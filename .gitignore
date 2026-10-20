@@ -1,37 +1,156 @@
-# Python
+# ── Python ───────────────────────────────────────────────────────────────
 __pycache__/
-.pytest_cache/
 *.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments (never commit these)
+venv/
 .venv/
- 
-# Output data (VERY IMPORTANT) 
-output /
+# Anchored to the repo root. An unanchored env/ matches at ANY depth, which
+# silently swallowed sdi-intelligence-backend/env/ — configuration, not a
+# virtualenv — and a file that cannot be committed is a file nobody can deploy.
+/env/
+.env
+# Any copy or backup of an env file is still a secrets file (src/.envbackup sat untracked
+# on the runner, one `git add -A` from history).
+.env.*
+*.envbackup
+.envbackup
+!config/*.example.env
+
+# ── Output data (VERY IMPORTANT) ─────────────────────────────────────────
+output/
 *.json
+# THE WEEKLY PARITY RESULT IS THE EXCEPTION, for the same reason the report PDFs are: it is
+# written to be read on another machine, and week on week it is the record of whether the
+# engine is converging on the estimators' own sheets. Scoped to reports/parity-*.json so a
+# job's own output JSON is still refused everywhere. It holds no manual-estimate figure —
+# tools/parity_workbooks.py writes variances, never the other side's pounds.
+!reports/parity-*.json
+*.jsonl
 *.log
 *.txt
 
-# Input data ( optional but recommended )
+# THE PRICE REGISTER IS THE OPPOSITE OF A RUN OUTPUT. It is SDI's commercial data, versioned
+# on purpose so a rate change is reviewable in a diff without a code edit — which is the
+# whole reason the figures were moved out of config.py. The blanket *.json above exists to
+# keep job data and run outputs out of the repository; this is neither.
+!data/price_register.json
+
+# A confirmations file is an INPUT, not an output: what a person read off the drawing,
+# entered once and ranked above everything the engine derived (src/estimator_confirmed.py).
+# The *.json rule above exists to keep run outputs and job data out of the repo, and these
+# are neither — they are small, hand-written, carry no customer geometry beyond overall
+# sizes, and are worthless if they cannot be reviewed in a diff like any other statement
+# of fact. Named narrowly so the blanket rule still holds everywhere else.
+!tools/jobs/*.json
+# A JOB'S RULINGS NOW LIVE IN config.JOB_DECISIONS, NOT IN A FILE HERE. "config needs to
+# be in config files. not json files lying around and being copied manually around" —
+# James Gray, 17 Sep 2026. A decision arrives with a pull, diffs like any other statement
+# of fact, and cannot differ between two machines. The exception below stays only so that a
+# stray answers file somebody drops in `docs/answers/` is VISIBLE in review rather than
+# silently ignored; the engine still reads one written beside the drawings on the share.
+!docs/answers/*.json
+# AN ESTIMATOR'S BRIEF IS A REVIEWED STATEMENT OF STRUCTURE, like tests/replay's accepted
+# facts: what a book of that job must reproduce, checked by tools/check_book_against_brief.py.
+# Not a run output and not job data — it holds no price.
+!docs/briefs/*.facts.json
+
+# ── Input data (drawings, spreadsheets) ──────────────────────────────────
 input/
 
-#PDFs and images (CRITICAL)
+# PDFs, images and workbooks (CRITICAL — job data, never commit)
 *.pdf
+# THE STATUS REPORTS ARE THE EXCEPTION, and a narrow one.
+#
+# The rule above exists because a PDF in this repo is almost always job data — a customer's
+# drawing pack — and that must never be committed. The status reports are the opposite kind
+# of file: they are written to be read by other people, on other machines. The portal opens
+# them from a share, and the machine that prints them is not the machine that serves them, so
+# an ignored PDF is a report that exists for exactly one person.
+#
+# Scoped to reports/ and to PDF alone, so a drawing dropped anywhere else is still refused.
+# tools/report_pdf.py prints them; test_a_status_report_ships_in_both_formats.py fails when
+# one is missing or untracked.
+!reports/*.pdf
 *.png
 *.jpg
 *.jpeg
+*.xls
+*.xlsx
 
-# Secrets - never commit a populated .env (example files stay tracked)
-.env
-**/.env
-*.env
-!*.example.env
-!config.example.env
+# CAD exports are job data exactly as PDFs are — a DXF carries the customer's geometry.
+# The fixtures under tests/ are already TRACKED, and a tracked file is unaffected by an
+# ignore, so this costs the replay harness nothing.
+*.dxf
+*.DXF
+*.dwg
+*.DWG
 
-# OS
+# Generated deliverables. Named narrowly, NOT as a blanket *.html: docs/, reports/ and
+# sdi-intelligence-backend/ are full of hand-written HTML that must stay committable, and
+# the lesson at the foot of this file is that a broad ignore is a trap for the next file.
+# These four patterns are what the engine itself writes beside a job:
+#   job_report_html.py -> {stem}_report.html      client_quote_html.py -> {safe}_quote.html
+#   also *_quote_LLM-ONLY.html and *.estimate_report.html
+*_report.html
+*.estimate_report.html
+*_quote.html
+*_quote_LLM-ONLY.html
+
+# ── Backups / scratch ────────────────────────────────────────────────────
+*.bak
+*.bak_*
+*.backup
+*~
+
+# SQL dumps (schema lives in versioned .sql under sql/ if needed)
+*.sql
+
+# ── OS ───────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-output/
-*.bak
-*.xlsx
+# ── Explicit keeps (override the broad ignores above) ────────────────────
+# A BROAD IGNORE PLUS ONE EXCEPTION IS A TRAP FOR THE NEXT FILE. `*.txt` above
+# means every new .txt is invisible to `git add -A`, which reports nothing —
+# requirements-dev.txt was written, committed, pushed and merged before anybody
+# noticed it had never left the machine it was created on. Anything meant to be
+# kept has to be named here.
+!requirements.txt
+!requirements-dev.txt
+# CLIENT QUOTATION DATA IS NOT SOURCE CODE.
+# This line used to read "!corpus/*.jsonl" -- an explicit exception that put the client
+# corpora BACK after the *.jsonl rule above had excluded them. With src/corpus.jsonl that
+# was 104,386 quotation records in the repository: customer names, job numbers, sell
+# prices, cost breakdowns, rebate fractions, derived overhead divisors, and the names of
+# the 39 estimators who prepared them, spanning 2006-2036 and 488 customers.
+#
+# Nothing reads them at estimate time. They are an INTERMEDIATE ARTEFACT: corpus_ingest.py
+# writes one from the K: spreadsheets, and ingest_historical_to_db.py / _to_qdrant.py read
+# it once to load SQL Server and the vector store. Both take the path as an argument and
+# default to a RELATIVE corpus.jsonl, not to anything committed here. The engine's
+# corpus-derived numbers are constants in config.py, with the corpus named in a comment as
+# their provenance -- the file itself is not consulted.
+#
+# So it bought nothing and put SDI's own margin structure, and its clients' pricing
+# history, on an external code host. The exception is removed and the ignore above stands.
+corpus/
+cache/
+.sdi-commit
 
-*.sql
+# Frozen-replay harness: accepted facts and frozen summaries are versioned evidence
+!tests/replay/**/*.json
+
+# ── SDI Intelligence app portal ──
+!sdi-intelligence-backend/services.json
+!sdi-intelligence-backend/appportal/*.png
+sdi-intelligence-backend/*.db
+sdi-intelligence-backend/*.db-wal
+sdi-intelligence-backend/*.db-shm
+
+# Voice CRM app journal (runtime data, created where the portal runs)
+sdi-intelligence-backend/voicecrm_journal.db*

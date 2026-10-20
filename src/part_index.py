@@ -1,6 +1,51 @@
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from bought_in_policy import is_bought_in as _is_bought_in
+from source_precedence import apply_field
+
+
+# Which reader actually saw a merged BOM row. merge_boms.reconcile_page stamps every row it
+# emits, and those four values are the whole answer.
+_BOM_ROW_READER = {
+    "BOTH":        "bom_tree",      # the deterministic reader and vision agreed
+    "A_ONLY":      "bom_tree",      # the deterministic reader alone — what bom_tree means
+    "B_RECOVERED": "llm_extract",   # vision found a row the deterministic reader did not
+    "B_OVERRIDE":  "llm_extract",   # vision disagreed and won
+}
+
+
+def _bom_row_source(row: Dict[str, Any]) -> str:
+    """A BOM ROW READ BY THE VISION MODEL IS NOT A MEASURED BOM ROW.
+
+    Every quantity off a BOM was stamped `bom_tree` — rank 60, and a member of
+    MEASURED_SOURCES, so reports print it with no reasoned-value mark and arbitration treats it
+    as something read off a table rather than off a picture of one.
+
+    ON AN LLM-ONLY RUN THAT IS FALSE FOR EVERY ROW ON THE JOB. --llm-only switches off Path A,
+    so `document_analysis.bom_rows` is the vision model's reading and nothing else; it then
+    reached section 9 of the report as "the bill of materials" with no lightning bolt beside
+    it, telling an estimator those quantities were measured. James was right to push on this,
+    though the column he named — material and thickness, which really do come off the drawing's
+    text layer via pdfplumber — was the one place the labels were already correct.
+
+    IT IS ALSO WRONG ON A FULL RUN, more quietly: any row vision RECOVERED (the deterministic
+    reader missed it) or OVERRODE carries the same false stamp. Those are exactly the rows
+    where corroboration did not happen, so they are exactly the rows the mark exists for.
+
+    THE ANSWER WAS ALREADY ON THE ROW. reconcile_page records BOTH / A_ONLY / B_RECOVERED /
+    B_OVERRIDE on every row it emits, and this was throwing it away. Nothing new is derived
+    here — a recorded fact is read instead of being replaced by a constant.
+
+    A NOTE ON RANK, because this is not purely cosmetic. bom_tree is 60 and llm_extract is 40,
+    so a vision-only quantity can now be displaced by an override rule at 50 where before it
+    could not. The exposure is narrow: a B_RECOVERED row is by definition one the deterministic
+    reader never saw, so no competing BOM value exists, and a title-block quantity already
+    outranked it at 70. Worth a look at the next full run's total against the 23:09 run's
+    £574.94 before this is shown to anybody.
+    """
+    return _BOM_ROW_READER.get(str(row.get("source") or "").strip().upper(), "bom_tree")
 
 
 def _clean_bom_description(desc: Any) -> Any:
@@ -17,6 +62,28 @@ def _clean_bom_description(desc: Any) -> Any:
     if len(cleaned) > 80:
         cleaned = cleaned[:77].rstrip() + "…"
     return cleaned if cleaned else text[:80]
+
+
+def _own_row_bleed(description: Any, summary: Dict[str, Any], page_number: Any) -> bool:
+    """True when a description is '<row words> <row qty>' of a parts-list row read off the
+    same page — the table's first row bled into a title field."""
+    text = " ".join(str(description or "").upper().split())
+    if not text or page_number is None:
+        return False
+    for r in (summary.get("document_analysis", {}) or {}).get("bom_rows", []) or []:
+        if not isinstance(r, dict) or r.get("source_page") != page_number:
+            continue
+        words = " ".join(str(r.get("description") or "").upper().split())
+        qty = r.get("quantity")
+        if not words or qty in (None, ""):
+            continue
+        try:
+            qty_txt = f"{float(qty):g}"
+        except (TypeError, ValueError):
+            qty_txt = str(qty).strip()
+        if text == f"{words} {qty_txt}":
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -38,6 +105,93 @@ class PartIndexDeps:
     interpret_part: Callable[..., Any]
 
 
+def _bom_table_pages(summary: Dict[str, Any]) -> Tuple[set, Dict[str, set]]:
+    """Which pages a parts list was read off, and whose parts list each one is.
+
+    Returns (job page numbers carrying a BOM table, {part number -> job pages whose table is
+    ITS table}). Both come from the reader's own record rather than from any guess about what
+    a page looks like: every reconciled row carries `bom_sheet`, written by merge_boms as
+    "<pdf name>#<page index>" from `enumerate(pdf.pages)`, and `bom_parent`, the part the table
+    belongs to.
+
+    KEYED ON (PDF, PAGE), NOT ON A PAGE NUMBER. The first cut of this returned bare page
+    numbers, which is only correct while a job has one PDF. In a folder-as-job merge each source
+    PDF numbers its own pages from 1 and file_scan renumbers them job-wide, keeping the original
+    as `source_page_number` beside `source_pdf_name` — so a BOM on page 3 of one PDF would have
+    demoted a genuine detail sheet on page 3 of another. The packs coming next are multi-PDF and
+    that would have been silent.
+
+    AND AN ASSEMBLY'S OWN PARTS LIST IS ITS DEFINING PAGE. Page 25 of 0359342 carries MBY433's
+    table AND its welding instruction ("Puddle weld on either side of Prong, Dress front and
+    back faces flush"). Demoting that page for the COMPONENTS it lists is right — MBY434's
+    dimensions are on p26 — but for MBY433 itself it is the page that defines it, so the second
+    return value names those pairings and the caller exempts them.
+    """
+    da = summary.get("document_analysis") if isinstance(summary, dict) else None
+    rows = []
+    if isinstance(da, dict):
+        rows = list(da.get("bom_rows") or []) + list(da.get("bay_bom_rows") or [])
+
+    # (pdf name, per-PDF page number) -> job page number. A job whose pages carry no source_pdf
+    # name is single-PDF, and there the job number IS the per-PDF number.
+    lookup: Dict[Tuple[str, int], int] = {}
+    for page in (summary.get("pages") or []):
+        if not isinstance(page, dict):
+            continue
+        job_no = page.get("page_number")
+        if not isinstance(job_no, int):
+            continue
+        per_pdf = page.get("source_page_number")
+        pdf_name = str(page.get("source_pdf_name") or "").strip().lower()
+        lookup[(pdf_name, int(per_pdf if isinstance(per_pdf, int) else job_no))] = job_no
+
+    pages: set = set()
+    owned: Dict[str, set] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sheet = row.get("bom_sheet") or row.get("sheet")
+        if not sheet or "#" not in str(sheet):
+            continue
+        name, _, index_text = str(sheet).rpartition("#")
+        try:
+            index = int(index_text)
+        except (TypeError, ValueError):
+            continue
+        if index < 0:
+            continue
+        key = (name.strip().lower(), index + 1)
+        job_no = lookup.get(key)
+        if job_no is None and not any(k[0] for k in lookup):
+            job_no = lookup.get(("", index + 1))     # single-PDF job, no source name recorded
+        if job_no is None:
+            continue
+        pages.add(job_no)
+        parent = str(row.get("bom_parent") or row.get("parent") or "").strip()
+        if parent:
+            owned.setdefault(parent, set()).add(job_no)
+    return pages, owned
+
+
+def document_gauge_to_hand_down(summary: Dict[str, Any]) -> Any:
+    """The document's gauge, for a made part that states none — or None.
+
+    A DOCUMENT OF SEVERAL GAUGES HAS NONE TO HAND DOWN (D-421). 8188-08 pools a GA that names
+    "3MM ACRYLIC", "6MM" and "10MM" lettering beside an 18 mm MDF panel; its first figure was
+    given to every part that stated none — the MDF at 3 mm, the letters at 3 — ranked as a
+    drawing reading, above the model's read of each part's own sheet."""
+    doc = summary.get("document_analysis", {}) or {}
+    gauges = set()
+    for g in ((doc.get("title_block") or {}).get("thicknesses_mm") or []):
+        try:
+            gauges.add(round(float(g), 2))
+        except (TypeError, ValueError):
+            continue
+    if len(gauges) > 1:
+        return None
+    return (doc.get("primary_fields") or {}).get("thickness_mm")
+
+
 def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[str, Any]]:
     dedupe = deps.dedupe
     is_valid_part_identifier = deps.is_valid_part_identifier
@@ -56,23 +210,37 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
     interpret_part = deps.interpret_part
 
     parts: Dict[str, Dict[str, Any]] = {}
-    document_bom_lookup = {
+    # ONE READING PER (TABLE, CODE). 12173-07-2-GA prints 12173-07-2-02M at items 1 and 3, one
+    # per hand. Keyed by code row by row, this reader submitted 1 as bom_tree, and the effective
+    # pass later submitted the table's combined 2 as bom_tree too — one reader contradicting
+    # itself, refused, and the trough built with one side. The table's own total is read once,
+    # through the same per-table combine bom_tree's effective pass uses.
+    from bom_tree import rows_combined_per_table
+    _table_rows = rows_combined_per_table(summary.get("document_analysis", {}).get("bom_rows", []))
+    document_bom_lookup = {  # noqa: E501 — see _bom_row_source below for how these are attributed
         row["part_number"]: row
-        for row in summary.get("document_analysis", {}).get("bom_rows", [])
+        for row in _table_rows
         if is_valid_part_identifier(row.get("part_number"))
     }
-    document_primary_thickness = summary.get("document_analysis", {}).get("primary_fields", {}).get("thickness_mm")
+    document_primary_thickness = document_gauge_to_hand_down(summary)
 
-    for row in summary.get("document_analysis", {}).get("bom_rows", []):
+    for row in _table_rows:
         pn = row["part_number"]
         if not is_valid_part_identifier(pn):
             continue
+        # BORN WITH A SOURCE. Constructing the record with quantity=<BOM value> and no
+        # quantity_source left most BOM quantities unattributed, so arbitration had nothing
+        # to weigh them against and any later pass could replace them silently. Worse, the
+        # apply path further down only ran for quantities of None or 1 — so every quantity
+        # ABOVE one, which is most of them, skipped attribution entirely. Construct without
+        # it, then submit it as the observation it is.
         parts[pn] = empty_part_record(
             part_number=pn,
             item_number=row.get("item_number"),
             description=_clean_bom_description(row.get("description")),
-            quantity=row.get("quantity", 1),
+            quantity=None,
         )
+        apply_field(parts[pn], "quantity", row.get("quantity"), _bom_row_source(row))
 
     for page in summary["pages"]:
         page_analysis = page.get("page_analysis", {})
@@ -89,7 +257,10 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
         title_block_drawing_numbers = title_block.get("drawing_numbers", [])
         page_target_part_numbers: List[str] = []
 
-        if page_role == "detail":
+        if page_role == "design_intent":
+            # A DESIGN-INTENT SHEET MINTS NO PART (D-406): its drawing number names an idea.
+            pass
+        elif page_role == "detail":
             page_target_part_numbers.extend(
                 [value for value in title_block_drawing_numbers if is_valid_part_identifier(value)]
             )
@@ -141,6 +312,10 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
             part["fold_values_mm"].extend(cues.get("fold_values_mm", []))
             part["slot_sizes_mm"].extend(cues.get("slot_sizes_mm", []))
             part["edge_distances_mm"].extend(cues.get("edge_distances_mm", []))
+            # The strings behind the count travel with it (D-405), and the larger reading's
+            # strings are the ones kept — the sentence that quotes the number names them.
+            if int(cues.get("fold_count_textual", 0) or 0) > int(part.get("fold_count_textual", 0) or 0):
+                part["fold_count_textual_evidence"] = list(cues.get("fold_count_textual_evidence") or [])
             part["fold_count_textual"] = max(part.get("fold_count_textual", 0), cues.get("fold_count_textual", 0))
             part["process_notes"].extend(process_notes.get("note_snippets", []))
             part["process_note_types"].extend(process_notes.get("detected_note_types", []))
@@ -151,27 +326,62 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
             part["slot_detected"] = part["slot_detected"] or cues.get("slot_detected", False)
             part["assembly_candidate"] = part["assembly_candidate"] or effective_page_role == "assembly"
             part["textual_operations"].extend(ops)
-            part["normalized_material"] = part["normalized_material"] or prefer_local_scalar(effective_page_role, title_block.get("normalized", {}).get("primary_material"), allow_on_assembly=allow_local_component_data)
-            part["normalized_finish"] = part["normalized_finish"] or prefer_local_scalar(effective_page_role, title_block.get("normalized", {}).get("primary_finish"), allow_on_assembly=allow_local_component_data)
-            part["normalized_thickness_mm"] = part["normalized_thickness_mm"] or prefer_local_scalar(effective_page_role, title_block.get("normalized", {}).get("primary_thickness_mm"), allow_on_assembly=allow_local_component_data)
+            # Title-block readings: rank 70. `x = x or y` fills a gap, which is the right
+            # direction, but records no source — and an unattributed datum is invisible to
+            # arbitration, so the next pass has nothing to weigh itself against.
+            _norm_tb = title_block.get("normalized", {})
+            for _fld, _tb_key in (("normalized_material", "primary_material"),
+                                  ("normalized_finish", "primary_finish"),
+                                  ("normalized_thickness_mm", "primary_thickness_mm")):
+                _v = prefer_local_scalar(effective_page_role, _norm_tb.get(_tb_key),
+                                         allow_on_assembly=allow_local_component_data)
+                if _v not in (None, ""):
+                    apply_field(part, _fld, _v, "drawing_deterministic")
 
             if part["description"] is None and pn in document_bom_lookup:
                 part["description"] = _clean_bom_description(document_bom_lookup[pn].get("description"))
             if part["description"] is None:
+                _refused = [str(v) for v in (title_block.get("descriptions_refused") or []) if v]
                 for description in title_block.get("descriptions", []):
-                    if is_good_description(description):
-                        part["description"] = _clean_bom_description(description)
-                        break
+                    if not is_good_description(description):
+                        _refused.append(str(description))
+                        continue
+                    _cleaned = _clean_bom_description(description)
+                    # A PARTS-LIST ROW OF THIS SAME PAGE, WITH ITS QUANTITY, IS NOT THIS
+                    # PART'S TITLE. 12173-03-201 was "FRONT FRAME ASSEMBLY 1": row 1 of its
+                    # own parts list (202 FRONT FRAME ASSEMBLY ×1) once the cleaner had cut
+                    # the table's head away. That exact signature — a row's words then its
+                    # count, read off the same page — is refused; a weldment titled like one
+                    # of its members (no count after it) is not touched. Left blank rather
+                    # than invented.
+                    if _own_row_bleed(_cleaned, summary, page.get("page_number")):
+                        _refused.append(str(description))
+                        continue
+                    part["description"] = _cleaned
+                    break
+                if part["description"] is None and _refused:
+                    # WHAT WAS READ AND REFUSED, so the graph can say no reader titled it.
+                    _have = part.setdefault("description_refused", [])
+                    for _v in _refused:
+                        if _v not in _have:
+                            _have.append(_v)
 
-            if part["quantity"] in (None, 1):
-                quantities = title_block.get("quantities", [])
-                if pn in document_bom_lookup and document_bom_lookup[pn].get("quantity"):
-                    part["quantity"] = document_bom_lookup[pn].get("quantity")
-                elif quantities:
-                    try:
-                        part["quantity"] = int(quantities[0])
-                    except (TypeError, ValueError):
-                        pass
+            # No "is it None or 1" test. That treated a quantity of ONE as an empty slot, so
+            # a part the model says there is one of was open to replacement by whatever a
+            # table happened to say — and it skipped attribution for everything above one.
+            # Every observation is submitted; the resolver decides which survives.
+            quantities = title_block.get("quantities", [])
+            if pn in document_bom_lookup and document_bom_lookup[pn].get("quantity"):
+                # SAME ROW, SAME ATTRIBUTION. The second of the two places a BOM quantity is
+                # submitted; stamping it differently from the first would put one part's
+                # quantity at rank 60 and another's at 40 for no reason a reader could find.
+                apply_field(part, "quantity", document_bom_lookup[pn].get("quantity"),
+                            _bom_row_source(document_bom_lookup[pn]))
+            elif quantities:
+                try:
+                    apply_field(part, "quantity", int(quantities[0]), "drawing_deterministic")
+                except (TypeError, ValueError):
+                    pass
 
             if should_assign_dimensions(effective_page_role, component_sheet):
                 page_dims = pick_part_dimensions(part, dimensions)
@@ -181,7 +391,9 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
                     part["overall_width_mm"] = page_dims["overall_width_mm"]
 
             if part["normalized_thickness_mm"] is None:
-                part["normalized_thickness_mm"] = first_numeric_thickness(part.get("thicknesses_mm", []))
+                apply_field(part, "normalized_thickness_mm",
+                            first_numeric_thickness(part.get("thicknesses_mm", [])),
+                            "drawing_deterministic")
             if not part["thicknesses_mm"] and part["normalized_thickness_mm"] is not None:
                 part["thicknesses_mm"] = [str(part["normalized_thickness_mm"])]
 
@@ -189,6 +401,35 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
                 part["confidence"].setdefault(key, []).append(value)
             rollup_geometry(part["geometry_rollup"], geometry)
 
+    # THE PAGE THAT LISTS A PART IS NOT THE PAGE THAT DEFINES IT.
+    #
+    # This is the last resort: nothing claimed the part by name, so it is matched by asking
+    # which pages MENTION its code. That is substring containment — a BOM row saying MBY434 and
+    # a title block saying MBY434 are indistinguishable to it — and the tie-break was "prefer a
+    # detail-role page, then the lowest page number".
+    #
+    # On 0359342 both halves of that tie-break are inert. The role classifier needs a part
+    # number to see an assembly, and none of this pack's codes (MBY434, JAE821, J13092, A61636)
+    # matches the digits-then-hyphen shape every recogniser here requires — so EVERY page in the
+    # pack, parts lists included, keeps the "detail" default. The run log shows it: pages 1, 3,
+    # 4, 5, 6 and 25 are BOM tables and every one previews as "Page N (detail)". With the roles
+    # all equal the sort collapses to lowest page number, which is "whichever mentions it first"
+    # — and a part is nearly always listed on its parent's table before its own sheet arrives.
+    #
+    # MBY434 was bound to p25, the MBY433 parts list; its detail sheet, carrying Ø24 x 2, is p26.
+    # JAE821 to p3; its 638 x 75 is on p9. MBY432 came out right at p24 purely because its sheet
+    # happens to precede the table that lists it — the mechanism was never working.
+    #
+    # THE FIX USES A FACT THE ENGINE ALREADY HAS AND HAS NEVER CONSULTED HERE. The dual-path BOM
+    # reconciler records, per reconciled row, the sheet the table was read from (`bom_sheet`,
+    # "<pdf>#<0-based page index>"). That is not a heuristic about what a page looks like; it is
+    # the reader saying which page it took a parts list off. A page that yielded a BOM table is
+    # ranked BELOW one that did not, so the detail sheet wins wherever both mention the code.
+    #
+    # Deliberately a tie-break and not a filter: where a part is mentioned ONLY on parts lists,
+    # it still binds there rather than losing its page altogether. Both references are kept —
+    # the BOM page for identity, parent and quantity; the detail page for geometry.
+    _bom_pages, _owned_tables = _bom_table_pages(summary)
     for part in parts.values():
         if part.get("pages"):
             continue
@@ -198,15 +439,31 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
         matching_pages = [page for page in summary["pages"] if pn in (page.get("normalized_text") or "")]
         if not matching_pages:
             continue
+        # An assembly's OWN parts list is the page that defines it, so it is not demoted for
+        # the part that table belongs to — only for the components it lists.
+        _mine = _owned_tables.get(pn) or set()
         matching_pages = sorted(
             matching_pages,
-            key=lambda item: (0 if item.get("page_role", {}).get("primary_role") == "detail" else 1, item.get("page_number", 9999)),
+            key=lambda item: (
+                1 if (item.get("page_number") in _bom_pages
+                      and item.get("page_number") not in _mine) else 0,
+                0 if item.get("page_role", {}).get("primary_role") == "detail" else 1,
+                item.get("page_number", 9999),
+            ),
         )
         chosen_page = matching_pages[0]
         chosen_role = chosen_page.get("page_role", {}).get("primary_role")
         part["pages"].append(chosen_page["page_number"])
         if chosen_role:
             part["page_roles"].append(chosen_role)
+        if chosen_page.get("page_number") in _bom_pages and \
+                chosen_page.get("page_number") not in (_owned_tables.get(pn) or set()):
+            # Bound to a parts list because there was nothing else. Said on the part, because a
+            # part with no detail sheet has no measured size either and the two go together.
+            part.setdefault("review_flags", []).append(
+                f"{pn} is bound to page {chosen_page.get('page_number')}, which is a parts "
+                f"list — no page in this pack details it, so it has no drawing of its own to "
+                f"take dimensions from")
 
     result: List[Dict[str, Any]] = []
     for part in parts.values():
@@ -236,7 +493,7 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
             "process_note_types",
             "textual_operations",
         ]:
-            part[key] = dedupe(part[key])
+            part[key] = dedupe(part[key])   # precedence: direct-write ok — dedupes a list in place, introduces no new evidence
         if part.get("normalized_material"):
             part["materials"] = [part["normalized_material"]]
         if part.get("normalized_finish"):
@@ -246,8 +503,33 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
         part["review_flags"] = dedupe(part["review_flags"])
         if not part.get("drawing_numbers") and not is_assembly_identifier(part.get("part_number")):
             part["drawing_numbers"] = [part["part_number"]]
-        if part.get("normalized_thickness_mm") is None and document_primary_thickness is not None:
-            part["normalized_thickness_mm"] = document_primary_thickness
+        # THE PACK'S GAUGE BELONGS TO THE PARTS WE CUT FROM IT.
+        #
+        # This fallback exists because a detail sheet that does not repeat the gauge should
+        # inherit the document's, and for a fabricated part that is right. It was applied to
+        # every part with no thickness of its own, which put a sheet gauge on things that are
+        # not cut from sheet at all:
+        #
+        #   12552-01-01X  62012RS Ball Bearing 12x32x10mm   ->  1.5mm
+        #   12552-01-02X  CONCRETE SLAB (drawing says 20mm) ->  1.5mm
+        #
+        # A gauge is not decoration. It makes a part look like sheet metal to the estimator —
+        # _has_blank accepts a bare thickness — and it sets the rate and steps the cut time.
+        # The bearing carried 1.5mm through three runs while everything else about it was
+        # being corrected, and it is the last thing holding it in the 1.5mm MILD STEEL laser
+        # group.
+        #
+        # NOT FLAGGED, deliberately, unlike the other bought-in refusals. Those all suppress
+        # something that would otherwise appear — a blank, a route — where silence would look
+        # like the rule never ran. Here the correct end state IS the absence, and it is
+        # already visible: the Gauge column on the sheet is simply empty, which is the honest
+        # answer for a part whose thickness we do not know and do not need. Flagging every
+        # FIXING on every job would be noise, not evidence.
+        if (part.get("normalized_thickness_mm") is None
+                and document_primary_thickness is not None
+                and not _is_bought_in(part)):
+            apply_field(part, "normalized_thickness_mm", document_primary_thickness,
+                        "drawing_deterministic")
             if not part.get("thicknesses_mm"):
                 part["thicknesses_mm"] = [str(document_primary_thickness)]
         part["confidence"] = {

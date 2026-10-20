@@ -12,6 +12,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from source_precedence import apply_field as _apply_field
+
 try:
     import ezdxf  # type: ignore
     from ezdxf import bbox  # type: ignore
@@ -191,9 +193,35 @@ def extract_dxf_geometry(dxf_path: Path) -> Dict[str, Any]:
     hole_diameters_mm: List[float] = []
     dimension_values_mm: List[float] = []
     max_span_mm = 0.0
+    # WHAT THE FILE IS ORGANISED INTO, WHICH NOBODY DOWNSTREAM HAS EVER BEEN TOLD.
+    #
+    # `drawing_job_merge` hands the DXF interpreter `"layers": raw.get("layers")` and this
+    # dict has never carried that key, so the answer was null on every job ever run. The
+    # model then wrote "layers not provided so bend vs cut assignment unknown" — 401912-02's
+    # book says exactly that — and three people read it as a fact about the drawing. It was
+    # a fact about OUR HAND-OFF: the reader knows the layers perfectly well, and the loop
+    # below is already touching every entity to get them.
+    #
+    # `entity_counts` and `text_entities` are asked for on the same line and were absent for
+    # the same reason. A model asked to say which layer is the cut profile, with no layers,
+    # no entity census and no text, is being asked to guess and then quoted as a witness.
+    layer_entity_counts: Dict[str, int] = {}
+    entity_counts: Dict[str, int] = {}
+    text_entities: List[str] = []
 
     for entity in _iter_modelspace_entities(doc):
         dxftype = entity.dxftype()
+        entity_counts[dxftype] = entity_counts.get(dxftype, 0) + 1
+        _lay = _entity_layer(entity) or "0"
+        layer_entity_counts[_lay] = layer_entity_counts.get(_lay, 0) + 1
+        if dxftype in {"TEXT", "MTEXT"} and len(text_entities) < 200:
+            try:
+                _txt = (entity.plain_text() if dxftype == "MTEXT"
+                        else str(entity.dxf.text or "")).strip()
+            except Exception:                                    # noqa: BLE001
+                _txt = ""
+            if _txt:
+                text_entities.append(_txt)
 
         if dxftype == "LINE":
             start = entity.dxf.start
@@ -321,6 +349,12 @@ def extract_dxf_geometry(dxf_path: Path) -> Dict[str, Any]:
         "estimated_pierce_count": estimated_pierce_count,
         "dimension_values_mm": dimension_values_mm,
         "drawing_extents_mm": extents_mm,
+        # The layer census, named rather than merely counted, so a reader — human or model —
+        # can say whether a BENDLINES layer was present, empty or never exported.
+        "layers": sorted(layer_entity_counts),
+        "layer_entity_counts": dict(sorted(layer_entity_counts.items())),
+        "entity_counts": dict(sorted(entity_counts.items())),
+        "text_entities": text_entities,
         "vector_features": vector_features,
         "confidence": {
             "geometry_reliability": geometry_reliability,
@@ -599,7 +633,11 @@ def _parse_filename(path: Path) -> Dict[str, Any]:
     # (e.g. 1_5mm -> 1.5mm) and does NOT fire on a part-number tail such as
     # 1455-C-002_1mm, where it would merge "002_1mm" -> "002.1mm", break the
     # part-number regex, and silently drop the flat from discovery.
-    stem_norm = re.sub(r"(?<![\d-])(\d{1,2})_(\d+mm)", lambda m: f"{m.group(1)}.{m.group(2)}", stem,
+    # The lookbehind must also refuse a LETTER: "10975-02-A01_2mm" is a lettered detail
+    # code followed by a thickness, and treating its "01_2mm" as a decimal turned the part
+    # token into "A01.2mm" — unparseable, so the only flat in the pack matched nothing.
+    # An underscore before the digits stays allowed; that is the genuine 1_5mm case.
+    stem_norm = re.sub(r"(?<![A-Za-z0-9-])(\d{1,2})_(\d+mm)", lambda m: f"{m.group(1)}.{m.group(2)}", stem,
                        flags=re.IGNORECASE)
     tokens = re.split(r"[_\s]+", stem_norm)
 
@@ -628,9 +666,30 @@ def _parse_filename(path: Path) -> Dict[str, Any]:
         # Try joining first two if they look like  9376  01  001
         if len(pn_tokens) >= 3 and all(re.match(r"^\d+$", t) for t in pn_tokens[:3]):
             part_number = "-".join(pn_tokens[:3])
-        # Cap at 3 dash-segments: 9233-12-GA-UK-MW → 9233-12-GA
-        if part_number and part_number.count("-") > 2:
-            part_number = "-".join(part_number.split("-")[:3])
+        # TRIM DESCRIPTIVE WORDS, NOT PART NUMBERS.
+        #
+        # This capped at three dash-segments, to turn 9233-12-GA-UK-MW into 9233-12-GA. SDI
+        # numbers a fabrication 12349-02-69-01A — four segments — so on that job EVERY flat
+        # resolved to the top-level 12349-02-69 instead of to the part it belongs to. Seven
+        # acrylic flats arrived at the wrong parent, could bind to nothing there, and were
+        # promoted as standalone parts with invented numbers; meanwhile 01A kept a 2120 x
+        # 2120 bounding box for a blank and one flat was costed twice, once as 03M and once
+        # as an orphan.
+        #
+        # So the cut is decided by what a segment LOOKS like rather than by how many there
+        # are. An identifier is digits with at most one trailing letter — 01A, 03M, 002, 04 —
+        # or GA. A word is not, and stops it, which is what the original cap was for: MM is
+        # two letters, REVA is not digits, UK is not digits.
+        if part_number:
+            _segments = part_number.split("-")
+            _kept = _segments[:2]
+            for _seg in _segments[2:]:
+                if _seg.upper() == "GA" or re.match(r"^\d{1,3}[A-Z]?$", _seg, re.IGNORECASE) \
+                        or re.match(r"^[A-Z]{1,2}\d{1,3}$", _seg, re.IGNORECASE):
+                    _kept.append(_seg)
+                else:
+                    break
+            part_number = "-".join(_kept)
 
     # SDI filenames like "1453 -01C - 50cm Kick Plate_1mm" — family + detail suffix
     # without a full dashed token in pn_tokens (1453 then -01C breaks the loop).
@@ -678,18 +737,402 @@ def _parse_filename(path: Path) -> Dict[str, Any]:
     }
 
 
+def _all_entities_with_layers(msp: Any,
+                              entity_types: Optional[set] = None) -> List[Tuple[Any, str]]:
+    """Every model-space entity INCLUDING block contents, each paired with its EFFECTIVE
+    layer, transformed to model coordinates.
+
+    ezdxf's msp.query() does not enter an INSERT. Anything counting features — holes,
+    pierces — must explode the same way the outline does, or the two disagree about what
+    the file contains.
+
+    The effective layer matters as much as the entity. An entity drawn on layer '0' inside
+    a block sits on whatever layer its INSERT sits on — that is how SolidWorks and the M&S
+    templates export them. Reading the entity's own layer instead returns '0' for every one
+    of them, so a circle inside a SYMBOLS(BENCHMARK) or DIMS+NOTES block passes a skip-layer
+    filter untouched and is priced as a hole. _get_layer_entities has always resolved this;
+    this walk did not, which left the two disagreeing about the same file.
+    """
+    out: List[Tuple[Any, str]] = []
+
+    def _walk(entities: Any, depth: int = 0, inherited: Optional[str] = None) -> None:
+        for e in entities:
+            _own = _entity_layer(e)
+            _eff = inherited if (_own in ("", "0") and inherited) else _own
+            if e.dxftype() == "INSERT" and depth < 5:
+                try:
+                    kids = list(e.virtual_entities())
+                except Exception:
+                    kids = []
+                if kids:
+                    _walk(kids, depth + 1, _eff or inherited)
+                    continue
+            if entity_types is None or e.dxftype() in entity_types:
+                out.append((e, _eff))
+
+    _walk(msp)
+    return out
+
+
+def _all_entities(msp: Any, entity_types: Optional[set] = None) -> List[Any]:
+    """As _all_entities_with_layers, entities only. Prefer the layer-aware form wherever
+    the result is filtered by layer."""
+    return [e for e, _ in _all_entities_with_layers(msp, entity_types)]
+
+
+def _entity_points(e: Any) -> List[Tuple[float, float]]:
+    """Every defining point of an entity, in drawing units. Used for extents and for
+    chaining open segments into loops; approximate is fine for both."""
+    t = e.dxftype()
+    try:
+        if t == "LINE":
+            return [(e.dxf.start.x, e.dxf.start.y), (e.dxf.end.x, e.dxf.end.y)]
+        if t == "ARC":
+            cx, cy, r = e.dxf.center.x, e.dxf.center.y, float(e.dxf.radius)
+            a0, a1 = math.radians(e.dxf.start_angle), math.radians(e.dxf.end_angle)
+            return [(cx + r * math.cos(a0), cy + r * math.sin(a0)),
+                    (cx + r * math.cos(a1), cy + r * math.sin(a1))]
+        if t == "CIRCLE":
+            cx, cy, r = e.dxf.center.x, e.dxf.center.y, float(e.dxf.radius)
+            return [(cx - r, cy - r), (cx + r, cy + r)]
+        if t == "LWPOLYLINE":
+            return [(float(p[0]), float(p[1])) for p in e.get_points("xy")]
+        if t == "POLYLINE":
+            return [(float(v.dxf.location.x), float(v.dxf.location.y)) for v in e.vertices]
+        if t == "SPLINE":
+            pts = list(getattr(e, "fit_points", []) or []) or list(getattr(e, "control_points", []) or [])
+            return [(float(p[0]), float(p[1])) for p in pts]
+    except Exception:
+        pass
+    return []
+
+
+def _is_closed_polyline(e: Any) -> bool:
+    if bool(getattr(e, "closed", False)):
+        return True
+    try:
+        return bool(int(getattr(e.dxf, "flags", 0) or 0) & 1)
+    except Exception:
+        return False
+
+
+# One threshold for every contour shape. A circle, a closed polyline and a chained loop are
+# three ways of drawing the same thing, so a size that is too small to be an aperture in one
+# must be too small in all three — otherwise the check is only as strong as its weakest door.
+_MIN_CONTOUR_MM = 1.0
+# A segment shorter than this is a duplicated vertex, not geometry. Left in, it chains into a
+# self-loop that satisfies the closed-contour test on its own.
+_MIN_SEGMENT_MM = 0.05
+
+
+def _contour_span_mm(points: List[Tuple[float, float]], scale: float) -> float:
+    """The SMALLER bounding dimension of a contour, in mm.
+
+    The larger dimension is the wrong test: a 100 x 0 closed polyline — a line drawn back on
+    itself, which is what a collapsed or duplicated edge looks like — spans 100mm on its long
+    side and passes, then counts as an aperture the laser pierces. A real cut-out has extent
+    in BOTH directions, so the minor dimension is what has to clear the bar.
+    """
+    if not points:
+        return 0.0
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    return min((max(xs) - min(xs)), (max(ys) - min(ys))) * (scale or 1.0)
+
+
+def _entity_length_mm(e: Any, scale: float) -> float:
+    """Length of a single entity, measured the way its own type requires.
+
+    Measuring end-to-end works for a LINE and for nothing else. A SPLINE's first and last fit
+    points can sit close together while the curve between them is long — an S-curve, or a
+    nearly closed profile — so a straight-line measurement discards valid large geometry as
+    degenerate. Ask each type for its own length and fall back only when it cannot answer.
+    """
+    t = e.dxftype()
+    try:
+        if t == "ARC":
+            return _arc_length(e, scale)
+        if t in ("LWPOLYLINE", "POLYLINE"):
+            return _polyline_length(e, scale)
+        if t == "SPLINE":
+            try:
+                return float(e.length()) * scale          # ezdxf measures the curve itself
+            except Exception:
+                pts = _entity_points(e)
+                return sum(_dist2d(pts[i], pts[i + 1]) for i in range(len(pts) - 1)) * scale
+        if t == "CIRCLE":
+            return math.pi * _circle_diameter_mm(e, scale)
+    except Exception:
+        pass
+    pts = _entity_points(e)
+    return _dist2d(pts[0], pts[-1]) * scale if len(pts) >= 2 else 0.0
+
+
+def _count_closed_contours(msp: Any, scale: float, skip_layers: set,
+                           blank_l: float = 0.0, blank_w: float = 0.0,
+                           cut_layers: Optional[set] = None) -> Dict[str, Any]:
+    """How many separate closed profiles the laser has to cut — the pierce count.
+
+    A pierce is one closed contour: the outer profile, and every internal cut-out. Counting
+    only CIRCLEs answers this for round holes alone and silently prices a slot, a rectangular
+    aperture or a D-cut at nothing. Cut-outs arrive in three shapes and all three are counted
+    here: a circle, a closed polyline, and a loop assembled from separate lines and arcs
+    (which is how a slot with radiused ends is usually exported).
+
+    Bend lines are excluded — they are not cut, and chaining them would fuse real contours
+    into one. Annotation layers are excluded by EFFECTIVE layer, so geometry inheriting
+    layer '0' from an annotation block is still skipped.
+
+    The outer profile is one of these contours, not an extra: it is added only when no
+    detected contour spans the blank, which is the case when the outline is drawn with gaps
+    too large to chain. `incomplete` is set when open segments were left unclosed, so a
+    caller can tell "no internal cut-outs" from "we could not tell".
+    """
+    types = {"LINE", "ARC", "CIRCLE", "LWPOLYLINE", "POLYLINE", "SPLINE"}
+    contours: List[List[Tuple[float, float]]] = []
+    loose: List[Any] = []
+
+    items = [(e, (lay or "").upper())
+             for e, lay in _all_entities_with_layers(msp, types)
+             if (lay or "").upper() not in skip_layers]
+    # PREFER THE CUT LAYERS. A production drawing carries a frame, a title block and
+    # revision boxes, and those are closed rectangles too: chaining every non-annotation
+    # segment in the file would invent contours and charge pierces for the border. Where the
+    # cut layers hold geometry — the normal case for a flat-pattern export — only they are
+    # counted. A file whose cut layers are empty falls back to everything not skipped, so an
+    # unusual layer scheme still gets a count rather than a silent zero.
+    if cut_layers:
+        _wanted = {l.upper() for l in cut_layers}
+        _on_cut = [it for it in items if it[1] in _wanted]
+        if _on_cut:
+            items = _on_cut
+
+    for e, layer in items:
+        t = e.dxftype()
+        if t == "CIRCLE":
+            if _circle_diameter_mm(e, scale) >= _MIN_CONTOUR_MM:
+                contours.append(_entity_points(e))
+            continue
+        if t in ("LWPOLYLINE", "POLYLINE"):
+            # The same minimum a circle must clear. A closed polyline of a few microns is a
+            # duplicated vertex or a construction artefact, not an aperture the laser pierces
+            # — and applying the threshold to circles alone let it in by the other door.
+            if _is_closed_polyline(e):
+                if _contour_span_mm(_entity_points(e), scale) >= _MIN_CONTOUR_MM:
+                    contours.append(_entity_points(e))
+            else:
+                loose.append(e)
+            continue
+        # A bend line is not a cut. It must not be chained, or two cut-outs joined by a
+        # bend line would be counted as one contour.
+        _len = _entity_length_mm(e, scale)
+        if _is_bend_candidate(e, _len):
+            continue
+        # A ZERO-LENGTH segment starts and ends on the same point. Chained, it becomes a
+        # self-loop whose single node has degree two — which is exactly the test for a closed
+        # contour, so every stray duplicate vertex in the file would invent a pierce.
+        if _len < _MIN_SEGMENT_MM:
+            continue
+        loose.append(e)
+
+    # Chain the loose segments: shared endpoints, within a 0.1mm tolerance.
+    tol = (0.1 / scale) if scale else 0.1
+
+    def _key(p: Tuple[float, float]) -> Tuple[int, int]:
+        q = tol if tol > 0 else 0.1
+        return (int(round(p[0] / q)), int(round(p[1] / q)))
+
+    parent: Dict[Tuple[int, int], Tuple[int, int]] = {}
+
+    def _find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a, b):
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    degree: Dict[Tuple[int, int], int] = {}
+    seg_nodes: List[Tuple[Tuple[int, int], Tuple[int, int], List[Tuple[float, float]]]] = []
+    for e in loose:
+        pts = _entity_points(e)
+        if len(pts) < 2:
+            continue
+        a, b = _key(pts[0]), _key(pts[-1])
+        if a == b and _contour_span_mm(pts, scale) < _MIN_CONTOUR_MM:
+            # Starts and ends on the same snapped node and spans nothing: a self-loop, which
+            # would pass the degree test alone and count as a contour of its own.
+            continue
+        degree[a] = degree.get(a, 0) + 1
+        degree[b] = degree.get(b, 0) + 1
+        _union(a, b)
+        seg_nodes.append((a, b, pts))
+
+    comps: Dict[Tuple[int, int], List[Tuple[Tuple[int, int], Tuple[int, int], List]]] = {}
+    for a, b, pts in seg_nodes:
+        comps.setdefault(_find(a), []).append((a, b, pts))
+
+    incomplete = False
+    for segs in comps.values():
+        nodes = set()
+        for a, b, _ in segs:
+            nodes.add(a); nodes.add(b)
+        # A closed loop visits every node at least twice; a chain has two loose ends.
+        if segs and all(degree.get(n, 0) >= 2 for n in nodes):
+            _pts = [p for _, _, pts in segs for p in pts]
+            # Same minimum as a circle and a closed polyline must clear.
+            if _contour_span_mm(_pts, scale) >= _MIN_CONTOUR_MM:
+                contours.append(_pts)
+        elif segs:
+            incomplete = True
+
+    def _spans_blank(pts: List[Tuple[float, float]]) -> bool:
+        if not (blank_l and blank_w and pts):
+            return False
+        xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+        dims = sorted([(max(xs) - min(xs)) * scale, (max(ys) - min(ys)) * scale], reverse=True)
+        return dims[0] >= 0.9 * max(blank_l, blank_w) and dims[1] >= 0.9 * min(blank_l, blank_w)
+
+    outer_counted = any(_spans_blank(c) for c in contours)
+    pierces = len(contours) + (0 if outer_counted else (1 if blank_l else 0))
+    return {
+        "pierce_count": pierces,
+        "closed_contours": len(contours),
+        "outer_counted": outer_counted,
+        "incomplete": incomplete,
+    }
+
+
 def _get_layer_entities(
     msp: Any,
     target_layers: set,
     entity_types: Optional[set] = None,
 ) -> List[Any]:
-    """Return modelspace entities whose layer (uppercased) is in target_layers."""
+    """Return modelspace entities whose layer (uppercased) is in target_layers.
+
+    INSERTs ARE EXPLODED. A SolidWorks flat-pattern export commonly wraps the whole profile
+    in a block, and iterating model space alone then finds a single INSERT and no geometry —
+    the cut layer looks empty, the blank comes back 0, and the part silently falls through to
+    the drawing's dimension TEXT for its size. On job 12120 that hit 4 of 7 parts, and the
+    geometry was in the file the whole time: exploding 01M's block gives 126.39 x 82.20mm,
+    matching the SolidWorks cut-list flat exactly.
+
+    virtual_entities() yields the block's contents transformed into model-space coordinates,
+    so extents and lengths are correct without touching the file. Nested blocks are followed
+    to a bounded depth. An entity inheriting layer 0 from its INSERT takes the INSERT's layer,
+    which is how SolidWorks exports them.
+    """
+    wanted = {l.upper() for l in target_layers}
     result = []
-    for e in msp:
-        if _entity_layer(e) in {l.upper() for l in target_layers}:
-            if entity_types is None or e.dxftype() in entity_types:
-                result.append(e)
+
+    def _consider(e: Any, inherited_layer: Optional[str] = None) -> None:
+        lay = _entity_layer(e)
+        # ByBlock/inherited: an entity on layer '0' inside a block sits on the INSERT's layer.
+        if inherited_layer and lay in ("", "0"):
+            lay = inherited_layer
+        if lay in wanted and (entity_types is None or e.dxftype() in entity_types):
+            result.append(e)
+
+    # POLYLINES ARE EXPLODED TOO, AND FOR THE SAME REASON AS INSERTS. The outline path
+    # asks this function for {"LINE"} and {"ARC"} and nothing else, so a profile drawn as
+    # one closed LWPOLYLINE — which is what Inventor, Solid Edge, most nesting software and
+    # nearly every customer-supplied DXF write — contributed no segments at all. Measured:
+    # a 200 x 100 plate with one hole came back blank 0.0 x 0.0, cut length 0, and STILL
+    # reported one hole, because the hole counter walks polylines and the outline reader
+    # does not. Two readers of one file disagreeing about what is in it.
+    #
+    # SolidWorks writes LINE + ARC, which is why SDI's own packs never showed this and a
+    # customer's DXF would have.
+    #
+    # virtual_entities() is the right conversion rather than get_points(): a LWPOLYLINE
+    # carries BULGE values for its arc segments, and reading the vertices alone turns every
+    # filleted corner into a chord — a quietly short cut length and a quietly small area on
+    # a part that looked like it read fine.
+    _EXPLODES_TO_SEGMENTS = {"LWPOLYLINE", "POLYLINE"}
+    _wants_segments = entity_types is None or bool(
+        {"LINE", "ARC"} & set(entity_types))
+
+    def _walk(entities: Any, depth: int = 0, inherited: Optional[str] = None) -> None:
+        for e in entities:
+            if e.dxftype() == "INSERT" and depth < 5:
+                try:
+                    kids = list(e.virtual_entities())
+                except Exception:
+                    kids = []
+                if kids:
+                    # A nested INSERT on layer '0' is ByBlock: it belongs to whatever
+                    # its parent sits on. Taking its own '0' would drop the cut layer
+                    # a level down and lose the geometry inside it.
+                    _own = _entity_layer(e)
+                    _walk(kids, depth + 1,
+                          inherited if _own in ('', '0') else (_own or inherited))
+                    continue
+            if (_wants_segments and e.dxftype() in _EXPLODES_TO_SEGMENTS
+                    and (entity_types is None or e.dxftype() not in entity_types)):
+                # Only where the caller did NOT ask for the polyline itself — the hole and
+                # contour counters do ask, and must keep receiving it whole.
+                _lay = _entity_layer(e)
+                if inherited and _lay in ("", "0"):
+                    _lay = inherited
+                if _lay in wanted:
+                    try:
+                        for _seg in e.virtual_entities():
+                            if entity_types is None or _seg.dxftype() in entity_types:
+                                result.append(_seg)
+                    except Exception:
+                        pass
+                    continue
+            _consider(e, inherited)
+
+    _walk(msp)
     return result
+
+
+# ── A DISC IS AN OUTLINE ──────────────────────────────────────────────────────────────────
+# 12173-03-02J, the 18 mm MDF spinner plate: its DXF ('..._18mm MDF_revA.DXF', a block/INSERT
+# export) holds one CIRCLE for the profile and the fixing holes, and no straight edge at all.
+# The flat-pattern test demanded four cut LINEs, so a perfectly measured disc read "a cut path
+# but no closed outline", its blank fell to the parts list's 556 x 556 square, and the paint
+# and the edging were figured on the square. A cut layer that holds no line and no arc, whose
+# largest circle contains every other circle on it, is a disc: the largest circle is the
+# outline, the others are holes inside it.
+_DISC_MIN_DIAMETER_MM = 10.0
+
+
+def _disc_outline(msp: Any, scale: float) -> Optional[Tuple[float, float, float, List[Any]]]:
+    """(cx, cy, r) of a circular cut outline in mm, and the circles inside it, or None.
+
+    INSERTs and polylines are exploded the same way the outline reader explodes them, so the
+    two cannot disagree about what is on the cut layer."""
+    if _get_layer_entities(msp, CUT_LAYERS, {"LINE", "ARC"}):
+        return None
+    circs = _get_layer_entities(msp, CUT_LAYERS, {"CIRCLE"})
+    if not circs:
+        return None
+    rows = []
+    for e in circs:
+        try:
+            r = float(getattr(e.dxf, "radius", 0.0) or 0.0) * scale
+            rows.append((e.dxf.center.x * scale, e.dxf.center.y * scale, r, e))
+        except Exception:
+            continue
+    if not rows:
+        return None
+    cx, cy, R, outer = max(rows, key=lambda t: t[2])
+    if 2.0 * R < _DISC_MIN_DIAMETER_MM:
+        return None
+    inner = []
+    for (x, y, r, e) in rows:
+        if e is outer:
+            continue
+        if math.hypot(x - cx, y - cy) + r > R + 1e-6:
+            return None                       # a circle outside the disc: not one outline
+        inner.append(e)
+    return cx, cy, R, inner
 
 
 def _order_segments(
@@ -794,9 +1237,19 @@ def _shapely_net_area_mm2(cut_lines, cut_arcs, cut_circs, scale, bbox_area_mm2):
     if not polys:
         return (bbox_area_mm2, "bbox_polygonize_empty", 0.0)
 
-    outer = max(polys, key=lambda p: p.area)
-    interior = [p for p in polys if p is not outer]
-    net_area = max(0.0, outer.area - sum(p.area for p in interior))
+    # THE OUTER FACE IS THE ONE WHOSE OUTLINE ENCLOSES THE OTHERS, NOT THE BIGGEST FACE
+    # (D-396). Harrods 9439-01-04-001 is a 219 x 60 base cut as a 5 mm rim: polygonize
+    # returns the rim (2,690 mm2, one interior) and the hole it encloses (10,450 mm2).
+    # Picking the biggest face took the HOLE for the blank and subtracted the rim from it
+    # — 7,760 mm2 for a part that is 2,690. Polygonize already leaves a face's holes out
+    # of its area, so the blank is the face with the largest exterior, as it stands; the
+    # faces inside its holes are air.
+    try:
+        from shapely.geometry import Polygon as _Poly
+        outer = max(polys, key=lambda p: _Poly(p.exterior).area)
+    except Exception:
+        outer = max(polys, key=lambda p: p.area)
+    net_area = max(0.0, outer.area)
 
     for e in (cut_circs or []):
         try:
@@ -804,14 +1257,42 @@ def _shapely_net_area_mm2(cut_lines, cut_arcs, cut_circs, scale, bbox_area_mm2):
             if r < 0.5:
                 continue
             c = (e.dxf.center.x * scale, e.dxf.center.y * scale)
-            disc = Point(c).buffer(r, resolution=16)
+            # POSITIONAL, DELIBERATELY. Shapely renamed this argument: it is `resolution`
+            # in 1.x and `quad_segs` in 2.x, and 2.1 deprecates the old spelling — which is
+            # where the DeprecationWarning in the test run comes from. Naming either one
+            # pins this module to a Shapely major version, and when the deprecated name is
+            # finally removed the call raises TypeError inside a `try/except Exception`
+            # that would swallow it: every hole would silently stop being subtracted from
+            # net area, on the measured-geometry path that ranks 80.
+            #
+            # The second positional parameter has meant "segments per quarter circle" in
+            # both versions, so passing it positionally is correct on either and cannot
+            # rot. 16 is unchanged.
+            disc = Point(c).buffer(r, 16)
             if outer.contains(disc.representative_point()):
                 net_area = max(0.0, net_area - disc.area)
         except Exception:
             continue
 
     fill = (100.0 * net_area / bbox_area_mm2) if bbox_area_mm2 > 0 else 0.0
-    if not (30.0 <= fill <= 100.5):
+    # A THIN RIM IS A REAL BLANK (D-396). The 30% floor took the base's 20% fill for
+    # garbage and fell back to the solid bbox — 516 g for a 105 g part. What tells a
+    # polygonized blank from garbage is whether its outline closes round the whole
+    # extent: the outer face's bounds match the bbox. A face that does not reach the
+    # extents is a fragment, and the bbox stands as before.
+    _closes = False
+    try:
+        _bx0, _by0, _bx1, _by1 = outer.bounds
+        _ox0 = min(min(s.coords, key=lambda c: c[0])[0] for s in segs)
+        _ox1 = max(max(s.coords, key=lambda c: c[0])[0] for s in segs)
+        _oy0 = min(min(s.coords, key=lambda c: c[1])[1] for s in segs)
+        _oy1 = max(max(s.coords, key=lambda c: c[1])[1] for s in segs)
+        _tol = 0.01 * max(_ox1 - _ox0, _oy1 - _oy0, 1.0)
+        _closes = (abs(_bx0 - _ox0) <= _tol and abs(_bx1 - _ox1) <= _tol
+                   and abs(_by0 - _oy0) <= _tol and abs(_by1 - _oy1) <= _tol)
+    except Exception:
+        _closes = False
+    if fill > 100.5 or (fill < 30.0 and not _closes):
         return (bbox_area_mm2, "bbox_fill_out_of_band", round(fill, 1))
     return (round(net_area, 2), "shapely_polygonize", round(fill, 1))
 
@@ -838,10 +1319,66 @@ def _exact_perimeter_and_area(
     perimeter  = line_length + arc_length
 
     # Bounding box from cut lines
-    xs = [e.dxf.start.x * scale for e in cut_lines] + \
-         [e.dxf.end.x   * scale for e in cut_lines]
-    ys = [e.dxf.start.y * scale for e in cut_lines] + \
-         [e.dxf.end.y   * scale for e in cut_lines]
+    # THE BLANK IS THE EXTENT OF THE WHOLE OUTLINE, NOT OF ITS STRAIGHT PARTS.
+    #
+    # This measured line endpoints alone, so every arc that reaches beyond them was left
+    # out of the part's own size: a radiused nose, a rounded end, a D-shape, a bulged
+    # polyline edge. Measured on a 200 x 100 plate with two outward bulges — true extent
+    # 220.0 x 100, reported 200 x 100. The blank comes back SMALL, and a small blank is an
+    # under-priced one: 6.6% of the material on that plate alone.
+    #
+    # It also broke the net area, one step further on. The reconstruction correctly found
+    # 21343mm2 of material inside an outline the bbox said was 20000mm2, so fill came out
+    # at 106.7% — outside the 30-100.5% plausibility band — and the abstain gate threw the
+    # CORRECT figure away and substituted the wrong bbox. A part with rounded ends was
+    # costed on its straight-edged shadow, twice over.
+    #
+    # Arcs are measured by the same flattening the polygonize path uses, so the two cannot
+    # disagree about where the outline goes. The sagitta is expressed in native units, so
+    # it means 0.2mm whether the file is drawn in millimetres or inches.
+    _pts_x: List[float] = [e.dxf.start.x * scale for e in cut_lines] + \
+                          [e.dxf.end.x   * scale for e in cut_lines]
+    _pts_y: List[float] = [e.dxf.start.y * scale for e in cut_lines] + \
+                          [e.dxf.end.y   * scale for e in cut_lines]
+    _sag_bb = 0.20 / max(scale, 1e-9)
+    for e in (cut_arcs or []):
+        try:
+            for v in e.flattening(_sag_bb):
+                _pts_x.append(v.x * scale)
+                _pts_y.append(v.y * scale)
+        except Exception:
+            continue
+
+    # A DISC HAS NO STRAIGHT EDGES AT ALL. With no lines and no arcs the outline can only
+    # be a circle, and reading nothing gave a 0 x 0 blank on a perfectly measurable part.
+    # Only in that case, because anywhere else a circle is a HOLE and its extent is inside
+    # the profile already.
+    _disc_r = 0.0
+    _disc_holes_mm2 = 0.0
+    if not _pts_x and (cut_circs or []):
+        for e in cut_circs:
+            try:
+                r = float(getattr(e.dxf, "radius", 0.0) or 0.0) * scale
+                cx, cy = e.dxf.center.x * scale, e.dxf.center.y * scale
+                _pts_x += [cx - r, cx + r]
+                _pts_y += [cy - r, cy + r]
+            except Exception:
+                continue
+        # THE OUTLINE IS THE LARGEST CIRCLE, AND IT IS CUT. Its circumference is the cut
+        # path and its area — less the holes inside it — is the part's face; the square it
+        # sits in is only what it nests in. The other circles stay holes, counted by the
+        # hole reader as before.
+        try:
+            _radii = sorted((float(getattr(e.dxf, "radius", 0.0) or 0.0) * scale
+                             for e in cut_circs), reverse=True)
+            if _radii and _radii[0] > 0:
+                _disc_r = _radii[0]
+                _disc_holes_mm2 = sum(math.pi * r * r for r in _radii[1:] if r < _disc_r)
+                perimeter += 2.0 * math.pi * _disc_r
+        except Exception:
+            _disc_r = 0.0
+
+    xs, ys = _pts_x, _pts_y
     if not xs:
         return {"perimeter_mm": round(perimeter, 3), "area_mm2": 0.0,
                 "blank_length_mm": 0.0, "blank_width_mm": 0.0, "bbox_fill_pct": 0.0}
@@ -862,6 +1399,10 @@ def _exact_perimeter_and_area(
     area, _area_method, fill_pct = _shapely_net_area_mm2(
         cut_lines, cut_arcs, cut_circs, scale, bbox_area
     )
+    if _disc_r > 0:
+        area = math.pi * _disc_r * _disc_r - _disc_holes_mm2
+        _area_method = "disc"
+        fill_pct = round(100.0 * area / bbox_area, 2) if bbox_area > 0 else 0.0
     if area < 1.0 and bbox_area > 0:
         area = bbox_area                      # last-resort guard (function already abstains)
         _area_method = "bbox_guard"
@@ -874,6 +1415,8 @@ def _exact_perimeter_and_area(
         "blank_width_mm":  blank_width,
         "bbox_fill_pct":   fill_pct,
         "area_method":     _area_method,
+        **({"outline_shape": "circle", "outline_diameter_mm": round(2.0 * _disc_r, 3)}
+           if _disc_r > 0 else {}),
     }
 
 
@@ -1107,13 +1650,28 @@ def _calculate_weight(
 def _is_flat_pattern(msp: Any, scale: float = 1.0) -> bool:
     """
     Return True if this DXF looks like a flat pattern:
+    - Has NO DIMENSION entities (a flat pattern has none, ever — a DXF carrying them is
+      a DRAWING of the part, whose border and views measure as fiction)
     - Has entities on CUT_LAYERS
     - Cut outline forms a sensible blank (area > 100mm², aspect < 50:1)
     - Optionally has BENDLINES layer
     """
+    # A DRAWING IS NOT A FLAT PATTERN, AND THIS READER SAID IT WAS. 10975-02's pack holds
+    # one DXF: the GA sheet exported whole — 9 DIMENSION entities, a BOM table, the M&S
+    # title block — and this returned True over it, so its extents (792 x 760.3 of views
+    # and border) reached the record as a "measured flat" and the blank check reported a
+    # phantom 377% disagreement against the model, twice. drawing_job_merge's guard
+    # already knows the decisive rule; the reader that MAKES the claim must apply it too,
+    # or every caller that trusts flat_pattern_detected (merge_dxf_into_scan_json does)
+    # inherits the lie.
+    for _e in msp:
+        if _e.dxftype() == "DIMENSION":
+            return False
     cut_lines = _get_layer_entities(msp, CUT_LAYERS, {"LINE"})
     if len(cut_lines) < 4:
-        return False
+        # A DISC HAS NO STRAIGHT EDGE (12173-03-02J). Its one circle is the outline.
+        _disc = _disc_outline(msp, scale)
+        return bool(_disc and math.pi * _disc[2] ** 2 > 100.0)
 
     xs = [e.dxf.start.x * scale for e in cut_lines] + \
          [e.dxf.end.x   * scale for e in cut_lines]
@@ -1166,15 +1724,78 @@ def extract_flat_pattern_data(dxf_path: Path) -> Dict[str, Any]:
     outline  = _exact_perimeter_and_area(cut_lines, cut_arcs, scale, cut_circs)
     notches  = _detect_corner_notches(cut_lines, scale)
 
+    # ── A ZERO THAT SAYS WHY ──────────────────────────────────────────────────
+    # The outline reader understands LINE, ARC and CIRCLE, plus the polylines exploded
+    # into them. Anything else on a cut layer — a SPLINE profile, an ELLIPSE, a HATCH
+    # boundary — produces a 0 x 0 blank and a cut length of zero, and said nothing at all:
+    # measured on a spline-outlined plate, which reported blank 0.0 x 0.0 AND one hole,
+    # because the hole counter reads entity types this does not.
+    #
+    # Adding spline support would fix one type and leave the next silent. Naming what was
+    # on the layer turns every unsupported type, including ones not written yet, into a
+    # stated refusal — and a refusal that names the entity is one somebody can act on,
+    # where a zero is indistinguishable from an empty file.
+    _unread_outline: List[str] = []
+    if not (outline.get("blank_length_mm") or 0):
+        _seen = {}
+        for _e, _lay in _all_entities_with_layers(msp):
+            if (_lay or "").upper() in {l.upper() for l in CUT_LAYERS}:
+                _seen[_e.dxftype()] = _seen.get(_e.dxftype(), 0) + 1
+        _unhandled = {t: n for t, n in _seen.items()
+                      if t not in {"LINE", "ARC", "CIRCLE", "LWPOLYLINE", "POLYLINE"}}
+        if _unhandled:
+            _unread_outline = [
+                f"the cut layer holds {n} {t} entit{'y' if n == 1 else 'ies'} that this "
+                f"reader cannot measure — the blank and cut length are ZERO because of "
+                f"that, not because the file is empty"
+                for t, n in sorted(_unhandled.items())]
+        elif _seen:
+            _unread_outline = [
+                f"the cut layer holds geometry ({', '.join(sorted(_seen))}) but no outline "
+                f"could be measured from it — treat the zero blank as unread, not as small"]
+
     # Holes — circles on CUT_LAYERS or all layers (excluding tiny features)
-    all_circles = list(msp.query("CIRCLE"))
-    hole_diams  = sorted(set(
-        round(_circle_diameter_mm(e, scale), 2)
-        for e in all_circles
-        if _circle_diameter_mm(e, scale) >= 1.0
-        and _entity_layer(e) not in {l.upper() for l in SKIP_LAYERS}
-    ))
-    hole_count = len(all_circles)
+    # Circles inside a block are geometry too. msp.query("CIRCLE") never enters an INSERT,
+    # so on an export that blocks the profile every hole vanished: 06M carries eight circles
+    # in its block and reported zero holes and zero pierces, which under-prices the laser.
+    # Same walk as the outline uses, so holes and profile can never disagree about what is
+    # in the file.
+    _skip = {l.upper() for l in SKIP_LAYERS}
+    # FILTER FIRST, THEN COUNT. hole_diams excluded sub-1mm circles and annotation layers;
+    # hole_count then counted every circle in the file regardless, so a title block or
+    # symbol layer inflated the laser's hole count. Now one filtered list feeds both, so
+    # the count and the diameters can never describe different sets of circles.
+    # Skip by EFFECTIVE layer: a circle drawn on layer '0' inside a SYMBOLS(BENCHMARK) or
+    # DIMS+NOTES block reports its own layer as '0' and would otherwise sail through the
+    # skip list and be priced as a hole.
+    _hole_circles = [
+        e for e, _lay in _all_entities_with_layers(msp, {"CIRCLE"})
+        if _circle_diameter_mm(e, scale) >= 1.0 and (_lay or "").upper() not in _skip
+    ]
+    # THE DISC'S OWN OUTLINE IS NOT A HOLE. On a circular profile the largest cut circle is
+    # the part's edge; counting it priced the rim as a hole.
+    if outline.get("outline_shape") == "circle":
+        _od = float(outline.get("outline_diameter_mm") or 0.0)
+        _dropped = False
+        _kept_holes = []
+        for e in _hole_circles:
+            if not _dropped and abs(_circle_diameter_mm(e, scale) - _od) < 0.01:
+                _dropped = True
+                continue
+            _kept_holes.append(e)
+        _hole_circles = _kept_holes
+    all_circles = _hole_circles
+    hole_diams  = sorted(set(round(_circle_diameter_mm(e, scale), 2) for e in _hole_circles))
+    hole_count  = len(_hole_circles)
+    # PIERCES ARE CONTOURS, NOT HOLES. Counting holes + 1 prices a slot, a rectangular
+    # aperture and a D-cut at nothing — only round holes were ever counted. Every closed
+    # profile needs its own pierce, whether it is a circle, a closed polyline, or a loop of
+    # separate lines and arcs, and the outer profile is one of them rather than an extra.
+    _contours = _count_closed_contours(msp, scale, _skip,
+                                       outline.get("blank_length_mm", 0.0) or 0.0,
+                                       outline.get("blank_width_mm", 0.0) or 0.0,
+                                       CUT_LAYERS)
+    pierce_from_holes = _contours["pierce_count"]
 
     # ── Bend data ─────────────────────────────────────────────────────────────
     bend = _extract_bend_data(msp, scale)
@@ -1234,6 +1855,8 @@ def extract_flat_pattern_data(dxf_path: Path) -> Dict[str, Any]:
         "scale_to_mm":          scale,
         "flat_pattern_detected": is_flat,
         "geometry_score":       geometry_score,
+        # Why a zero blank is zero. Empty on every file this reader measured.
+        "outline_unread_reasons": _unread_outline,
 
         # Filename metadata
         "part_number":          fn_data.get("part_number"),
@@ -1243,9 +1866,18 @@ def extract_flat_pattern_data(dxf_path: Path) -> Dict[str, Any]:
         "filename_stem":        fn_data.get("filename_stem"),
 
         # Blank geometry (exact)
+        "estimated_pierce_count": pierce_from_holes,
+        "closed_contour_count":   _contours["closed_contours"],
+        # Open segments were left unchained, so some cut-outs may not have been seen. Lets a
+        # caller tell "no internal cut-outs" from "we could not tell".
+        "pierce_count_incomplete": bool(_contours["incomplete"]),
         "blank_length_mm":      outline.get("blank_length_mm", 0.0),
         "blank_width_mm":       outline.get("blank_width_mm",  0.0),
         "blank_area_mm2":       area_mm2,
+        # A circular profile says so, with its diameter: the coated face and the banded
+        # edge follow the circle, while the blank (what it nests in) stays the square.
+        "outline_shape":        outline.get("outline_shape"),
+        "outline_diameter_mm":  outline.get("outline_diameter_mm"),
         "bbox_area_mm2":        outline.get("bbox_area_mm2",   0.0),
         "bbox_fill_pct":        outline.get("bbox_fill_pct",   0.0),
         "perimeter_mm":         outline.get("perimeter_mm",    0.0),
@@ -1313,6 +1945,22 @@ def merge_dxf_into_scan_json(
         )
         return result
 
+    # ONLY A FLAT PATTERN'S GEOMETRY MAY LAND ON A PART. This merge applied the blank
+    # whatever the extract said — flat_pattern_detected was computed and never consulted —
+    # so a drawing-sheet export's border extents could arrive on a part as measured
+    # geometry with confidence 1.0. Refused loudly: the augmentation record says the file
+    # was seen and why it gave no blank.
+    if not flat.get("flat_pattern_detected"):
+        result.setdefault("dxf_augmentations", []).append({
+            "dxf_file": str(dxf_path.name),
+            "part_number": (flat.get("part_number") or "").strip().upper() or None,
+            "matched": False,
+            "refused": ("not a flat pattern — the file is a drawing of the part "
+                        "(dimensions / title block) or its cut layers yield no blank; "
+                        "its extents would measure the border, not the profile"),
+        })
+        return result
+
     dxf_pn = (flat.get("part_number") or "").strip().upper()
     if not dxf_pn:
         return result
@@ -1344,11 +1992,16 @@ def merge_dxf_into_scan_json(
         part["geometry_score"]      = 1.0
         part["flat_pattern_detected"] = True
 
-        # Material from filename if not already set
-        if flat.get("material_from_filename") and not part.get("normalized_material"):
-            part["normalized_material"] = flat["material_from_filename"]
-        if flat.get("thickness_mm") and not part.get("normalized_thickness_mm"):
-            part["normalized_thickness_mm"] = flat["thickness_mm"]
+        # Material and gauge FROM THE FILENAME. Not from the geometry — from the characters
+        # in the file's name, which is a naming convention someone typed. It ranks as
+        # inference, well below the model's cut list and below the printed title block, and
+        # the "if not already set" guard is not a substitute for that: it protects a value
+        # that arrived first, not the value that is better.
+        if flat.get("material_from_filename"):
+            _apply_field(part, "normalized_material", flat["material_from_filename"],
+                         "inference")
+        if flat.get("thickness_mm"):
+            _apply_field(part, "normalized_thickness_mm", flat["thickness_mm"], "inference")
 
         # Bends
         if flat["bend_count"] > 0:

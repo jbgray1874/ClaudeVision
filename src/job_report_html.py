@@ -1,10 +1,18 @@
 """
 job_report_html.py — SDI Intelligence unified job report (generic, data-driven).
 
-Produces the rich 7-section review report for ANY job from its summary JSON:
+THE ESTIMATOR'S PAGE. Four sections read from the one post-costing record
+(costed_facts.costed_job), in the order an estimator works:
+
+  Summary                       quantity, material, labour, unit cost, release status
+  Decisions required            issue, part, current assumption, action, owner, £ at stake
+  Bill of materials and hierarchy   expandable assemblies; charged material per line
+  Manufacturing route           the priced department rows and the decisions behind them
+
+Then, collapsed under "Evidence and diagnostics", the audit the report always carried:
   1. Estimate at a glance          5. What to focus on when checking
   2. What the engine got right     6. Design recommendations
-  3. Review items & limitations    7. Verdict
+  3. Review items & limitations    7. Verdict (with sections 8–14 beneath it)
   4. Drawing analysis
 
 When a parity bundle is supplied (a manual estimate exists), an additional
@@ -77,6 +85,65 @@ def _first_num(d: Dict[str, Any], *keys, default=None):
     return default
 
 
+# ── THE ONE PLACE A SECTION NUMBER IS WRITTEN ─────────────────────────────────────
+# 12173-02's section 2 said "See section 8" and the verdict said the failed checks were
+# "listed in section 8". Section 8 is "How far to trust this number"; the checks are 13.
+# Every heading number and every reference was its own hand-typed literal, and two of them
+# had been wrong since the first commit. Headings come from _h2(key) and references from
+# _sec(key), so a reference cannot name a section the heading does not carry.
+#
+# STATIC, NOT RENUMBERED PER RENDER: the workbook's AI Explanation tab (written before any
+# report exists) and the quote cite these numbers too, so a section with nothing to show
+# keeps its heading and says so in a sentence, and the numbering never gaps or shifts.
+# Conditional sub-sections (1a, 8.5) keep their own numbers and are referred to only when
+# they render.
+_SECTIONS: Dict[str, Tuple[str, str]] = {
+    "glance": ("1", "Estimate at a glance"),
+    "parity": ("1a", "Parity vs manual estimate"),
+    "right": ("2", "What the engine got right"),
+    "review": ("3", "Review items &amp; limitations"),
+    "drawings": ("4", "Drawing analysis"),
+    "focus": ("5", "What to focus on when checking this job"),
+    "design": ("6", "Design recommendations — for consistent, reliable estimating"),
+    "verdict": ("7", "Verdict"),
+    "trust": ("8", "How far to trust this number"),
+    "concept": ("8.5", "What this concept budget assumed"),
+    "bom_source": ("9", "Where the bill of materials came from"),
+    "keys": ("10", "What each purchased part was looked up by"),
+    "unpriced": ("11", "Why these lines carry no price"),
+    "route": ("12", "How each operation was decided"),
+    "checks": ("13", "Consistency checks"),
+    "explained": ("14", "Every row, explained"),
+}
+
+
+def _h2(key: str) -> str:
+    """The heading of a numbered section, from the registry."""
+    n, t = _SECTIONS[key]
+    return f"<h2>{n} &nbsp;{t}</h2>"
+
+
+def _sec(key: str) -> str:
+    """A reference to a numbered section, from the same registry as its heading."""
+    return f"section {_SECTIONS[key][0]}"
+
+
+def section_number(key: str) -> str:
+    """The number a section of this report carries — for documents that cite it."""
+    return _SECTIONS[key][0]
+
+
+def _sub(key: str, i: int) -> str:
+    """A sub-section's number under its registered section: _sub('drawings', 1) -> '4.1'."""
+    return f"{_SECTIONS[key][0]}.{i}"
+
+
+def _empty_section(key: str, why: str) -> str:
+    """A numbered section with nothing to show keeps its heading and says why — the same
+    rule as SILENCE IS NOT A CLEAN BILL, so the numbering never gaps."""
+    return _h2(key) + f'<p class="mini">{why}</p>'
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Field extraction — turn the summary JSON into a normalised view-model
 # ─────────────────────────────────────────────────────────────────────────────
@@ -119,34 +186,118 @@ def _extract_headline(summary: Dict[str, Any]) -> Dict[str, Any]:
     # fallbacks to cost_breakdown if WEP absent
     if unit is None:
         unit = _get(summary, "estimate_summary", "document_total_estimated_cost_gbp")
+    # ── THE UNIT COST THIS REPORT MAY PRINT, DECIDED ONCE ───────────────────────
+    #
+    # D-141: the report printed raw `hl["unit"]` in its header, its summary, its verdict and
+    # its footer, while the covering email had already been put behind `publishable_total`.
+    # Four sites in one document, each deciding for itself — the five-surfaces shape again,
+    # inside a single file. So the decision is made HERE, where `hl` is built, and every
+    # renderer reads the same answer.
+    #
+    # The cell comes from the read-back's own scan (`final_estimate.totals.unit_cell`). A
+    # total with no cell behind it is refused: the whole point is that a reader can open the
+    # figure, and "£149.87" with nowhere to check it is the £321.88 shape.
+    _fe_tot = (_get(summary, "final_estimate", "totals", default={}) or {})
+    from displayed_charge import publishable_total as _pub            # noqa: PLC0415
+    _pt = _pub({"run": {"unit_cost_gbp": unit,
+                        "unit_cell": _fe_tot.get("unit_cell"),
+                        "unit_cell_value": _fe_tot.get("unit_cell_value")}})
+    # A RUN THAT COSTED NOTHING HAS NO FIGURE TO PUBLISH (D-409) — decided here, where every
+    # renderer reads its answer, so the header, the summary, the glance, the verdict and the
+    # footer say "no price" together instead of one of them finding £25.46 of packaging.
+    try:
+        from run_stop import nothing_to_cost as _ntc                 # noqa: PLC0415
+        _stop = _ntc(summary)
+    except Exception:                                                # noqa: BLE001
+        _stop = None
     return {
         "unit": unit, "material": material, "labour": labour,
+        "nothing_to_cost": _stop,
+        "unit_publishable": _pt.get("amount"),
+        "unit_cell": _pt.get("cell"),
+        "unit_withheld_why": _pt.get("why") or "",
         "hours": hours, "source_of_truth": src,
     }
 
 
 def _extract_parts(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return _get(summary, "estimate_summary", "part_estimates", default=[]) or []
+    """The canonical job part list, shared with the sheet and every other deliverable.
+
+    Reading part_estimates here put this report on a different set of rows from the
+    Estimate sheet in the same job: cost streams that omitted a bought-in the sheet
+    charges, and quantities that differ for anything below the first level."""
+    from costed_facts import job_parts
+    return job_parts(summary) or (
+        _get(summary, "estimate_summary", "part_estimates", default=[]) or [])
 
 
 def _extract_cost_streams(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Group part_estimates into material streams (steel / bought-in / acrylic / boards)."""
     parts = _extract_parts(summary)
     streams: Dict[str, Dict[str, Any]] = {}
+    # WHICH PARTS ACTUALLY NESTED, from the workbook read-back. Empty on a run with no read-back,
+    # in which case the material-string rule below stands exactly as before.
+    _fe = ((summary.get("estimate_summary") or {}).get("final_estimate")
+           or summary.get("final_estimate") or {})
+    _steel_pns = {
+        str(_x).strip().upper()
+        for _r in (_fe.get("material_rows") or []) if isinstance(_r, dict)
+        and _r.get("block") == "steel"
+        for _x in ((_r.get("part_numbers") or [])
+                   or [str(_r.get("description") or "").split()[0] if _r.get("description") else ""])
+        if _x
+    }
+
+    # THE RECORD'S KIND, WHERE THE LINE HAS ONE (12173-02). This table counted bought-ins by
+    # prefix and stock form and section 2 by the policy — 7 against 12 for one population.
+    # A line the record holds is bucketed by the kind the record gave it; the prefix and
+    # stock-form tests remain only for a part with no line.
+    try:
+        from costed_facts import costed_job as _cj_streams
+        _kind_of = {str(l.get("part_number") or "").strip().upper(): str(l.get("kind") or "")
+                    for l in (_cj_streams(summary).get("lines") or []) if isinstance(l, dict)}
+    except Exception:                                            # noqa: BLE001
+        _kind_of = {}
 
     def bucket(part: Dict[str, Any]) -> str:
         pn = str(part.get("part_number") or "").upper()
-        mat = str(part.get("normalized_material") or "").upper()
         me = part.get("material_estimate") or {}
         stock = str(me.get("stock_form") or "").lower()
-        if pn.startswith("BI-") or stock == "bought_in":
+        _k = _kind_of.get(pn.strip())
+        if _k == "bought_in":
             return "Bought-in items"
+        if _k == "commercial":
+            return "Commercial lines"
+        if _k is None and (pn.startswith("BI-") or stock == "bought_in"):
+            return "Bought-in items"
+        # ── AND A BOUGHT-IN IS NOT BUCKETED BY SOMEBODY ELSE'S MATERIAL ─────────
+        #
+        # The two tests above catch a bought-in by its part-number prefix or its stock form,
+        # and a parts-table row that carries neither reaches the material tests below wearing
+        # the DRAWING SHEET's reading — so the magnetic tape counted as an Acrylic part on
+        # 0355255 and a Sheet steel part on 401912-02, in a section that tells an estimator
+        # how many of each the job has.
+        #
+        # `display_material` answers whether the material on a line is the line's own. Where
+        # it is not, the material tests have nothing to work from and the part is what it is:
+        # bought in.
+        from display_material import display_material as _dm
+        _fact = _dm(part, _k or "")
+        if _fact["inherited"]:
+            return "Bought-in items"
+        mat = str(_fact["text"] if _fact["basis"] == "own" else "").upper()
         if "ACRYLIC" in mat or "ACR" in mat:
             return "Acrylic"
         if pn.startswith("VINYL") or "BOARD" in mat or "DISPLAY" in mat:
             return "Display boards"
+        # "SHEET STEEL" MEANS A ROW IN THE SHEET STEEL BLOCK, not a part whose material string
+        # contains STEEL. Bucketing on the word counted section stock, the assembly parent and
+        # the commercial BOM lines as sheet-steel parts, so the report announced TEN sheet-steel
+        # parts against a Sheet Steel block holding FIVE. Where the workbook has been read back
+        # we know exactly which parts nested; where it has not, the old behaviour stands.
         if "STEEL" in mat or mat in ("MILD_STEEL", "CR4", "MS"):
-            return "Sheet steel"
+            if not _steel_pns or pn in _steel_pns:
+                return "Sheet steel"
         return "Other material"
 
     for p in parts:
@@ -165,7 +316,8 @@ def _extract_cost_streams(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
         streams["Powder material"] = {"name": "Powder material", "count": None, "value": float(powder_total)}
 
     # order: steel, boards, acrylic, bought-in, powder, other
-    order = ["Sheet steel", "Display boards", "Acrylic", "Bought-in items", "Powder material", "Other material"]
+    order = ["Sheet steel", "Display boards", "Acrylic", "Bought-in items", "Commercial lines",
+             "Powder material", "Other material"]
     out = [streams[k] for k in order if k in streams]
     # any not in the order list
     out += [v for k, v in streams.items() if k not in order]
@@ -175,51 +327,151 @@ def _extract_cost_streams(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
 def _extract_review_items(summary: Dict[str, Any]) -> Dict[str, Any]:
     """Low-confidence parts, flagged parts, risk flags, provisional rates."""
     parts = _extract_parts(summary)
-    review = {"flagged_parts": [], "risk_flag_tally": {}, "provisional": []}
+    # A GHOST'S NAME MUST NOT OUTLIVE ITS LINE. The review signals were recorded before
+    # the identity gates folded the wrapped-row fragments away, so the confidence and
+    # missing-material panels kept asking about BI- codes that no longer exist anywhere
+    # the money is. Every panel here excludes the removal ledgers.
+    try:
+        from costed_facts import removed_identities as _removed_ids
+        _gone_ids = _removed_ids(summary)
+    except Exception:                                            # noqa: BLE001
+        _gone_ids = set()
+    parts = [p for p in parts
+             if str(p.get("part_number") or "").strip().upper() not in _gone_ids]
+    review = {"flagged_parts": [], "risk_flag_tally": {}, "provisional": [], "not_on_sheet": []}
 
     ers = _get(summary, "estimate_summary", "estimate_review_signals", default={}) or {}
-    flagged = ers.get("parts_flagged") or []
+    flagged = [f for f in (ers.get("parts_flagged") or [])
+               if not (isinstance(f, dict)
+                       and str(f.get("part_number") or f.get("part") or "")
+                       .strip().upper() in _gone_ids)]
 
-    # translate reason codes into plain language
-    def _reason_text(reasons: List[Dict[str, Any]]) -> str:
-        if not reasons:
-            return ""
-        bits = []
-        for r in reasons:
+    # ── ONE RECORD FOR EVERY FLAG COUNT ON THE PAGE ─────────────────────────────
+    # 12173-02 listed 29 parts "Welding on the drawing" in section 3 and section 5 and
+    # tallied 27 two lines below: the rows read the signals the estimator froze before the
+    # workbook existed, the tally read job_parts — and a ticket strip whose weld the route
+    # had ruled out was in both. Once the route is priced, the signals are rebuilt from
+    # job_parts (reconciled against the route) and the rows, the tally and section 5 all
+    # read that one list. A frozen entry with no line on the sheet (a nameless record, one
+    # canonicalisation dropped) is not dropped silently: it is named once, uncounted.
+    _canon = None
+    try:
+        from costed_facts import (canonical_identity as _canon, priced_route_known,
+                                  review_signals)
+        if priced_route_known(summary):
+            _live = {(_canon(summary, p.get("part_number"))
+                      or str(p.get("part_number") or "").strip().upper())
+                     for p in parts if isinstance(p, dict)}
+            _live.discard("")
+            review["not_on_sheet"] = [
+                f for f in flagged if isinstance(f, dict)
+                and not ((_canon(summary, f.get("part_number") or f.get("part"))
+                          or "") in _live)]
+            flagged = review_signals(parts)["parts_flagged"]
+    except Exception:                                            # noqa: BLE001
+        pass
+
+    # ── THE FINDINGS, KEPT APART ────────────────────────────────────────────────
+    #
+    # This used to join every reason for a part into one string with semicolons:
+    #
+    #     "high bend count; low extraction confidence (26%)"
+    #
+    # Two unrelated observations, one clause, no subject. James read them as a single claim and
+    # asked whether the confidence figure was a judgement on the bend count. It is not — it is
+    # the mean confidence across every field read for that part — but nothing on the page could
+    # have told him, because the semicolon had already made them one sentence.
+    #
+    # So each finding is returned as its own record carrying its CODE, and the renderer glosses
+    # each one separately from plain_english. Prose is built at the point of display, where the
+    # space to keep things apart exists.
+    def _findings(reasons: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for r in reasons or []:
             if not isinstance(r, dict):
                 continue
             code = str(r.get("code", ""))
             detail = r.get("detail")
+            if not code:
+                continue
+            if code == "risk_flag":
+                # The code that matters is the flag itself; "risk_flag" is only its envelope.
+                out.append({"code": str(detail), "detail": None})
+                continue
+            note = ""
             if code == "low_part_confidence":
                 try:
-                    bits.append(f"low extraction confidence ({float(detail)*100:.0f}%)")
+                    note = f"{float(detail) * 100:.0f}% average across the fields read"
                 except (TypeError, ValueError):
-                    bits.append("low extraction confidence")
-            elif code == "risk_flag":
-                RF = {
-                    "many_bends": "high bend count",
-                    "missing_material_spec": "material spec missing on the drawing",
-                    "weld_required": "weld cue detected — verify weld/dress content",
-                }
-                bits.append(RF.get(str(detail), f"risk flag: {detail}"))
-            elif code == "geometry_with_powder_below":
-                bits.append("low geometry confidence on a powder-coated part")
-            elif code:
-                bits.append(f"{code.replace('_', ' ')}" + (f" ({detail})" if detail is not None else ""))
+                    note = ""
+            elif detail is not None:
+                note = str(detail)
+            out.append({"code": code, "detail": note})
+        return out
+
+    def _reason_text(reasons: List[Dict[str, Any]]) -> str:
+        """The one-line form, still used where a table cell has no room for more."""
+        from plain_english import label as _lbl
+        bits = []
+        for f in _findings(reasons):
+            note = f" ({f['detail']})" if f.get("detail") else ""
+            bits.append(f"{_lbl(f['code'])}{note}")
         return "; ".join(bits)
+
+    try:
+        from costed_facts import charges_behind_flag as _charges
+    except Exception:                                            # noqa: BLE001
+        _charges = None
+
+    def _named(f: Dict[str, Any]) -> str:
+        # A findable name, not "?". part_number may be None (rejected as boilerplate); fall
+        # back through the description and the source filename so Tim can locate the part the
+        # review flag is about, instead of a bare "?" he cannot act on.
+        _src = f.get("source_file")
+        _label = (f.get("part_number") or f.get("part") or f.get("description")
+                  or (str(_src).rsplit("\\", 1)[-1].rsplit("/", 1)[-1] if _src else None)
+                  or "unidentified (no part number)")
+        # A code too short to identify anything ("//", "P/P") carries its words beside it.
+        _pn = str(f.get("part_number") or "")
+        _d = str(f.get("description") or "").strip()
+        if _pn and _d and len(re.sub(r"[^A-Za-z0-9]", "", _pn)) < 4:
+            _label = f"{_pn} ({_d[:40]})"
+        return str(_label)
 
     for f in flagged:
         if isinstance(f, dict):
+            _fnd = _findings(f.get("reasons") or [])
+            # WHAT EACH CUE BECAME ON THE SHEET, by the join reconcile uses to demote a flag:
+            # the rows its operation was charged on and who decided it (12173-02's weld cue
+            # drove 16 Weld and Dress rows while section 3 called the list arithmetic-free).
+            _charged: List[Dict[str, Any]] = []
+            if _charges is not None and f.get("part_number"):
+                _seen_rows = set()
+                for x in _fnd:
+                    for c in _charges(summary, f.get("part_number"), x["code"]) or []:
+                        if c.get("workbook_row") in _seen_rows:
+                            continue
+                        _seen_rows.add(c.get("workbook_row"))
+                        _charged.append(dict(c, flag=x["code"]))
             review["flagged_parts"].append({
-                "part": f.get("part_number") or f.get("part") or "?",
+                "part": _named(f),
+                "part_number": f.get("part_number"),
                 "reason": _reason_text(f.get("reasons") or []),
+                "findings": _fnd,
                 "cost": f.get("unit_total_cost_gbp") or f.get("cost"),
+                "charged": _charged,
             })
 
-    # risk flag tally across parts
-    for p in parts:
-        for rf in (p.get("risk_flags") or []):
-            review["risk_flag_tally"][rf] = review["risk_flag_tally"].get(rf, 0) + 1
+    # THE TALLY FROM THE SAME LIST the rows above were built from — never a second walk over
+    # a different record, which is how one page said 29 and 27 for one flag.
+    for f in flagged:
+        if not isinstance(f, dict):
+            continue
+        for r in f.get("reasons") or []:
+            if isinstance(r, dict) and r.get("code") == "risk_flag" and r.get("detail"):
+                rf = str(r["detail"])
+                review["risk_flag_tally"][rf] = review["risk_flag_tally"].get(rf, 0) + 1
+    review["not_on_sheet"] = [_named(f) for f in review["not_on_sheet"]]
 
     # provisional rate signals
     pc = _get(summary, "estimate_summary", "powder_coating_summary", default={}) or {}
@@ -229,7 +481,85 @@ def _extract_review_items(summary: Dict[str, Any]) -> Dict[str, Any]:
             "item": f"Powder £{ci.get('powder_rate_per_kg_gbp')}/kg",
             "note": "Powder material rate — confirm with supplier.",
         })
+
+    # ── THE SENTENCES THE ENGINE ACTUALLY WROTE ─────────────────────────────────
+    #
+    # THE REPORT SAID "NO PROVISIONAL OR LOW-CONFIDENCE ITEMS FLAGGED FOR THIS JOB" ON A JOB
+    # WITH FIVE. 401912-02's book of 18 Sep 07:31 carried an OUTSTANDING ESTIMATOR INPUTS list
+    # five long, and section 3 of the report beside it was empty, because this dict is built
+    # from `estimate_review_signals.parts_flagged` -- a structured signal with a fixed
+    # vocabulary -- and NEVER from `part["review_flags"]`, which is where every sentence the
+    # costing rules write actually lands.
+    #
+    # So the mass check's "the line is light by 0.91 kg", the fold's "counted by
+    # dxf_bendlines_layer -- measured, not inferred", the steel rate's refusal note and every
+    # other rule written this month reached the record, reached the workbook, and stopped
+    # short of the one page an estimator reads before sending. The claim on the page was not
+    # merely incomplete, it was the OPPOSITE of true, which is worse than saying nothing.
+    #
+    # Deduplicated across parts, because a flag written by a rule that runs per part would
+    # otherwise print forty times on a forty-part job and be scrolled past.
+    #
+    # The NOT PRICED lines are deliberately left out: they are the Decisions-required section's
+    # subject, that section is the one that gates sending, and the same item in two places on
+    # one page reads as two problems.
+    #
+    # AND FROM THE LINE WHERE THERE IS ONE. A sentence written at ingest can be made false by
+    # the money that arrives later ("treat any £0 as MISSING" beside £0.31 charged, 12173-02);
+    # the costed record rewrites it from the line's own money, so these notes read the line.
+    review["part_notes"] = part_review_notes(parts, (_record_for(summary) or {}).get("lines"))
     return review
+
+
+def part_review_notes(parts: List[Dict[str, Any]],
+                      lines: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """Every sentence the costing rules wrote onto a part, deduplicated, with who it was about.
+
+    Split out so it can be exercised directly: a gatherer buried inside a 90-line builder is a
+    gatherer that gets tested through the thing it feeds, which is how this one went unnoticed.
+
+    A part with a costed line speaks through the line's `review_flags` (the record's form of
+    the same sentences, computed against the money); a part with none through its own.
+    """
+    by_line: Dict[str, Dict[str, Any]] = {}
+    for l in lines or []:
+        if not isinstance(l, dict):
+            continue
+        for key in (l.get("part_number"), l.get("identity")):
+            k = str(key or "").strip().upper()
+            if k:
+                by_line.setdefault(k, l)
+    seen: Dict[str, List[str]] = {}
+    for p in parts or []:
+        if not isinstance(p, dict):
+            continue
+        _l = by_line.get(str(p.get("part_number") or "").strip().upper())
+        _flags = (_l.get("review_flags") if _l is not None else None)
+        if _flags is None:
+            _flags = p.get("review_flags") or []
+        for flag in _flags:
+            text = str(flag or "").strip()
+            if not text or "NOT PRICED" in text.upper() or "NOT YET PRICED" in text.upper():
+                continue
+            number = str(p.get("part_number") or "").strip()
+            who = seen.setdefault(text, [])
+            if number and number not in who:
+                who.append(number)
+    return [{"note": t, "parts": who} for t, who in seen.items()]
+
+
+# WHAT A DXF RECORD IS CALLED, ONCE (D-408, D-409). drawing_job_merge writes `dxf` on a matched
+# record, `path` on an unmatched, skipped or ambiguous one and `candidates` where several flats
+# were weighed — full Windows paths as written on the box. This report read `dxf_name`, `name`
+# and `file`, keys no live run has ever written, so 4.1 listed every PDF and every model and not
+# one DXF: on 12675-01's 19:10 report the only DXF in the pack minted the priced part and was
+# named nowhere, and 4.2 could only count the unmatched files; the test fixture used `dxf_name`,
+# so the test passed against a shape the engine never produces. The vocabulary lives in
+# costed_facts beside the covering note's, so the two cannot call one file two things.
+from costed_facts import (DXF_REASON_SENTENCES as _DXF_REASON_SENTENCES,  # noqa: E402
+                          dxf_record_names as _dxf_record_names,
+                          dxf_record_code_and_evidence as _dxf_record_code_and_evidence,
+                          dxf_record_reason as _dxf_record_reason)
 
 
 def _extract_drawing_quality(summary: Dict[str, Any]) -> Dict[str, Any]:
@@ -247,14 +577,38 @@ def _extract_drawing_quality(summary: Dict[str, Any]) -> Dict[str, Any]:
     dxf_names = []
     for k in ("matched", "unmatched_dxf", "ambiguous_dxf", "skipped"):
         for it in (dxf.get(k) or []):
-            nm = it.get("dxf_name") or it.get("name") or it.get("file") if isinstance(it, dict) else str(it)
-            if nm:
-                dxf_names.append(str(nm))
+            dxf_names.extend(_dxf_record_names(it))
     all_names = [str(p.get("name") or p) if isinstance(p, dict) else str(p) for p in pdfs] + dxf_names
+    # THE FILES SET ASIDE, BY NAME AND WITH THE REASON THE MERGE RECORDED (D-408). A refused
+    # drawing export is a different fact from a naming mismatch and gets its own row: the
+    # advice for one ("align the filename to the part number") is wrong for the other.
+    _refused_drawings: List[Tuple[str, str]] = []
+    _unmatched_items: List[Tuple[str, str]] = []
+    for k in ("unmatched_dxf", "skipped"):
+        for it in (dxf.get(k) or []):
+            code, evidence = _dxf_record_code_and_evidence(it)
+            for nm in _dxf_record_names(it):
+                if code == "drawing_export_not_a_flat":
+                    _refused_drawings.append((nm, evidence))
+                elif k == "unmatched_dxf":
+                    _unmatched_items.append((nm, _dxf_record_reason(it) or "matched to no part"))
     stray_space = [n for n in all_names if re.search(r"\s\.(dxf|pdf)$", n, re.I) or "  " in n]
 
     # part-number format variety
+    #
+    # THE COUNT ON ITS OWN WAS NOT A FINDING. The report said "Inconsistent part-number formats
+    # — 4 distinct patterns" and James asked the only question available: "what are the mixed
+    # conventions? If it's mixed conventions from the drawings, this should be stated clearly.
+    # Does the report state which drawings have mixed convention issues?"
+    #
+    # It did not, and worse, it could not, because a shape count is not a list of anything. So
+    # the part numbers behind each shape are kept. Reading them is what shows that on 10575-02
+    # the four patterns are 10575-01-001 (SDI fabricated), BI-BOLT (bought-in prefix),
+    # FIXING2104 (supplier code) and STD PART (a category, not a number) — three working
+    # conventions that TELL an estimator what kind of line each is, and one entry that is not a
+    # part number at all. Only the last is worth anyone's time.
     pn_patterns = set()
+    pn_examples: Dict[str, List[str]] = {}
     for p in parts:
         pn = str(p.get("part_number") or "")
         if not pn:
@@ -262,6 +616,9 @@ def _extract_drawing_quality(summary: Dict[str, Any]) -> Dict[str, Any]:
         # crude signature: letters/digits/dashes shape
         sig = re.sub(r"\d+", "N", re.sub(r"[A-Za-z]+", "L", pn))
         pn_patterns.add(sig)
+        pn_examples.setdefault(sig, [])
+        if pn not in pn_examples[sig]:
+            pn_examples[sig].append(pn)
 
     # contaminated / low-confidence fields from manual_review_items, BY SEVERITY
     # (distinguish genuine errors from low-confidence dimension-read warnings/info)
@@ -300,12 +657,35 @@ def _extract_drawing_quality(summary: Dict[str, Any]) -> Dict[str, Any]:
         except (TypeError, ValueError):
             return None
 
+    # SolidWorks native flat patterns — measured blanks from the model's sheet-metal cut
+    # list. A part that has one is NOT missing geometry, so it must not be reported under
+    # "parts without DXF": that would tell the estimator the blank is provisional when it
+    # is measured. Layer 0 of the waterfall gets its own count.
+    _native = summary.get("solidworks_native") or {}
+    _native_flat_pns = {
+        str(p.get("part_number") or "").strip().upper()
+        for p in parts
+        if p.get("native_flat_pattern")
+        or str(p.get("geometry_source") or "") == "solidworks_flat_pattern"
+    } - {""}
+    _without_dxf = []
+    for x in (dxf.get("parts_without_dxf") or []):
+        _pn = (str(x.get("part_number") or "") if isinstance(x, dict) else str(x)).strip().upper()
+        if _pn and _pn in _native_flat_pns:
+            continue
+        _without_dxf.append(x)
+
     return {
         "dxf_matched": len(dxf.get("matched") or []),
         "dxf_unmatched": len(dxf.get("unmatched_dxf") or []),
+        "dxf_unmatched_items": _unmatched_items,
+        "dxf_refused_drawings": _refused_drawings,
         "dxf_ambiguous": len(dxf.get("ambiguous_dxf") or []),
         "dxf_skipped": len(dxf.get("skipped") or []),
-        "parts_without_dxf": dxf.get("parts_without_dxf") or [],
+        "native_flat_parts": len(_native_flat_pns),
+        "native_top_assembly": _native.get("top_assembly") or "",
+        "native_counts": _native.get("counts") or {},
+        "parts_without_dxf": _without_dxf,
         "geo_reliability": geo_rel,
         "geo_reliability_band": _band(geo_rel),
         "geo_confidence": geo_conf,
@@ -314,6 +694,7 @@ def _extract_drawing_quality(summary: Dict[str, Any]) -> Dict[str, Any]:
         "stray_space_files": stray_space,
         "pn_pattern_count": len(pn_patterns),
         "pn_patterns": sorted(pn_patterns),
+        "pn_examples": {k: v[:6] for k, v in pn_examples.items()},
         "review_errors": sev_tally["error"],
         "review_warnings": sev_tally["warning"],
         "review_info": sev_tally["info"],
@@ -338,10 +719,24 @@ _CSS = """
     --accent:#c9a227;
   }
   *{box-sizing:border-box}
+  /* Used since the report was written and never defined, so every "t-muted" span has been
+     rendering as ordinary text. Defined here rather than removed: the places that reach for
+     it are all saying "this is context, not the answer", which is worth showing. */
+  .t-muted{color:var(--mut)}
+  /* The explanation's tables are ten columns wide. Without this they push the page sideways
+     and the reader scrolls the whole report to read one row. */
+  .scroll{overflow-x:auto;max-width:100%}
+  .scroll table{min-width:100%}
   body{margin:0;background:var(--bg);color:var(--ink);
     font:15px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
   .wrap{max-width:960px;margin:0 auto;padding:40px 28px 80px;}
   header.rpt{border-bottom:3px solid var(--navy);padding-bottom:22px;margin-bottom:8px;}
+  /* Letterhead. Both marks sit on one baseline whatever their aspect ratios, which is what
+     a fixed offset could never manage across a tall logo and a wide one. */
+  .marks{display:flex;align-items:center;justify-content:space-between;gap:16px;
+    min-height:46px;margin-bottom:16px;}
+  .marks .m-sdi,.marks .m-cust{display:inline-flex;align-items:center;}
+  .marks img,.marks svg{max-height:46px;width:auto;display:block;}
   .kicker{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--steel);font-weight:700;}
   h1{font-size:27px;line-height:1.2;margin:8px 0 6px;color:var(--navy);font-weight:750;letter-spacing:-.01em;}
   .sub{color:var(--mut);font-size:14px;}
@@ -391,6 +786,75 @@ _CSS = """
   .chk li{padding:8px 0 8px 30px;position:relative;border-bottom:1px dashed var(--line);}
   .chk li:before{content:"\\25A1";position:absolute;left:4px;top:7px;font-size:17px;color:var(--steel);}
   .chk li:last-child{border-bottom:none;}
+
+  /* ── THE ESTIMATOR'S PAGE ─────────────────────────────────────────────────────
+     Summary, decisions, BOM and route above the fold; the diagnostics collapsed. */
+  .release{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;padding:14px 18px;}
+  .release .tag{font-size:12.5px;padding:5px 13px;}
+  .release ul{margin:4px 0 0;flex-basis:100%;}
+  table.dec td{vertical-align:top;}
+  details.diag{margin-top:44px;border-top:3px solid var(--navy);padding-top:6px;}
+  details.diag>summary{cursor:pointer;font-size:20px;color:var(--navy);font-weight:700;
+    padding:12px 0;list-style:none;}
+  details.diag>summary::-webkit-details-marker{display:none;}
+  details.diag>summary:before{content:"\\25B8";display:inline-block;margin-right:10px;color:var(--steel);}
+  details.diag[open]>summary:before{content:"\\25BE";}
+  details.asm{border:1px solid var(--line);border-radius:9px;padding:4px 14px 8px;margin:12px 0;
+    background:var(--card);}
+  details.asm>summary{cursor:pointer;font-weight:650;color:var(--navy2);padding:8px 0;}
+  details.asm details.asm{margin-left:18px;}
+  details.asm table{margin:6px 0 4px;}
+  td code{white-space:nowrap;}
+  td.n .mini{white-space:nowrap;}
+
+  /* ── PRINTED, BECAUSE THIS IS THE DOCUMENT THAT GETS WALKED THROUGH ────────────────
+     There were no print rules at all, and the default handling of this page loses
+     content in three ways that a reader sees as "the bottom is missing":
+
+     COLOUR IS THE WARNING. Browsers drop background colours when printing unless told
+     otherwise, so every callout printed white on white: the red PRESENT, NOT READ rows
+     and the whole "what to check" apparatus came out looking like ordinary prose. The
+     alarming rows are the ones that vanish, which is the wrong way round.
+
+     A TABLE'S HEADINGS STOP AT PAGE ONE. Section 12 runs to forty-odd rows over three
+     sheets of paper, and without display:table-header-group the second and third pages
+     are unlabelled columns of part numbers. thead repeats now.
+
+     AND ROWS SPLIT DOWN THE MIDDLE. A row whose cells carry two lines of explanation
+     breaks across the fold, so half a finding sits at the bottom of one page and half
+     at the top of the next, and the two halves read as two different findings. */
+  @media print {
+    @page { margin: 14mm 12mm; }
+    html, body { background:#fff; }
+    body { -webkit-print-color-adjust:exact; print-color-adjust:exact; font-size:11.5px; }
+    .wrap { max-width:none; padding:0; }
+    /* Repeat the column headings on every page the table spills onto. */
+    thead { display:table-header-group; }
+    tfoot { display:table-footer-group; }
+    /* Keep a finding whole, and keep a heading with what it introduces. */
+    tr, .callout, .rec, .chk li { page-break-inside:avoid; break-inside:avoid; }
+    h1, h2, h3 { page-break-after:avoid; break-after:avoid; }
+    table { page-break-inside:auto; font-size:10.5px; }
+    /* A grid container is the classic way for print to swallow the second column. */
+    .split { display:block; }
+    .split > * { margin-bottom:10px; }
+    /* Nothing on this page is interactive on paper; the underline just adds noise. */
+    a { color:inherit; text-decoration:none; }
+    /* The diagnostics print in full — the script opens them on beforeprint — and the
+       disclosure arrows mean nothing on paper. */
+    details.diag>summary:before, details.asm>summary::-webkit-details-marker { display:none; }
+    details.asm { page-break-inside:auto; break-inside:auto; }
+  }
+  /* Scoped styles for the detailed parity tables reused from parity_report_html
+     (kept under .parity-detail so their .num/.over/.pn/.pill do not collide). */
+  .parity-detail h3{color:var(--navy);font-size:14px;margin:18px 0 4px;}
+  .parity-detail .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+  .parity-detail .over{color:#991b1b;font-weight:600;}
+  .parity-detail .under{color:#1d4ed8;font-weight:600;}
+  .parity-detail .ok{color:#166534;font-weight:600;}
+  .parity-detail .muted{color:var(--mut);}
+  .parity-detail .pill{display:inline-block;font-size:11px;padding:1px 7px;border-radius:9px;background:#eef2f7;color:var(--mut);}
+  .parity-detail .pn{font-family:"SF Mono",Consolas,Monaco,monospace;background:#eef2f7;padding:1px 5px;border-radius:4px;font-size:12px;}
 """
 
 
@@ -398,18 +862,217 @@ _CSS = """
 # Section renderers — each returns an HTML string, driven by the view-model
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _render_header(h: Dict[str, Any], has_parity: bool) -> str:
+def _render_run_stop(summary: Dict[str, Any]) -> str:
+    """THE FIRST THING ON AN EMPTY BOOK IS WHY IT IS EMPTY (D-409).
+
+    The 12675-01 report of 8 Oct 09:15 opened on "What this estimate prices", a Summary with a
+    PENDING unit cost, £23.00 of material and "Not for release — 3 to settle", and a Decisions
+    table about packaging and delivery. The run had stopped — design-intent sheets, nothing to
+    cost — and that sentence was on no page: the scan wrote it as a review flag that nothing
+    rendered. It is the one fact every other section is about, so it is the first thing read.
+    """
+    try:
+        from run_stop import nothing_to_cost, sentence, doors, HEADLINE  # noqa: PLC0415
+        stop = nothing_to_cost(summary)
+    except Exception:                                                # noqa: BLE001
+        return ""
+    if not stop:
+        return ""
+    pages = stop.get("pages") or []
+    where = (f" Page(s) {_esc(', '.join(str(p) for p in pages))} of the pack." if pages else "")
+    # WHY BOTH DOORS GAVE NOTHING (D-413). An empty book that does not say why the model and
+    # the concept read both produced nothing is a failed run wearing a safety result.
+    why = doors(stop)
+    why_html = (f'<br><b>Why both doors gave nothing:</b> {_esc(why)}.' if why else "")
+    return (f'<div class="callout warn" style="border-left:6px solid #b3261e">'
+            f'<b>{_esc(HEADLINE)}.</b> {_esc(sentence(stop))}{where} Nothing on this page or '
+            f'on the sheet is a price for the product; the sections below describe an empty '
+            f'book and what was set aside, and this is not to be sent as an estimate.{why_html}</div>')
+
+
+def _render_concept_takeoff(summary: Dict[str, Any]) -> str:
+    """A BOOK PRICED FROM THE MODEL SAYS SO BEFORE ANY FIGURE (D-411). Every part, size,
+    material and count came off a SolidWorks assembly nobody has detailed; the reader must know
+    that before the number, in the same words the sheet and the quote use."""
+    t = summary.get("concept_takeoff")
+    if not isinstance(t, dict) or not t.get("design"):
+        return ""
+    excluded = [str(e.get("part_number") or "") for e in (t.get("excluded") or [])
+                if isinstance(e, dict) and e.get("part_number")]
+    others = [str(o) for o in (t.get("other_designs") or []) if str(o or "").strip()]
+    set_aside = (f" Set aside as the customer's / reference models, not costed: "
+                 f"{_esc(', '.join(excluded))}." if excluded else "")
+    if str(t.get("source") or "") == "vision_concept":
+        # THE FALLBACK (D-413): one design's sheet(s), sighted — said as such, with why the
+        # model gave nothing and which designs were left unread.
+        other_designs = (f" Other designs in the pack, not read in this book: "
+                         f"{_esc(', '.join(others))} — each is its own run (SDI_PRODUCT=&lt;name&gt;)."
+                         if others else "")
+        why = str(t.get("model_takeoff_why_not") or "").strip()
+        # WHAT THE SHEET CHECK FOUND, IN THE CALLOUT (D-415): agreeing or not, before any figure.
+        _sc = t.get("sheet_check") if isinstance(t.get("sheet_check"), dict) else {}
+        held = ""
+        if _sc.get("failures"):
+            held = (' <b>UNCHECKED CONCEPT FIGURE — the bill does not agree with the sheet:</b> '
+                    + _esc("; ".join(str(f) for f in _sc["failures"]))
+                    + '. Costed as sighted — not a checked budget; walk it against the GA before '
+                      'anyone relies on it.')
+        elif _sc.get("unverified"):
+            held = (' <b>UNCHECKED CONCEPT FIGURE — nothing in the bill contradicts the sheet, '
+                    'but it is unverified:</b> '
+                    + _esc("; ".join(str(f) for f in _sc["unverified"]))
+                    + '. Not a checked budget; walk it against the GA before anyone relies on it.')
+        elif _sc.get("agrees"):
+            held = (' The bill was checked against the body and weight the sheet states'
+                    + (f' (about {_sc["sighted_weight_kg"]:g} kg as sized against '
+                       f'{_sc["net_weight_kg"]:g} kg on the sheet)'
+                       if _sc.get("sighted_weight_kg") and _sc.get("net_weight_kg") else '')
+                    + ' and agrees.')
+        elif _sc and not _sc.get("checked"):
+            held = ' The sheet states no body size or weight to check the bill against.'
+        return (f'<div class="callout warn" style="border-left:6px solid #1F4E79">'
+                f'<b>CONCEPT READ OF A DESIGN-INTENT SHEET — not a drawings estimate.</b> This pack '
+                f'has no parts list and no part drawings'
+                + (f', and the model gave no take-off ({_esc(why)})' if why else '')
+                + f'; the vision model read the parts of <code>{_esc(str(t["design"]))}</code> '
+                f'({_esc(str(t.get("design_title") or ""))}) off the sheet'
+                + (' with the enquiry brief' if t.get("brief_used", True) else '')
+                + f' — {t.get("parts", 0)} part(s); chosen as {_esc(str(t.get("chosen_by") or ""))}. '
+                f'Every size, material and count is an assumption to confirm; nothing here was '
+                f'measured.{held}{other_designs}</div>')
+    other_designs = (f" Other designs in the model, not priced in this book: "
+                     f"{_esc(', '.join(others))} — each is its own run (SDI_PRODUCT=&lt;name&gt;)."
+                     if others else "")
+    return (f'<div class="callout warn" style="border-left:6px solid #1F4E79">'
+            f'<b>CONCEPT TAKE-OFF FROM THE MODEL — not a drawings estimate.</b> This pack has no '
+            f'parts list and no part drawings; every part, size, material and count on this page is '
+            f'read from the SolidWorks assembly <code>{_esc(str(t["design"]))}</code> '
+            f'({t.get("parts", 0)} part(s); chosen as {_esc(str(t.get("chosen_by") or ""))}). '
+            f'Operations come from the model\'s features and are assumptions to confirm; nothing '
+            f'here has been detailed, toleranced or released.{set_aside}{other_designs}</div>')
+
+
+def _render_product_scope(summary: Dict[str, Any]) -> str:
+    """WHAT WAS PRICED, AND WHAT WAS LEFT OUT — before any figure.
+
+    The 11650-02 run of 23 Sep 2026 priced the cabinet top, because that was the Drawing
+    Number it was given, and set the whole Coffret kit aside; this page opened on the price and
+    said neither. Empty when the run declared no product."""
+    try:
+        from route_compiler import product_scope_sentences
+        lines = product_scope_sentences(summary)
+    except Exception:                                                # noqa: BLE001
+        lines = []
+    if not lines:
+        return ""
+    return ('<div style="border-left:4px solid #1F4E79;padding:4px 0 4px 14px;margin:14px 0">'
+            '<p style="margin:4px 0"><b>What this estimate prices</b></p><ul style="margin:4px 0 '
+            '4px 18px;padding:0">'
+            + "".join(f"<li style='margin:3px 0'>{_esc(t)}</li>" for t in lines)
+            + "</ul></div>")
+
+
+def _render_customer_changes(summary: Dict[str, Any]) -> str:
+    """WHAT THE CUSTOMER CHANGED SINCE THE DRAWINGS, BEFORE ANY FIGURE (D-507).
+
+    An estimate costed on a value the drawings do not state has to say so where it is read:
+    the drawn value, the customer's, which was costed, and the e-mail's own words. Changes that
+    could not be applied are on the Decisions list; declined ones are named here so a reader
+    knows they were seen. Empty when the run carried no customer changes."""
+    cc = summary.get("customer_changes") or {}
+    if not isinstance(cc, dict) or not (cc.get("applied") or cc.get("agreed")
+                                        or cc.get("not_applied") or cc.get("declined")):
+        return ""
+    try:
+        from customer_changes import LABELS, describe
+    except Exception:                                                # noqa: BLE001
+        LABELS, describe = {}, (lambda v, f: str(v))                 # type: ignore
+
+    def _row(e: Dict[str, Any], status: str) -> str:
+        f = str(e.get("field") or "")
+        drawn = describe(e.get("from"), f) if "from" in e else "—"
+        return (f"<tr><td><code>{_esc(e.get('part') or 'the order')}</code></td>"
+                f"<td>{_esc(LABELS.get(f, f))}</td><td>{_esc(drawn)}</td>"
+                f"<td><b>{_esc(e.get('applied') or describe(e.get('to'), f))}</b></td>"
+                f"<td>{_esc(status)}</td>"
+                f"<td class='mini'>{_esc(e.get('evidence') or e.get('quote') or '')}</td></tr>")
+
+    rows = "".join(_row(e, "COSTED") for e in (cc.get("applied") or []))
+    rows += "".join(_row(e, "already as drawn") for e in (cc.get("agreed") or []))
+    rows += "".join(_row(e, f"NOT APPLIED — {e.get('why')}") for e in (cc.get("not_applied")
+                                                                       or []))
+    rows += "".join(_row(e, "declined by the estimator") for e in (cc.get("declined") or []))
+    who = cc.get("accepted_by") or "an estimator"
+    when = f" on {cc.get('accepted_on')}" if cc.get("accepted_on") else ""
+    return ('<div style="border-left:4px solid #B7791F;padding:4px 0 4px 14px;margin:14px 0">'
+            '<p style="margin:4px 0"><b>Changes the customer asked for since the drawings</b> '
+            f'<span class="mini">— accepted by {_esc(who)}{_esc(when)}. These are costed in '
+            'place of what the drawings state; the drawings themselves are unchanged.</span></p>'
+            '<div class="scroll"><table class="dec"><thead><tr><th>Part</th><th>What</th>'
+            '<th>The drawings</th><th>Costed at</th><th>Status</th><th>Evidence</th></tr>'
+            f'</thead><tbody>{rows}</tbody></table></div></div>')
+
+
+def _render_header(h: Dict[str, Any], has_parity: bool,
+                   summary: Optional[Dict[str, Any]] = None) -> str:
+    """THE MEETING FILE GETS A LETTERHEAD.
+
+    James: "SDI + Dyson on the job report header. Meeting file."
+
+    The quote has carried both marks all along; this document — the one an estimator actually
+    works from, and the one being walked through with the team — opened with a text kicker and
+    nothing else. A page with no marks on it reads as a working note. This one is the argument.
+
+    Both marks come from the quote's loader, so a white logo gets the same dark plate here and
+    the two documents cannot disagree about what a customer's logo looks like. Failure is
+    silent by design: a missing folder or an unreadable file leaves the header exactly as it
+    was, because a report that will not render for want of a logo is a worse outcome than a
+    report without one.
+    """
     kind = "Estimate Review &amp; Parity" if has_parity else "Estimate Review"
+    _marks = ""
+    try:
+        from client_quote_html import (_derive_customer, _load_logo_markup,
+                                       _sdi_logo_markup)
+        _sdi = _sdi_logo_markup()
+        _cust_name = _derive_customer(summary or {}, str(h.get("stem") or ""))
+        _cust = _load_logo_markup(_cust_name) if _cust_name else ""
+        if _sdi or _cust:
+            _marks = (f'<div class="marks">'
+                      f'<span class="m-sdi">{_sdi}</span>'
+                      f'<span class="m-cust">{_cust}</span></div>')
+    except Exception:                                            # noqa: BLE001
+        _marks = ""
     return f"""<header class="rpt">
+  {_marks}
   <div class="kicker">SDI Intelligence &middot; {kind}</div>
   <h1>Job {_esc(h['job_no'])} — {_esc(h['name'])}</h1>
-  <div class="sub">Automated estimate analysis &amp; drawing-quality audit</div>
+  <div class="sub">Estimator's working copy &mdash; decisions first, the evidence behind them below</div>
   <div class="meta">
     <span><b>Job</b> {_esc(h['stem'])}</span>
     <span><b>Drawing pack</b> {h['page_count']} pages &middot; {h['pdf_count']} PDFs &middot; {h['dxf_matched']} DXFs matched</span>
-    <span><b>Quantity basis</b> {_esc(h['quantity'])} off</span>
+    <span><b>Quantity basis</b> {_esc(h['quantity'])} of</span>
   </div>
 </header>"""
+
+
+def _unit_text(hl: Dict[str, Any]) -> str:
+    """The unit cost as this report may print it — a figure, or why it may not.
+
+    Every site that used to print `_money(hl["unit"])` calls this, so the header, the summary,
+    the verdict and the footer cannot disagree about whether the total is publishable. They
+    could before: the email refused a total the report printed four ways.
+    """
+    if hl.get("nothing_to_cost"):
+        # A RUN THAT COSTED NOTHING HAS NO PRICE TO BE PENDING (D-409). "PENDING — NOT
+        # TRACEABLE TO A WORKBOOK CELL" promises a figure somebody can finish; on 12675-01's
+        # empty book it sat over £25.46 of packaging and delivery and said nothing about why.
+        from run_stop import HEADLINE as _NO_PRICE                   # noqa: PLC0415
+        return _NO_PRICE
+    if hl.get("unit_publishable") is not None:
+        return _money(hl["unit_publishable"])
+    return "PENDING — NOT TRACEABLE TO A WORKBOOK CELL"
+
 
 
 def _render_headline(hl: Dict[str, Any], h: Dict[str, Any], streams: List[Dict[str, Any]]) -> str:
@@ -417,8 +1080,21 @@ def _render_headline(hl: Dict[str, Any], h: Dict[str, Any], streams: List[Dict[s
     src_note = ""
     if hl.get("source_of_truth") == "populated_xlsx_excel_com":
         src_note = "Workbook-computed (Excel)"
+    # ── AND THE INTERNAL PAGE SAYS WHY, BECAUSE THE WHY IS THE ACTIONABLE PART ──────
+    #
+    # `publishable_total` refuses for three quite different reasons — the cell was never
+    # recorded, the cell was recorded but not its value, or the cell holds a DIFFERENT figure
+    # from the one proposed. Only the third is a fault in the pricing, and it is the one an
+    # estimator must chase. Printing "PENDING" alone tells them the outcome and hides the
+    # instruction; `unit_withheld_why` was computed for this and rendered nowhere.
+    #
+    # It goes HERE and not on the quotation: it names figures and cells, which is the
+    # estimator's business and not the customer's.
+    _why = str(hl.get("unit_withheld_why") or "").strip()
+    _note = (f'Not publishable — {_esc(_why)}' if (_why and hl.get("unit_publishable") is None)
+             else (src_note or 'Deliverable figure'))
     return f"""<div class="headline">
-  <div class="fig"><div class="lab">Unit Cost (workbook)</div><div class="val">{_money(hl['unit'])}</div><div class="note">{src_note or 'Deliverable figure'} &middot; qty {_esc(h['quantity'])}</div></div>
+  <div class="fig"><div class="lab">Unit Cost (workbook)</div><div class="val">{_unit_text(hl)}</div><div class="note">{_note} &middot; qty {_esc(h['quantity'])}</div></div>
   <div class="fig"><div class="lab">Material</div><div class="val">{_money(hl['material'])}</div><div class="note">Steel + BOM + boards + powder</div></div>
   <div class="fig"><div class="lab">Labour</div><div class="val">{_money(hl['labour'])}</div><div class="note">{_num(hl['hours'],2)} hrs · all depts</div></div>
   <div class="fig"><div class="lab">Parts costed</div><div class="val">{parts}</div><div class="note">across material streams</div></div>
@@ -431,121 +1107,444 @@ def _extract_parts_count_note(streams: List[Dict[str, Any]]) -> str:
 
 
 def _render_glance(streams: List[Dict[str, Any]], hl: Dict[str, Any]) -> str:
-    rows = ""
+    # Authoritative workbook-computed figures (the Excel's own SUM) — the single source of truth.
+    if hl.get("nothing_to_cost"):
+        # NOT "LABOUR £29.13" OVER AN EMPTY BOOK (D-409). The 12675-01 report printed the
+        # engine's own labour aggregate here, under a heading calling it the workbook's SUM,
+        # beside a summary tile reading "—" and a sheet reading £0.00. On a run that costed
+        # nothing there is no figure to show, and the glance says why instead.
+        from run_stop import sentence as _stop_sentence              # noqa: PLC0415
+        return (f"{_h2('glance')}\n<div class=\"callout warn\"><b>{_esc(_unit_text(hl))}.</b> "
+                f"{_esc(_stop_sentence(hl['nothing_to_cost']))} No material or labour figure "
+                f"on this run is a price, so none is shown here.</div>")
+    fig_rows = ""
+    if hl.get("material") is not None:
+        fig_rows += f'<tr><td>Material</td><td class="n">{_money(hl["material"])}</td></tr>'
+    if hl.get("labour") is not None:
+        fig_rows += f'<tr><td>Labour</td><td class="n">{_money(hl["labour"])}</td></tr>'
+    fig_rows += f'<tr><td><b>Unit Cost</b></td><td class="n"><b>{_unit_text(hl)}</b></td></tr>'
+
+    # Parts grouped by material stream — COUNTS only. The per-stream £ breakdown was on an
+    # engine-internal basis that did not reconcile with the workbook total, so it is not shown
+    # here; the per-stream cost breakdown lives in the populated spreadsheet.
+    stream_rows = ""
     for s in streams:
-        cnt = f" ({s['count']} parts)" if s.get("count") else ""
-        rows += f"""<tr><td>{_esc(s['name'])}{cnt}</td><td class="n">{_money(s['value'])}</td></tr>"""
-    rows += f"""<tr><td><b>Unit Cost</b></td><td class="n"><b>{_money(hl['unit'])}</b></td></tr>"""
-    return f"""<h2>1 &nbsp;Estimate at a glance</h2>
-<p>The engine model identified and costed each material stream separately. The table below shows the
-cost breakdown by stream, as read from the drawing pack.</p>
+        if not s.get("count"):
+            continue
+        stream_rows += f'<tr><td>{_esc(s["name"])}</td><td class="n">{s["count"]}</td></tr>'
+    stream_table = ""
+    if stream_rows:
+        stream_table = f"""<h3>Parts by material stream</h3>
 <table>
-  <thead><tr><th>Cost stream</th><th class="n">Value</th></tr></thead>
-  <tbody>{rows}</tbody>
+  <thead><tr><th>Material stream</th><th class="n">Parts</th></tr></thead>
+  <tbody>{stream_rows}</tbody>
 </table>"""
+
+    return f"""{_h2('glance')}
+<p>The figures below are the <b>authoritative workbook-computed</b> costs — the Excel's own SUM, the one
+true number. Parts are grouped by material stream as counts; the per-stream cost breakdown is in the
+populated spreadsheet.</p>
+<table>
+  <thead><tr><th>Figure</th><th class="n">Value</th></tr></thead>
+  <tbody>{fig_rows}</tbody>
+</table>
+{stream_table}"""
 
 
 def _render_parity(bundle: Dict[str, Any]) -> str:
     """Conditional section — engine vs manual estimate comparison, from the parity bundle."""
     if not bundle:
         return ""
-    money = bundle.get("money_cell_comparisons") or []
-    rollup = bundle.get("rollup_unit_cost_comparison") or {}
-    counts = bundle.get("status_counts") or {}
-    labour = bundle.get("labour_route_comparisons") or []
-
-    # money rows: find material / labour / unit
-    money_rows = ""
-    for m in money:
-        label = m.get("label") or m.get("cell") or m.get("metric") or ""
-        eng = m.get("json_value") if "json_value" in m else m.get("estimate_value")
-        man = m.get("workbook_value") if "workbook_value" in m else m.get("manual_value")
-        delta = m.get("delta") if "delta" in m else None
-        if eng is None and man is None:
-            continue
-        d = ""
-        try:
-            d = _money(float(eng) - float(man))
-        except (TypeError, ValueError):
-            d = _esc(delta) if delta is not None else "—"
-        money_rows += f"""<tr><td>{_esc(label)}</td><td class="n">{_money(eng)}</td><td class="n">{_money(man)}</td><td class="n">{d}</td></tr>"""
-
-    verdict_html = ""
-    ru = rollup.get("unit_cost_delta_pct") if isinstance(rollup, dict) else None
-    if ru is not None:
-        try:
-            pct = abs(float(ru))
-            if pct <= 5:
-                verdict_html = '<div class="callout good"><b>On track</b> — engine unit cost within 5% of the manual estimate.</div>'
-            elif pct <= 15:
-                verdict_html = '<div class="callout warn"><b>Needs a look</b> — engine unit cost 5–15% from the manual estimate.</div>'
-            else:
-                verdict_html = '<div class="callout warn"><b>Variance</b> — engine unit cost over 15% from the manual estimate.</div>'
-        except (TypeError, ValueError):
-            pass
-
-    match_note = ""
-    if counts:
-        parts_bits = ", ".join(f"{v} {k}" for k, v in counts.items())
-        match_note = f'<p class="mini">Part-line match summary: {_esc(parts_bits)}.</p>'
-
+    # Headline engine-vs-manual comparison — REUSE parity_report_html's extractor + renderer so it
+    # parses the REAL bundle schema. (The previous hand-rolled key guesses — json_value/workbook_value
+    # — did not match the bundle, so this table rendered blank.) Scoped under .parity-detail.
     money_block = ""
-    if money_rows:
-        money_block = f"""<table>
-  <thead><tr><th>Metric</th><th class="n">Engine</th><th class="n">Manual</th><th class="n">Δ</th></tr></thead>
-  <tbody>{money_rows}</tbody>
-</table>"""
+    verdict_html = ""
+    match_note = ""
+    try:
+        from parity_report_html import _money_rows, _section_table, _find_row
+        _mrows = _money_rows(bundle)
+        if _mrows:
+            money_block = "<div class='parity-detail'>" + _section_table(_mrows) + "</div>"
+            _u = _find_row(_mrows, "unit")
+            if _u and _u.get("engine") is not None and _u.get("manual"):
+                _pct = abs(_u["engine"] - _u["manual"]) / _u["manual"] * 100.0
+                if _pct <= 5:
+                    verdict_html = '<div class="callout good"><b>On track</b> — engine unit cost within 5% of the manual estimate.</div>'
+                elif _pct <= 15:
+                    verdict_html = '<div class="callout warn"><b>Needs a look</b> — engine unit cost 5–15% from the manual estimate.</div>'
+                else:
+                    verdict_html = '<div class="callout warn"><b>Variance</b> — engine unit cost over 15% from the manual estimate.</div>'
+    except Exception:
+        money_block = ""
+        verdict_html = ""
 
-    return f"""<h2>1a &nbsp;Parity vs manual estimate</h2>
+    # Detailed comparison tables — REUSE parity_report_html's exact renderers (no duplication),
+    # scoped under .parity-detail so their .num/.over/.pn/.pill styling can't collide with the
+    # job report's own classes. Failure-isolated: if the bundle lacks a piece, that table is skipped.
+    detail = ""
+    try:
+        from parity_report_html import (_route_rows, _recon, _route_table,
+                                        _matched_table, _unmatched_section)
+        _route = _route_rows(bundle)
+        _rec = _recon(bundle)
+        _blocks = ["<div class='parity-detail'>"]
+        if _route and _route.get("rows"):
+            _blocks.append("<h3>Labour by operation</h3>")
+            _blocks.append("<p class='mini'>Engine cost per operation, and how the engine's canonical "
+                           "operations map to the workbook route codes. Rows marked <b>manual only</b> are "
+                           "operations the manual books that the engine does not yet (e.g. Dress Welds) — "
+                           "the route gaps to close.</p>")
+            _blocks.append(_route_table(_route))
+        if _rec.get("matched"):
+            _blocks.append("<h3>Part lines matched on code</h3>")
+            _blocks.append("<p class='mini'>%s manual line(s) matched an engine line on part code "
+                           "(exact or code-stem).</p>" % _esc(_rec.get("matched_count", len(_rec.get("matched") or []))))
+            _blocks.append(_matched_table(_rec))
+        _us = _unmatched_section(_rec)
+        if _us:
+            _blocks.append("<h3>Lines not matched on code</h3>")
+            _blocks.append(_us)
+        _blocks.append("</div>")
+        if len(_blocks) > 2:
+            detail = "".join(_blocks)
+    except Exception:
+        detail = ""
+
+    return f"""{_h2('parity')}
 <p>This job has a manual estimate on file. The engine's figures are compared against it below —
 the manual estimate is the human benchmark, not necessarily ground truth (it may itself be at a
 different quantity or revision).</p>
 {money_block}
 {verdict_html}
-{match_note}"""
+{match_note}
+{detail}"""
+
+def bought_in_strength_row(tally: Any) -> str:
+    """The "bought-in items recognised" row, from costed_facts.bought_in_tally.
+
+    RECOGNISING A PART AND PRICING IT ARE DIFFERENT ACHIEVEMENTS. This row said every
+    bought-in was "identified and priced from catalogue/historical sources" under a green
+    Sound tag, on a job where three of the applied prices were AI market estimates and a
+    fourth was zero. Identification is what went right; say that, and count how the prices
+    actually arrived.
+
+    ONE COUNT, THE BANNER'S (12173-02). It counted its own population (12, packaging and
+    delivery included) and its own AI stamps (1), beside a banner naming five bought-ins on
+    researched market prices. The tally is the record's kinds and the firmness the banner
+    reads; the stamp count is the reproducibility check's question, not this one.
+    """
+    t = tally if isinstance(tally, dict) else {}
+    bi = list(t.get("bought_in") or [])
+    com = list(t.get("commercial") or [])
+    if not bi and not com:
+        return ""
+    market = list(t.get("bought_in_market") or [])
+    unpriced = list(t.get("bought_in_unpriced") or [])
+    bits = []
+    if market:
+        bits.append(f"{len(market)} on a researched market price, not a catalogue "
+                    f"({', '.join(market[:8])}{' and more' if len(market) > 8 else ''})")
+    if unpriced:
+        bits.append(f"{len(unpriced)} carrying no price at all")
+    tag = "t-warn" if bits else "t-good"
+    note = ("identified as purchased rather than fabricated"
+            + (" \u2014 but " + " and ".join(bits) + ". Identification is not pricing"
+               if bits else "")
+            + (f"; plus {len(com)} commercial line(s), "
+               f"{len(t.get('commercial_market') or [])} on a researched market price"
+               if com else "") + ".")
+    return (f'<tr><td><span class="tag {tag}">'
+            f'{"Sound" if tag == "t-good" else "Check"}</span></td>'
+            f'<td><b>Bought-in items recognised.</b> {len(bi)} bought-in part(s) '
+            f'{_esc(note)}</td></tr>')
+
+
+# THE FINDINGS THAT MAKE "WHAT THE ENGINE GOT RIGHT" THE WRONG HEADING.
+#
+# Not a severity list — these are the specific ones that undercut this section's SUBJECT. Every
+# claim in here is about how the costed BOM hangs together: streams separated, nothing counted
+# twice, bought-ins recognised. All of that reasons over the lines the engine has. It says
+# nothing about whether those lines are the job's real lines, and these findings say they may
+# not be.
+_UNDERCUTS_STRUCTURE = {
+    # THE ONLY SIGNAL THAT MEANS THE BOM WAS READ ONCE. Both readers ran or they did not, and
+    # when they did not, nothing in this section is standing on anything.
+    "bom_reader_never_ran",
+}
+
+# OVER-TRIGGERED, AND HIDING THE PART THAT WAS RIGHT.
+#
+# bom_node_disconnected and its canonical twin were in the set above. On the 30/08 full run
+# they fired on BI-BOLT, the wood screws and the pallet — hardware the prose recogniser MINTED
+# from a note, which by construction has no parent in a drawing hierarchy — and the whole "what
+# the engine got right" block was withheld. James: "A disconnected screw should not hide '11
+# flats nested at 1.2 mm'. Gate §2 on fabricated corroboration, not on minted hardware."
+#
+# He is right, and the distinction is the fabricated BOM. Eleven flat patterns were read,
+# corroborated and costed at the gauge the drawing office typed; that is exactly what this
+# section exists to report, and three parentless screws say nothing about it.
+#
+# They still need saying, so they say it INSIDE the section as a check rather than by deleting
+# it. A caveat a reader can weigh beats a blank page they cannot.
+_QUALIFIES_STRUCTURE = {
+    "uncorroborated_bom_line_costed",
+    "canonical_route_bom_node_disconnected",
+    "bom_node_disconnected",
+}
+
+
+def _messages_for(summary: Dict[str, Any], codes) -> List[str]:
+    inv = summary.get("invariants")
+    if not isinstance(inv, dict):
+        return []
+    return [str(v.get("message") or v.get("code"))
+            for v in (inv.get("violations") or ())
+            if isinstance(v, dict) and str(v.get("code") or "") in codes]
+
+
+def _structure_is_unverified(summary: Dict[str, Any]) -> List[str]:
+    """The messages, if this job's BOM structure is not corroborated well enough to praise."""
+    return _messages_for(summary, _UNDERCUTS_STRUCTURE)
+
+
+def _structure_qualifiers(summary: Dict[str, Any]) -> List[str]:
+    """Real, and not a reason to withhold the section — they belong in it."""
+    return _messages_for(summary, _QUALIFIES_STRUCTURE)
+
 
 def _render_whats_right(summary: Dict[str, Any], streams: List[Dict[str, Any]]) -> str:
-    """Section 2 — verify claims from the data rather than assert fixed ones."""
+    """Section 2 — verify claims from the data rather than assert fixed ones.
+
+    AND SAY NOTHING WHEN THE SUBJECT IS NOT ESTABLISHED. On the 10575-02 LLM-only run this
+    section told an estimator the job was "structurally sound" with "no double-counting", while
+    section 13 of the same document recorded that 94% of the material total came from BOM lines
+    only one reader could see and that a part was priced from a 90 x 10 mm blank with a
+    10,846 mm cut path through it.
+
+    Both were true of what they described. Section 2 reasons over the lines the engine HAS —
+    are they separated, is anything counted twice — and that is a real question with a real
+    answer. It is simply not the question an estimator is asking when they read a heading that
+    says the engine got things right, and it is the first section they read.
+
+    So when the BOM itself is uncorroborated, this section leads with that and withholds the
+    strengths. Not because they are false: because "each part is in exactly one cost stream" is
+    a statement about bookkeeping, and offering it as reassurance about a BOM read once is how
+    a document comes to disagree with itself eleven sections later.
+    """
     rows = ""
     parts = _extract_parts(summary)
 
+    for _q in _structure_qualifiers(summary):
+        rows += ('<tr><td><span class="tag t-warn">Check</span></td><td>'
+                 f'{_esc(_q)}</td></tr>')
+
+    _unverified = _structure_is_unverified(summary)
+    if _unverified:
+        _lines = "".join(f"<li>{_esc(m)}</li>" for m in _unverified[:4])
+        return f"""{_h2('right')}
+<div class="card"><table><tbody>
+<tr><td><span class="tag t-bad">Not established</span></td><td>
+<b>This section is withheld on this job, because what it would tell you rests on a bill of
+materials that has not been corroborated.</b>
+<ul>{_lines}</ul>
+The engine costs the lines it read, and how it costed them can be checked — that is sections 3
+onwards, and the Decision Report and AI Provenance tabs. What cannot be checked from here is
+whether those are the job's real lines. A statement that nothing is counted twice is about
+bookkeeping over the lines present; it is not evidence the pack was read correctly, and it is
+not what a reader takes from a heading like this one.</td></tr>
+</tbody></table></div>"""
+
     # material streams separated?
-    stream_names = [s["name"] for s in streams if s.get("count")]
+    # A commercial line (packaging, delivery) is not a material stream to separate.
+    stream_names = [s["name"] for s in streams if s.get("count")
+                    and s["name"] != "Commercial lines"]
     if len(stream_names) > 1:
         rows += (f'<tr><td><span class="tag t-good">Sound</span></td><td><b>Material streams correctly separated.</b> '
                  f'The engine costed {len(stream_names)} distinct streams ({_esc(", ".join(stream_names))}) — '
                  f'each material costed on its own basis, none mis-routed into another.</td></tr>')
 
-    # no double-counting: a part shouldn't be in both a fabricated stream and bought-in
-    dup = 0  # the streams are mutually exclusive by construction here
-    rows += ('<tr><td><span class="tag t-good">Sound</span></td><td><b>No double-counting.</b> '
-             'Each part is assigned to exactly one cost stream — fabricated parts to their material, '
-             'purchased items to the bill of materials.</td></tr>')
+    # NO DOUBLE-COUNTING — CHECKED, NOT ASSERTED.
+    #
+    # This was `dup = 0  # the streams are mutually exclusive by construction here`, a variable
+    # computed as a literal and then never read, above a row that told the estimator the
+    # property held. "By construction" is the claim that most needs testing: the whole reason
+    # a part can be counted twice is that something upstream put it in two places, and a
+    # report that assumes it cannot is blind to the only case worth reporting.
+    #
+    # So it looks — and section 2 and the verdict read ONE answer, costed_facts.
+    # double_count_status. 12173-02 printed "No double-counting found" beside the ×12 screw
+    # on two lines (same words, same count, same parent) and twenty unsettled "the same item
+    # is being charged twice" findings, because this row compared part numbers only and fell
+    # through to the all-clear whatever the checks said.
+    from costed_facts import double_count_status
+    _dc = double_count_status(summary, record=_record_for(summary))
+    _both = _dc["cross_stream"]
+    if _both:
+        rows += (f'<tr><td><span class="tag t-bad">Counted twice</span></td><td>'
+                 f'<b>{len(_both)} part(s) appear in two cost streams.</b> '
+                 f'{_esc(", ".join(_both[:6]))} are costed as fabricated material AND listed as '
+                 f'a purchased item, so their cost is in the total twice. Remove one of the two '
+                 f'lines before quoting.</td></tr>')
+    if _dc["same_item_pairs"] or _dc["found_by_checks"]:
+        _said = ([f"{' and '.join(p['identities'])} are both '{p['description']}' "
+                  f"x{float(p['qty_per_unit'] or 0):g} under {p['parent']}"
+                  for p in _dc["same_item_pairs"][:6]]
+                 + [f"{c} ({_sec('checks')})" for c in _dc["found_by_checks"]])
+        rows += (f'<tr><td><span class="tag t-warn">Check</span></td><td>'
+                 f'<b>Possibly counted twice.</b> {_esc("; ".join(_said))} — one item on two '
+                 f'lines, or two items: rule before quoting. Nothing has been removed.</td></tr>')
+    elif _dc["state"] == "not_established" and not _both:
+        _inv_dc = summary.get("invariants") if isinstance(summary.get("invariants"), dict) else None
+        rows += (f'<tr><td><span class="tag t-warn">Not established</span></td><td>'
+                 f'<b>Double-counting not ruled out.</b> No part number is in two cost '
+                 f'streams, but '
+                 + (f'{_dc["unrun"]} check finding(s) that look for the same work charged '
+                    f'twice could not settle it — {_sec("checks")}.' if _inv_dc is not None
+                    else 'the consistency checks that look for the same work charged twice '
+                         'did not run.')
+                 + '</td></tr>')
+    elif _dc["state"] == "clear":
+        # AN ALL-CLEAR MUST NOT OUTRUN ITS OWN CHECK. 08:52's duplicates were the SAME
+        # purchase under DIFFERENT minted names; where the engine's own ledgers record
+        # removed duplicates, the row reports the cleanup instead of asserting purity.
+        _cleaned = (len(summary.get("folded_bom_row_fragments") or [])
+                    + len(summary.get("quarantined_interleave_artefacts") or []))
+        if _cleaned:
+            rows += (f'<tr><td><span class="tag t-good">Cleaned</span></td><td>'
+                     f'<b>{_cleaned} duplicate or artefact line(s) were removed before '
+                     f'costing</b> (see the run record: folded fragments and quarantined '
+                     f'interleave artefacts). No part number appears in two cost streams '
+                     f'on the sheet as issued.</td></tr>')
+        else:
+            rows += ('<tr><td><span class="tag t-good">Sound</span></td><td><b>No double-counting '
+                     'found.</b> No part number appears in two cost streams — fabricated parts '
+                     'against their material, purchased items on the bill of materials — no '
+                     'two purchased lines under one parent share their words and count, and no '
+                     'check that looks for the same work charged twice found or left any. '
+                     'Checked, not assumed.</td></tr>')
 
-    # estimate status
+    # estimate status — READ THE SAME GATE THE QUOTE READS.
+    # estimate_status is the DATA-SUFFICIENCY verdict: did the engine have enough to reach a
+    # number. The invariants are a different and later question: does that number hold
+    # together. Reporting the first as "completed cleanly" while the quote for the same job
+    # carried "3 consistency check(s) FAILED" left two documents describing one estimate and
+    # disagreeing about whether it could be trusted — and the one an estimator reads first is
+    # the one that said everything was fine.
     status = _get(summary, "estimate_summary", "estimate_status")
-    if status == "ok":
+    _inv = summary.get("invariants") if isinstance(summary.get("invariants"), dict) else None
+    if status == "ok" and _inv is not None and not _inv.get("may_quote_firm"):
+        _cs = _checks_sentence(summary)
+        rows += ('<tr><td><span class="tag t-bad">Not firm</span></td><td><b>Consistency checks did '
+                 'not pass.</b> The engine reached a full costed estimate — data sufficiency was '
+                 f'met — but {_esc(_cs) if _cs else "the checks did not pass"}. The figures '
+                 'below are <b>provisional</b> and must not be released as a firm price. See '
+                 f'{_sec("checks")}.</td></tr>')
+    elif status == "ok" and _inv is None:
+        rows += ('<tr><td><span class="tag t-warn">Unverified</span></td><td><b>Estimate completed, '
+                 'but unchecked.</b> The engine reached a full costed estimate; the consistency '
+                 'checks did not run, so none of its figures have been verified against the '
+                 'workbook.</td></tr>')
+    elif status == "ok":
         rows += ('<tr><td><span class="tag t-good">Sound</span></td><td><b>Estimate completed cleanly.</b> '
-                 'The engine reached a full costed estimate with no blocking data-sufficiency failure.</td></tr>')
+                 'The engine reached a full costed estimate, and every consistency check passed.</td></tr>')
 
     # powder handled?
-    pc = _get(summary, "estimate_summary", "powder_coating_summary", default={}) or {}
-    if pc.get("by_part"):
-        n_pc = len(pc.get("by_part") or [])
+    # Post-costing source, shared with the client quote (costed_facts). The powder MATERIAL
+    # summary is not evidence on its own: it can carry a line for a part whose powder LABOUR
+    # was gated off, which is how this bullet came to congratulate the engine for correctly
+    # powder-coating eight lacquered timber panels that the Estimate sheet never charges
+    # powder on. A report claiming a process the sheet does not price is worse than silence.
+    from costed_facts import part_numbers_with_operation
+    _pc_parts = part_numbers_with_operation(summary, "powder_coating", "p.coat")
+    # NOT "SOUND" WHILE THE SCOPE IS AN OPEN DECISION. 12312-01-GA printed this beside a
+    # decision saying the powder scope was genuinely mixed — the reassurance and the question
+    # cannot both be true, and the question is the one a person has to answer.
+    _pc_open = any(isinstance(_i, dict) and _i.get("code") == "powder_scope_mixed_members"
+                   for _i in ((((summary.get("estimate_summary") or {})
+                                .get("canonical_route_shadow") or {}).get("issues")) or []))
+    if _pc_parts and _pc_open:
+        rows += (f'<tr><td><span class="tag t-warn">Check</span></td><td><b>Powder coating charged on '
+                 f'{len(_pc_parts)} part(s): {_esc(", ".join(sorted(_pc_parts)))}.</b> '
+                 f'Whether that is the right scope is an open decision — see Decisions required.</td></tr>')
+    elif _pc_parts:
         rows += (f'<tr><td><span class="tag t-good">Sound</span></td><td><b>Powder coating scoped to the right parts.</b> '
-                 f'{n_pc} part(s) carry powder coating, driven by the finish field — not applied blanket across raw/assembly parts.</td></tr>')
+                 f'{len(_pc_parts)} part(s) are <b>charged</b> powder coating — not applied blanket '
+                 f'across raw/assembly parts.</td></tr>')
 
     # bought-ins recognised
-    bi = [p for p in parts if str(p.get("part_number") or "").upper().startswith("BI-")]
-    if bi:
-        rows += (f'<tr><td><span class="tag t-good">Sound</span></td><td><b>Bought-in items recognised.</b> '
-                 f'{len(bi)} bought-in part(s) identified and priced from catalogue/historical sources rather than fabricated.</td></tr>')
+    # ONE MODULE ANSWERS "DO WE BUY THIS", AND ONE RECORD COUNTS THEM. A local BI- prefix
+    # test read four bought-ins on 12120 where the policy said more (THUM620); then 12173-02
+    # printed 7, 12 and 10 for one population on one page. The record's kind — which asks
+    # bought_in_policy where the graph is silent — is the count the stream table, this row
+    # and the BOM table all read.
+    from costed_facts import bought_in_tally
+    rows += bought_in_strength_row(bought_in_tally(summary, record=_record_for(summary)))
 
     if not rows:
         rows = '<tr><td><span class="tag t-info">Note</span></td><td>No specific strengths auto-detected for this job.</td></tr>'
 
-    return f"""<h2>2 &nbsp;What the engine got right</h2>
+    return f"""{_h2('right')}
 <div class="card"><table><tbody>{rows}</tbody></table></div>"""
+
+
+def _sheet_ruled_block_names() -> set:
+    """Every spelling the Sheet Steel block answers to, taken from the module that names it.
+
+    TWICE THIS GATE WAS KEYED ON A VALUE NOBODY CHECKED. First on the engine's `cost_method`,
+    which on 401912-02 is not the sheet formula at all. Then on the block's DISPLAY LABEL,
+    "Sheet Steel" -- and a costed line carries the block KEY, `steel`. Both times the guard
+    was written, tested green and shipped without ever meeting a real record, and both times
+    the £3.88 was still on the page after the rerun.
+
+    So the vocabulary comes from `costed_facts._FABRICATED_BLOCKS`, which defines it, rather
+    than from a literal typed here a third time. Falls back to both known spellings if that
+    private name ever moves, because a gate that silently stops matching is how this fault
+    behaves in the first place.
+    """
+    names = {"steel", "sheet steel"}
+    try:
+        from costed_facts import _FABRICATED_BLOCKS as _FB      # noqa: PLC0415
+        names.add("steel")
+        label = _FB.get("steel")
+        if label:
+            names.add(str(label).strip().lower())
+    except Exception:                                            # noqa: BLE001
+        pass
+    return names
+
+
+# The workbook blocks whose own nest formula and own rate cell charge the line. A second
+# figure beside the charged one on these is not evidence: the estimator has already ruled
+# which rate governs, and the sheet's cell is where they change it.
+_SHEET_RULED_BLOCKS = _sheet_ruled_block_names()
+
+
+def _sheet_ruled_basis(line: Dict[str, Any]) -> bool:
+    """True where the workbook's own block charged this line.
+
+    KEYED ON THE CHARGED LINE'S BLOCK, NOT ON THE ENGINE'S cost_method. The first attempt
+    asked whether the ENGINE had costed the part by `workbook_sheet_steel_formula`, and on
+    401912-02 it had not: the engine's own material estimate reached GBP 3.88 by its own
+    method, and GBP 3.07 is what the SHEET's nest row calculated and handed back. Those are
+    two different questions, and the one that matters is WHO CHARGED THE LINE. So the gate
+    reads `block`, which costed_facts already records per line for exactly this purpose --
+    "Sheet Steel", "Other Sheet Material", "Tube", "Wire" -- and the guard fires on the one
+    the ruling covers.
+
+    Accepts a costed line or a part record, because two renderers hand it different shapes.
+    """
+    if not isinstance(line, dict):
+        return False
+    for holder in (line, line.get("price_origin") or {}, line.get("material_estimate") or {}):
+        if not isinstance(holder, dict):
+            continue
+        if str(holder.get("block") or "").strip().lower() in _SHEET_RULED_BLOCKS:
+            return True
+        if str(holder.get("cost_method") or "") == "workbook_sheet_steel_formula":
+            return True
+    return False
+
 
 
 def _render_review_items(review: Dict[str, Any]) -> str:
@@ -561,11 +1560,22 @@ def _render_review_items(review: Dict[str, Any]) -> str:
         elif reason:
             low_conf_only.append(fp)
 
+    def _impact(fp: Dict[str, Any]) -> str:
+        # A CUE THAT BECAME A CHARGE SAYS SO, naming the rows and who decided them — never
+        # their money split per part: one Weld row can cover eight parts.
+        ch = fp.get("charged") or []
+        if not ch:
+            return "Review against the drawing."
+        return ("CHARGED on the sheet — " + "; ".join(
+            f"{c.get('wb_operation')}, Estimate row {c.get('workbook_row')}"
+            + (f", decided by {', '.join(c.get('decided_by') or [])}" if c.get("decided_by") else "")
+            for c in ch) + ". Confirming or striking the cue moves the price.")
+
     for fp in specific:
         cost = _money(fp["cost"]) if fp.get("cost") is not None else ""
         rows += (f'<tr><td><b>{_esc(fp["part"])}</b> {cost} <span class="tag t-warn">Verify</span></td>'
                  f'<td>{_esc(fp["reason"])}</td>'
-                 f'<td>Review against the drawing.</td></tr>')
+                 f'<td>{_esc(_impact(fp))}</td></tr>')
 
     if low_conf_only:
         names = ", ".join(_esc(fp["part"]) for fp in low_conf_only[:10])
@@ -591,44 +1601,159 @@ def _render_review_items(review: Dict[str, Any]) -> str:
                      f'<td>Add the rate so the operation is costed.</td></tr>')
         elif flag in RISK_LABEL:
             lbl, imp = RISK_LABEL[flag]
+            # The tally's impact from the same join as the rows: charged on N of them.
+            _n_ch = sum(1 for fp in flagged
+                        if any(c.get("flag") == flag for c in (fp.get("charged") or [])))
+            if _n_ch:
+                imp = (f"Charged on the sheet on {_n_ch} of these part(s) — confirming or "
+                       f"striking the cue moves the price.")
             rows += (f'<tr><td><b>{_esc(lbl)}</b> <span class="tag t-warn">Verify</span> ×{count}</td>'
                      f'<td>{count} part(s) flagged.</td><td>{_esc(imp)}</td></tr>')
+
+    # FLAGS ON LINES THAT ARE NOT ON THE SHEET — named once, never counted above.
+    _off = [str(x) for x in (review.get("not_on_sheet") or []) if x]
+    if _off:
+        rows += (f'<tr><td><b>Flags on lines that are not on the sheet</b> '
+                 f'<span class="tag t-info">Not costed</span></td>'
+                 f'<td>{_esc(", ".join(_off[:10]))}'
+                 + (f" (+{len(_off) - 10} more)" if len(_off) > 10 else "")
+                 + '</td><td>Raised before costing on records the sheet does not carry; '
+                   'confirm nothing is missing from the bill.</td></tr>')
 
     for pv in review.get("provisional", []):
         rows += (f'<tr><td><b>{_esc(pv["item"])}</b> <span class="tag t-info">Provisional</span></td>'
                  f'<td>{_esc(pv["note"])}</td><td>Confirm the rate.</td></tr>')
 
+    # What the costing rules themselves said about these parts. See the note where
+    # `part_notes` is built: these had never reached this page.
+    for pn in review.get("part_notes", []):
+        _who = pn.get("parts") or []
+        _lbl = ", ".join(_esc(x) for x in _who[:6]) + (f" (+{len(_who)-6} more)" if len(_who) > 6 else "")
+        rows += (f'<tr><td><b>{_lbl or "This job"}</b> <span class="tag t-warn">Check</span></td>'
+                 f'<td>{_esc(pn["note"])}</td>'
+                 f'<td>Read it against the drawing before this goes out.</td></tr>')
+
     if not rows:
         rows = '<tr><td colspan="3" class="mini">No provisional or low-confidence items flagged for this job.</td></tr>'
 
-    return f"""<h2>3 &nbsp;Review items &amp; limitations</h2>
-<p>None of the following break the total — the estimate is structurally sound. They are points where a
-value is <b>provisional</b> or <b>derived with limited confidence</b>, listed so an estimator can review
-them deliberately.</p>
+    # ── NO BLANKET CLAIM ABOUT THE ARITHMETIC ───────────────────────────────────
+    # This opened "None of the following change the arithmetic" on 12173-02 above 29 weld
+    # cues that had become 16 charged Weld and Dress rows, and above part notes that state
+    # charges themselves ("is CHARGED", "costed from the STATED 3.19 kg"). The lead now says
+    # what the list is, and adds — computed from the same join as the rows — how many of the
+    # cues drove a charge and on how many Estimate rows (each row counted once).
+    _hit = {c.get("workbook_row"): c for fp in specific for c in (fp.get("charged") or [])}
+    _n_cue = sum(1 for fp in specific if fp.get("charged"))
+    _ops = sorted({str(c.get("wb_operation") or "") for c in _hit.values()} - {""})
+    lead = ("Each item below is a point where a value is <b>provisional</b> or <b>derived with "
+            "limited confidence</b>, listed so an estimator can review it deliberately. "
+            + (f"<b>{_n_cue} of them drove a charge on the sheet</b> ({_esc(', '.join(_ops))}; "
+               f"{len(_hit)} Estimate row{'s' if len(_hit) != 1 else ''}) — confirming or "
+               f"striking those moves the price. " if _n_cue else "")
+            + "Whether the estimate can go out is answered under Decisions required at the top "
+              "of the page, not here.")
+
+    return f"""{_h2('review')}
+<p>{lead}</p>
 <table>
   <thead><tr><th>Item</th><th>Nature</th><th>Impact</th></tr></thead>
   <tbody>{rows}</tbody>
 </table>"""
 
 
-def _render_drawing_analysis(dq: Dict[str, Any]) -> str:
-    """Section 4 — the drawing-quality audit. Honest severity, not alarmist counts."""
+def _render_drawing_analysis(dq: Dict[str, Any], summary: Optional[Dict[str, Any]] = None) -> str:
+    """Section 4 — the drawing-quality audit. Honest severity, not alarmist counts.
+
+    Takes the summary as well as the quality figures, because the most serious thing that can be
+    wrong with a drawing pack is a drawing that is not in it, and that fact lives on the job
+    rather than in the extraction stats."""
     # 4.1 strengths
     strengths = []
+    if dq.get("native_flat_parts"):
+        _nc = dq.get("native_counts") or {}
+        _ta = f" (top assembly {dq['native_top_assembly']})" if dq.get("native_top_assembly") else ""
+        strengths.append(
+            f"<li><b>SolidWorks models read natively.</b> {dq['native_flat_parts']} part(s) "
+            f"carry a modelled flat pattern from the sheet-metal cut list{_ta} — blank size, "
+            f"sheet gauge and bend radius are taken from the model, not inferred from the "
+            f"drawing. Material coverage {_nc.get('material_coverage', '—')} of "
+            f"{_nc.get('parts_with_signals', '—')} part(s); quantities from the full-depth "
+            f"assembly BOM.</li>")
     if dq["dxf_matched"]:
         strengths.append(f"<li><b>Flat-pattern DXFs present.</b> {dq['dxf_matched']} DXF(s) matched to parts, "
                          f"giving reliable cut-length and bend geometry.</li>")
     if dq.get("geo_reliability") is not None:
         band = dq.get("geo_reliability_band") or ""
         rel_pct = _num(float(dq["geo_reliability"]) * 100, 0) if isinstance(dq["geo_reliability"], (int, float)) else "—"
-        strengths.append(f"<li><b>Geometry reliability: {band} ({rel_pct}%).</b> "
+        # Name this for what it is. A high number here is PDF VECTOR EXTRACTION confidence —
+        # how cleanly we read the page — NOT flat-pattern/manufacturing geometry coverage.
+        # Shown unqualified next to "0 DXFs matched" it reads as "fab geometry is solid",
+        # which is the opposite of the truth on a PDF-only pack.
+        # The caveat only holds when NOTHING measured the blanks. Native SolidWorks flats
+        # are measured geometry, so a native job must not be told its blanks are provisional.
+        _no_measured = not (dq.get("dxf_matched") or dq.get("native_flat_parts"))
+        _ct = (summary or {}).get("concept_takeoff") if isinstance((summary or {}).get("concept_takeoff"), dict) else {}
+        if _no_measured and _ct.get("source") == "solidworks_model":
+            # NOT "NO MODEL MATCHED" ON A BOOK TAKEN OFF THE MODEL (D-414): the parts came from
+            # the SolidWorks assembly, not from flats or drawings, and the line says so.
+            _caveat = ("  <em>This measures how cleanly the PDF vectors were read — it is "
+                       "<b>not</b> flat-pattern coverage. The parts on this book were taken off "
+                       f"the SolidWorks assembly {_esc(str(_ct.get('design') or ''))}, not read "
+                       "from drawings or flats, so every size is the model's and every operation "
+                       "an assumption.</em>")
+        elif _no_measured:
+            _caveat = ("  <em>This measures how cleanly the PDF vectors were read — it is "
+                       "<b>not</b> flat-pattern coverage. No DXFs or SolidWorks models are "
+                       "matched on this job, so blank sizes, bend counts and cut lengths "
+                       "remain provisional.</em>")
+        else:
+            _caveat = ""
+        strengths.append(f"<li><b>PDF vector extraction confidence: {band} ({rel_pct}%).</b> "
                          f"Overall extraction confidence "
-                         f"{_num(float(dq['geo_confidence'])*100,0) if isinstance(dq.get('geo_confidence'),(int,float)) else '—'}%.</li>")
+                         f"{_num(float(dq['geo_confidence'])*100,0) if isinstance(dq.get('geo_confidence'),(int,float)) else '—'}%."
+                         f"{_caveat}</li>")
     if not strengths:
         strengths.append("<li>Drawing pack read; see findings below.</li>")
 
     # 4.2 weaknesses table — only genuine issues
     wk = ""
+    # DRAWINGS THAT NEVER ARRIVED COME FIRST, because it is the one weakness that changes what
+    # the total MEANS rather than how precisely it was measured. A pack missing four welded
+    # assemblies is not a cheap job; it is a job we have only seen part of, and the reader needs
+    # that before any confidence percentage below it.
+    try:
+        from costed_facts import undrawn_bom_lines as _undrawn
+        _missing_drawings = _undrawn(summary)
+    except Exception:                                            # noqa: BLE001
+        _missing_drawings = []
+    if _missing_drawings:
+        _names = ", ".join(
+            f"{m['part_number']}" + (f" ({m['description']})" if m.get("description") else "")
+            for m in _missing_drawings[:6])
+        _extra = f" …and {len(_missing_drawings) - 6} more" if len(_missing_drawings) > 6 else ""
+        wk += (f'<tr><td><b>Drawings named on the BOM but not in the pack</b></td>'
+               f'<td>{_esc(_names)}{_extra}</td>'
+               f'<td>Nothing read these, so nothing costed them. The estimate is priced from '
+               f'what was supplied and is <b>not</b> a price for the whole product — ask for '
+               f'the detail drawings before quoting the complete job.</td></tr>')
+    # A LINE THAT IS CHARGED IS NOT "NOTHING COSTED" (D-450): the wire frame priced off the
+    # sheet that draws it, the mesh from a catalogue — said as what they are, with the basis.
+    try:
+        from costed_facts import priced_without_a_drawing as _pwd
+        _priced_undrawn = _pwd(summary)
+    except Exception:                                            # noqa: BLE001
+        _priced_undrawn = []
+    if _priced_undrawn:
+        _cells = "; ".join(
+            f"{m['part_number']}" + (f" ({m['description']})" if m.get("description") else "")
+            + f" — {m['basis']}" + (f", £{m['gbp']:,.2f}" if m.get("gbp") else "")
+            for m in _priced_undrawn[:6])
+        wk += (f'<tr><td><b>Priced without a drawing of their own</b></td>'
+               f'<td>{_esc(_cells)}</td>'
+               f'<td>The BOM names a drawing the pack does not contain, and the line is still '
+               f'charged — from the sheet that draws it, a catalogue or the market, as the basis '
+               f'says. Confirm the size and the figure against the detail drawing when it '
+               f'arrives.</td></tr>')
     if dq.get("parts_without_dxf"):
         parts = dq["parts_without_dxf"]
         n = len(parts)
@@ -652,7 +1777,29 @@ def _render_drawing_analysis(dq: Dict[str, Any]) -> str:
                      else ", though reliability stayed high"))
         wk += (f'<tr><td><b>Parts without a DXF</b></td><td>{_esc(", ".join(names_bits))}{"…" if n>6 else ""}</td>'
                f'<td>{n} part(s): {effect}.</td></tr>')
-    if dq.get("dxf_unmatched"):
+    # NAMED, WITH THE REASON, NOT COUNTED (D-408). "1 file(s) — check naming" told a reader
+    # nothing about a file the content reader refused for carrying 22 dimension entities: the
+    # name was fine, the file was a drawing. Each file set aside is listed with what the merge
+    # recorded about it, and a refused drawing export is kept apart from a naming mismatch
+    # because the remedy differs.
+    def _listed(items: List[Tuple[str, str]], cap: int = 6) -> str:
+        shown = "; ".join(f"{n} — {why}" if why else n for n, why in items[:cap])
+        return shown + (f" …and {len(items) - cap} more" if len(items) > cap else "")
+    _refused = dq.get("dxf_refused_drawings") or []
+    if _refused:
+        wk += (f'<tr><td><b>DXFs that are drawings, not flat patterns</b></td>'
+               f'<td>{_esc(_listed(_refused))}</td>'
+               f'<td>{len(_refused)} DXF(s) carry dimensions or a title block, so each is an export '
+               f'of the drawing rather than of the flat pattern. None minted a part and none was '
+               f'measured. A flat-pattern export of the part is what gives measured geometry.</td></tr>')
+    _unm = dq.get("dxf_unmatched_items") or []
+    if _unm:
+        wk += (f'<tr><td><b>Unmatched DXFs</b></td><td>{_esc(_listed(_unm))}</td>'
+               f'<td>{len(_unm)} DXF(s) present and tied to no part, each with the reason recorded '
+               f'beside its name. A naming mismatch is fixed by aligning the filename to the part '
+               f'number; a code from another assembly is not this job\'s flat.</td></tr>')
+    elif dq.get("dxf_unmatched") and not _refused:
+        # An older record whose entries carry no name or reason: the count is all there is.
         wk += (f'<tr><td><b>Unmatched DXFs</b></td><td>{dq["dxf_unmatched"]} file(s)</td>'
                f'<td>DXFs present but not tied to a part — check naming/part-number alignment.</td></tr>')
     if dq.get("dxf_ambiguous"):
@@ -663,8 +1810,28 @@ def _render_drawing_analysis(dq: Dict[str, Any]) -> str:
         wk += (f'<tr><td><b>Stray spaces in filenames</b></td><td><code>{ex}</code></td>'
                f'<td>Spaces (esp. before the extension) complicate file matching; tolerated but fragile.</td></tr>')
     if dq.get("pn_pattern_count", 0) > 2:
-        wk += (f'<tr><td><b>Inconsistent part-number formats</b></td><td>{dq["pn_pattern_count"]} distinct patterns</td>'
-               f'<td>Mixed conventions make it harder to tell fabricated parts from sub-assemblies and bought-ins.</td></tr>')
+        # NAMED, AND NOT OVERSTATED. This row used to say "Inconsistent part-number formats — 4
+        # distinct patterns" and nothing else, which is a count where a list was needed and an
+        # accusation where none was earned. Several numbering conventions in one pack is usually
+        # the pack WORKING: 10575-01-001 is an SDI fabricated part, BI-BOLT is flagged bought-in
+        # by its prefix, FIXING2104 is a supplier's own code. An estimator reads the shape and
+        # knows what kind of line it is.
+        #
+        # What is worth flagging is an entry that is not a part number at all — "STD PART", a
+        # description sitting in the number column — because that is the one a lookup fails on.
+        # So the families are shown with examples, and the finding is stated as something to
+        # confirm rather than something wrong.
+        _ex = dq.get("pn_examples") or {}
+        _fam = " &nbsp;·&nbsp; ".join(
+            f'<code>{_esc(v[0])}</code>' + (f' <span class="t-muted">(+{len(v)-1})</span>'
+                                            if len(v) > 1 else "")
+            for _k, v in sorted(_ex.items(), key=lambda kv: -len(kv[1])) if v)
+        wk += (f'<tr><td><b>Several part-number conventions</b></td><td>{_fam}</td>'
+               f'<td>{dq["pn_pattern_count"]} shapes across the pack. This is normal and '
+               f'usually useful &mdash; the shape is how a reader tells an SDI fabricated part '
+               f'from a bought-in one from a supplier code. Worth a glance for the opposite '
+               f'case: an entry that is a description rather than a number will not match '
+               f'anything in SDILive.</td></tr>')
     # review items — honest severity, not a lump "contaminated" count
     if dq.get("review_total"):
         errs = dq.get("review_errors", 0)
@@ -687,54 +1854,335 @@ def _render_drawing_analysis(dq: Dict[str, Any]) -> str:
     if dq.get("validation_issues"):
         wk += (f'<tr><td><b>Validation issues</b></td><td>{len(dq["validation_issues"])} item(s)</td>'
                f'<td>The manufacturing write-up flagged structural issues (assembly-only parts, missing cues).</td></tr>')
+    # THE PACK DID NOT "READ CLEANLY" BESIDE A FAILED CHECK (D-406). 12675-01's report said so
+    # with three checks failed, the SolidWorks extract refused and two DXFs rejected as
+    # drawings: the callout below is printed only when this table is empty, so what the run
+    # itself found wrong with the pack is written into it.
+    _inv = (summary or {}).get("invariants") if isinstance(summary, dict) else None
+    _viol = [v for v in ((_inv or {}).get("violations") or []) if isinstance(v, dict)]
+    _failed = [v for v in _viol if str(v.get("severity") or "").lower() == "blocking"]
+    if _failed:
+        _codes = ", ".join(sorted({str(v.get("code") or "?") for v in _failed})[:6])
+        wk += (f'<tr><td><b>Consistency checks failed</b></td><td>{len(_failed)} check(s): {_esc(_codes)}</td>'
+               f'<td>Section 13 lists them. A failed check is a fault the run found in what it read; '
+               f'the pack has not read cleanly while any stands.</td></tr>')
+    if any(str(v.get("code") or "") == "native_extract_refused" for v in _viol):
+        wk += (f'<tr><td><b>SolidWorks extract refused</b></td><td>the model files beside the pack</td>'
+               f'<td>Nothing from the model was applied; blanks, gauges and bends rest on the drawings alone.</td></tr>')
+    try:
+        from file_scan import design_intent_pages as _di_pages
+        _di = _di_pages(summary or {})
+    except Exception:                                                # noqa: BLE001
+        _di = []
+    if _di:
+        wk += (f'<tr><td><b>Design-intent sheets</b></td><td>page(s) {_esc(", ".join(str(p) for p in _di))}</td>'
+               f'<td>Concept drawings with no parts list and no part sheets. They mint no part; the design '
+               f'is taken off from its own SolidWorks assembly or detailed by Design into a drawings pack '
+               f'(an LLM scan with a brief is a fallback budget only).</td></tr>')
 
-    weaknesses = f"""<h3>4.2 &nbsp;Weaknesses &amp; inconsistencies found</h3>
+    weaknesses = f"""<h3>{_sub('drawings', 3)} &nbsp;Weaknesses &amp; inconsistencies found</h3>
 <table><thead><tr><th>Finding</th><th>Where</th><th>Effect on estimating</th></tr></thead>
-<tbody>{wk}</tbody></table>""" if wk else """<h3>4.2 &nbsp;Weaknesses &amp; inconsistencies found</h3>
+<tbody>{wk}</tbody></table>""" if wk else f"""<h3>{_sub('drawings', 3)} &nbsp;Weaknesses &amp; inconsistencies found</h3>
 <div class="callout good"><b>No significant drawing faults detected.</b> The pack read cleanly with no
 missing DXFs, filename issues, or contaminated fields flagged.</div>"""
 
-    return f"""<h2>4 &nbsp;Drawing analysis</h2>
+    return f"""{_h2('drawings')}
 <p>The estimate is only ever as good as the drawing pack it reads. This section audits the drawings
 directly — what was clear, and where the engine had to work around them.</p>
-<h3>4.1 &nbsp;Strengths of the drawing pack</h3>
+{_files_read_section(summary or {})}
+<h3>{_sub('drawings', 2)} &nbsp;Strengths of the drawing pack</h3>
 <ul class="clean">{''.join(strengths)}</ul>
 {weaknesses}"""
 
 
+def _files_read_section(summary: Dict[str, Any]) -> str:
+    """4.1 — THE DRAWINGS THIS NUMBER CAME FROM, NAMED.
+
+    The pack was recorded and never shown. `job_source_pdfs` was in the summary and the report
+    used it for counts and filename hygiene; `cad_inputs` held the files that were present and
+    NOT read. Neither was ever put in front of the estimator, so the one document people
+    actually read could not answer "which drawings produced this?" — six weeks later, when
+    somebody asks, that is the whole question.
+
+    It matters more since staging, not less. Selection now genuinely decides what is priced, so
+    a drawing left off the list is absent from the estimate and there was nothing on paper
+    saying which ones were on it. A short list is also the fastest way to catch the expensive
+    mistake — a pack that is missing a part — because a person who knows the job reads six
+    filenames and sees the seventh is not there.
+
+    Files present and NOT read are named beside the ones that were. A DWG nobody could convert
+    is not a neutral fact: it is geometry that was in the folder and did not reach the number.
+    """
+    read = [str(p.get("name") or p) if isinstance(p, dict) else str(p)
+            for p in (summary.get("job_source_pdfs") or [])]
+    cad = summary.get("cad_inputs") or {}
+    dxf = summary.get("dxf_augmentation") or {}
+
+    def _names(items) -> List[str]:
+        # By the key the merge writes (`dxf`, `path`, `candidates`), not the keys a fixture
+        # once used — see _dxf_record_names for the report that named no DXF at all.
+        out: List[str] = []
+        for it in items or []:
+            out.extend(_dxf_record_names(it))
+        return out
+
+    # WHAT ACTUALLY READ EACH FILE, not what kind of file it is.
+    #
+    # The column is headed "What it contributed" and printed "SOLIDWORKS model" against every
+    # SLDPRT in the folder — on a run with the SolidWorks extract switched off. Two paragraphs
+    # below, 4.2 said "No DXFs or SolidWorks models are matched on this job". One section was
+    # reporting the folder; the other was reporting the readings; the reader got both.
+    #
+    # A model file is a SOURCE only when the extract ran against it. Where it did not, it
+    # belongs with the DWGs — present, and contributed nothing.
+    from run_readers import pdf_reader_summary, readers_that_ran, run_was_llm_only
+    _recorded = summary.get("readers_that_ran")
+    if isinstance(_recorded, list) and _recorded:
+        _readers = _recorded
+    else:
+        # An older JSON, or a run where the stamp did not land. Derive it from the flag: the
+        # answer is coarser but it is never wrong about the three readers --llm-only disables.
+        _readers = readers_that_ran(llm_only=run_was_llm_only(summary))
+    _ran = {r.get("key"): bool(r.get("ran")) for r in _readers if isinstance(r, dict)}
+    _sw_ran = _ran.get("solidworks", True)
+
+    rows: List[tuple] = []
+    _pdf_what = pdf_reader_summary(summary)
+    for n in read:
+        rows.append((n, "PDF", _pdf_what))
+    for n in _names(dxf.get("matched")):
+        rows.append((n, "DXF", "matched to a part — measured flat pattern (ezdxf)"))
+    # A DXF THE MERGE SET ASIDE IS NAMED WITH THE REASON IT RECORDED (D-408). Matched rows go
+    # first, so a file that was weighed among candidates and then applied keeps its matched
+    # row and the record of the weighing does not list it a second time.
+    for key in ("unmatched_dxf", "skipped", "ambiguous_dxf"):
+        for it in (dxf.get(key) or []):
+            why = _dxf_record_reason(it) or "matched to no part"
+            for n in _dxf_record_names(it):
+                rows.append((n, "DXF", f"present, not used: {why}"))
+    for n in (cad.get("solidworks") or []):
+        rows.append((str(n), "MODEL",
+                     "cut list and assembly structure read from the model (SolidWorks COM)"
+                     if _sw_ran else
+                     "PRESENT, NOT READ — the SolidWorks extract did not run on this job"))
+    for n in (cad.get("converted") or []):
+        rows.append((str(n), "DXF", "converted from a DWG"))
+    # LAST AND MARKED, because this is the row that changes what the number means.
+    unread = [str(n) for n in (cad.get("unread") or [])]
+    for n in unread:
+        rows.append((n, "—", "PRESENT, NOT READ — contributed nothing"))
+
+    if not rows:
+        # Silence would read as "no drawings", which is never true of a job that produced a
+        # number. Say that the record is missing, not that the pack was.
+        return (f'<h3>{_sub("drawings", 1)} &nbsp;Drawings this estimate was built from</h3>'
+                '<div class="callout warn">The engine did not record which files it read on '
+                'this job, so they cannot be listed here. The staged input folder for this '
+                'client and drawing holds exactly the pack that was priced.</div>')
+
+    seen, body = set(), ""
+    for name, kind, what in rows:
+        key = (name.lower(), kind)
+        if key in seen:
+            continue
+        seen.add(key)
+        # Red for a file that contributed nothing, however it came to contribute nothing.
+        _nothing = ("NOT READ", "minted no part", "matched to no part", "not attached",
+                    "not measured")
+        cls = (' style="color:#b3261e;font-weight:600"'
+               if any(m in what for m in _nothing) else "")
+        body += (f'<tr><td><code>{_esc(name)}</code></td><td>{_esc(kind)}</td>'
+                 f'<td{cls}>{_esc(what)}</td></tr>')
+
+    note = ""
+    _sw_files = [str(n) for n in (cad.get("solidworks") or [])]
+    if unread or (_sw_files and not _sw_ran):
+        _n = len(unread) + (len(_sw_files) if not _sw_ran else 0)
+        note = (f'<div class="callout warn"><b>{_n} file(s) were in the pack and were '
+                f'not read.</b> They contributed nothing to this estimate. A DWG usually means '
+                f'no converter was available; a STEP or IGES carries geometry but no part '
+                f'numbers, quantities or material, so it is never a source. A SolidWorks file '
+                f'is only a source when the native extract runs against it — sitting in the '
+                f'folder it contributes nothing.</div>')
+
+    return (f'<h3>{_sub("drawings", 1)} &nbsp;Drawings this estimate was built from</h3>'
+            f'{_render_readers_panel(_readers)}'
+            f'<p>Exactly these files, and nothing else in the folder. Drawings not selected for '
+            f'the run were not read.</p>'
+            f'<table><thead><tr><th>File</th><th>Type</th><th>What read it, and what it '
+            f'contributed</th></tr>'
+            f'</thead><tbody>{body}</tbody></table>{note}')
+
+
+def _render_readers_panel(readers: List[Dict[str, Any]]) -> str:
+    """WHICH READERS LOOKED AT THIS PACK — named, with what each one can and cannot see.
+
+    James, on the LLM-only report: "it states when solidworks was used but not what was used to
+    read the PDF? Was it pdfplumber and / or something else? it must have been LLM."
+
+    His guess was half right, and the half he had wrong is the half that matters. The vision
+    model did read every page. It did NOT produce the part numbers, the quantities, the material
+    callouts or the title-block fields — those came off the PDF's own text layer, exactly as
+    typed, on this run as on any other, because --llm-only switches off the BOM reader and the
+    two measuring readers and leaves the text readers alone.
+
+    That distinction is the difference between "an LLM wrote this estimate" and "an LLM was the
+    only thing corroborating the drawing", and no estimator can be expected to infer it. So the
+    readers are listed, run and not run together, and each says in one sentence what it produces
+    and where it stops.
+
+    OFF IS PRINTED AS LOUDLY AS ON. A reader that did not run is the reason a number is
+    provisional, and a list that quietly omitted it would read as a shorter pipeline rather than
+    a weaker one.
+    """
+    if not readers:
+        return ""
+    on, off = [], []
+    for r in readers:
+        if not isinstance(r, dict):
+            continue
+        (on if r.get("ran") else off).append(r)
+
+    def _rows(items, ran: bool) -> str:
+        out = ""
+        for r in items:
+            mark = ("<b style='color:#1e7d32'>ran</b>" if ran
+                    else "<b style='color:#b3261e'>did not run</b>")
+            tail = (f' <span class="t-muted">— {_esc(r.get("why_off") or "")}</span>'
+                    if not ran and r.get("why_off") else "")
+            out += (f'<tr><td><b>{_esc(r.get("name") or "")}</b><br>'
+                    f'<span class="t-muted">{_esc(r.get("library") or "")}</span></td>'
+                    f'<td>{mark}{tail}</td>'
+                    f'<td>{_esc(r.get("produces") or "")}<br>'
+                    f'<span class="t-muted">{_esc(r.get("limits") or "")}</span></td></tr>')
+        return out
+
+    n_off = len(off)
+    lead = ("Every reader below ran on this pack." if not n_off else
+            f"{len(on)} of {len(on) + n_off} readers ran on this pack. "
+            f"The {n_off} that did not are the reason figures on this job are corroborated by "
+            f"fewer sources than usual — each says why it was off.")
+    # ── WHAT "LLM-ONLY" ACTUALLY MEANS, ON THE PAGE ─────────────────────────────────
+    #
+    # James: "Fix the heading. Don't say 'vision model alone / DXF and extract off' if
+    # pdfplumber still read title blocks. Say: BOM from vision; title-block text from
+    # pdfplumber; flats/SW off."
+    #
+    # The flag's name is the problem and no wording can undo it: --llm-only reads as "nothing
+    # but the LLM", and what it does is switch off Path A of the BOM merge, the DXF flats and
+    # the SolidWorks extract. The drawing's text layer is read exactly as on a normal run,
+    # which is why twenty parts on the 10575-02 measurement carried material and thickness
+    # from "the drawing" and were right to.
+    #
+    # An estimator holding this document has to know which half is the model's. Stating it in
+    # one sentence, above the table, is cheaper than expecting anyone to reconstruct it from
+    # six ran/did-not-run rows.
+    _bom_only = any(not r.get("ran") and r.get("key") == "bom_reader" for r in readers)
+    _scope = ""
+    if _bom_only:
+        _scope = ('<div class="callout warn"><b>What "LLM-only" means on this run.</b> '
+                  'The <b>bill of materials</b> — which parts, how many — came from the vision '
+                  'model and nothing else, so no BOM line was corroborated by a second reader. '
+                  'The <b>drawing\'s text</b> was still read normally: material, thickness and '
+                  'title-block fields came off the PDF\'s own text layer exactly as on a full '
+                  f'run, and are shown as "the drawing" in {_sec("bom_source")}. Flat patterns '
+                  'and the SolidWorks extract were off, so no folded part has a measured '
+                  'blank.</div>')
+    return (f'<div class="callout"><b>What read this pack.</b> {lead} '
+            f'Where a figure came from is recorded per part in {_sec("bom_source")} and, per costing '
+            f'datum, on the AI Provenance tab of the workbook.</div>{_scope}'
+            f'<table><thead><tr><th>Reader</th><th>This run</th>'
+            f'<th>What it produces, and where it stops</th></tr></thead><tbody>'
+            f'{_rows(on, True)}{_rows(off, False)}</tbody></table>')
+
+
 def _render_checklist(review: Dict[str, Any], dq: Dict[str, Any]) -> str:
-    items = ""
+    """5 — THE CHECKLIST, WITH EACH FINDING EXPLAINED ONCE.
+
+    WHAT IT LOOKED LIKE, and why nobody could work from it:
+
+        * 10575-01-102 — high bend count; weld cue detected — verify weld/dress content; low
+          extraction confidence (26%).
+        * 10575-01-103 — high bend count; risk flag: missing_labour_rate:laser_cutting; low
+          extraction confidence (34%).
+        * 10575-01-104 — weld cue detected — verify weld/dress content; low extraction
+          confidence (26%).
+
+    James: "same for all these. Can we be more specific somehow?"
+
+    THE REPETITION IS THE PROBLEM, NOT THE LENGTH. Three parts, one shared vocabulary, and by
+    the third line the reader has learned that these lines all say roughly the same thing —
+    which is exactly when they stop reading, and the one line that differs is the one carrying
+    `missing_labour_rate:laser_cutting`: an operation on the route with no rate behind it, which
+    means laser cutting on that part is costing nothing at all.
+
+    So the findings are GROUPED BY WHAT THEY ARE, not scattered per part. Each kind is explained
+    once, in full, and lists the parts it applies to. A reader learns "3 or more bends" one time
+    and then reads a list of part numbers; the labour-rate gap gets its own row and cannot hide
+    at the end of a semicolon chain.
+    """
+    from plain_english import action as _action, explain as _explain, label as _lbl
+
     flagged = review.get("flagged_parts", [])
-    # Split: parts with a SPECIFIC issue (weld/material/etc.) get individual lines;
-    # parts flagged ONLY for low confidence get grouped into one summary line (else it's noise).
-    specific = []
-    low_conf_only = []
+
+    # code -> {parts: [names], notes: [per-part detail]}
+    by_code: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
     for fp in flagged:
-        reason = (fp.get("reason") or "").lower()
-        has_specific = any(k in reason for k in ("weld", "material spec", "bend", "risk flag", "price"))
-        if has_specific:
-            specific.append(fp)
-        elif reason:
-            low_conf_only.append(fp)
+        for f in (fp.get("findings") or []):
+            code = str(f.get("code") or "")
+            if not code:
+                continue
+            if code not in by_code:
+                by_code[code] = {"parts": [], "notes": []}
+                order.append(code)
+            cost = f" ({_money(fp['cost'])})" if fp.get("cost") is not None else ""
+            note = f" — {f['detail']}" if f.get("detail") else ""
+            by_code[code]["parts"].append(f"{fp['part']}{cost}{note}")
 
-    for fp in specific:
-        cost = f" ({_money(fp['cost'])})" if fp.get("cost") is not None else ""
-        items += f"<li><b>{_esc(fp['part'])}{cost}</b> — {_esc(fp['reason'])}.</li>"
+    # Worst first is not severity but ACTIONABILITY: a gap that makes an operation cost nothing
+    # outranks a flag asking somebody to look at a fold count.
+    _PRIORITY = ("missing_labour_rate", "missing_material_price", "missing_material_spec",
+                 "missing_material_thickness", "customer_supplied_zero_cost")
 
-    if low_conf_only:
-        names = ", ".join(_esc(fp["part"]) for fp in low_conf_only[:8])
-        more = f" (+{len(low_conf_only)-8} more)" if len(low_conf_only) > 8 else ""
-        items += (f"<li><b>{len(low_conf_only)} part(s) flagged for low extraction confidence</b> — "
-                  f"{names}{more}. These read below the confidence threshold; spot-check their "
-                  f"dimensions/material against the drawing.</li>")
+    def _rank(code: str) -> Tuple[int, int]:
+        head = code.split(":", 1)[0]
+        return (_PRIORITY.index(head) if head in _PRIORITY else len(_PRIORITY),
+                order.index(code))
+
+    items = ""
+    for code in sorted(order, key=_rank):
+        rec = by_code[code]
+        names = rec["parts"]
+        shown = ", ".join(_esc(n) for n in names[:10])
+        more = f" <span class=\"t-muted\">(+{len(names) - 10} more)</span>" if len(names) > 10 else ""
+        items += (f'<li><b>{_esc(_lbl(code))}</b> &nbsp;<span class="t-muted">'
+                  f'{len(names)} part(s)</span><br>'
+                  f'{_esc(_explain(code))}<br>'
+                  f'<b>Do:</b> {_esc(_action(code))}<br>'
+                  f'<span class="t-muted">{shown}{more}</span></li>')
 
     for pv in review.get("provisional", []):
         items += f"<li><b>{_esc(pv['item'])}</b> — {_esc(pv['note'])}</li>"
 
+    # ONE PAGE MUST NOT SAY BOTH THINGS. Section 3 lists the flags the costing rules wrote;
+    # this section is built from a DIFFERENT structure and said "the estimate read cleanly"
+    # on the same page, four flags further up. That is the same contradiction section 3 was
+    # carrying against the workbook a commit ago, moved one heading down: two builders, one
+    # question, and a reader who cannot tell which answer to believe.
+    for pn in review.get("part_notes", []):
+        _who = pn.get("parts") or []
+        _lbl_who = ", ".join(_esc(x) for x in _who[:10]) + (
+            f' <span class="t-muted">(+{len(_who) - 10} more)</span>' if len(_who) > 10 else "")
+        items += (f'<li><b>Check against the drawing</b><br>{_esc(pn["note"])}<br>'
+                  f'<span class="t-muted">{_lbl_who}</span></li>')
+
     if not items:
         items = "<li>No specific review points — the estimate read cleanly.</li>"
-    return f"""<h2>5 &nbsp;What to focus on when checking this job</h2>
-<p>A practical checklist for the estimator reviewing the populated sheet:</p>
+    return f"""{_h2('focus')}
+<p>Grouped by what the finding is, so each one is explained once and you can see every part it
+touches. Ordered by what it does to the number: a missing rate makes an operation cost nothing,
+a flag asks you to look at something.</p>
 <ul class="chk">{items}</ul>"""
 
 
@@ -749,7 +2197,24 @@ _DESIGN_RECS = [
 ]
 
 
-def _render_design_recs(dq: Optional[Dict[str, Any]] = None) -> str:
+def _render_design_recs(dq: Optional[Dict[str, Any]] = None,
+                        summary: Optional[Dict[str, Any]] = None) -> str:
+    # THIS PACK'S SHORTFALLS FIRST, generic advice second. James's rule: when the engine
+    # had to code around the pack — a drawing export staged as a flat, a stray file, a
+    # BOM line with no drawing — the report says so, or the drawing office never hears
+    # it and every pack costs another engine fix. Evidence-only, from the record.
+    _shortfall_html = ""
+    try:
+        from costed_facts import pack_shortfalls
+        _sf = pack_shortfalls(summary or {})
+    except Exception:                                            # noqa: BLE001
+        _sf = []
+    if _sf:
+        _shortfall_html = (
+            '<div class="callout warn"><b>What this pack made the engine work around.</b> '
+            'Each was handled on this run — but every one is a pack fault, not an '
+            'estimating step, and a cleaner pack removes the risk entirely:<ul>'
+            + "".join(f"<li>{_esc(s)}</li>" for s in _sf[:8]) + "</ul></div>")
     # Build a concrete filename example from THIS job if a stray-space file was found;
     # otherwise use a neutral, job-agnostic example (never another job's real filename).
     file_example = "Remove spaces from DXF/PDF filenames — e.g. <code>PART_revA.dxf</code>, not <code>PART_revA .dxf</code>."
@@ -762,7 +2227,8 @@ def _render_design_recs(dq: Optional[Dict[str, Any]] = None) -> str:
     for i, (title, body) in enumerate(_DESIGN_RECS, start=1):
         body = body.replace("{FILE_EXAMPLE}", file_example)
         recs += f'<div class="rec"><div class="num">{i}</div><div class="body"><b>{title}</b> {body}</div></div>'
-    return f"""<h2>6 &nbsp;Design recommendations — for consistent, reliable estimating</h2>
+    return f"""{_h2('design')}
+{_shortfall_html}
 <p>These changes to how drawings are produced would let the engine <b>read</b> the drawings rather than
 <b>cope</b> with them — reducing variation job-to-job and making every future estimate more reliable.</p>
 {recs}
@@ -773,22 +2239,1034 @@ def _render_design_recs(dq: Optional[Dict[str, Any]] = None) -> str:
 </div>"""
 
 
-def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool) -> str:
+def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool,
+                    summary: Dict[str, Any]) -> str:
     faults = bool(dq.get("parts_without_dxf") or dq.get("stray_space_files")
                   or dq.get("review_errors") or dq.get("validation_issues"))
     draw_note = ("The drawing pack is largely legible, with the main opportunities captured as Design "
                  "recommendations above." if faults else
                  "The drawing pack read cleanly with no significant faults detected.")
-    parity_note = (" The engine's figures are compared against the manual estimate in section 1a." if has_parity else "")
-    return f"""<h2>{'8' if has_parity else '7'} &nbsp;Verdict</h2>
-<p class="lead">The estimate is <b>structurally sound</b>: material streams are correctly separated and
-there is no double-counting. The workbook Unit Cost is <b>{_money(hl['unit'])}</b>. It is presented with
-a transparent list of provisional items for estimator review.{parity_note} {draw_note}</p>"""
+    parity_note = (f" The engine's figures are compared against the manual estimate in {_sec('parity')}." if has_parity else "")
+    _inv = summary.get("invariants") if isinstance(summary.get("invariants"), dict) else None
+    # NO REASSURANCE THE TOP OF THE PAGE CONTRADICTS. The record's open decisions are stated
+    # in this verdict too, so a reader who lands here from a search does not read "every
+    # check passed" on a job whose plating scope is still Tim's call.
+    from costed_facts import outstanding_summary, double_count_status
+    _rec = _record_for(summary)
+    _out = outstanding_summary(_rec)
+    _open = _out["total"]
+    # THE HEADLINE AND ITS PHRASE, TOGETHER (12173-02 printed the phrase alone here, and
+    # gated it on a total that left failing checks out). Both are now one count.
+    _open_note = (f" Still to confirm: {_out['total']} — {_esc(_out['phrase'])} — listed under "
+                  f"Decisions required at the top of this page." if _open else "")
+    # "NOTHING IS COUNTED TWICE" ONLY WHERE SECTION 2 ESTABLISHED IT — the same record.
+    _dc = {"clear": "nothing is counted twice",
+           "found": f"some lines may be counted twice ({_sec('right')})",
+           "not_established": f"double-counting is not ruled out ({_sec('right')})"
+           }[double_count_status(summary, record=_rec)["state"]]
+    _stop = _rec.get("run_stop") if isinstance(_rec.get("run_stop"), dict) else None
+    if _stop:
+        # THE VERDICT ON AN EMPTY BOOK IS THAT IT IS EMPTY (D-409), not "PROVISIONAL … the
+        # workbook Unit Cost is PENDING" as though a figure were waiting to be finished.
+        from run_stop import sentence as _stop_sentence              # noqa: PLC0415
+        _lead = (f"<b>No price was produced on this run.</b> {_esc(_stop_sentence(_stop))} "
+                 f"The checks and figures in this document describe an empty book, not a "
+                 f"price; nothing here is to be sent as an estimate.{_open_note}")
+    elif _inv is not None and not _inv.get("may_quote_firm"):
+        _sentence = _checks_sentence(summary)
+        _lead = (f"<b>This estimate is PROVISIONAL and must not be released as a firm price.</b> "
+                 + (f"{_esc(_sentence)} — listed in {_sec('checks')}. " if _sentence else
+                    f"The consistency checks did not pass — see {_sec('checks')}. ")
+                 + f"Material streams are separated and {_dc}, and the workbook Unit "
+                 f"Cost is <b>{_unit_text(hl)}</b>, but that figure is not yet one the "
+                 f"engine can stand behind.{_open_note}")
+    elif _inv is None:
+        _lead = (f"Material streams are correctly separated and {_dc}. "
+                 f"The workbook Unit Cost is <b>{_unit_text(hl)}</b>. The consistency "
+                 f"checks did NOT run on this job, so none of these figures have been verified "
+                 f"against the workbook — treat as provisional.{_open_note}")
+    elif _open:
+        _lead = (f"Every consistency check passed — material rows and labour rows each "
+                 f"reconcile to the workbook's own totals, and those totals to the unit price "
+                 f"— <b>but the estimate is not releasable</b>.{_open_note} The workbook Unit "
+                 f"Cost is <b>{_unit_text(hl)}</b>.")
+    else:
+        _lead = (f"The estimate is <b>structurally sound</b> and every consistency check passed: "
+                 f"material rows and labour rows each reconcile to the workbook's own totals, "
+                 f"and those totals to the unit price. The workbook Unit Cost is "
+                 f"<b>{_unit_text(hl)}</b>. It is presented with a transparent list of "
+                 f"provisional items for estimator review.")
+    return f"""{_h2('verdict')}
+<p class="lead">{_lead}{parity_note} {draw_note}</p>
+{_provenance_strip(summary)}
+{_concept_assumptions_section(summary)}
+{_bom_provenance_section(summary)}
+{_purchased_key_section(summary)}
+{_unpriced_section(summary)}
+{_route_decisions_section(summary)}
+{_invariants_section(summary)}
+{_explanation_section(summary)}"""
+
+
+def _checks_sentence(summary: Dict[str, Any]) -> str:
+    """What the consistency checks found, as costed_facts.failing_checks_summary words it —
+    the one sentence section 2, the verdict and section 13 all print. A hand-made check
+    result that carries counts and no findings is stated from its counts."""
+    try:
+        from costed_facts import failing_checks_summary
+        s = failing_checks_summary(_record_for(summary))["sentence"]
+    except Exception:                                            # noqa: BLE001
+        s = ""
+    if s:
+        return s
+    inv = summary.get("invariants") if isinstance(summary.get("invariants"), dict) else {}
+    if not (inv.get("violations") or []) and (inv.get("blocking") or inv.get("unverified")):
+        return (f"{inv.get('blocking', 0)} consistency finding(s) failed and "
+                f"{inv.get('unverified', 0)} could not be run")
+    return ""
+
+
+def route_decision_states(decisions: Any) -> Dict[str, List[Dict[str, Any]]]:
+    """The route's decisions sorted by what they ask of a person, by the predicates the
+    consistency check uses (invariants.check_canonical_route_shadow): UNVERIFIED with no
+    conflicting claim is UNOWNED, UNVERIFIED with conflicts is a tie left unsettled, and
+    `contested` is a tie the arbiter already SETTLED — informational, not open.
+
+    12173-02's section 8 counted only `contested` as "needing resolution", said "none", and
+    missed ten operations nothing in the pack claimed — which section 13 listed as blocking."""
+    ds = [d for d in (decisions or []) if isinstance(d, dict)]
+    return {
+        "settled": [d for d in ds if d.get("contested")],
+        "unowned": [d for d in ds if str(d.get("status") or "") == "unverified"
+                    and not d.get("conflicts")],
+        "unsettled": [d for d in ds if str(d.get("status") or "") == "unverified"
+                      and d.get("conflicts")],
+    }
+
+
+def _provenance_strip(summary: Dict[str, Any]) -> str:
+    """Four lines an estimator reads before anything else.
+
+    The two provenance tables below are long by design. What a reviewer needs first is
+    whether to trust the number at all, and that is four facts: where the totals came from,
+    the best source that contributed anything, how many decisions had to be settled rather
+    than simply read, and who owns powder. Powder is on this strip because it is the one
+    figure that has twice been produced by a mechanism nobody could name from the sheet.
+    """
+    try:
+        from source_precedence import display_name, rank
+    except Exception:
+        return _empty_section("trust", "Not shown — the source-precedence reader is not "
+                                       "available where this report was generated.")
+    hl = _extract_headline(summary) or {}
+    payload = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+               or summary.get("canonical_route_shadow") or {})
+    decisions = [d for d in (payload.get("decisions") or []) if isinstance(d, dict)]
+
+    # WHERE THE TOTALS CAME FROM, said rather than implied. A reader cannot otherwise tell
+    # a figure the workbook calculated from one this report worked out for itself, and only
+    # the first can be checked by opening the sheet.
+    if hl.get("source_of_truth") == "populated_xlsx_excel_com":
+        truth = ("the workbook's own calculated cells, read back after Excel recalculated "
+                 "&mdash; not re-computed here")
+    elif hl.get("source_of_truth"):
+        truth = f"{_esc(hl.get('source_of_truth'))} &mdash; <b>not</b> the workbook's own cells"
+    else:
+        truth = "<b>not recorded</b> &mdash; treat every total below as unverified"
+
+    best = ""
+    for d in decisions:
+        nm = str(d.get("source") or "")
+        if nm and (not best or rank(nm) > rank(best)):
+            best = nm
+    best_txt = (f"{_esc(display_name(best))} (rank {rank(best)})" if best
+                else "<b>none &mdash; no operation was arbitrated</b>")
+
+    _rs = route_decision_states(decisions)
+    contested = _rs["settled"]
+    keys = sorted({str(d.get("settled_by_key") or "") for d in contested if d.get("settled_by_key")})
+    set_txt = ("none" if not contested
+               else f"<b>{len(contested)}</b>" + (f", settled by {_esc(', '.join(keys))}" if keys else ""))
+    own_txt = ("none" if not _rs["unowned"] else
+               f"<b>{len(_rs['unowned'])}</b> &mdash; the route prices none of them; listed in "
+               f"{_sec('checks')}")
+    tie_txt = ("none" if not _rs["unsettled"] else
+               f"<b>{len(_rs['unsettled'])}</b> &mdash; not priced; listed in {_sec('checks')}")
+    # AND THE TALLY THE TOP OF THE PAGE PRINTS, so this row cannot read as "nothing open"
+    # over a Decisions table of twenty-five.
+    try:
+        from costed_facts import outstanding_summary as _osum_t
+        _o_t = _osum_t(_record_for(summary))
+        settle_txt = (f"<b>{_o_t['total']}</b> &mdash; {_esc(_o_t['phrase'])}; listed under "
+                      f"Decisions required" if _o_t["total"] else "none")
+    except Exception:                                            # noqa: BLE001
+        settle_txt = ""
+
+    powder = [d for d in decisions
+              if str(d.get("operation") or "").lower() in
+              ("powder_coating", "powder_coat", "powder", "p_coat", "pcoat")]
+    if powder:
+        req = [d for d in powder if str(d.get("status")) == "required"]
+        pow_txt = (f"the route compiler &mdash; {len(req)} part(s) decided coated"
+                   if req else "the route compiler &mdash; <b>nothing coated on this job</b>")
+    elif decisions:
+        pow_txt = ("<b>no powder decision on this route.</b> Mass, if any, came from "
+                   "geometry, not from an arbitrated decision")
+    else:
+        pow_txt = "<b>the legacy finish gate</b> &mdash; no compiled route on this job"
+
+    # THE FIRST THING TO SAY, WHEN IT APPLIES. Every figure above this strip is presented as
+    # the workbook's; when the Excel read-back did not run they are the engine's PRE-Excel
+    # numbers instead, which is a different total. Section 11 says so too, but an estimator
+    # reading top-down has already formed a view of the number by the time they reach it.
+    _fe = summary.get("final_estimate")
+    if not isinstance(_fe, dict):
+        _fe = (summary.get("estimate_summary") or {}).get("final_estimate")
+    _no_readback = (
+        '<div class="callout warn"><b>The calculated sheet was never read back.</b> Excel did '
+        'not return this workbook\'s computed totals, so the figures above are the engine\'s '
+        'own, not what the Estimate sheet calculates &mdash; two different numbers. Nothing '
+        'below has been reconciled against the workbook.</div>'
+        if not isinstance(_fe, dict) or not _fe else '')
+
+    return (_h2('trust')
+            + _no_readback +
+            '<table><tbody>'
+            f'<tr><td><b>Totals came from</b></td><td>{truth}</td></tr>'
+            f'<tr><td><b>Best source used</b></td><td>{best_txt}</td></tr>'
+            f'<tr><td><b>Ties the arbiter settled</b></td><td>{set_txt}</td></tr>'
+            f'<tr><td><b>Operations not priced &mdash; nothing in the pack claims them</b></td>'
+            f'<td>{own_txt}</td></tr>'
+            f'<tr><td><b>Ties left unsettled</b></td><td>{tie_txt}</td></tr>'
+            + (f'<tr><td><b>Still to confirm</b></td><td>{settle_txt}</td></tr>'
+               if settle_txt else '') +
+            f'<tr><td><b>Powder decided by</b></td><td>{pow_txt}</td></tr>'
+            '</tbody></table>')
+
+
+def _concept_assumptions_section(summary: Dict[str, Any]) -> str:
+    """8.5 — WHAT A CONCEPT BUDGET ASSUMED, AS A LIST SOMEBODY CAN WORK THROUGH.
+
+    James Gray, 22 Sep 2026: a price reconstructed from a render "is acceptable only as a
+    clearly editable concept budget, with each assumption available to confirm — not as a
+    technical estimate reconstructed from a PNG."
+
+    Every figure on a concept run is already stamped `vision_concept` and carries the cue it
+    was scaled from, which section 9 reports part by part. That is provenance, and provenance
+    answers "where did this come from" for a datum you already have in your hand. This answers
+    the estimator's actual question — WHAT DID IT ASSUME, all of it, in one place, with the
+    file that turns each assumption into a confirmed figure named at the top.
+
+    Empty on every other run, because a drawing pack assumes none of this.
+    """
+    concept = summary.get("concept_read") or {}
+    rows = concept.get("assumptions") or []
+    if not isinstance(rows, list) or not rows:
+        return ""
+    path = str(concept.get("assumptions_file") or "")
+    body = []
+    for row in rows[:400]:
+        if not isinstance(row, dict):
+            continue
+        value = row.get("value")
+        if isinstance(value, list):
+            value = ", ".join(str(v) for v in value)
+        body.append(
+            f'<tr><td>{_esc(row.get("part_number"))}</td>'
+            f'<td>{_esc(row.get("description"))}</td>'
+            f'<td>{_esc(row.get("field"))}</td>'
+            f'<td>{_esc(value)}</td>'
+            f'<td>{_esc(row.get("cue"))}</td></tr>')
+    where = (f'<p>Confirm or correct them in <code>{_esc(path)}</code>. State your reasoning '
+             f'against each one — an entry with none is refused, and the render\'s own '
+             f'assumption stands.</p>' if path else "")
+    # A SHEET READ SAYS WHAT THE SHEET STATED AND WHETHER THE BILL AGREED (D-415).
+    sheet_html = ""
+    if concept.get("sheet_read"):
+        try:
+            from concept_scan import sheet_check_sentence as _scs
+            _said = _scs(concept.get("sheet_check") or {})
+        except Exception:                                                # noqa: BLE001
+            _said = ""
+        facts = concept.get("sheet_facts") if isinstance(concept.get("sheet_facts"), dict) else {}
+        _body = facts.get("body_mm") if isinstance(facts.get("body_mm"), dict) else {}
+        _stated = [s for s in (
+            ("Body", " × ".join(f"{_body.get(k):g}" for k in ("height", "width", "depth")
+                                if isinstance(_body.get(k), (int, float)) and _body.get(k))
+             + (" mm" if any(_body.get(k) for k in ("height", "width", "depth")) else "")),
+            ("Material", " ".join(str(x) for x in (
+                f"{facts.get('thickness_mm'):g} mm" if isinstance(facts.get("thickness_mm"), (int, float))
+                and facts.get("thickness_mm") else "", facts.get("material") or "") if x)),
+            ("Finish", str(facts.get("finish") or "")),
+            ("Stated weight", (f"{facts.get('stated_weight_kg'):g} kg"
+                               if isinstance(facts.get("stated_weight_kg"), (int, float))
+                               and facts.get("stated_weight_kg") else "")),
+            ("Goods it holds", str(facts.get("goods") or "")),
+        ) if s[1]]
+        aside = [a for a in (concept.get("set_aside_undrawn") or []) if isinstance(a, dict)]
+        sheet_html = (
+            '<p><b>What the sheet states, and whether the bill agrees.</b></p>'
+            + (('<table><tbody>' + "".join(f'<tr><td>{_esc(k)}</td><td>{_esc(v)}</td></tr>'
+                                           for k, v in _stated) + '</tbody></table>')
+               if _stated else '')
+            + (f'<p>{_esc(_said)}</p>' if _said else '')
+            + (('<p>Listed by the read but not drawn on the sheet, so not costed and asked: '
+                + _esc(", ".join(f"{a.get('name')}" + (f" x{a.get('quantity')}" if a.get('quantity') else "")
+                                 for a in aside)) + '.</p>') if aside else ''))
+    _lead = ('This pack is design-intent sheets with no parts list, so <b>every size, material '
+             'and count below was read off the sheet by the vision model</b> and none of it was '
+             'measured. ' if concept.get("sheet_read") else
+             'This pack is a visual, so <b>every size, material and count below was sighted '
+             'from the image</b> and none of it was measured. ')
+    return (f'{_h2("concept")}'
+            f'<p class="lead">{_lead}'
+            f'{len(rows)} assumption(s) went into the price.</p>{sheet_html}{where}'
+            f'<table><thead><tr><th>Part</th><th>Description</th><th>Assumed</th>'
+            f'<th>Value</th><th>Sighted because</th></tr></thead>'
+            f'<tbody>{"".join(body)}</tbody></table>')
+
+
+def _bom_provenance_section(summary: Dict[str, Any]) -> str:
+    """Where each PART's costing facts came from -- the BOM half of the same question.
+
+    Section 8 explains the ROUTE. This explains the BILL OF MATERIALS, and the two are
+    asked for together every time: an estimator looking at a line wants to know whether the
+    material, the thickness and the quantity behind it were measured off a model, read off
+    a DXF, taken from the title block, or produced by a language model. Until now the report
+    named none of them, so a figure derived from a model and one derived from Grok looked
+    identical on the page.
+
+    READ THROUGH source_precedence, which is where each datum's source is actually stamped.
+    Deriving it here from filenames or geometry hints -- which is what other parts of this
+    codebase used to do -- produces a second opinion about provenance, and a report that
+    disagrees with the record it is reporting on is worse than no report.
+    """
+    try:
+        from source_precedence import source_of, display_name, was_measured, rank
+    except Exception:
+        return _empty_section("bom_source", "Not shown — the source-precedence reader is "
+                                            "not available where this report was generated.")
+    parts = _extract_parts(summary) or []
+    if not parts:
+        # SILENCE IS NOT A CLEAN BILL, and section 10 already knows it. A missing section
+        # reads as nothing-to-report; here it means no part reached the costed pool at all.
+        return (_h2('bom_source') +
+            '<p class="mini t-muted">Which SOURCE won each field, and which drawing file it '
+            f'was read from. What each row COSTS is in {_sec("explained")}.</p>'
+                '<div class="callout warn"><b>No costed parts on this job.</b> Nothing '
+                'reached the costed pool, so no material provenance can be shown &mdash; '
+                'this is not a job whose provenance is clean.</div>')
+
+    # ── A FIELD THAT DOES NOT APPLY IS NOT A FIELD THAT IS MISSING ──────────────────
+    #
+    # The section reported "22 part(s) carry a field with no recorded source at all" on a
+    # 25-part job, and the Blank size column was a wall of "not stamped" — including on
+    # BI-BOLT, PALLET1, STD PART and the wood screws. A bought-in bolt has no blank size and
+    # no gauge; nobody will ever stamp one, because there is nothing there to stamp.
+    #
+    # Counting those as gaps did two things, both bad. It buried the real gaps — the folded
+    # steel parts whose blank genuinely was never measured — in a list four times too long.
+    # And it made the tally read as an indictment of the engine's record-keeping when most of
+    # it was the table asking sheet-metal questions about a screw.
+    #
+    # This is the same error section 11 made asking for a catalogue price on a part SDI makes.
+    # Both come from applying one vocabulary to two kinds of line.
+    try:
+        from bought_in_policy import is_bought_in as _bi
+    except ImportError:
+        def _bi(p):
+            return str(p.get("part_number") or "").upper().startswith("BI-")
+
+    # WHICH DRAWING, NOT WHICH KIND OF DRAWING.
+    #
+    # This table said "the drawing" and pointed at section 14 for the page. James, reading it:
+    # are we showing the drawing the part is associated with, that we extracted the data from
+    # to make the decision? We were not. "The drawing" in a pack of eleven names none of them,
+    # and an estimator checking a gauge has to go and find which sheet to open.
+    #
+    # The SAME reader the covering note uses, so the two documents cannot name different
+    # files for one part — that is the failure this whole set of documents exists to avoid.
+    # Every file the part is evidenced by: the flat that was measured, the model it came out
+    # of, then the sheets it is drawn on, each with the page number PRINTED on that document
+    # rather than the job-wide one.
+    try:
+        from estimate_explained import _page_index as _pgidx
+        from estimate_explained import _pack_files as _packf
+        from estimate_explained import _sources_of as _srcof
+        _pack, _pages = _packf(summary), _pgidx(summary)
+    except Exception:                                            # noqa: BLE001
+        _srcof, _pack, _pages = None, [], {}
+
+    def _where_from(part: Dict[str, Any]) -> str:
+        """The drawing files this part came from, or an honest dash."""
+        if _srcof is None:
+            return "&mdash;"
+        try:
+            found = _srcof(part, _pack, _pages)
+        except Exception:                                        # noqa: BLE001
+            return "&mdash;"
+        if not found:
+            # A bought-in has no drawing of its own and never will; saying "not recorded"
+            # about it is the same mistake this section already fixed for blank sizes.
+            return ("<span class='t-muted'>bought in &mdash; no drawing</span>"
+                    if _bi(part) else "<span class='t-muted'>not recorded</span>")
+        return "<br>".join(_esc(f) for f in found[:4]) + (
+            f"<br>&hellip;and {len(found) - 4} more" if len(found) > 4 else "")
+
+    _FIELDS = (("normalized_material", "Material", False),
+               ("normalized_thickness_mm", "Thickness", True),
+               ("quantity", "Quantity", False),
+               ("blank_length_mm", "Blank size", True))
+    rows, reasoned_n, unstamped_n = [], 0, 0
+    for p in parts:
+        if not isinstance(p, dict):
+            continue
+        _bought = _bi(p)
+        cells, worst, any_reasoned, any_missing = [], 999, False, False
+        for field, _label, _fab_only in _FIELDS:
+            src = ""
+            try:
+                src = str(source_of(p, field) or "")
+            except Exception:
+                src = ""
+            if not src:
+                if _fab_only and _bought:
+                    cells.append('<td class="mini t-muted">not applicable &mdash; '
+                                 'bought in</td>')
+                else:
+                    cells.append('<td class="mini"><i>not recorded</i></td>')
+                    any_missing = True
+                continue
+            measured = was_measured(src)
+            any_reasoned = any_reasoned or not measured
+            worst = min(worst, rank(src))
+            cells.append(f'<td class="mini">{"" if measured else "&#9889; "}'
+                         f'{_esc(display_name(src))}</td>')
+        reasoned_n += 1 if any_reasoned else 0
+        unstamped_n += 1 if any_missing else 0
+        rows.append((worst, str(p.get("part_number") or ""),
+                     f'<tr class="{"over" if any_reasoned else ""}">'
+                     f'<td class="pn"><a id="bom-{_esc(p.get("part_number"))}" href="#route-{_esc(p.get("part_number"))}">{_esc(p.get("part_number"))}</a></td>'
+                     + "".join(cells)
+                     + f'<td class="mini">{_where_from(p)}</td>' + "</tr>"))
+    if not rows:
+        return _empty_section("bom_source", "No costed part carries a recorded source for "
+                                            "any costing datum, so there is nothing to show.")
+    rows.sort(key=lambda r: (r[0], r[1]))          # weakest provenance first
+    _heads = "".join(f"<th>{h}</th>" for _f, h, _o in _FIELDS)
+    _note = (f'<p class="mini"><b>{reasoned_n} of {len(rows)} part(s)</b> rest on at least one '
+             f'reasoned value (&#9889;) rather than a measurement, and are listed first. '
+             f'On <b>{unstamped_n} part(s)</b> a field that DOES apply has no recorded source '
+             f'&mdash; an unstamped datum is not a measured one. Fields a part cannot have, '
+             f'such as a gauge on a bought-in bolt, are marked not applicable and are not '
+             f'counted here.</p>' if (reasoned_n or unstamped_n)
+             else '<p class="mini">Every costing datum on every part was measured and '
+                  'carries a recorded source.</p>')
+    return (_h2('bom_source') +
+            '<p class="mini t-muted">Which SOURCE won each field, and which drawing file it '
+            f'was read from. What each row COSTS is in {_sec("explained")}.</p>'
+            '<p class="mini">The source recorded against each costing datum, weakest first. '
+            '&#9889; marks a value that was reasoned rather than measured: it can be right, '
+            'but it cannot be held against the drawing.</p>' + _note +
+            f'<table><thead><tr><th>Part</th>{_heads}'
+            f'<th>Which drawing files and pages</th></tr></thead><tbody>'
+            + "".join(r[2] for r in rows) + '</tbody></table>'
+            + _source_legend(rows_html="".join(r[2] for r in rows)))
+
+
+def _source_legend(rows_html: str) -> str:
+    """WHAT EACH SOURCE NAME ACTUALLY MEANS, under the table that uses it.
+
+    James: "it's all a bit like shrouded in codes. it's difficult to understand."
+
+    The names in this table are already plain English — "the drawing", "engine inference",
+    "Grok (xAI)". Plain is not the same as explanatory: "the drawing" does not tell a reader
+    whether it means a dimension somebody typed or a number a model read off a picture of the
+    page, and that difference is the whole reason the column exists.
+
+    Only the sources actually used on this job are listed. A legend covering sources that did
+    not appear is a second thing to read past.
+    """
+    try:
+        from plain_english import SOURCE_NOTES
+    except ImportError:
+        return ""
+    used = [(name, note) for name, note in SOURCE_NOTES.items() if f">{name}<" in rows_html
+            or f"; {name}<" in rows_html or f"&#9889; {name}<" in rows_html]
+    if not used:
+        return ""
+    body = "".join(f'<tr><td class="mini"><b>{_esc(n)}</b></td>'
+                   f'<td class="mini">{_esc(t)}</td></tr>' for n, t in used)
+    return ('<p class="mini"><b>What these sources are.</b></p>'
+            f'<table><tbody>{body}</tbody></table>')
+
+
+def _purchased_key_section(summary: Dict[str, Any]) -> str:
+    """What each purchased part was looked up BY, and whether we had a real key to use.
+
+    "No price found" is two different problems wearing one face. Either the manufacturer's
+    number was tried and nobody had it -- which an estimator can act on, by asking the
+    supplier -- or there was never a number to try, because the drawing named the part in
+    prose and the engine minted BI-BINDINGSCREW to stand in for it. Only the second is ours,
+    and it is invisible unless the report says which happened.
+
+    CAPTURING THE REFERENCE WITHOUT SHOWING IT WOULD BE THE SAME DEFECT IN A NEW PLACE. This
+    engine's recurring failure is correct evidence with no reader; a supplier_references field
+    that appears only in the JSON is exactly that.
+    """
+    # A NUMBERED SECTION WITH NOTHING TO SHOW SAYS SO (12173-02's numbering jumped 9 to 11
+    # on a job with no purchased-key data). The heading stays; one sentence says why empty.
+    try:
+        import supplier_reference as _sr
+    except Exception:
+        return (_h2('keys') + '<p class="mini">Not shown — the purchased-key reader is not '
+                'available where this report was generated.</p>')
+    parts = [p for p in (_extract_parts(summary) or [])
+             if isinstance(p, dict) and (p.get("supplier_references")
+                                         or _sr.is_synthesised_key(p.get("part_number")))]
+    if not parts:
+        return (_h2('keys') + '<p class="mini">No purchased line on this job carries a '
+                'manufacturer reference or a key this engine minted, so there is no lookup '
+                'key to show.</p>')
+    rows, keyless = [], 0
+    for p in parts:
+        refs = p.get("supplier_references") or []
+        minted = _sr.is_synthesised_key(p.get("part_number"))
+        if not refs:
+            keyless += 1
+        keys = ", ".join(str(r.get("reference")) for r in refs[:3]) or "&mdash;"
+        conv = ", ".join(sorted({str(r.get("convention") or "") for r in refs})) or (
+            "none found on the drawing")
+        rows.append((0 if not refs else 1, str(p.get("part_number") or ""),
+                     f'<tr class="{"over" if not refs else ""}">'
+                     f'<td class="pn">{_esc(p.get("part_number"))}</td>'
+                     f'<td class="mini">{_esc(p.get("description") or "")}</td>'
+                     f'<td class="mini">{keys}</td>'
+                     f'<td class="mini">{_esc(conv)}</td>'
+                     f'<td class="mini">{"minted here" if minted else "read off the drawing"}</td>'
+                     f'</tr>'))
+    rows.sort(key=lambda r: (r[0], r[1]))          # the ones with no real key first
+    _note = (f'<p class="mini"><b>{keyless} of {len(rows)} purchased line(s)</b> carry no '
+             f'manufacturer reference at all, so the only key available was one this engine '
+             f'minted from the description. Nothing in any catalogue, price file or supplier '
+             f'system has ever heard of that key, so those lines cannot be priced by lookup '
+             f'however good the catalogue gets &mdash; they need the number off the drawing '
+             f'or off the estimator.</p>' if keyless else
+             '<p class="mini">Every purchased line carries a manufacturer reference, so every '
+             'one of them can be priced by lookup against a catalogue or a supplier price '
+             'file that uses the same key.</p>')
+    return (_h2('keys') +
+            '<p class="mini">A price lookup can only find what it asks for. These are the '
+            'keys used for the bought-in lines, lines with no real key first.</p>' + _note +
+            '<table><thead><tr><th>Part</th><th>Description</th>'
+            '<th>Manufacturer reference</th><th>Convention</th><th>Part number</th>'
+            '</tr></thead><tbody>' + "".join(r[2] for r in rows) + '</tbody></table>')
+
+
+def _unpriced_section(summary: Dict[str, Any]) -> str:
+    """Every line the sheet priced at nothing, and WHOSE nothing it is.
+
+    A blank in a price column reads as free. On this pack sixteen fabricated lines sit at
+    GBP 0.00 because their material is costed in the Sheet Steel block -- pricing them again
+    would double the material total -- beside a lock and a mag catch that genuinely are not
+    priced at all. Identical on the sheet, opposite actions, and until the reasons were
+    written nothing anywhere could tell them apart.
+
+    ORDERED BY WHO HAS TO ACT, WORST FIRST. An engine gap is work that will be done and
+    invoiced with nothing on the sheet asking anyone to price it, so the job is under-charged
+    by that amount and no estimator input can fix it. That is the only category here worth
+    interrupting somebody for, so it leads.
+    """
+    try:
+        import price_provenance as _pp
+        # EITHER SHAPE. Some writers stamp final_estimate on the summary root and some inside
+        # estimate_summary. Reading one place only renders an empty section on every job of
+        # the other shape — which here means a report that silently claims nothing is unpriced.
+        _fe = summary.get("final_estimate")
+        if not isinstance(_fe, dict):
+            _fe = (summary.get("estimate_summary") or {}).get("final_estimate") or {}
+    except AttributeError:
+        return _empty_section("unpriced", "Not shown — this run's record has no readable "
+                                          "final estimate.")
+    # THE SECTION DISAPPEARING IS THE SAME LIE THE TABLE WOULD TELL. When the Excel read-back
+    # fails -- Excel busy or absent, a workbook that will not open -- there is no
+    # final_estimate, so there are no rows, so this section rendered nothing at all and the
+    # report read as a job with no unpriced lines. The estimate on that page is then built
+    # from the PRE-Excel numbers, which is a different total, and nothing on the page says so.
+    if not _fe:
+        return (_h2('unpriced') +
+                '<div class="callout warn"><b>The calculated sheet was never read back, so '
+                'this could not be checked.</b> No material row reached this report, which is '
+                'not the same as a job with nothing unpriced &mdash; the figures above come '
+                'from before Excel calculated, and no blank on the sheet has been examined.'
+                '</div>')
+    rows = _fe.get("material_rows") or []
+    if not rows:
+        return _empty_section("unpriced", "The read-back recorded no material row, so no "
+                                          "blank on the sheet could be examined here.")
+    # ── A ZERO ON THIS ROW IS NOT A PART THAT WAS NOT PRICED ────────────────────────
+    #
+    # WHAT THIS SECTION TOLD TIM TO DO, on 10575-02:
+    #
+    #     10575-01-001   no_price_source   ...no catalogue, price file or quote holds it
+    #     10575-01-012   no_price_source   ...same
+    #
+    # James: "001 IS in Sheet Steel (the BOM dash is 'costed below'). 012 HAS £0.21 in
+    # Provenance. The 'no catalogue' line is the WRONG BUCKET. Don't send those to Tim as 'you
+    # must find a price.'"
+    #
+    # The section read final_estimate.material_rows and treated every zero as an unpriced line.
+    # A material row can be zero because the part's material is carried on ANOTHER row — a
+    # sheet-steel stream line covering every part nested from that sheet — and the dash means
+    # "costed below", not "nobody costed this". The engine knows: part_estimates carries the
+    # per-part figure that AI Provenance prints.
+    #
+    # SENDING SOMEBODY TO FIND A PRICE THAT ALREADY EXISTS IS WORSE THAN SAYING NOTHING. They
+    # look, find the number two tabs away, and stop believing the section — including on the
+    # lines where the gap is real. So a blank row is cross-checked against what the job
+    # actually costed for that part before it is called unpriced at all.
+    _costed_elsewhere: Dict[str, float] = {}
+    try:
+        from bought_in_policy import is_bought_in as _bought_here
+    except Exception:                                                # noqa: BLE001
+        _bought_here = None
+    for _pe in ((summary.get("estimate_summary") or {}).get("part_estimates") or []):
+        if not isinstance(_pe, dict):
+            continue
+        _pn = str(_pe.get("part_number") or "").strip().upper()
+        if not _pn:
+            continue
+        # A PURCHASED LINE'S MONEY IS ITS PURCHASE, NOT ITS LABOUR. A bought-in whose price
+        # sits on its total is costed (FIXING2104's £12.40); one whose total is only the
+        # handling labour is not. On the 12645 book of 29 Sep 21:27 the two roller shutters —
+        # £0, "nothing holds a rate" in the same report — were also listed as "show zero here
+        # and ARE costed … their money is on the block rows above", because their assembly
+        # labour made the engine's total non-zero (D-346).
+        if _bought_here is not None and _bought_here(_pe):
+            try:
+                _lab = float(((_pe.get("labour_estimate") or {}).get(
+                    "extended_labour_cost_gbp")) or 0)
+                _tot = float(_pe.get("extended_total_cost_gbp") or 0)
+                _mat_b = float((_pe.get("material_estimate") or {}).get(
+                    "extended_material_cost_gbp") or 0)
+            except (TypeError, ValueError):
+                _lab = _tot = _mat_b = 0.0
+            if max(_mat_b, _tot - _lab) <= 0.005:
+                continue
+        # THE ENGINE ANSWERS "IS THIS ROW'S MONEY ELSEWHERE", NOT "WHAT IS THE FIGURE".
+        #
+        # Two different questions, and this loop was being used for both. The CLASSIFICATION
+        # must survive a run where Excel never opened — otherwise every zero row reads as
+        # unpriced, which is the defect this whole section exists to prevent. The AMOUNT must
+        # not be an engine figure printed in pounds, which is how £3.88 reached five pages.
+        #
+        # So the engine seeds the classification with None for the figure, and the costed
+        # record overwrites it below with the sheet's own charge where there is one.
+        _me = _pe.get("material_estimate") or {}
+        try:
+            _v = float(_me.get("extended_material_cost_gbp") or 0) or float(
+                _pe.get("extended_total_cost_gbp") or 0)
+        except (TypeError, ValueError):
+            _v = 0.0
+        if _v:
+            _costed_elsewhere[_pn] = None
+
+    # THE FIGURE IN THIS SENTENCE IS WHAT THE SHEET CHARGED, NOT WHAT THE ENGINE RESOLVED.
+    #
+    # THE FIFTH PLACE THE COMPARATOR REACHED A PAGE. The loop above reads the ENGINE's
+    # material estimate, so this reassurance -- "these are not waiting on anybody:
+    # 401912-02-01M (£3.88)" -- published the very figure that had just been removed from the
+    # HTML report, the Provenance tab and both AI Explanation surfaces. It then sent the
+    # reader to "the per-part figures on the AI Provenance tab", where that column now
+    # correctly reads a dash. A pointer to a number we have deliberately withheld.
+    #
+    # The costed record carries what the sheet actually charged, per line. Where it has an
+    # answer it is used; the engine's figure remains the fallback for a line the sheet never
+    # charged, which is the only case where it is the only number there is.
+    from displayed_charge import displayed_charge as _dc_elsewhere    # noqa: PLC0415
+    for _l in ((_record_for(summary) or {}).get("lines") or []):
+        if not isinstance(_l, dict):
+            continue
+        _lp = str(_l.get("part_number") or "").strip().upper()
+        _sh = _dc_elsewhere(_l)
+        # ONLY A LINE THE SHEET CHARGED counts as "costed elsewhere". A pending line has an
+        # engine figure and no cell, and calling it costed is how a genuine gap disappears.
+        if _lp and _sh["basis"] == "workbook" and _sh["amount"]:
+            _costed_elsewhere[_lp] = float(_sh["amount"])
+
+    blanks, _elsewhere = [], []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        value = r.get("price_gbp", r.get("total_value_gbp", r.get("unit_price_gbp")))
+        try:
+            if value is not None and float(value) != 0:
+                continue
+        except (TypeError, ValueError):
+            pass
+        _key = str(r.get("part_number") or r.get("part_code") or "").strip().upper()
+        # MEMBERSHIP, NOT TRUTHINESS. The value is now None where the classification came
+        # from the engine alone and there is no publishable figure — and `if _found:` sent
+        # every one of those lines back into `blanks`, reporting a costed part as unpriced.
+        if _key in _costed_elsewhere:
+            _elsewhere.append((r, _costed_elsewhere[_key]))
+            continue
+        blanks.append(r)
+
+    # NAMED, NOT QUIETLY DROPPED. A row that vanishes from this table because it is costed
+    # somewhere else looks, to anyone who noticed it last week, like a finding that was
+    # suppressed. Saying where the money is turns it from an omission into an answer — and it
+    # is the same sentence that stops the next reader chasing it.
+    _elsewhere_note = ""
+    if _elsewhere:
+        # A FIGURE ONLY WHERE THE SHEET CHARGED ONE. Where the classification came from the
+        # engine alone there is no publishable amount — the part is named and the money is
+        # not invented.
+        _bits = ", ".join(
+            (f"{_esc(str(r.get('part_number') or r.get('part_code')))} ({_money(v)})"
+             if v is not None else
+             f"{_esc(str(r.get('part_number') or r.get('part_code')))}")
+            for r, v in _elsewhere[:8])
+        _more = f" and {len(_elsewhere) - 8} more" if len(_elsewhere) > 8 else ""
+        _elsewhere_note = (
+            f'<p class="mini"><b>{len(_elsewhere)} line(s) show zero here and ARE costed.</b> '
+            f'Their material sits on another row — a sheet-steel stream line covers every part '
+            f'nested from that sheet, so the part\'s own row reads as a dash meaning "costed '
+            f'below". These are not waiting on anybody: {_bits}{_more}.'
+            + (' Each figure shown is what the sheet charges, on its own block row.'
+               if any(v is not None for _, v in _elsewhere) else
+               # No figure was published, so the sentence must not promise one. The money is
+               # on the block; the engine's own number is not a price and is not printed.
+               ' Their money is on the block rows above, not on these lines.')
+            + '</p>')
+
+    if not blanks:
+        return (_h2('unpriced') +
+                '<p class="mini">Every material line on this job carries a price.</p>'
+                + _elsewhere_note)
+    # A SHEET FULL OF BLANKS AND NO REASONS IS THE DEFECT, NOT AN EMPTY SECTION. The
+    # vocabulary existed for months with no writer and the check stayed green throughout;
+    # a report that quietly shows an empty table when the stamping did not run would let
+    # exactly that happen again, one layer up.
+    if not any(isinstance(r.get("unpriced_reason"), dict) for r in blanks):
+        return (_h2('unpriced') +
+                f'<div class="callout warn"><b>{len(blanks)} line(s) carry no price and no '
+                f'recorded reason.</b> A blank in a price column reads as free. Nothing on '
+                f'this job says which of them are correctly nil, which are waiting on an '
+                f'estimator, and which are work this engine cannot charge for.</div>')
+    # WHICH LINES ARE PARTS SDI MAKES. The distinction decides whether "no catalogue price"
+    # is an explanation or a category error — see plain_english.why_no_price.
+    try:
+        from bought_in_policy import is_bought_in as _bi
+    except ImportError:
+        def _bi(p):
+            return str(p.get("part_number") or p.get("part_code") or "").upper().startswith("BI-")
+    from plain_english import why_no_price as _why
+
+    _RANK = {"engine": 0, "estimator": 1, "nobody": 2}
+    out, tally = [], {"engine": 0, "estimator": 0, "nobody": 0}
+    for r in blanks:
+        reason = r.get("unpriced_reason")
+        reason = reason if isinstance(reason, dict) else _pp.unpriced_reason(_pp.UNEXPLAINED)
+        owner = reason.get("owner") or "engine"
+        tally[owner] = tally.get(owner, 0) + 1
+        code = str(r.get("part_number") or r.get("part_code") or r.get("description") or "?")
+        # ASK THE POLICY ABOUT A PART, NOT ABOUT A SPREADSHEET ROW.
+        #
+        # This passed the material row straight to is_bought_in, and a material row keys its
+        # identity as `part_code` where a part record uses `part_number`. The policy found no
+        # part number, answered False, and BI-BOLT — whose entire name is the bought-in prefix
+        # — was labelled "SDI makes it" and given the fabricated explanation: that its cost is
+        # material plus labour and a gauge or a blank size must be missing. For a bolt.
+        #
+        # Caught on the 31/08 full run, in the section this change was written to fix, which is
+        # the argument for reading the output rather than the tests.
+        _probe = dict(r)
+        _probe["part_number"] = code
+        _fab = not _bi(_probe)
+        # THE REASON THE COST DECISION RECORDED, passed whole: where it names the missing
+        # input (`missing`, from estimate_material's `unpriced_inputs`) the heading follows
+        # it and the computed detail prints beside it (12173-02's MFC back: gauge and blank
+        # known, no price for the board — not "a gauge, a blank size or a labour rate").
+        _cat, _why_txt, _supersedes = _why(str(reason.get("category") or ""),
+                                           part_is_fabricated=_fab, reason=reason)
+        if not _cat:
+            _cat, _why_txt = str(reason.get("category") or ""), str(reason.get("why") or "")
+        # ONE SENTENCE, NOT THE SAME ONE TWICE, AND NEVER THE CORRECTED ONE BESIDE THE WRONG
+        # ONE. The row read "no catalogue, price file or quote we can query holds this item —
+        # no catalogue row, price file or quote was found for this item": the category's gloss
+        # and the writer's detail saying the same thing in two vocabularies, which reads as two
+        # findings and answers neither. On a fabricated line the detail is worse than redundant
+        # — it is the sentence the heading has just corrected.
+        _detail = "" if _supersedes else str(reason.get("detail") or "")
+        _norm = lambda s: re.sub(r"[^a-z]", "", s.lower())
+        if _detail and (_norm(_detail) in _norm(_why_txt) or _norm(_why_txt) in _norm(_detail)):
+            _detail = ""
+        out.append((_RANK.get(owner, 0), code,
+                    f'<tr class="{"over" if reason.get("undercharging") else ""}">'
+                    f'<td class="pn">{_esc(code[:40])}</td>'
+                    f'<td class="mini">{"SDI makes it" if _fab else "Bought in"}</td>'
+                    f'<td class="mini"><b>{_esc(_cat)}</b><br>{_esc(_why_txt)}'
+                    + (f' &mdash; {_esc(_detail)}' if _detail else "")
+                    + f'</td><td class="mini">{_esc(owner)}</td></tr>'))
+    out.sort(key=lambda t: (t[0], t[1]))
+    gaps = tally.get("engine", 0)
+    _lead = (f'<div class="callout warn"><b>{gaps} line(s) are unpriced because this ENGINE '
+             f'has no way to price them</b>, not because anything is missing from the '
+             f'drawings. That work will be done and invoiced. The job is under-charged by '
+             f'that amount and no estimator input can fix it.</div>' if gaps else
+             '<p class="mini">Nothing here is blank because the engine lacks a way to price '
+             'it. Every line below is waiting on a person or is correctly nil.</p>')
+    return (_h2('unpriced') +
+            f'<p class="mini">{len(blanks)} blank line(s): <b>{tally.get("estimator", 0)}</b> '
+            f'waiting on the estimator, <b>{tally.get("nobody", 0)}</b> correctly nil '
+            f'(costed elsewhere, a duplicate article, or an assembly whose material is its '
+            f'children\'s), <b>{gaps}</b> the engine cannot price. Worst first.</p>'
+            '<p class="mini">A part SDI makes has no catalogue price and never will &mdash; its '
+            'cost is material plus labour, so a blank on one of those lines is not a supplier '
+            'that could not be found. Each row says which input its material cost was missing '
+            'where the cost decision recorded it, and says so where it did not.</p>'
+            + _elsewhere_note + _lead +
+            '<table><thead><tr><th>Line</th><th>Make or buy</th><th>Why it is blank</th>'
+            '<th>Who acts</th></tr></thead><tbody>'
+            + "".join(r[2] for r in out) + '</tbody></table>')
+
+
+def _route_decisions_section(summary: Dict[str, Any]) -> str:
+    """Where every route decision was taken, and which of them were contested.
+
+    THIS RENDERS ON EVERY JOB. The only route detail the report carried before came from
+    parity_report_html and appeared solely when a manual workbook was passed with
+    --parity-workbook -- so on an ordinary run, the document an estimator works from could
+    not say what decided a single operation. "Where did this come from" is the first
+    question asked of any estimate this engine produces, and the report had no answer.
+
+    CONTESTED LINES COME FIRST, and say what the other source claimed. A decision taken
+    over an objection is the one worth reading, and the table that buries it among fifty
+    unanimous rows has hidden the only line that needed a person.
+    """
+    payload = {}
+    try:
+        payload = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+                   or summary.get("canonical_route_shadow") or {})
+    except Exception:
+        payload = {}
+    decisions = payload.get("decisions") if isinstance(payload, dict) else None
+    if not isinstance(decisions, list) or not decisions:
+        # SILENCE IS NOT A CLEAN BILL. A job with no compiled route has had no operation
+        # arbitrated at all, and a missing section reads as "nothing to report".
+        return (_h2('route') +
+            '<p class="mini t-muted">What each of these operations CHARGES, by sheet row, is '
+            f'in {_sec("explained")}.</p>'
+                '<div class="callout warn"><b>No compiled route on this job.</b> No operation '
+                'was arbitrated, so nothing here can say what decided it. The labour below '
+                'came from the legacy path.</div>')
+
+    rows, contested_n = [], 0
+    _rs = route_decision_states(decisions)
+    for d in decisions:
+        if not isinstance(d, dict):
+            continue
+        _contested = bool(d.get("contested"))
+        contested_n += 1 if _contested else 0
+        _losing = ", ".join(str(x) for x in (d.get("losing_statuses") or []))
+        _ev = str(d.get("evidence") or "")
+        rows.append((
+            # contested AND unverified first: both are the lines that need reading
+            0 if (_contested or str(d.get("status") or "") == "unverified") else 1,
+            str(d.get("target_id") or ""),
+            f'<tr class="{"over" if _contested else ""}">'
+            f'<td class="pn"><a id="route-{_esc(d.get("target_id"))}" href="#bom-{_esc(d.get("target_id"))}">{_esc(d.get("target_id"))}</a></td>'
+            f'<td>{_esc(str(d.get("operation") or "").replace("_", " "))}</td>'
+            f'<td>{_esc(d.get("status"))}</td>'
+            f'<td>{_esc(d.get("decided_by") or d.get("source") or "not recorded")}<br>'
+            f'<span class="t-muted">{_esc(_source_note(d))}</span></td>'
+            f'<td class="num">{_esc(d.get("source_rank"))}<br>'
+            f'<span class="t-muted">{_esc(_rank_word(d.get("source_rank")))}</span></td>'
+            f'<td>{("<b>resolved over " + _esc(_losing) + "</b> &#8226; by " + _esc(d.get("settled_by_key") or "rank")) if _contested else "—"}</td>'
+            f'<td class="mini">{_esc(_ev[:70]) if _ev else "<i>nothing quoted</i>"}</td></tr>'))
+    if not rows:
+        return _empty_section("route", "The compiled route carries no readable decision, so "
+                                       "nothing here can say what decided an operation.")
+    rows.sort(key=lambda r: (r[0], r[1]))
+    # "SINGLE STRONGEST SOURCE" ONLY WHEN IT IS TRUE. 12173-02's note said so over ten
+    # operations nothing in the pack claimed — section 13 listed the same ten as blocking.
+    _open_n = len(_rs["unowned"]) + len(_rs["unsettled"])
+    if _open_n:
+        _note = (f'<p class="mini"><b>{_open_n} operation(s) are UNVERIFIED</b> and are listed '
+                 f'first: {len(_rs["unowned"])} that nothing in the pack claims to perform and '
+                 f'{len(_rs["unsettled"])} tie(s) left unsettled. The route prices neither; '
+                 f'each is a blocking check in {_sec("checks")}.'
+                 + (f' {contested_n} other decision(s) were contested and settled by the '
+                    f'arbiter.' if contested_n else '') + '</p>')
+    elif contested_n:
+        _note = (f'<p class="mini"><b>{contested_n} decision(s) were contested</b> and are listed '
+                 f'first: two equally-ranked sources disagreed and the arbiter settled it. '
+                 f'The losing claim is named so it can be checked.</p>')
+    else:
+        _note = ('<p class="mini">No decision was contested — every operation had a single '
+                 'strongest source and nothing at that rank disagreed with it.</p>')
+    return (_h2('route') +
+            '<p class="mini t-muted">What each of these operations CHARGES, by sheet row, is '
+            f'in {_sec("explained")}.</p>'
+            '<p class="mini">Every operation on this job and what decided it. <b>Rank</b> is '
+            'the engine\'s order of precedence between sources: a higher-ranked source may not '
+            'be overwritten by a lower one, and where two disagree at the same rank the '
+            'arbiter settles it and the row says so. <b>"Nothing quoted"</b> means no claim '
+            'carried the drawing\'s own words &mdash; the operation is on the route and there '
+            'is no sentence from the sheet to hold it against.</p>'
+            '<p class="mini">Names in this column are readers, not documents. '
+            '<b>A note on the drawing</b> means a keyword recogniser found the operation in the '
+            'sheet\'s own note text. <b>Engine inference</b> means nothing on the drawing said '
+            'it and the engine concluded it from the part &mdash; a folded part needs folding. '
+            '<b>An unrecorded source</b> means the operation is on the route and the engine '
+            'failed to stamp where it came from: a gap in record-keeping rather than evidence '
+            'the operation is wrong, but it cannot be traced back to a drawing.</p>'
+            + _note +
+            '<table><thead><tr><th>Part</th><th>Operation</th><th>Status</th>'
+            '<th>Decided by</th><th>Rank</th><th>Contested</th><th>Drawing says</th>'
+            '</tr></thead><tbody>' + "".join(r[2] for r in rows) + '</tbody></table>')
+
+
+def _rank_word(rank: Any) -> str:
+    """A NUMBER IN A COLUMN HEADED "Rank" IS NOT INFORMATION.
+
+    James saw a column of 0s and 20s beside "an unrecorded source" and "engine inference". The
+    number is meaningful inside the engine — it is the precedence that decides which claim
+    survives an arbitration — and it means nothing to a reader who has not seen the table it
+    indexes into. Both are printed: the figure for anyone comparing rows, and the word for
+    everyone else.
+    """
+    try:
+        r = int(rank)
+    except (TypeError, ValueError):
+        return ""
+    if r >= 90:
+        return "measured — the model itself"
+    if r >= 80:
+        return "measured — DXF geometry"
+    if r >= 70:
+        return "read off the drawing"
+    if r >= 60:
+        return "read off the BOM table"
+    if r >= 40:
+        return "a reading, not a measurement"
+    if r >= 20:
+        return "reasoned, not read"
+    return "fills gaps only — never overrides anything"
+
+
+def _source_note(decision: Dict[str, Any]) -> str:
+    """One line on what that source name means, from the one glossary."""
+    try:
+        from plain_english import SOURCE_NOTES
+    except ImportError:
+        return ""
+    name = str(decision.get("decided_by") or decision.get("source") or "")
+    note = SOURCE_NOTES.get(name, "")
+    return note[:130] if note else ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Assembly
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _invariants_section(summary: Dict[str, Any]) -> str:
+    """What the engine checked about its own answer, and what it found.
+
+    The quote can only carry a banner — it goes to a customer. The report is the document an
+    estimator works from, so it gets the detail: every check that ran, and for each failure
+    the engine's own sentence about what is wrong. Without this the report asserted the
+    estimate was sound while the quote for the same job said three checks had failed, and
+    nothing in either told anyone WHICH.
+    """
+    inv = summary.get("invariants")
+    if not isinstance(inv, dict):
+        return (_h2('checks') +
+                '<div class="callout warn"><b>The consistency checks did not run on this job.</b> '
+                'Nothing here has been verified against the workbook: rows have not been '
+                'reconciled to their totals, priced rows have not been joined to the parts that '
+                'produced them, and geometry claims have not been tested. Treat every figure in '
+                'this report as unverified.</div>')
+    _v = [x for x in (inv.get("violations") or []) if isinstance(x, dict)]
+    _n = len(inv.get("checks_run") or [])
+    if inv.get("may_quote_firm") and not _v:
+        return (f'{_h2("checks")}'
+                f'<div class="callout good"><b>All {_n} checks passed.</b> Material and labour '
+                f'rows each reconcile to the workbook\'s own totals, those totals reconcile to '
+                f'the unit price, every priced row joins to exactly one route, and no report '
+                f'names an operation the sheet did not charge for.</div>')
+    _order = {"blocking": 0, "unverified": 1, "warning": 2}
+    _label = {"blocking": ('t-bad', 'Failed'),
+              "unverified": ('t-warn', 'Not run'),
+              "warning": ('t-info', 'Advisory')}
+    # A RULING IS NOT A CHECK THAT COULD NOT RUN (12173-02 labelled twenty rulings "Not
+    # verified" and counted them as "could not be run"), and a failure the Decisions table
+    # already carries says so, so its count and the table's can be read together.
+    _record = _record_for(summary)
+    _netted_codes = {str(d.get("also_failing_check") or "") for d in
+                     (_record.get("decisions_required") or []) if isinstance(d, dict)} - {""}
+    _netted_parts = {str(d.get("part") or "").strip().upper() for d in
+                     (_record.get("decisions_required") or [])
+                     if isinstance(d, dict) and d.get("also_failing_check")}
+    rows = ""
+    for x in sorted(_v, key=lambda a: _order.get(str(a.get("severity")), 3)):
+        _cls, _txt = _label.get(str(x.get("severity")), ('t-info', 'Advisory'))
+        _xd = x.get("detail") if isinstance(x.get("detail"), dict) else {}
+        # By the marker, at either severity a ruling carries (invariants.check_job).
+        if str(x.get("severity")) in ("unverified", "warning") and _xd.get("needs_ruling"):
+            _cls, _txt = ('t-warn', 'Needs a ruling')
+        if (str(x.get("severity")) == "blocking" and str(x.get("code") or "") in _netted_codes
+                and {str(i).strip().upper() for i in (_xd.get("identities") or [])}
+                and {str(i).strip().upper() for i in (_xd.get("identities") or [])}
+                <= _netted_parts):
+            _txt = 'Failed &middot; already Decisions required'
+        # THE DETAIL, not just the sentence. "5 part(s) claim measured geometry but carry no
+        # usable outline" tells an estimator a number and nothing they can act on: they
+        # cannot open five unnamed parts. Every check already collects which records it
+        # objected to; printing the message and discarding the evidence made the report
+        # describe a problem instead of locating it.
+        _d = x.get("detail") if isinstance(x.get("detail"), dict) else {}
+        _bits = []
+        _DETAIL_LISTS = ("parts", "lines", "rows", "problems", "failed_paths", "files")
+        for _k in _DETAIL_LISTS:
+            for _item in (_d.get(_k) or [])[:8]:
+                if isinstance(_item, dict):
+                    # `part` as well as `part_number`: the firmness checks report a line by
+                    # whatever named it, and a detail block that renders as a bare count is
+                    # the thing this whole section exists to stop.
+                    _lbl = (_item.get("part_number") or _item.get("part")
+                            or _item.get("workbook_row") or _item.get("block")
+                            or _item.get("path") or _item.get("where"))
+                    _why = (_item.get("geometry_source") or _item.get("wb_operation")
+                            or _item.get("reason") or _item.get("code")
+                            or _item.get("material_class") or "")
+                    _bits.append(f"{_lbl}{f' ({_why})' if _why else ''}")
+                elif _item:
+                    _bits.append(str(_item))
+        for _k, _v in sorted(_d.items()):
+            if _k in _DETAIL_LISTS or _k == "needs_ruling" or _v in (None, "", [], {}):
+                continue
+            if not isinstance(_v, (list, dict)):
+                _bits.append(f"{_k}={_v}")
+        _detail = (f'<br><span class="mini">{_esc("; ".join(_bits[:12]))}</span>'
+                   if _bits else "")
+        rows += (f'<tr><td><span class="tag {_cls}">{_txt}</span></td>'
+                 f'<td><code>{_esc(str(x.get("code") or ""))}</code></td>'
+                 f'<td>{_esc(str(x.get("message") or ""))}{_detail}</td></tr>')
+    # FINDINGS AND CHECKS, EACH IN ITS OWN UNIT, from the one record (12173-02: "12 check(s)
+    # failed and 20 could not be run, out of 45" — findings from 4 checks against 45).
+    _sentence = _checks_sentence(summary)
+    _head = ('<div class="callout warn"><b>This estimate is not a firm price.</b> '
+             + (f'{_esc(_sentence)}. ' if _sentence else '')
+             + 'A check that could not run has verified nothing — it is not a pass.</div>'
+             if not inv.get("may_quote_firm") else
+             '<div class="callout info">No check failed. The advisories below are worth '
+             'reading but do not affect whether the price can be released.</div>')
+    return (f'{_h2("checks")}{_head}'
+            f'<table><thead><tr><th>Status</th><th>Check</th><th>What it found</th></tr></thead>'
+            f'<tbody>{rows}</tbody></table>')
+
 
 def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] = None) -> str:
     has_parity = bool(bundle)
@@ -798,25 +3276,48 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
     review = _extract_review_items(summary)
     dq = _extract_drawing_quality(summary)
 
+    record = _record_for(summary)
+
     title = f"Job {h['job_no']} {h['name']} — Estimate Review"
-    body = "\n".join([
-        _render_header(h, has_parity),
-        f'<p class="lead">This report presents the engine model\'s estimate for job {_esc(h["job_no"])}, '
-        f'together with a detailed audit of the drawing pack: what the drawings gave us cleanly, where they '
-        f'were inconsistent or hard to read, and how Design could make future jobs more reliable to estimate.</p>',
-        _render_headline(hl, h, streams),
+    # THE ESTIMATOR'S PAGE: decisions before diagnostics. The four sections above the fold
+    # read the one record; everything the report used to open with is kept, in full, under
+    # Evidence and diagnostics — collapsed, and opened for print.
+    diagnostics = "\n".join([
         _render_glance(streams, hl),
         _render_parity(bundle) if has_parity else "",
         _render_whats_right(summary, streams),
         _render_review_items(review),
-        _render_drawing_analysis(dq),
+        _render_drawing_analysis(dq, summary),
         _render_checklist(review, dq),
-        _render_design_recs(dq),
-        _render_verdict(hl, dq, has_parity),
+        _render_design_recs(dq, summary),
+        _render_verdict(hl, dq, has_parity, summary),
+    ])
+    body = "\n".join([
+        _render_header(h, has_parity, summary),
+        _render_run_stop(summary),
+        _render_concept_takeoff(summary),
+        _render_product_scope(summary),
+        _render_customer_changes(summary),
+        _render_summary(summary, record, h, hl),
+        _render_decisions(record),
+        _render_bom_tree(summary, record),
+        _render_route(summary, record),
+        '<details class="diag"><summary>Evidence and diagnostics — how the figures were read, '
+        'checked and reconciled</summary>',
+        '<p class="mini">Everything below is the working behind the four sections above: the '
+        'drawing audit, the checks, the provenance of every row. Open it to investigate a '
+        'flagged item; it opens itself for printing.</p>',
+        diagnostics,
+        '</details>',
         f'<div class="foot">SDI Intelligence &middot; ClaudeVision automated estimating engine &middot; '
-        f'Job {_esc(h["stem"])}<br>Unit Cost {_money(hl["unit"])} is the workbook-computed figure. '
-        f'Provisional items and drawing recommendations are listed for estimator and Design review. '
-        f'Generated for internal review.</div>',
+        f'Job {_esc(h["stem"])}<br>Unit Cost {_unit_text(hl)} is the workbook-computed figure. '
+        f'Decisions required and drawing recommendations are listed for estimator and Design review. '
+        f'Generated for internal review.'
+        + (f'<br>Run <code>{_esc(summary.get("run_id"))}</code> &middot; quantity '
+           f'{_esc(summary.get("assumed_job_quantity") or summary.get("quantity") or 1)}'
+           if summary.get("run_id") else '')
+        + '</div>',
+        _PRINT_SCRIPT,
     ])
 
     return f"""<!DOCTYPE html>
@@ -836,8 +3337,17 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
 
 
 def generate_report(summary_json_path: str, out_path: Optional[str] = None,
-                    bundle_path: Optional[str] = None, job_stem: Optional[str] = None) -> str:
+                    bundle_path: Optional[str] = None, job_stem: Optional[str] = None,
+                    workbook: Optional[str] = None) -> str:
     summary = json.loads(Path(summary_json_path).read_text(encoding="utf-8"))
+    # A RUN FROM BEFORE THE PATH WAS RECORDED STILL HAS A WORKBOOK. The run JSON only began
+    # naming the estimate it produced recently, so every job estimated before that cannot show
+    # section 14 however good the code is — the report has no way to find the spreadsheet.
+    # Naming it on the command line costs one argument and makes every existing job
+    # regenerable, which is the difference between a fix that applies from now on and one that
+    # applies to the jobs already sitting on the share.
+    if workbook:
+        summary.setdefault("saved_output_paths", {})["estimate_xlsx"] = str(workbook)
     bundle = None
     if bundle_path and Path(bundle_path).exists():
         try:
@@ -850,6 +3360,23 @@ def generate_report(summary_json_path: str, out_path: Optional[str] = None,
         stem = re.sub(r"[^\w\- ]", "", str(stem)).strip()
         out_dir = Path(summary_json_path).parent
         out_path = str(out_dir / f"{stem}_report.html")
+    # THE SAME QUESTION THE WORKBOOK IS ASKED, AT THIS DELIVERABLE'S OWN BOUNDARY.
+    #
+    # The scrub before wb_populate's save covers the workbook and nothing else, so "remove
+    # the visible replacement characters from workbook/REPORT text" was only half met: the
+    # report is built from the same drawing notes and supplier descriptions, and a byte
+    # that failed to decode upstream arrives here exactly as it arrives there. A browser
+    # draws a replacement character as a black diamond, which is no better than Excel's box.
+    #
+    # scrub_report_text, not repair: the whole document is one string, so collapsing runs of
+    # spaces would reflow the markup. Only the damaged characters are dropped, and the
+    # layout is left exactly as it was built.
+    try:
+        from workbook_hygiene import scrub_report_text
+        htmlout = scrub_report_text(htmlout)
+    except Exception:
+        # A hygiene pass is never worth losing the report over.
+        pass
     Path(out_path).write_text(htmlout, encoding="utf-8")
     return out_path
 
@@ -859,10 +3386,797 @@ def main() -> None:
     ap.add_argument("--json", required=True, help="Summary JSON path.")
     ap.add_argument("--bundle", help="Optional parity bundle JSON (adds the comparison section).")
     ap.add_argument("--out", help="Output HTML path.")
+    ap.add_argument("--workbook", help="The estimate .xlsx, for runs made before the JSON "
+                                       "recorded which workbook they produced.")
     args = ap.parse_args()
-    out = generate_report(args.json, out_path=args.out, bundle_path=args.bundle)
+    out = generate_report(args.json, out_path=args.out, bundle_path=args.bundle,
+                          workbook=args.workbook)
     print(f"report -> {out}")
 
 
 if __name__ == "__main__":
     main()
+
+
+# ── 14 · every row, explained ────────────────────────────────────────────────
+#
+# THE SAME DOCUMENT THE WORKBOOK'S TAB CARRIES, rendered for the report. Not a second pass
+# over the workbook and not a second opinion: estimate_explained produces it once, sections()
+# gives it back as titles, tables and notes, and this turns those into HTML. Three renderings
+# of one answer.
+#
+# IT NEEDS THE WORKBOOK, and the report may be generated where the workbook is not reachable —
+# a regeneration on another machine, a share that has gone away, a run whose spreadsheet never
+# got written. In that case the section says what it needs rather than rendering half of
+# itself, which is the same rule the rest of this report follows.
+
+_EXPLAINED_SECTION_NO = _SECTIONS["explained"][0]
+
+
+def _explanation_section(summary: Dict[str, Any]) -> str:
+    paths = summary.get("saved_output_paths") or {}
+    workbook, run_json = paths.get("estimate_xlsx"), paths.get("json")
+    heading = _h2("explained")
+
+    if not workbook or not Path(str(workbook)).is_file():
+        return (heading +
+                '<p class="mini">Not produced — this run did not record the estimate workbook '
+                'it wrote, or that file is not reachable from where the report was generated. '
+                'The same content is on the workbook\'s <b>AI Explanation</b> tab.</p>')
+    try:
+        import estimate_explained
+        parsed = estimate_explained.sections(
+            estimate_explained.build(Path(str(workbook)),
+                                     Path(str(run_json)) if run_json else None))
+    except Exception as exc:                                     # noqa: BLE001
+        return (heading +
+                f'<p class="mini">Not produced — the explanation could not be built '
+                f'({_esc(type(exc).__name__)}). Nothing else in this report is affected.</p>')
+    if not parsed:
+        return heading + '<p class="mini">Not produced — the explanation came back empty.</p>'
+
+    out = [heading,
+           '<p class="mini">Where every figure on the estimate came from, which drawing page '
+           f'owns it, and what the sheet charges for it. {_sec("bom_source").capitalize()} above says which SOURCE won '
+           'each field; this says what each ROW costs and where you would go to check it. The '
+           'workbook carries the same content on its <b>AI Explanation</b> tab.</p>']
+    for section in parsed:
+        out.append(f'<h3>{_esc(section["title"])}</h3>')
+        for line in section.get("intro") or []:
+            # The document's bullets are markdown "- "; a page has its own way of showing a
+            # list and the marker would arrive as a literal dash.
+            out.append(f'<p class="mini">{_explained_inline(line.lstrip("- ").strip())}</p>')
+        for table in section.get("tables") or []:
+            head = "".join(f"<th>{_explained_inline(c)}</th>" for c in table["columns"])
+            rows = "".join(
+                "<tr>" + "".join(f'<td class="mini">{_explained_inline(c)}</td>'
+                                 for c in row) + "</tr>"
+                for row in table["rows"])
+            out.append(f'<div class="scroll"><table><thead><tr>{head}</tr></thead>'
+                       f'<tbody>{rows}</tbody></table></div>')
+        for note in section.get("notes") or []:
+            out.append(f'<p class="mini t-muted">{_explained_inline(note)}</p>')
+    return "\n".join(out)
+
+
+def _explained_inline(text: Any) -> str:
+    """The document's own emphasis, kept — it marks the figures that matter.
+
+    Escaped first and marked up after, so a part description containing an angle bracket
+    cannot reach the page as markup while **£11.48** still arrives bold.
+    """
+    out = _esc(str(text or ""))
+    for token, tag in (("**", "b"), ("`", "code")):
+        parts = out.split(token)
+        if len(parts) > 2:
+            rebuilt = parts[0]
+            for index, part in enumerate(parts[1:], start=1):
+                rebuilt += (f"<{tag}>{part}</{tag}>" if index % 2 else part)
+            out = rebuilt
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE ESTIMATOR'S PAGE
+#
+# James, on the 7332-01 report: too much repetition and conflicting reassurance; decisions
+# before diagnostics. "Confirm whether frame members 001–005 are plated after welding"
+# matters more than pages about the extraction tools.
+#
+# So the page is now five things in this order — Summary, Decisions required, Bill of
+# materials and hierarchy, Manufacturing route — each read from costed_facts.costed_job, the
+# one record every deliverable reads; and then Evidence and diagnostics, which is everything
+# the report used to be, collapsed under one heading. Nothing there was deleted: it is where
+# an estimator goes to investigate a flagged item, and it opens itself for printing.
+#
+# The four sections above the fold derive nothing. The money is the sheet's charged figure,
+# the classification is the record's, the decisions are the record's list. That is the
+# condition for the page and the workbook tabs and the covering e-mail agreeing.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# FROM THE RECORD'S ONE TABLE (costed_facts.DECISION_KINDS). This file kept its own five
+# kinds; the record emits more, and 12173-02's stated-not-carried row fell to "Decision",
+# ranked after every manufacturing question although it is money missing from the unit.
+from costed_facts import DECISION_KINDS as _DECISION_KINDS          # noqa: E402
+
+_DECISION_KIND_WORDS = {k: (v[0], v[1]) for k, v in _DECISION_KINDS.items()}
+_DECISION_ORDER = {k: v[2] for k, v in _DECISION_KINDS.items()}
+
+# Plain string, not an f-string: it carries braces. Opens the diagnostics for print, because
+# a closed <details> prints closed and the evidence would be absent from the paper copy.
+_PRINT_SCRIPT = """<script>
+(function(){
+  function openAll(){document.querySelectorAll('details.diag').forEach(function(d){d.open=true;});}
+  window.addEventListener('beforeprint', openAll);
+  if (window.matchMedia) {
+    var mq = window.matchMedia('print');
+    var on = function(e){ if (e.matches) openAll(); };
+    if (mq.addEventListener) { mq.addEventListener('change', on); } else if (mq.addListener) { mq.addListener(on); }
+  }
+})();
+</script>"""
+
+
+def _record_for(summary: Dict[str, Any]) -> Dict[str, Any]:
+    """The one record, built fresh — pure and cheap — never read from a stale stamp."""
+    try:
+        from costed_facts import costed_job
+        rec = costed_job(summary)
+        if isinstance(rec, dict):
+            return rec
+    except Exception:                                            # noqa: BLE001
+        pass
+    return {"lines": [], "gaps": {}, "release": {}, "decisions_required": [], "run": {},
+            "plating": {}}
+
+
+def _release_words(record: Dict[str, Any], summary: Dict[str, Any]) -> Tuple[str, str, List[str]]:
+    """(tag class, one-line status, reasons) — the release status in the words the quote's
+    draft strip uses, so the two documents cannot disagree about whether this can go out.
+
+    NO GENERIC REASSURANCE. "Every check passed" is said only when nothing is outstanding
+    either; a job with a plating decision open is not described as clean because its
+    arithmetic reconciles."""
+    rel = record.get("release") or {}
+    inv = summary.get("invariants") if isinstance(summary.get("invariants"), dict) else None
+    reasons = [str(r) for r in (rel.get("reasons") or []) if r]
+    # NO PRICE IS NOT "N TO SETTLE" (D-409). The 12675-01 book's status read "Not for release —
+    # 3 to settle: 2 market figures to replace (£23.00) + 1 consistency finding failed" over a
+    # run that costed nothing; the stop is the status, and the tally is what it is about.
+    _stop = record.get("run_stop") if isinstance(record.get("run_stop"), dict) else None
+    if _stop is None:
+        try:
+            from run_stop import nothing_to_cost as _ntc             # noqa: PLC0415
+            _stop = _ntc(summary)
+        except Exception:                                            # noqa: BLE001
+            _stop = None
+    if _stop:
+        from run_stop import sentence as _stop_sentence              # noqa: PLC0415
+        _first = _stop_sentence(_stop)
+        return ("t-bad", "No price — this run produced nothing to cost",
+                [_first] + [r for r in reasons if r != _first])
+    if rel.get("draft"):
+        # THE ONE TALLY. The banner said "3 inputs" over a table of 5 items because it read
+        # release.outstanding (blocking only) while the table listed every decision. Both
+        # now come from outstanding_summary, so the headline count IS the table's row count.
+        from costed_facts import outstanding_summary
+        s = outstanding_summary(record)
+        return ("t-bad",
+                f"Estimator review — {s['total']} item(s) to confirm: {s['phrase']}",
+                reasons)
+    if inv is None:
+        return "t-warn", "Unverified — the consistency checks did not run", reasons
+    if not inv.get("may_quote_firm"):
+        return ("t-bad", "Estimator review — an automated check is still to run",
+                reasons)
+    if rel.get("status") == "firm":
+        return ("t-good", "Releasable — every check passed and nothing is outstanding",
+                reasons)
+    if rel.get("status") == "reviewable":
+        return ("t-warn", "Reviewable — SDI house rates marked INDICATIVE are still to verify",
+                reasons)
+    return ("t-warn", "Unverified — " + (reasons[0] if reasons
+                                         else "the calculated sheet was not read back"),
+            reasons)
+
+
+def _clip_names(reason: Any, n: int = 6) -> str:
+    """A reason of the form "<count words>: A, B, C, ..." keeps its first n names."""
+    head, sep, names = str(reason).partition(": ")
+    items = [x.strip() for x in names.split(",")] if sep else []
+    if len(items) <= n:
+        return str(reason)
+    return f"{head}: {', '.join(items[:n])} and {len(items) - n} more"
+
+
+def _render_summary(summary: Dict[str, Any], record: Dict[str, Any],
+                    h: Dict[str, Any], hl: Dict[str, Any]) -> str:
+    """Quantity, material, labour, unit cost and release status. Then the five facts an
+    estimator asks first, each from the record."""
+    run = record.get("run") or {}
+    calculated = run.get("totals_source") == "excel_calculated"
+    # THE ONE ANSWER, HERE TOO. This chose between the record's run total and the headline's,
+    # and then printed whichever it got — so the summary could show a figure the header had
+    # already refused. `_unit_text` is the single decision for this document.
+    unit = run.get("unit_gbp") if calculated else hl.get("unit")
+    material = run.get("material_gbp") if calculated else hl.get("material")
+    labour = run.get("labour_gbp") if calculated else hl.get("labour")
+    _stop = hl.get("nothing_to_cost")
+    if _stop:
+        # NO FIGURE IS A PRICE ON A RUN THAT COSTED NOTHING (D-409): the tiles say so rather
+        # than show packaging and delivery as the material of a product that was never costed.
+        material = labour = None
+    qty = run.get("order_qty") or h.get("quantity")
+    cls, head, reasons = _release_words(record, summary)
+    gaps = record.get("gaps") or {}
+    lines = record.get("lines") or []
+    charged = [l for l in lines if (l.get("charged_ext_gbp") or l.get("engine_ext_gbp"))]
+    plating = record.get("plating") or {}
+    finishes = str(record.get("finishes_charged") or "")
+
+    facts: List[str] = []
+    if _stop:
+        from run_stop import sentence as _stop_sentence              # noqa: PLC0415
+        facts.append(f"<b>Nothing was costed on this run.</b> {_esc(_stop_sentence(_stop))}")
+    if lines:
+        facts.append(f"<b>{len(lines)}</b> lines on the bill of materials, <b>{len(charged)}</b> "
+                     f"carrying money on the sheet.")
+    if gaps.get("unpriced"):
+        facts.append(f"<b>{len(gaps['unpriced'])} unpriced</b>, held at £0: "
+                     f"{_esc(', '.join(gaps['unpriced']))}. The unit cost is understated by "
+                     f"whatever they are worth.")
+    if gaps.get("indicative_market"):
+        facts.append(f"<b>{len(gaps['indicative_market'])} on a researched market price</b> "
+                     f"({_money(gaps.get('indicative_market_gbp'))}) — replace before issue: "
+                     f"{_esc(', '.join(gaps['indicative_market']))}.")
+    if gaps.get("indicative_house"):
+        facts.append(f"<b>{len(gaps['indicative_house'])} on an SDI house rate marked "
+                     f"INDICATIVE</b> ({_money(gaps.get('indicative_house_gbp'))}) — "
+                     f"configured, reproducible, to verify: "
+                     f"{_esc(', '.join(gaps['indicative_house']))}.")
+    if finishes:
+        facts.append(f"Finish charged: <b>{_esc(finishes)}</b>.")
+    if plating.get("charged"):
+        _mem = ", ".join(plating.get("members") or []) or "no member"
+        _exc = plating.get("excluded") or []
+        facts.append(f"Plating {_money(plating.get('ext_gbp'))} is priced on <b>{_esc(_mem)}</b>"
+                     + (f"; excluded because their own detail states another finish: "
+                        f"{_esc(', '.join(_exc))}" if _exc else "") + ".")
+    basis = ("not a price — this run costed nothing, so no figure on the sheet is one"
+             if _stop else
+             "the Estimate sheet's own calculated cells" if calculated else
+             "the engine's figures — the sheet has not been read back, so nothing here is "
+             "the charged money yet")
+    # NEVER DROP A REASON (12173-02: the seventh, "1 parts-list row(s) stated and not
+    # carried", was cut, so the banner named a row its own explanation did not). A long
+    # list of names INSIDE a reason is what gets shortened.
+    reason_html = ("".join(f"<li>{_esc(_clip_names(r))}</li>" for r in reasons)
+                   if reasons else "")
+    return f"""<h2>Summary</h2>
+<div class="headline">
+  <div class="fig"><div class="lab">Unit cost</div><div class="val">{_unit_text(hl)}</div><div class="note">per unit, ex VAT{(" &middot; " + _esc(hl["unit_cell"])) if hl.get("unit_cell") else ""}</div></div>
+  <div class="fig"><div class="lab">Material</div><div class="val">{_money(material)}</div><div class="note">sheet, section, bought-in, commercial</div></div>
+  <div class="fig"><div class="lab">Labour</div><div class="val">{_money(labour)}</div><div class="note">per department row</div></div>
+  <div class="fig"><div class="lab">Quantity</div><div class="val">{_esc(qty) if qty else '—'}</div><div class="note">order quantity the sheet was priced at</div></div>
+</div>
+<div class="card release"><span class="tag {cls}">{_esc(head)}</span>
+{('<ul class="clean mini">' + reason_html + '</ul>') if reason_html else ''}
+</div>
+<ul class="clean">{''.join(f'<li>{f}</li>' for f in facts)}</ul>
+<p class="mini">Figures are {basis}.</p>"""
+
+
+def _render_decisions(record: Dict[str, Any]) -> str:
+    """Specific issue, affected part, current assumption, action, owner, £ at stake —
+    worst first. The list an estimator works through, before any diagnostics."""
+    decs = [d for d in (record.get("decisions_required") or []) if isinstance(d, dict)]
+    rel = record.get("release") or {}
+    if not decs:
+        if rel.get("draft"):
+            # Reached only by a record saved before failing checks were rows (costed_job.v1):
+            # its tally is still stated, from the same function the banner prints.
+            from costed_facts import outstanding_summary
+            _o = outstanding_summary(record)
+            return ('<h2>Decisions required</h2><div class="callout warn"><b>'
+                    f'{_o["total"]} to settle, not itemised here</b> — {_esc(_o["phrase"])}. '
+                    'This record was saved before those were listed as rows; see the '
+                    f'consistency checks ({_sec("checks")}) under Evidence and diagnostics.</div>')
+        return ('<h2>Decisions required</h2><div class="callout info">Nothing on this estimate '
+                'is waiting on a person. Every line carries a price with a named source and '
+                'no manufacturing decision is open.</div>')
+    decs.sort(key=lambda d: (_DECISION_ORDER.get(str(d.get("kind")), 9),
+                             -float(d.get("gbp_at_stake") or 0)))
+    rows = ""
+    for i, d in enumerate(decs, start=1):
+        cls, word = _DECISION_KIND_WORDS.get(str(d.get("kind")), ("t-info", "Decision"))
+        gbp = d.get("gbp_at_stake")
+        # A ROW A CHECK ALSO FOUND SAYS SO, so section 13's count and this table's can be
+        # read together (12173-02's '//' was both row 2 and one of twelve failures).
+        _also = ""
+        if d.get("also_failing_check"):
+            _also = (f'<br><span class="mini">also a failing check: '
+                     f'{_esc(d.get("also_failing_check"))}</span>')
+        elif d.get("also_ruled_by_check"):
+            _also = (f'<br><span class="mini">also a finding to rule on: '
+                     f'{_esc(d.get("also_ruled_by_check"))}</span>')
+        rows += (f'<tr><td class="n">{i}</td>'
+                 f'<td><span class="tag {cls}">{word}</span>{_also}</td>'
+                 f'<td><b>{_esc(d.get("issue") or "")}</b></td>'
+                 f'<td><code>{_esc(d.get("part") or "—")}</code></td>'
+                 f'<td>{_esc(d.get("assumption") or "")}</td>'
+                 f'<td>{_esc(d.get("action") or "")}</td>'
+                 f'<td>{_esc(d.get("owner") or "")}</td>'
+                 f'<td class="n">{_money(gbp) if gbp not in (None, "", 0, 0.0) else "—"}</td></tr>')
+    n = len(decs)
+    from costed_facts import outstanding_summary as _osum_d
+    _legacy_n = int(_osum_d(record).get("legacy") or 0)
+    _legacy_note = (f" A further {_legacy_n} counted in the banner (failing checks or sizes "
+                    f"assumed) are not itemised: this record was saved before they were rows."
+                    if _legacy_n else "")
+    return f"""<h2>Decisions required</h2>
+<p>{n} item{'s' if n != 1 else ''}, worst first.{_legacy_note} Until these are answered the estimate is a
+draft — and the quote does NOT say so, because it is sent after you have answered them.
+Nothing on the customer's copy names an open item; this page is where they live.</p>
+<div class="scroll"><table class="dec">
+  <thead><tr><th class="n">#</th><th>Kind</th><th>Issue</th><th>Part</th><th>Current assumption</th><th>Action required</th><th>Owner</th><th class="n">£ at stake</th></tr></thead>
+  <tbody>{rows}</tbody>
+</table></div>"""
+
+
+def _line_dimensions(line: Dict[str, Any], part: Dict[str, Any]) -> str:
+    """The value used, its source, and whether it is a reading — attached to the datum."""
+    ln = line.get("length") or {}
+    if ln and ln.get("mm"):
+        prof = line.get("section_profile") or {}
+        dims = " × ".join(str(prof[k]) for k in ("a", "b", "t") if prof.get(k))
+        txt = (f"{dims} × " if dims else "length ") + f"{float(ln['mm']):,.0f} mm"
+        who = ln.get("reader") or ""
+        rung = ln.get("source") or ""
+        note = " · ".join(x for x in (rung, f"read by {who}" if who else "") if x)
+        if ln.get("indicative"):
+            note = (note + " · " if note else "") + "INDICATIVE — largest dimension"
+        return f"{_esc(txt)}" + (f'<br><span class="mini">{_esc(note)}</span>' if note else "")
+    me = part.get("material_estimate") if isinstance(part.get("material_estimate"), dict) else {}
+    length = me.get("blank_length_mm") or part.get("blank_length_mm")
+    width = me.get("blank_width_mm") or part.get("blank_width_mm")
+    thk = line.get("thickness_mm") or part.get("normalized_thickness_mm")
+    # THE GAUGE THE SHEET COSTS, NOT THE ONE DRAWN, WHERE A PRODUCTION RULE STANDS BETWEEN
+    # THEM. 12527-22-01M is drawn 0.9 mm and bought and cut at 1.0; the Sheet Steel row says
+    # 1 and this column said 0.9, beside a flag saying "COSTED AT 1 mm". Both figures are
+    # true, so both are shown, in that order.
+    _ps = part.get("production_substitution") or line.get("production_substitution")
+    _drawn_note = ""
+    if isinstance(_ps, dict) and _ps.get("costed_thickness_mm"):
+        thk = _ps["costed_thickness_mm"]
+        if _ps.get("drawn_thickness_mm"):
+            _drawn_note = f"drawn {_ps['drawn_thickness_mm']:g} mm, costed at {thk:g} mm"
+    if length and width:
+        txt = f"{_num(length, 2).rstrip('0').rstrip('.')} × {_num(width, 2).rstrip('0').rstrip('.')}"
+        if thk:
+            txt += f" × {thk:g} mm" if isinstance(thk, (int, float)) else f" × {thk} mm"
+        src = str(part.get("geometry_source") or "")
+        words = ""
+        try:
+            from wb_populate import _geom_source_words
+            words = _geom_source_words(src) if src and src != "pdf" else ""
+        except Exception:                                        # noqa: BLE001
+            words = ""
+        words = " · ".join(w for w in ((words if words != "not recorded" else ""),
+                                        _drawn_note) if w)
+        if words:
+            return f"{_esc(txt)}<br><span class=\"mini\">{_esc(words)}</span>"
+        return _esc(txt)
+    if thk and line.get("kind") in ("leaf", "assembly"):
+        # A GAUGE ALONE STATES ITS BASIS. 12173-02's meshes printed a bare "1.0 mm" — the
+        # pack's document-level figure (a tolerance band and a spec legend on every sheet),
+        # in force there only because the model's 6 mm was refused — beside a flag saying
+        # "the gauge comes from the drawing". The record says whether the kept figure is one
+        # the census found repeated across parts; the cell says so, or names its source.
+        txt = f"{thk:g} mm" if isinstance(thk, (int, float)) else f"{thk} mm"
+        tb = line.get("thickness_basis") if isinstance(line.get("thickness_basis"), dict) else {}
+        note = ""
+        if tb.get("document_level"):
+            _n = len(tb.get("also_on") or [])
+            note = (f"drawing text only — the same figure is on {_n} other part"
+                    f"{'s' if _n != 1 else ''}; no measured gauge — confirm")
+        elif tb.get("source"):
+            try:
+                from source_precedence import display_name as _dn      # noqa: PLC0415
+                note = f"from {_dn(tb['source']) or tb['source']}"
+            except Exception:                                    # noqa: BLE001
+                note = f"from {tb['source']}"
+        return _esc(txt) + (f'<br><span class="mini">{_esc(note)}</span>' if note else "")
+    return "—"
+
+
+def _render_bom_tree(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
+    """Expandable assemblies; each line with quantity, material, dimensions, source and the
+    CHARGED material. The engine's own figure is named only where it differs, as not
+    charged — never presented as the provenance of the charged amount."""
+    lines = [l for l in (record.get("lines") or []) if isinstance(l, dict)]
+    if not lines:
+        return ('<h2>Bill of materials and hierarchy</h2><div class="callout warn">No costed '
+                'lines — the run carries no part list this page can describe.</div>')
+    by_pn: Dict[str, Dict[str, Any]] = {}
+    for l in lines:
+        for key in (l.get("part_number"), l.get("identity")):
+            k = str(key or "").strip().upper()
+            if k:
+                by_pn.setdefault(k, l)
+    try:
+        from costed_facts import _canonical_nodes, job_parts
+        nodes = _canonical_nodes(summary)
+        parts = {str(p.get("part_number") or "").strip().upper(): p for p in job_parts(summary)}
+    except Exception:                                            # noqa: BLE001
+        nodes, parts = {}, {}
+    # A MEMBER IS A LINE, NOT AN EDGE. The graph's edge ledger still names codes whose
+    # records were quarantined (the zipped BOM row) or folded (the tape's second
+    # spelling), and rendering those edges printed phantom members with dashes in every
+    # column — the reader is being shown a part that nothing costs and nothing holds.
+    # A code renders only if a costed line or a part record stands behind it; the
+    # quarantine and fold ledgers are excluded by name as well, whatever else knows them.
+    _gone = {
+        str(e.get("part_number") or "").strip().upper()
+        for key in ("quarantined_interleave_artefacts", "folded_bom_row_fragments")
+        for e in (summary.get(key) or []) if isinstance(e, dict)
+    }
+    _known = (set(by_pn) | set(parts)) - _gone
+    children: Dict[str, List[str]] = {}
+    roots: List[str] = []
+    for pn, node in nodes.items():
+        if pn in _gone:
+            continue
+        # An assembly with no line of its own still structures the page; a LEAF edge with
+        # no line and no record behind it is the phantom this filter exists to drop.
+        if pn not in _known and str(node.get("kind") or "").lower() != "assembly":
+            continue
+        parents = [str(p).strip().upper() for p in (node.get("parents") or []) if p]
+        if not parents:
+            roots.append(pn)
+        for p in parents:
+            children.setdefault(p, []).append(pn)
+    # Lines the graph does not know still belong on the page, at the root.
+    for l in lines:
+        k = str(l.get("identity") or l.get("part_number") or "").upper()
+        if k and k not in nodes and k not in roots:
+            roots.append(k)
+
+    def money_of(l: Dict[str, Any]) -> float:
+        v = l.get("charged_ext_gbp")
+        if v is None:
+            v = l.get("engine_ext_gbp")
+        try:
+            return float(v or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    # ── A LINE UNDER TWO PARENTS IS ONE LINE, SHARED — NOT TWO LINES ─────────────────
+    #
+    # 12173-02, 1 Oct: the tab 12173-03-06M hangs under frames 202 and 203 and printed
+    # "16 / £0.33" under EACH, so each frame's "members charged" was £7.30 and their parent's
+    # £14.27 — siblings that did not add up to their parent. The ticket strip WINDMILL: WSF45
+    # did the same under the pocket (×8) and the rack (×1). The sheet charges each line once
+    # (Estimate!93). So each parent shows its SHARE: the cascade's own per-parent figure
+    # (node.qty_by_parent — the numbers the BOMs & Routes trail prints, after precedence and
+    # any printed-total override), or on a summary compiled before that existed, the parent's
+    # count × the raw edge. Shares are normalised, so they always add up to the whole line.
+    # Where neither gives a count, money is not split on a guess: the whole line goes under
+    # the first parent and the others say it is charged there.
+    parents_of: Dict[str, List[str]] = {}
+    for _p, _ks in children.items():
+        for _k in _ks:
+            if _p not in _gone and _p not in parents_of.get(_k, []):
+                parents_of.setdefault(_k, []).append(_p)
+
+    def _edge_count(parent: str, child: str) -> float:
+        for e in (nodes.get(parent) or {}).get("children") or []:
+            if isinstance(e, dict) and str(e.get("part_number") or "").strip().upper() == child:
+                try:
+                    return float(e.get("qty") or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+        return 0.0
+
+    def share(parent: Optional[str], child: str) -> Tuple[Optional[float], float]:
+        """(the quantity under this parent, the fraction of the line it carries)."""
+        ps = sorted(parents_of.get(child) or [])
+        if parent is None or len(ps) <= 1 or parent not in ps:
+            return None, 1.0
+        node = nodes.get(child) or {}
+        byp: Dict[str, float] = {}
+        for k, v in (node.get("qty_by_parent") or {}).items():
+            try:
+                byp[str(k).strip().upper()] = float(v or 0)
+            except (TypeError, ValueError):
+                continue
+        w = {p: byp.get(p, 0.0) for p in ps}
+        if sum(w.values()) <= 0:
+            def _pq(p: str) -> float:
+                try:
+                    return float((nodes.get(p) or {}).get("qty_per_unit") or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+            w = {p: _pq(p) * _edge_count(p, child) for p in ps}
+        tot = sum(w.values())
+        if tot <= 0:
+            return None, (1.0 if parent == ps[0] else 0.0)
+        frac = w[parent] / tot
+        _l = by_pn.get(child) or {}
+        try:
+            q_all = float(_l.get("qty_per_unit") if _l.get("qty_per_unit") not in (None, "")
+                          else node.get("qty_per_unit") or 0)
+        except (TypeError, ValueError):
+            q_all = 0.0
+        return (q_all * frac if q_all else w[parent]), frac
+
+    def subtotal(pn: str, stack: Tuple[str, ...] = ()) -> float:
+        if pn in stack:
+            return 0.0
+        total = money_of(by_pn.get(pn) or {})
+        for k in children.get(pn, []):
+            total += share(pn, k)[1] * subtotal(k, stack + (pn,))
+        return total
+
+    shared_any = [False]
+
+    def row(pn: str, parent: Optional[str] = None) -> str:
+        l = by_pn.get(pn) or {"part_number": pn, "description": (nodes.get(pn) or {}).get("description", ""),
+                              "kind": (nodes.get(pn) or {}).get("kind", ""), "qty_per_unit": (nodes.get(pn) or {}).get("qty_per_unit")}
+        part = parts.get(pn) or {}
+        origin = l.get("price_origin") or {}
+        charged = l.get("charged_ext_gbp")
+        engine = l.get("engine_ext_gbp")
+        # ── ONE FACT DECIDES WHAT THIS CELL PRINTS ─────────────────────────────
+        # `displayed_charge` carries the amount, its cell, and whether the engine's own
+        # figure may be shown beside it. This renderer no longer decides: it was one of the
+        # FIVE that each decided separately, and the £3.88 was found once per rerun because
+        # of it.
+        from displayed_charge import displayed_charge as _dc          # noqa: PLC0415
+        _shown = _dc(l)
+        if _shown["basis"] == "workbook":
+            money = _money(_shown["amount"])
+            if _shown["publish_diagnostic"]:
+                money += (f'<br><span class="mini">engine '
+                          f'{_money(_shown["diagnostic"])} — not charged</span>')
+        elif _shown["basis"] == "pending":
+            # NOT RENDERED AS MONEY. An engine figure with no workbook cell behind it is an
+            # input still wanted, not a price — printing it in pounds is what put £3.88 on
+            # five pages. The diagnostic is named as a diagnostic.
+            # NO POUNDS. The first cut of this printed "pending a price (engine: £4.40)",
+            # which is precisely an engine-only amount rendered as currency — the thing the
+            # whole fact exists to prevent, reintroduced by the renderer that was meant to
+            # honour it. The diagnostic stays on the record for anybody debugging; it does
+            # not reach a published page.
+            money = '—<br><span class="mini">PENDING A CURRENT PRICE</span>'
+        elif _shown["basis"] == "pending_traceability":
+            # A DASH HERE WOULD READ AS "NOTHING TO SEE". The sheet DID calculate a figure
+            # for this line; what is missing is the record of which cell it came from, so it
+            # cannot be published as traceable money. Falling through to a plain dash makes an
+            # outstanding traceability problem look like an empty row, which is the one way
+            # nobody would ever go and fix it.
+            money = ('—<br><span class="mini">PENDING — WORKBOOK CELL NOT RECORDED</span>')
+        else:
+            money = "—"
+        qty = l.get("qty_per_unit")
+        qty_txt = _num(qty, 2).rstrip("0").rstrip(".") if qty not in (None, "") else "—"
+        q_here, frac = share(parent, pn)
+        if frac < 1.0:
+            # THIS PARENT'S SHARE, AND THE WHOLE LINE IT IS A SHARE OF. The £ here is derived
+            # (the sheet's amount × the share), so the note names the cell and the full amount.
+            shared_any[0] = True
+            others = [p for p in sorted(parents_of.get(pn) or []) if p != parent]
+            _whole = (_money(_shown["amount"]) if _shown["basis"] == "workbook" else "")
+            _cell = str(l.get("charged_cell") or "").strip()
+            note = ("of " + qty_txt + (f" / {_whole}" if _whole else "")
+                    + (f" at {_cell}" if _cell else "")
+                    + f" — also under {', '.join(others)}; "
+                    + ("the sheet charges this line once" if frac > 0 else "charged there"))
+            if _shown["basis"] == "workbook" and frac > 0:
+                money = _money(float(_shown["amount"] or 0) * frac)
+            elif frac <= 0:
+                money = "—"
+            money += f'<br><span class="mini">{_esc(note)}</span>'
+            qty_txt = (_num(q_here, 2).rstrip("0").rstrip(".") if q_here is not None else "—")
+        src = str(origin.get("label") or "")
+        flags = [f for f in (l.get("review_flags") or []) if f][:2]
+        return (f'<tr><td><code>{_esc(l.get("part_number") or pn)}</code></td>'
+                f'<td>{_esc(l.get("description") or "")}'
+                + (f'<br><span class="mini">{_esc(" · ".join(str(f) for f in flags))}</span>' if flags else "")
+                + f'</td><td class="n">{qty_txt}</td>'
+                f'<td>{_esc(l.get("material_label") or "")}</td>'
+                f'<td>{_line_dimensions(l, part)}</td>'
+                f'<td>{_esc(src)}</td>'
+                f'<td class="n">{money}</td></tr>')
+
+    head = ('<thead><tr><th>Part</th><th>Description</th><th class="n">Qty/unit</th>'
+            '<th>Material</th><th>Dimensions</th><th>Price source</th>'
+            '<th class="n">Charged £</th></tr></thead>')
+
+    rendered_under: Dict[str, str] = {}
+
+    def reference_row(pn: str, parent: str) -> str:
+        """A shared sub-assembly drawn in full elsewhere: this parent's share, in one row."""
+        shared_any[0] = True
+        l = by_pn.get(pn) or {}
+        node = nodes.get(pn) or {}
+        q_here, frac = share(parent, pn)
+        where = rendered_under.get(pn) or ", ".join(
+            p for p in sorted(parents_of.get(pn) or []) if p != parent)
+        _amt = subtotal(pn) * frac
+        qty_txt = _num(q_here, 2).rstrip("0").rstrip(".") if q_here is not None else "—"
+        note = (f"rendered in full under {where}; this parent's share "
+                + (f"{_money(_amt)}" if frac > 0 else "is none — charged there"))
+        return (f'<tr><td><code>{_esc(l.get("part_number") or pn)}</code></td>'
+                f'<td>{_esc(l.get("description") or node.get("description") or "")}'
+                f'<br><span class="mini">{_esc(note)}</span></td>'
+                f'<td class="n">{qty_txt}</td><td></td><td></td><td>sub-assembly</td>'
+                f'<td class="n">{_money(_amt) if frac > 0 else "—"}</td></tr>')
+
+    def render(pn: str, seen: set, depth: int = 0, parent: Optional[str] = None) -> str:
+        if pn in seen:
+            return ""
+        seen.add(pn)
+        if parent is not None:
+            rendered_under.setdefault(pn, parent)
+        kids = children.get(pn, [])
+        if not kids:
+            return f'<table>{head}<tbody>{row(pn)}</tbody></table>' if depth == 0 else row(pn, parent)
+        l = by_pn.get(pn) or {}
+        node = nodes.get(pn) or {}
+        leaf_rows = "".join(row(k, pn) for k in kids if not children.get(k))
+        # A SHARED SUB-ASSEMBLY IS DRAWN ONCE. Its other parents carry one row: where it is
+        # drawn and their share of it — so a heading's figure never includes a member twice.
+        refs = "".join(reference_row(k, pn) for k in kids if children.get(k) and k in seen)
+        sub = "".join(render(k, seen, depth + 1, pn) for k in kids
+                      if children.get(k) and k not in seen)
+        for k in kids:
+            seen.add(k)
+        own = row(pn) if money_of(l) else ""
+        _ps = sorted(parents_of.get(pn) or [])
+        split = ""
+        if len(_ps) > 1:
+            shared_any[0] = True
+            _whole = subtotal(pn)
+            split = (" &middot; shared: " + ", ".join(
+                f"{_money(_whole * share(p, pn)[1])} under {_esc(p)}" for p in _ps))
+        return (f'<details class="asm" open><summary><code>{_esc(l.get("part_number") or pn)}</code> '
+                f'{_esc(l.get("description") or node.get("description") or "")} &middot; '
+                f'{_esc(str(node.get("kind") or l.get("kind") or "assembly"))} &middot; '
+                f'qty/unit {_esc(node.get("qty_per_unit") or l.get("qty_per_unit") or 1)} &middot; '
+                f'{len(kids)} member{"s" if len(kids) != 1 else ""} &middot; '
+                f'members charged {_money(subtotal(pn))}{split}</summary>'
+                f'<div class="scroll"><table>{head}<tbody>{own}{leaf_rows}{refs}</tbody></table></div>{sub}</details>')
+
+    seen: set = set()
+    blocks = [render(r, seen) for r in roots if children.get(r)]
+    # The lines that hang off no assembly — the commercial lines, a stray bought-in — in ONE
+    # table rather than a table each, plus anything reachable only through a cycle.
+    loose = [r for r in roots if not children.get(r) and r not in seen]
+    for r in loose:
+        seen.add(r)
+    stray = [str(l.get("identity") or l.get("part_number")).upper() for l in lines
+             if str(l.get("identity") or l.get("part_number")).upper() not in seen]
+    loose_rows = "".join(row(pn) for pn in loose + stray)
+    if loose_rows:
+        blocks.append(f'<h3>Lines outside the assemblies</h3><div class="scroll"><table>{head}'
+                      f'<tbody>{loose_rows}</tbody></table></div>')
+    run = record.get("run") or {}
+    # AN ASSEMBLY'S CHARGED £ IS ITS LABOUR ROWS, NOT MATERIAL (D-461). The 19:35 book's bill
+    # summed the four sub-assemblies' read-back labour (£22.00 + £43.04 + £4.85 + £25.99 =
+    # £95.88) into "charged material" and reported a £95.88 difference "on the sheet and on no
+    # line here" — the wrong lines AND the wrong direction. The material tally takes material-
+    # carrying lines only; the assemblies' money is named for what it is.
+    def _is_material_line(l: Dict[str, Any]) -> bool:
+        if l.get("cross_reference") and not l.get("charged_ext_gbp"):
+            return False
+        return str(l.get("kind") or "").lower() != "assembly"
+
+    total = sum(money_of(l) for l in lines if _is_material_line(l))
+    asm_money = round(sum(money_of(l) for l in lines
+                          if str(l.get("kind") or "").lower() == "assembly"), 2)
+    sheet = run.get("material_gbp")
+    recon = ""
+    if sheet is not None:
+        gap = round(float(sheet) - total, 2)
+        recon = (f'<p class="mini">Charged material on these lines: {_money(total)} against the '
+                 f"sheet's Total Material Cost of {_money(sheet)}"
+                 + (" — they agree." if abs(gap) < 0.005 else
+                    f" — {_money(abs(gap))} of rounding across the rows." if abs(gap) <= 0.02 else
+                    (f", a difference of {_money(abs(gap))} on the sheet and on no line here."
+                     if gap > 0 else
+                     f", a difference of {_money(abs(gap))} on these lines and not in the "
+                     f"sheet's material total — reconcile before quoting."))
+                 + (f" The assemblies' own rows ({_money(asm_money)}) are labour, compared on "
+                    f"the Manufacturing route table, not here." if asm_money else "")
+                 + "</p>")
+    return (f'<h2>Bill of materials and hierarchy</h2>'
+            f'<p>Every line the sheet carries, under the assembly it belongs to. <b>Charged £</b> is '
+            f"the sheet's own figure for the line — a nested part's share of a whole sheet, a "
+            f'section by length, a bought-in at its unit price. Where the engine\'s own net-part '
+            f'figure differs it is shown beneath, as not charged.'
+            + (" A line under more than one parent shows, under each, that parent's share — "
+               "Qty/unit is per quoted unit through that parent, and the £ is the sheet's "
+               "amount for the whole line times the share; the note beneath names the whole "
+               "line and its cell, which the sheet charges once." if shared_any[0] else "")
+            + '</p>'
+            + "".join(blocks) + recon)
+
+
+def _render_route(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
+    """Target parts, operation, quantity basis, throughput, set-up and charge — the rows the
+    sheet actually prices, joined to the decisions that put each part on them."""
+    try:
+        from costed_facts import _workbook_rows, costed_operations
+        rows = _workbook_rows(summary)
+    except Exception:                                            # noqa: BLE001
+        rows, costed_operations = None, None
+    fe = ((summary.get("estimate_summary") or {}).get("final_estimate")
+          if isinstance(summary.get("estimate_summary"), dict) else None) \
+        or summary.get("final_estimate") or {}
+    calc = {}
+    for r in (fe.get("labour_rows") or []) if isinstance(fe, dict) else []:
+        if isinstance(r, dict) and r.get("workbook_row"):
+            try:
+                calc[int(float(r["workbook_row"]))] = r
+            except (TypeError, ValueError):
+                continue
+    if not rows:
+        ops = []
+        try:
+            ops = sorted(costed_operations(summary) or {}) if costed_operations else []
+        except Exception:                                        # noqa: BLE001
+            ops = []
+        return ('<h2>Manufacturing route</h2><div class="callout warn"><b>No workbook route.</b> '
+                'The Estimate sheet has not been built or read back for this run, so there are no '
+                'priced department rows to show.'
+                + (f' The engine\'s own costed operations are: {_esc(", ".join(ops))}.' if ops else '')
+                + '</div>')
+    body = ""
+    total = 0.0
+    for r in sorted(rows, key=lambda r: float(r.get("workbook_row") or 0)):
+        try:
+            wr = int(float(r.get("workbook_row") or 0))
+        except (TypeError, ValueError):
+            wr = 0
+        c = calc.get(wr) or {}
+        charge = r.get("total_value_gbp")
+        try:
+            total += float(charge or 0)
+        except (TypeError, ValueError):
+            pass
+        parts_ = ", ".join(str(p) for p in (r.get("part_numbers") or []) if p)
+        ops = ", ".join(str(o) for o in (r.get("engine_operations") or []) if o)
+        dids = " · ".join(str(d) for d in (r.get("decision_ids") or []) if d)
+        basis = r.get("rate_basis") or ""
+        body += (f'<tr><td class="n">{wr or "—"}</td>'
+                 f'<td><b>{_esc(r.get("wb_operation") or "")}</b>'
+                 + (f'<br><span class="mini">{_esc(ops)}</span>' if ops else "")
+                 + f'</td><td>{_esc(c.get("department") or "")}</td>'
+                 f'<td>{_esc(parts_) or "—"}</td>'
+                 f'<td class="n">{_esc(r.get("qty_per_unit") if r.get("qty_per_unit") not in (None, "") else "—")}</td>'
+                 f'<td class="n">{_num(c.get("setup_minutes"), 0) if c.get("setup_minutes") not in (None, "") else "—"}</td>'
+                 f'<td class="n">{_num(r.get("batch_hours") or c.get("batch_hours"), 2) if (r.get("batch_hours") or c.get("batch_hours")) not in (None, "") else "—"}</td>'
+                 f'<td class="n">{_money(c.get("dept_rate_gbp_per_hour")) if c.get("dept_rate_gbp_per_hour") not in (None, "") else "—"}</td>'
+                 f'<td class="n">{_money(charge) if charge not in (None, "") else "—"}</td>'
+                 f'<td>{_esc(basis)}'
+                 + (f'<br><span class="mini">{_esc(dids)}</span>' if dids else "")
+                 + '</td></tr>')
+    sheet = (record.get("run") or {}).get("labour_gbp")
+    foot = ""
+    if sheet is not None:
+        gap = round(float(sheet) - total, 2)
+        foot = (f'<p class="mini">{len(rows)} rows, {_money(total)} against the sheet\'s Total '
+                f'Labour Cost of {_money(sheet)}'
+                + (" — they agree." if abs(gap) < 0.005 else
+                   f" — {_money(abs(gap))} of rounding." if abs(gap) <= 0.02 else
+                   f" — {_money(abs(gap))} is on the sheet and not in this table; treat the "
+                   f"sheet's figure as the total.")
+                + "</p>")
+    else:
+        foot = f'<p class="mini">{len(rows)} rows, {_money(total)}. The sheet has not been read back.</p>'
+    return f"""<h2>Manufacturing route</h2>
+<p>The department rows the Estimate sheet prices, in sheet order. Batch hours are for the whole order; £ is per unit. Set-up is the quantity story: raise the order and it spreads.</p>
+<div class="scroll"><table>
+  <thead><tr><th class="n">Row</th><th>Operation</th><th>Dept</th><th>Target parts</th><th class="n">Qty/unit</th><th class="n">Set-up min</th><th class="n">Batch hrs</th><th class="n">£/hr</th><th class="n">£ per unit</th><th>Rate basis · decisions</th></tr></thead>
+  <tbody>{body}</tbody>
+</table></div>{foot}"""

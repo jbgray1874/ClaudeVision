@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+
+import source_precedence
+from source_precedence import apply_field as _apply_field
 
 import config
 from document_builder import _empty_geometry_rollup, _empty_part_record, _interpret_part, _rollup_geometry
@@ -30,6 +33,20 @@ except ImportError:
 
 from estimator import estimate_document
 
+
+
+_PIECE_OF_PART = re.compile(r"^(?P<part>.*[A-Z])-(?P<n>\d{1,2})$")
+
+
+def _piece_of_known_part(parts_by_key: Dict[str, Dict[str, Any]], key: str
+                         ) -> Optional[Dict[str, Any]]:
+    """`<part>-N` where <part> is a part in this job and ends in a letter (01J, 03M, 02A):
+    the Nth piece of that part. A digit-ended code ("…-201") is a part number of its own and
+    is never read as a piece."""
+    m = _PIECE_OF_PART.match(str(key or ""))
+    if not m:
+        return None
+    return parts_by_key.get(_normalize_part_key(m.group("part")))
 
 def _normalize_part_key(part_number: str) -> str:
     try:
@@ -53,7 +70,12 @@ def part_number_from_dxf_path(path: Path) -> Optional[str]:
     cfg = getattr(config, "DRAWING_JOB_DISCOVERY", {}) or {}
     patterns: Sequence[str] = cfg.get(
         "part_number_from_dxf_patterns",
-        [r"(?P<pn>\d{4,5}-\d{2}-\d{3}[A-Z]?)"],
+        # Digit-first detail codes (-001, -003M) and LETTER-FIRST ones (-A01, -G01) both
+        # exist in the wild — 10975-02's whole pack is lettered, and with only the first
+        # pattern the run staged two DXFs and matched zero: the flat's own code parsed as
+        # nothing, and the 2 mm token and the BENDLINES count died with it.
+        [r"(?P<pn>\d{4,5}-\d{2}-\d{3}[A-Z]?)",
+         r"(?P<pn>\d{4,5}-\d{2}-[A-Z]{1,2}\d{1,3})"],
     )
     for pattern in patterns:
         match = re.search(pattern, stem, flags=re.IGNORECASE)
@@ -73,17 +95,165 @@ def is_ignored_ga_dxf(path: Path) -> bool:
     name = path.name.upper()
     if "-GA_" in name or "_GA_" in name:
         return True
-    if re.search(r"[-_]GA[-_.]", name, flags=re.IGNORECASE):
+    # A SPACE ENDS THE CODE AS WELL AS A HYPHEN DOES. "12633-00-GA Display Chiller
+    # Shelf_revB.DXF" is the GA drawing exported whole; with only [-_.] after the GA it was
+    # taken for a flat, promoted as an orphan part, and named after another part (D-247).
+    if re.search(r"[-_]GA(?:[-_.\s]|$)", name, flags=re.IGNORECASE):
         return True
     cfg = getattr(config, "DRAWING_JOB_DISCOVERY", {}) or {}
     for token in cfg.get("ignore_dxf_name_tokens", ["-GA-", "_GA_"]):
         if token.upper() in name:
             return True
+    # THE ROLE GLUED TO THE SHEET NUMBER. "12645-02GA_REVA.DXF" is the body's GA exported
+    # whole, and every rule above needs a separator before the GA, so it passed this gate as
+    # a flat-pattern source — the D-247 failure again, on a real 12645 name — while
+    # cad_inputs.dwg_class called the same name a general arrangement. product_identity reads
+    # that spelling (D-311); it is asked here rather than copied, so the DXF gate and the DWG
+    # triage cannot disagree about one file.
+    try:
+        from product_identity import drawing_of_file
+        if (drawing_of_file(path.name) or {}).get("is_assembly"):
+            return True
+    except Exception:                                      # noqa: BLE001
+        pass
     return False
 
 
 def is_flat_part_dxf(path: Path) -> bool:
+    """CHEAP, FILENAME-ONLY gate used during discovery. Content is checked separately by
+    drawing_export_reason() at the point geometry is actually applied — see there for why a
+    name alone cannot tell a flat pattern from a drawing of one."""
     return is_dxf_path(path) and not is_ignored_ga_dxf(path) and bool(part_number_from_dxf_path(path))
+
+
+# A flat pattern may carry an etch label or two. A DRAWING carries a title block.
+_DRAWING_TEXT_ENTITIES = 8
+
+
+def dxf_declares_bend_layer(path: Path) -> Optional[bool]:
+    """Does this DXF's layer table contain a bend layer AT ALL? None when unreadable.
+
+    THE DIFFERENCE BETWEEN A MEASURED ZERO AND NO MEASUREMENT. The bend reader returns an
+    empty list both when a bend layer exists and is empty, and when the export carries no
+    bend layer whatsoever. Those are opposite facts and the caller was treating them the
+    same: on job 11350 the left arm's flat is a cut-only export with no bend layer, so
+    "0 bend lines" ruled the fold off a part the drawing plainly shows formed.
+
+    An explicit zero is a value; an absent layer is silence. Only the first can rule work
+    out — which is the rule this codebase already applies everywhere else."""
+    try:
+        import ezdxf
+        doc = ezdxf.readfile(str(path))
+    except Exception:
+        return None
+    try:
+        from dxf_reader import BEND_LAYERS as _BL
+        _wanted = {str(n).upper() for n in _BL}
+    except Exception:
+        _wanted = {"BENDLINES", "BEND", "BEND_LINES"}
+    try:
+        return bool({str(layer.dxf.name).upper() for layer in doc.layers} & _wanted)
+    except Exception:
+        return None
+
+
+def dxf_can_rule_out_folding(path: Path, flat_pattern_detected: Any,
+                             resolved_bends: Any) -> bool:
+    """May this DXF's zero bend count be used to REMOVE a fold the drawing states?
+
+    Only when all three hold: the export is a flat pattern, it resolved zero bends, and it
+    DECLARES a bend layer — so the zero is a measurement rather than a silence.
+
+    This exists as a function because the same rule was written out twice and corrected
+    once. The guarded copy is the one the 11350 fix touched; a second copy further down the
+    same function stripped `folding` on `flat_pattern_detected and bends == 0` with no
+    layer check at all, and stayed that way because the test drove the first copy and never
+    reached the second. It only surfaced when a polyline-profiled flat started being read
+    at all — geometry arriving where there had been none is what let the unguarded branch
+    finally fire.
+
+    A private copy of a rule that exists elsewhere is how two readers of one job come to
+    disagree about what it says.
+    """
+    if not flat_pattern_detected:
+        return False
+    try:
+        if int(resolved_bends or 0) != 0:
+            return False
+    except (TypeError, ValueError):
+        return False
+    return bool(dxf_declares_bend_layer(path))
+
+
+def drawing_export_reason(path: Path) -> Optional[str]:
+    """Why this DXF is a DRAWING of a part rather than the part's flat pattern — or None.
+
+    THE FILENAME CANNOT TELL YOU. is_flat_part_dxf accepts anything that is a .dxf, is not
+    named as a GA, and has a part number in its name — and a drawing exported straight out
+    of SolidWorks satisfies all three. Job 11350 shipped five DXFs of which three are
+    drawing exports carrying title blocks, dimensions and hundreds of annotation entities,
+    under names indistinguishable from the two real flats.
+
+    What that costs if it is missed: the title-block border and every dimension line get
+    measured as cut path. The part comes back with a bounding box the size of an A3 sheet,
+    a cut length several times the real one, and a hole count that includes the arrowheads
+    — and every one of those numbers looks like a measurement, because it was measured.
+
+    DIMENSION entities are decisive: a flat pattern has none, ever. A large body of
+    TEXT/MTEXT is the second signal, thresholded so a flat with a couple of etch labels is
+    not rejected. Deliberately conservative in that direction — wrongly rejecting a real
+    flat costs geometry we could have had, which the run already reports; wrongly accepting
+    a drawing puts fiction on the sheet.
+    """
+    try:
+        import ezdxf
+    except Exception:
+        return None          # cannot read it — say nothing rather than guess
+    try:
+        doc = ezdxf.readfile(str(path))
+        msp = doc.modelspace()
+    except Exception:
+        return None
+    _dims = 0
+    _texts = 0
+    for _e in msp:
+        _t = _e.dxftype()
+        if _t == "DIMENSION":
+            _dims += 1
+        elif _t in ("TEXT", "MTEXT"):
+            _texts += 1
+    if _dims:
+        return (f"{_dims} dimension entit{'y' if _dims == 1 else 'ies'} — this is a drawing "
+                f"of the part, not its flat pattern")
+    if _texts >= _DRAWING_TEXT_ENTITIES:
+        return (f"{_texts} text entities (title block / notes) — this is a drawing of the "
+                f"part, not its flat pattern")
+    return None
+
+
+# The range a sheet gauge can credibly be. Anything outside it in a filename is a
+# dimension, a product name or a part code — not the material thickness.
+SHEET_GAUGE_MIN_MM = 0.3
+SHEET_GAUGE_MAX_MM = 25.0
+# A BOARD IS NOT A GAUGE. The bound above exists to stop a product LENGTH being read as a
+# thickness — "Left Arm 200mm_flat.dxf" came back as a 200mm steel gauge. 25mm is generous
+# for sheet metal and wrong for board: 12422-24's MFC panel is 28mm, and shop-fitting board
+# runs 18/22/25/28/30 and beyond, so the panel's thickness was silently refused.
+#
+# The bound now depends on what the material IS. Same guard, told what it is guarding.
+#
+# ONE HOME. This was defined here and estimator kept its own hard 25.0, so a filename this
+# module accepted as a 28mm board was discarded by the module that costs it. The ceiling is
+# config's; this name is kept so existing readers still resolve.
+from config import MAX_BOARD_THICKNESS_MM as BOARD_GAUGE_MAX_MM  # noqa: E402
+
+
+def _gauge_bounds(path: Path) -> Tuple[float, float]:
+    """(min, max) plausible thickness for whatever this filename says it is cut from."""
+    _mat = material_from_dxf_filename(path) or ""
+    from wb_populate import _is_board
+    return (SHEET_GAUGE_MIN_MM,
+            BOARD_GAUGE_MAX_MM if _is_board(_mat) else SHEET_GAUGE_MAX_MM)
 
 
 def thickness_mm_from_dxf_filename(path: Path) -> Optional[float]:
@@ -91,7 +261,14 @@ def thickness_mm_from_dxf_filename(path: Path) -> Optional[float]:
         try:
             parsed = _parse_filename(path)
             if parsed.get("thickness_mm") is not None:
-                return float(parsed["thickness_mm"])
+                # BOUNDED HERE TOO. The shared parser runs first, so bounding only the
+                # fallback below left the defect fully intact: "Left Arm 200mm_flat.dxf"
+                # still came back as a 200mm gauge. A guard on the second reader is no
+                # guard at all when the first one answers.
+                _pv = float(parsed["thickness_mm"])
+                _lo, _hi = _gauge_bounds(path)
+                if _lo <= _pv <= _hi:
+                    return _pv
         except Exception:
             pass
     stem = path.stem
@@ -102,9 +279,23 @@ def thickness_mm_from_dxf_filename(path: Path) -> Optional[float]:
     # (e.g. "_1_5mm" -> "1.5mm"). The lookbehind stops the old rule mangling a part
     # number like "...-01_1mm" into "01.1mm" -> 1.1; that must read as 1.0.
     stem_norm = re.sub(r"(?<![\d.])(\d)_(\d+\s*mm)", r"\1.\2", stem_norm, flags=re.IGNORECASE)
-    match = re.search(r"(\d+(?:\.\d+)?)\s*mm", stem_norm, flags=re.IGNORECASE)
-    if match:
-        return float(match.group(1))
+    # A GAUGE, NOT THE FIRST NUMBER FOLLOWED BY "mm".
+    #
+    # This took the first <n>mm token in the stem with no plausibility bound, so
+    # "Boots Comms Bar - Left Arm 200mm_flat.dxf" returned 200.0 — a 200mm-thick mild steel
+    # arm — because the PRODUCT LENGTH is in the filename. Same class as the 1310-02 STUD,
+    # where a bar's diameter was read as a sheet thickness: a number with a unit is not
+    # automatically the number this function is looking for.
+    #
+    # Every token is considered and the first PLAUSIBLE one wins, so
+    # "Left Arm 200mm_1mm MS" resolves to 1.0 rather than to the length that happens to come
+    # first. Nothing plausible means no reading — the DXF geometry and the drawing still
+    # carry a thickness, and a wrong gauge is far worse than an absent one.
+    _lo, _hi = _gauge_bounds(path)
+    for _m in re.finditer(r"(\d+(?:\.\d+)?)\s*mm", stem_norm, flags=re.IGNORECASE):
+        _v = float(_m.group(1))
+        if _lo <= _v <= _hi:
+            return _v
     return None
 
 
@@ -123,6 +314,13 @@ _DXF_MATERIAL_TOKENS: List[Tuple[str, str]] = [
     (r"POLYCARB|\bPC\b", "POLYCARBONATE"),
     (r"\bCARD\b|GREYBOARD|GREY\s*BOARD", "CARD"),
     (r"\bMDF\b", "MDF"),
+    # MFC is Melamine Faced Chipboard and is the commonest shop-fitting board there is —
+    # 12422-24's panel is 28mm of it. The spelled-out name was recognised and the trade
+    # abbreviation everybody actually writes was not, so the panel came through with no
+    # material at all. Resolved to the full name so every downstream board and timber test
+    # keeps working off one spelling.
+    (r"\bMFC\b|MELAMINE\s*FACED", "MELAMINE FACED CHIPBOARD"),
+    (r"\bCHIPBOARD\b", "CHIPBOARD"),
     (r"PLYWOOD|\bPLY\b", "PLYWOOD"),
     (r"STAINLESS|\bSS\b|\b304\b|\b316\b", "STAINLESS STEEL"),
     (r"ALUMINI?UM|\bALUM?\b", "ALUMINIUM"),
@@ -132,11 +330,42 @@ _DXF_MATERIAL_TOKENS: List[Tuple[str, str]] = [
 
 
 def material_from_dxf_filename(path: Path) -> Optional[str]:
-    """Canonical material from a DXF filename token, or None if no token is present."""
+    """Canonical material from a DXF filename token, or None if no token is present.
+
+    THE LIST ABOVE KNEW HIPS, ACRYLIC, POLYCARBONATE, MDF AND THE STEELS — AND NOT PETG, AND
+    NOT ABS. 11650-04's exports are named `11650-04-01A_2MM PETG_REVG`, and this returned the
+    gauge and no material at all. So the filename evidence promoted in 50682e8 submitted half
+    of what it had read, the quorum was still counting one source against the model's ABS, and
+    the pair-level rule that followed had nothing to settle. Three commits of arbitration
+    resting on a vocabulary that could not say the word.
+
+    A PRIVATE LIST OF MATERIALS BESIDE THE ENGINE'S OWN IS THE DUAL-PATH DEFECT, spelled in
+    nouns instead of numbers. `costed_facts` already holds the vocabulary that decides which
+    materials are costed as sheet at all; a second list here can only ever drift from it, and
+    the drift is silent because a material nobody names reads exactly like a filename that
+    named nothing.
+
+    So the ordered patterns stay for what only they can do — abbreviations and ambiguities
+    where a word boundary or an ordering decides it (MS, SS, PC, ACR, and HIPS before ACRYLIC)
+    — and anything else falls through to the engine's own vocabulary. Adding a material to
+    costed_facts now teaches this reader too, and the guard fails the suite if it does not.
+    """
     stem = path.stem.upper().replace("_", " ")
     for pat, mat in _DXF_MATERIAL_TOKENS:
         if re.search(pat, stem):
             return mat
+    # THE ENGINE'S OWN VOCABULARY, ASKED SECOND, AND WHOLE-WORD. The boundary is what makes
+    # this safe rather than an ordering: PET cannot answer for PETG because the G fails the
+    # lookahead, and ABS cannot answer for ABSORBER. A longest-first sort looked like prudence
+    # and no mutant could kill it — with boundaries enforced there is no prefix collision left
+    # for it to break — so it is gone rather than kept as decoration.
+    import costed_facts as _cf
+    for tok in _cf._PLASTIC_SHEET_TOKENS + _cf._BOARD_TIMBER_TOKENS:
+        _t = tok.strip()
+        if len(_t) < 3:
+            continue
+        if re.search(rf"(?<![A-Z0-9]){re.escape(_t)}(?![A-Z0-9])", stem):
+            return _t
     return None
 
 
@@ -154,6 +383,83 @@ def build_geometry_summary_for_dxf(dxf_path: Path) -> Tuple[Dict[str, Any], Dict
     return geometry, raw, reliability
 
 
+def _pierce_fields(verdict: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Flatten the arbitration into the geometry record: the VALUE costing reads, the SOURCE
+    that produced it, and whether it is a measurement or a floor. Kept as three fields rather
+    than one number, so a provisional figure cannot be mistaken for a measured one."""
+    if not verdict:
+        return {"estimated_pierce_count": None}
+    return {
+        "estimated_pierce_count": verdict.get("value"),
+        "estimated_pierce_count_source": verdict.get("source"),
+        "estimated_pierce_count_uncertain": bool(verdict.get("uncertain")),
+    }
+
+
+def _arbitrate_pierces(flat: Dict[str, Any], raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Which reader's pierce count do we cost?
+
+    The two readers are not equal and must not be treated as interchangeable. The flat
+    reader walks the file topologically: it explodes blocks, resolves inherited layers, and
+    counts closed contours — circles, closed polylines, and loops assembled from separate
+    lines and arcs. The raw reader does none of that. It never enters a block, and it counts
+    every closed polyline as a pierce whether or not that polyline is the outer profile, so
+    a part drawn as several short closed polylines is counted twice over: once as holes, once
+    as profiles.
+
+    So taking max() unconditionally, as this did, hands the decision to whichever reader
+    happens to be more wrong in the upward direction. When the flat reader reports a complete
+    walk, it IS the answer — a higher raw figure is inflation, not detail.
+
+    The raw reader is used only where the flat walk admits it is incomplete: segments left
+    unchained because the outline is drawn with gaps too large to close. There the flat
+    count is a floor rather than an answer, a higher raw figure may be catching something
+    real, and the part is flagged either way so a person sees it.
+    """
+    _flat = int(flat.get("estimated_pierce_count") or 0)
+    _raw = int(raw.get("estimated_pierce_count") or 0)
+    if not flat.get("pierce_count_incomplete"):
+        if _flat:
+            return {"value": _flat, "source": "dxf_contour_walk", "uncertain": False}
+        if _raw:
+            return {"value": _raw, "source": "dxf_raw_fallback", "uncertain": True,
+                    "note": ("The contour walk found no pierces and the raw parser found "
+                             f"{_raw}. Using the raw count, which does not enter blocks and "
+                             "can count a profile twice — confirm against the drawing")}
+        return None
+    # The walk could not close its loops. Neither reading is a measurement now: the walk is a
+    # floor, and the raw count is a different reader's guess with a known upward bias. Taking
+    # the larger is a choice between two unreliable numbers, so it is recorded AS a choice —
+    # value, source and uncertainty kept apart — and the part is marked provisional rather
+    # than the maximum being laundered into a confident measured figure.
+    _val = max(_flat, _raw)
+    if not _val:
+        return None
+    return {"value": _val, "source": "dxf_incomplete_walk_max", "uncertain": True,
+            "note": (f"DXF outline could not be fully closed. Pierce count is the larger of "
+                     f"the contour walk ({_flat}) and the raw parser ({_raw}); it is a FLOOR, "
+                     f"not a measurement")}
+
+
+def bend_count_disagreement(bend_count_dxf, sw_bend_count):
+    """A review message when the DXF BENDLINES layer and the SOLIDWORKS bend count differ, else
+    None.
+
+    Both count folds. bend_count_dxf -- the measured BENDLINES layer, what the press brake bends
+    from -- is the one the engine uses, but a silent win hides that the model and the flat
+    disagree: on 11762-02-02M the DXF read 5 folds and SW 4, one fold of labour apart. Fires
+    ONLY when both sources exist and differ; an absent source is a gap the other fills, not a
+    disagreement, so it says nothing."""
+    if bend_count_dxf is None or sw_bend_count is None:
+        return None
+    _dxf, _sw = int(bend_count_dxf or 0), int(sw_bend_count or 0)
+    if _dxf == _sw:
+        return None
+    return (f"BEND COUNT DISAGREES: DXF BENDLINES layer shows {_dxf}, the SOLIDWORKS bend count "
+            f"shows {_sw}. The DXF is what the press brake folds from, so {_dxf} is used -- "
+            f"confirm the fold count.")
+
+
 def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str, Any]:
     """
     Augment a part dict with DXF geometry.
@@ -164,9 +470,32 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
       2. build_geometry_summary_for_dxf — bbox extents, geometry rollup
          (fallback when flat-pattern detection fails)
     """
+    # A DRAWING IS NOT A FLAT PATTERN, AND MEASURING ONE PRODUCES A MEASUREMENT.
+    #
+    # Refused here rather than at discovery, because this is the single point where DXF
+    # geometry lands on a part — a guard anywhere else leaves the other callers open.
+    # Recorded on the part, never silently skipped: a DXF that exists and was rejected is a
+    # different fact from no DXF at all, and the estimator needs to know a flat is missing.
+    _export_reason = drawing_export_reason(dxf_path)
+    if _export_reason:
+        part.setdefault("rejected_dxf_files", []).append(
+            {"file": dxf_path.name, "reason": _export_reason})
+        part.setdefault("review_flags", []).append(
+            f"DXF {dxf_path.name} rejected: {_export_reason}. No flat pattern for this "
+            f"part — geometry is from the drawing only.")
+        return part
+
     geometry, raw, reliability = build_geometry_summary_for_dxf(dxf_path)
     part["geometry_rollup"] = _empty_geometry_rollup()
     _rollup_geometry(part["geometry_rollup"], geometry)
+
+    # THE LAYERS THE READER SAW, KEPT WHERE THE REST OF THE RUN CAN ASK. The reader has
+    # always known them; nothing carried them onto the part, so the fold review line could
+    # not tell "exported without bend lines" from "the layers never reached us", and the
+    # DXF interpreter below was handed a null and duly reported OUR gap as the drawing's.
+    _lays = (raw or {}).get("layers")
+    if _lays:
+        part["dxf_layers"] = list(_lays)
 
     flat: Optional[Dict[str, Any]] = None
     try:
@@ -186,6 +515,11 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
             "geometry_source": "dxf_flat_pattern",
             "geometry_confidence": 1.0,
         })
+        # A ROUND PROFILE TRAVELS AS ONE (12173-03-02J's disc). The blank stays the square
+        # it nests in; the coated face and the banded edge read the circle.
+        if flat.get("outline_shape") == "circle" and flat.get("outline_diameter_mm"):
+            ng["outline_shape"] = "circle"
+            ng["outline_diameter_mm"] = flat["outline_diameter_mm"]
         part["normalized_geometry"] = ng
         part["geometry_score"] = 1.0
         part["flat_pattern_detected"] = True
@@ -198,24 +532,38 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
         # Strip it here — this branch runs for every genuine flat-pattern part and
         # is upstream of (and not gated by) the conditional re-infer block. The
         # downstream routing reads this exact list to emit the Fold op.
-        if int(flat.get("bend_count") or 0) == 0:
+        #
+        # THROUGH THE SHARED RULE. The THIRD spelling of this test, and the one that
+        # actually fires first: `bend_count == 0` alone reads a cut-only export's silence
+        # about bends as a measured zero. The 11350 fix reached one of the three copies,
+        # and because this one runs upstream of that one it was the copy doing the damage.
+        if dxf_can_rule_out_folding(dxf_path, True, flat.get("bend_count")):
             for _k in ("operations", "textual_operations"):
                 _ops = part.get(_k)
                 if isinstance(_ops, list) and "folding" in _ops:
-                    part[_k] = [_o for _o in _ops if _o != "folding"]
+                    part[_k] = [_o for _o in _ops if _o != "folding"]   # precedence: direct-write ok — removes an op, adds no evidence   # precedence: direct-write ok — removes an op, adds no evidence
 
-        if flat.get("thickness_mm") and part.get("normalized_thickness_mm") is None:
-            part["normalized_thickness_mm"] = flat["thickness_mm"]
+        if flat.get("thickness_mm"):
+            # From the measured flat pattern — rank 80. Submitted even when a value is
+            # already present: `is None` protected whatever arrived first rather than
+            # whatever is better, and left the datum unattributed either way.
+            _apply_field(part, "normalized_thickness_mm", flat["thickness_mm"], "dxf")
             if not part.get("thicknesses_mm"):
                 part["thicknesses_mm"] = [str(flat["thickness_mm"])]
 
         _mat_fn = flat.get("material_from_filename") or material_from_dxf_filename(dxf_path)
-        if _mat_fn and (
-            not part.get("normalized_material")
-            or str(part.get("normalized_material") or "").strip().upper() in {"MDF", "NONE", ""}
-        ):
-            # DXF filename material is authoritative over a missing or MDF-bleed material.
-            part["normalized_material"] = _mat_fn
+        if _mat_fn:
+            # SUBMITTED ALWAYS, NOT INTO A GAP. This was gap-fill at `inference`, so on a
+            # part that already carried a material it was not recorded anywhere -- and an
+            # observation nobody wrote down cannot corroborate anything. 11650-04's six
+            # exports are all named 2MM PETG and not one of them reached the record, because
+            # the model had already written ABS.
+            #
+            # The resolver decides the outcome, as it does for every other source. A
+            # filename still loses to a measured DXF or a model on its own; what it can now
+            # do is stand beside the title block, and two independent readings are what the
+            # quorum is for.
+            _apply_field(part, "normalized_material", _mat_fn, "dxf_filename")
 
         weight_g = float(flat.get("weight_g") or 0.0)
         if weight_g > 0:
@@ -249,8 +597,20 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
             "drawing_extents_mm": [flat["blank_length_mm"], flat["blank_width_mm"]],
             "estimated_hole_count": flat["hole_count"],
             "estimated_bend_line_count": flat["bend_count"],
-            "estimated_pierce_count": raw.get("estimated_pierce_count"),
+            **_pierce_fields(_arbitrate_pierces(flat, raw)),
+            # Carried so a reader can tell "no internal cut-outs" from "we could not tell".
+            "pierce_count_incomplete": bool(flat.get("pierce_count_incomplete")),
+            "closed_contour_count": flat.get("closed_contour_count"),
         }
+        _pv = _arbitrate_pierces(flat, raw)
+        if _pv and _pv.get("uncertain"):
+            part["geometry_provisional"] = True
+            part.setdefault("review_flags", []).append(str(_pv.get("note") or ""))
+        if flat.get("pierce_count_incomplete"):
+            part.setdefault("review_flags", []).append(
+                "DXF outline has segments that could not be chained into closed loops, so "
+                "some cut-outs may not have been counted. The pierce count is a FLOOR — "
+                "check the drawing for cut-outs the laser has not been charged for")
     else:
         extents = raw.get("drawing_extents_mm") or []
         if isinstance(extents, (list, tuple)) and len(extents) >= 2:
@@ -263,8 +623,13 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
                 part["flat_pattern_detected"] = True
 
         thk = thickness_mm_from_dxf_filename(dxf_path)
-        if thk is not None and part.get("normalized_thickness_mm") is None:
-            part["normalized_thickness_mm"] = thk
+        if thk is not None:
+            # THE SAME ARGUMENT AS THE MATERIAL. A gauge read from the filename is not the
+            # geometry, and it is not a guess either: it is what the drawing office called
+            # the stock this flat is cut from. 11650-04's panels are costed at 2.2mm from a
+            # model while every export says 2MM and the catalogue stocks 2.0 and 3.0 -- so
+            # the rate lookup misses on exactly the parts that matter.
+            _apply_field(part, "normalized_thickness_mm", thk, "dxf_filename")
             if not part.get("thicknesses_mm"):
                 part["thicknesses_mm"] = [str(thk)]
 
@@ -283,14 +648,104 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
             "estimated_pierce_count": raw.get("estimated_pierce_count"),
         }
 
+    # ── DID THE DXF ACTUALLY YIELD MEASURED GEOMETRY? ────────────────────────────
+    # A matched file is not the same as a measured part. dxf_reader collects the outline
+    # from LINE/ARC/CIRCLE entities on the cut layers and does NOT explode INSERT blocks
+    # ("Model-space entities only (INSERT blocks are not exploded in v1)"). Where a
+    # SolidWorks export wraps the profile in a block — 4 of 7 parts on job 12120 — the cut
+    # layer yields nothing, the blank comes back 0, and the part's dimensions fall through
+    # to the drawing's DIMENSION TEXT instead. That number can be perfectly correct, but it
+    # is TRANSCRIBED, not measured, and it carries none of the guarantees a measured outline
+    # does: no cut length, no hole count, no proof the profile is what the text claims.
+    #
+    # Setting dxf_augmented unconditionally told the credibility gate that every matched
+    # part was DXF-backed, so a job could report full measured coverage while most of its
+    # blanks came from text. The gate exists to answer exactly that question, and it was
+    # being fed the wrong answer. Claim measurement only where there is measurement.
+    _blank_area = 0.0
+    try:
+        _blank_area = float((flat or {}).get("blank_area_mm2") or 0.0)
+    except (TypeError, ValueError):
+        _blank_area = 0.0
+    # TWO DIFFERENT CLAIMS, AND THEY WERE SHARING ONE FLAG. A DXF can yield a measured cut
+    # PATH without yielding a measured BLANK — the cut layer holds geometry the reader can
+    # follow, but nothing that closes into an outline with an area. Both are real
+    # measurement, and they license completely different things:
+    #
+    #   outline measured   -> we know the blank, so no blank allowance is needed
+    #   cut length measured -> we know the cut time, and nothing at all about the blank
+    #
+    # dxf_measured_outline was being set from EITHER, so five parts on 12120 skipped their
+    # blank allowance on the strength of a measurement that says nothing about their blank.
+    # bought_in_policy already documents the contract this breaks — "dxf_augmented is set
+    # ONLY where an outline was actually measured" — so the reader was right and the writer
+    # was wrong. Keep the claims apart and each gate reads the one it actually needs.
+    _outline_measured = bool(flat and flat.get("flat_pattern_detected") and _blank_area > 0)
+    try:
+        _cut_length_measured = float((raw or {}).get("estimated_cut_length_mm") or 0.0) > 0.0
+    except (TypeError, ValueError):
+        _cut_length_measured = False
+
     part["geometry_source"] = (
-        "dxf_flat_pattern" if (flat and flat.get("flat_pattern_detected")) else "dxf"
+        "dxf_flat_pattern" if _outline_measured
+        else ("dxf_cut_length_only" if _cut_length_measured else "dxf_matched_no_geometry")
     )
     part["geometry_source_path"] = str(dxf_path.resolve())
     part["dxf_source_file"] = dxf_path.name
-    part["dxf_augmented"] = True
+    part["dxf_measured_outline"] = _outline_measured
+    part["dxf_measured_cut_length"] = _cut_length_measured
+    # Only a measured OUTLINE counts as augmentation, because augmentation is what tells the
+    # costing path the blank extents can be trusted. The filename still gives thickness and
+    # material (dxf_source_file is kept), and a measured cut length is still recorded above
+    # for the operations that need it — but the blank claim is withdrawn.
+    part["dxf_augmented"] = _outline_measured
+    if not _outline_measured:
+        _what = ("Its cut layer yielded a measured cut path but no closed outline, so the cut "
+                 "time is measured and the blank is not"
+                 if _cut_length_measured else
+                 "Its cut layer holds no line/arc/circle geometry at all")
+        part.setdefault("review_flags", []).append(
+            f"DXF '{dxf_path.name}' matched but yielded NO measured blank outline. {_what} "
+            f"(commonly a block/INSERT export, which the reader does not explode). Any blank "
+            f"shown for this part is transcribed from the drawing's dimension text, not "
+            f"measured, and it takes the blank allowance accordingly. Re-export the flat "
+            f"pattern as exploded geometry to measure it")
     part["dxf_geometry_reliability"] = reliability
     part["dxf_raw_geometry"] = dxf_raw
+
+    # ── THE SECOND READ OF THE SAME FILE ─────────────────────────────────────────────
+    # ezdxf has now measured everything it can. What it cannot say is what the geometry
+    # MEANS — which layer is the cut profile, what each hole is for, whether this is one
+    # part or a nest — and those are the answers that decide how a part is made and, in the
+    # nest case, whether its price is out by a factor of six.
+    #
+    # Measurement above is untouched: this is gap-fill and judgement, stamped `inference`.
+    # Failure-isolated and off unless a key is present, so a job with no model reaching it
+    # costs exactly as it does today.
+    try:
+        import os as _os_di
+        _di_flag = _os_di.getenv("SDI_DXF_LLM_INTERPRET", "").strip().lower()
+        if _di_flag not in {"0", "false", "no", "off"} and (
+                _di_flag in {"1", "true", "yes", "on"} or _os_di.getenv("XAI_API_KEY")):
+            from dxf_llm_interpret import interpret as _dxf_interpret, apply_to_part as _dxf_apply
+            _measured = {
+                "layers": (raw or {}).get("layers") or (geometry or {}).get("layers"),
+                "entity_counts": (raw or {}).get("entity_counts"),
+                "text_entities": (raw or {}).get("text_entities"),
+                "blank_mm": [part.get("overall_length_mm"), part.get("overall_width_mm")],
+                "hole_diameters_mm": part.get("hole_sizes_mm"),
+                "closed_contour_count": (raw or {}).get("closed_contour_count"),
+                "cut_length_mm": dxf_raw.get("estimated_cut_length_mm"),
+            }
+            _interp = _dxf_interpret(_measured, filename=dxf_path.name)
+            if _interp:
+                _ic = _dxf_apply(part, _interp)
+                print(f"   [dxf-interpret] {dxf_path.name}: {_interp.get('recommended_process')}"
+                      f"/{_interp.get('complexity')} — filled {_ic['filled']}, "
+                      f"raised {_ic['flags']} for review", flush=True)
+    except Exception as _e_di:
+        print(f"   [dxf-interpret] skipped for {dxf_path.name} ({_e_di}) — run continues",
+              flush=True)
     # DXF flat-pattern is ground truth for folding: a genuine flat-pattern part
     # whose resolved DXF bend count is 0 does NOT fold. Strip a stale 'folding'
     # op that a shared/document note baked into the ops upstream. Runs at the
@@ -301,11 +756,43 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
         _bcx = part.get("bend_count_dxf")
         _ebl = _gr.get("estimated_bend_line_count")
         _resolved_bends = int((_bcx if _bcx is not None else (_ebl if _ebl is not None else 0)) or 0)
-        if part.get("flat_pattern_detected") and _resolved_bends == 0:
+        # TWO SOURCES FOR ONE COUNT: SAY SO WHEN THEY DISAGREE. The DXF BENDLINES layer and the
+        # SOLIDWORKS API both count folds, and bend_count_dxf now wins where both exist (it is
+        # the press-brake truth) -- but a silent win hides that the model and the flat disagree.
+        # On 11762-02-02M the DXF read 5 and SW 4, one fold of labour apart.
+        _bend_msg = bend_count_disagreement(_bcx, _ebl)
+        if _bend_msg:
+            part.setdefault("review_flags", []).append(_bend_msg)
+        # A MEASURED ZERO, NOT AN ABSENT LAYER. See dxf_declares_bend_layer: a cut-only
+        # export carries no bend layer, and reading its silence as "does not fold" ruled the
+        # fold off 11350's left arm — a part the drawing shows formed. Where the layer is
+        # missing the question is left OPEN, so the drawing's own reading still decides.
+        # ONE COMPUTATION, USED BOTH WAYS. The flag below and the strip further down are
+        # the two halves of the same question, and asking it twice in two spellings is how
+        # this rule came to have three copies and one correction.
+        _can_rule_out = dxf_can_rule_out_folding(
+            dxf_path, part.get("flat_pattern_detected"), _resolved_bends)
+        if part.get("flat_pattern_detected") and _resolved_bends == 0 and not _can_rule_out:
+            part.setdefault("review_flags", []).append(
+                f"DXF {dxf_path.name} carries no bend layer, so it cannot say whether this "
+                f"part folds. Folding left as the drawing states it — confirm.")
+        if _can_rule_out:
             for _k in ("operations", "textual_operations"):
                 _ops = part.get(_k)
                 if isinstance(_ops, list) and "folding" in _ops:
-                    part[_k] = [_o for _o in _ops if _o != "folding"]
+                    part[_k] = [_o for _o in _ops if _o != "folding"]   # precedence: direct-write ok — removes an op, adds no evidence
+            # RECORD THE RULING, NOT JUST THE REMOVAL.
+            #
+            # This deleted the op and left nothing to say it had. A later pass — the LLM
+            # route, which reads formed walls off the drawing views — simply adds `folding`
+            # back, and now that a routed operation without a cost model reaches the sheet,
+            # it would be COSTED. A measured zero overwritten by a conclusion is the exact
+            # failure that took three commits on 12120.
+            #
+            # An explicit zero is a value. Recorded here so every later pass can see that
+            # this one was measured, not merely absent.
+            part.setdefault("operations_ruled_out", {})["folding"] = (
+                "DXF flat pattern measured 0 bend lines — the part does not fold")
     except Exception:
         pass
 
@@ -346,7 +833,14 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
                     # The merge above only ADDs, so a stale 'folding' would survive;
                     # strip it here. process_router reads this exact list to emit the
                     # Fold op, so removing it here removes the phantom fold.
-                    if part.get("flat_pattern_detected") and bends == 0:
+                    #
+                    # THROUGH THE SHARED RULE. This tested `flat_pattern_detected and
+                    # bends == 0` directly, which is the pre-11350 spelling: it reads a
+                    # cut-only export's SILENCE about bends as a measured zero and takes
+                    # the fold off a part the drawing shows formed. The guard was added to
+                    # the copy above and never to this one.
+                    if dxf_can_rule_out_folding(dxf_path,
+                                                part.get("flat_pattern_detected"), bends):
                         merged = [op for op in merged if op != "folding"]
                     part["operations"] = merged
                     part["textual_operations"] = merged
@@ -355,6 +849,14 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
                 pass
 
     _interpret_part(part)
+    # The interpretation rebuilds normalized_geometry from the rollup; a measured round
+    # outline is a fact about the flat, so it is put back where the finish and edge read it.
+    if flat and flat.get("outline_shape") == "circle" and flat.get("outline_diameter_mm") \
+            and part.get("geometry_source") == "dxf_flat_pattern":
+        _ngc = part.get("normalized_geometry")
+        if isinstance(_ngc, dict):
+            _ngc["outline_shape"] = "circle"
+            _ngc["outline_diameter_mm"] = flat["outline_diameter_mm"]
     return part
 
 
@@ -396,6 +898,15 @@ def _pick_best_flat(part: Dict[str, Any], paths: Sequence[Path]) -> Path:
 
 
 def _lookup_part(parts_by_key: Dict[str, Dict[str, Any]], part_number: str) -> Optional[Dict[str, Any]]:
+    return _lookup_part_with_basis(parts_by_key, part_number)[0]
+
+
+def _lookup_part_with_basis(parts_by_key: Dict[str, Dict[str, Any]], part_number: str
+                            ) -> Tuple[Optional[Dict[str, Any]], str]:
+    """_lookup_part, naming the rung that matched: alias | exact | piece | ga | alias_target |
+    segment | loose | "" (none). A match on the PIECE rung is a reading of the file's suffix,
+    not a match of its code, and the merge says so (D-382); it could not tell before, because
+    the piece rung returned the part exactly like an exact hit."""
     key = _normalize_part_key(part_number)
     try:
         from part_identity import dxf_alias_target
@@ -404,11 +915,20 @@ def _lookup_part(parts_by_key: Dict[str, Dict[str, Any]], part_number: str) -> O
         if alias:
             alias_key = _normalize_part_key(alias)
             if alias_key in parts_by_key:
-                return parts_by_key[alias_key]
+                return parts_by_key[alias_key], "alias"
     except Exception:
         pass
     if key in parts_by_key:
-        return parts_by_key[key]
+        return parts_by_key[key], "exact"
+    # A NUMBERED PIECE OF A PART IS THAT PART'S. "12173-03-01J-1_25mm MDF" and "-01J-2" are the
+    # two 25 mm layers of the base 12173-03-01J. With no exact hit they fell to the trailing-
+    # segment fallback below, which took the last "1" and "2" and paired them with the FRAMES
+    # 12173-03-201 and -202 — a 25 mm MDF gauge on a steel weldment, and the base left on a
+    # 3 mm floor. A code that is an existing part plus a one- or two-digit piece number after
+    # a lettered segment is that part; the phase-2 split costs each piece.
+    _pc = _piece_of_known_part(parts_by_key, key)
+    if _pc is not None:
+        return _pc, "piece"
     try:
         from part_identity import GA_TO_DETAIL_PREFERENCE, normalize_part_code
 
@@ -417,13 +937,50 @@ def _lookup_part(parts_by_key: Dict[str, Dict[str, Any]], part_number: str) -> O
             if normalize_part_code(detail_code) == norm:
                 ga_key = normalize_part_code(ga_code)
                 if ga_key in parts_by_key:
-                    return parts_by_key[ga_key]
+                    return parts_by_key[ga_key], "ga"
     except Exception:
         pass
-    suffix = key.split("-")[-1]
+    # THE DRAWING'S BOM OWNS IDENTITY, AND IS CONSULTED BEFORE A PART IS INVENTED.
+    #
+    # A DXF that matches no BOM line is promoted to a NEW part by the caller. That is right
+    # for a flat whose part has no PDF detail page — it would otherwise be lost — and wrong
+    # for a flat whose part IS on the drawing under the code the drawing uses. On 11350
+    # "11350-01-01M.DXF" found no "11350-01-01M" and minted a second bar, so a five-item BOM
+    # became seven nodes with the hierarchy on one copy and the measured blank on the other.
+    #
+    # The trailing-segment fallback below cannot bridge it: "01M" does not end with "01".
+    # Resolved here, upstream, where it PREVENTS the phantom — the compiler's alias could
+    # only merge one after the fact, and merging is not the same as never splitting.
+    try:
+        from part_code_conventions import alias_targets
+
+        for _cand in alias_targets(part_number):
+            _cand_key = _normalize_part_key(_cand)
+            if _cand_key and _cand_key in parts_by_key:
+                return parts_by_key[_cand_key], "alias_target"
+    except Exception:
+        pass
+    # A WHOLE SEGMENT, NEVER ITS LAST CHARACTERS. `endswith` let "-1" match "-201" and "-2"
+    # match "-202" — the near-match presumption Dave Wright ruled out ("better left as zero
+    # cost and flagging it"). The trailing segment must equal the candidate's own, and be long
+    # enough to mean something.
+    #
+    # AND EVERY SEGMENT THE FILE HAS, NOT ONLY ITS LAST (D-434). 8188-08's folder holds
+    # "8188-12-002 MS 2MM.DXF", a part of the swing stopper. Its last segment "002" equals the
+    # frame base 8188-29-002's, so it was bound to the base; two flats at two gauges then made
+    # the base an "assembly" of two minted pieces, both of which the product scope set aside,
+    # and the 1,292 x 200 x 3 base left the book. A file's code may stand for a LONGER code
+    # only where the file's own segments are the candidate's last segments, whole: "12-002"
+    # may be 8188-12-002; "8188-12-002" is never 8188-29-002.
+    _fsegs = [x for x in key.split("-") if x]
+    suffix = _fsegs[-1] if _fsegs else ""
     for candidate_key, part in parts_by_key.items():
-        if candidate_key.endswith(suffix) or candidate_key.replace("-", "") == key.replace("-", ""):
-            return part
+        _csegs = [x for x in candidate_key.split("-") if x]
+        if candidate_key.replace("-", "") == key.replace("-", ""):
+            return part, "segment"
+        if (len(suffix) >= 3 and len(_csegs) >= len(_fsegs)
+                and _csegs[len(_csegs) - len(_fsegs):] == _fsegs):
+            return part, "segment"
     # Tolerant fall-back: bridge abbreviated DXF part numbers ("1449C", "1450")
     # to full BOM numbers ("1449-01C", "1450-01C") via leading numeric block +
     # trailing letter. Only bind when exactly one BOM part shares it; if several
@@ -437,52 +994,127 @@ def _lookup_part(parts_by_key: Dict[str, Dict[str, Any]], part_number: str) -> O
             and (not tail or _loose_part_key(candidate_key)[1] == tail)
         ]
         if len(hits) == 1:
-            return hits[0]
-    return None
+            return hits[0], "loose"
+    return None, ""
 
 
-def _numeric_part_prefix(part_number: str) -> str:
-    m = re.match(r"^(\d+)", str(part_number or "").upper())
-    return m.group(1) if m else ""
+def _dxf_code_is_in_this_job(dxf_code: str, parts_by_key: Dict[str, Dict[str, Any]]) -> bool:
+    """Could this DXF's code belong under the assembly this job's parts sit under?
+
+    Only refuses when the job is UNAMBIGUOUSLY single-branch. Where the existing parts share
+    a real assembly prefix ("11350-01") a code outside it is another drawing's; where they
+    share only the job number, or nothing, this cannot tell and says yes — a missed detail
+    part must still be promoted, and that is the commoner case by far.
+    """
+    _code = _normalize_part_key(dxf_code)
+    if not _code:
+        return True
+    _keys = [k for k in parts_by_key if k and re.match(r"^\d", k)]
+    if len(_keys) < 2:
+        return True
+    _segs = [k.split("-") for k in _keys]
+    _common: List[str] = []
+    for _i in range(min(len(x) for x in _segs)):
+        _tok = _segs[0][_i]
+        if all(x[_i] == _tok for x in _segs):
+            _common.append(_tok)
+        else:
+            break
+    # WHATEVER THE PARTS ACTUALLY SHARE IS THE SCOPE, however much that is.
+    #
+    # The first version special-cased a one-segment prefix — "the job number alone proves
+    # nothing" — and a mutation showed that wrong: across BRANCHES it proves nothing, but
+    # across JOBS it proves plenty. A folder whose parts span 11350-01 and 11350-02 cannot
+    # tell whether 11350-03 belongs, and must promote it; it can tell perfectly well that
+    # 12120-01-01 does not.
+    if not _common:
+        return True
+    return _code.startswith("-".join(_common))
 
 
-def _description_for_orphan_dxf(summary: Dict[str, Any], part_number: str) -> str:
-    """Best-effort description from pooled BOM rows sharing the numeric family prefix."""
+_REV_IN_NAME = re.compile(r"(?<![A-Z])REV[_\s-]*[A-Z0-9]{1,2}(?![A-Z0-9])", re.I)
+_GAUGE_WORD = re.compile(r"^\d+(?:\.\d+)?\s*MM$", re.I)
+
+
+def _description_from_dxf_name(path: Path, part_number: str) -> str:
+    """What the drawing office typed after the code: "12633-01-02P - BOTTLE SUPPORT - 5MM
+    PMMA" gives BOTTLE SUPPORT. The code, the revision, the gauge and the material words are
+    facts read elsewhere, not the name of the part. Empty when nothing else is left."""
+    stem = path.stem
+    _code = str(part_number or "").strip()
+    if _code:
+        stem = re.sub(r"[\s_-]*".join(re.escape(c) for c in re.sub(r"[\s_-]", "", _code)),
+                      " ", stem, count=1, flags=re.I)
+    stem = _REV_IN_NAME.sub(" ", stem)
+    kept: List[str] = []
+    for seg in re.split(r"\s+-\s+|_", stem):
+        words = seg.strip(" -").split()
+        if not words:
+            continue
+        if all(_GAUGE_WORD.match(w) or material_from_dxf_filename(Path(f"{w}.dxf"))
+               for w in words):
+            continue
+        kept.append(" ".join(words))
+    return " - ".join(kept)
+
+
+def _description_for_orphan_dxf(summary: Dict[str, Any], part_number: str,
+                                dxf_path: Optional[Path] = None) -> str:
+    """The part's OWN description: its own BOM row, else the words in its own filename.
+
+    NEVER A SIBLING'S. This used to take the longest description on any BOM row sharing the
+    job number, so the 12633-00-GA drawing export was named "Bottle Support" (14 characters,
+    the longest in the pack) and the AI pricer then researched a price for a bottle support
+    under the GA's code (D-247). A family prefix says which job a row is from, not which part.
+    """
     pn_key = _normalize_part_key(part_number)
-    prefix = _numeric_part_prefix(pn_key)
     bom_rows = (summary.get("document_analysis") or {}).get("bom_rows") or []
-    best_desc = ""
-    best_len = 0
     for row in bom_rows:
-        row_pn = _normalize_part_key(str(row.get("part_number") or ""))
-        if not row_pn:
-            continue
-        row_prefix = _numeric_part_prefix(row_pn)
-        if row_prefix != prefix and not row_pn.startswith(prefix):
-            continue
-        desc = str(row.get("description") or row_pn).strip()
-        if len(desc) > best_len:
-            best_desc = desc
-            best_len = len(desc)
-    return best_desc or pn_key
+        if _normalize_part_key(str(row.get("part_number") or "")) == pn_key:
+            desc = str(row.get("description") or "").strip()
+            if desc:
+                return desc
+    if dxf_path is not None:
+        named = _description_from_dxf_name(dxf_path, part_number)
+        if named:
+            return named
+    return pn_key
+
+
+def dxf_may_mint_a_part(dxf_path: Path, report: Optional[Dict[str, Any]] = None,
+                        part_number: str = "") -> bool:
+    """A DXF that is a drawing of a part — a sheet export with dimensions, a title block and
+    notes — never mints a part (D-406). 12675-01: "12675-01-02 Block Model V2.dxf" was minted
+    as an orphan, its geometry then refused as a drawing, and the record survived as a
+    bought-in priced by an AI market figure at £8.50 beside packaging and delivery for it.
+    The refusal is recorded in the report's unmatched list so the file is not silently lost."""
+    _why = drawing_export_reason(dxf_path)
+    if not _why:
+        return True
+    if isinstance(report, dict):
+        report.setdefault("unmatched_dxf", []).append({
+            "path": str(dxf_path), "part_number": part_number,
+            "reason": f"drawing_export_not_a_flat: {_why}"})
+    return False
 
 
 def _create_orphan_dxf_part(summary: Dict[str, Any], part_number: str, dxf_path: Path) -> Dict[str, Any]:
     """Standalone part record for a flat DXF with no PDF detail page in the writeup."""
     parsed_pn = part_number_from_dxf_path(dxf_path) or part_number
     pn = _normalize_part_key(parsed_pn) or part_number
-    desc = _description_for_orphan_dxf(summary, pn)
-    if desc == pn or desc == part_number:
-        desc = dxf_path.stem.replace("_", " ").strip()
-    part = _empty_part_record(pn, description=desc, quantity=1)
+    desc = _description_for_orphan_dxf(summary, pn, dxf_path)
+    part = _empty_part_record(pn, description=desc, quantity=None)
+    # Born with a source. A quantity of 1 written silently is indistinguishable from a
+    # quantity of 1 somebody established, and the next pass is free to replace it.
+    _apply_field(part, "quantity", 1, "inference")
     part["page_roles"] = ["dxf_only"]
     part["source"] = "dxf_orphan_no_bom_part"
     part["geometry_source"] = "dxf_flat_pattern"
     part.setdefault("review_flags", []).append("dxf_orphan_no_detail_ga")
     part["dxf_orphan"] = {"path": str(dxf_path.resolve()), "note": "Flat DXF in folder — no detail GA/PDF part record"}
     _mat_fn = material_from_dxf_filename(dxf_path)
-    if _mat_fn and not part.get("normalized_material"):
-        part["normalized_material"] = _mat_fn
+    if _mat_fn:
+        _apply_field(part, "normalized_material", _mat_fn, "dxf_filename")
     return part
 
 
@@ -532,32 +1164,122 @@ def _bbox_close(a: Tuple[float, float], b: Tuple[float, float], *, tol_pct: floa
     return True
 
 
+def flat_stock_key(path: Path) -> Tuple[Optional[float], str]:
+    """(gauge, material) as the FILENAME states them — the two facts that decide what stock is
+    bought, and therefore what makes two flats the same article rather than one drawn twice."""
+    _mat = material_from_dxf_filename(path)
+    return (thickness_mm_from_dxf_filename(path), str(_mat or "").upper())
+
+
+# The member number the drawing office wrote into the filename: "…01A_-07_5MM…" -> "07".
+# ONE definition, because two passes read it for opposite purposes — the namer to call a flat
+# `01A-07`, and the clusterer to refuse to merge it with `01A-03` — and a pass that read it
+# differently would name parts it had already thrown away.
+_MEMBER_NUMBER_RE = re.compile(r"[_\s-]-(\d{1,3})(?=[_\s.-])")
+
+
+def member_number_from_filename(path: Path) -> str:
+    """"…-01A -03 5MM…" -> "03"; "" when the name carries no member number."""
+    _m = _MEMBER_NUMBER_RE.search(Path(path).stem)
+    return _m.group(1).lstrip("0") or "0" if _m else ""
+
+
 def _cluster_paths_by_bbox(paths: Sequence[Path]) -> List[Tuple[Optional[Tuple[float, float]], List[Path]]]:
-    """Group paths whose blank bounding boxes match. Each cluster = one physical flat."""
-    clusters: List[Tuple[Optional[Tuple[float, float]], List[Path]]] = []
+    """Group paths that are the SAME PHYSICAL FLAT. One cluster = one thing that gets cut.
+
+    THE BOUNDING BOX WAS NOT ENOUGH, AND IT LOST REAL PARTS. Clustering on outline alone says
+    two flats are one whenever their blanks are within tolerance — which is true of a revision
+    re-exported, and equally true of THE SAME PROFILE CUT FROM A DIFFERENT GAUGE. A folder
+    holding `…_-01_2MM_…`, `…_-02_3MM_…` and five `…_5MM_…` of one part collapsed the thin ones
+    into the thick, one member was picked per cluster and the rest discarded, and the estimate
+    nested everything at 5 mm. The estimator's words: "not picking up 2/3 mm HIA acrylic — is it
+    classing it as 5 mm".
+    
+    Two flats are one flat only when the stock they are cut from is the same stock. Gauge and
+    material come first and the outline breaks ties within them; a pack whose filenames carry
+    neither is unchanged, because then every flat shares the one empty key and this is the old
+    behaviour exactly.
+
+    AND THE SAME STOCK STILL LOST A PART. 12349-02's folder holds seven 01A flats and the
+    estimate costed six: `-03` and one of the other 5 mm members share an outline, so with
+    gauge and material equal they clustered, one was picked, and `-03` was discarded — a cut
+    file the drawing office supplied, absent from the sheet that prices the job. Two parts CAN
+    share an outline and differ entirely inside it, which is why their cut lengths differ, and
+    the bounding box cannot see that.
+
+    So the member number joins the key. `-03` and `-04` are two numbers a person wrote down,
+    and no outline comparison overrules them. Re-exports and revisions still collapse, because
+    they carry the SAME number; only a pack that numbers its flats is affected, and only to
+    keep the ones it named.
+    """
+    clusters: List[Tuple[Optional[Tuple[float, float]], List[Path], Tuple[Optional[float], str, str]]] = []
     for p in paths:
         bb = _dxf_bbox_wh(p)
+        _stock = flat_stock_key(p)
+        key = (_stock[0], _stock[1], member_number_from_filename(p))
         placed = False
-        for i, (rep, members) in enumerate(clusters):
+        for rep, members, rep_key in clusters:
+            if rep_key != key:
+                continue          # different stock, or a different member number, is never
+                                  # the same flat — whatever the outline says
             if bb and rep and _bbox_close(bb, rep):
                 members.append(p)
                 placed = True
                 break
         if not placed:
-            clusters.append((bb, [p]))
-    return clusters
+            clusters.append((bb, [p], key))
+    return [(bb, members) for bb, members, _k in clusters]
 
 
-def _orphan_child_pn(parent: Dict[str, Any], path: Path, index: int = 0) -> str:
-    """Distinct, collision-safe child PN for a parent flat with no matching child.
+def _orphan_child_pn(parent: Dict[str, Any], path: Path, index: int = 0,
+                     taken: Optional[set] = None) -> str:
+    """The name a flat with no matching BOM child should carry under its parent.
 
-    Carries a 'DXF' marker and ends in a digit so the synthesised suffix can never
-    be misread by SDI's single-letter material/identity conventions — a trailing
-    '-T' was routing the acrylic TOP PANEL to MDF/timber, and '-S' to stainless."""
+    IT USED TO BE A SYNTHESISED KEY — `<parent>-DXF<slug><index>` — and that is what put
+    `…-01A-DXF12349026900` on an estimate an estimator has to read. A hashed slug is not a part
+    number: it cannot be looked up, quoted, or matched to anything the shop holds, and four of
+    them on one sheet read as four products where the drawing has one part in several profiles.
+    
+    THE DRAWING OFFICE HAS ALREADY NUMBERED THESE. `12349-02-69-01A_-07_5MM_…` is member 07 of
+    01A, so the name is `…-01A-07`. A ladder, not a guess, and each rung is something a person
+    wrote down:
+    
+        the member number in the filename      -01A-07
+        else the gauge, which the name states  -01A-5MM
+        else the position in the folder        -01A-02
+    
+    Collision-safe against `taken`: two files that resolve to the same rung get the next one
+    down rather than overwriting each other.
+    """
     parent_pn = _normalize_part_key(parent.get("part_number", "")) or "PART"
-    stem = re.sub(r"(?i)rev[\s_]*[a-z]\b|\d+(?:[.,]\d+)?\s*mm|_+", " ", path.stem)
-    slug = re.sub(r"[^A-Z0-9]+", "", stem.upper())[:10] or "FLAT"
-    return f"{parent_pn}-DXF{slug}{index}"
+    _taken = taken if taken is not None else set()
+
+    def _free(candidate: str) -> Optional[str]:
+        _k = _normalize_part_key(candidate)
+        if _k and _k not in _taken:
+            _taken.add(_k)
+            return candidate
+        return None
+
+    # The member number the drawing office gave it: "...01A_-07_5MM..." -> 07
+    _m = re.search(r"[_\s-]-(\d{1,3})(?=[_\s.-])", path.stem)
+    # ...or joined straight to the lettered code: "12173-03-01J-1_25mm" -> piece 01.
+    _num = _m.group(1) if _m else _member_suffix_of_flat(path)
+    if _num:
+        _hit = _free(f"{parent_pn}-{int(_num):02d}" if len(_num) < 2 else f"{parent_pn}-{_num}")
+        if _hit:
+            return _hit
+    _thk = thickness_mm_from_dxf_filename(path)
+    if _thk:
+        _hit = _free(f"{parent_pn}-{_thk:g}MM".replace(".", ""))
+        if _hit:
+            return _hit
+    _n = index + 1
+    while True:
+        _hit = _free(f"{parent_pn}-{_n:02d}")
+        if _hit:
+            return _hit
+        _n += 1
 
 
 def _apply_and_report(part: Dict[str, Any], chosen: Path, report: Dict[str, Any], matched_keys: set, *, reason: str = "matched") -> None:
@@ -579,6 +1301,285 @@ def _apply_and_report(part: Dict[str, Any], chosen: Path, report: Dict[str, Any]
     )
 
 
+def _stock_key_of_flat(path: Path) -> Tuple[Optional[float], Optional[str]]:
+    """The (thickness, material) a flat's own filename declares — the stock it is cut from."""
+    thickness = None
+    if _parse_filename is not None:
+        try:
+            thickness = _parse_filename(path).get("thickness_mm")
+        except Exception:                                        # noqa: BLE001
+            thickness = None
+    try:
+        material = material_from_dxf_filename(path)
+    except Exception:                                            # noqa: BLE001
+        material = None
+    return (round(float(thickness), 3) if thickness else None,
+            str(material).upper() if material else None)
+
+
+def flats_are_different_pieces(paths: Sequence[Path]) -> bool:
+    """Are these flats DIFFERENT PARTS, or competing revisions of one?
+
+    THE ASSUMPTION THAT COST 12349-02 SIX OF ITS SEVEN ACRYLIC PIECES.
+    -----------------------------------------------------------------
+    When several distinct blanks resolve to one part number, the merge splits them onto child
+    detail parts — but only where numbered children exist in scope. 01A has none: SDI exports
+    the pieces of a bonded fabrication as `...-01A_-01_2MM_...` through `...-01A_-07_5MM_...`,
+    which is an export SUFFIX, not a child part number. So it fell to the other branch, whose
+    comment reads "these are competing variants for a single leaf part (e.g. a stale revision
+    left in the folder) — pick the best and flag".
+
+    That is right about stale revisions and wrong about this. 01A came through as one
+    770 x 135 x 5 strip: £11.43 of material and £1.96 of laser for a bonded box made of seven
+    pieces, which is an under-charge nobody reading the sheet could see, because the six that
+    were dropped left no trace on it.
+
+    THE TELL IS IN THE FILENAMES THE ENGINE ALREADY PARSES. A stale revision of a part is the
+    same part — same stock, same gauge, a slightly different outline. 01A's flats declare
+    2mm, 3mm and 5mm. Nothing is a revision of itself in a different thickness: that is a lens,
+    a comb and five 5mm parts, and they are bonded together.
+
+    So: disagree on the stock they are cut from, and they are pieces. Agree, and today's
+    pick-the-best behaviour stands, which is what keeps a stale revision from becoming a
+    phantom part on every existing job.
+    """
+    keys = {_stock_key_of_flat(p) for p in paths}
+    keys.discard((None, None))
+    if len({k for k in keys if k[0] is not None}) > 1 or \
+            len({k[1] for k in keys if k[1] is not None}) > 1:
+        return True
+
+    # AND THE WELDMENT, WHICH THE STOCK TEST CANNOT SEE.
+    #
+    # Disagreeing about stock proves pieces, and 01A proved it three times over — 2mm, 3mm and
+    # 5mm. A WELDMENT is the case it misses: 03M's tap and its two channels are all 1.5mm mild
+    # steel, so the stock keys agree and the pieces read as revisions of one another. Tim
+    # splits them (TAP 1145x358, CHANNELS 145x23 x2); we costed the tap alone.
+    #
+    # The suffix itself is the tell, and it is SDI's own export convention. A revision is
+    # marked as one — "11908-21-01J_9mm MDF+ LAM_REV[A].dxf" — while the members of a
+    # fabrication are numbered "_-01", "_-02", "_-07". Two files for one part number carrying
+    # DIFFERENT member numbers are different members; that is what the numbers are for. A
+    # stale revision left in the folder does not acquire one.
+    #
+    # Kept as the second test rather than the first so nothing that already worked changes:
+    # where the stock disagrees, the answer was already yes.
+    members = {m for m in (_member_suffix_of_flat(p) for p in paths) if m is not None}
+    return len(members) > 1
+
+
+_MEMBER_SUFFIX = re.compile(r"_-(\d{1,2})(?:[_.]|$)")
+
+
+def _member_suffix_of_flat(path: Path) -> Optional[str]:
+    """The `_-NN` member number SDI's exporter puts on each piece of a fabrication.
+
+    Anchored on the underscore-hyphen pair, so an ordinary part number with hyphens in it
+    ("12349-02-69-01A") cannot supply one, and a revision marker ("_REV[A]") has none.
+    """
+    m = _MEMBER_SUFFIX.search(str(getattr(path, "name", path)))
+    if m:
+        return m.group(1)
+    # SDI's other spelling: the piece number joined straight to a lettered part code —
+    # "12173-03-01J-1_25mm MDF", "-01J-2_…" (the two layers of one base).
+    try:
+        _pn = part_number_from_dxf_path(Path(str(getattr(path, "name", path))))
+    except Exception:                                                # noqa: BLE001
+        _pn = None
+    mp = _PIECE_OF_PART.match(str(_pn or "").upper())
+    return mp.group("n") if mp else None
+
+
+# ── A NUMBERED PIECE OR AN ITEM OF ITS OWN ──────────────────────────────────────────────
+# "<part>-<n>" reads as piece n of <part> (12173-03-01J-1 / -2, the base's two 25 mm layers).
+# Another drawing office writes the same suffix for an ITEM: a family member <part>-2 that has
+# its own row, its own record or its own model component. The reading is taken only where
+# nothing in the job names such an item; where something does, the file is not attached and a
+# person says which (D-382 review, 1 Oct). Only what was checked is claimed: the job's parts
+# and its parts-list rows here; the model is read after this merge and is checked by
+# recheck_dxf_pieces_against_model.
+_SIZE_IN_WORDS = re.compile(
+    r"(\d+(?:\.\d+)?)\s*[xX\u00d7]\s*(\d+(?:\.\d+)?)(?:\s*[xX\u00d7]\s*(\d+(?:\.\d+)?))?\s*mm\b",
+    re.I)
+
+
+def _family_items(summary: Mapping[str, Any], parts_by_key: Mapping[str, Dict[str, Any]],
+                  family_key: str) -> List[Dict[str, Any]]:
+    """Every <family>-<m> (m numeric) this job names as an item: a part record (not one this
+    merge minted as a piece) or a parts-list row's code."""
+    fam = re.compile(rf"^{re.escape(family_key)}-(\d{{1,2}})$")
+    out: List[Dict[str, Any]] = []
+    for k, p in parts_by_key.items():
+        m = fam.match(k)
+        if m and not p.get("dxf_minted_piece_of"):
+            out.append({"n": int(m.group(1)), "code": str(p.get("part_number") or k), "key": k,
+                        "where": "part"})
+    for r in ((summary.get("document_analysis") or {}).get("bom_rows") or []) \
+            if isinstance(summary, Mapping) else []:
+        if not isinstance(r, Mapping):
+            continue
+        for c in {r.get("part_number"), r.get("printed_code")} - {None, ""}:
+            m = fam.match(_normalize_part_key(str(c)))
+            if m and not any(o["key"] == _normalize_part_key(str(c)) for o in out):
+                out.append({"n": int(m.group(1)), "code": str(c),
+                            "key": _normalize_part_key(str(c)), "where": "row",
+                            "parent": str(r.get("bom_parent") or "")})
+    return out
+
+
+def _listed_pieces(summary: Mapping[str, Any], parent: Mapping[str, Any],
+                   paths: Sequence[Path]) -> Dict[str, Any]:
+    """The parent's OWN parts list sizing these flats: uncoded rows under that parent whose two
+    largest figures match a flat's blank (within max(2 mm, 2%)) and whose third matches the
+    filename's gauge (within 0.5 mm). 12173-03-01J's table lists two "626 x 626 x 25 mm" rows
+    for its two 626 x 626, 25 mm MDF layers. Item numbers alone corroborate nothing: any parent
+    whose list has n rows has items 1..n."""
+    pkey = _normalize_part_key(parent.get("part_number") or "")
+    rows = [r for r in ((summary.get("document_analysis") or {}).get("bom_rows") or [])
+            if isinstance(r, Mapping)
+            and _normalize_part_key(str(r.get("bom_parent") or "")) == pkey
+            and r.get("bom_parent_known") is not False
+            and not str(r.get("part_number") or "").strip()
+            and _SIZE_IN_WORDS.search(str(r.get("description") or ""))]
+    free, hits = list(rows), []
+    for p in paths:
+        bb = _dxf_bbox_wh(Path(p))
+        gauge = flat_stock_key(Path(p))[0]
+        for r in list(free):
+            fig = sorted(float(x) for x in _SIZE_IN_WORDS.search(str(r["description"])).groups()
+                         if x)
+            if bb and len(fig) >= 2 and all(abs(a - b) <= max(2.0, 0.02 * b)
+                                            for a, b in zip(sorted(bb), fig[-2:])) \
+                    and (gauge is None or len(fig) < 3 or abs(fig[0] - gauge) <= 0.5):
+                hits.append(r)
+                free.remove(r)
+                break
+    if paths and len(hits) == len(paths):
+        return {"rows": [str(r.get("description")) for r in hits], "listed": len(rows)}
+    return {"rows": [], "listed": len(rows)}
+
+
+def _ask_dxf_identity(part: Dict[str, Any], paths: Sequence[Path], against: Sequence[str],
+                      report: Dict[str, Any], costed_as: Sequence[str] = (),
+                      source: str = "drawing_job_merge.augment_summary_with_dxf") -> None:
+    """One question naming the files and the evidence; money only where the pieces are costed."""
+    names = [Path(p).name for p in paths]
+    pn = str(part.get("part_number") or "")
+    costed = [c for c in costed_as if c]
+    _reading = (f"costed as numbered piece{'s' if len(costed) > 1 else ''} of {pn} "
+                f"({', '.join(costed)})" if costed
+                else f"NOT attached — {pn} keeps the geometry its drawing gives")
+    q = {"issue": (f"Is {names[0]} a numbered piece of {pn}, or the flat of an item of its own?"
+                   if len(names) == 1 else
+                   f"Are {', '.join(names[:-1])} and {names[-1]} numbered pieces of {pn}, or "
+                   f"flats of items of their own?"),
+         "assumption": f"{_reading}; {'; '.join(against)}",
+         "action": (f"a piece: confirm, and each piece is costed under {pn}; an item of its "
+                    f"own: name it, so its flat prices that item only"),
+         "source": source,
+         "subject": "dxf_identity",
+         "gbp_parts": list(costed)}
+    qs = part.setdefault("manufacturing_questions", [])
+    if isinstance(qs, list) and not any(isinstance(x, dict) and x.get("issue") == q["issue"]
+                                        for x in qs):
+        qs.append(q)
+    part.setdefault("review_flags", []).append(
+        f"DXF {', '.join(names)} {'COSTED AS PIECES' if costed else 'NOT ATTACHED'}: the name "
+        f"reads as a numbered piece of {pn}, but {'; '.join(against)}. A price is only for the "
+        f"exact item — say which it is")
+    report["ambiguous_dxf"].append({
+        "part_number": pn, "candidates": [str(p) for p in paths],
+        "reason": "numbered_piece_or_separate_item_unresolved", "evidence": list(against)})
+
+
+def _flag_dxf_pieces(summary: Mapping[str, Any], part: Dict[str, Any], paths: Sequence[Path],
+                     minted: Mapping[str, str], report: Dict[str, Any],
+                     parts_by_key: Mapping[str, Dict[str, Any]]) -> None:
+    """Say the piece reading on the part and on each piece it minted, with what was checked."""
+    pn = str(part.get("part_number") or "")
+    listed = _listed_pieces(summary, part, paths)
+    _rows_read = bool((summary.get("document_analysis") or {}).get("bom_rows"))
+    recs: List[Dict[str, Any]] = []
+    for p in paths:
+        n = _member_suffix_of_flat(Path(p)) or "?"
+        costed = minted.get(Path(p).name)
+        recs.append({"dxf": Path(p).name, "piece": n, "costed_as": costed,
+                     "corroborated_by": list(listed["rows"])})
+        checked = (f"no part of this job and no row of its parts lists is named {pn}-{n}"
+                   if _rows_read else
+                   f"no part of this job is named {pn}-{n} (no parts-list rows were read to "
+                   f"check)")
+        part.setdefault("review_flags", []).append(
+            f"DXF {Path(p).name} read as numbered piece {n} of {pn}"
+            + (f", costed as {costed}" if costed and costed != pn else "")
+            + f": {checked}. "
+            + (f"Its own parts list sizes the pieces: {'; '.join(listed['rows'])}."
+               if listed["rows"] else
+               "Its own parts list does not size them — if the suffix marks a variant rather "
+               "than a piece, correct the match.")
+            + (" Only one numbered file was supplied; if the part has more pieces their flats "
+               "are missing." if len(paths) == 1 else ""))
+    part["dxf_pieces"] = recs
+    for _name, _code in minted.items():
+        if not _code or _normalize_part_key(_code) == _normalize_part_key(pn):
+            continue
+        _piece = parts_by_key.get(_normalize_part_key(_code))
+        if _piece is not None:
+            _piece["dxf_minted_piece_of"] = pn
+            _piece.setdefault("review_flags", []).append(
+                f"numbered piece of {pn}, read from its DXF name {_name} — see {pn}")
+            # A PIECE IS A CHILD OF ITS PART, OR THE PRODUCT NEVER REACHES IT (D-384). The
+            # 1 Oct 21:19 book minted 12173-03-01J-01 and -02 (the base's two 25 mm MDF layers)
+            # and then listed them "not linked to 12173-02-GA, so not priced": the piece
+            # records existed, carried the flats, and hung on nothing — so the base had labour
+            # and no board. The part that owns the pieces names them as its children, through
+            # the same field the description rule and the route compiler already read.
+            _kids = part.setdefault("assembly_children", [])
+            if isinstance(_kids, list) and not any(
+                    _normalize_part_key(k) == _normalize_part_key(_code) for k in _kids):
+                _kids.append(_code)
+            part["is_assembly_parent"] = True
+    # DIFFERING PIECES NOBODY SIZED ARE COSTED AND ASKED, as two gauges on one part number are
+    # (TWO GAUGES ON ONE PART NUMBER, below): withholding them is money removed on a doubt.
+    if len(paths) > 1 and not listed["rows"]:
+        _shapes = set()
+        for p in paths:
+            bb = _dxf_bbox_wh(Path(p))
+            _shapes.add((tuple(round(v) for v in bb) if bb else None, flat_stock_key(Path(p))))
+        if len(_shapes) > 1:
+            _ask_dxf_identity(part, paths, [
+                f"the numbered flats differ ({len(_shapes)} different blanks or stocks) and "
+                f"{pn}'s own parts list does not size them"], report,
+                costed_as=sorted({c for c in minted.values() if c}))
+
+
+def recheck_dxf_pieces_against_model(parts: Sequence[Dict[str, Any]],
+                                     model_codes: Iterable[Any]) -> List[str]:
+    """After the model is read: a costed piece <part>-<n> whose number the model holds as a
+    component of its own (<part>-<n> or <part>-0<n>) is asked about, never detached — the
+    merge ran before the model and could not check it."""
+    codes = {_normalize_part_key(str(c)) for c in (model_codes or ()) if c}
+    asked: List[str] = []
+    for p in parts or ():
+        if not isinstance(p, dict):
+            continue
+        pkey = _normalize_part_key(p.get("part_number") or "")
+        for pc in (p.get("dxf_pieces") or []):
+            if not isinstance(pc, Mapping) or not str(pc.get("piece") or "").isdigit():
+                continue
+            fam = re.compile(rf"^{re.escape(pkey)}-0*{int(pc['piece'])}$")
+            hit = sorted(c for c in codes if fam.match(c))
+            if hit:
+                _ask_dxf_identity(p, [Path(str(pc.get("dxf")))],
+                                  [f"the model holds a component {hit[0]}"],
+                                  {"ambiguous_dxf": []},
+                                  costed_as=[str(pc.get("costed_as") or p.get("part_number"))],
+                                  source="drawing_job_merge.recheck_dxf_pieces_against_model")
+                if p.get("part_number") not in asked:
+                    asked.append(str(p.get("part_number")))
+    return asked
+
+
 def _split_parent_flats_to_children(
     parent: Dict[str, Any],
     clusters: List[Tuple[Optional[Tuple[float, float]], List[Path]]],
@@ -587,17 +1588,23 @@ def _split_parent_flats_to_children(
     summary: Dict[str, Any],
     report: Dict[str, Any],
     matched_keys: set,
+    *,
+    bind_children: bool = True,
 ) -> None:
     """Several DISTINCT blanks resolved to one (parent/assembly) part — e.g. descriptor
     DXFs 04_TOP_PANEL / 04_SIDE_PANEL both reading parent PN ...-04. Bind each blank to
     the child detail part whose dimensions match; promote a distinct part if no child is
-    in scope. Never collapse two different blanks onto one part."""
+    in scope. Never collapse two different blanks onto one part.
+
+    bind_children=False: the flats are NUMBERED PIECES of the parent and are each minted as
+    <parent>-NN. A numbered piece is never bound to a child by elimination — on a part with a
+    handed variant <part>-H, piece 1 landed on the hand and was mirrored back onto the base."""
     parent_key = _normalize_part_key(parent.get("part_number", ""))
     children = [
         p
         for k, p in parts_by_key.items()
         if k != parent_key and k.startswith(parent_key + "-") and not k.endswith("-GA")
-    ]
+    ] if bind_children else []
     used: set = set()
 
     # Bind the most descriptor-specific flats FIRST. With no child dims to match on, an
@@ -614,6 +1621,25 @@ def _split_parent_flats_to_children(
             default=0,
         )
     ordered = sorted(clusters, key=_cluster_overlap, reverse=True)
+    # Names already in use anywhere on the job, so a member number can never overwrite a real
+    # part or a sibling flat that resolved to the same rung.
+    _taken_keys = {_normalize_part_key(p.get("part_number", "")) for p in parts}
+    _taken_keys.discard("")
+    # ── TWO GAUGES ON ONE PART NUMBER IS A DRAWING QUESTION, NOT A SILENT DROP ──────────
+    # A parent whose folder holds flats in more than one gauge is either a part made from two
+    # thicknesses or a part whose alternates were left in the folder. The filenames cannot tell
+    # those apart and neither can we, so BOTH are costed and the estimator is asked. Dropping
+    # the thin ones because we were unsure is how a whole pack came to read 5 mm.
+    _gauges_seen = {g for g, _m in (flat_stock_key(_p) for _cl in clusters for _p in _cl[1])
+                    if g is not None}
+    if len(_gauges_seen) > 1:
+        _g = ", ".join(f"{x:g} mm" for x in sorted(_gauges_seen))
+        parent.setdefault("review_flags", []).append(
+            f"TWO GAUGES ON ONE PART NUMBER: the flats for "
+            f"{parent.get('part_number')} are cut from {_g}. Both are costed — confirm every "
+            f"gauge is made, or say which files are alternates")
+        report.setdefault("multi_gauge_parents", []).append(
+            {"part_number": parent.get("part_number"), "gauges_mm": sorted(_gauges_seen)})
     for _ci, (rep_bbox, cl_paths) in enumerate(ordered):
         chosen = _pick_best_flat(parent, cl_paths) if len(cl_paths) > 1 else cl_paths[0]
         target = None
@@ -646,15 +1672,14 @@ def _split_parent_flats_to_children(
         if target is not None:
             used.add(id(target))
             _mat_fn = material_from_dxf_filename(chosen)
-            if _mat_fn and (
-                not target.get("normalized_material")
-                or str(target.get("normalized_material") or "").strip().upper() in {"MDF", "NONE", ""}
-            ):
-                # DXF filename material is authoritative over a missing/MDF-bleed child material.
-                target["normalized_material"] = _mat_fn
+            if _mat_fn:
+                # Submitted, not gap-filled — see the note at the flat-application site.
+                _apply_field(target, "normalized_material", _mat_fn, "dxf_filename")
             _apply_and_report(target, chosen, report, matched_keys, reason=bind_reason)
+        elif not dxf_may_mint_a_part(chosen, report):
+            pass                          # a drawing of a part is not a part (D-406)
         else:
-            pn = _orphan_child_pn(parent, chosen, _ci)
+            pn = _orphan_child_pn(parent, chosen, _ci, _taken_keys)
             orphan = _create_orphan_dxf_part(summary, pn, chosen)
             orphan["part_number"] = pn
             orphan.setdefault("review_flags", []).append("distinct_child_flat_promoted_by_geometry")
@@ -698,6 +1723,1607 @@ def _stamp_assembly_parents(parts: List[Dict[str, Any]]) -> None:
             flags = p.setdefault("review_flags", [])
             if "assembly_parent_rolled_up_to_children" not in flags:
                 flags.append("assembly_parent_rolled_up_to_children")
+    _stamp_described_assemblies(parts)
+    _stamp_arrangement_parents(parts)
+
+
+def _stamp_arrangement_parents(parts: List[Dict[str, Any]]) -> None:
+    """A parent whose children include ANOTHER assembly parent is an ARRANGEMENT — a
+    general-arrangement node whose immediate members are themselves assemblies.
+
+    WHY THE DISTINCTION EXISTS. 12349-02's GA record carried a Glue labour row ("Glue —
+    6mm TIMBER (12349-02-69)"), minted from the word GLUE in the arrangement drawing's own
+    notes — and the estimator's first question was "What op is this for?", because nobody
+    can say. An arrangement drawing's notes describe its MEMBERS: the gluing they call up
+    is the members' work (the acrylic route books bonding on the bonded assembly, the
+    timber allowance books glue on the timber leaves), so the same word charged on the
+    arrangement is the same work charged twice, against a node that is only a drawing.
+
+    The predicate is deliberately NOT "the root": a weldment that tops its own job
+    (7332-01-101 STAND WELD ASSY over leaf plates) is a root and genuinely performs its
+    joining, and a bonded acrylic assembly (12349-02-69-01A over its seven flats) keeps
+    its UV bond for the same reason. Both have only LEAVES below them. What marks a node
+    as paper rather than a bench is having an ASSEMBLY below it.
+
+    Children are recognised the two ways parents are stamped: by part-number prefix, and
+    by a described-assembly's recorded children."""
+    keyed = [(_normalize_part_key(p.get("part_number", "")), p)
+             for p in parts if isinstance(p, dict)]
+    parents = [(k, p) for k, p in keyed
+               if k and (p.get("is_assembly_parent") or p.get("is_sub_assembly"))]
+    if len(parents) < 2:
+        return
+    parent_keys = {k for k, _ in parents}
+    for k, p in parents:
+        prefix = k + "-"
+        child_ids = {_normalize_part_key(c) for c in (p.get("assembly_children") or [])}
+        if (any(ok != k and ok.startswith(prefix) for ok in parent_keys)
+                or (child_ids & parent_keys)):
+            p["is_arrangement_parent"] = True
+            flags = p.setdefault("review_flags", [])
+            _msg = ("arrangement node — its members include another assembly, so its "
+                    "drawing's process notes describe THEM; note-minted process work is "
+                    "not charged here")
+            if _msg not in flags:
+                flags.append(_msg)
+            # THE OP LEAVES THE RECORD, NOT ONLY THE COSTING. The route-decision report is
+            # compiled from textual_operations; a glue left on the record would print
+            # "required" beside a sheet with no glue row, and a report that contradicts
+            # the sheet it accompanies is worse than either alone. Same shape as
+            # strip_leaf_operations: removed, recorded, flagged — never silent.
+            _removed: List[str] = []
+            for _field in ("textual_operations", "inferred_operations"):
+                _vals = p.get(_field)
+                if isinstance(_vals, list) and any(
+                        str(o).strip().lower() == "glue" for o in _vals):
+                    p[_field] = [o for o in _vals                       # precedence: direct-write ok — removes ops, adds no evidence
+                                 if str(o).strip().lower() != "glue"]
+                    if "glue" not in _removed:
+                        _removed.append("glue")
+            if _removed:
+                p.setdefault("removed_operations", []).extend(_removed)
+
+
+_WITH_SPLIT = re.compile(r"\s+WITH\s+", re.IGNORECASE)
+_AND_SPLIT = re.compile(r"\s*(?:,|\s\+\s|\bAND\b)\s*", re.IGNORECASE)
+
+
+def _desc_key(text: Any) -> str:
+    """A description reduced to comparable words. Punctuation and spacing vary between the
+    BOM table and the title block; the words do not."""
+    return " ".join(re.sub(r"[^A-Z0-9 ]+", " ", str(text or "").upper()).split())
+
+
+def _singular(text: str) -> str:
+    """"PEM STUDS" -> "PEM STUD". The BOM names one of a thing; the parent names several."""
+    return re.sub(r"S$", "", text) if text.endswith("S") and not text.endswith("SS") else text
+
+
+def _stamp_described_assemblies(parts: List[Dict[str, Any]]) -> None:
+    """"<A> WITH <B>" is A with B fitted — an assembly — when A and B are BOTH on this BOM.
+
+    JOB 11350 CHARGED ONE BLANK TWICE. "11350-01-101 TICKET STRIP BAR WITH PEM STUDS" was
+    routed as a fabricated leaf: its own Laser row, its own Fold row, its own material and
+    its own share of powder — on top of "11350-01-01 TICKET STRIP BAR", which is the same
+    physical bar and already carries all of it. It has no DXF, no model and no blank, so its
+    2.5mm gauge came from an LLM inference and both operations priced at default throughput.
+
+    The numbering rule above cannot see it: -101 is not a prefix-parent of -01, and it has
+    no numbered children at all. The hierarchy simply is not in the part numbers on this
+    pack — but it IS on the drawing, written the way drawings write it.
+
+    THE EVIDENCE IS THAT BOTH HALVES ARE LINES ON THIS BOM. "BAR WITH PEM STUDS" claims
+    nothing on its own: "PANEL WITH CUTOUTS" is a panel, not an assembly, and reading it as
+    one would delete real fabrication. So the claim requires the base description to match
+    another line EXACTLY, and every named component to be a line here too. A cut-out is not
+    a BOM line and never will be; a PEM stud is, because somebody has to buy it.
+
+    Refused where the part has a flat of its own — a part somebody exported a blank for is a
+    part somebody cuts, whatever its description says. Same guard as the numbering rule, and
+    the same direction of safety: a missed assembly costs a visible double-count an estimator
+    can strike out, a wrongly claimed one silently deletes work the job actually does.
+    """
+    records = [p for p in parts if isinstance(p, dict)]
+    by_desc: Dict[str, Dict[str, Any]] = {}
+    for p in records:
+        _k = _desc_key(p.get("description"))
+        if _k:
+            by_desc.setdefault(_k, p)
+
+    from part_identity import is_placeholder_identity, synthesise_bought_in_code
+
+    def _child_identity(record: Dict[str, Any]) -> str:
+        """The code the GRAPH will know this child by, not the cell the drawing printed.
+
+        A drawing leaves the code blank for standard hardware, so this recorded "-" as
+        11350-01-101's child. clean_part_number drops that, the edge vanishes, and
+        BI-PEMSTUD — which the compiler synthesises from the same description moments later
+        — arrives with no parent. Two names for one row, and the hierarchy fell between
+        them. Same shared rule as the compiler, so both derive the same code.
+        """
+        _pn = record.get("part_number")
+        if is_placeholder_identity(_pn):
+            return synthesise_bought_in_code(record.get("description"), _pn) or ""
+        return str(_pn or "")
+
+    for part in records:
+        # REPAIR, NOT JUST DISCOVER. The hardware rows arrive after this rule first runs, so
+        # the first pass records a placeholder and the second used to skip — "already a
+        # parent" — leaving the broken edge in place forever. A parent whose children cannot
+        # be resolved is re-derived; one whose children are all real is left alone.
+        _prior = part.get("assembly_children")
+        _needs_repair = isinstance(_prior, list) and any(
+            not _child_identity({"part_number": k}) or is_placeholder_identity(k)
+            for k in _prior)
+        if part.get("is_assembly_parent") and not _needs_repair:
+            continue
+        if "dxf" in str(part.get("geometry_source") or "").lower():
+            continue
+        if (part.get("normalized_geometry") or {}).get("blank_length_mm"):
+            continue
+        _pieces = _WITH_SPLIT.split(_desc_key(part.get("description")), maxsplit=1)
+        if len(_pieces) != 2:
+            continue
+        _base_desc, _rest = _pieces[0].strip(), _pieces[1].strip()
+        _base = by_desc.get(_base_desc)
+        if _base is None or _base is part:
+            continue
+
+        # EVERY named component must be a line on this BOM, or the phrase is describing a
+        # feature rather than listing parts.
+        _components: List[Dict[str, Any]] = []
+        _names = [n.strip() for n in _AND_SPLIT.split(_rest) if len(n.strip()) >= 3]
+        if not _names:
+            continue
+        for _name in _names:
+            _want = _singular(_name)
+            _hit = next((p for k, p in by_desc.items()
+                         if p is not part and p is not _base
+                         and (k == _want or k.endswith(" " + _want))), None)
+            if _hit is None:
+                _components = []
+                break
+            _components.append(_hit)
+        if not _components:
+            continue
+
+        _child_ids = [_child_identity(_base)] + [_child_identity(c) for c in _components]
+        if not all(_child_ids):
+            continue          # a component whose identity nobody can derive is not an edge
+        part["is_assembly_parent"] = True
+        part["assembly_children"] = _child_ids
+        flags = part.setdefault("review_flags", [])
+        if "assembly_parent_rolled_up_to_children" not in flags:
+            flags.append("assembly_parent_rolled_up_to_children")
+        if any("ASSEMBLY FROM THE DESCRIPTION" in str(f) for f in flags):
+            continue          # said once; a repair pass does not say it again
+        flags.append(
+            f"ASSEMBLY FROM THE DESCRIPTION: '{part.get('description')}' names "
+            f"{_base.get('part_number')} plus "
+            f"{', '.join(str(c.get('part_number')) for c in _components)}, and every one of "
+            f"them is a line on this BOM — so this is those parts fitted together, not a "
+            f"second blank. Its material and fabrication labour belong to them; only "
+            f"assembly work belongs here.")
+
+
+def _num(value: Any) -> Optional[float]:
+    """A positive finite number, or None. A zero blank is not a blank."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if f == f and abs(f) != float("inf") and f > 0 else None
+
+
+def _is_blank(value: Any) -> bool:
+    """No-data. An explicit 0 and an explicit False are VALUES, not absence — a measured
+    zero bend count is the whole basis of the fold rule-out, and overwriting it here would
+    give a flat part its mirror's folds."""
+    return value is None or (isinstance(value, (str, list, tuple, dict)) and not value)
+
+
+_MIRROR_GEOMETRY_FIELDS = ["blank_length_mm", "blank_width_mm", "blank_area_mm2",
+                           "perimeter_mm", "weight_kg", "weight_g"]
+_MIRROR_TOP_FIELDS = ["overall_length_mm", "overall_width_mm", "blank_length_mm",
+                      "blank_width_mm", "dxf_weight_g", "dxf_weight_kg", "bend_count_dxf",
+                      "flange_lengths_mm", "bend_positions_mm", "symmetric_flanges",
+                      "fold_count_textual", "flat_pattern_detected"]
+
+
+def _own_number_key(part_number: Any) -> str:
+    """A part indexed under the number IT carries, hand suffix and all.
+
+    NOT normalize_part_code, which strips the hand: "11650-04-01A-HANDED" normalises to
+    "11650-04-01A", the same key as its base. That is the right answer to "are these the
+    same article" and the wrong one for an index, because the twin then OVERWRITES its base
+    and the mirror lookup returns the twin itself.
+
+    ONE FUNCTION, CALLED BY BOTH ENDS. The index and the lookup normalising differently is
+    exactly what happened: they agreed for every base and disagreed for every twin, and
+    nothing in the code said they were meant to match, so apply_mirror_geometry was a silent
+    no-op for every "-HANDED" pack ever run through it while working perfectly for "MIR" and
+    "Mirror<code>", which do not collapse.
+    """
+    return re.sub(r"\s+", "", str(part_number or "")).upper()
+
+
+_STOCK_KEY = ("normalized_material", "normalized_thickness_mm")
+
+
+def handed_pairs(parts: List[Dict[str, Any]]):
+    """Every (hand, base) this job holds both halves of.
+
+    ONE NOTION OF IDENTITY, EXPRESSED ONCE. `mirror_base` says what a hand is a hand OF and
+    `_own_number_key` says what a part is called; both callers here use those two functions
+    and nothing else. A second way of deciding what pairs with what would be a dual path in
+    the very rule that exists to stop records drifting apart.
+    """
+    if not isinstance(parts, list):
+        return
+    from part_code_conventions import mirror_base
+    by_key = {_own_number_key(p.get("part_number")): p
+              for p in parts if isinstance(p, dict)}
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        # The code's own marker, else the sheet's note (stamp_mirror_notes): both say the
+        # same thing, and the guards below treat them the same.
+        base_pn = _mirror_base_of(part)
+        if not base_pn:
+            continue
+        base = by_key.get(_own_number_key(base_pn))
+        if base is None or base is part:
+            continue
+        yield part, base
+
+
+# A COPY OF THE OTHER HAND IS NOT A SECOND OPINION. Mirroring exists to fill what a hand is
+# missing, and what it writes is the base's own reading wearing a different source name. Count
+# it as independent and a wrong base becomes unanimous: 11650-04-01A's model said ABS, the
+# mirror carried ABS onto the hand, and the pair then showed two sources agreeing where there
+# was one reading seen twice.
+_DERIVED_SOURCES = {"mirror_of_measured"}
+
+# A READING THAT NAMES THIS SPECIFIC PART, which a mirror must not overwrite.
+#
+# The measured and model sources (dxf 80, solidworks_api 90, estimator_confirmed 100) already
+# beat the mirror on rank, so they need no protection here. The one source ranked BELOW the
+# mirror that is still unambiguously about THIS hand is the export filename: "11650-04-01A_2MM
+# PETG_REVG.DXF" names the exact part it is cut from, so a mirror copying the OTHER hand cannot
+# claim to know better.
+#
+# Assembly-page text (drawing_deterministic / title_block on an assembly-only hand) is
+# DELIBERATELY not here. An assembly page lists many parts, and text scraped near one hand may
+# name the material of another; the existing rule that a mirror overwrites that is correct and
+# is kept. So this protects the hand's own cut file, and nothing that could belong to a
+# neighbour on a shared sheet.
+_A_READING_OF_THIS_SPECIFIC_PART = {"dxf_filename"}
+
+# THE FILE THE CNC IS ACTUALLY DRIVEN FROM. When a handed pair splits one-for-one — one hand's
+# material read from the exported flat, the other's from a bare model property — the readings
+# are level on COUNT but not on authority. The laser cuts the issued DXF, not the SolidWorks
+# library material, which is often a stale default (the ABS-vs-PETG problem this file exists
+# for). So on an otherwise even split the export breaks the tie, the pair takes one stock key,
+# and the conflict is kept as a loud proviso rather than left as two materials on one article.
+#
+# dxf_filename names the material on the cut file; dxf / dxf_flat_pattern are the geometry read
+# from it. All three ARE the manufacturing export. A model or drawing-text source is not, so a
+# pair split model-against-model, or export-against-export, is NOT broken here — that is a real
+# disagreement a person settles, and inventing a winner would hide it.
+_CNC_CUT_FILE_SOURCES = {"dxf_filename", "dxf", "dxf_flat_pattern"}
+
+
+def _independent_support(record: Dict[str, Any], field: str, value: Any) -> set:
+    return {s for s in source_precedence.support_for(record, field, value)
+            if s not in _DERIVED_SOURCES}
+
+
+def _pool_pair_evidence(hand: Dict[str, Any], base: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Ask the quorum again with BOTH hands' readings on the table.
+
+    11650-04 IS WHY THIS EXISTS, AND THE DIAGNOSTIC SPELLED IT OUT.
+
+        11650-04-01A          ABS from the model      AGAINST IT: 1 source said PETG - drawing_deterministic
+        11650-04-01A-HANDED   ABS from the mirror     AGAINST IT: 1 source said PETG - dxf_filename
+
+    One panel. Two records. The title block read PETG on one and the export the laser cuts from
+    read PETG on the other — two independent readings of the SAME article — and each record was
+    left holding a lone dissenter against a model, one short of the quorum, twice.
+
+    The corroboration rule was right and could not see half its own evidence, because a handed
+    pair is one commercial part and arbitration was running per record. So the readings are
+    pooled first and the quorum asked once for the pair; only then are the resolved keys
+    compared, which is what the rest of this function does.
+
+    DERIVED SOURCES DO NOT VOTE. The mirror had already carried the base's ABS onto the hand,
+    so counting `mirror_of_measured` would have shown two sources agreeing where there was one
+    reading seen twice — and it is the base's reading, the very one under challenge.
+
+    Applies to BOTH records or neither. Half a pair moved is the split this file exists to end.
+    """
+    moved: List[Dict[str, Any]] = []
+    for field in _STOCK_KEY:
+        held = {id(r): source_precedence.value_of(r, field) for r in (hand, base)}
+        if any(v is source_precedence.MISSING for v in held.values()):
+            continue
+        # Every value either hand has heard named, and who named it, across the pair.
+        candidates: Dict[str, Any] = {}
+        support: Dict[str, set] = {}
+        for rec, tag in ((hand, "hand"), (base, "base")):
+            seen = [source_precedence.value_of(rec, field)]
+            seen += [e.get("value") for e in source_precedence.displaced_values(rec, field)]
+            seen += [e.get("value") for e in
+                     ((rec.get("_agreed") or {}).get(field) or [])]
+            for v in seen:
+                if v is source_precedence.MISSING or v is None:
+                    continue
+                key = source_precedence._norm_value_key(v)
+                candidates.setdefault(key, v)
+                support.setdefault(key, set()).update(
+                    f"{tag}:{s}" for s in _independent_support(rec, field, v))
+        if not support:
+            continue                        # no independent reading of this field either way
+        ranked = sorted(support.items(), key=lambda kv: -len(kv[1]))
+        top_key, top_srcs = ranked[0]
+        if len(top_srcs) < source_precedence.CORROBORATION_QUORUM:
+            continue                        # a quorum is still a quorum, pooled or not
+        winner = candidates[top_key]
+        losers = [r for r in (hand, base)
+                  if not source_precedence._same_value(held[id(r)], winner)]
+        if not losers:
+            continue                        # both hands already hold it
+        # It must beat what is held, not merely reach two. A key the pair already agrees on
+        # with equal support is not overturned by counting the same readings differently.
+        _held_key = source_precedence._norm_value_key(held[id(losers[0])])
+        if len(support.get(_held_key, set())) >= len(top_srcs):
+            continue
+        for rec in losers:
+            was = held[id(rec)]
+            was_src = source_precedence.source_of(rec, field)
+            source_precedence._observe(rec, field, was, was_src or "an earlier pass",
+                                       applied=True, displaced_by="handed_pair_quorum")
+            path, leaf = source_precedence._split(field)
+            node = source_precedence._walk(rec, path, create=True)
+            if node is None:
+                continue
+            node[leaf] = winner
+            # ITS OWN READING WHERE IT HAS ONE. The hand's export said PETG itself; stamping it
+            # with the base's title block would credit a reading of the other drawing and lose
+            # the record that this hand was independently right.
+            _tag = "hand" if rec is hand else "base"
+            _own = [s.split(":", 1)[1] for s in top_srcs if s.startswith(_tag + ":")]
+            # ITS STRONGEST OWN READING, not the first one alphabetically. Where a hand read
+            # PETG off both the export it is cut from and a language model, the export is what
+            # the record should say it rests on.
+            _pick = max(_own or [s.split(":", 1)[1] for s in top_srcs],
+                        key=source_precedence.rank)
+            node[source_precedence._source_key(leaf)] = _pick
+            node.pop(f"{leaf}_confidence", None)
+            rec.setdefault("review_flags", []).append(
+                f"HANDED PAIR QUORUM: {field} was '{was}' from {was_src or 'an earlier pass'} "
+                f"on this hand. Across the pair, {len(top_srcs)} independent sources say "
+                f"'{winner}' ({', '.join(sorted(top_srcs))}) against "
+                f"{len(support.get(_held_key, set()))} for '{was}'. Two hands are one part, so "
+                f"a reading of either is a reading of both; confirm which is right")
+            rec.setdefault("_handed_pair_quorum", {})[field] = {
+                "value": winner, "sources": sorted(top_srcs), "displaced": was}
+        moved.append({"part_number": (losers[0].get("part_number")), "field": field,
+                      "outcome": "pooled_quorum", "value": winner,
+                      "sources": sorted(top_srcs)})
+    return moved
+
+
+def _rests_on_cut_file(support: set) -> bool:
+    """Does any reading in this support set come from the manufacturing export?
+
+    Support entries are 'tag:source:field' (base:dxf_filename:normalized_material); the source
+    is the middle token. One export reading is enough to say this side rests on the cut file.
+    """
+    for entry in support or ():
+        bits = str(entry).split(":")
+        if len(bits) >= 2 and bits[1] in _CNC_CUT_FILE_SOURCES:
+            return True
+    return False
+
+
+def _adopt_pair_stock_key(loser: Dict[str, Any], keep, drop, winner_name: Any,
+                          basis: str) -> None:
+    """The loser of a handed-pair decision takes the winner's WHOLE stock key.
+
+    However the pair was decided — more independent readings, or the cut file breaking an even
+    split — adopting the key is one rule and must stay one, or the two paths drift. The field
+    moves where it differs, logging what it displaced; the whole key takes ONE owner even on the
+    half that already agreed (else material says mirror_of_measured while gauge still says the
+    model, and the halves separate again at the next submission); and the winner is never
+    restamped, because it reached this key on its own honest readings. Only the FLAG differs by
+    how it was decided, and the caller writes that. `basis` records which way it went, so a
+    proviso can be raised on a pair settled by the cut file and not on one settled by weight of
+    evidence.
+    """
+    for field, val in zip(_STOCK_KEY, keep):
+        was, was_src = loser.get(field), source_precedence.source_of(loser, field)
+        if not source_precedence._same_value(was, val):
+            source_precedence._observe(loser, field, was, was_src or "an earlier pass",
+                                       applied=True, displaced_by="mirror_of_measured")
+            loser[field] = val
+        loser[source_precedence._source_key(field)] = "mirror_of_measured"
+        loser.pop(f"{field}_confidence", None)
+    loser.setdefault("_handed_settled", {})["stock_key"] = {
+        "value": list(keep), "displaced": list(drop), "agreed_with": winner_name,
+        "basis": basis}
+
+
+def settle_handed_pairs(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """A handed pair is ONE purchase, so it gets one stock key.
+
+    11650-04'S PANELS CAME BACK ON TWO DIFFERENT SHEETS. 01A resolved to 2.2mm and
+    01A-HANDED to 2.0mm, each from its own SolidWorks model, and the job then bought a sheet
+    at GBP 84.10 for one hand and GBP 60.21 for the other -- of the same panel, cut from the
+    same material, on the same machine, in the same week.
+
+    THE MIRROR RULE COULD NOT FIX THIS AND WAS RIGHT NOT TO. It submits material and gauge at
+    `mirror_of_measured` (75), which correctly loses to a model at 90. Read as "fill what the
+    hand is missing", that is exactly right. But the hands were not missing anything: they
+    each had an answer, and the answers disagreed. Precedence arbitrates sources within ONE
+    record and has nothing to say about two records that must agree by construction.
+
+    AND THAT IS THE POINT. Two hands of one part are not two facts about two articles. They
+    are ONE fact read twice, and where the readings differ one of them is wrong -- so
+    resolving it per record produces two confident answers and two purchase orders, which is
+    the failure this whole file exists to prevent, one level up.
+
+    DECIDED BY SUPPORT ACROSS THE PAIR, NOT BY RANK. Rank already had its turn inside each
+    record and produced the disagreement. What breaks the tie is the same question the quorum
+    asks: how many distinct readings, across both hands, name each key. A model on each hand
+    is two readings of two files and counts as two; the same source named twice on one record
+    is one. Where neither side has more, nothing moves and a person is asked -- a pair split
+    two-against-two is a drawing problem, and inventing an answer would hide it.
+
+    THE WHOLE KEY MOVES OR NONE OF IT DOES, for the reason `settle_companion_facts` exists:
+    taking the material from one hand and the gauge from the other is how you arrive at a
+    stock item nobody stocks.
+    """
+    settled: List[Dict[str, Any]] = []
+    for hand, base in handed_pairs(parts):
+        # THE EVIDENCE IS POOLED BEFORE THE ANSWERS ARE COMPARED. Two hands are one article,
+        # so a reading of either is a reading of both — and until this ran first, the pair's
+        # evidence was split across two records while the quorum counted inside one.
+        settled.extend(_pool_pair_evidence(hand, base))
+        # Each record's own key is settled first, so the pair is compared on the answers
+        # per-part arbitration actually reached rather than on half-resolved ones.
+        source_precedence.settle_companion_facts(hand)
+        source_precedence.settle_companion_facts(base)
+        k_hand = tuple(hand.get(f) for f in _STOCK_KEY)
+        k_base = tuple(base.get(f) for f in _STOCK_KEY)
+        if any(v is None for v in k_hand + k_base):
+            continue                      # an absent key is a gap, not a disagreement
+        if all(source_precedence._same_value(a, b) for a, b in zip(k_hand, k_base)):
+            continue
+        # Distinct readings for each side's key, counted across BOTH records. Namespaced by
+        # record: the base's model and the hand's model are two files and two readings, while
+        # one source quoted twice on one record stays one.
+        # ONLY THE FIELDS THAT ACTUALLY DIFFER ARE COUNTED, and this is a REPORTING rule,
+        # not a deciding one -- worth saying plainly, because it looks like a deciding one. An
+        # agreed field holds the same value in both keys, so it contributes the identical
+        # support set to each side and can never change which is larger. What it does change
+        # is the number the flag prints: "3 readings against 1" is a sentence an estimator can
+        # act on, where "5 against 3" buries the disagreement in readings nobody disputes.
+        _disputed = [f for f, a, b in zip(_STOCK_KEY, k_hand, k_base)
+                     if not source_precedence._same_value(a, b)]
+
+        def _support(key) -> set:
+            """A RECORD BACKS ITS OWN ANSWER AND NOTHING ELSE.
+
+            Counting every reading on both records let a record DONATE ITS REJECTS to the
+            opposing key: the base had read ABS 3.0 from its model before its own title block
+            and export overruled it, and that dead reading then turned up as evidence for the
+            hand's ABS — so the hand won 4-3 on the strength of a value the base had already
+            decided against. The richer a record's evidence, the more it armed the other side.
+
+            Each record has already arbitrated its own sources. The pair-level question is
+            between the two ANSWERS, so the evidence for an answer is the evidence on the
+            record that reached it.
+            """
+            out = set()
+            for tag, rec in (("base", base), ("hand", hand)):
+                if not all(source_precedence._same_value(rec.get(f), v)
+                           for f, v in zip(_STOCK_KEY, key)):
+                    continue
+                for field, val in zip(_STOCK_KEY, key):
+                    if field not in _disputed:
+                        continue
+                    for src in source_precedence.support_for(rec, field, val):
+                        out.add(f"{tag}:{src}:{field}")
+            return out
+        s_hand, s_base = _support(k_hand), _support(k_base)
+        if len(s_hand) == len(s_base):
+            # AN EVEN COUNT IS NOT AN EVEN AUTHORITY. If exactly one side rests on the cut file
+            # the CNC is driven from — one hand's material off the exported flat, the other's
+            # off a bare model property — the export breaks the tie. The laser cuts the issued
+            # DXF, not the SolidWorks library material, so the pair takes the export's key, both
+            # hands price from it (one rate, one laser row), and the disagreement is kept as a
+            # loud proviso rather than left as two materials on one article. A price is always
+            # rendered; the conflict is always visible; the pair is not firm until it is
+            # confirmed.
+            hand_on_export = _rests_on_cut_file(s_hand)
+            base_on_export = _rests_on_cut_file(s_base)
+            if hand_on_export != base_on_export:
+                keep, drop = ((k_hand, k_base) if hand_on_export else (k_base, k_hand))
+                loser = base if hand_on_export else hand
+                winner_name = (hand if hand_on_export else base).get("part_number")
+                _adopt_pair_stock_key(loser, keep, drop, winner_name, "cut_file")
+                loser.setdefault("review_flags", []).append(
+                    f"HANDED PAIR PRICED ON THE CUT FILE: this hand read {drop[0]} at "
+                    f"{drop[1]}mm and {winner_name} reads {keep[0]} at {keep[1]}mm from the DXF "
+                    f"the part is cut from. The readings are one-for-one, so neither outweighs "
+                    f"the other on count — but the CNC is driven from the exported flat, not "
+                    f"the model's library material, so both hands are priced as {keep[0]} at "
+                    f"{keep[1]}mm. The pack disagrees with itself: priced from the cut-file "
+                    f"export, the model disagrees — confirm the material")
+                settled.append({"part_number": loser.get("part_number"), "base": winner_name,
+                                "outcome": "settled_on_cut_file", "stock_key": list(keep)})
+                continue
+            # NO EXPORT VOICE TO BREAK IT — a genuine even split (model vs model, or export vs
+            # export). Do not invent a winner; flag only, and a person settles which is right.
+            for rec in (hand, base):
+                rec.setdefault("review_flags", []).append(
+                    f"HANDED PAIR DISAGREES: {hand.get('part_number')} is "
+                    f"{k_hand[0]} at {k_hand[1]}mm and {base.get('part_number')} is "
+                    f"{k_base[0]} at {k_base[1]}mm, on {len(s_hand)} readings each. One "
+                    f"panel made twice cannot be two purchases — but neither side rests on the "
+                    f"cut file and neither has more evidence, so nothing has been changed. "
+                    f"Confirm which hand is right")
+            settled.append({"part_number": hand.get("part_number"),
+                            "base": base.get("part_number"), "outcome": "undecided",
+                            "hand_key": list(k_hand), "base_key": list(k_base)})
+            continue
+        keep, drop = ((k_hand, k_base) if len(s_hand) > len(s_base) else (k_base, k_hand))
+        loser = hand if keep is k_base else base
+        winner_name = (base if keep is k_base else hand).get("part_number")
+        _adopt_pair_stock_key(loser, keep, drop, winner_name, "more_independent_readings")
+        loser.setdefault("review_flags", []).append(
+            f"HANDED PAIR SETTLED: this hand read {drop[0]} at {drop[1]}mm and "
+            f"{winner_name} read {keep[0]} at {keep[1]}mm. A handed pair is one purchase, "
+            f"so both now carry {keep[0]} at {keep[1]}mm — the key with more independent "
+            f"readings across the two hands ({max(len(s_hand), len(s_base))} against "
+            f"{min(len(s_hand), len(s_base))}). Confirm if the hands are genuinely "
+            f"different stock")
+        settled.append({"part_number": loser.get("part_number"), "base": winner_name,
+                        "outcome": "settled", "stock_key": list(keep)})
+    return settled
+
+
+_CUT_OPS = ("laser_cutting", "cnc_routing", "waterjet_cutting", "plasma_cutting",
+            "punching", "guillotine")
+_METHOD_TO_OP = {"laser": "laser_cutting", "router": "cnc_routing", "punch": "punching"}
+# Stock a router cuts when the shop has not said otherwise: board, foam board and plastic sheet.
+_ROUTED_STOCK = ("FOAM", "PVC", "ACRYLIC", "PERSPEX", "PMMA", "PETG", "HIPS", "ABS",
+                 "POLYCARBONATE", "POLYPROP", "DIBOND", "ACM", "MDF", "PLY", "BOARD", "TIMBER")
+# Stock whose cutting method the flat does not tell us (a graphic may arrive cut to shape).
+_UNSAID_STOCK = ("CARD", "PAPER", "VINYL", "FABRIC", "BOOK", "LABEL", "FILM")
+# Other names for a material the shop table already rules on. 12633-10's files say PMMA and its
+# title block says ACRYLIC; one plastic, one rule.
+_MATERIAL_ALIASES = {"PMMA": "ACRYLIC", "PERSPEX": "ACRYLIC", "PLEXIGLAS": "ACRYLIC",
+                     "CAST_ACRYLIC": "ACRYLIC", "EXTRUDED_ACRYLIC": "ACRYLIC",
+                     "CLEAR_ACRYLIC": "ACRYLIC", "MS": "MILD_STEEL", "CR4": "MILD_STEEL"}
+# A general arrangement or assembly drawing is never a cut blank, even when its DXF is read
+# before the record is marked an assembly.
+_ASSEMBLY_CODE = re.compile(r"(?:^|[-\s_])(?:GA|ASSY|ASSEMBLY|ASM)$", re.I)
+
+
+def _has_measured_flat(part: Dict[str, Any]) -> bool:
+    ng = part.get("normalized_geometry") or {}
+    src = " ".join(str(v or "") for v in (part.get("geometry_source"), ng.get("geometry_source")))
+    return bool(part.get("flat_pattern_detected") or part.get("dxf_path")
+                or "dxf" in src.lower() or "mirror_of_measured" in src)
+
+
+_BEND_CALLOUT = re.compile(r"\b(?:UP|DOWN)\s*\d{2,3}(?:\.\d+)?\s*°", re.I)
+
+# THE SHEET THAT SAYS "I AM THE OTHER HAND OF THAT ONE". 12567-05-02M END CAP - HANDED prints
+# no dimensions of its own: "THIS PART SYMMETRICALLY OPPOSITE TO HANDED VERSION - REFER TO
+# DRAWING 12567-05-01M FOR ALL DETAILS". The code carries no MIR / HANDED / -H marker, so the
+# naming-convention mirror rule (part_code_conventions.mirror_base) never saw a pair, the part
+# had no flat, and it went to the catalogue by its description and came back a 25p "end cap"
+# at 12 mm (D-265). Two statements on one sheet make the pair: an opposite-hand phrase, and a
+# reference to another drawing in the job.
+_OPPOSITE_HAND_NOTE = re.compile(
+    r"\b(?:SYMMETRICAL(?:LY)?\s+OPPOSITE|OPPOSITE\s+HAND|OTHER\s+HAND|HANDED\s+VERSION"
+    r"|MIRROR(?:ED)?\s+(?:IMAGE|VERSION|OF|PART|HAND))\b", re.I)
+_REFER_TO_DRAWING = re.compile(
+    r"REFER\s+TO\s+(?:DRAWING|DWG|DRG)\.?\s*(?:NO\.?\s*)?([0-9]{3,}[0-9A-Z]*(?:-[0-9A-Z]+)+)",
+    re.I)
+
+
+def _mirror_base_of(part: Mapping[str, Any]) -> str:
+    """What this part is the other hand OF: the code's own marker first, else the sheet's note."""
+    from part_code_conventions import mirror_base
+    return (mirror_base(str(part.get("part_number") or ""))
+            or str(part.get("mirror_of") or "").strip())
+
+
+def stamp_mirror_notes(parts: List[Dict[str, Any]], summary: Any) -> int:
+    """Stamp `mirror_of` on a part whose own sheet says it is the opposite hand of another
+    drawing in the job. Returns parts stamped.
+
+    Only a part with no measured flat of its own, only from a page that is not another
+    part's parts list, and only where the referenced drawing is a part this job holds — the
+    same three guards apply_mirror_geometry keeps for a hand named by its code. A GA note
+    that says "refer to drawing X for nutsert positions" names no hand and stamps nothing.
+    """
+    pages = (summary or {}).get("pages") if isinstance(summary, dict) else None
+    if not pages or not isinstance(parts, list):
+        return 0
+    try:
+        from part_index import _bom_table_pages
+        bom_pages, owned = _bom_table_pages(summary)
+    except Exception:                                                # noqa: BLE001
+        bom_pages, owned = set(), {}
+    by_own = {_own_number_key(p.get("part_number")): p for p in parts
+              if isinstance(p, dict) and p.get("part_number")}
+    text_by_page: Dict[Any, str] = {}
+    _docs: Dict[str, Any] = {}
+    for pg in pages:
+        if not isinstance(pg, dict):
+            continue
+        layers = [str(pg.get(k) or "") for k in ("pdfplumber_text", "normalized_text",
+                                                 "pypdf_text", "text")]
+        layers.append(_mupdf_page_text(pg, _docs))
+        text_by_page[pg.get("page_number")] = "\n".join(t for t in layers if t)
+    for _doc in _docs.values():
+        try:
+            _doc.close()
+        except Exception:                                            # noqa: BLE001
+            pass
+    n = 0
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        pn = str(part.get("part_number") or "").strip()
+        if not pn or part.get("mirror_of") or _has_measured_flat(part):
+            continue
+        for p in (part.get("pages") or []):
+            if not isinstance(p, int):
+                continue
+            if p in bom_pages and p not in (owned.get(pn) or set()):
+                continue
+            text = text_by_page.get(p) or ""
+            if not text or not _OPPOSITE_HAND_NOTE.search(text):
+                continue
+            for m in _REFER_TO_DRAWING.finditer(text):
+                ref = m.group(1).upper()
+                if _own_number_key(ref) == _own_number_key(pn):
+                    continue
+                base = by_own.get(_own_number_key(ref))
+                if base is None or base is part:
+                    continue
+                part["mirror_of"] = str(base.get("part_number"))   # precedence: direct-write ok — the sheet's own statement of what this part is the hand of, not a measured field
+                part.setdefault("review_flags", []).append(
+                    f"the sheet says this part is the opposite hand of {base.get('part_number')} "
+                    f"(\"refer to drawing {ref} for all details\") — its geometry, gauge and bends "
+                    f"are taken from that hand")
+                n += 1
+                break
+            if part.get("mirror_of"):
+                break
+    return n
+
+
+def _mupdf_page_text(page: Mapping[str, Any], docs: Dict[str, Any]) -> str:
+    """This summary page's text as PyMuPDF reads it (rotated text included), or ''."""
+    path = str(page.get("source_pdf_path") or "")
+    local = page.get("source_page_number") or page.get("pdf_page_number") or page.get("page_number")
+    if not path:
+        return ""
+    try:
+        if path not in docs:
+            import pymupdf                                              # noqa: PLC0415
+            docs[path] = pymupdf.open(path)
+        doc = docs[path]
+        idx = int(local) - 1
+        return doc[idx].get_text() if 0 <= idx < len(doc) else ""
+    except Exception:                                                   # noqa: BLE001
+        return ""
+
+
+# The fields fold_count.press_brake_folds reads. Kept beside the arbiter's readers so a new
+# rung there is a one-line addition here.
+_FOLD_EVIDENCE_FIELDS = ("bend_count_dxf", "fold_count_textual", "fold_values_mm", "angles_deg",
+                         "solidworks_bend_features", "drawing_bend_callouts")
+# The ones a SHEET states: a fold note, fold dimensions, bend angles, bend callouts. The DXF
+# rung is the flat's (a mirrored hand has its base's) and the model rung describes how the
+# model was built, not what the drawing office said about this hand.
+_SHEET_FOLD_FIELDS = ("fold_count_textual", "fold_values_mm", "angles_deg",
+                      "drawing_bend_callouts")
+
+
+# ── A PART'S OWN SHEET ──────────────────────────────────────────────────────────────────
+#
+# "Its own sheet" was "any page it is bound to". 12173-04-02M-H is bound to page 15 — the
+# pocket's parts list, which no page in the pack details it on (part_index binds a part to a
+# list as the last resort) — so a test on its pages, or on fold fields arriving from them,
+# would have read the pocket's table as the hand's drawing. A sheet is the part's own when it
+# is bound to that part and to no other coded part, is not a parts list read for another part
+# (part_index._bom_table_pages, the reader's own record of which page each table came off),
+# and is a detail page — or carries the part's OWN table, which can make a detail sheet look
+# like an assembly to the page classifier. A page shared by a handed pair (one sheet issued
+# for both, 12614-01-06M-H) is the base's sheet, not the hand's. A page the summary does not
+# hold says nothing either way and is not counted.
+def _own_sheet_context(parts: List[Dict[str, Any]], summary: Any) -> Dict[str, Any]:
+    pages = (summary or {}).get("pages") if isinstance(summary, dict) else None
+    by_no = {pg.get("page_number"): pg for pg in pages or [] if isinstance(pg, dict)}
+    bound: Dict[Any, set] = {}
+    for q in parts or []:
+        if not isinstance(q, dict) or not str(q.get("part_number") or "").strip():
+            continue
+        for p in q.get("pages") or []:
+            if not isinstance(p, dict):
+                bound.setdefault(p, set()).add(id(q))
+    try:
+        from part_index import _bom_table_pages
+        bom_pages, owned = _bom_table_pages(summary) if by_no else (set(), {})
+    except Exception:                                                # noqa: BLE001
+        bom_pages, owned = set(), {}
+    return {"by_no": by_no, "bound": bound, "bom_pages": bom_pages, "owned": owned}
+
+
+def own_detail_pages(part: Mapping[str, Any], ctx: Mapping[str, Any]) -> List[Any]:
+    """The pages that are this part's own drawing sheet (see the block above)."""
+    mine = ctx["owned"].get(str(part.get("part_number") or "").strip()) or set()
+    out: List[Any] = []
+    for p in part.get("pages") or []:
+        if isinstance(p, dict):
+            continue
+        pg = ctx["by_no"].get(p)
+        if pg is None:
+            continue
+        if (ctx["bound"].get(p) or set()) - {id(part)}:
+            continue                                          # shared with another part
+        if p in ctx["bom_pages"] and p not in mine:
+            continue                                          # another part's parts list
+        _role = pg.get("page_role")
+        _role = str((_role.get("primary_role") if isinstance(_role, dict) else _role) or "")
+        if _role and _role.lower() != "detail" and p not in mine:
+            continue
+        out.append(p)
+    return out
+
+
+def settle_mirrored_folds(parts: List[Dict[str, Any]], summary: Any = None) -> int:
+    """A hand whose flat IS its base's flat folds as its base is charged (D-380).
+
+    12173-04-02M-H inherited 02M's measured flat, then took 02M's callouts and model features
+    but not its fold note, and was arbitrated on what it had: 4 folds against 02M's 1. Same
+    tool, opposite hand. Where the hand's geometry was mirrored from the base, the base's whole
+    fold evidence is held on the hand and the one arbiter decides both.
+
+    A HAND WHOSE OWN SHEET STATES ITS FOLDS KEEPS THAT READING (review of D-380). The only
+    guard was the hand's own bend callouts, so a hand drawn on its own detail sheet with a fold
+    note or angles of its own lost them to its base's, and its reading vanished from every
+    sentence. Kept where the hand has its own detail sheet (own_detail_pages) and a sheet fold
+    statement that is not a mirror's copy. Where that reading and the base's charge differ, the
+    question is raised with both counts and both sources; nothing chooses between them. Without
+    a summary no sheet is known to be the hand's own, which is D-380's ruling.
+    Returns the number of hands settled.
+    """
+    n = 0
+    _ctx = _own_sheet_context(parts, summary)
+    for hand, base in handed_pairs(parts) or ():
+        _ng = hand.get("normalized_geometry") if isinstance(hand.get("normalized_geometry"),
+                                                            dict) else {}
+        if _own_number_key(_ng.get("mirrored_from")) != _own_number_key(base.get("part_number")):
+            continue
+        if base.get("mirrored_fold_evidence"):
+            continue
+        _said = [k for k in _SHEET_FOLD_FIELDS
+                 if hand.get(k) and source_precedence.source_of(hand, k) != "mirror_of_measured"]
+        # Bend callouts of its own are counted only off its own sheet (stamp_drawing_bend_
+        # callouts), so they need no page test; a note or angles may have come off any page
+        # the hand is bound to, so they stand only where the hand has a sheet of its own.
+        if "drawing_bend_callouts" in _said or (_said and own_detail_pages(hand, _ctx)):
+            try:
+                import fold_count as _fc
+                _h, _b = _fc.press_brake_folds(hand), _fc.press_brake_folds(base)
+            except Exception:                                        # noqa: BLE001
+                continue
+            if _h["count"] != _b["count"]:
+                source_precedence.raise_manufacturing_question(
+                    hand,
+                    (f"fold count of {hand.get('part_number')}: its own sheet states its folds "
+                     f"and on its own evidence it reads {_h['count']} ({_h['source_label']}); "
+                     f"{base.get('part_number')}, whose flat it mirrors, is charged "
+                     f"{_b['count']} ({_b['source_label']}) — one flat, two readings"),
+                    (f"each hand is charged on its own reading: {hand.get('part_number')} "
+                     f"{_h['count']}, {base.get('part_number')} {_b['count']}"),
+                    ("confirm the fold count of the pair against both sheets; if the hands "
+                     "fold alike, the one count applies to both"),
+                    "drawing_job_merge.settle_mirrored_folds")
+            continue
+        evidence = {k: base.get(k) for k in _FOLD_EVIDENCE_FIELDS if not _is_blank(base.get(k))}
+        _dash = (base.get("geometry_rollup") or {}).get("dashed_long_axis_lines") \
+            if isinstance(base.get("geometry_rollup"), dict) else None
+        if _dash is not None:
+            evidence["geometry_rollup"] = {"dashed_long_axis_lines": _dash}
+        if not evidence:
+            continue
+        hand["mirrored_fold_evidence"] = {"from": base.get("part_number"), "evidence": evidence}
+        hand.setdefault("review_flags", []).append(
+            f"fold count taken as {base.get('part_number')}'s, on its evidence and its rules "
+            f"— a mirrored hand is the same flat")
+        n += 1
+    return n
+
+
+def stamp_drawing_bend_callouts(parts: List[Dict[str, Any]], summary: Any) -> int:
+    """How many bend callouts ("UP 105°", "DOWN 90°") the part's own drawing sheets print.
+
+    12633-00-GA: SolidWorks counted two bend features on the wine lifter base (right — its flat
+    pattern prints UP 105° / DOWN 105°) and one on the beer plinth's bottom panel (wrong — a flat
+    400 x 71 plate, with no callout on its sheet). A model feature count describes how the model
+    was built; the callout is the drawing office saying the part is bent. Returns parts stamped.
+    """
+    pages = (summary or {}).get("pages") if isinstance(summary, dict) else None
+    # THE BEST READING OF EACH PAGE, NOT THE FIRST. Bend callouts sit along the bend lines,
+    # and on a vertical bend line they are ROTATED text, which pdfplumber drops: 12614-01's
+    # fascia sheet prints 10 UP/DOWN callouts and pdfplumber returned 6 — the same short
+    # count as its DXF, so the drawing could not correct it (D-259). Each text layer the page
+    # carries is counted separately (never concatenated, which would double a page read
+    # twice), and the page's own PDF is read with PyMuPDF where it is available.
+    count_by_page: Dict[Any, int] = {}
+    evidence_by_page: Dict[Any, Dict[str, Any]] = {}
+    _mupdf_docs: Dict[str, Any] = {}
+    for pg in pages or []:
+        if not isinstance(pg, dict):
+            continue
+        layers = [str(pg.get(k) or "") for k in ("pdfplumber_text", "normalized_text",
+                                                 "pypdf_text", "text")]
+        _mu = _mupdf_page_text(pg, _mupdf_docs)
+        # THE LAYER THAT READS EVERY GLYPH DECIDES (D-402). The max over layers was taken
+        # because pdfplumber DROPS rotated callouts; PyMuPDF reads them, so where it read the
+        # page its count is complete and a layer counting MORE has read a callout twice (an
+        # overlaid glyph run), not found one PyMuPDF missed. 9598-02-01M prints UP 90° and
+        # DOWN 180° and was charged against "callouts read 3". Without the page's own PDF the
+        # text layers are all there is, and the largest reading still stands.
+        # AND THE COUNT NAMES ITS LAYER AND ITS STRINGS (D-403), so a "callouts read 3" on a
+        # sheet that prints two can be traced to the read that doubled one.
+        if _mu.strip():
+            _found = [" ".join(m.split()) for m in _BEND_CALLOUT.findall(_mu)]
+            _layer = "PyMuPDF"
+        else:
+            _names = ("pdfplumber_text", "normalized_text", "pypdf_text", "text")
+            _reads = [(n, [" ".join(m.split()) for m in _BEND_CALLOUT.findall(t)])
+                      for n, t in zip(_names, layers)]
+            _layer, _found = max(_reads, key=lambda nt: len(nt[1])) if _reads else ("", [])
+        count_by_page[pg.get("page_number")] = len(_found)
+        evidence_by_page[pg.get("page_number")] = {"layer": _layer, "callouts": _found}
+    for _doc in _mupdf_docs.values():
+        try:
+            _doc.close()
+        except Exception:                                            # noqa: BLE001
+            pass
+    n = 0
+    # ONLY THE PART'S OWN SHEET (review of D-380). The count was the largest over every page
+    # the part is bound to — a shared sheet, a GA, another part's parts list — and a callout
+    # count the model "confirms" now outranks a short flat pattern or an angle-only note, so a
+    # page's callouts landing on a part that is merely listed there could set its charge. A
+    # part with no sheet of its own takes no page-level count; a mirrored hand takes its base's
+    # below.
+    _ctx = _own_sheet_context(list(parts or []), summary)
+    for part in parts or []:
+        if not isinstance(part, dict):
+            continue
+        _own_pages = own_detail_pages(part, _ctx)
+        counts = [count_by_page.get(p, 0) for p in _own_pages]
+        if counts and max(counts):
+            part["drawing_bend_callouts"] = max(counts)
+            _best = max(_own_pages, key=lambda p: count_by_page.get(p, 0))
+            _ev = dict(evidence_by_page.get(_best) or {})
+            _ev["page"] = _best
+            part["drawing_bend_callout_evidence"] = _ev
+            n += 1
+    # A HAND WITH NO SHEET OF ITS OWN BENDS LIKE THE HAND IT MIRRORS. 12614-01-06M-H: one
+    # DXF and one sheet were issued for the pair, so the mirror carried the base's short
+    # DXF count (6) but not its callouts (11) or model features (12), and would have been
+    # charged 6 folds against the base's 11. Same flat, same bends (D-260). Filled only where
+    # the hand has nothing of its own; a hand with its own sheet or model keeps its readings.
+    _by_own = {_own_number_key(p.get("part_number")): p for p in (parts or [])
+               if isinstance(p, dict)}
+    for part in parts or []:
+        if not isinstance(part, dict):
+            continue
+        _bpn = _mirror_base_of(part)
+        _base = _by_own.get(_own_number_key(_bpn)) if _bpn else None
+        if _base is None or _base is part:
+            continue
+        for _k in ("drawing_bend_callouts", "solidworks_bend_features"):
+            if not part.get(_k) and _base.get(_k):
+                _apply_field(part, _k, _base[_k], "mirror_of_measured",
+                             note=f"mirrored from {_base.get('part_number')}")
+                part.setdefault("review_flags", []).append(
+                    f"{_k.replace('_', ' ')} {_base[_k]} taken from {_base.get('part_number')}, "
+                    f"the hand this part mirrors — no sheet or model reading of its own")
+    for part in parts or []:
+        if not isinstance(part, dict) or not part.get("drawing_bend_callouts"):
+            continue
+        # A DXF ZERO THAT THE DRAWING AND THE MODEL CONTRADICT IS LIFTED. 12614-01-14M:
+        # the flat's bend layer was empty, the DXF pass recorded "folding ruled out", and
+        # the route kept the fold off although the sheet prints DOWN 40.6° / 49.4° and the
+        # model has two bend features. The ruling is replaced by a note, not deleted
+        # silently (D-259).
+        try:
+            _features = int(part.get("solidworks_bend_features") or 0)
+        except (TypeError, ValueError):
+            _features = 0
+        _ruled = (part.get("operations_ruled_out") or {})
+        if (_features >= part["drawing_bend_callouts"] and "folding" in _ruled
+                and "0 bend" in str(_ruled.get("folding"))):
+            _ruled.pop("folding", None)
+            part.setdefault("review_flags", []).append(
+                f"folding reinstated: the DXF's bend layer was empty, but the drawing "
+                f"prints {part['drawing_bend_callouts']} bend callout(s) and the model has "
+                f"{_features} bend feature(s) — the export was short, the part folds")
+    return n
+
+
+def propose_missing_cuts(parts: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """A part priced from a measured flat must have a way to become that flat.
+
+    12312-01-GA: the 03A back panel (3 mm Foamex, its own DXF, nested and charged as material)
+    and the 04G card graphic had no cutting row and nothing said so — the drawing's notes name
+    the laser for the steel pages and nothing for these two. Generic, per part with a measured
+    flat and no cutting operation:
+      - the shop's own rule for the material (config.CUT_METHOD_BY_MATERIAL) is applied;
+      - otherwise board / plastic sheet is PROPOSED for the router, inferred, and put to the
+        estimator as a decision (the machine is a shop choice);
+      - card, paper, vinyl, or a part priced as BOUGHT-IN, is not given a machine: how it
+        becomes the drawn shape is asked (bought cut to shape, or cut here, and on what).
+    Returns what it did, for the log.
+    """
+    try:
+        import config as _cfg
+        rules = list(getattr(_cfg, "CUT_METHOD_BY_MATERIAL", []) or [])
+    except Exception:                                               # pragma: no cover
+        rules = []
+    done: List[Dict[str, str]] = []
+    for part in parts or []:
+        if not isinstance(part, dict) or not _has_measured_flat(part):
+            continue
+        if part.get("is_assembly_parent") or part.get("is_sub_assembly") \
+                or part.get("assembly_children") or part.get("supplied_by_third_party") \
+                or _ASSEMBLY_CODE.search(str(part.get("part_number") or "").strip()):
+            continue
+        ops = [str(o) for o in ((part.get("textual_operations") or [])
+                                + (part.get("inferred_operations") or []))]
+        if any(o in _CUT_OPS for o in ops):
+            continue
+        pn = str(part.get("part_number") or "")
+        mat = str(part.get("normalized_material") or part.get("material") or "").upper()
+        mat_key = re.sub(r"[\s-]+", "_", mat.strip())
+        mat_key = _MATERIAL_ALIASES.get(mat_key, mat_key)
+        shown = str(part.get("material") or part.get("normalized_material") or "").strip()
+        bought = bool(part.get("is_bought_in")) or "bought_in" in (part.get("page_roles") or []) \
+            or str(part.get("canonical_kind") or "").lower() == "bought_in"
+        if bought or any(w in mat for w in _UNSAID_STOCK) or not mat:
+            part["route_gap"] = {
+                "issue": (f"{pn} has a measured flat and a material charge "
+                          f"({shown or 'material unstated'}), but nothing cuts it to "
+                          f"that shape"),
+                "assumption": ("priced as a bought item — no SDI cutting row" if bought
+                               else "no cutting row — the drawing does not say how"),
+                "action": ("say how it becomes the drawn shape: bought cut to shape (price it "
+                           "as supplied), or cut here — and on which machine"),
+            }
+            done.append({"part_number": pn, "result": "asked"})
+            continue
+        rule = next((r for r in rules if str(r.get("material") or "").upper() == mat_key
+                     and (r.get("max_thickness_mm") is None
+                          or (part.get("thickness_mm") or 0) <= r["max_thickness_mm"])), None)
+        if rule and _METHOD_TO_OP.get(str(rule.get("method"))):
+            op, why = _METHOD_TO_OP[str(rule["method"])], f"SDI shop rule for {mat_key}"
+        elif any(w in mat for w in _ROUTED_STOCK):
+            op, why = "cnc_routing", f"proposed — no shop rule names {shown}"
+            part["route_gap"] = {
+                "issue": f"{pn}: cutting proposed as CNC routing ({shown} sheet)",
+                "assumption": ("routed from its measured flat and timed on the sheet — no SDI "
+                               f"shop rule names {shown}"),
+                "action": ("confirm the machine; add the material to "
+                           "CUT_METHOD_BY_MATERIAL so the next job does not ask"),
+            }
+        else:
+            continue
+        inf = list(part.get("inferred_operations") or [])
+        inf.append(op)
+        part["inferred_operations"] = inf
+        # The acrylic route keeps its laser only on a laser SIGNAL (cut_method / is_laser_cut)
+        # and drops it otherwise — so the machine chosen here is stated where it looks.
+        if not part.get("cut_method"):
+            part["cut_method"] = {"laser_cutting": "laser", "cnc_routing": "router",
+                                  "punching": "punch"}.get(op, "")
+        part.setdefault("review_flags", []).append(
+            f"{pn} had a measured flat and no cutting operation; {op} added ({why})")
+        done.append({"part_number": pn, "result": op})
+    return done
+
+
+def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Give a mirrored part the flat pattern of the part it mirrors.
+
+    JOB 11350'S RIGHT ARM WAS PRICED BY AN LLM AT 97% OF THE MATERIAL TOTAL WHILE ITS OWN
+    GEOMETRY SAT TWO ROWS ABOVE IT. Only "11350-01-02_2MM MS_flat.dxf" was exported, so the
+    left arm had a measured 258.35 x 84.8 x 2.0 blank and "11350-01-02 MIR" had nothing.
+    With no blank there is no material to cost, so the engine went looking for a price:
+    catalogue, then web, then — with the search provider exhausted — a market estimate that
+    came back GBP 79.04 on one run and GBP 86.04 on the next. It also had no cut length and
+    no hole count, so its laser and fold rows fell back to default throughput.
+
+    A MIRRORED DERIVATION IS THE SAME FLAT. Same blank, same perimeter, same pierces, same
+    bend count, same gauge, same material — that is what mirroring means, and it is why one
+    DXF is exported for a handed pair in the first place. This is geometry we hold, not a
+    figure we generate, and it is ranked accordingly: mirror_of_measured (75), below the
+    flat it was copied from and below a model or DXF of the mirror ITSELF, above everything
+    inferred or generated.
+
+    THE DIRECTION OF SAFETY. Gap-fill only — a mirror that HAS its own export keeps every
+    figure of its own, and a field the base never had stays missing rather than becoming a
+    zero. Nothing is inherited from a base that was itself inherited or inferred: the base
+    must carry a real measurement, or this would propagate a guess and dress it as geometry.
+
+    Returns one record per part filled, for the report. Both naming conventions are handled
+    by part_code_conventions, so a pack that spells it "Mirror<code>" and a pack that spells
+    it "<code> MIR" behave identically.
+    """
+    from part_code_conventions import mirror_base
+
+    filled: List[Dict[str, Any]] = []
+    if not isinstance(parts, list):
+        return filled
+    # INDEXED BY WHAT EACH PART IS CALLED, NOT BY WHAT IT NORMALISES TO.
+    #
+    # normalize_part_code STRIPS the hand suffix — "11650-04-01A-HANDED" comes back as
+    # "11650-04-01A", which is correct for asking "are these the same article" and fatal
+    # here. Keyed that way, the twin OVERWRITES its own base in this index, the lookup below
+    # returns the twin, `base is part` is true, and the whole rule quietly does nothing.
+    #
+    # So apply_mirror_geometry had never once fired for a part spelled "-HANDED". It works
+    # for "MIR" and "Mirror<code>", which do not collapse — which is why this survived: the
+    # rule demonstrably worked on 11350, and 11650-04's handed panels went through it as a
+    # no-op with nothing anywhere saying so. Its geometry, its cut length, its hole count
+    # and its material were all left to be re-read from assembly pages.
+    #
+    # Two questions, one helper, and they need different answers. This one is an index of
+    # parts under their own numbers.
+    by_key = {_own_number_key(p.get("part_number")): p
+              for p in parts if isinstance(p, dict)}
+
+    def _refuse(part: Dict[str, Any], base_pn: str, why: str) -> None:
+        """A hand this rule recognised and would not fill, and the reason.
+
+        EVERY EXIT BELOW USED TO BE A BARE `continue`. So a handed part the rule declined —
+        correctly, because inheriting from an unmeasured base would launder a guess into
+        geometry at rank 75 — was indistinguishable on the record from a handed part the
+        rule never saw. 11650-04-03A-HANDED came out of a run carrying nothing at all, and
+        the only honest thing that could be said about it was "either it never fired, or it
+        fired and recorded nothing".
+
+        Those two readings lead opposite ways: one is a bug in the index, the other is the
+        rule doing its job on a base nobody measured. Guessing between them cost a round of
+        diagnosis and a wrong prediction. The rule states which, on the record, every time.
+        """
+        part.setdefault("review_flags", []).append(
+            f"MIRROR NOT APPLIED: {part.get('part_number')} reads as the opposite hand of "
+            f"{base_pn}, and its geometry was NOT inherited — {why} This part was costed "
+            f"from whatever else read it, so it may not agree with the hand it pairs with.")
+        part.setdefault("_mirror_refused", {})[str(base_pn)] = why
+
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        # The code's own marker, else the sheet's note (stamp_mirror_notes): both say the
+        # same thing, and the guards below treat them the same.
+        base_pn = _mirror_base_of(part)
+        if not base_pn:
+            continue
+        # AN ASSEMBLY'S HAND HAS NO FLAT TO COPY (D-505). 12665-03-GA-H is the side-wing kit
+        # built the other way round; the graph gives it the base kit's members, each by its
+        # own hand. "MIRROR NOT APPLIED" on it read as a missing drawing when nothing was.
+        try:
+            from part_code_conventions import carries_assembly_role as _asm_role
+            if _asm_role(base_pn) or _asm_role(part.get("part_number")):
+                continue
+        except Exception:                                            # noqa: BLE001
+            pass
+        base = by_key.get(_own_number_key(base_pn))
+        if base is None:
+            _refuse(part, base_pn,
+                    f"no part numbered {base_pn} is in this job. Either the base drawing is "
+                    f"missing from the pack, or the two are spelled differently.")
+            continue
+        if base is part:
+            # NOT REPORTED. This is the index defect that made the rule a no-op for every
+            # "-HANDED" pack, and it is now unreachable: _own_number_key keeps the hand, so a
+            # twin cannot resolve to itself. If it ever does again, that is a bug in the key
+            # and not a fact about the drawing — a review flag would blame the pack for it.
+            continue
+
+        # THE BASE MUST HAVE BEEN MEASURED. Inheriting from a part whose own blank was
+        # inferred would launder an inference into geometry at rank 75 — the exact move
+        # every source rule in this codebase exists to prevent. A base that itself inherited
+        # is refused for the same reason, and that also stops two mirrors of each other from
+        # trading an empty record back and forth.
+        base_ng = base.get("normalized_geometry") or {}
+        _base_src = str(base_ng.get("geometry_source")
+                        or base.get("geometry_source") or "")
+        # THE BASE MUST HAVE BEEN MEASURED, and rank is how this codebase says so. Testing
+        # a flag meant swapping in the shared blank resolver quietly admitted an INFERRED
+        # blank as a source — laundering a guess into geometry at rank 75, which is the one
+        # thing this rule must never do. At or above dxf (80) is measured; that also
+        # excludes mirror_of_measured (75), so an inherited flat is still not inheritable.
+        from source_precedence import rank as _rank
+        # TWO HANDS ARE ONE FLAT, WHICHEVER OF THEM WAS MEASURED. 11650-06: the handed
+        # extender carried the pack's only DXF (420 x 133) and the plain one had nothing but
+        # the PANEL default envelope, 400 x 300 — so this rule refused (the base was not
+        # measured) and the two hands of one panel were nested at different sizes, £4.51
+        # against £2.43 a part. Where the base is unmeasured and THIS hand is, the same rule
+        # runs the other way: the base is filled from this hand, at the same rank and with
+        # the same guards. Nothing is inherited from an unmeasured hand in either direction.
+        _twin_ng = part.get("normalized_geometry") or {}
+        _twin_src = str(_twin_ng.get("geometry_source") or part.get("geometry_source") or "")
+        if _rank(_base_src) < _rank("dxf") <= _rank(_twin_src):
+            part, base = base, part
+            base_pn = str(base.get("part_number") or "")
+            base_ng = base.get("normalized_geometry") or {}
+            _base_src = _twin_src
+        if _rank(_base_src) < _rank("dxf"):
+            _refuse(part, base_pn,
+                    f"{base_pn}'s own geometry came from "
+                    f"{_base_src or 'no recorded source'}, which is weaker than a DXF or a "
+                    f"model. Inheriting it would turn a reading of that strength into "
+                    f"measured geometry on this part, which is the one thing this rule must "
+                    f"never do. Measure or export the base and both hands will agree.")
+            continue
+        # THROUGH THE SHARED RESOLVER, NOT ONE SPELLING OF IT. document_builder writes the
+        # flat as bounding_box_flat_mm/developed_*, apply_dxf_geometry_to_part writes
+        # blank_length_mm. Reading only the last found nothing on a real record — while a
+        # fixture that invented that shape passed.
+        from document_builder import flat_blank_mm
+        _bl, _bw = flat_blank_mm(base)
+        if not (_bl and _bw):
+            _refuse(part, base_pn,
+                    f"{base_pn} has no flat blank of its own to give. Its geometry is "
+                    f"strong enough to inherit from, but the developed size was never "
+                    f"read, so there is nothing to copy.")
+            continue
+        # ITS OWN MEASUREMENT WINS OUTRIGHT. A mirror with its own export needs nothing.
+        #
+        # AND IF IT DISAGREES, SAY SO. SolidWorks lets the link to the seed be BROKEN, after
+        # which the opposite hand can be edited independently — so two measured hands whose
+        # blanks differ is either deliberate or a stale derived part, and only a person can
+        # tell which. Equal blanks are a safe assumption while the link holds and a silent
+        # error once it does not. Nothing is overwritten either way: both were measured.
+        # A BLANK IS NOT EVERYTHING. This returned as soon as the mirror had a blank of its
+        # own — and a mirror can have its blank and still be missing the cut length, the
+        # hole count and the bend data, which is exactly what the laser and fold rates read.
+        # 11350's right arm sat in Sheet Steel at the correct 258.35 x 84.8 with its laser
+        # calculator's hole and internal-cut cells EMPTY, so it cut at 368/hr against the
+        # left arm's 287 — a 28% rate difference on two parts that are the same flat.
+        #
+        # Each thing is now asked for separately. Only a DISAGREEING blank stops the rest:
+        # if the two hands really are different sizes, the other hand's cut length is not
+        # this one's either.
+        _ng = part.get("normalized_geometry") or {}
+        _ml, _mw = flat_blank_mm(part)
+        # A GUESS IS NOT A DISAGREEMENT. Only a blank this hand MEASURED can conflict with
+        # the other hand's; an inferred envelope (the 400 x 300 PANEL default) is the gap
+        # this rule exists to fill, and treating it as a reading kept it.
+        _own_src = str(_ng.get("geometry_source") or part.get("geometry_source") or "")
+        _own_measured = _rank(_own_src) >= _rank("dxf")
+        _blank_conflict = bool(_own_measured and _ml and _mw
+                               and (abs(_ml - _bl) > 0.5 or abs(_mw - _bw) > 0.5))
+        if _ml and _mw and _own_measured:
+            if _blank_conflict:
+                part.setdefault("review_flags", []).append(
+                    f"HANDED PAIR DISAGREES: this part measures {_ml:g} x {_mw:g}mm and "
+                    f"{base.get('part_number')}, which it mirrors, measures {_bl:g} x "
+                    f"{_bw:g}mm. A true opposite hand develops the same flat — so either the "
+                    f"link to the seed was broken and this hand edited, or one of the two "
+                    f"exports is stale. Both figures are measured and neither has been "
+                    f"changed; the estimator decides.")
+                filled.append({"part_number": part.get("part_number"),
+                               "mirrored_from": base.get("part_number"),
+                               "fields": [], "disagreement_mm": [round(_ml - _bl, 2),
+                                                                  round(_mw - _bw, 2)]})
+                continue
+
+        # EVERY KEY THE BASE CARRIES, not a fixed six. A list of field names is a list of
+        # the spellings whoever wrote it happened to know, and this record has three.
+        # Provenance keys are set explicitly below and must not be copied.
+        #
+        # THROUGH THE RESOLVER, NOT A GAP-FILL — the same correction already written out for
+        # geometry_rollup forty lines below, and never applied here.
+        #
+        # Gap-filling means "only where this part has nothing". 11650-04-01A-HANDED had a
+        # cut length read off an ASSEMBLY page, so it was not blank, so the base's measured
+        # 7582.17mm never arrived — and the twin was laser-costed at 3802.9mm, half the cut
+        # of the part it is a mirror of. Its base carried 0 holes and it carried 4. Two hands
+        # of one panel, on one run, cut at different rates.
+        #
+        # Then, because SOMETHING had been filled, the whole node was stamped
+        # geometry_source = mirror_of_measured. So the record claimed inheritance over values
+        # that had not been inherited, and a diagnostic reading it — this one did — concluded
+        # the geometry had travelled when the number driving the laser had not.
+        #
+        # Submitted at mirror_of_measured (75) each value beats an assembly reading or an
+        # inference and still loses to this part's OWN dxf (80) or model (90). That is the
+        # whole point of having ranks, and it is why the twin's own 2.0mm gauge survived its
+        # base's 2.2mm — correctly, and with the disagreement written down.
+        _got: List[str] = []
+        for _f, _v in base_ng.items():
+            if _f in {"geometry_source", "geometry_confidence", "mirrored_from"} \
+                    or _f.endswith("_source"):
+                continue
+            if _is_blank(_v):
+                continue
+            import copy as _c
+            if _apply_field(part, f"normalized_geometry.{_f}", _c.deepcopy(_v),
+                            "mirror_of_measured",
+                            note=f"mirrored from {base.get('part_number')}"):
+                _got.append(_f)
+        _ng = part.get("normalized_geometry") or _ng
+        # NOT "nothing to fill in the geometry record, so nothing to do at all". That is
+        # the same conflation one level down: a mirror whose normalized_geometry is complete
+        # can still be missing its rollup, and bailing here is what left 11350's right arm
+        # with empty hole and internal-cut cells beside a correct blank.
+        if _got:
+            # A NODE-LEVEL SOURCE IS A CLAIM ABOUT EVERY VALUE IN THE NODE, so it is only
+            # true when the mirror actually supplied the geometry that defines it. Stamped on
+            # "something was filled", it said mirror_of_measured over a cut length the mirror
+            # had not written — the record and its own per-field sources disagreeing about one
+            # part, which is the family of defect this whole file keeps finding.
+            #
+            # The blank is what makes a flat that flat. If this part kept its own, the node is
+            # not the base's geometry however many gaps were filled around it. `mirrored_from`
+            # is stamped either way, because it is a fact about the part and not a claim about
+            # where each number came from — those are on the fields, written by the resolver.
+            if any(_f in _got for _f in ("blank_length_mm", "blank_width_mm")):
+                _ng["geometry_source"] = "mirror_of_measured"
+                # The confidence of the flat it came from, never higher — and never invented
+                # where the base carried none.
+                if base_ng.get("geometry_confidence") is not None:
+                    _ng["geometry_confidence"] = base_ng["geometry_confidence"]
+                # A MEASURED FLAT HAS LANDED, SO THE ENVELOPE IS NO LONGER THE SIZE USED. The
+                # detail-page pass runs first and, finding no printed overall on the hand's
+                # sheet, wrote "UNRESOLVED; the size used is a fallback envelope". 12567-05-02M
+                # then took 05-01M's 409.5 x 88 and was nested on it, with that sentence
+                # still beside it on the report (D-291). A flag about a size that is not used
+                # is withdrawn by the pass that replaced the size.
+                part["review_flags"] = [
+                    f for f in (part.get("review_flags") or [])
+                    if "the size used is a fallback envelope" not in str(f)]
+            _ng["mirrored_from"] = base.get("part_number")
+            part["normalized_geometry"] = _ng
+        # THROUGH THE RESOLVER, NOT AROUND IT. These are written under a COMPUTED key, so
+        # the field name is not visible at the write — which is exactly the shape that let
+        # the override rules overwrite material in silence. Submitting them instead means a
+        # stronger source is defended whatever the list grows to contain, and every figure
+        # arrives carrying the name of where it came from.
+        for _f in _MIRROR_TOP_FIELDS:
+            if _is_blank(part.get(_f)) and not _is_blank(base.get(_f)):
+                _apply_field(part, _f, base[_f], "mirror_of_measured",
+                             note=f"mirrored from {base.get('part_number')}")
+        # THE CUT LENGTH, THE PIERCES AND THE HOLES. Without these the laser row falls back
+        # to a default throughput, which is how this part got a default rate on both its
+        # laser and its fold row even after its blank was known.
+        #
+        # FIELD BY FIELD, THROUGH THE RESOLVER — not a wholesale copy, and not a gap-fill.
+        # Copying only when the mirror had NO rollup meant a mirror carrying ONE inferred
+        # value kept it and inherited nothing: an estimated_pierce_count of 1 survived while
+        # the base's measured cut length never arrived, and the laser row stayed on a
+        # default rate. Gap-filling instead would keep that inference over a measurement.
+        # Submitting each value at mirror_of_measured (75) lets it beat an inference (20)
+        # and still lose to this part's own DXF (80) or model (90) — which is the whole
+        # point of having ranks.
+        _base_roll = base.get("geometry_rollup")
+        if isinstance(_base_roll, dict):
+            for _rk, _rv in _base_roll.items():
+                if _is_blank(_rv):
+                    continue
+                if _apply_field(part, f"geometry_rollup.{_rk}", _rv, "mirror_of_measured",
+                                note=f"mirrored from {base.get('part_number')}"):
+                    _got.append(f"geometry_rollup.{_rk}")
+        # Thickness and material go through the resolver so a printed title block or a model
+        # still outranks them, and so the disagreement is recorded if one does.
+        #
+        # THIS WAS ALWAYS HERE, AND 11650-04'S HANDED PANELS STILL CAME OUT ABS AND PETG at
+        # GBP 175.01 and GBP 114.98 a sheet. Nothing was wrong with these four lines: the
+        # function never reached them, because a "-HANDED" part shadowed its own base in the
+        # index above and the lookup returned the twin itself. Worth remembering before
+        # adding a rule that already exists -- the first fix for that defect was a second
+        # copy of this loop, which would have been two lists doing one job and no more
+        # correct than one.
+        for _field, _key in (("normalized_thickness_mm", "normalized_thickness_mm"),
+                             ("normalized_material", "normalized_material")):
+            if _is_blank(base.get(_key)):
+                continue
+            # A MIRROR FILLS WHAT A HAND IS MISSING. IT MUST NOT OVERRULE WHAT THE HAND READ.
+            #
+            # 11650-04 survived because its base carried a title-block PETG, so the pair-level
+            # quorum had a second independent voice to count. A pack WITHOUT that — a lone model
+            # on the base, and the hand's own export the only other reading — loses the whole
+            # pair to the model, because this line copies the base's material onto the hand at
+            # mirror_of_measured (75), beating the hand's own dxf_filename (70), and then
+            # settle_handed_pairs finds both hands agreeing and has nothing to settle. The
+            # hand's own measured reading is destroyed one function before the rule that would
+            # have defended it ever runs.
+            #
+            # RANK IS THE WRONG QUESTION HERE. What arrives is not an independent observation
+            # of THIS hand; it is the other hand's reading wearing a different source name. It
+            # carries no new information about this record, and it must not displace a reading
+            # this record made of itself. So it still fills a gap, and it still replaces a mere
+            # inference (a guess is not a reading) — but it stops at anything the hand actually
+            # read. Where the two disagree, the disagreement survives to the pair-level quorum,
+            # which is the one place with both hands' evidence on the table to settle it.
+            _held_src = source_precedence.source_of(part, _field)
+            _hand_read_it = _held_src in _A_READING_OF_THIS_SPECIFIC_PART
+            if _hand_read_it and not source_precedence._same_value(part.get(_field),
+                                                                   base[_key]):
+                source_precedence._observe(part, _field, base[_key], "mirror_of_measured",
+                                           applied=False)
+                part.setdefault("review_flags", []).append(
+                    f"{_field}: {base.get('part_number')} reads '{base[_key]}' and this hand "
+                    f"reads '{part.get(_field)}' from {_held_src}, which the hand read of "
+                    f"itself. A mirror copies the other hand rather than observing this one, "
+                    f"so it has not been applied over the hand's own reading — the pair is "
+                    f"settled on the evidence for the article, not by which hand was read "
+                    f"second")
+                continue
+            _apply_field(part, _field, base[_key], "mirror_of_measured",
+                         note=f"mirrored from {base.get('part_number')}")
+
+        # ONE FLAT IS CUT ONE WAY. 11650-06's extender pair shares one DXF; the handed panel
+        # carried laser_cutting and the plain one only a drawn hole_machining, so the plain
+        # panel was nested and costed with nothing to cut its profile. Where this hand has NO
+        # cutting operation and the hand it pairs with has one, it takes that one, inferred
+        # and flagged. Other operations (a drilled hole, a countersink) are not copied —
+        # whether the pair really differs there is a question for a person.
+        _cut_ops = ("laser_cutting", "cnc_routing", "waterjet_cutting", "plasma_cutting",
+                    "punching", "guillotine")
+
+        def _ops(p):
+            return [str(o) for o in ((p.get("textual_operations") or [])
+                                     + (p.get("inferred_operations") or []))]
+        _base_cut = [o for o in _ops(base) if o in _cut_ops]
+        if _base_cut and not any(o in _cut_ops for o in _ops(part)):
+            _inf = list(part.get("inferred_operations") or [])
+            for _o in dict.fromkeys(_base_cut):
+                if _o not in _inf:
+                    _inf.append(_o)
+            part["inferred_operations"] = _inf
+            part.setdefault("review_flags", []).append(
+                f"{part.get('part_number')} had no cutting operation; it is cut from the same "
+                f"flat as {base.get('part_number')}, so it takes {', '.join(dict.fromkeys(_base_cut))} "
+                f"from that hand. Its other operations are its own — confirm any the two hands "
+                f"do not share")
+        # AND THE SAME FLAT FOLDS THE SAME WAY. 12567-05-02M took 05-01M's blank, cut length
+        # and three bends, and then had no Fold row: the bend COUNT was mirrored and the
+        # folding OPERATION was not, so the brake never saw it (D-270). A mirrored flat with
+        # the base's bend lines is folded exactly as the base is — that is what a handed pair
+        # is. Copied only where this hand states no folding of its own, inferred and flagged.
+        def _base_bends() -> int:
+            for _k in ("bend_count_dxf", "solidworks_bend_features", "drawing_bend_callouts"):
+                try:
+                    if int(base.get(_k) or 0) > 0:
+                        return int(base.get(_k) or 0)
+                except (TypeError, ValueError):
+                    continue
+            return 0
+
+        if ("folding" in _ops(base) or _base_bends()) and "folding" not in _ops(part):
+            _inf_f = list(part.get("inferred_operations") or [])
+            _inf_f.append("folding")
+            part["inferred_operations"] = _inf_f
+            part.setdefault("review_flags", []).append(
+                f"{part.get('part_number')} folds as {base.get('part_number')} does — the same "
+                f"flat carries the same bend lines, so the fold is taken from that hand")
+        # A HAND THAT TAKES A FOLDED BASE'S FLAT IS NOT A PLATE. 12567-05-02M's own model had
+        # no flat pattern and no mass, and reported a "thickness" of 12 mm — the depth of the
+        # folded envelope — so 12 x 409.5 x 88 read as one thickness thick, the connector
+        # ruled it a plate (native_flat_solid) and removed the fold, and the costing gate
+        # removed it again after this pass had put it back. The base's measured flat and its
+        # bends outrank an envelope read off a model with no sheet body: the ruling is lifted
+        # here, with the reason on the record (D-278).
+        if part.get("native_flat_solid") and ("folding" in _ops(base) or _base_bends()):
+            part.pop("native_flat_solid", None)
+            _mf = part.get("manufacturing_features")
+            if isinstance(_mf, dict) and not _mf.get("bend_count"):
+                _mf.pop("bend_count", None)
+                _mf.pop("bend_count_source", None)
+            if "folding" not in _ops(part):
+                part["inferred_operations"] = list(part.get("inferred_operations") or []) + ["folding"]
+            part.setdefault("review_flags", []).append(
+                f"plate ruling lifted on {part.get('part_number')}: its own model reported no "
+                f"flat pattern and read one thickness thick, but it takes the measured flat of "
+                f"{base.get('part_number')}, which folds ({_base_bends() or 'bends stated'}) — "
+                f"the same flat is not a plate in one hand")
+
+        # A HAND THAT TAKES A SHEET FLAT IS SHEET, AND SHEET IS NOT WIRE-FORMED (D-385).
+        # 12173-04-02M-H and 07-1-02M-H took their bases' 1.5 mm flats and still carried a
+        # Robomac row (£16) off the pack's 'RESISTANCE WELDING WIRE TO WIRE' note: with no
+        # flat of their own at document-build time, the wire note landed on them, and the
+        # stock-form gate did not see them as sheet. The flat they take says what they are.
+        # KEYED ON WHAT THE BASE IS, NOT ON ITS OP LIST (D-387): on the saved 03:17 job both
+        # bases carried the same pack-wide wire_forming note, so a test on the base's ops did
+        # not fire for either real hand. A base is wire when its own record says so — a bar
+        # or wire schedule, the wire route's override, a wire stock form; a base with a gauge
+        # and a measured sheet blank is sheet, whatever note the pack painted on it.
+        # NOT `_wire_part_override` (D-388): the document builder sets that flag from the
+        # pack's wire note too, so on the saved 03:17 job both sheet-metal bases carried it
+        # and the guard skipped both real hands. A bar or wire schedule, a recognised bar, or
+        # a wire stock form is the base's own record saying what it is; a flag a note painted
+        # on it is not.
+        _wire_ops = ("wire_forming", "robomac")
+        _base_is_wire = bool(
+            base.get("_bar_recognised") or base.get("wire_schedule") or base.get("bar_schedule")
+            or str(base.get("stock_form")
+                   or (base.get("material_estimate") or {}).get("stock_form") or "").lower()
+            in ("wire", "bar", "rod"))
+        if _got and not _base_is_wire \
+                and _num(base.get("normalized_thickness_mm")) is not None:
+            _had = [o for o in _wire_ops if o in _ops(part)]
+            if _had:
+                for _f in ("textual_operations", "inferred_operations", "operations"):
+                    if isinstance(part.get(_f), list):
+                        part[_f] = [o for o in part[_f] if o not in _wire_ops]   # precedence: direct-write ok — removes ops, adds no evidence
+                _ro = part.setdefault("operations_ruled_out", {})
+                for _o in _had:
+                    _ro.setdefault(_o, (
+                        f"this hand takes the {_num(base.get('normalized_thickness_mm')):g} mm "
+                        f"sheet flat of {base.get('part_number')}, which is not wire-formed — a "
+                        f"sheet blank goes to the press brake, not the Robomac"))
+                part.setdefault("review_flags", []).append(
+                    f"{'/'.join(_had)} removed from {part.get('part_number')}: it is the opposite "
+                    f"hand of a sheet part, and the wire note it carried is the pack's, not its own")
+        # A HAND THAT TAKES A MADE PART'S MEASURED FLAT IS MADE. 11650-06's handed arm bracket
+        # was listed on a kit page tagged as bought-in, so it carried that role; it was then
+        # nested and charged as fabricated steel from the plain arm's flat while its provenance
+        # still read "Bought-in / catalogue component". The base was measured (checked above),
+        # so it is a part we cut, and so is its opposite hand: the stale role is cleared, and
+        # said so.
+        if _got and (part.get("is_bought_in") or "bought_in" in (part.get("page_roles") or [])):
+            part["is_bought_in"] = False
+            part["page_roles"] = [r for r in (part.get("page_roles") or []) if r != "bought_in"]
+            if str(part.get("canonical_kind") or "").lower() == "bought_in":
+                part["canonical_kind"] = base.get("canonical_kind") or "part"
+            part.setdefault("review_flags", []).append(
+                f"{part.get('part_number')} was tagged bought-in by the page it was listed on; it "
+                f"takes {base.get('part_number')}'s measured flat, so it is made, not bought")
+
+        if not _got:
+            continue            # blank AND rollup already complete — genuinely nothing to do
+        part.setdefault("review_flags", []).append(
+            f"GEOMETRY MIRRORED from {base.get('part_number')}: no flat was exported for "
+            f"this hand, so its blank, cut length and bend count are the measured ones of "
+            f"the part it mirrors. A mirrored derivation is the same flat — but if these "
+            f"two hands are NOT identical, this part is wrong and needs its own DXF.")
+        filled.append({"part_number": part.get("part_number"),
+                       "mirrored_from": base.get("part_number"), "fields": _got})
+    return filled
+
+
+def merge_truncated_part_codes(parts: List[Dict[str, Any]],
+                               claimed_codes: Optional[Any] = None) -> List[Dict[str, Any]]:
+    """One item extracted twice is one PART, not two — on the population the sheet renders.
+
+    THE FIRST ATTEMPT AT THIS RAN ON THE WRONG POOL. It was wired into the pooled PDF BOM,
+    which is 7 rows on 12422-24; the workbook renders 15, built from part_estimates, so the
+    merge was correct and invisible. "79814P  3.5 x 16mm Pan Head Wood Screw" stayed on the
+    sheet beside "79814P613", the same four screws, and the stem could never be priced
+    because it is not a code any supplier holds.
+
+    Running here — beside the mirror pass, BEFORE the canonical graph is compiled — means
+    the phantom never becomes a node, rather than being repaired after it already is.
+
+    The guards are part_identity's and are not restated: descriptions must agree, a
+    separator means hierarchy rather than truncation, and a stem matching more than one
+    fuller code is left alone for an estimator. A part carrying real geometry is never
+    merged away, whatever its code looks like — a truncation is a text artefact, and a
+    measured blank means something read a drawing.
+
+    WHICH SPELLING SURVIVES IS EVIDENCE, NOT LENGTH. Keeping the longer code assumes the
+    short one is the damaged read. That is the usual case, and it is still only a guess
+    about a string. 12422-24 is the counter-example: the job's own hierarchy claims
+    "79814P" as a child of the GA, while "79814P613" appears in no assembly at all and was
+    reported as a disconnected node. Dropping the claimed code to keep the unclaimed one
+    would have removed the part the drawing references and left the orphan in its place —
+    this merge firing correctly would STILL have left the blocker standing.
+
+    So when exactly one of the two codes is CLAIMED by the job hierarchy, that one is kept,
+    whatever its length. A parent is something a drawing states; length is something a
+    string happens to have. Position is not evidence on this branch, and neither is size.
+
+    `claimed_codes` is any iterable of codes named as a child by some assembly. Omitted, the
+    length rule stands unchanged — this only ever adds a reason to prefer one over the other.
+    """
+    from part_identity import (is_engine_derived_identity, normalize_part_code,
+                               strip_code_label, stem_duplicate_target)
+
+    merged: List[Dict[str, Any]] = []
+    if not isinstance(parts, list) or len(parts) < 2:
+        return merged
+
+    for part in parts:
+        # An identity the engine derived (printed_code / identity_source) is ours, not a
+        # labelled cell, and is never label-stripped (D-383).
+        if isinstance(part, dict) and not is_engine_derived_identity(part):
+            _raw = str(part.get("part_number") or "")
+            _clean = strip_code_label(_raw)
+            if _clean and _clean != _raw.strip():
+                _apply_field(part, "part_number", _clean, "drawing_deterministic",
+                             note=(f"BOM code '{_raw}' carried a label; read as '{_clean}' "
+                                   f"so it can be looked up"))
+
+    _codes = [str(p.get("part_number") or "") for p in parts if isinstance(p, dict)]
+    _by = {normalize_part_code(c): p for c, p in zip(_codes, parts) if isinstance(p, dict)}
+    _drop: List[int] = []
+
+    def _desc(p):
+        return " ".join(str(p.get("description") or "").upper().split())
+
+    _claimed = {normalize_part_code(strip_code_label(c)) for c in (claimed_codes or [])}
+    _claimed.discard("")
+
+    for _i, part in enumerate(parts):
+        if not isinstance(part, dict):
+            continue
+        code = str(part.get("part_number") or "")
+        target = stem_duplicate_target(code, [c for c in _codes if c != code])
+        keeper = _by.get(target) if target else None
+        if keeper is None or keeper is part:
+            continue
+        if not _desc(part) or _desc(part) != _desc(keeper):
+            continue
+        # THE CLAIMED SPELLING WINS. Exactly one of the pair named as somebody's child is
+        # the one the drawing's hierarchy actually references; the other is the redundant
+        # read, whichever is longer. Both claimed or neither claimed leaves the length rule
+        # in charge, because then nothing has been said to prefer one.
+        _stem_key, _full_key = normalize_part_code(code), normalize_part_code(target)
+        _reason = "it is a truncation of it"
+        if _claimed and (_stem_key in _claimed) != (_full_key in _claimed):
+            if _stem_key in _claimed:
+                # Swap the roles: the SHORT code is the one the job hierarchy claims.
+                part, keeper = keeper, part
+                code, target = target, code
+                _reason = ("the job hierarchy names the shorter code as a child and names "
+                           "this one nowhere, so this is the redundant read")
+            else:
+                _reason = ("it is a truncation of it, and the job hierarchy names the "
+                           "fuller code as a child while naming this one nowhere")
+        # A MEASURED PART IS NOT A TEXT ARTEFACT. A truncation is something the extractor
+        # did to a string; a blank means something read a drawing. Never merge away a part
+        # that carries geometry, however much its code looks like a stem.
+        from document_builder import flat_blank_mm
+        _bl, _bw = flat_blank_mm(part)
+        if _bl and _bw:
+            continue
+        _q_stem = _num(part.get("quantity")) or 0.0
+        _q_keep = _num(keeper.get("quantity")) or 0.0
+        if _q_stem > _q_keep:
+            _apply_field(keeper, "quantity", _q_stem, "drawing_deterministic")
+        keeper.setdefault("review_flags", []).append(
+            f"'{code}' merged into '{target}': same description, and {_reason}. "
+            f"One item read twice — the quantity is the larger of the two "
+            f"({_q_keep:g} and {_q_stem:g}), not their sum.")
+        merged.append({"part_number": code, "merged_into": target,
+                       "quantity": max(_q_stem, _q_keep), "reason": _reason})
+        # THE INDEX OF THE RECORD ACTUALLY BEING REMOVED, not of the one this iteration
+        # started on. Where the hierarchy swapped the roles, `part` is no longer the record
+        # at _i, and dropping _i would delete the code we just decided to keep.
+        _drop.append(next((_j for _j, _p in enumerate(parts) if _p is part), _i))
+
+    # DEDUPED, because popping one index twice removes a record nobody decided to remove.
+    # Two stems resolving to one keeper is rare and the loss would be silent.
+    for _i in sorted(set(_drop), reverse=True):
+        parts.pop(_i)
+    return merged
 
 
 def augment_summary_with_dxf(
@@ -723,6 +3349,7 @@ def augment_summary_with_dxf(
 
     # Phase 1 - resolve each flat DXF to a BOM part (no geometry applied yet).
     resolved: List[Tuple[Dict[str, Any], Path]] = []
+    piece_files: set = set()          # files taken on the numbered-piece reading
     for dxf_path in dxf_paths:
         path = Path(dxf_path)
         if not path.is_file():
@@ -737,10 +3364,108 @@ def augment_summary_with_dxf(
 
         pn = part_number_from_dxf_path(path)
         if not pn:
-            report["unmatched_dxf"].append({"path": str(path), "reason": "no_part_number_in_filename"})
-            continue
+            # THE HYPHENS ARE NOT PART OF THE NAME. "1097502A01_2mm_ACRY_Rev_B.DXF" is
+            # 10975-02-A01's flat with the separators dropped by whoever exported it; the
+            # grammar patterns need the hyphens and matched nothing, so the only DXF in the
+            # pack paired with no part — which cost A01 its 2 mm gauge token and its
+            # BENDLINES count, and with them the Linebend. A unique BOM part whose squashed
+            # spelling (A-Z0-9 only, eight characters or more) appears in the squashed
+            # filename is that part; two candidates or none, and the file stays unmatched.
+            _stem_sq = re.sub(r"[^A-Z0-9]", "", path.stem.upper())
+            _hits = [k for k in parts_by_key
+                     if len(re.sub(r"[^A-Z0-9]", "", k)) >= 8
+                     and re.sub(r"[^A-Z0-9]", "", k) in _stem_sq]
+            if len(_hits) == 1:
+                pn = str(parts_by_key[_hits[0]].get("part_number") or _hits[0])
+                report["matched"].append({
+                    "path": str(path), "part_number": pn,
+                    "reason": "squashed_filename_match"})
+            else:
+                # NAMED FOR WHAT IT IS, NOT FOR WHAT IT LACKS. A pack legitimately carries
+                # DXF exports of the DRAWING — views, dimensions, a title block — whose
+                # names are the job description rather than a part code ("0355255 - A4
+                # Table Top Graphic Holder - 10975_REV B"). One of those is not a failure
+                # to match; it is a different kind of file, and the report should say so
+                # with the content evidence, so nobody reads "no part number" as a gap.
+                _export = drawing_export_reason(path)
+                if _export:
+                    report["skipped"].append({
+                        "path": str(path),
+                        "reason": "drawing_export_not_a_flat",
+                        "detail": _export})
+                else:
+                    report["unmatched_dxf"].append(
+                        {"path": str(path), "reason": "no_part_number_in_filename"})
+                continue
 
-        part = _lookup_part(parts_by_key, pn)
+        part, _basis = _lookup_part_with_basis(parts_by_key, pn)
+        # A NUMBERED PIECE IS AN ASSUMPTION ABOUT A SUFFIX, SO IT IS SAID (D-382). "<part>-1"
+        # read as piece 1 of <part> is right for 12173-03-01J's two 25 mm layers; another
+        # drawing office may write the same suffix for a VARIANT or an ITEM of its own. So the
+        # reading is checked against what the job holds before it is taken:
+        #   * the same number spelt with padding (part <part>-01 for file <part>-1) is that
+        #     exact item, and the file is its flat;
+        #   * another <part>-<m> named as a part or on a parts-list row says the family holds
+        #     items of their own: the file is not attached and a person is asked;
+        #   * a flat named for <part> itself beside it: a piece and a variant cannot be told
+        #     apart, so it is not attached (D-382);
+        #   * otherwise the piece reading stands and is flagged in phase 2, with what was
+        #     checked and whether the part's own parts list sizes the pieces.
+        if part is not None and _basis == "piece":
+            _mp = _PIECE_OF_PART.match(_normalize_part_key(pn))
+            _fam_key = _normalize_part_key(part.get("part_number"))
+            _n = int(_mp.group("n")) if _mp else -1
+            _items = _family_items(summary, parts_by_key, _fam_key)
+            _same = [it for it in _items if it["n"] == _n and it["where"] == "part"]
+            if _same:
+                part = parts_by_key[_same[0]["key"]]
+                part.setdefault("review_flags", []).append(
+                    f"DXF {path.name} bound to {part.get('part_number')} — the same item "
+                    f"number, written {pn} in the file name")
+                resolved.append((part, path))
+                continue
+            if _items:
+                _ask_dxf_identity(part, [path], [
+                    (f"{it['code']} is a part of this job" if it["where"] == "part" else
+                     f"{it['code']} is a row of {it.get('parent') or 'a parts list'}'s parts "
+                     f"list") for it in _items], report)
+                continue
+            _base_key = _fam_key
+            _own_flat = any(
+                _normalize_part_key(part_number_from_dxf_path(Path(_o)) or "") == _base_key
+                for _o in dxf_paths if Path(_o) != path)
+            if _own_flat:
+                report["ambiguous_dxf"].append({
+                    "path": str(path), "part_number": pn,
+                    "reason": "suffixed_flat_beside_the_parts_own_flat",
+                    "detail": (f"{path.name} reads as piece {pn.rsplit('-', 1)[-1]} of "
+                               f"{part.get('part_number')}, but the job also holds a flat "
+                               f"named for {part.get('part_number')} itself — a variant or a "
+                               f"piece cannot be told apart, so it is not attached")})
+                part.setdefault("review_flags", []).append(
+                    f"DXF {path.name} NOT attached: its suffix could be a piece or a variant "
+                    f"of {part.get('part_number')}, which has a flat of its own — say which")
+                continue
+            piece_files.add(str(path))
+        if not part and not _dxf_code_is_in_this_job(pn, parts_by_key):
+            # A FLAT FOR ANOTHER DRAWING IS NOT A PART OF THIS ONE.
+            #
+            # 11350's folder holds "11350-03-BOOTS COMMS BAR 200MM BLACK_RevB.DXF" — the
+            # BLACK variant, a different GA. It parses a code, matches nothing, and was
+            # minted as a new part: the black bar's geometry costed onto the white job,
+            # under a code that normalises to "11350-03" and reads entirely plausible.
+            #
+            # Minting an orphan is right for a detail the BOM missed. It is wrong for a flat
+            # that belongs to a sibling drawing, and the difference is visible: this job's
+            # parts sit under one assembly and this code does not. Refused and reported —
+            # declining costs a measurement somebody can see, minting costs a phantom
+            # nobody would.
+            report["unmatched_dxf"].append({
+                "path": str(path), "part_number": pn,
+                "reason": "code_belongs_to_another_assembly_in_this_job_number"})
+            continue
+        if not part and not dxf_may_mint_a_part(path, report, pn):
+            continue                      # a drawing of a part is not a part (D-406)
         if not part:
             part = _create_orphan_dxf_part(summary, pn, path)
             parts.append(part)
@@ -769,8 +3494,29 @@ def augment_summary_with_dxf(
 
     for pid, paths in by_part.items():
         part = part_by_id[pid]
+        _as_pieces = [p for p in paths if str(p) in piece_files]
         if len(paths) == 1:
             _apply_and_report(part, paths[0], report, matched_keys)
+            if _as_pieces:
+                _flag_dxf_pieces(summary, part, _as_pieces,
+                                 {paths[0].name: str(part.get("part_number") or "")},
+                                 report, parts_by_key)
+            continue
+        if _as_pieces and len(_as_pieces) == len(paths):
+            # NUMBERED PIECES, EACH COSTED AS ITSELF AND NEVER BOUND TO A CHILD. Distinct
+            # numbers on every file say every file is a piece (12173-03-01J's two identical
+            # layers); a lettered child (a hand, <part>-H) is not a piece number.
+            _n_before = len(report["matched"])
+            report["ambiguous_dxf"].append({
+                "part_number": part.get("part_number"),
+                "candidates": [str(p) for p in paths],
+                "reason": "numbered_pieces_promoted"})
+            _split_parent_flats_to_children(
+                part, [(_cluster_paths_by_bbox([p])[0][0], [p]) for p in paths],
+                parts, parts_by_key, summary, report, matched_keys, bind_children=False)
+            _minted = {Path(str(m.get("dxf") or "")).name: str(m.get("part_number") or "")
+                       for m in report["matched"][_n_before:]}
+            _flag_dxf_pieces(summary, part, paths, _minted, report, parts_by_key)
             continue
         # Several flats resolved to one part. Cluster by blank geometry:
         #   1 cluster  -> genuine duplicates / stale revisions (e.g. 08_1_2mm_MS +
@@ -779,6 +3525,14 @@ def augment_summary_with_dxf(
         #                 DXFs 04_TOP_PANEL/04_SIDE_PANEL both reading parent ...-04)
         #                 -> split each to the child detail part it matches by dimension.
         clusters = _cluster_paths_by_bbox(paths)
+        # NUMBERED PIECES ARE PIECES, EVEN WHEN THEY ARE THE SAME SHAPE. The base of 12173-03
+        # is two identical 626 x 626 x 25 mm layers, "-01J-1" and "-01J-2": one blank, one
+        # stock, so they clustered as duplicates and one would have been dropped as a stale
+        # revision. A revision is never given a piece number; distinct numbers on every file
+        # say every file is a piece, so each is its own cluster and each is costed.
+        _nums = [_member_suffix_of_flat(p) for p in paths]
+        if None not in _nums and len(set(_nums)) == len(paths) and len(paths) > 1:
+            clusters = [(_cluster_paths_by_bbox([p])[0][0], [p]) for p in paths]
         if len(clusters) <= 1:
             chosen = _pick_best_flat(part, paths)
             report["ambiguous_dxf"].append(
@@ -802,12 +3556,19 @@ def augment_summary_with_dxf(
                 k != parent_key and k.startswith(parent_key + "-") and not k.endswith("-GA")
                 for k in parts_by_key
             )
-            if has_children:
+            # ... OR when the flats are cut from DIFFERENT STOCK, which is what says they are
+            # pieces of one fabrication rather than revisions of one part. See
+            # flats_are_different_pieces: 01A's seven arrive as 2mm, 3mm and five 5mm, and
+            # nothing is a revision of itself in a different thickness.
+            _pieces = flats_are_different_pieces(paths)
+            if has_children or _pieces:
                 report["ambiguous_dxf"].append(
                     {
                         "part_number": part.get("part_number"),
                         "candidates": [str(p) for p in paths],
-                        "reason": "distinct_blanks_on_one_parent_split_to_children",
+                        "reason": ("distinct_blanks_on_one_parent_split_to_children"
+                                   if has_children else
+                                   "distinct_stock_on_one_parent_promoted_as_pieces"),
                         "clusters": len(clusters),
                     }
                 )
@@ -841,6 +3602,15 @@ def augment_summary_with_dxf(
 
     summary["dxf_augmentation"] = report
     summary["geometry_source_policy"] = "dxf_wins_geometry_pdf_wins_bom"
+
+    # A mirrored part has its own hand's flat only when somebody exported one. Where nobody
+    # did, its other hand was measured and is sitting in this same list.
+    report["mirror_inherited"] = apply_mirror_geometry(parts)
+    report["cuts_proposed"] = propose_missing_cuts(parts)
+    # AFTER THE GEOMETRY, DELIBERATELY. Mirroring fills what a hand is MISSING; this settles
+    # what the two hands each answered and disagreed about, which only has meaning once both
+    # records are as complete as they are going to get.
+    report["handed_pairs_settled"] = settle_handed_pairs(parts)
 
     # Flag sub-assembly parents (e.g. TANK 04 over 04-01/04-02) so estimation
     # suppresses their material + phantom fab labour. Must run before re-estimate.
@@ -910,6 +3680,19 @@ def discover_flat_dxf_files_in_folder(
     subdir = cfg.get("dxf_subdir", "DXF")
     if subdir:
         roots.append(Path(job_folder) / subdir)
+    # A subfolder named for the job is still the DXF subfolder. Only the literal name "DXF"
+    # was matched, so M&S job 2085 — flats in "2085 - DXFs_DEV1" — would have had every part
+    # sized from drawing text had a root copy not happened to exist. Immediate children only:
+    # recursing a job folder pulls in whatever else has been left there, and 12120 already
+    # had another job's DXF sitting beside its own.
+    _tokens = [str(t).upper() for t in (cfg.get("dxf_subdir_tokens") or []) if str(t).strip()]
+    if _tokens:
+        try:
+            for _child in sorted(Path(job_folder).iterdir()):
+                if _child.is_dir() and any(t in _child.name.upper() for t in _tokens):
+                    roots.append(_child)
+        except OSError:
+            pass
     if extra_roots:
         roots.extend(extra_roots)
 
@@ -939,7 +3722,37 @@ def collect_dxf_paths_for_job(
     if auto_discover_dxf:
         for path in discover_flat_dxf_files_in_folder(job_folder):
             paths[str(path.resolve())] = path
-    return sorted(paths.values(), key=lambda p: p.name.lower())
+    return _drop_duplicate_files(sorted(paths.values(), key=lambda p: p.name.lower()))
+
+
+def _drop_duplicate_files(paths: Sequence[Path]) -> List[Path]:
+    """One file is one file, however many places it has been copied to.
+
+    Deduplication was by resolved PATH, which is right for the same file reached two ways and
+    wrong for the same file COPIED twice. 2085 keeps its plate flat both in the job folder and
+    in "2085 - DXFs_DEV1"; once discovery searches both, the identical file is read twice and
+    the part looks ambiguous when nothing about it is.
+
+    Identical CONTENT is the test, not the name. Two files sharing a name and differing inside
+    are a real ambiguity — a superseded revision beside a current one — and both are kept so
+    the existing candidate scoring can choose between them and flag it. Silently dropping one
+    would pick a revision by accident of filesystem order.
+    """
+    import hashlib
+
+    seen: Dict[str, Path] = {}
+    out: List[Path] = []
+    for path in paths:
+        try:
+            digest = hashlib.sha1(Path(path).read_bytes()).hexdigest()
+        except OSError:
+            out.append(path)          # unreadable here; let the reader report it properly
+            continue
+        if digest in seen:
+            continue                  # byte-identical to one already taken
+        seen[digest] = path
+        out.append(path)
+    return out
 
 
 def collect_dxf_paths_for_pdf_scan(

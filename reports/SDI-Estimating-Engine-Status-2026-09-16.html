@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SDI Estimating Engine Status</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --paper:#f4f6f8; --card:#ffffff; --ink:#1e242b; --dim:#5a6572; --line:#d8dee5;
+    --accent:#2f6db3; --accent-ink:#24568e;
+    --live:#2e7d4f; --live-bg:#e3f0e8;
+    --pilot:#b0742a; --pilot-bg:#f6ecdd;
+    --hold:#a33b3b; --hold-bg:#f5e4e4;
+    --mono-bg:#eceff3;
+  }
+  :root:not([data-theme="light"]){}
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#161a1f; --card:#1e242b; --ink:#e8ecf0; --dim:#9aa6b2; --line:#333c46;
+      --accent:#6ea3d8; --accent-ink:#8db8e4;
+      --live:#6fbf8f; --live-bg:#22352a;
+      --pilot:#d8a35c; --pilot-bg:#3a2f1e;
+      --hold:#d88080; --hold-bg:#3a2424;
+      --mono-bg:#262d35;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#161a1f; --card:#1e242b; --ink:#e8ecf0; --dim:#9aa6b2; --line:#333c46;
+    --accent:#6ea3d8; --accent-ink:#8db8e4;
+    --live:#6fbf8f; --live-bg:#22352a;
+    --pilot:#d8a35c; --pilot-bg:#3a2f1e;
+    --hold:#d88080; --hold-bg:#3a2424;
+    --mono-bg:#262d35;
+  }
+  body{background:var(--paper); color:var(--ink); margin:0;
+       font-family:"Source Sans 3",-apple-system,"Segoe UI",sans-serif; font-size:16px; line-height:1.55;}
+  .wrap{max-width:960px; margin:0 auto; padding-block:36px 64px; padding-inline:20px;}
+  h1,h2,h3{font-family:"Archivo","Source Sans 3",sans-serif; text-wrap:balance; line-height:1.2;}
+  h1{font-size:30px; font-weight:700; margin:6px 0 4px;}
+  h2{font-size:20px; font-weight:700; margin:40px 0 12px; padding-top:18px; border-top:2px solid var(--line);}
+  h3{font-size:16px; font-weight:600; margin:20px 0 6px;}
+  .eyebrow{font-size:12px; letter-spacing:.12em; text-transform:uppercase; color:var(--accent-ink); font-weight:600;}
+  .meta{color:var(--dim); font-size:14px; margin:0 0 6px;}
+  p{max-width:70ch;}
+  code{font-family:"IBM Plex Mono",ui-monospace,Consolas,monospace; font-size:.86em;
+       background:var(--mono-bg); border-radius:3px; padding:1px 5px;}
+  .jobs{display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; margin:22px 0 6px;}
+  .job{background:var(--card); border:1px solid var(--line); border-radius:6px; padding:16px 18px;}
+  .job .jt{font-family:"Archivo",sans-serif; font-weight:700; font-size:15px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+  .job p{font-size:14px; color:var(--dim); margin:8px 0 0;}
+  .pill{display:inline-block; font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase;
+        border-radius:999px; padding:2px 10px;}
+  .p-live{background:var(--live-bg); color:var(--live);}
+  .p-pilot{background:var(--pilot-bg); color:var(--pilot);}
+  .p-hold{background:var(--hold-bg); color:var(--hold);}
+  .tblwrap{overflow-x:auto; border:1px solid var(--line); border-radius:6px; background:var(--card);}
+  table{border-collapse:collapse; width:100%; font-size:14px;}
+  th{font-family:"Archivo",sans-serif; text-align:left; font-size:12px; letter-spacing:.06em; text-transform:uppercase;
+     color:var(--dim); padding:10px 14px; border-bottom:1px solid var(--line); white-space:nowrap;}
+  td{padding:10px 14px; border-bottom:1px solid var(--line); vertical-align:top;}
+  tr:last-child td{border-bottom:none;}
+  td.k{white-space:nowrap; font-weight:600;}
+  .num{font-variant-numeric:tabular-nums;}
+  ul{padding-left:20px; max-width:75ch;}
+  li{margin:6px 0;}
+  .rule{border-left:3px solid var(--accent); background:var(--card); border-radius:0 6px 6px 0;
+        padding:12px 16px; margin:14px 0; max-width:78ch;}
+  .rule b{font-family:"Archivo",sans-serif;}
+  .quote{color:var(--dim); font-style:italic;}
+  .note{font-size:13.5px; color:var(--dim); margin-top:10px; max-width:78ch;}
+  .elsewhere{display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:14px; margin-top:16px;}
+  .ws{background:var(--card); border:1px solid var(--line); border-left:3px solid var(--accent);
+      border-radius:0 6px 6px 0; padding:14px 16px;}
+  .ws .wst{font-family:"Archivo",sans-serif; font-weight:700; font-size:14.5px; display:flex; align-items:center;
+           gap:8px; flex-wrap:wrap;}
+  .ws p{font-size:13.5px; color:var(--dim); margin:8px 0 0;}
+  .where{background:var(--card); border:1px solid var(--line); border-radius:6px; padding:14px 18px; margin-top:18px;}
+  .where ul{margin:8px 0 0; font-size:14px;}
+  .foot{margin-top:44px; color:var(--dim); font-size:13px; border-top:1px solid var(--line); padding-top:14px;}
+  .actions{display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:14px;}
+  .btn{font-family:"Archivo",sans-serif; font-size:13.5px; font-weight:600; color:var(--accent-ink);
+       background:var(--card); border:1px solid var(--accent); border-radius:5px; padding:7px 14px;
+       cursor:pointer; line-height:1.3;}
+  .btn:hover:not(:disabled){background:var(--live-bg); background:color-mix(in srgb, var(--accent) 8%, var(--card));}
+  .btn:disabled{opacity:.6; cursor:default;}
+  .btn:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+  .dlnote{font-size:13px; color:var(--dim);}
+  .kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin:20px 0 6px;}
+  .kpi{background:var(--card); border:1px solid var(--line); border-radius:6px; padding:14px 16px;}
+  .kpi .n{font-family:"Archivo",sans-serif; font-weight:700; font-size:27px; line-height:1.05;
+          font-variant-numeric:tabular-nums; color:var(--accent-ink);}
+  .kpi .n.good{color:var(--live);} .kpi .n.gap{color:var(--hold);}
+  .kpi .l{font-size:12.5px; color:var(--dim); margin-top:5px; line-height:1.4;}
+  .kpi .l b{color:var(--ink); font-weight:600;}
+</style>
+</head>
+<body>
+<div id="sdi-dlbar" style="font:500 13px/1.4 ui-sans-serif,-apple-system,'Segoe UI',sans-serif;
+     display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+     max-width:940px;margin:0 auto;padding:10px 22px 0;color:inherit">
+  <a id="sdi-dlbar-pdf" href="" target="_blank" rel="noopener"
+     style="text-decoration:none;color:inherit;border:1px solid currentColor;border-radius:5px;
+            padding:5px 11px;opacity:.75">PDF version</a>
+  <button type="button" id="sdi-dlbar-save"
+     style="font:inherit;color:inherit;background:transparent;border:1px solid currentColor;
+            border-radius:5px;padding:5px 11px;opacity:.75;cursor:pointer">Save this page</button>
+  <span id="sdi-dlbar-note" style="opacity:.6"></span>
+</div>
+<script>
+(function () {
+  var bar = document.getElementById("sdi-dlbar");
+  if (!bar) return;
+  var link = document.getElementById("sdi-dlbar-pdf");
+  var save = document.getElementById("sdi-dlbar-save");
+  var note = document.getElementById("sdi-dlbar-note");
+
+  // WHERE THE PDF IS, WHICH DEPENDS ENTIRELY ON HOW THIS PAGE WAS OPENED.
+  var here = String(location.href).split("#")[0];
+  var name = (here.split("/").pop() || "").split("?")[0];
+  if (/[?&]path=/.test(here)) {
+    // The portal: /api/file?path=<dir>/<name>.html -> swap the extension inside the query.
+    link.href = here.replace(/(\.html?)(?=($|&))/i, ".pdf");
+  } else if (/\.html?$/i.test(name)) {
+    link.href = name.replace(/\.html?$/i, ".pdf");   // sibling file, on disk or on K:
+  } else {
+    link.hidden = true;                              // cannot work it out: offer nothing broken
+  }
+
+  save.addEventListener("click", function () {
+    try {
+      bar.hidden = true;                             // the saved copy carries the report, not the bar
+      var html = "<!doctype html>\n" + document.documentElement.outerHTML;
+      bar.hidden = false;
+      var url = URL.createObjectURL(new Blob([html], {type: "text/html;charset=utf-8"}));
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = (name && /\.html?$/i.test(name)) ? name : "sdi-status-report.html";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    } catch (e) {
+      note.textContent = "Saving is blocked here — use the browser's own Save Page As.";
+    }
+  });
+})();
+</script>
+<style>@media print { #sdi-dlbar { display:none !important; } }</style>
+
+<div class="wrap">
+  <div class="eyebrow">SDI Intelligence · Estimating Engine</div>
+  <h1>Status Report — 16 September 2026</h1>
+  <p class="meta">Branch <code>main-2026</code> at <code>c92bf36</code>, 16 Sep evening · 5,957 tests passing, 11 skipped
+  · prepared for James Gray; shareable with Tony Ford and Howard Thurley</p>
+  <p class="meta">This page is the engine-level detail for the estimators. <b>The company-wide picture — this workstream
+  plus Yogesh Kumar's and Muhammad Yazir's — is the 16 September set:</b> the programme status report (issue 3), the
+  covering e-mail to the MD and FD, and the portal, all listed at the foot of this page.</p>
+
+  <div class="actions" id="dl-row" hidden>
+    <button type="button" class="btn" id="dl">Save a copy of this page</button>
+    <span class="dlnote" id="dl-note">Downloads as a single HTML file — opens in any browser, and prints to PDF from there.</span>
+  </div>
+
+  <h2>Where each job stands</h2>
+  <div class="jobs">
+    <div class="job">
+      <div class="jt">Howard — 7332-01 <span class="pill p-pilot">rerun assessed</span></div>
+      <p>All nine points of Howard's reply are implemented, plus both rerun blockers: the laser set-up
+      shares only across a <b>proven</b> one-sheet nest, and the plater pack times are reconciled per unit.
+      Plating and freight are shown as <b>explicitly awaiting current quotes</b> — no figure off a manual
+      estimate is retained anywhere. The 17:36 rerun is assessed; the five laser rows, the stated weld and
+      dress times and the two pack rows all landed.</p>
+      <p><b>Open from that book:</b> the shared set-up on the two nested parts, the brushing minutes and pack
+      minutes on the frame, a tube-bend flag still on the sawn leg, and the plating specification not
+      identified on the run. The gauge cause was found and fixed from the book alone; the rest need the run's
+      own <code>output/json/7332-01.json</code> from the laptop.</p>
+    </div>
+    <div class="job">
+      <div class="jt">Howard — 10975-02 <span class="pill p-pilot">email held</span></div>
+      <p>Figures stable since the 14:28 book (Description, Rev B, four quantity breaks, 1-off deliberate) —
+      the engine's own output, not anybody's sheet, and they move when the build moves. Needs one clean rerun
+      on the current build before the covering e-mail, which will state that the 1-unit run is deliberate and
+      answer his points.</p>
+    </div>
+    <div class="job">
+      <div class="jt">Tony — 11908-21 + 5 new <span class="pill p-pilot">next in queue</span></div>
+      <p>11908-21's joinery route is scoped correctly (bench rate now reaches only faced board).
+      Still open before rerun: MC J emission proof on the book, edge-banding metres (his input),
+      box-and-pallet method into config, and a guard so a <b>purchased, customer-supplied or pre-assembled
+      board parent</b> is not given bench work merely for having child records. The five new jobs run as
+      controlled learning passes, findings fed back per job.</p>
+    </div>
+    <div class="job">
+      <div class="jt">Tim — 11350-02 / -01 <span class="pill p-pilot">answered, 2 figures out</span></div>
+      <p>Four points, two of them about where a figure came from and two about why a line carried none.
+      Both "where from" questions are answered by arithmetic that reproduces the booked row — pemming
+      at 15 s a pressed fastener (his own 12120 sheet), powder by weight and never by RAL. Both
+      "why none" cases are fixed generically (below). <b>Out to him:</b> the powder rate per kg, the
+      coverage figure, and whether 15 s still holds. 11350-01 is the same job at another size and
+      re-runs beside it.</p>
+    </div>
+  </div>
+
+  <h2>The fortnight in numbers</h2>
+  <p>Counted rather than characterised. The last two are the honest ones: both are gaps, and both
+  have an owner.</p>
+  <div class="kpis">
+    <div class="kpi"><div class="n good">11</div><div class="l"><b>jobs run</b> in two weeks, against a minimum of five a week</div></div>
+    <div class="kpi"><div class="n good">3 / 3</div><div class="l"><b>estimators</b> have returned a review — six job-reviews between them</div></div>
+    <div class="kpi"><div class="n good">~40</div><div class="l"><b>points raised</b> by the estimators, and every one is now a rule, not a patch</div></div>
+    <div class="kpi"><div class="n">69</div><div class="l"><b>numbered decisions</b> on the register, D-016 to D-082, each with its source and its proof</div></div>
+    <div class="kpi"><div class="n">5,957</div><div class="l"><b>tests passing</b> across 381 files — they execute the engine, they do not read it</div></div>
+    <div class="kpi"><div class="n">272</div><div class="l"><b>commits</b> since the 7 September report</div></div>
+    <div class="kpi"><div class="n gap">0 / 3</div><div class="l"><b>supplier price lists loaded</b> — Elite, Eagle, Thermaset. Every unpriced bought line traces back here</div></div>
+    <div class="kpi"><div class="n good">4 / 11</div><div class="l"><b>parity comparisons filed</b> against the estimators' own sheets — below</div></div>
+  </div>
+
+  <h2>Parity — the engine against the estimators' own sheets</h2>
+  <p>Four jobs now have both books side by side: the engine's workbook and the estimator's manual
+  estimate for the same job. This is the measure the go-live rests on, and it refreshes every week
+  as more pairs come in.</p>
+
+  <div class="kpis">
+    <div class="kpi"><div class="n">4 / 11</div><div class="l"><b>jobs compared</b> — a manual sheet exists and pairs with a run</div></div>
+    <div class="kpi"><div class="n">17.9%</div><div class="l"><b>mean absolute variance</b> on material plus labour, across the four</div></div>
+    <div class="kpi"><div class="n good">0.4%</div><div class="l"><b>closest material agreement</b> — 10975-02, essentially exact</div></div>
+    <div class="kpi"><div class="n">3 of 4</div><div class="l"><b>read under the manual</b>, which is the safe direction and has a named cause</div></div>
+  </div>
+
+  <div class="tblwrap" style="margin-top:16px"><table>
+    <tr><th style="width:17%">Job</th><th style="width:8%">Compared at</th><th style="width:11%">Material</th><th style="width:11%">Labour</th><th style="width:12%">Mat + labour</th><th style="width:41%">What explains it</th></tr>
+    <tr><td class="k"><b>7332-01</b><div style="font-size:12.5px;color:var(--dim);font-weight:400;margin-top:3px">Howard · Harrods signage stand</div></td><td class="num" style="white-space:nowrap">6 off</td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--pilot)">-17.3%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;right:50%;width:8.7%;background:var(--pilot);border-radius:2px"></div></div></td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--hold)">-27.1%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;right:50%;width:13.6%;background:var(--hold);border-radius:2px"></div></div></td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--pilot)">-24.8%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;right:50%;width:12.4%;background:var(--pilot);border-radius:2px"></div></div></td><td style="font-size:13px;line-height:1.55">The engine is deliberately short here: <b>plating and the freight to the plater carry no price</b>, both awaiting current quotes rather than a figure off a sheet. Packaging and delivery are held at nil by decision. The gap is the size of the lines we have chosen not to guess at.</td></tr><tr><td class="k"><b>12349-02</b><div style="font-size:12.5px;color:var(--dim);font-weight:400;margin-top:3px">Tim · Fanatics gravity feeders</div></td><td class="num" style="white-space:nowrap">7 off</td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--pilot)">-21.1%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;right:50%;width:10.6%;background:var(--pilot);border-radius:2px"></div></div></td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--pilot)">-23.5%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;right:50%;width:11.8%;background:var(--pilot);border-radius:2px"></div></div></td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--pilot)">-22.9%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;right:50%;width:11.4%;background:var(--pilot);border-radius:2px"></div></div></td><td style="font-size:13px;line-height:1.55">Same shape, same cause: <b>packaging, delivery and two fixings carry no price</b> on this book. Tim's fourteen points are in, and this is the 14 September run — its quantity-breaks tab still reads #REF!, which was fixed on the 16th.</td></tr><tr><td class="k"><b>10975-02</b><div style="font-size:12.5px;color:var(--dim);font-weight:400;margin-top:3px">Howard · M&amp;S table-top graphic holder</div></td><td class="num" style="white-space:nowrap">10 off</td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--live)">+0.4%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;left:50%;width:0.2%;background:var(--live);border-radius:2px"></div></div></td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--pilot)">+19.5%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;left:50%;width:9.8%;background:var(--pilot);border-radius:2px"></div></div></td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--pilot)">+12.9%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;left:50%;width:6.5%;background:var(--pilot);border-radius:2px"></div></div></td><td style="font-size:13px;line-height:1.55"><b>The material is within half a percent.</b> Labour runs over, which is where to look next: one labour line on this job is still with Howard to rule on. The closest agreement in the set &mdash; and it is Howard's job, not the one Tim's &ldquo;really close&rdquo; remark was about.</td></tr><tr><td class="k"><b>11908-21</b><div style="font-size:12.5px;color:var(--dim);font-weight:400;margin-top:3px">Tony · sunglasses tray</div></td><td class="num" style="white-space:nowrap">50 off</td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--hold)">-66.4%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;right:50%;width:33.2%;background:var(--hold);border-radius:2px"></div></div></td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--hold)">+35.3%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;left:50%;width:17.6%;background:var(--hold);border-radius:2px"></div></div></td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--pilot)">-10.8%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;right:50%;width:5.4%;background:var(--pilot);border-radius:2px"></div></div></td><td style="font-size:13px;line-height:1.55">The two halves move in opposite directions and both are explicable. <b>Labour is over</b> because Tony's review added the joinery route the engine had been missing entirely — edge banding, saw and spindle, bench work. <b>Material is well under</b>, which is the open one: faced-board pricing on this job is the thing to look at before the re-run.</td></tr>
+  </table></div>
+  <p class="note"><b>Reading the bars.</b> Left of centre the engine is under the manual, right of
+  centre it is over. Green within 10%, amber to 25%, red beyond. <b>Under is the safe direction</b>,
+  and on three of these four it has a named cause rather than a mystery: lines the engine
+  deliberately refuses to price until somebody quotes them.</p>
+
+  <h3>How these are compared, and why that matters more than the number</h3>
+  <ul>
+    <li><b>Both sides are read by the same block reader.</b> The manual sheet and the engine's are
+    the same house template, so material and labour come off the same blocks on both, and each side
+    is reconciled to its own stated totals before anything is compared. All eight books balanced.</li>
+    <li><b>Matched quantity, always.</b> Two pairs were priced at different quantities — 11908-21
+    ran at one and Tony's sheet is at fifty; 10975-02 ran at one and Howard's Rev B sheet is at ten.
+    A variance across two quantities is arithmetic about nothing, because set-up amortises over a
+    different number on each side. Both are compared at the manual's quantity, taken from <b>the
+    engine's own Quantity Breaks tab</b>, which recalculates the whole estimate at each break —
+    the tab that exists because of Howard's review.</li>
+    <li><b>The same article, not just the same job number.</b> 10975-02 has two manual revisions: an
+    L-stand at one off and the A4 table-top holder at ten. Comparing the engine's table-top run
+    against the L-stand sheet gives a material variance near 800% and means nothing. Rev B is the
+    pair.</li>
+    <li><b>No figure off a manual estimate appears here.</b> By rule those are not retained in our
+    reports, so parity is published as the engine's own number and a variance with a direction. That
+    measures us without keeping their figures, and a variance cannot be used as a price.</li>
+  </ul>
+
+  <div class="rule"><b>11350-02 and 11350-01 have engine runs and no manual sheet</b>, so they are
+  not among the four and no accuracy is claimed for them either way. Tim's own words on 11350-02 are
+  the only reading we have: <span class="quote">“Costs come out really close.”</span> If the manual
+  books exist, they complete the week.</div>
+
+  <p><b>Every week from here.</b> One command per pair, on the two workbooks alone — no engine JSON,
+  no database, nothing but the files an estimator already has:</p>
+  <p><code>python tools/parity_workbooks.py --pair &lt;job&gt; &lt;engine.xlsx&gt; &lt;manual.xls&gt;</code></p>
+
+  <h2>What is live and generic</h2>
+  <div class="tblwrap"><table>
+    <tr><th>Rule</th><th>What it does</th><th>Proof</th></tr>
+    <tr><td class="k">One laser row per component</td><td>Each component gets its own LASM row and rate — no blended rate across a strap and a cap. Rows of one material and gauge share ONE department set-up, allocated only when the engine's own nesting proves the whole order fits one sheet; unproven nests keep full set-ups and say so.</td><td>D-066/074 · executed tests: five components never create five set-ups</td></tr>
+    <tr><td class="k">0.9 mm steel → 1.0 mm</td><td>A confirmed production-substitution rule (data, not code): costed at the gauge the shop buys, drawn figure kept on the line, estimator-confirmed thickness stands it down. Mild steel and Zintec only. A confirmed rule of this kind <b>cannot be outvoted by the drawing readers</b> — the quorum that kept one part at 0.9 is now barred from overruling a ruling.</td><td>D-068/078 · all three states executed</td></tr>
+    <tr><td class="k">Mitred tube is sawn, not bent</td><td>The tube-bender needs a round/oval section and a radius. A square leg whose only evidence is 45° callouts loses the op, citing Howard's ruling; measured bends are never second-guessed.</td><td>D-069</td></tr>
+    <tr><td class="k">No default acrylic peel</td><td>“Nothing fixed for this” — the standing MANA allowance comes off unless the drawing states the work; the absence is flagged with how to reverse it.</td><td>D-070</td></tr>
+    <tr><td class="k">Customer finish standards</td><td>“M&amp;S dress all seen welds; TTI none” — kept as a per-customer rule with Howard's name on it. Governs the engine's inference only; a drawing stating dressing is never overruled.</td><td>D-071</td></tr>
+    <tr><td class="k">Two packs, two rows</td><td>A plated part packs out (its own PACM row) and packs back. The total is unchanged; each figure is now checkable on its own line.</td><td>D-072/075</td></tr>
+    <tr><td class="k">Board assembly bench line</td><td>Every multi-part board assembly gets a bench-fitting line — the BOM's own structure says so. The <i>rate</i> is scoped (below); the <i>rule</i> is generic.</td><td>D-067</td></tr>
+    <tr><td class="k">Faced board keeps its facing</td><td>MFMDF stated on a title block survives the canonical collapse to MDF, is promotion evidence on its own, and prices by the purchased sheet — closing the 4× plain-core under-charge path.</td><td>D-067</td></tr>
+    <tr><td class="k">One workbook, every quantity</td><td>An enquiry asked at 10, 50, 250 and 1,000 produces <b>one spreadsheet</b>, not one per quantity. The estimators' own Material Price Break tab is filled by the engine and a Quantity Breaks tab recalculates the whole estimate at each quantity, with order-level freight divided by that quantity rather than landed on every unit. The base sheet is deliberately run at one unit, where each department's set-up is visible instead of hidden in a volume average.</td><td>"Still generating multiple s/sheets" — James, 15 Sep. The sweep still computes the figures; it no longer files copies</td></tr>
+    <tr><td class="k">An unpriced line names whose gap it is</td><td>Three lines on Tim's comms bar said only "needs a rate". Two carried a code <b>the engine minted</b> from the description (BI-NUT, BI-PEMSTUD) because the pack gives none — nothing can be looked up against a code we wrote, and it sits in the code column looking like a part number. The third carried <b>DBR60, a real code</b> that was asked and found nothing. Each now says which, because one is closed by a code on the pack and the other by loading the catalogue.</td><td>D-079/080 · executed tests: a code we invented is not a code Tim can look up</td></tr>
+    <tr><td class="k">A figure states the sum that made it</td><td>Pemming is the MANM department rate × 15 s a pressed fastener (4 clinch at 60/hr and 2 PEM at 120/hr are both 240 inserts an hour). Powder is coated area × coverage × £/kg, with the colour never entering the sum. Both reproduce the booked row exactly — the test a figure passes before it stands.</td><td>D-081/082</td></tr>
+    <tr><td class="k">An unpriced line clears the cell</td><td>A line awaiting a price writes an empty cell rather than leaving the template's own formula in place — which is what put <code>#REF!</code> on the Harrods book. No line can look priced because a template remembered a number.</td><td>Executed test on a real worksheet</td></tr>
+  </table></div>
+
+  <h2>What is scoped pilot knowledge — measured once, not shop constants</h2>
+  <div class="tblwrap"><table>
+    <tr><th>Figure</th><th>Measured on</th><th>Scope</th></tr>
+    <tr><td class="k num">Joinery 12 / 12 / 12 / 2 / 20 per hr</td><td>Tony, 11908-21 (one faced-board tray, 50 off)</td><td>CNCJ/EDGE/MC J/BENC/PACJ run rates. Bench 2/hr reaches <b>faced/laminated board only</b>; plain MDF, ply and timber take the labelled house allowance.</td></tr>
+    <tr><td class="k num">Brushing 40 min/unit</td><td>Howard, 7332-01 (“similar size units”)</td><td>Pre-plating brush — method generic, timing size-sensitive, confirm outside similar size.</td></tr>
+    <tr><td class="k num">Weld 30 / dress 20 min</td><td>Welding dept via Howard, 7332-01</td><td>Per-joint rates derived from the measured joint count; stated times always beat medians.</td></tr>
+    <tr><td class="k num">Pemming 15 s per pressed fastener</td><td>Tim, 12120 sheet (clinch ×4 @60/hr, pem ×2 @120/hr)</td><td>Both of his rows state 240 inserts an hour. Applied wherever the reconciled BOM holds self-clinch or PEM hardware; out to him to confirm, and to say whether a clinch nut and a PEM stud should differ.</td></tr>
+    <tr><td class="k num">Set-up model (shop-wide)</td><td>Confirmed on Tony's joinery AND Howard's metal sheet</td><td>Hours = department set-up once per order + run × qty. The <i>model</i> is shop-wide; the rates above stay pilots.</td></tr>
+  </table></div>
+  <p class="note">Each row carries the job and the person it was measured on, which is what makes a change in it
+  visible: when the same operation is measured again on a second job the two figures sit side by side, and the
+  difference is a question for the department rather than a silent overwrite. A pilot becomes generic only when a
+  second independent job or the department itself confirms it.</p>
+
+  <h2>What must never inherit</h2>
+  <div class="rule"><b>Historic estimates teach; they do not supply prices.</b> <span class="quote">“A number copied from an estimator’s sheet is not a price source, even as a reference.”</span> <span class="quote">“A rate taken from a single estimate is a scoped pilot, never generic, until a second independent job or the department itself confirms it.”</span></div>
+  <ul>
+    <li><b>Harrods 01 plating</b> — the quoted figure is retained nowhere. What it taught lives on as a rule: Harrods 01 is decorative plating that needs a fresh, identified plater quote for each job; until one exists the line is not priced.</li>
+    <li><b>Plater freight</b> — the reference figure from Howard's review is retained nowhere; a plated route still carries a freight line, raised <b>awaiting a current transport quote</b> (owner: SDI transport) on every job, 7332-01 included. The route inherits; the money does not.</li>
+    <li><b>Edging rate and tape roll price</b> — off the estimators' sheets, so no longer held anywhere: the edging specification, the roll length and the length-arithmetic carry forward; the money comes from SDI Live or a supplier source or the line is explicitly awaiting price.</li>
+    <li><b>Held to by test, not by intent</b> — the register, the price file, the documentation, the reports, the prompts and the audit payload are all empty of these figures, and a test asserts that a new run cannot discover or display a historic manual-estimate amount anywhere. Mechanism tests use invented figures so they prove the arithmetic without carrying a real one.</li>
+  </ul>
+
+  <h2>Questions owned by people</h2>
+  <div class="tblwrap"><table>
+    <tr><th>Owner</th><th>Question</th></tr>
+    <tr><td class="k">James Gray</td><td><b>Three configured rates have no live source</b> — the board sheet price, the zinc plating rate per kg and the section-stock rate per kg sit in configuration with no SDI Live, catalogue or quote behind them. Under D-078 they are either sourced or turned into awaiting-price lines with an owner.</td></tr>
+    <tr><td class="k">Tim</td><td><b>Powder, two figures.</b> Is £4.00/kg still right for standard powder? And the coverage — we hold 0.20 kg/m², the workbook template's own calculator holds 0.1667. They disagree by a fifth. His proposal to put the powder reference on the drawing is accepted in principle and retires both.</td></tr>
+    <tr><td class="k">Tim</td><td><b>Pemming, 15 s a pressed fastener</b> — still right, and the same for a clinch nut and a PEM stud?</td></tr>
+    <tr><td class="k">Tim</td><td><b>DBR60</b> a rate or the catalogue row it should read; and SDI codes for the M4 wing nut and M4×8 PEM stud if they have them.</td></tr>
+    <tr><td class="k">Howard</td><td>Two PACM set-ups on the split pack rows (one per occasion) — or does the bench regard them as one? The rerun book flags it either way.</td></tr>
+    <tr><td class="k">Howard</td><td>Acrylic laser throughput: the corpus figure against his own. Whose holds? His answer goes in the stated-rates register, not code.</td></tr>
+    <tr><td class="k">Tony</td><td>Banded metres on 11908-21 (only visible edges band — his judgement, not a drawing number).</td></tr>
+    <tr><td class="k">SDI transport</td><td>A current haulage quote for any new plated job — the line asks for it by name.</td></tr>
+    <tr><td class="k">Runner</td><td>The 7332-01 run's own JSON, so the five open items on that book can be diagnosed; then clean reruns — 10975-02 for the e-mail, then 11908-21.</td></tr>
+  </table></div>
+
+  <h2>Elsewhere in SDI Intelligence</h2>
+  <p>The engine is one of three workstreams. The other two are reported in full in the company-wide set below;
+  this is where they stood on 16 September.</p>
+  <div class="elsewhere">
+    <div class="ws">
+      <div class="wst">SDI Technical Design Intelligence <span class="pill p-pilot">P2 hardening</span></div>
+      <p>Yogesh Kumar. Production Design Extraction hardened after its 2 September approval — the two checkouts
+      untangled, the fifteen missing BOM previews diagnosed, extraction history and a metrics endpoint added,
+      tests from about 240 to 363. Six demo videos with write-ups. P2 keeps 29 September; P3.1 has started, with
+      Ubuntu and Docker installed for the PDM MVP. Watch-points: a day or two absorbed by demos and new design-team
+      requirements, and the server and hardware quotes still to be finalised.</p>
+    </div>
+    <div class="ws">
+      <div class="wst">SDI Creative Design Intelligence <span class="pill p-live">Drawing search live</span></div>
+      <p>Muhammad Yazir. <b>SDI Drawing Search Intelligence is live</b> for the design and technical teams, out of
+      UAT and ahead of its 25 September date: 32,422 drawings searched by what is printed on the sheet, with the
+      SolidWorks or 3ds Max file opened from the result. Ian tested it before it went in. <b>Client Briefing is
+      back on the agenda</b> after its hold from 4 September — brief intake, with Jonathan approving every brief;
+      two briefs through it so far.</p>
+    </div>
+  </div>
+
+  <div class="elsewhere" style="margin-top:14px">
+    <div class="ws" style="border-left-color:var(--hold)">
+      <div class="wst">Sage X3 data migration <span class="pill p-pilot">30 Oct 26</span></div>
+      <p>The nearest hard date in front of the business, and it touches this engine twice. The
+      <b>eleven X3 templates</b> are built over eighteen SDI Live tables, with every other table given
+      a stated disposition; <b>all data loaded by Friday 30 October</b>, ahead of the ERP's own go-live
+      in January. It matters here because the engine reads the same tables &mdash; and because from
+      go-live its material and supplier prices come from X3 rather than from SDI Live, which is the
+      versioned price seam. The plan is gated: three third-party items by Friday 16 October or the
+      date rebaselines.</p>
+    </div>
+  </div>
+
+  <h2>Also shipped today</h2>
+  <ul>
+    <li><b>SDI Drawing Search Intelligence</b> is a menu item on the portal and both estimating pages, directly below its guide, opening the application in its own tab — one change, every deployment (8071 / 8072 / server). It is now described as live rather than in UAT everywhere the site states it.</li>
+    <li>Tests across the batch <b>execute the engine</b> (<code>estimate_part()</code>, the group builder, the allocator on a real worksheet) rather than reading source text — which is how the facing-collapse defect was caught at all.</li>
+    <li>Change register rows <b>D-067 → D-082</b>; D-064's scope and D-066's presumption formally superseded, and D-077's register entry withdrawn by D-078 rather than reworded.</li>
+  </ul>
+
+  <div class="where">
+    <b>The company-wide 16 September set</b>
+    <ul>
+      <li><b>SDI Intelligence Programme Status, issue 3</b> — <code>reports/SDI-Intelligence-Programme-Status-2026-09-16.html</code> and its PDF. All three workstreams, the shared workstation, and what is open across the programme. Supersedes the 7 September issue.</li>
+      <li><b>Covering e-mail to the MD and FD</b> — <code>docs/SDI_Programme_Update_Email_20260916.html</code>, with a plain-text twin.</li>
+      <li><b>The portal</b> — dashboard, AI Programme, AI Roadmap and the service pages, updated to the same facts on the laptop and the server.</li>
+      <li><b>The change register</b> — <code>docs/CHANGE_REGISTER.md</code> is the operating contract; every rule on this page carries its row, its source and its proof there.</li>
+    </ul>
+  </div>
+
+  <div class="foot">SDI Intelligence · estimating engine · 16 September 2026 · engine-level detail for the estimators;
+  the programme-level report is issue 3, above.</div>
+</div>
+<script>
+// The save control is offered only where the viewer can actually be given a file.
+// A copy opened from disk has no claude runtime, so the row stays hidden there and
+// the page never shows a control that does nothing.
+(async function () {
+  var row = document.getElementById('dl-row');
+  var btn = document.getElementById('dl');
+  var note = document.getElementById('dl-note');
+  var noteText = note.textContent;
+  var downloads = null;
+  try { downloads = await (window.claude && window.claude.use ? window.claude.use('downloads') : null); }
+  catch (e) { downloads = null; }
+  if (!downloads) return;
+  row.hidden = false;
+
+  btn.addEventListener('click', async function () {
+    var label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    note.textContent = noteText;
+    // Hide the control while the document is serialised, so the saved copy
+    // carries the report and not a dead button.
+    row.hidden = true;
+    var html = '<!doctype html>\n' + document.documentElement.outerHTML;
+    row.hidden = false;
+    try {
+      await downloads.save({
+        filename: 'SDI-Estimating-Engine-Status-2026-09-16.html',
+        data: html
+      });
+      btn.textContent = 'Saved';
+      note.textContent = 'Saved. Open it in a browser, or print it to PDF from there.';
+      setTimeout(function () {
+        btn.textContent = label; btn.disabled = false; note.textContent = noteText;
+      }, 4000);
+    } catch (err) {
+      var code = err && err.code;
+      btn.textContent = label;
+      if (code === 'declined') {
+        btn.disabled = false;
+      } else if (code === 'rate_limited') {
+        note.textContent = 'A save prompt is already open. Try again in a moment.';
+        btn.disabled = false;
+      } else {
+        row.hidden = true;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

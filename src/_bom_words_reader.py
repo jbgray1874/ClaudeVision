@@ -26,7 +26,8 @@ import glob
 import os
 import re
 import sys
-from typing import Any, Dict, List, Optional
+import part_code_conventions
+from typing import Any, Dict, List, Optional, Tuple
 
 # ── Reuse bom_table_extractor's proven logic; fall back to inlined copies ──
 try:
@@ -81,19 +82,33 @@ def _cluster_rows(words: List[dict], y_tol: float = 3.0) -> List[List[dict]]:
 # use another variant. We match each column on a synonym set rather than one exact
 # word, so the deterministic reader covers anticipatable format variation. The FIRST
 # word in a row whose normalised text is in a set anchors that column.
-_HDR_ITEM = {"ITEM", "ITEMNO", "ITEM NO", "NO", "POS", "POSITION", "PART ITEM"}
-_HDR_CODE = {"DWG", "DWG NO", "DWGNO", "PARTNO", "PART NO", "PART", "PART NUMBER",
-             "PARTNUMBER", "DRAWING", "DRAWING NO", "REF", "PART REF"}
-_HDR_DESC = {"DESCRIPTION", "DESC", "TITLE", "NAME", "PART DESCRIPTION"}
-_HDR_QTY = {"QTY", "QTY.", "QUANTITY", "QUANT", "QTY REQD", "QTY REQ", "REQD"}
+# ONE OWNER: the families live in bom_table_extractor (the lowest module in the reader
+# stack) so this reader, the extract_tables path and the Camelot bench all answer "what
+# does this header word mean" from one set. NO OFF / OFF is the standard UK spelling of
+# quantity; MATERIAL / MASS are the customer columns the 0359342 probe proved. The
+# fallback literals keep this reader standing alone if the import cannot resolve.
+try:
+    from bom_table_extractor import (HDR_CODE as _HDR_CODE, HDR_DESC as _HDR_DESC,
+                                     HDR_ITEM as _HDR_ITEM,
+                                     HDR_MATERIAL as _HDR_MATERIAL,
+                                     HDR_QTY as _HDR_QTY, HDR_WEIGHT as _HDR_WEIGHT)
+except Exception:                                                # pragma: no cover
+    _HDR_ITEM = {"ITEM", "ITEMNO", "ITEM NO", "NO", "POS", "POSITION", "PART ITEM"}
+    _HDR_CODE = {"DWG", "DWG NO", "DWGNO", "PARTNO", "PART NO", "PART", "PART NUMBER",
+                 "PARTNUMBER", "DRAWING", "DRAWING NO", "REF", "PART REF"}
+    _HDR_DESC = {"DESCRIPTION", "DESC", "TITLE", "NAME", "PART DESCRIPTION"}
+    _HDR_QTY = {"QTY", "QTY.", "QUANTITY", "QUANT", "QTY REQD", "QTY REQ", "REQD",
+                "NO OFF", "NOOFF", "OFF", "NO. OFF", "QTY OFF", "REQUIRED"}
+    _HDR_MATERIAL = {"MATERIAL", "MATL", "MAT", "MATERIAL SPEC", "SPEC"}
+    _HDR_WEIGHT = {"WEIGHT", "WT", "MASS", "UNIT WEIGHT", "WEIGHT KG", "MASS KG"}
 
 
 def _hdr_norm(t: str) -> str:
     return t.upper().replace(".", "").strip()
 
 
-def _find_header(rows: List[List[dict]]) -> Optional[Dict[str, Any]]:
-    """Find the BOM header row and return the column x-anchors derived from it.
+def _header_from_row(ri: int, row: List[dict]) -> Optional[Dict[str, Any]]:
+    """If this single clustered row is a BOM header, return {index, top, anchors}; else None.
 
     Column headers are matched against SYNONYM SETS (see _HDR_*), so this reads
     both the 2013 template (ITEM NO. / PartNo / Description / QTY.) and the 2025
@@ -105,55 +120,83 @@ def _find_header(rows: List[List[dict]]) -> Optional[Dict[str, Any]]:
     word AND a QTY-like word (the three that are always present); the CODE column
     (DWG/PartNo) is located if present but its synonym set is broad.
     """
-    for ri, row in enumerate(rows):
-        norms = [( _hdr_norm(w["text"]), w["x0"] ) for w in row]
-        norm_texts = {n for n, _ in norms}
-        # Also consider two-word combinations (e.g. "ITEM" + "NO", "DWG" + "NO",
-        # "PART" + "NO") so multi-token headers match the synonym sets.
-        def _has(colset):
-            if norm_texts & colset:
+    norms = [( _hdr_norm(w["text"]), w["x0"] ) for w in row]
+    norm_texts = {n for n, _ in norms}
+    # Also consider two-word combinations (e.g. "ITEM" + "NO", "DWG" + "NO",
+    # "PART" + "NO") so multi-token headers match the synonym sets.
+    def _has(colset):
+        if norm_texts & colset:
+            return True
+        toks = [n for n, _ in norms]
+        for i in range(len(toks) - 1):
+            if f"{toks[i]} {toks[i+1]}" in colset:
                 return True
-            # try adjacent-word joins
-            toks = [n for n, _ in norms]
-            for i in range(len(toks) - 1):
-                if f"{toks[i]} {toks[i+1]}" in colset:
-                    return True
-            return False
+        return False
 
-        if not (_has(_HDR_ITEM) and _has(_HDR_DESC) and _has(_HDR_QTY)):
-            continue
+    if not (_has(_HDR_ITEM) and _has(_HDR_DESC) and _has(_HDR_QTY)):
+        return None
 
-        anchors: Dict[str, float] = {}
-        # Assign the FIRST word matching each column set as that column's x-anchor.
-        # Order matters: item is leftmost, then code, then desc, then qty. We take
-        # the leftmost qualifying word for each so multi-word headers anchor cleanly.
-        for norm, x in sorted(norms, key=lambda p: p[1]):
-            if "item" not in anchors and (norm in _HDR_ITEM):
-                anchors["item"] = x
-            elif "code" not in anchors and (norm in _HDR_CODE):
-                anchors["code"] = x
-            elif "desc" not in anchors and (norm in _HDR_DESC):
-                anchors["desc"] = x
-            elif "qty" not in anchors and (norm in _HDR_QTY):
-                anchors["qty"] = x
+    anchors: Dict[str, float] = {}
+    # Assign the FIRST word matching each column set as that column's x-anchor.
+    for norm, x in sorted(norms, key=lambda p: p[1]):
+        if "item" not in anchors and (norm in _HDR_ITEM):
+            anchors["item"] = x
+        elif "code" not in anchors and (norm in _HDR_CODE):
+            anchors["code"] = x
+        elif "desc" not in anchors and (norm in _HDR_DESC):
+            anchors["desc"] = x
+        elif "qty" not in anchors and (norm in _HDR_QTY):
+            anchors["qty"] = x
+        elif "material" not in anchors and (norm in _HDR_MATERIAL):
+            anchors["material"] = x
+        elif "weight" not in anchors and (norm in _HDR_WEIGHT):
+            anchors["weight"] = x
 
-        # item, desc, qty are required; code (DWG/PartNo) may be absent on some
-        # templates — if so, synthesise a code anchor midway between item and desc.
-        if not all(k in anchors for k in ("item", "desc", "qty")):
-            continue
-        if "code" not in anchors:
-            anchors["code"] = (anchors["item"] + anchors["desc"]) / 2.0
+    # item, desc, qty required; code (DWG/PartNo) may be absent — synthesise midway.
+    if not all(k in anchors for k in ("item", "desc", "qty")):
+        return None
+    _real_families = len(anchors)          # before any synthesis
+    if "code" not in anchors:
+        anchors["code"] = (anchors["item"] + anchors["desc"]) / 2.0
+    # THE SDI LAYOUT IS ORDERED, AND THAT ORDER IS STILL THE FIRST ACCEPTANCE — a page
+    # whose header passes it parses exactly as before. But the order is a TEMPLATE fact,
+    # not a table fact: 0359342's customer header runs weight/material/qty/part/desc/
+    # item, and rejecting it here is how a page with a perfectly printed parts list read
+    # as having none. A permuted header is accepted only on STRONGER evidence — at least
+    # four real column families in one clustered row (a title block scatters two or
+    # three of these words; four aligned families is a table header) — and its rows are
+    # parsed by region rather than by the ordered carve.
+    if anchors["item"] <= anchors["code"] <= anchors["desc"] < anchors["qty"]:
+        _layout = "ordered"
+    elif _real_families >= 4:
+        _layout = "by_regions"
+    else:
+        return None
 
-        # anchors must be in sane left-to-right order
-        if not (anchors["item"] <= anchors["code"] <= anchors["desc"] < anchors["qty"]):
-            continue
+    return {"header_row_index": ri, "header_top": row[0]["top"], "anchors": anchors,
+            "layout": _layout}
 
-        return {
-            "header_row_index": ri,
-            "header_top": row[0]["top"],
-            "anchors": anchors,
-        }
+
+def _find_header(rows: List[List[dict]]) -> Optional[Dict[str, Any]]:
+    """The FIRST BOM header on the page (kept for single-table callers)."""
+    for ri, row in enumerate(rows):
+        h = _header_from_row(ri, row)
+        if h:
+            return h
     return None
+
+
+def _find_all_headers(rows: List[List[dict]]) -> List[Dict[str, Any]]:
+    """EVERY BOM header on the page — so a page carrying a main BOM PLUS a fixings/
+    hardware sub-table is read in full, not just the first table. Belt-and-braces so
+    the deterministic path covers multi-table pages rather than leaning on the vision
+    backstop. Headers are returned top-to-bottom."""
+    out: List[Dict[str, Any]] = []
+    for ri, row in enumerate(rows):
+        h = _header_from_row(ri, row)
+        if h:
+            out.append(h)
+    return out
 
 
 def _parse_row(row: List[dict], anchors: Dict[str, float]) -> Optional[Dict[str, str]]:
@@ -209,15 +252,311 @@ def _parse_row(row: List[dict], anchors: Dict[str, float]) -> Optional[Dict[str,
     }
 
 
+def _parse_row_by_regions(row: List[dict], anchors: Dict[str, float]) -> Optional[Dict[str, str]]:
+    """Parse one row against a header whose columns sit in ANY order.
+
+    The ordered parser carves the row left-to-right by the SDI template's column
+    sequence; a customer table that prints ITEM on the right and WEIGHT on the left
+    defeats it structurally. Here each anchored column owns the region between the
+    midpoints to its neighbours, a word belongs to the region it starts in, and the
+    two numeric columns take the bare integer NEAREST their own anchor — position,
+    not sequence, is what a header anchor actually asserts.
+    """
+    order = sorted(anchors.items(), key=lambda kv: kv[1])
+    lo_bound = order[0][1] - 25.0
+    hi_bound = order[-1][1] + 60.0
+    regions: Dict[str, Tuple[float, float]] = {}
+    for i, (name, x) in enumerate(order):
+        lo = lo_bound if i == 0 else (x + order[i - 1][1]) / 2.0
+        hi = hi_bound if i == len(order) - 1 else (x + order[i + 1][1]) / 2.0
+        regions[name] = (lo, hi)
+    cells: Dict[str, List[Tuple[float, str]]] = {name: [] for name in anchors}
+    for w in sorted(row, key=lambda w: w["x0"]):
+        x = w["x0"]
+        if not (lo_bound <= x <= hi_bound):
+            continue                      # grid labels / edge notes outside the table
+        for name, (lo, hi) in regions.items():
+            if lo <= x < hi:
+                cells[name].append((x, w["text"]))
+                break
+
+    def _nearest_int(name: str) -> Optional[Tuple[float, str]]:
+        # NO UNIVERSAL CAP. The first cut refused qty 300 (capped at 250) and item 100
+        # (capped at 99) — limits nothing on any drawing supports. A word already sits
+        # in its own numeric column's region; being an integer there IS the evidence.
+        # Implausibility is a validation question for downstream, never a silent drop.
+        best = None
+        for x, t in cells.get(name) or []:
+            if t.isdigit() and int(t) >= 1:
+                d = abs(x - anchors[name])
+                if best is None or d < best[0]:
+                    best = (d, x, t)
+        return (best[1], best[2]) if best else None
+
+    item_word = _nearest_int("item")
+    qty_word = _nearest_int("qty")
+    if item_word is None or qty_word is None:
+        return None
+
+    # A MIDPOINT IS A GUESS AT A BOUNDARY, NOT A RULING LINE. A long description
+    # drifts past the midpoint into the neighbouring numeric region — the review
+    # probe's "Edition Sunglasses Plinth Top" lost its last two words into ITEM's
+    # region and they vanished without a word. A word that is not a number does not
+    # belong to a numeric column: it is reassigned to the nearest text column, and
+    # the row is flagged so nobody treats the segmentation as certain.
+    _text_cols = [n for n in ("code", "desc", "material", "weight") if n in anchors]
+    _displaced = False
+    for _num_col, _chosen in (("item", item_word), ("qty", qty_word)):
+        for x, t in list(cells.get(_num_col) or []):
+            if (x, t) == _chosen:
+                continue
+            if re.search(r"[A-Za-z]", t) and _text_cols:
+                _tgt = min(_text_cols, key=lambda n: abs(anchors[n] - x))
+                cells[_tgt].append((x, t))
+                _displaced = True
+
+    def _cell_text(name: str) -> str:
+        return " ".join(t for _, t in sorted(cells.get(name) or [])).strip()
+
+    out = {
+        "item": item_word[1],
+        "code": _cell_text("code"),
+        "desc": _cell_text("desc"),
+        "qty": qty_word[1],
+    }
+    for name in ("material", "weight"):
+        if name in anchors:
+            out[name] = _cell_text(name)
+    # DESCRIPTION SPILL INSIDE THE CODE CELL. Page 25's small table never grid-maps,
+    # so its words read stood — and 'Backplate MBY434' priced £3,203 as its own
+    # bought-in because the wrapped description's last word crossed into the code
+    # region. When the cell's LAST token is code-shaped and everything before it is
+    # plain words (pure alpha, 3+ letters — 'Backplate', 'Outside', 'Top'), the words
+    # are description, the token is the code, and the row says it is uncertain. 'M8'
+    # and friends carry digits, so real spec-prefixed cells never strip.
+    _ctoks = out["code"].split()
+    if len(_ctoks) > 1 \
+            and re.match(r"^[A-Z]{1,4}\d{3,}[A-Z0-9-]*$", _ctoks[-1], re.I) \
+            and all(t.isalpha() and len(t) >= 3 for t in _ctoks[:-1]):
+        out["desc"] = (out["desc"] + " " + " ".join(_ctoks[:-1])).strip()
+        out["code"] = _ctoks[-1]
+        _displaced = True
+    if _displaced:
+        out["segmentation_uncertain"] = True
+    return out
+
+
+def _row_material_fields(material_txt: Any, weight_txt: Any) -> Dict[str, Any]:
+    """material_text / thickness_mm / stated_weight_kg for one row, from its own cells.
+
+    The unit rules live in _bom_vision_reader (both paths must parse "MDF, 18mm" and
+    "4.28 kg" identically or the reconciler compares apples with pears); the inline
+    fallback keeps Path A standing if that module cannot be imported."""
+    out: Dict[str, Any] = {}
+    _mat = str(material_txt or "").strip()
+    _wtxt = str(weight_txt or "").strip()
+    if not _mat and not _wtxt:
+        return out
+    try:
+        from _bom_vision_reader import material_thickness_mm as _mt, weight_kg as _wk
+    except Exception:                                            # pragma: no cover
+        def _mt(s):
+            s = str(s or "")
+            if re.search(r"Ø|⌀|\bDIA\b|\bDIAMETER\b", s, re.I):
+                return None                    # a diameter is not a thickness
+            # no trailing \b: squashed "6mmand9mm" must count as TWO figures
+            vals = {float(v) for v in re.findall(r"(\d+(?:\.\d+)?)\s*mm", s, re.I)}
+            return vals.pop() if len(vals) == 1 else None   # two figures = a decision
+
+        def _wk(s):
+            m = re.search(r"(\d+(?:\.\d+)?)\s*(kg|g)\b", str(s or ""), re.I)
+            if not m:
+                return None
+            v = float(m.group(1))
+            return v if m.group(2).lower() == "kg" else v / 1000.0
+    if _mat:
+        out["material_text"] = _mat
+        _thk = _mt(_mat)
+        if _thk is not None:
+            out["thickness_mm"] = _thk
+    _kg = _wk(_wtxt)
+    if _kg is not None:
+        out["stated_weight_kg"] = _kg
+    return out
+
+
 def _title_block_dwg_no(words: List[dict]) -> Optional[str]:
-    """The parent assembly = the DWG NO in the title block (a 12120-01-* token
-    low on the page). We take the last such token (title block sits at bottom)."""
-    cand = None
-    for w in sorted(words, key=lambda w: w["top"]):
-        t = w["text"].strip()
-        if re.match(r"^\d{3,}-\d+-[A-Z0-9]+$", t, re.I):
-            cand = t  # keep the lowest (last) match = title block
-    return cand
+    """The parent assembly = the drawing number in the title block, low on the page.
+
+    Two things this used to get wrong, and each one left a whole page's BOM rows with no
+    parent — which is a hierarchy that cannot be built, not a hierarchy that is wrong.
+
+    IT REQUIRED THREE HYPHENATED SEGMENTS (r"^\\d{3,}-\\d+-[A-Z0-9]+$"). That is the
+    12120 house style. 1282-GA, 12392-04 and 3886-GA are two, and matched nothing. The
+    shape test now comes from part_code_conventions, which route_compiler also uses, so
+    the reader and the compiler cannot disagree about what a drawing number looks like.
+
+    IT READ ONE WORD AT A TIME. CAD title blocks print "1282 - GA" with real spaces, so
+    pdfplumber returns three words and no single one of them is a drawing number. Words
+    sharing a y-band are now joined before testing, longest run first, so a spaced code
+    is recognised as the one code it is.
+
+    Still the LOWEST match on the page, because that is where a title block sits — but
+    only the bottom third is considered, so a drawing number written in a note or a
+    revision table cannot be mistaken for this sheet's own.
+    """
+    if not words:
+        return None
+    _bottom = max(w["top"] for w in words)
+    _top = min(w["top"] for w in words)
+    _cutoff = _top + (_bottom - _top) * 0.6  # the title block band
+
+    band = _cluster_rows([w for w in words if w["top"] >= _cutoff])
+
+    # WHAT WENT WRONG, AND WHAT ACTUALLY FIXES IT.
+    #
+    # Joining every adjacent word and preferring the longest match read a whole
+    # title-block row as one token. On 12392-02 that produced
+    #   "1-WIDEGIFTCARDGATEPOSTPANELTESCOIMS1-WIDEGIFTCARDGATEPOST12392-02-GAA"
+    # — description, customer, description again, the real drawing number and the revision
+    # letter, run together and preferred precisely BECAUSE it was longest. Every BOM row on
+    # the job then had no parent it could name.
+    #
+    # The fix is the GAP, not the preference. Those words sit in separate title-block
+    # cells; nothing but a reader willing to join across any distance would ever have run
+    # them together. Preferring a single word instead was the obvious repair and the wrong
+    # one: on a title block printing "12392-02 - GA" the single word "12392-02" is itself a
+    # perfectly good drawing number, and it is the parent of this sheet rather than this
+    # sheet — taking it silently reparents every row on the page one level up.
+    #
+    # So: every single word and every join across a real space, and the longest of those
+    # lowest on the page wins.
+    candidates: List[Tuple[float, str]] = [
+        (w["top"], w["text"]) for row in band for w in row]
+    joined: List[Tuple[float, str]] = []
+    for row in band:
+        for start in range(len(row)):
+            # A JOIN ENDS WHERE A WORD ENDS (D-421). Text laid down a character at a time —
+            # the M&S border's specification list is — comes back as one-letter words that
+            # touch, and every prefix of "6063 - ALUMINIUM FOR EXTRUSION" was a candidate:
+            # "6063-AL", "6063-ALUM". Only a join whose next word is across a real space, a
+            # cell border or nothing at all is a token; the whole word is then judged.
+            text = row[start]["text"]
+            right_edge = row[start]["x1"]
+            following = row[start + 1:]
+            for k, nxt in enumerate(following):
+                if nxt["x0"] - right_edge > _max_join_gap(nxt):
+                    break  # a cell border, not a space
+                text += nxt["text"]
+                right_edge = nxt["x1"]
+                after = following[k + 1] if k + 1 < len(following) else None
+                if after is None or after["x0"] - right_edge >= _min_space(after):
+                    joined.append((row[start]["top"], text))
+    return _lowest_drawing_number(candidates + joined)
+
+
+def _min_space(word: dict) -> float:
+    """The narrowest gap that is a space rather than two letters of one word touching."""
+    height = float(word.get("bottom", 0.0)) - float(word.get("top", 0.0))
+    return max(height, 1.0) * 0.15
+
+
+# A real space between words is a fraction of the text's own height; the distance across
+# a title-block cell border is far more. Joining only across the former is what keeps a
+# drawing number from absorbing the revision letter printed in the box beside it.
+# Measured against the text rather than fixed in points, because a title block sets its
+# description in 8pt and its drawing number in 14, and one absolute threshold cannot be
+# right for both.
+_JOIN_GAP_AS_FRACTION_OF_HEIGHT = 0.6
+
+
+def _max_join_gap(word: dict) -> float:
+    height = float(word.get("bottom", 0.0)) - float(word.get("top", 0.0))
+    return max(height, 6.0) * _JOIN_GAP_AS_FRACTION_OF_HEIGHT
+
+
+def _title_block_spelling(text: Any) -> str:
+    """A title block's code as the graph spells it. An underscore in a drawing-number cell is
+    a separator: 8188-08's GA prints "8188-08_GA", and read as written it matched no shape, so
+    the product's own sheet named no owner and its rows hung from whatever else was lowest."""
+    return str(text or "").strip().replace("_", "-")
+
+
+def _reads_as_words(code: str) -> bool:
+    """A drawing number's letters are a designator (GA, SA05, 01M), never a word. The M&S
+    border prints its specification list below the drawing-number cell — "• 6063 - ALUMINIUM
+    FOR EXTRUSION", "• 304 - STAINLESS STEEL" — and joined across its spaces that is a
+    code-shaped token lower on the page than the real one: on 8188-08 every sheet of three
+    PDFs read "6063-ALUMINIUMFOREXTRUSION", which became the root of the whole product and
+    pulled the deleted swing stopper in with it."""
+    try:
+        import config as _cfg
+        longest = int(getattr(_cfg, "TITLE_BLOCK_CODE_MAX_LETTER_RUN", 4))
+    except Exception:                                                     # noqa: BLE001
+        longest = 4
+    return bool(re.search(r"[A-Z]{%d,}" % (longest + 1), code.upper()))
+
+
+def _lowest_drawing_number(candidates: List[Tuple[float, str]]) -> Optional[str]:
+    """The drawing-number-shaped candidate lowest on the page — a title block sits at the
+    bottom, and codes quoted higher up are the BOM's rows or a cross-reference to another
+    sheet. Among candidates on one line, the longer is the more specific."""
+    best: Optional[Tuple[float, str]] = None
+    for top, text in candidates:
+        code = _title_block_spelling(text)
+        if not part_code_conventions.looks_like_a_drawing_number(code):
+            continue
+        if _reads_as_words(code):
+            continue
+        if best is None or (top, len(code)) > (best[0], len(best[1])):
+            best = (top, code.upper())
+    return best[1] if best else None
+
+
+def survey_page(page) -> Dict[str, Any]:
+    """What this reader SAW on a page, as distinct from what it managed to read.
+
+    read_bom_from_page answers one bit — a BOM or None — and returns None from six
+    different places that mean entirely different things. "This is a plain detail sheet"
+    and "there is a parts list here whose header row I could see and whose rows I could
+    not parse" arrive as the same value. The second is the single best reason to spend a
+    vision call on a page, and it was indistinguishable from the best reason not to.
+
+    Returns:
+        has_text      the page yielded words at all. False = raster/scanned sheet.
+        header_found  a full BOM header row (item + description + qty, in order).
+        header_words  header VOCABULARY is present even though no header row qualified —
+                      the words are there but the layout defeated the row clustering.
+        rows_parsed   how many data rows came out under those headers.
+
+    Deliberately reuses _HDR_* — the synonym sets the header matcher itself uses — so
+    "does this page talk like a parts list" cannot drift away from "does this page parse
+    as a parts list". Two lists is how one of them silently stops recognising NO OFF.
+    """
+    verdict = {"has_text": False, "header_found": False, "header_words": False,
+               "rows_parsed": 0}
+    try:
+        words = page.extract_words(x_tolerance=1.5, y_tolerance=1.5) or []
+    except Exception:
+        return verdict
+    if not words:
+        return verdict
+    verdict["has_text"] = True
+
+    norms = {_hdr_norm(w["text"]) for w in words}
+    hits = sum(1 for colset in (_HDR_ITEM, _HDR_CODE, _HDR_DESC, _HDR_QTY)
+               if norms & colset)
+    # Three of the four column families. Two is too easy: _HDR_CODE contains "REF" and
+    # "PART", and _HDR_ITEM contains "NO", all of which appear in ordinary title blocks.
+    verdict["header_words"] = hits >= 3
+
+    rows = _cluster_rows(words)
+    headers = _find_all_headers(rows)
+    verdict["header_found"] = bool(headers)
+    if headers:
+        bom = read_bom_from_page(page)
+        verdict["rows_parsed"] = len((bom or {}).get("rows") or [])
+    return verdict
 
 
 def read_bom_from_page(page) -> Optional[Dict[str, Any]]:
@@ -231,62 +570,87 @@ def read_bom_from_page(page) -> Optional[Dict[str, Any]]:
         return None
 
     rows = _cluster_rows(words)
-    header = _find_header(rows)
-    if not header:
+    headers = _find_all_headers(rows)
+    if not headers:
         return None
 
-    anchors = header["anchors"]
-    header_top = header["header_top"]
     parent = _title_block_dwg_no(words)
 
     data_rows: List[Dict[str, Any]] = []
-    seen = set()
-    _max_item_seen = 0
-    for row in rows:
-        top = row[0]["top"]
-        if top <= header_top:
-            continue  # skip header and anything above it
-        cols = _parse_row(row, anchors)
-        if cols is None:
-            continue  # not a BOM data row (no valid item+qty in the table extent)
-        item, code, desc, qty = cols["item"], cols["code"], cols["desc"], cols["qty"]
+    seen = set()  # page-wide dedup across every table on the page
+    # Walk each header's table independently. A page can carry a main BOM PLUS a
+    # fixings/hardware sub-table; each restarts its own item sequence at 1, so the
+    # contiguity guard's _max_item_seen MUST reset per table or the second table's
+    # item 1 gets rejected as "backwards". Rows belong to a table when they sit
+    # BELOW that header and ABOVE the next header (or the page bottom for the last).
+    for hi, header in enumerate(headers):
+        anchors = header["anchors"]
+        header_top = header["header_top"]
+        next_top = headers[hi + 1]["header_top"] if hi + 1 < len(headers) else float("inf")
+        _max_item_seen = 0
+        for row in rows:
+            top = row[0]["top"]
+            if top <= header_top or top >= next_top:
+                continue  # outside this table's vertical band
+            # A permuted header parses by region; so does an ordered one that anchored a
+            # material or weight column, because the ordered carve would fold those
+            # cells into the description.
+            if header.get("layout") == "by_regions" or "material" in anchors \
+                    or "weight" in anchors:
+                cols = _parse_row_by_regions(row, anchors)
+            else:
+                cols = _parse_row(row, anchors)
+            if cols is None:
+                continue  # not a BOM data row (no valid item+qty in the table extent)
+            item, code, desc, qty = cols["item"], cols["code"], cols["desc"], cols["qty"]
 
-        # GUARD 1 — item contiguity: real BOM items are a monotonic 1..N sequence.
-        # A row whose item number is <= one already accepted is a duplicate/backwards
-        # value — almost always sheet-edge grid NUMBERS (2..8) that survived the x-extent
-        # filter because they look like integers. Reject it.
-        if int(item) <= _max_item_seen:
-            continue
+            # GUARD 1 — item contiguity: real BOM items are a monotonic 1..N sequence.
+            # A row whose item number is <= one already accepted is a duplicate/backwards
+            # value — almost always sheet-edge grid NUMBERS (2..8) that survived the x-extent
+            # filter because they look like integers. Reject it.
+            if int(item) <= _max_item_seen:
+                continue
 
-        # GUARD 2 — numeric-noise desc: grid-number noise builds a row like
-        # code='' desc='6 7' (bare integers). A genuine sparse/thin row has an EMPTY
-        # desc, never a numbers-only one. Reject empty-code rows whose desc is purely
-        # numeric/punctuation (no alphabetic run).
-        _has_alpha = bool(re.search(r"[A-Za-z]{2,}", desc))
-        _numeric_noise = bool(desc) and not _has_alpha and bool(re.match(r"^[\d\s.\-]+$", desc))
-        if not code.strip() and _numeric_noise:
-            continue
+            # GUARD 2 — numeric-noise desc: grid-number noise builds a row like
+            # code='' desc='6 7' (bare integers). A genuine sparse/thin row has an EMPTY
+            # desc, never a numbers-only one. Reject empty-code rows whose desc is purely
+            # numeric/punctuation (no alphabetic run).
+            _has_alpha = bool(re.search(r"[A-Za-z]{2,}", desc))
+            _numeric_noise = bool(desc) and not _has_alpha and bool(re.match(r"^[\d\s.\-]+$", desc))
+            if not code.strip() and _numeric_noise:
+                continue
 
-        _max_item_seen = int(item)
-        part_ref = code
-        # keep sparse rows (item+qty present) even if code/desc thin — flag them
-        thin = not (re.search(r"[A-Za-z]{2,}", desc) or re.search(r"[A-Za-z0-9]{2,}", part_ref))
+            _max_item_seen = int(item)
+            part_ref = code
+            # keep sparse rows (item+qty present) even if code/desc thin — flag them
+            thin = not (re.search(r"[A-Za-z]{2,}", desc) or re.search(r"[A-Za-z0-9]{2,}", part_ref))
 
-        kind, code_or_spec = _classify_part_ref(part_ref) if part_ref else ("bought_in", "")
-        key = (item, _clean(part_ref), qty)
-        if key in seen:
-            continue
-        seen.add(key)
+            kind, code_or_spec = _classify_part_ref(part_ref) if part_ref else ("bought_in", "")
+            key = (item, _clean(part_ref), qty)
+            if key in seen:
+                continue
+            seen.add(key)
 
-        data_rows.append({
-            "item_number": item,
-            "part_ref": _clean(part_ref),
-            "part_number": code_or_spec if kind == "drawing_ref" else "",
-            "description": desc,
-            "quantity": int(qty),
-            "kind": kind,
-            "thin": thin,
-        })
+            _out_row = {
+                "item_number": item,
+                "part_ref": _clean(part_ref),
+                "part_number": code_or_spec if kind == "drawing_ref" else "",
+                "description": desc,
+                "quantity": int(qty),
+                "kind": kind,
+                "thin": thin,
+            }
+            # The row's own material and weight cells, where the table printed them —
+            # the fields the schema used to discard (0359342: "MDF, 18mm" beside every
+            # panel while costing ran on a document-default 6mm).
+            _out_row.update(_row_material_fields(cols.get("material"),
+                                                 cols.get("weight")))
+            if cols.get("segmentation_uncertain"):
+                # Words drifted across a region midpoint and were reassigned rather
+                # than lost — true, but not certain. The flag travels with the row so
+                # a reconciler or reviewer treats the split cells as approximate.
+                _out_row["segmentation_uncertain"] = True
+            data_rows.append(_out_row)
 
     if not data_rows:
         return None
@@ -296,46 +660,19 @@ def read_bom_from_page(page) -> Optional[Dict[str, Any]]:
 # ── Grok known-good oracle (per-parent, code/desc-token -> qty) ──
 # We compare on (item, a recognisable token, qty) so minor desc wording differences
 # don't fail the check — the QUANTITIES and the presence of each item are what matter.
-ORACLE = {
-    "12120-01-GA": [
-        ("1", "SA01", 1), ("2", "103", 1), ("3", "04M", 1),
-        ("4", "THUM620", 4), ("5", "08M", 1), ("6", "FIXINGTBC", 2),
-    ],
-    "12120-01-SA01": [
-        ("1", "101", 1), ("2", "05M", 1),
-    ],
-    "12120-01-101": [
-        ("1", "02M", 1), ("2", "03M", 1),
-        ("3", "PEM", 2), ("4", "CLINCH", 4),
-    ],
-    "12120-01-103": [
-        ("1", "01M", 1), ("2", "06M", 1),
-        # item 3 = keyhole pem qty 2. Its DESCRIPTION is in a drawing note
-        # ("KEYHOLE PEM SIZE REQUIRED"), NOT the table cell, so a deterministic
-        # table reader correctly yields item 3 / qty 2 with a thin (blank) desc.
-        # We match on item+qty here; the note-desc is a separate enrichment step.
-        ("3", "", 2),
-    ],
-    # ---- 1282 Milwaukee Wall Bay (2013 template, "ITEM NO./PartNo" header) ----
-    # Known-good BOM extracted independently (Grok/pdf_browse) across the file set.
-    # Note codes carry hyphen/space variants on the drawing (e.g. "1450 - GA",
-    # "1453-GA C", "1455-C GA") which _normalize_bom_code repairs to canonical form.
-    "1448-GA": [
-        ("1", "1448-01", 1), ("2", "1448-02", 1),
-    ],
-    "1455-C-GA": [
-        ("1", "1455-C-101", 1), ("2", "1455-C-005", 1),
-        # item 3 = ELECTRICS 50cm LOOM (bought-in, no drawing code); item 4 = FIXING
-        # dome rivet x2. Match item+qty; the code column is a commodity spec here.
-        ("3", "", 1), ("4", "", 2),
-    ],
-    # The top-level GA parent token in 1282's title block — confirm its 7 lines.
-    "1282-GA": [
-        ("1", "1448-GA", 2), ("2", "1449-01C", 3), ("3", "1450-GA", 1),
-        ("4", "1453-GA-C", 1), ("5", "2621-01C", 1), ("6", "3886-GA", 2),
-        ("7", "1455-C-GA", 1),
-    ],
-}
+# The self-test answers for this reader are regression data, not engine code (D-454):
+# tests/fixtures/bom_reader_oracles.json["words"], read only by verify().
+def _load_oracle(_key: str = "words"):
+    import json as _json
+    from pathlib import Path as _Path
+    _p = _Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "bom_reader_oracles.json"
+    try:
+        return {k: [tuple(t) for t in v] for k, v in _json.loads(_p.read_text(encoding="utf-8"))[_key].items()}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+ORACLE = _load_oracle()
 
 
 def _row_token(row: Dict[str, Any]) -> str:

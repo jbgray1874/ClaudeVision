@@ -1,0 +1,3782 @@
+#!/usr/bin/env python3
+r"""Every row of an estimate, explained — the joined record the deliverables are built from.
+
+WHY THIS EXISTS. The deliverables each said where a number came from and none of them said
+WHICH FILE AND WHICH PAGE, so the one question estimating always asks — "where did you see
+that?" — could not be answered from the pack that was sent, and got asked by email instead.
+The pages were never missing from the engine: every part record carries `pages` and
+`page_roles` and the run log says so out loud. They were dropped before anything was written.
+
+So this joins the three records that between them hold the whole answer:
+
+    the workbook        the blocks, the blank sizes, the routes
+    final_estimate      the rows AS EXCEL CALCULATED THEM — the only record with money on
+                        every line, and the only one that can be summed against the sheet's
+                        own Total Material Cost and Total Labour Cost
+    the part records    the drawing page that owns each part, and what that sheet stated
+
+and prints one section per question an estimator actually asks.
+
+ONE BUILDER, SEVERAL RENDERINGS. This began as a hand-run tool and is now the source for the
+workbook's Explanation tab, the HTML report's provenance sections and the body of the
+estimate email. It lives in src/ for that reason: three programs that each go and ask the
+workbook their own questions are three programs that disagree by the tenth change.
+
+WHAT IT WILL NOT DO. It never recalculates. Every figure is read from the sheet or from the
+run's record of the sheet, and where a figure is unavailable it says so rather than printing
+a zero — a zero would make a reconciliation against it look exact. Where two records disagree
+about the same rows it prints both, says which one reaches the total, and says so in pounds.
+
+Run it from tools/handover_note.py.
+"""
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Any, Dict, List, Mapping, Optional
+
+try:
+    import openpyxl
+except ImportError:                                              # pragma: no cover
+    raise SystemExit("openpyxl is required: pip install openpyxl")
+
+
+# ── reading the workbook ─────────────────────────────────────────────────────
+
+def _rows(ws, header_row: int = 1) -> List[Dict[str, Any]]:
+    """A sheet as dicts keyed by its own header, blank rows dropped."""
+    header = [str(ws.cell(header_row, c).value or "").strip()
+              for c in range(1, ws.max_column + 1)]
+    out: List[Dict[str, Any]] = []
+    for r in range(header_row + 1, ws.max_row + 1):
+        values = [ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
+        if not any(v not in (None, "") for v in values):
+            continue
+        out.append({h: v for h, v in zip(header, values) if h})
+    return out
+
+
+def _sheet(wb, name: str) -> List[Dict[str, Any]]:
+    return _rows(wb[name]) if name in wb.sheetnames else []
+
+
+# The Sheet Steel block's own columns, by position, from the template.
+_STEEL_COLS = {"desc": 3, "qty": 5, "length": 6, "width": 7, "gauge": 8,
+               "sheet_l": 9, "sheet_w": 10, "per_sheet": 11, "scrap": 12,
+               "cost_per_part": 13, "internal_cut": 20, "rate_per_hour": 23}
+
+
+def _steel_rows(wb) -> Dict[str, Dict[str, Any]]:
+    """The Sheet Steel block, keyed by part number.
+
+    WHERE A FABRICATED PART'S MONEY ACTUALLY IS. A "-M" line shows a dash in the BOM price
+    column and says why in its own text — "costed in Sheet Steel below" — because sheet metal
+    is priced by NEST on that block: a whole sheet divided by how many of the part come out
+    of it, not by the part's own area and not per piece. An explanation that stops at
+    "priced below"
+    ends exactly where the estimator's question begins: how big, off what sheet, how many out
+    of it, at what cost. This reads that block so the two halves can be shown together.
+
+    Found by its header text, not a row number: the block moves with the size of the BOM
+    above it, and a fixed row would silently read whatever had shifted into it.
+    """
+    if "Estimate" not in wb.sheetnames:
+        return {}
+    ws = wb["Estimate"]
+    # EVERY NESTED BLOCK, EACH THROUGH ITS OWN HEADER. The first version found ONE header
+    # and read fixed steel column positions below it — and on an acrylic job whose Sheet
+    # Steel block is empty, the scan ran on into Other Sheet Material, swallowed its title
+    # and header as parts ("OTHER", "PART") and read A01 one column adrift: gauge 3050
+    # (the sheet length), blank 210 x 2, qty 760.25. Columns are mapped from each header
+    # row's own text, so a block whose layout differs — or moves — reads correctly.
+    _NEEDLES = [("part description", "desc"), ("qty per unit", "qty"),
+                ("part length", "length"), ("part width", "width"),
+                ("sheet length", "sheet_l"), ("sheet width", "sheet_w"),
+                ("qty per sheet", "per_sheet"), ("per sheet", "per_sheet"),
+                ("gauge", "gauge"), ("thickness", "gauge"), ("scrap", "scrap"),
+                ("cost per part", "cost_per_part"), ("internal cut", "internal_cut"),
+                ("rate per hour", "rate_per_hour")]
+    header_rows: List[int] = []
+    for r in range(1, min(ws.max_row, 200) + 1):
+        joined = " ".join(str(ws.cell(r, c).value or "") for c in range(1, 30)).lower()
+        if "part description" in joined and ("gauge" in joined or "thickness" in joined) \
+                and ("part length" in joined or "part width" in joined):
+            header_rows.append(r)
+    out: Dict[str, Dict[str, Any]] = {}
+    for hi, header_row in enumerate(header_rows):
+        cols: Dict[str, int] = {}
+        for c in range(1, 31):
+            t = " ".join(str(ws.cell(header_row, c).value or "").split()).lower()
+            if not t:
+                continue
+            for needle, field in _NEEDLES:
+                if field not in cols and needle in t:
+                    cols[field] = c
+                    break
+        if "desc" not in cols:
+            continue
+        # A SPARSELY-LABELLED HEADER STILL READS. The steel template's columns sit at
+        # fixed offsets from the ones it does label, so any column with no header of its
+        # own defaults to its classic neighbour position — labelled columns always win.
+        if "qty" not in cols:
+            cols["qty"] = cols["desc"] + 2
+        if "length" in cols and "width" not in cols:
+            cols["width"] = cols["length"] + 1
+        if "gauge" in cols:
+            for _i, _f in enumerate(("sheet_l", "sheet_w", "per_sheet", "scrap",
+                                     "cost_per_part"), start=1):
+                cols.setdefault(_f, cols["gauge"] + _i)
+        stop = header_rows[hi + 1] if hi + 1 < len(header_rows) else ws.max_row + 1
+        started = False
+        for r in range(header_row + 1, stop):
+            text = str(ws.cell(r, cols["desc"]).value or "").strip()
+            if not text:
+                if started and not str(
+                        ws.cell(r + 1, cols["desc"]).value or "").strip():
+                    break
+                continue
+            low = text.lower()
+            # A block title or a stray heading is a boundary, never a part.
+            if "material" in low and ("sheet" in low or "other" in low or
+                                      "total" in low):
+                break
+            if low.startswith("part description"):
+                continue
+            started = True
+            code = text.split()[0].strip().upper()
+            out.setdefault(code, {"row": r, "text": text,
+                                  **{k: ws.cell(r, c).value
+                                     for k, c in cols.items() if k != "desc"}})
+    return out
+
+
+_TOTAL_LABELS = (("material", "total material cost"),
+                 ("labour", "total labour cost"),
+                 ("unit", "total unit cost"))
+
+
+def _sheet_totals(wb, final: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The Estimate sheet's own labelled totals.
+
+    Found by label rather than by cell reference, and the value taken as the first number to
+    the right of it — the template's totals sit in column M today and a reference is the one
+    thing that cannot survive a template revision.
+
+    THE CELLS ARE USUALLY EMPTY TO US, AND THAT IS NOT THE SAME AS ABSENT. Total Material
+    Cost is a SUM formula, and a workbook written by openpyxl and never re-saved by Excel
+    carries no cached result for it — so reading the file alone returned nothing for all
+    three totals and the reconciliation could not be performed at all, on a document whose
+    whole purpose is to perform it. The read-back has already opened that workbook through
+    Excel, calculated it, and read those same labelled cells: `final_estimate.totals` IS
+    what the cell held. Falling back to it is not circular — the totals were scanned from
+    the labelled cells, the rows from the four blocks, by two separate passes — but the
+    document says which of the two it used, because "read from the file" and "read from the
+    run's record of the file" are different claims.
+
+    A figure neither source yields stays None. The document then says the total was not
+    available rather than reporting a zero that would make every reconciliation look perfect.
+    """
+    out: Dict[str, Any] = {k: None for k, _ in _TOTAL_LABELS}
+    if "Estimate" not in wb.sheetnames:
+        return _fill_totals_from_final(out, final)
+    ws = wb["Estimate"]
+    for r in range(1, ws.max_row + 1):
+        label = " ".join(str(ws.cell(r, c).value or "") for c in range(1, 8)).strip().lower()
+        if not label:
+            continue
+        for key, needle in _TOTAL_LABELS:
+            if out[key] is None and label.startswith(needle):
+                for c in range(8, min(ws.max_column, 30) + 1):
+                    value = _money(ws.cell(r, c).value)
+                    if value is not None:
+                        out[key] = round(value, 2)
+                        out.setdefault("_from", {})[key] = "the workbook's own cell"
+                        # THE CELL, RECORDED WHERE IT IS FOUND. This scan locates the total by
+                        # LABEL precisely because a cell reference "cannot survive a template
+                        # revision" — which is the same reason `publishable_total` refuses to
+                        # assume one. The scan has just found it, so it says which it was, and
+                        # a published total can name where a reader checks it.
+                        if key == "unit":
+                            from openpyxl.utils import get_column_letter as _cl  # noqa: PLC0415
+                            out["unit_cell"] = f"Estimate!{_cl(c)}{r}"
+                            # The value FROM that cell, in the same breath. See
+                            # `publishable_total`: a citation whose value nobody recorded
+                            # cannot vouch for the figure printed beside it.
+                            out["unit_cell_value"] = round(value, 2)
+                        break
+    return _fill_totals_from_final(out, final)
+
+
+def _fill_totals_from_final(out: Dict[str, Any],
+                            final: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Whatever the cells would not yield, taken from the run's record of those same cells."""
+    totals = (final or {}).get("totals")
+    if not isinstance(totals, dict):
+        return out
+    for key, field in (("material", "material_gbp"), ("labour", "labour_gbp"),
+                       ("unit", "unit_gbp")):
+        if out.get(key) is None:
+            value = _money(totals.get(field))
+            if value is not None:
+                out[key] = round(value, 2)
+                out.setdefault("_from", {})[key] = (
+                    "the run's read-back of that cell, calculated by Excel")
+    # The cell the read-back located for the unit cost, carried so a published total can name
+    # where a reader checks it. Absent on a run where Excel never opened, and `publishable_total`
+    # then refuses to publish rather than inventing "Estimate!G6".
+    if totals.get("unit_cell"):
+        out["unit_cell"] = str(totals["unit_cell"])
+    if totals.get("unit_cell_value") is not None:
+        out["unit_cell_value"] = _money(totals["unit_cell_value"])
+    return out
+
+
+def _order_quantity(wb) -> Optional[int]:
+    """How many this estimate is for, from the header cell the populator writes.
+
+    A plain value, not a formula, so it reads out of the saved file — unlike the totals. It is
+    what makes the set-up split meaningful: a labour row's Total Value is per unit, so the
+    set-up inside it has already been divided by this.
+    """
+    if "Estimate" not in wb.sheetnames:
+        return None
+    try:
+        from wb_populate import CELL_MAP
+        cell = str(CELL_MAP["header"]["order_qty"])
+    except Exception:                                            # noqa: BLE001
+        cell = "D6"
+    value = _money(wb["Estimate"][cell].value)
+    return int(value) if value and value >= 1 else None
+
+
+def _estimate_bom(wb) -> List[Dict[str, Any]]:
+    """The Bill of Materials block on the Estimate sheet.
+
+    Found by its own header text rather than a row number: the block moves whenever a job
+    has more or fewer lines, and a hard-coded row would silently read the wrong band.
+    """
+    if "Estimate" not in wb.sheetnames:
+        return []
+    ws = wb["Estimate"]
+    header_row = None
+    for r in range(1, min(ws.max_row, 60) + 1):
+        joined = " ".join(str(ws.cell(r, c).value or "") for c in range(1, 16)).lower()
+        if "bill of materials" in joined and "part code" in joined:
+            header_row = r
+            break
+    if header_row is None:
+        return []
+    out = []
+    for r in range(header_row + 1, ws.max_row + 1):
+        code = ws.cell(r, 8).value           # "Part code"
+        text = ws.cell(r, 3).value           # the description column
+        if not code and not text:
+            if out:
+                break                        # the block has ended
+            continue
+        out.append({
+            "code": str(code or "").strip(),
+            "text": str(text or "").strip(),
+            "supplier": ws.cell(r, 9).value,
+            "price": ws.cell(r, 10).value,
+            "qty": ws.cell(r, 11).value,
+        })
+    return out
+
+
+# ── reading the scan ─────────────────────────────────────────────────────────
+
+def _load_scan(path: Optional[Path]) -> Any:
+    """The run JSON as it sits on disk, or None. Read once and passed around.
+
+    SEPARATED FROM _scan_parts BECAUSE THE PARTS ARE NOT THE ONLY THING IN IT. The same
+    document carries `final_estimate` — the rows as Excel calculated them, which is the only
+    record that has money on every line and provably sums to the sheet's own totals. Reading
+    the file twice to get at both would be two chances to read two different files.
+    """
+    if not path or not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:                                            # noqa: BLE001
+        return None
+
+
+def _scan_parts(data: Any) -> Dict[str, Dict[str, Any]]:
+    """part number -> the scan record, for the pages the workbook does not carry."""
+    if data is None:
+        return {}
+    # THREE SHAPES, BECAUSE THE FULL SCAN IS TOO BIG TO MOVE. 12552's scan JSON is 258,935
+    # lines; nobody is going to send that to have three fields read out of it. So a trimmed
+    # extract — a bare list of records, or {"parts": [...]} — is accepted alongside the real
+    # thing, and only part_number, pages and page_roles are ever read from any of them.
+    #
+    # This is a workaround for the actual defect, which is that no page number reaches any
+    # deliverable. Once the page is written onto the row, this whole path becomes unnecessary.
+    if isinstance(data, list):
+        parts = data
+    elif isinstance(data, dict):
+        parts = ((data.get("manufacturing_writeup") or {}).get("parts")
+                 or data.get("parts") or [])
+    else:
+        return {}
+    return {str(p.get("part_number") or "").strip().upper(): p
+            for p in parts if isinstance(p, dict)}
+
+
+def _basename(path: Any) -> str:
+    """The filename out of a path that was written on Windows and may be read anywhere.
+
+    Path(...).name splits on the separator of the machine it is RUNNING on, so a
+    "K:\\jobs\\part.DXF" recorded by the runner comes back whole on anything but Windows —
+    and the document is generated wherever somebody happens to run it. Split on both.
+    """
+    text = str(path or "").strip().rstrip("\\/")
+    for sep in ("\\", "/"):
+        text = text.rsplit(sep, 1)[-1]
+    return text
+
+
+def _pack_files(data: Any) -> List[str]:
+    """Every drawing file this run read, in the order the run recorded them."""
+    if not isinstance(data, dict):
+        return []
+    out: List[str] = []
+    for key in ("job_source_pdfs", "source_pdfs"):
+        for item in (data.get(key) or []):
+            # `job_source_pdfs` holds RECORDS, not paths — file_scan writes
+            # {"name", "path", "page_count"} per document, while `source_pdfs` is a plain
+            # list of paths. _basename() was handed the dict and stringified it, so the
+            # pack read `{'name': '12552-00-GA_Infinity Drawer_RevC.PDF'}` and any answer
+            # built from it carried the braces into the report.
+            if isinstance(item, dict):
+                item = item.get("name") or item.get("path") or ""
+            name = _basename(item)
+            if name and name not in out:
+                out.append(name)
+    single = data.get("source_file")
+    if single and str(single).lower().endswith(".pdf"):
+        name = _basename(single)
+        if name not in out:
+            out.append(name)
+    return out
+
+
+def _page_index(data: Any) -> Dict[int, Dict[str, Any]]:
+    """job page number -> which PDF it is a page of, and the page number PRINTED on it.
+
+    A PACK OF FOUR DRAWINGS HAS FOUR PAGE ONES. file_scan renumbers every page across the
+    whole job so `page_number` is unique — 1..N — and keeps the document's own number as
+    `source_page_number`, "the per-PDF original for display". Nothing was displaying it.
+
+    So a part on the second document's page 4 was reported as "p.18": a number that appears
+    on no drawing anybody can open, next to a file name that was only ever filled in when the
+    pack happened to hold exactly ONE PDF. An estimator turning to p.18 of a 12-page drawing
+    finds nothing there, and has no way to tell which of the four documents to look in.
+
+    Both halves of "where did you see that" come from here.
+    """
+    out: Dict[int, Dict[str, Any]] = {}
+    pages = (data or {}).get("pages") if isinstance(data, dict) else None
+    for page in pages or []:
+        if not isinstance(page, dict):
+            continue
+        try:
+            job_page = int(page.get("job_page_number") or page.get("page_number"))
+        except (TypeError, ValueError):
+            continue
+        name = _basename(page.get("source_pdf_name") or page.get("source_pdf_path") or "")
+        printed = page.get("source_page_number")
+        out[job_page] = {"file": name,
+                         "printed": printed if printed is not None else job_page}
+    return out
+
+
+def _file_of(record: Dict[str, Any], pack: List[str],
+             pages: Optional[Dict[int, Dict[str, Any]]] = None) -> str:
+    """WHICH FILE, not just which page.
+
+    "p.6" is only half an answer when a pack has four PDFs and a folder of DXFs — the estimator
+    still has to work out which document page 6 belongs to. A part measured off a DXF has an
+    even better answer available: the DXF's own filename, which the engine already records and
+    which names the gauge and the material in most drawing offices' conventions.
+    """
+    dxf = str(record.get("dxf_source_file") or "").strip()
+    if dxf:
+        return _basename(dxf)
+    own = str(record.get("source_file") or "").strip()
+    if own.lower().endswith(".pdf"):
+        return _basename(own)
+    # THE PAGE KNOWS WHICH DOCUMENT IT IS A PAGE OF. Asked before falling back to guessing
+    # from the size of the pack, so a four-PDF job answers as precisely as a one-PDF job.
+    named = {(pages or {}).get(_int(p), {}).get("file") for p in (record.get("pages") or [])}
+    named.discard(None)
+    named.discard("")
+    if named:
+        return ", ".join(sorted(named))
+    if record.get("pages") and len(pack) == 1:
+        # One document in the pack, so every page in it is a page of that document. Said
+        # rather than inferred silently: with two PDFs this would be a guess and it declines.
+        return pack[0]
+    return "not recorded"
+
+
+def _int(value: Any) -> Any:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _drawing_no(record: Dict[str, Any]) -> str:
+    """The number in the TITLE BLOCK, which is not always the part number.
+
+    part_index collects `drawing_numbers` off each title block and falls back to the part
+    number when a sheet prints none. An estimator checking our work reads the number off the
+    drawing in front of them, so it is reported even when it equals the part number — "the
+    same" is an answer, and its absence is the interesting case.
+    """
+    numbers = [str(d).strip() for d in (record.get("drawing_numbers") or []) if str(d).strip()]
+    if not numbers:
+        return "—"
+    pn = str(record.get("part_number") or "").strip().upper()
+    other = [d for d in numbers if d.upper() != pn]
+    return ", ".join(dict.fromkeys(other or numbers))
+
+
+def _sources_of(record: Dict[str, Any], pack: List[str],
+                pages: Optional[Dict[int, Dict[str, Any]]] = None) -> List[str]:
+    """EVERY drawing file this part is evidenced by, each with the page and what it is.
+
+    A part is rarely evidenced by one document. It has a flat exported for the laser, a
+    detail sheet, a line on the GA, and a model the first two came out of — and this returned
+    whichever ONE it found first, which meant "where did you see that" was answered with the
+    DXF and the drawing pages went unmentioned, or answered with a page and the flat that
+    actually supplied the geometry went unmentioned.
+
+    James: "source_pdf_name needs to cover all drawing file names, not just pdfs." So all of
+    them, named, in the order of what they are worth as evidence: the flat that was measured,
+    the model it came from, then the sheets it is drawn on.
+    """
+    out: List[str] = []
+    dxf = str(record.get("dxf_source_file") or "").strip()
+    if dxf:
+        out.append(f"{_basename(dxf)} (flat)")
+    model = str(record.get("solidworks_part_number") or "").strip()
+    if model:
+        out.append(f"{model} (SOLIDWORKS model)")
+
+    own = record.get("pages") or []
+    roles = ", ".join(str(r) for r in (record.get("page_roles") or []))
+    if own and pages:
+        # Each page paired with the document it is printed in, and the number printed on it.
+        for p in own:
+            entry = pages.get(_int(p)) or {}
+            name = entry.get("file") or (pack[0] if len(pack) == 1 else "not recorded")
+            out.append(f"{name} · p.{entry.get('printed', p)}")
+    elif own:
+        name = _file_of(record, pack, pages)
+        # Where the page cannot be resolved, _file_of falls back to the DXF — which is
+        # already the first entry. Naming it twice reads as two documents.
+        if not any(entry.startswith(name) for entry in out):
+            out.append(f"{name} · {_pages_of(record, pages).split(' (')[0]}")
+    if roles and out:
+        out[-1] = f"{out[-1]} ({roles})"
+    return out
+
+
+def _material_stated(rec: Dict[str, Any]) -> str:
+    """What the drawing states this part is made of — and nothing about the sheet it sits on.
+
+    A PURCHASED ITEM IS NOT MADE OF THE ASSEMBLY'S MATERIAL. 401912-02's bill of materials
+    lists "25.4mm ADHESIVE MAGNETIC TAPE, L: 450mm", and this column reported its material
+    stated as MILD STEEL -- read off the GA title block, which states what the DIVIDER is made
+    of. The tape is magnetised rubber from Abel Magnets. Nothing was mis-costed by it (the
+    tape is priced as a bought-in and never touched the steel route), but a purchased line
+    that reads as mild steel on a page headed "Drawing quality, sheet by sheet" is the kind of
+    wrong fact an estimator carries into a conversation with a supplier.
+
+    The same test the "What it could not give" column already applies two cells along: a line
+    whose only page role is bought_in has no detail drawing, so the sheet it appears on states
+    the assembly's material and not its own. Where a bought-in DOES have a detail drawing the
+    material on it is genuinely the part's, and it is printed as before.
+
+    ── AND THE RULE MOVED, BECAUSE IT WAS NEVER THIS COLUMN'S ─────────────────────
+
+    This knew the answer and was the only surface that did. The same inherited reading
+    reached the quotation's Material line, the report's part table and the SQL export, each
+    of which read `normalized_material` raw. `display_material.material_is_the_parts_own`
+    is this test, asked by all of them.
+    """
+    from display_material import material_is_the_parts_own
+    roles = [str(r).lower() for r in (rec.get("page_roles") or [])]
+    if "bought_in" in roles and not material_is_the_parts_own(rec):
+        return "purchased — the sheet states the assembly's material, not this item's"
+    return ", ".join(str(m) for m in rec.get("materials") or []) or "no"
+
+
+
+def _where(record: Dict[str, Any], pack: List[str],
+           pages: Optional[Dict[int, Dict[str, Any]]] = None) -> str:
+    """Every file and page this part was seen in, which is what "where did you see that"
+    actually asks. Never one of them."""
+    if not record:
+        return "not supplied"
+    found = _sources_of(record, pack, pages)
+    if not found:
+        return "no sheet of its own"
+    # "·" already separates a file from its page, so a second level is needed between the
+    # files themselves. Not "|" — these strings go into markdown tables.
+    return " ; ".join(found)
+
+
+def _pages_of(record: Dict[str, Any],
+              pages: Optional[Dict[int, Dict[str, Any]]] = None) -> str:
+    own = record.get("pages") or []
+    roles = record.get("page_roles") or []
+    if not own:
+        return "no sheet of its own"
+    # THE NUMBER PRINTED ON THE DRAWING, not the job-wide one. They are the same on a
+    # single-PDF pack and different on every other, and only one of them is a page an
+    # estimator can turn to.
+    shown = ", ".join(f"p.{(pages or {}).get(_int(p), {}).get('printed', p)}" for p in own)
+    return f"{shown} ({', '.join(str(r) for r in roles)})" if roles else shown
+
+
+# ── the rows as Excel calculated them ────────────────────────────────────────
+#
+# THE ONE RECORD WITH MONEY ON EVERY LINE. `final_estimate` is written by the read-back after
+# Excel has recalculated the populated template: every material block (bought-in BOM, tube,
+# sheet steel, other sheet) and every labour row, each carrying the value the sheet itself
+# computed. It is the only structure that can be summed and held against Total Material Cost
+# and Total Labour Cost — which is what "relates to the spreadsheet" has to mean.
+#
+# Until this was read, this document explained material only, and the labour — a third of the
+# unit cost — appeared as a list of operations with no figure against any of them.
+
+def _data_sufficiency(data: Any) -> Dict[str, Any]:
+    """What the engine concluded about whether this pack could be costed credibly.
+
+    IT SUPPRESSES ITS OWN HEADLINE AND SAYS SO ONLY ON THE CONSOLE. The gate stamps
+    INSUFFICIENT DATA, nulls the engine's document total, and prints one line to a log nobody
+    keeps — while the workbook goes on to compute a perfectly ordinary Unit Cost, because the
+    two are different figures. So the estimate arrives priced, with the reason to doubt it
+    recorded in a JSON field and stated nowhere a person reads.
+
+    Priced with what we have, and the limitation stated: this is the half that was missing.
+    """
+    if not isinstance(data, dict):
+        return {}
+    for node in (data.get("data_sufficiency"),
+                 (data.get("estimate_summary") or {}).get("data_sufficiency")
+                 if isinstance(data.get("estimate_summary"), dict) else None):
+        if isinstance(node, dict):
+            return node
+    return {}
+
+
+def _final_estimate(data: Any) -> Dict[str, Any]:
+    """`final_estimate` off the run JSON, wherever the writer put it."""
+    if not isinstance(data, dict):
+        return {}
+    for node in (data.get("final_estimate"),
+                 (data.get("estimate_summary") or {}).get("final_estimate")
+                 if isinstance(data.get("estimate_summary"), dict) else None):
+        if isinstance(node, dict):
+            return node
+    return {}
+
+
+def _accepted_labour(data: Any) -> Dict[int, Dict[str, Any]]:
+    """workbook_labour rows keyed by sheet row — the PARTS behind each labour line.
+
+    The calculated rows know what a line cost and which department did it; they do not know
+    which parts produced it. The accepted rows know exactly that and nothing about cost. They
+    join on the sheet row they share, which is the join wb_populate itself documents.
+    """
+    if not isinstance(data, dict):
+        return {}
+    node = data.get("workbook_labour")
+    if not isinstance(node, dict) and isinstance(data.get("estimate_summary"), dict):
+        node = data["estimate_summary"].get("workbook_labour")
+    out: Dict[int, Dict[str, Any]] = {}
+    for row in ((node or {}).get("rows") or []):
+        if isinstance(row, dict) and row.get("workbook_row") is not None:
+            try:
+                out[int(row["workbook_row"])] = row
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+def _money(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _sum_money(rows: List[Dict[str, Any]], key: str = "total_value_gbp") -> float:
+    return round(sum(_money(r.get(key)) or 0.0 for r in rows), 2)
+
+
+_BLOCK_NAMES = {"bom": "Bought-in / standard materials", "tube": "Tube and wire",
+                "steel": "Sheet steel", "other_sheet": "Other sheet material"}
+
+
+# ── which reader decided a thing ─────────────────────────────────────────────
+#
+# "WHERE DID THAT COME FROM" HAS TWO ANSWERS AND THE DOCUMENT ONLY GAVE ONE. It said which
+# drawing page a part appears on, and what priced it — and not which READER supplied the
+# material, the gauge, the quantity or the size. Those are different questions: a thickness
+# measured off the SOLIDWORKS model and one read off a title block are both "p.7", and only
+# one of them is a measurement.
+#
+# The engine records it per field and always has. source_precedence stamps material_source,
+# thickness_source, quantity_source and geometry_source onto every part as it goes, and ranks
+# them so a weaker reader cannot overwrite a stronger one. This prints that record.
+
+_READER_WORDS = {
+    "estimator_confirmed": "an estimator confirmed it",
+    "knowledge_base": "the knowledge base",
+    "solidworks_api": "the SOLIDWORKS model",
+    "solidworks_flat_pattern": "the SOLIDWORKS flat pattern — measured",
+    "solidworks_applied_material": "the material applied in the SOLIDWORKS model",
+    "drawn_on_sheet": "the sheet that draws it — it has no sheet of its own",
+    "dxf": "the part's DXF",
+    "dxf_flat_pattern": "the part's DXF flat pattern — measured",
+    "dxf_filename": "the DXF's own filename",
+    "mirror_of_measured": "mirrored from the measured opposite hand",
+    "drawing_deterministic": "read straight off the drawing",
+    "title_block": "the drawing's title block",
+    "drawing_notes": "a note on the drawing",
+    "pdf_overall_dims": "overall dimensions on the drawing — the view, not the part",
+    "bom_tree": "the BOM table",
+    "override_rule": "an override rule",
+    "llm_extract": "the vision model (xAI Grok) — a reading, not a measurement",
+    "llm_full_extract": "the vision model (xAI Grok) — a reading, not a measurement",
+    "inference": "inferred by the engine — nothing on the drawing said it",
+    "geometry_inference": "inferred from the part's geometry — nothing measured it",
+    "": "not recorded",
+}
+
+
+def _reader(source: Any) -> str:
+    """A source name in words an estimator can weigh, with the engine's own rank on it."""
+    key = str(source or "").strip().lower()
+    words = _READER_WORDS.get(key)
+    if words is None:
+        # Decorated values such as "knowledge_base (92%)" or "override_rule:timber_panels".
+        for known, text in _READER_WORDS.items():
+            if known and key.startswith(known):
+                words = text
+                break
+    words = words or key.replace("_", " ")
+    try:
+        from source_precedence import rank as _rank
+        _r = _rank(key)
+    except Exception:                                            # noqa: BLE001
+        _r = None
+    return f"{words} ({_r})" if _r else words
+
+
+def _readers_used(scan: Dict[str, Dict[str, Any]]) -> List[str]:
+    """Every reader that actually decided something on this job, strongest first."""
+    seen: Dict[str, int] = {}
+    for rec in scan.values():
+        for field in ("material_source", "thickness_source", "quantity_source",
+                      "geometry_source"):
+            key = str(rec.get(field) or "").strip().lower()
+            if key:
+                seen[key] = seen.get(key, 0) + 1
+    try:
+        from source_precedence import rank as _rank
+    except Exception:                                            # noqa: BLE001
+        def _rank(_):                                            # noqa: ANN001
+            return 0
+    return [f"{_reader(k)} — {n} field(s)"
+            for k, n in sorted(seen.items(), key=lambda kv: (-_rank(kv[0]), -kv[1], kv[0]))]
+
+
+# ── where a part number stopped tracing through the pack ─────────────────────
+#
+# THE FAILURE DESIGN CAN ACT ON, AND THE ONE NOBODY HAS BEEN TOLD ABOUT.
+#
+# A part number is supposed to travel: BOM row -> detail sheet -> DXF export -> model. Every
+# place it does not is a place the engine had to size or price a part from something that was
+# not a drawing of that part, and every one of those has a £ on it.
+#
+# 12349-02-69 is the case. Its flats are named `...-01A_-01_2MM_High Impact Acrylic_RevA.DXF`
+# — four dash-segments — and the filename parser capped a number at three, so all seven
+# resolved to the grandparent. 01A then had no flat of its own, fell through to a document
+# text scan, and took 2120 x 2120 off the general arrangement. None of that was reported: the
+# estimate simply arrived with a 4.5 square metre acrylic drawer front in it.
+#
+# The engine cannot tell Design their numbering is wrong — usually it is not; usually the
+# READER is. What it can do is say, on every job, exactly where a number stopped tracing and
+# what the estimate did instead, so the two of us can tell which end the fix belongs at.
+
+# Geometry that is not a measurement OF THIS PART. Each means: no flat, no model, so a size
+# came from somewhere that describes the part only indirectly.
+_UNTRACED_GEOMETRY = {
+    "pdf_overall_dims": "sized from the overall on a view rather than a flat pattern",
+    "document_text_largest_numbers": "sized from the largest numbers in the document text — "
+                                     "context-blind, and the biggest numbers in a pack are "
+                                     "usually the general arrangement's",
+    "inference": "sized by inference — nothing on the drawing stated it",
+    "geometry_inference": "sized from reasoning about the part, not from a drawing of it",
+    "llm_extract": "sized from a vision-model reading of the page",
+    "llm_full_extract": "sized from a vision-model reading of the page",
+}
+
+# A TRACING FAILURE IS ABOUT A PART WE HAVE TO CUT.
+#
+# `bom_tree` was in the list above and produced the wrong kind of noise: a bought-in concrete
+# slab has no geometry because it is bought, not because its number stopped tracing, and
+# reporting it here sends somebody to ask Design for a detail drawing of a slab. Nothing is a
+# break in the trail unless the engine needed a drawing of that part and could not find one —
+# which means the part is fabricated.
+
+
+_QUALITY_FIELDS = ("materials", "thicknesses_mm", "surface_finishes", "geometry_rollup")
+
+
+def _pack_was_read_in_full(scan: Dict[str, Dict[str, Any]]) -> bool:
+    """Does this extract carry the fields a drawing-quality read needs?
+
+    A FIELD MISSING FROM THE EXTRACT IS NOT A FIELD MISSING FROM THE DRAWING. Against a
+    trimmed extract every row comes out "material no, thickness no, finish no" for a pack
+    whose page 4 plainly reads MATERIAL: MILD STEEL, 1.5 THK, POWDER COATED. That is not a
+    weak answer, it is a confident wrong one, and it would go to an estimator as an
+    assessment of Design's work.
+    """
+    return any(any(k in rec for k in _QUALITY_FIELDS) for rec in scan.values())
+
+
+def _gauge_stated(rec: Dict[str, Any]) -> str:
+    """The gauge this part is COSTED at, and the scrape only where it disagrees.
+
+    THE COLUMN WAS PRINTING A TOLERANCE TABLE. `thicknesses_mm` is every number the page
+    reader found that looked like a thickness — on 11908-21 that is "1.0, 3" against three
+    parts whose DXF filenames read `9mm MDF+ LAM`, whose sheet block says Ga 9, and which are
+    costed at 9. On 12349 the same column said 5.0 for a 1.5 mm bracket.
+
+    So section 7 disagreed with section 2 about the same part in the same document, and the
+    half that was wrong is the half headed "what the drawing states" — which is the half an
+    estimator would use to check us, and the half they would send to Design.
+
+    The resolved gauge is what the arbitration decided after weighing every reading. Where a
+    scraped number differs it is still shown, marked as unused, because a drawing that prints
+    a contradictory thickness IS worth knowing about — it is just not what we costed.
+    """
+    resolved = _money(rec.get("normalized_thickness_mm"))
+    scraped = [str(t) for t in (rec.get("thicknesses_mm") or []) if str(t).strip()]
+    if resolved is None:
+        return ", ".join(scraped) or "no"
+    shown = f"{resolved:g}"
+    others = [t for t in scraped if _money(t) is not None
+              and abs((_money(t) or 0) - resolved) > 0.01]
+    if others:
+        return f"{shown} (the page also reads {', '.join(others)} — not used)"
+    return shown
+
+
+def _what_a_sheet_could_not_give(rec: Dict[str, Any]) -> List[str]:
+    """What this drawing did not state, or why the question does not apply to it.
+
+    A PURCHASED PART NAMED ON AN ASSEMBLY SHEET IS NOT AN INCOMPLETE DETAIL. The bearing and
+    the rivets appear on p.2 because that is where they are listed, and they have no detail
+    drawing because they do not need one. Saying what they ARE beats listing four fields they
+    were never going to carry.
+    """
+    roles = [str(r).lower() for r in (rec.get("page_roles") or [])]
+    if "bought_in" in roles and "detail" not in roles:
+        return ["bought in — listed on an assembly sheet, no detail drawing needed"]
+    geom = rec.get("geometry_rollup") or {}
+    missing: List[str] = []
+    if not rec.get("materials"):
+        missing.append("material")
+    if not rec.get("thicknesses_mm"):
+        missing.append("thickness")
+    if not rec.get("surface_finishes"):
+        missing.append("finish")
+    if not (geom.get("estimated_cut_length_mm") or 0):
+        missing.append("cut length")
+    return missing
+
+
+def _what_they_are(lines: List[Dict[str, Any]]) -> str:
+    """The kinds of line actually on THIS job, named from the lines themselves.
+
+    This sentence was a fixed list — "fasteners off the BOM table, bought items, packaging,
+    delivery and the powder line" — printed whatever the job held. 11908-21 has no powder on
+    it, so the note named a line that does not exist, which is exactly the tell that a
+    document is generated rather than written. It also had nothing to say about a job whose
+    lines were something else.
+    """
+    kinds: List[str] = []
+    codes = [str(l.get("code") or "").upper() for l in lines]
+    descs = " ".join(str(l.get("desc") or "") for l in lines).upper()
+    if any(c in ("PACKAGING",) for c in codes):
+        kinds.append("packaging")
+    if any(c in ("DELIVERY",) for c in codes):
+        kinds.append("delivery")
+    if any(c.startswith("POWDER") for c in codes):
+        kinds.append("the powder line")
+    if any(c.startswith(("FIXING", "STD", "BI-", "P/P")) for c in codes):
+        kinds.append("fasteners off the BOM table")
+    _named = {"packaging", "delivery", "the powder line", "fasteners off the BOM table"}
+    if len(kinds) < len(lines) or not kinds:
+        kinds.append("bought items")
+    if len(kinds) == 1:
+        return kinds[0]
+    return ", ".join(kinds[:-1]) + " and " + kinds[-1]
+
+
+def _sdi_cuts(code: str, steel: Dict[str, Any], material: Dict[str, Dict[str, Any]],
+              line: Optional[Mapping[str, Any]]) -> bool:
+    """Is this a line SDI cuts? A sheet blank, a section cut to length, or a route that cuts it.
+
+    THE ROUTE IS EVIDENCE TOO (D-415). The 12675-01 concept book lasered its flat bars from
+    strip, priced them off length, and this table read neither a Sheet Steel row nor a Blank L
+    column for them — so it told the reader none of its lines was a part SDI cuts, and that
+    each was "a bought item, a fastener off a BOM table, or a commercial line"."""
+    if bool(steel.get(code)) or bool((material.get(code) or {}).get("Blank L")):
+        return True
+    line = line or {}
+    if line.get("length"):
+        return True
+    try:
+        import config                                                    # noqa: PLC0415
+        cutting = {str(o).lower() for o in getattr(config, "CUTTING_OPERATIONS", ())}
+    except Exception:                                                    # noqa: BLE001
+        cutting = set()
+    ops = {str(o or "").strip().lower()
+           for o in list(line.get("route_operations") or []) + list(line.get("operations") or [])}
+    return bool(ops & cutting)
+
+
+def _missing_drawings(bom: List[Dict[str, Any]], scan: Dict[str, Dict[str, Any]],
+                      steel: Dict[str, Any],
+                      material: Dict[str, Dict[str, Any]],
+                      record: Optional[Dict[str, Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """Lines with no sheet of their own, and whether their price depended on one.
+
+    A LINE WITH NO SHEET IS ONLY A PROBLEM IF ITS PRICE RESTED ON ONE. A bought-in bolt has
+    no detail drawing because it does not need one, and saying so stops somebody chasing
+    Design for it.
+    """
+    out: List[Dict[str, Any]] = []
+    for row in bom:
+        code = str(row.get("code") or "").upper()
+        if not code:
+            continue
+        rec = scan.get(code) or {}
+        if rec.get("pages"):
+            continue
+        unit, qty = _money(row.get("price")), _money(row.get("qty"))
+        # THE RECORD'S CHARGED MONEY, NOT ONLY THE BOM CELL. 11350-01's right arm is a
+        # cross-reference here (its £0.45 lives in Sheet Steel), and reading only this
+        # row's price cell made the one panel that survived the MIR join fix keep
+        # calling a charged part free. What is missing for such a part is its DRAWING,
+        # never its money — and the panel must say so with the same figure Canonical
+        # carries.
+        _line = (record or {}).get(code) or {}
+        _charged = _money(_line.get("charged_ext_gbp"))
+        out.append({
+            "code": row.get("code"), "desc": _description(row),
+            "cut": _sdi_cuts(code, steel, material, _line),
+            "section": bool(_line.get("length")),
+            "gbp": (round(unit * qty, 2) if unit and qty else _charged or None),
+            "priced": row.get("price") not in (None, "") or bool(_charged),
+        })
+    return out
+
+
+def _synthesised_number(part_number: str) -> bool:
+    """A number the engine invented because the file's own would not resolve.
+
+    drawing_job_merge names a promoted flat `<parent>-DXF<digits>` when it cannot bind it to a
+    real child. That is a legitimate rescue and a loud signal: something in the pack did not
+    trace, and this line may be a duplicate of one that did.
+    """
+    return "-DXF" in str(part_number or "").upper()
+
+
+def _tracing_failures(scan: Dict[str, Dict[str, Any]], pack: List[str],
+                      steel_calc: Dict[str, Dict[str, Any]],
+                      material: Dict[str, Dict[str, Any]],
+                      pages: Optional[Dict[int, Dict[str, Any]]] = None
+                      ) -> List[Dict[str, Any]]:
+    """Every part whose number stopped tracing somewhere, with what it cost.
+
+    Reported per part rather than per pack, because "three numbers did not resolve" is not
+    something anybody can act on and "01A was sized off the GA at £86" is.
+    """
+    out: List[Dict[str, Any]] = []
+    for code, rec in sorted(scan.items()):
+        if not code:
+            continue
+        _calc = steel_calc.get(code) or {}
+        _det = material.get(code) or {}
+        # Fabricated: the engine cut it, so it needed a drawing of it. A bought-in is
+        # excluded here and reported — with its price and its source — on the bill of
+        # materials, where it belongs.
+        _roles = [str(r).lower() for r in (rec.get("page_roles") or [])]
+        _fabricated = bool(_calc or _det.get("Blank L")
+                           or str(rec.get("dxf_source_file") or "").strip()) or (
+            "detail" in _roles and "bought_in" not in _roles)
+        if not _fabricated:
+            continue
+        geom = str(rec.get("geometry_source") or "").strip().lower()
+        pages = rec.get("pages") or []
+        why: List[str] = []
+        if _synthesised_number(rec.get("part_number") or code):
+            why.append("its number was synthesised by the engine — the file it came from "
+                       "could not be bound to a part in the BOM")
+        if geom in _UNTRACED_GEOMETRY:
+            why.append(_UNTRACED_GEOMETRY[geom])
+        if not pages and not str(rec.get("dxf_source_file") or "").strip():
+            why.append("no sheet of its own in the pack and no DXF — nothing in the pack "
+                       "draws this part")
+        if not why:
+            continue
+        out.append({
+            "code": rec.get("part_number") or code,
+            "description": _clip(rec.get("description"), 48),
+            "why": why,
+            "reader": _reader(rec.get("geometry_source")),
+            "drawing_no": _drawing_no(rec),
+            "where": _where(rec, pack, pages),
+            "gbp": _money(_calc.get("total_value_gbp")) or _money(_det.get("Cost")),
+            "blank": (f"{_fmt(_det.get('Blank L'))} x {_fmt(_det.get('Blank W'))}"
+                      if _det.get("Blank L") else ""),
+        })
+    return sorted(out, key=lambda d: -(d["gbp"] or 0))
+
+
+# ── the money's provenance ───────────────────────────────────────────────────
+
+# TWO DIFFERENT QUESTIONS, ONE TUPLE — AND THAT IS THE BUG.
+#
+# "grok/llm/xai/market" say WHERE a figure came from. "indicative" says HOW FIRM it is. Mixed
+# together, every configured SDI rate we deliberately stamp "(INDICATIVE)" matched as an AI
+# market lookup: 7332-01's felt pad (£0.20, a fixed config commodity) and its plating (£15.83,
+# config £/kg subcontract) were both reported to Tim as "AI market indication". That tells him
+# to distrust the wrong thing — these are house rates to VERIFY, not model guesses to replace.
+_MARKET_AI = ("grok", "llm", "xai", "market")      # provenance: an AI/market lookup
+_INDICATIVE = _MARKET_AI + ("indicative",)         # firmness: not a firm quote, whatever its source
+
+# THE ENGINE'S OWN SOURCE TOKENS, SAID IN WORDS. The AI Price Provenance tab carries the
+# cost_method / source verbatim — "standard_commodity_provisional", "market_ai_indicative" —
+# because that is the machine's record. Printed straight onto an estimator's Source column it
+# reads as jargon, and "config rate card" (the old label) claimed a firmness these lines do
+# not have. Each one is an INDICATIVE figure with a stated basis, so it is said as one.
+#
+# ONE VOCABULARY. These are costed_facts.PRICE_ORIGIN_LABELS, the words the record itself
+# prints; keeping a second copy here is how the tab and the e-mail came to phrase one origin
+# two ways.
+from costed_facts import PRICE_ORIGIN_LABELS as _SOURCE_TOKENS  # noqa: E402
+from costed_facts import (INDICATIVE_HOUSE as _HOUSE, INDICATIVE_MARKET as _MARKET,  # noqa: E402
+                          costed_job as _costed_job, record_lines as _record_lines)
+
+
+def _record_line(record: Optional[Dict[str, Dict[str, Any]]], bom_row: Dict[str, Any]
+                 ) -> Optional[Dict[str, Any]]:
+    """The record's line for a workbook BOM row, or None."""
+    if not record:
+        return None
+    code = str(bom_row.get("code") or "").strip().upper()
+    return (record.get(code) or record.get(code.replace(" ", ""))
+            or record.get(str(bom_row.get("text") or "").strip().split(" ")[0].upper()))
+
+
+def _split_by_firmness(bom: List[Dict[str, Any]], record: Optional[Dict[str, Dict[str, Any]]],
+                       gaps: Dict[str, Any]) -> tuple:
+    """(house, market): the BOM rows the record classes as an INDICATIVE house rate, and
+    those it classes as an AI/market indication. ONE split, used by the Explanation tab's
+    question 2, its settle table, the e-mail's banner, §3 footer and §5 — so the four can no
+    longer disagree about which lines those are or what they add up to."""
+    house_codes = {str(c).upper() for c in (gaps.get("indicative_house") or [])}
+    market_codes = {str(c).upper() for c in (gaps.get("indicative_market") or [])}
+    house, market = [], []
+    for r in bom:
+        line = _record_line(record, r)
+        if line is None:
+            # A workbook row the run JSON does not know (a line typed onto the sheet by
+            # hand): the record cannot classify it, so the supplier cell's own words do.
+            if _money(r.get("price")) and any(
+                    t in f"{r.get('supplier') or ''}".lower() for t in _INDICATIVE):
+                market.append(r)
+            continue
+        code = str(line.get("part_number") or r.get("code") or "").upper()
+        if code in market_codes:
+            market.append(r)
+        elif code in house_codes:
+            house.append(r)
+    return house, market
+
+
+def _humanise_source(raw: str) -> str:
+    """An engine source token in words an estimator can act on, or the token untouched.
+
+    Matches on the token as the tab spells it (lower-cased, spaces or underscores), so the
+    same phrase reads the same whether the machine wrote 'market_ai_indicative' or a human
+    typed 'market AI indicative' into the cell.
+    """
+    key = re.sub(r"[\s_]+", "_", str(raw or "").strip().lower())
+    return _SOURCE_TOKENS.get(key, _SOURCE_TOKENS.get(key.replace("_", " "), raw))
+
+# EVERY FABRICATED BLOCK, NOT JUST THE STEEL ONE. A BOM line whose own text says its money is
+# costed in another block (Sheet Steel / Other Sheet / Tube / Wire) is deliberately £0 here —
+# pricing it again would double it. The unpriced/outstanding-input detectors used to test only
+# for "costed in sheet steel", so a WIRE cross-reference ("11762-17-03M U WIRE — costed in Wire
+# below") — priced £0.26 in the Wire block — was counted as a line carrying no price, and the
+# report/explanation/email/banner told the estimator a correct £21.01 was "understated by the
+# wires". One predicate, every block, so the row that points at the money is never on the
+# to-do list.
+_COSTED_IN_BLOCK_MARKERS = (
+    "costed in sheet steel", "costed in other sheet material",
+    "costed in tube", "costed in wire",
+)
+
+
+def _is_costed_in_a_block(text: Any) -> bool:
+    """True when a BOM row's own text says its material is costed in a fabricated block."""
+    _t = str(text or "").lower()
+    return any(_m in _t for _m in _COSTED_IN_BLOCK_MARKERS)
+
+
+def _order_qty_hint(bom_row: Dict[str, Any]) -> str:
+    """The order quantity a commercial line was priced for, out of its own description.
+
+    commercial_lines writes "PACKAGING for the whole order of 7, divided per unit" onto the
+    line. That sentence is the only place the divisor survives into the workbook, so this
+    reads it back rather than guessing at the header quantity — which is the same number
+    today and would silently diverge the moment a line is priced for a different batch.
+    """
+    found = re.search(r"whole order of\s*(\d+)", str(bom_row.get("text") or ""),
+                      re.IGNORECASE)
+    return found.group(1) if found else ""
+
+
+def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]],
+                  steel_index: Optional[Dict[str, Dict[str, Any]]] = None,
+                  record: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
+    """Which book priced this line, in words an estimator can act on.
+
+    THE FABRICATED PARTS ARE NOT UNPRICED. Every "-M" line carries a blank in the BOM's
+    price column and says so in its own text — "costed in Sheet Steel below" — because sheet
+    metal is priced BY NEST on the Sheet Steel block, not per piece here. Reading the
+    blank as "no rate" put fifteen made parts on the estimator's to-do list, which is both
+    wrong and the fastest way to lose their trust in the rest of the document.
+
+    A BLANK WITH NO EXPLANATION IS THE ONE THAT MATTERS, and it stays loud.
+    """
+    code = bom_row["code"].upper()
+    text = str(bom_row.get("text") or "")
+    supplier = str(bom_row.get("supplier") or "").strip()
+    # THE JOIN, TRIED THE WAYS THE TWO SHEETS ACTUALLY SPELL A CODE. Looking the raw code up
+    # verbatim and giving up is how most of 12349-02's lines came out "source not named".
+    prov = (provenance.get(code)
+            or provenance.get(code.replace(" ", ""))
+            or provenance.get(str(bom_row.get("text") or "").strip().split(" ")[0].upper())
+            or {})
+    named = str(prov.get("Price Source") or prov.get("price_source")
+                or prov.get("Source") or prov.get("source") or "").strip()
+    # An engine source token ("standard_commodity_provisional", "market_ai_indicative") is
+    # translated to its fully-worded INDICATIVE phrase and marked so the market/AI re-wrap
+    # below leaves it alone — the phrase already carries its own qualifier. This is also
+    # where the class-word commodity (the £1.20 clip) at last names its source instead of
+    # falling to "source not named": the provenance row now exists for every minted bought-in.
+    _named_worded = _humanise_source(named)
+    _named_is_engine_phrase = bool(named) and _named_worded != named
+
+    # A CATEGORY WORD IS NOT A CODE, AND SAYING SO IS THE ANSWER.
+    #
+    # SDI drawings put a CLASS in the part-code column where the item has no specific code:
+    # "FIXING", "STD PART", "P/P". 12349-02 carried all three, each at GBP 0.00 with "source
+    # not named in the workbook" beside it — which reads as a lookup we forgot to do. It is
+    # not: there is nothing to look up. You cannot price the word "FIXING", and the identity
+    # is entirely in the description next to it.
+    try:
+        from part_code_conventions import is_category_not_a_code as _is_category
+    except Exception:                                            # noqa: BLE001
+        _is_category = None                                      # type: ignore[assignment]
+    # EVERY FABRICATED BLOCK, NOT JUST THE STEEL ONE. This tested for "costed in sheet
+    # steel" alone, so 12349-02's acrylic and MDF — whose own text reads "costed in Other
+    # Sheet Material" — fell through it and came out as "source not named in the workbook",
+    # on lines that are correctly and deliberately blank here because their money is in
+    # another block. Three made parts on the estimator's to-do list for no reason.
+    _blocks = (("costed in sheet steel", "Sheet Steel"),
+               ("costed in other sheet material", "Other Sheet Material"),
+               ("costed in tube", "Tube"), ("costed in wire", "Wire"))
+    for _needle, _label in _blocks[1:]:
+        if _needle in text.lower():
+            return (f"costed by nest on the {_label} block, not per piece here")
+    if "costed in sheet steel" in text.lower():
+        # NAME THE ROW IT IS COSTED ON. "priced below" is true and stops exactly where the
+        # question starts; an estimator wants to look at the figure, not be told it exists.
+        # NOT "BY BLANK AREA". That was the AI Material Detail tab's method, and it is not
+        # what the sheet does: column M divides a whole sheet by how many of the part nest
+        # out of it. Naming the wrong method on the row that points at the money is how a
+        # covering note came to quote the blank-area figure.
+        steel_row = (steel_index or {}).get(code, {}).get("row")
+        return (f"costed by nest on the Sheet Steel block — see `Estimate!{steel_row}` below"
+                if steel_row else
+                "costed by nest on the Sheet Steel block, not per piece here")
+    # ZERO IS WHAT A BLANK READS AS ONCE THE CELL HAS BEEN WRITTEN. This asked for None or
+    # empty only, so every line the workbook had filled with 0.00 skipped past the loud
+    # answer and landed on "source not named in the workbook" — which sends an estimator to
+    # check a provenance tab about a line that simply has no price.
+    _p = bom_row.get("price")
+    if _p in (None, "") or (isinstance(_p, (int, float)) and float(_p) == 0.0):
+        # WHY it could not be priced, where we can say. A class word in the code column is
+        # not a lookup we forgot — there is nothing to look up, and the answer is a code.
+        # Asked only of an unpriced line: PACKAGING is a category word too, and on a line
+        # that carries GBP 25.00 the price is what matters, not the spelling of its code.
+        if _is_category is not None and code and _is_category(code):
+            # WHOSE FAULT IT IS, STATED CAREFULLY. The first version of this told an
+            # estimator to "identify it and give it a code" — and on 12349-02 the engine had
+            # ALREADY resolved BI-SCREW and BI-BUTTONSCREW for two of the three lines and
+            # then kept the class word over them. Asking a person to do work we had already
+            # done and thrown away is worse than saying nothing.
+            return ("**NOT PRICED — the code column holds a CLASS, not a code.** The sheet "
+                    f"carries '{bom_row['code']}', which is the word a drawing prints where "
+                    "an item has no part number, so nothing can look a rate up against it. "
+                    "If the item has an SDI code, put it in and the price follows; if it "
+                    "genuinely has none, price it by hand. Where the engine resolved a real "
+                    "code and this class word displaced it, that is ours")
+        # A NIL THE RECORD PUT THERE ON PURPOSE IS NOT A MISSING RATE. G01's free-issue
+        # graphic was recognised, costed nil deliberately, worded FREE-ISSUE on the sheet
+        # — and this branch, which never asked the record, still demanded "a rate" for it
+        # in the one document that opens with "the questions, answered first".
+        _line0 = _record_line(record, bom_row)
+        if _line0 is not None:
+            _og0 = _line0.get("price_origin") or {}
+            if str(_og0.get("class") or "") == "nil_by_design" and _og0.get("label"):
+                return str(_og0["label"])
+        # WHICH OF THE TWO REASONS, BECAUSE THEY HAVE DIFFERENT ANSWERS.
+        #
+        # "NOT PRICED — needs a rate" was the whole message on 11350-02 against a wing nut, a
+        # PEM stud and a ticket strip, and Tim's reply asked the question it had failed to
+        # answer: "can it not take of system or internet for cost or is spec missing on
+        # drawing". Those three lines are not one case. Two carried a code the ENGINE minted
+        # from their description because the pack gave none — nothing can be looked up against
+        # a code we wrote ourselves. The third carried DBR60, a real code that was asked and
+        # came back with nothing, which is the purchasing catalogue's gap and not the
+        # drawing's. An estimator can act on either sentence; neither is "needs a rate".
+        try:
+            from part_identity import is_engine_minted_code as _is_minted
+            from part_identity import is_engine_minted_record as _is_minted_rec
+        except Exception:                                        # noqa: BLE001
+            _is_minted = None                                    # type: ignore[assignment]
+            _is_minted_rec = None                                # type: ignore[assignment]
+        # A SIGHTED LINE HAS A THIRD ANSWER, AND IT IS NOT ABOUT CODES AT ALL.
+        #
+        # The castor on the first concept book was not short of a catalogue row; it was
+        # short of a SPECIFICATION. "CASTOR" names a drawer, not a purchase — no diameter,
+        # no fixing, no load — so nothing could be looked up and nothing could be researched
+        # either. Telling an estimator to load a supplier price list would be the third
+        # wrong sentence in a row on the same line.
+        try:
+            from part_identity import is_sighted_code as _is_sighted
+        except Exception:                                        # noqa: BLE001
+            _is_sighted = None                                   # type: ignore[assignment]
+        if _is_sighted is not None and code and _is_sighted(code):
+            return ("**NOT PRICED — this part was SIGHTED on a render, and nothing names "
+                    "which item it is.** A picture shows that there is a castor; it does "
+                    "not show the diameter, the fixing or the load, so no catalogue row "
+                    "can be matched to it and no supplier can be asked for a real price. "
+                    "Name the item — a code, a manufacturer reference, or the specification "
+                    "you would order by — and the ordinary price chain answers it")
+        # BY THE RECORD WHERE IT IS IN HAND (D-383): a minted code that keeps a row's figures
+        # ("BI-DOWEL8MMX30MM") is not recognisable by its shape, and calling it "a real code"
+        # sends an estimator to look for a catalogue row that could never exist.
+        _minted_by_record = bool(_line0 is not None and _is_minted_rec is not None
+                                 and _is_minted_rec(_line0))
+        # A SPLIT IDENTITY IS DERIVED FROM A CLASS WORD, NOT PRINTED (D-383). 12173-03-GA
+        # prints "FIXING" against its pan-head screws; "FIXING-3.5-X12MM-PAN-HEAD" is the
+        # engine's per-article identity, and "a real code ... asked of the catalogue" is not
+        # true of it.
+        try:
+            from part_identity import is_category_split_identity as _is_split
+        except Exception:                                        # noqa: BLE001
+            _is_split = None                                     # type: ignore[assignment]
+        if _line0 is not None and _is_split is not None and _is_split(_line0):
+            return ("**NOT PRICED — the drawing printed only the class word "
+                    f"'{_line0.get('printed_code')}' for this line.** "
+                    f"'{bom_row['code']}' is an identity derived from that class word and the "
+                    "row's own words, so the lines stay apart — it is not a code anything "
+                    "holds a rate against. The description was matched against the purchasing "
+                    "catalogue instead and no priced row carried its words and sizes. Put the "
+                    "SDI code on the pack and the price follows, or price this one by hand")
+        if (_is_minted is not None and code and _is_minted(code)) or _minted_by_record:
+            return ("**NOT PRICED — this line has no part code, and the one shown is ours.** "
+                    f"'{bom_row['code']}' was minted by the engine from the description so "
+                    "the line could be carried and counted; nothing can look a rate up "
+                    "against a code we wrote. The description was matched against the "
+                    "purchasing catalogue instead and no priced row carried its words and "
+                    "sizes. The drawing's spec is not the problem: put the SDI code on the "
+                    "pack and the price follows, or price this one by hand")
+        if code:
+            return ("**NOT PRICED — the code was asked and nothing holds a rate for it.** "
+                    f"'{bom_row['code']}' is a real code, so it was put to the purchasing "
+                    "catalogue and the price history by code, and neither carries a price "
+                    "for it. That is a gap on our side — either the catalogue has no row for "
+                    "it or its supplier price list has not been loaded — not a fault in the "
+                    "drawing")
+        return "**NOT PRICED — needs a rate**"
+    # PACKAGING AND DELIVERY ARE ORDER-LEVEL, AND THE DIVISOR IS THE POINT.
+    #
+    # Both are asked for the WHOLE ORDER and divided by the quantity, so the per-unit figure
+    # an estimator reads falls as the order rises — on 12552 they were £85 + £85 on a unit of
+    # £930.39 at 1 off, and near nothing at 100. "AI market indication" says neither of those
+    # things, and does not say how to stop it being an indication at all.
+    _order_line = str(bom_row.get("code") or "").upper() in ("PACKAGING", "DELIVERY")
+    if _order_line and any(token in f"{supplier} {named}".lower() for token in _INDICATIVE):
+        _qty = _order_qty_hint(bom_row)
+        return ("market indication for the WHOLE ORDER"
+                + (f" of {_qty}, ÷ {_qty} per unit" if _qty else ", divided per unit")
+                + " — NOT A QUOTE. To make it a firm house rate on every job, set "
+                  "`config.COMMERCIAL_LINE_GBP_PER_ORDER` and this becomes a catalogue price")
+    # THE RECORD ANSWERS FIRST. Once the read-back has run, costed_facts.costed_job has
+    # already classified this line — origin AND firmness, from the part record the sheet was
+    # built from, not from whatever the AI Price Provenance tab happened to spell. 7332-01's
+    # leg read "not named" here while the record knew it was priced at the section trade
+    # rate; the plating read "AI market indication" here while the record knew it was a
+    # config £/kg. The nest pointers, the unpriced and the nil-by-design keep the wording
+    # above, which is already the record's own.
+    _line = _record_line(record, bom_row)
+    if _line is not None:
+        _origin = _line.get("price_origin") or {}
+        _cls = str(_origin.get("class") or "")
+        if _origin.get("label") and _cls and not _cls.startswith("nest_") \
+                and _cls not in ("unrecorded", "nil_by_design", "unpriced",
+                                 "unpriced_commercial"):
+            return str(_origin["label"])
+    # A recognised engine token is returned in its own words, ahead of the market/AI wrap —
+    # the phrase already says "INDICATIVE / NOT A QUOTE", and re-wrapping it would print the
+    # raw token in parentheses. A named supplier still leads where one is stated.
+    if _named_is_engine_phrase and not supplier:
+        return _named_worded
+    # ONLY A GENUINE AI/MARKET LOOKUP GETS THE MARKET WRAP. A configured SDI rate stamped
+    # "(INDICATIVE)" is a house figure to verify, not a model guess to replace.
+    if any(token in supplier.lower() for token in _MARKET_AI):
+        # PLAIN WORDS. "AI market indication" is internal system language on a note that goes
+        # to an estimator; what they need to know is that it is researched rather than quoted,
+        # and that it must be replaced before it reaches a customer.
+        return f"researched market price ({supplier}) — not a quotation, replace before quoting"
+    if any(token in named.lower() for token in _MARKET_AI):
+        return f"researched market price ({named}) — not a quotation, replace before quoting"
+    if supplier:
+        return f"catalogue — {supplier}"
+    if named:
+        return named
+    # Said plainly rather than guessed at. "config rate card" was asserted here for anything
+    # unlabelled, which claimed a source for the bearing's GBP 1.42 that nothing in the
+    # workbook actually states.
+    return "source not named in the workbook — check AI Provenance"
+
+
+# ── the document ─────────────────────────────────────────────────────────────
+
+def _description(bom_row: Dict[str, Any]) -> str:
+    """What the part IS, with the workbook's warnings stripped off the end.
+
+    The Estimate sheet's description cell carries the part code, then the description, then
+    any notice appended to it — "[AI ESTIMATE - INDICATIVE, NOT A QUOTE]", "MATERIAL
+    UNPRICED: enter a unit rate for this item". Taking the LAST segment kept the notice and
+    threw the description away, so the concrete slab appeared as "[AI ESTIMATE - INDICATIVE,
+    NOT A QUOTE]" and the nylon washer as "MATERIAL UNPRICED" — a table naming no parts.
+    Those notices are already carried, properly, by the price column beside it.
+    """
+    text = str(bom_row.get("text") or "")
+    code = str(bom_row.get("code") or "")
+    if code and text.upper().startswith(code.upper()):
+        text = text[len(code):]
+    for marker in ("[AI ESTIMATE", "—  MATERIAL UNPRICED", "— MATERIAL UNPRICED",
+                   "MATERIAL UNPRICED"):
+        cut = text.find(marker)
+        if cut > 0:
+            text = text[:cut]
+    # Trim the "— costed in <block> below" cross-reference suffix off the DESCRIPTION for every
+    # block, not just Sheet Steel — otherwise a wire/tube/board row keeps the pointer in its
+    # name. Case-insensitive, on the earliest block marker present.
+    _low = text.lower()
+    _cuts = [_low.find(_m) for _m in _COSTED_IN_BLOCK_MARKERS if _low.find(_m) > 0]
+    # allow for the leading em dash / hyphen the marker usually follows
+    if _cuts:
+        _c = min(_cuts)
+        _dash = max(text.rfind("—", 0, _c), text.rfind("-", 0, _c))
+        text = text[:_dash if _dash > 0 and _c - _dash <= 3 else _c]
+    text = text.strip(" —-—\t")
+    return (text[:60] or "—")
+
+
+def _gbp(value: Any) -> str:
+    """A number as money, or a plain statement that the figure was not available.
+
+    NEVER A ZERO. A total whose cell holds an uncached formula reads as None, and printing
+    that as £0.00 would make a reconciliation against it look exact.
+    """
+    number = _money(value)
+    return f"£{number:,.2f}" if number is not None else "not readable from the sheet"
+
+
+def _gbp_or(value: Any, dash: str) -> str:
+    """Money where there is a number, and the caller's own words where there is not."""
+    return _gbp(value) if _money(value) is not None else dash
+
+
+def _diff(here: float, sheet: Optional[float]) -> str:
+    if sheet is None:
+        return "cannot be checked"
+    gap = round(here - sheet, 2)
+    if abs(gap) < 0.01:
+        return "**none — it reconciles**"
+    # SAID AS A DIRECTION, NOT A SIGNED NUMBER. "£-193.30" makes the reader work out which way
+    # round it is, and the two directions mean opposite things: short means lines are missing
+    # from this document, over means it is counting something the sheet is not.
+    if gap < 0:
+        return f"**{_gbp(-gap)} short** — lines this document cannot see"
+    return f"**{_gbp(gap)} more** than the sheet — this document is counting something twice"
+
+
+def _fe_totals(final: Dict[str, Any]) -> Dict[str, Any]:
+    node = final.get("totals")
+    return node if isinstance(node, dict) else {}
+
+
+def _measured_sentence(material: Dict[str, Dict[str, Any]],
+                       scan: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
+    """How much of the geometry was measured off a model rather than reasoned from a view.
+
+    THE PART RECORD ANSWERS THIS WHEN THE TAB WILL NOT. On 12552 the AI Material Detail tab
+    read "not recorded" for all 31 parts while the same run's part records carried
+    solidworks_flat_pattern on nineteen of them — so the honest answer was sitting one join
+    away while the document reported that nothing at all had been measured. That is the
+    worst kind of wrong here: it understates the estimate's own evidence.
+    """
+    sources: Dict[str, int] = {}
+    for code, row in material.items():
+        key = str(row.get("Geom source") or "").strip()
+        if not key or key == "not recorded":
+            key = str(((scan or {}).get(code) or {}).get("geometry_source") or "").strip()
+        sources[key or "not recorded"] = sources.get(key or "not recorded", 0) + 1
+    if not sources:
+        return "The workbook carries no geometry-source column to answer this from."
+    ranked = sorted(sources.items(), key=lambda kv: (-kv[1], kv[0]))
+    return ("Of " + str(sum(sources.values())) + " part(s) with a material row: "
+            + ", ".join(f"{n} {name}" for name, n in ranked) + ".")
+
+
+def _blocks_sentence(material_rows: List[Dict[str, Any]],
+                     labour_rows: List[Dict[str, Any]]) -> str:
+    if not material_rows and not labour_rows:
+        return "No calculated rows were supplied, so this cannot be answered."
+    parts = []
+    for block in ("bom", "tube", "steel", "other_sheet"):
+        rows = [r for r in material_rows if r.get("block") == block]
+        if rows:
+            parts.append(f"{_BLOCK_NAMES[block].lower()} {_gbp(_sum_money(rows))}")
+    if labour_rows:
+        parts.append(f"labour {_gbp(_sum_money(labour_rows))} across "
+                     f"{len(labour_rows)} sheet row(s)")
+    return "; ".join(parts) + "."
+
+
+def _reconciles_sentence(material_rows: List[Dict[str, Any]],
+                         labour_rows: List[Dict[str, Any]],
+                         totals: Dict[str, Any]) -> str:
+    if not material_rows and not labour_rows:
+        return ("Not yet — no calculated rows were supplied, so nothing below can be summed "
+                "against the sheet.")
+    gaps = []
+    for label, rows, total in (("material", material_rows, totals.get("material")),
+                               ("labour", labour_rows, totals.get("labour"))):
+        if total is None:
+            gaps.append(f"the sheet's {label} total could not be read")
+            continue
+        gap = round(_sum_money(rows) - total, 2)
+        if abs(gap) >= 0.01:
+            gaps.append(f"{label} is {_gbp(abs(gap))} "
+                        + ("short" if gap < 0 else "over"))
+    if not gaps:
+        return ("Yes. Every material and labour line below sums to the Estimate sheet's own "
+                "Total Material Cost and Total Labour Cost.")
+    return "Not entirely — " + "; ".join(gaps) + ". The table below says where."
+
+
+def _fmt(value: Any, dash: str = "—") -> str:
+    if value in (None, ""):
+        return dash
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
+
+
+_AI_ROW_HEADERS = {
+    "material": ["Part", "Desc", "Material", "Blank L", "Blank W", "Gauge",
+                 "Cost/Part", "Ext Material", "Cut len (mm)", "Geom source"],
+    "provenance": ["Part", "Desc", "Unit £", "Price Source", "Verified", "Supplier",
+                   "Review Flags"],
+}
+
+
+def _json_ai_rows(scan_doc: Any, which: str) -> Dict[str, Dict[str, Any]]:
+    """The AI Material Detail / AI Price Provenance rows, from the run JSON, keyed by part
+    and by the headers the tabs used to carry — so the readers below are unchanged."""
+    if not isinstance(scan_doc, dict):
+        return {}
+    try:
+        import wb_populate as _wb
+        rows = (_wb._material_detail_rows(scan_doc) if which == "material"
+                else _wb._price_provenance_rows(scan_doc))
+    except Exception:                                                # noqa: BLE001
+        return {}
+    headers = _AI_ROW_HEADERS[which]
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        rec = {h: (r[i] if i < len(r) else None) for i, h in enumerate(headers)}
+        key = str(rec.get("Part") or "").upper()
+        if key and key not in out:
+            out[key] = rec
+    return out
+
+
+def _json_route_rows(scan_doc: Any) -> List[Dict[str, Any]]:
+    """The Canonical Route rows from the run JSON, keyed by the headers the tab carried."""
+    if not isinstance(scan_doc, dict):
+        return []
+    try:
+        import wb_populate as _wb
+        rows = _wb.canonical_route_rows(scan_doc)
+        headers = _wb.CANONICAL_ROUTE_HEADERS
+    except Exception:                                                # noqa: BLE001
+        return []
+    return [{h: (r[i] if i < len(r) else None) for i, h in enumerate(headers)} for r in rows]
+
+
+def _gather(workbook: Path, scan_json: Optional[Path]) -> Dict[str, Any]:
+    """Everything both the document and the covering email are written from.
+
+    ONE READER, TWO RENDERERS. The email restates the estimate's headline figures in the body
+    of a message somebody forwards to a customer's engineer; the markdown document states them
+    in full. If each opened the workbook and totalled it for itself, the two would eventually
+    disagree — and the one that disagreed would be the one already sent. So the reading is done
+    once, here, and both renderers are handed the same numbers.
+    """
+    wb = openpyxl.load_workbook(workbook, data_only=True)
+    scan_doc = _load_scan(scan_json)
+    final = _final_estimate(scan_doc)
+    # THE ONE RECORD. Built from the run JSON after the read-back: the sheet's charged rows
+    # joined to the canonical parts, each line classified once for origin and firmness.
+    # Both renderers read their gap lists, their source labels and their material labels
+    # from it — never re-deriving them from the workbook cells.
+    try:
+        _record = _costed_job(scan_doc) if isinstance(scan_doc, dict) else {}
+        _lines = _record_lines(scan_doc) if isinstance(scan_doc, dict) else {}
+    except Exception:                                                # noqa: BLE001
+        _record, _lines = {}, {}
+    return {
+        "wb": wb,
+        "stem": workbook.stem,
+        "scan_doc": scan_doc,
+        "record": _record,
+        "record_lines": _lines,
+        "scan": _scan_parts(scan_doc),
+        "final": final,
+        "sufficiency": _data_sufficiency(scan_doc),
+        "accepted": _accepted_labour(scan_doc),
+        "labour_rows": [r for r in (final.get("labour_rows") or []) if isinstance(r, dict)],
+        "material_rows": [r for r in (final.get("material_rows") or []) if isinstance(r, dict)],
+        "totals": _sheet_totals(wb, final),
+        "steel": _steel_rows(wb),
+        # The calculated steel rows, keyed the way the block's own description cell is keyed —
+        # the read-back carries no part code for the fabricated blocks, only the description
+        # the engine wrote into them, and that description begins with the part number.
+        # EVERY NESTED SHEET BLOCK, NOT ONLY STEEL. A01 is other_sheet, and the
+        # steel-only filter meant an acrylic job's calculated nest count and charged
+        # value could never reach the fabricated-material table — the geometry half read
+        # correctly (block-aware scanner above) while the money half stayed empty. Each
+        # row keeps its block so the renderer can name the block it came from.
+        "steel_calc": {str(r.get("description") or "").split()[0].strip().upper(): r
+                       for r in (final.get("material_rows") or [])
+                       if isinstance(r, dict)
+                       and r.get("block") in ("steel", "other_sheet")
+                       and str(r.get("description") or "").strip()},
+        # THE TWO AI TABS THESE USED TO READ ARE GONE FROM THE WORKBOOK. The same rows are
+        # built from the run JSON by the functions that used to write them — same keys, so
+        # nothing downstream changed. A workbook that still carries the tabs is read as
+        # before.
+        "material": ({str(r.get("Part") or "").upper(): r
+                      for r in _sheet(wb, "AI Material Detail")}
+                     or _json_ai_rows(scan_doc, "material")),
+        "provenance": ({str(r.get("Part") or "").upper(): r
+                        for r in _sheet(wb, "AI Price Provenance")}
+                       or _json_ai_rows(scan_doc, "provenance")),
+        # The Canonical Route tab is gone from the workbook; the same rows come from the JSON.
+        "routes": _sheet(wb, "Canonical Route") or _json_route_rows(scan_doc),
+        "bom": _estimate_bom(wb),
+        "order_qty": _order_quantity(wb),
+        "pack": _pack_files(scan_doc),
+        "page_index": _page_index(scan_doc),
+    }
+
+
+def _report_section(key: str) -> str:
+    """'section N' as the job report numbers it — read from the report's one registry, so a
+    document written before the report exists cannot cite a different number."""
+    try:
+        from job_report_html import section_number                  # noqa: PLC0415
+        return f"section {section_number(key)}"
+    except Exception:                                                # noqa: BLE001
+        return "the matching section"
+
+
+def _settle_block(record: Any, o: Optional[Dict[str, Any]] = None) -> List[str]:
+    """'What a person still has to settle' — every row of the record, in the record's order.
+
+    THE COUNT AND ITS LIST FROM ONE RECORD (12173-02). This section printed "25 to settle"
+    and then listed seventeen: the manufacturing decisions and the read-back's market lines.
+    The two missing prices, the stated row not carried, five quantity checks and every failing
+    check were counted and listed nowhere, and a job whose only open items were quantity
+    checks printed no list at all under its "No — N to settle". The table is now the record's
+    decisions_required, one row each, with the kind words and order the report's Decisions
+    table uses; gated on the tally, not on the read-back's lists."""
+    if not isinstance(record, dict):
+        return []
+    from costed_facts import decision_kind, outstanding_summary
+    o = o if isinstance(o, dict) else outstanding_summary(record)
+    if not o.get("total"):
+        return []
+    ds = [d for d in (record.get("decisions_required") or []) if isinstance(d, dict)]
+
+    def _cell(v: Any) -> str:
+        return str(v if v is not None else "").replace("|", "/").replace("\n", " ").strip()
+    out = ["## For the estimator to confirm", "",
+           f"{o['total']} item(s) to confirm: {o['phrase']}. The estimate firms as each is "
+           f"confirmed, and the customer quote follows sign-off."]
+    if o.get("legacy"):
+        out.append(f"{o['legacy']} of them (failing checks or sizes assumed) were counted on a "
+                   f"record saved before they were listed as rows, so they are not itemised.")
+    out.append("")
+    if ds:
+        out += ["| # | Kind | Decision | Part | Current assumption | Action | £ at stake |",
+                "|---|---|---|---|---|---|---|"]
+        for i, d in enumerate(ds, 1):
+            _at = d.get("gbp_at_stake")
+            out.append(f"| {i} | {decision_kind(d.get('kind'))[1]} | **{_cell(d.get('issue'))}** "
+                       f"| {_cell(d.get('part')) or '—'} | {_cell(d.get('assumption'))} "
+                       f"| {_cell(d.get('action'))} | {_gbp(_at) if _at else '—'} |")
+        out.append("")
+    return out
+
+
+def build(workbook: Path, scan_json: Optional[Path],
+          totals_override: Optional[Dict[str, Any]] = None) -> str:
+    g = _gather(workbook, scan_json)
+    wb, scan_doc, scan = g["wb"], g["scan_doc"], g["scan"]
+    final, sufficiency, accepted = g["final"], g["sufficiency"], g["accepted"]
+    labour_rows, material_rows = g["labour_rows"], g["material_rows"]
+    totals, steel, steel_calc = g["totals"], g["steel"], g["steel_calc"]
+    # A QUANTITY VARIANT'S TOTALS COME FROM THE SWEEP, NOT THE FILE. A variant workbook is
+    # saved by openpyxl, and an openpyxl save strips Excel's cached formula results — so the
+    # label scan above finds nothing and the JSON fallback hands back the BASELINE quantity's
+    # figures. The sweep read each variant's totals out of a live Excel session before the
+    # cache was stripped; when the caller passes that row, it is the truth for this file and
+    # overrides both other sources.
+    if isinstance(totals_override, dict):
+        for _k in ("material", "labour", "unit"):
+            _v = _money(totals_override.get(_k))
+            if _v is not None:
+                totals[_k] = round(_v, 2)
+                totals.setdefault("_from", {})[_k] = (
+                    "the quantity sweep's Excel-calculated read of this variant")
+        # AND THE ROW DETAIL, NOT ONLY THE HEADLINE. With the trio overridden the 50-off
+        # tab still printed the 1-off labour table — £13.56 of Linebend against a £2.51
+        # labour total three lines above it. Each row's money is the sheet's own
+        # arithmetic (hours = set-up + run x qty, £/unit = hours x rate / qty), and every
+        # term of it is on the row, so the variant's rows are computed with the variant's
+        # quantity rather than recited from the baseline.
+        _q = int(_money(totals_override.get("quantity")) or 0)
+        _b = int(_money(totals_override.get("baseline_quantity")) or 0)
+        if _q and _b and _q != _b:
+            _scaled = []
+            for _r in g["labour_rows"]:
+                _r2 = dict(_r)
+                _setup_h = (_money(_r.get("setup_minutes")) or 0.0) / 60.0
+                _batch_b = _money(_r.get("batch_hours"))
+                _rate = _money(_r.get("dept_rate_gbp_per_hour"))
+                if _batch_b is not None and _rate:
+                    _run_pu = max(0.0, _batch_b - _setup_h) / _b
+                    _batch_q = _setup_h + _run_pu * _q
+                    _r2["batch_hours"] = round(_batch_q, 6)
+                    _r2["total_value_gbp"] = round(_batch_q * _rate / _q, 4)
+                _scaled.append(_r2)
+            g["labour_rows"] = _scaled
+            labour_rows = _scaled
+    # The uplift the unit cell adds is the variant's own gap, not the baseline's £4.74 —
+    # and the basis SENTENCE recomputes too: "(material + labour) 50.82 -> 54.65" is the
+    # baseline's arithmetic and must not be recited on the 50-off page.
+    _other_gbp = _money(_fe_totals(final).get("other_gbp"))
+    _basis_text = str((final.get("unit_price_composition") or {}).get("basis")
+                      or "per the sheet")
+    if isinstance(totals_override, dict) and None not in (
+            totals.get("unit"), totals.get("material"), totals.get("labour")):
+        _other_gbp = round(totals["unit"] - totals["material"] - totals["labour"], 2) or None
+        _v_sub = round(totals["material"] + totals["labour"], 2)
+        _basis_text = (f"the sheet's own absorption — (material + labour) "
+                       f"{_v_sub:.2f} -> {totals['unit']:.2f} at this quantity")
+    material, provenance, routes = g["material"], g["provenance"], g["routes"]
+    bom, order_qty, pack = g["bom"], g["order_qty"], g["pack"]
+    page_index = g["page_index"]
+    record, record_lines = g["record"], g["record_lines"]
+    _gaps = (record or {}).get("gaps") or {}
+
+    lines: List[str] = []
+    add = lines.append
+
+    add(f"# {workbook.stem}")
+    add("")
+    _rid_tab = str(scan_doc.get("run_id") or "") if isinstance(scan_doc, dict) else ""
+    if _rid_tab:
+        add(f"> Run `{_rid_tab}` · quantity {order_qty} — the workbook, e-mail, report "
+            f"and quote of this estimate all carry this run identity.")
+        add("")
+    if not scan:
+        add("> **Page numbers are unavailable** — no scan JSON was supplied, so the "
+            "\"which sheet\" column reads *not supplied* throughout. Re-run with "
+            "`--scan-json output/json/<job>.json` to fill it.")
+        add("")
+
+    # ── the questions, answered before the tables ────────────────────────────
+    # ASKED AND ANSWERED IN THAT ORDER. A document that opens with four hundred rows makes
+    # the reader derive the five facts they came for. These are the five, each computed from
+    # the same rows the tables below print — never typed, so they cannot drift from them.
+    # A REAL ZERO IS NOT A PRICE. This tested for a blank cell only, and the commercial
+    # placeholders are deliberately materialised as a numeric 0.0 — so PACKAGING and DELIVERY
+    # slipped past as "priced" and this tab announced "No line is unpriced" three rows above
+    # its own table saying "NOT PRICED — needs a rate" against both. The same module already
+    # knows better twice over (_price_source, and the covering note's _reads_as_free, which is
+    # why the email correctly said "2 lines carry no price" on the very same run). _money
+    # returns None for a blank and 0.0 for a zero — both falsy, both unpriced.
+    # AND A DELIBERATE NIL IS NOT A GAP. The free-issue graphic is costed nothing ON
+    # PURPOSE — the record classes it nil_by_design — and counting it here put it in
+    # "what must be replaced before this is a quote", asking for the one price the
+    # estimate must not contain.
+    def _nil_on_purpose(r: Dict[str, Any]) -> bool:
+        _l = _record_line(record_lines, r)
+        return bool(_l is not None and str(((_l.get("price_origin") or {})
+                                            ).get("firmness") or "") == "nil")
+    _unpriced = [r for r in bom
+                 if not _money(r.get("price"))
+                 and not _is_costed_in_a_block(r.get("text"))
+                 and not _nil_on_purpose(r)]
+    # HOUSE RATE OR MARKET GUESS — THE RECORD SAYS WHICH, ONCE. This tested the supplier
+    # cell for the word "indicative" and called every hit an AI market indication; the
+    # e-mail tested a different string and summed a different column. Same two lines,
+    # three answers. Both now read costed_facts' split and its extended sums.
+    if record:
+        _house, _market = _split_by_firmness(bom, record_lines, _gaps)
+        _house_gbp = float(_gaps.get("indicative_house_gbp") or 0.0)
+        _market_gbp = float(_gaps.get("indicative_market_gbp") or 0.0)
+    else:
+        _house = []
+        _market = [r for r in bom
+                   if any(t in f"{r.get('supplier') or ''}".lower() for t in _INDICATIVE)
+                   and _money(r.get("price"))]
+        _house_gbp = 0.0
+        _market_gbp = round(sum((_money(r.get("price")) or 0) * (_money(r.get("qty")) or 0)
+                                for r in _market), 2)
+    _indicative = _house + _market
+    # ONE LINE, ONE VERDICT. A cell holding a FORMULA reads back as no number, and the
+    # unpriced test above reads exactly that: so PACKAGING — priced by Howard's stated
+    # method, £1.91, and correctly classed house by the record — appeared in this tab TWICE,
+    # once as "an SDI house rate marked INDICATIVE" and again two rows later as "£0.00 — the
+    # line is costing nothing. A rate. Nothing we can query holds a price for this code."
+    # The summary above then told the estimator that both packaging and delivery were
+    # missing prices, on a sheet where one of them was priced.
+    #
+    # The record is the authority on whether a line is priced; the read-back is only a fact
+    # about a cell. So a line the record has already classified comes off the unpriced list.
+    _classified = {id(r) for r in _indicative}
+    _unpriced = [r for r in _unpriced if id(r) not in _classified]
+    add("## The questions, answered first")
+    add("")
+    try:
+        from run_stop import nothing_to_cost as _ntc, sentence as _stop_sentence
+        _stop = _ntc(scan_doc)
+    except Exception:                                                # noqa: BLE001
+        _stop = None
+    if _stop:
+        # THE FIRST ANSWER ON AN EMPTY BOOK IS THAT IT IS EMPTY (D-409) — not "£25.46 —
+        # material £23.00 + labour £0.00" over packaging and delivery for nothing.
+        add(f"- **What does a unit cost, and of what?** {_stop_sentence(_stop)}")
+    else:
+        add(f"- **What does a unit cost, and of what?** "
+            f"{_gbp(totals['unit'])} — material {_gbp(totals['material'])} + labour "
+            f"{_gbp(totals['labour'])}"
+            + (f", and the unit cell adds {_gbp(_other_gbp)} ({_basis_text})"
+               if _other_gbp else "")
+            + ".")
+    # THE BANNER'S TALLY, NOT A SECOND ONE (D-349). This counted bill-of-materials lines
+    # only, so the 12645 book of 29 Sep 21:27 said "1 line(s) carry no price at all — Roller
+    # Shutter" beneath a banner of "21 prices missing": twenty Sheet Steel rows with no cost
+    # are missing prices too. Where the costed record has its decisions, their missing
+    # prices are the answer, named as the banner names them.
+    if isinstance(record, dict) and isinstance(record.get("decisions_required"), list):
+        _missing = [str(d.get("part") or "").strip()
+                    for d in record["decisions_required"]
+                    if isinstance(d, dict) and d.get("kind") == "missing_price"]
+        _missing = [m for m in dict.fromkeys(_missing) if m]
+    else:
+        _missing = [r["code"] or _description(r) for r in _unpriced]
+    add(f"- **What must be replaced before this is a quote?** "
+        + (f"{len(_missing)} line(s) carry no price at all — "
+           + ", ".join(_missing[:8])
+           + ("…" if len(_missing) > 8 else "") + ". "
+           if _missing else "No line is unpriced. ")
+        + (f"{len(_market)} line(s) worth {_gbp(_market_gbp)} are AI market "
+           f"indications, not catalogue prices: "
+           + ", ".join(r["code"] or _description(r) for r in _market[:8]) + ". "
+           if _market else "No line rests on a researched market price. ")
+        + (f"{len(_house)} line(s) worth {_gbp(_house_gbp)} are priced on an SDI house "
+           f"rate marked INDICATIVE — a figure to verify, not to replace: "
+           + ", ".join(r["code"] or _description(r) for r in _house[:8]) + "."
+           if _house else ""))
+    add(f"- **How much of this was measured rather than reasoned?** "
+        + _measured_sentence(material, scan))
+    add(f"- **Where is the money?** " + _blocks_sentence(material_rows, labour_rows))
+    add(f"- **Does this document add up to the sheet?** "
+        + _reconciles_sentence(material_rows, labour_rows, totals))
+    # THE TWO FACTS THE REPORT AND THE QUOTE STATE THAT THIS TAB DID NOT. The finish the
+    # price contains, and whether the estimate can go out — both from the record, in the
+    # words the other deliverables use, so a reader with two documents open sees one job.
+    _mfg = [d for d in ((record or {}).get("decisions_required") or [])
+            if isinstance(d, dict) and d.get("kind") == "manufacturing_decision"]
+    _rel = (record or {}).get("release") or {}
+    if record:
+        add(f"- **What finish is charged?** "
+            + (f"{(record or {}).get('finishes_charged')}." if (record or {}).get("finishes_charged")
+               else "No finish operation or subcontract finish carries money on this sheet."))
+        from costed_facts import outstanding_summary
+        _out = outstanding_summary(record)
+        add(f"- **Can this go out?** "
+            + (f"No — {_out['total']} item(s) to confirm: {_out['phrase']}. The quote is a draft "
+               f"and the sheet is provisional until they are settled."
+               if _rel.get("draft") else
+               "Nothing is waiting on a person; release is subject to the consistency checks."))
+    add("")
+
+    # ── what a person still has to do ────────────────────────────────────────
+    # NAMED, PRICED AND COUNTED, not summarised in a sentence. "3 lines carry no price" is
+    # true and an estimator cannot act on it: they want the codes, the money each one is
+    # worth, the page to look at and whether it is waiting on them or on us. This is the list
+    # that has been retyped into every covering email so far.
+    # THE ONE TALLY AND ITS ROWS — the record's decisions, every one, in its order; the same
+    # list the report's Decisions table prints (12173-02: "25 to settle" over seventeen).
+    _settle = _settle_block(record) if record else []
+    for _ln in _settle:
+        add(_ln)
+    if not _settle and (_unpriced or _indicative or _mfg):
+        # No costed record to read (a book explained without its run JSON): the read-back's
+        # own lines, counted as they are listed.
+        add("## For the estimator to confirm")
+        add("")
+        add(f"{len(_unpriced) + len(_indicative)} line(s)"
+            + (f" and {len(_mfg)} manufacturing decision(s)" if _mfg else "")
+            + ". The estimate firms as each is confirmed, and the customer quote follows "
+              "sign-off.")
+        add("")
+    if _unpriced or _indicative:
+        if _settle:
+            # DETAIL, NOT A SECOND COUNT: the sheet cells behind the price rows above.
+            add("**The sheet cells behind the price rows above** — what each line costs on "
+                "the sheet and where to check it.")
+            add("")
+        add("| Line | What it is | Qty | On the sheet | What it needs | Which file and page |")
+        add("|---|---|---|---|---|---|")
+        _todo = ([(r, "market") for r in _market] + [(r, "house") for r in _house]
+                 + [(r, "unpriced") for r in _unpriced])
+        for row, kind in sorted(
+                _todo, key=lambda pair: -((_money(pair[0].get("price")) or 0)
+                                          * (_money(pair[0].get("qty")) or 0))):
+            # ── THE ONE FACT, ASKED HERE TOO ───────────────────────────────────
+            #
+            # This multiplied the row's own price by its quantity and printed the product.
+            # That is a renderer deriving money for itself — the habit that put £3.88 on five
+            # pages. `displayed_charge` carries what the SHEET charged and the cell it was
+            # read from; where nothing was charged the line is PENDING and no currency is
+            # printed, because an engine figure with no cell behind it is not a price.
+            from displayed_charge import displayed_charge as _dc_note   # noqa: PLC0415
+            _rl = _record_line(record_lines, row) or {}
+            # The costed line where there is one, else the read-back row itself — which
+            # carries the same money from the same cell.
+            _shown_note = _dc_note(_rl if _rl.get("charged_ext_gbp") is not None else row)
+            _unit, _qty = _money(row.get("price")), _money(row.get("qty"))
+            if _shown_note["basis"] == "workbook" and _shown_note["amount"] is not None:
+                _ext_txt = _gbp(_shown_note["amount"]) + (
+                    f" ({_shown_note['cell']})" if _shown_note.get("cell") else "")
+            elif _unit and _qty:
+                # THE SHEET'S OWN UNIT PRICE AND QUANTITY, MULTIPLIED OUT. Not an engine
+                # figure: both operands were read back off the Estimate sheet, and a template
+                # that leaves the extended cell empty should not cost an estimator the one
+                # number this table exists to show. Labelled, so nobody reads it as a cell.
+                _ext_txt = (f"{_gbp(round(_unit * _qty, 2))} — the sheet's own unit price "
+                            f"x quantity")
+            elif _shown_note["basis"] == "pending":
+                _ext_txt = "not yet priced on the sheet"
+            else:
+                _ext_txt = "—"
+            _rec = scan.get(row["code"].upper()) or {}
+            _label = str((_rl.get("price_origin") or {}).get("label") or "")
+            add(f"| {row['code'] or '—'} | {_description(row)} | {_fmt(row.get('qty'))} "
+                + (f"| {_ext_txt} — a researched market price, not a catalogue price "
+                   f"| **Replace it, or accept it deliberately.** It can move between runs, "
+                   f"so an estimate resting on it cannot be reproduced. "
+                   if kind == "market" else
+                   f"| {_ext_txt} — an SDI house rate marked INDICATIVE "
+                   f"| **Verify it, or accept it deliberately.** "
+                   f"{_label or 'A configured rate, reproducible between runs.'} "
+                   if kind == "house" else
+                   "| **£0.00 — the line is costing nothing** "
+                   "| **A rate.** Nothing we can query holds a price for this code. ")
+                + f"| {_where(_rec, pack, page_index)} |")
+        add("")
+
+    # ── does it reconcile ────────────────────────────────────────────────────
+    # THE CLAIM THAT MAKES THE REST OF THE DOCUMENT WORTH READING, AND THE ONE THAT CAN BE
+    # CHECKED. Every line printed below is summed and held against the Estimate sheet's own
+    # labelled total. Where the two differ the difference is stated in pounds — an
+    # explanation that quietly covers 81% of a total is worse than one that says which 19% it
+    # cannot see, because only the second sends anybody looking.
+    _pointers = sum(1 for r in bom if _is_costed_in_a_block(r.get("text")))
+    if material_rows or labour_rows:
+        add("## This document against the sheet")
+        add("")
+        add("| Block | Lines here | £ here | The sheet's own total | Difference |")
+        add("|---|---|---|---|---|")
+        for block in ("bom", "tube", "steel", "other_sheet"):
+            rows_in = [r for r in material_rows if r.get("block") == block]
+            if rows_in:
+                # THE BOM BLOCK CARRIES THE POINTERS TOO. Every part costed on Sheet Steel
+                # also has a row up here showing a dash, so a bare count reads as thirty-two
+                # bought-in lines when seventeen of them are what anybody would call bought in.
+                _count = str(len(rows_in))
+                if block == "bom" and _pointers:
+                    _count = (f"{len(rows_in)} — {len(rows_in) - _pointers} priced or awaiting "
+                              f"a rate, {_pointers} pointing at Sheet Steel")
+                add(f"| {_BLOCK_NAMES[block]} | {_count} | "
+                    f"{_gbp(_sum_money(rows_in))} | — | — |")
+        add(f"| **All material** | {len(material_rows)} | {_gbp(_sum_money(material_rows))} "
+            f"| {_gbp(totals['material'])} | {_diff(_sum_money(material_rows), totals['material'])} |")
+        add(f"| **All labour** | {len(labour_rows)} | {_gbp(_sum_money(labour_rows))} "
+            f"| {_gbp(totals['labour'])} | {_diff(_sum_money(labour_rows), totals['labour'])} |")
+        add("")
+        add("> Every figure in the £ column is the value the Estimate sheet itself computed "
+            "for that row, read back after Excel recalculated. Nothing here is re-derived, "
+            "so a difference is a row this document cannot see — not a rounding argument.")
+        _from = totals.get("_from") or {}
+        for key, label in (("material", "Total Material Cost"),
+                           ("labour", "Total Labour Cost")):
+            if _from.get(key):
+                add(f"> **{label}** came from {_from[key]}.")
+        add("")
+        for problem in (final.get("adapter_problems") or []):
+            if isinstance(problem, dict) and problem.get("message"):
+                add(f"> **A block was not read:** {problem['message']}")
+                add("")
+    elif scan_doc is not None:
+        add("## This document against the sheet")
+        add("")
+        add("> **Not produced.** The run JSON supplied carries no `final_estimate`, which is "
+            "the record of the rows as Excel calculated them. Without it the lines below can "
+            "be listed but not summed against the sheet's own totals, so this document "
+            "cannot claim to be complete. Re-run with the full "
+            "`output/json/<job>.json` from a run whose workbook was read back.")
+        add("")
+
+    # ── every BOM line ───────────────────────────────────────────────────────
+    # TWO ROWS FOR A PART SDI CUTS, because it has two halves on the sheet and an estimator
+    # asked for both: the BOM row that shows a dash and points below, and the Sheet Steel row
+    # that holds the blank, the gauge and the money. The page is stamped on both — the same
+    # drawing owns both halves, and leaving the second one blank is what made the join look
+    # like a missing answer.
+    add("## Every line on the Bill of Materials")
+    add("")
+    add("| Part | Description | Qty | Unit £ | Ext £ | Where the £ came from | Material | "
+        "Gauge | Blank | Which sheet |")
+    add("|---|---|---|---|---|---|---|---|---|---|")
+    for row in bom:
+        code = row["code"].upper()
+        mat = material.get(code, {})
+        rec = scan.get(code, {})
+        blank_l, blank_w = mat.get("Blank L"), mat.get("Blank W")
+        blank = (f"{_fmt(blank_l)} × {_fmt(blank_w)}"
+                 if blank_l or blank_w else "not a cut part")
+        page = _where(rec, pack, page_index)
+        _unit, _qty = _money(row.get("price")), _money(row.get("qty"))
+        # WHAT THE LINE IS MADE OF, from the record. The stub that mints a commercial line
+        # or a plating service carries MILD STEEL because every stub does, and the AI
+        # Material Detail tab printed it beside PACKAGING. The record says what kind of
+        # line it is and labels it accordingly.
+        _line = _record_line(record_lines, row)
+        _mat_label = (_line.get("material_label") if _line and _line.get("material_label")
+                      else _fmt(mat.get("Material")))
+        add(f"| {row['code'] or '—'} "
+            f"| {_description(row)} "
+            f"| {_fmt(row.get('qty'))} "
+            f"| {_fmt(row.get('price'))} "
+            f"| {_gbp(round(_unit * _qty, 2)) if _unit and _qty else '—'} "
+            f"| {_price_source(row, provenance, steel, record=record_lines)} "
+            f"| {_mat_label} "
+            f"| {_fmt(mat.get('Gauge'), 'none — not sheet')} "
+            f"| {blank} "
+            f"| {page} |")
+        steel_row = steel.get(code)
+        if steel_row:
+            # M IS A LINE TOTAL, NOT A COST PER PART. The column is headed "Cost Per Part"
+            # and holds ROUNDUP(sheet price / parts-per-sheet, 2) x qty x scrap — the whole
+            # line. Printing it under a per-part heading, or dividing it back out by the
+            # quantity, invents a per-piece figure the sheet never computed; printing the AI
+            # Material Detail tab's per-part instead put a blank-area number in the money
+            # column that is not in the unit cost at all. Same naming trap as the labour
+            # block's "Rate Per Hour", which holds a throughput.
+            line_total = _gbp_or((steel_calc.get(code) or {}).get("total_value_gbp"),
+                                 "not read back")
+            # The block as the template names it (wb_populate.block_title): "tube" is the
+            # Wire block, never "the Tube block" (12173-02).
+            _blk_key = str((steel_calc.get(code) or {}).get("block") or "steel")
+            try:
+                from wb_populate import block_title as _block_title      # noqa: PLC0415
+                _blk_word = _block_title(_blk_key) if _blk_key in (
+                    "steel", "other_sheet", "tube") else "its nested"
+            except Exception:                                            # noqa: BLE001
+                _blk_word = {"steel": "Sheet Steel", "other_sheet": "Other Sheet Material",
+                             "tube": "Wire"}.get(_blk_key, "its nested")
+            add(f"| ↳ `Estimate!{steel_row['row']}` "
+                f"| the same part, on the {_blk_word} block "
+                f"| {_fmt(steel_row.get('qty'))} "
+                f"| — line total, not per part "
+                f"| **{line_total}** "
+                f"| one {_fmt(steel_row.get('sheet_l'))} × {_fmt(steel_row.get('sheet_w'))} "
+                f"sheet ÷ {_fmt((steel_calc.get(code) or {}).get('qty_per_sheet'), '?')} "
+                f"nested, × qty, "
+                f"× {_fmt(steel_row.get('scrap'))} scrap "
+                f"| {_fmt(mat.get('Material'))} "
+                f"| {_fmt(steel_row.get('gauge'), 'none — not sheet')} "
+                f"| {_fmt(steel_row.get('length'))} × {_fmt(steel_row.get('width'))} "
+                f"| {page} |")
+    add("")
+
+    # ── where the fabricated money actually is ───────────────────────────────
+    if steel:
+        # PRICED BY NEST. "by blank area" was the AI Material Detail tab's method and is
+        # not what this block does — column M divides a whole sheet by how many of the part
+        # nest out of it. The footnote under this very table has said so correctly the whole
+        # time, so the section contradicted itself over the one number an estimator came for,
+        # and the wrong half was the heading. James, on 12552: "Ignore the 'by blank area'
+        # wording on the dash rows."
+        add("## The fabricated parts, priced by nest")
+        add("")
+        add("Each of these shows a dash in the BOM price column above. That is not a missing "
+            "rate — sheet metal is costed on this block, from how many of the part nest out "
+            "of a sheet, and pricing it in both places would double it. This is the other "
+            "half of those lines.")
+        add("")
+        # ── ONE STEEL BASIS ON THIS BLOCK ────────────────────────────────────────
+        #
+        # James Gray, 18 Sep 2026: "It must be removed from every output for this
+        # workbook-sheet-steel route. The reported GBP 3.07 is the only applicable steel
+        # basis." This table's "The engine's own figure" column and the paragraph below it
+        # were the third and fourth places that comparator reached a page, after the HTML
+        # report and the Provenance tab. Every row in THIS table is by definition on the
+        # sheet-steel block -- that is what the block is -- so the whole column goes rather
+        # than being gated row by row.
+        add("| Part | Blank L × W | Gauge | Off a sheet | Nest per sheet | Scrap | Qty | "
+            "**£ the sheet charges** | Sheet row |")
+        add("|---|---|---|---|---|---|---|---|---|")
+        for code, row in steel.items():
+            # COST FROM THE RESOLVED FIGURE, NOT THE FORMULA CELL. The Sheet Steel block's
+            # cost column is an Excel formula, and a workbook written by the engine and never
+            # opened has no cached result — so reading that cell alone gives nothing and the
+            # table says "computes in Excel" on the one column an estimator came for. The
+            # engine's own resolved figure for the same part is on AI Material Detail, which
+            # is a value, not a formula. Still read, never recalculated here.
+            mat = material.get(code, {})
+            # THE NEST COUNT COMES FROM THE READ-BACK, NOT THE CELL. Qty Per Sheet is a
+            # formula with no cached result in the saved file, so the column read "not
+            # computed" on every row of a job whose whole steel story is the nest. Excel
+            # calculated it and the read-back recorded it.
+            nest = _fmt((steel_calc.get(code) or {}).get("qty_per_sheet"), "not recorded")
+            add(f"| {code} "
+                f"| {_fmt(row.get('length'))} × {_fmt(row.get('width'))} "
+                f"| {_fmt(row.get('gauge'))} "
+                f"| {_fmt(row.get('sheet_l'))} × {_fmt(row.get('sheet_w'))} "
+                f"| {nest} "
+                f"| {_fmt(row.get('scrap'))} "
+                f"| {_fmt(row.get('qty'))} "
+                f"| **{_gbp_or((steel_calc.get(code) or {}).get('total_value_gbp'), 'not read back')}** "
+                f"| `Estimate!{row['row']}` |")
+        add("")
+        add("> **£ the sheet charges** is column M of the part's own nested block row — "
+            "Sheet Steel or Other Sheet Material — and it is a LINE "
+            "TOTAL despite the column being headed *Cost Per Part*: "
+            "`ROUNDUP(sheet price / nest per sheet, 2) x qty x scrap`. Do not divide it back "
+            "out — the sheet computes no per-piece figure. That total is what is inside "
+            "Total Material Cost, and on this block it is the ONLY steel basis: the rate is "
+            "the template's own cell and the estimator changes it there. Nothing here is "
+            "recalculated.")
+        # THE TWO VIEWS OF THE SAME PARTS -- NO LONGER HELD AGAINST EACH OTHER HERE.
+        #
+        # This paragraph existed for 12552, where the engine's per-part figures extended to
+        # £49.76 while the sheet's steel rows summed to £136.32 -- £86.56 on the same fifteen
+        # parts, printed and reconciled in two places with nothing saying they disagreed.
+        # Naming the gap was right then, because nobody had ruled which figure governs.
+        #
+        # THE RULING SETTLED IT. The sheet's own block and its own rate cell are the single
+        # charged steel basis, and a second figure beside the controlling one is no longer
+        # evidence -- it is an invitation to re-open a closed question, which is what it did:
+        # three readers spent an afternoon on £3.07 against £3.88 and the answer was that
+        # nothing was wrong. The nest explanation the paragraph carried is the useful half and
+        # it survives in the note above, stated as the method rather than as a discrepancy.
+        #
+        # This is the fourth and last place that comparator reached a page.
+        add("")
+
+    # ── every labour line, with the money on it ──────────────────────────────
+    # A THIRD OF THE UNIT COST, PREVIOUSLY UNEXPLAINED. This document listed every operation
+    # and what decided it, and put no figure against any of them — so an estimator could see
+    # that 12552 folds and welds, and could not see that the folding costs £41 until they
+    # opened the sheet and found the row themselves. The route section below answers "why is
+    # this operation here"; this one answers "what is it charging, and to which parts".
+    if labour_rows:
+        add("## Every labour line, and what it charges")
+        add("")
+        add("Sorted by cost. **Batch hours** are for the whole order, not one unit; **£ this "
+            "line** is the sheet's own Total Value for the row. Parts come from the accepted "
+            "route grouping, joined to the calculated row on the sheet row they share.")
+        add("")
+        add("| Sheet row | Operation | Dept | Parts | Qty/unit | Set-up (min) | Batch hours | "
+            "Rate £/hr | £ this line | Rate basis |")
+        add("|---|---|---|---|---|---|---|---|---|---|")
+        for row in sorted(labour_rows, key=lambda r: -(_money(r.get("total_value_gbp")) or 0)):
+            acc = accepted.get(int(_money(row.get("workbook_row")) or 0), {})
+            parts = [str(p) for p in (acc.get("part_numbers") or []) if p]
+            # The cell the read-back read this money from, where it recorded one. A row
+            # number alone sends a reader to fourteen columns to find the money.
+            _lab_cell = str(row.get("charged_cell") or "").strip() \
+                or f"Estimate!{_fmt(row.get('workbook_row'))}"
+            add(f"| `{_lab_cell}` "
+                f"| {_fmt(row.get('operation'))} "
+                f"| {_fmt(row.get('department'))} "
+                f"| {', '.join(parts) if parts else 'not recorded on the accepted row'} "
+                f"| {_fmt(row.get('qty_per_unit'))} "
+                f"| {_fmt(row.get('setup_minutes'))} "
+                f"| {_fmt(row.get('batch_hours'))} "
+                f"| {_fmt(row.get('dept_rate_gbp_per_hour'))} "
+                f"| {_gbp(row.get('total_value_gbp'))} "
+                f"| {_fmt(acc.get('rate_basis'), 'not recorded')} |")
+        add("")
+        add(f"> {len(labour_rows)} row(s), {_gbp(_sum_money(labour_rows))} — "
+            f"against the sheet's Total Labour Cost of {_gbp(totals['labour'])}.")
+        add("")
+
+    # ── which reader decided each part ───────────────────────────────────────
+    # THE OTHER HALF OF "WHERE DID YOU SEE THAT". The page says which sheet a part is on; this
+    # says which reader supplied each fact about it, and at what rank — a gauge off the
+    # SOLIDWORKS model and one read off a title block are both "p.7", and only one of them was
+    # measured. The engine has stamped this on every field as it went; nothing printed it.
+    if scan:
+        _graded = [(code, rec) for code, rec in sorted(scan.items())
+                   if any(rec.get(f) for f in ("material_source", "thickness_source",
+                                               "quantity_source", "geometry_source"))]
+        if _graded:
+            add("## Which reader decided each part")
+            add("")
+            add("The number in brackets is the engine's rank for that reader: a higher-ranked "
+                "source may not be overwritten by a lower one, which is why a SOLIDWORKS "
+                "measurement survives a vision model's reading of the same part and not the "
+                "other way round.")
+            add("")
+            add("**What decided something on this job:** "
+                + "; ".join(_readers_used(scan)) + ".")
+            add("")
+            add("| Part | Material | Thickness | Quantity | Geometry / size | Which file and page |")
+            add("|---|---|---|---|---|---|")
+            for code, rec in _graded:
+                add(f"| {code or '—'} "
+                    f"| {_reader(rec.get('material_source'))} "
+                    f"| {_reader(rec.get('thickness_source'))} "
+                    f"| {_reader(rec.get('quantity_source'))} "
+                    f"| {_reader(rec.get('geometry_source'))} "
+                    f"| {_where(rec, pack, page_index)} |")
+            add("")
+            add("> A SOLIDWORKS source means the part and assembly files themselves were read "
+                "— not the PDF of them. Where the model was available the engine takes the "
+                "flat pattern, the applied material and the bend count from it, because those "
+                "are the modelled facts rather than somebody's reading of a view. Where it was "
+                "not, the drawing is the best available and the row says so.")
+            add("")
+
+    # ── what the labour actually is ──────────────────────────────────────────
+    # THE WHOLE QUANTITY STORY, AND IT WAS BEING WORKED OUT BY HAND. Every labour row carries
+    # a one-off set-up and a run time, and the sheet charges both against however many units
+    # the run was for. The set-up is what falls when the quantity rises; the run time never
+    # moves. Without the split an estimator asked "what would 25 off cost" has to open the
+    # sheet, find eleven set-up cells and eleven rates, and do it themselves — which is what
+    # happened, and it is the kind of arithmetic that goes into an email slightly wrong.
+    if labour_rows and order_qty:
+        _setup = 0.0
+        for row in labour_rows:
+            _mins = _money(row.get("setup_minutes")) or 0.0
+            _rate = _money(row.get("dept_rate_gbp_per_hour")) or 0.0
+            _setup += (_mins / 60.0) * _rate / order_qty
+        _setup = round(_setup, 2)
+        _charged = _sum_money(labour_rows)
+        _run = round(_charged - _setup, 2)
+        add("## What the labour is: set-up, and run time")
+        add("")
+        add(f"This estimate is for **{order_qty} of**. Of the {_gbp(_charged)} of labour on "
+            f"it, **{_gbp(_setup)} is set-up** and **{_gbp(_run)} is run time**. Set-up is a "
+            f"one-off per department row and is spread across the order, so it falls as the "
+            f"quantity rises. Run time per unit does not move at any quantity — it is the "
+            f"floor.")
+        add("")
+        add("| Order qty | Set-up per unit | Run per unit | Labour per unit |")
+        add("|---|---|---|---|")
+        for _q in (1, 10, 25, 50, 100, 250):
+            _s = round(_setup * order_qty / _q, 2)
+            add(f"| {_q}{' — this estimate' if _q == order_qty else ''} | {_gbp(_s)} "
+                f"| {_gbp(_run)} | {_gbp(round(_s + _run, 2))} |")
+        add("")
+        add("> Labour only. Material per part does not change with quantity, and packaging "
+            "and delivery are priced for the whole order at the quantity above — neither is "
+            "in this table, so it is not a unit price. It is what the labour would do.")
+        add("")
+
+    # ── every route line ─────────────────────────────────────────────────────
+    add("## Every operation, and who decided it")
+    add("")
+    add("| Part | Operation | Seq | Scope | Qty | Decided by | On what basis | Which file and page |")
+    add("|---|---|---|---|---|---|---|---|")
+    for row in routes:
+        target = str(row.get("Target") or "").upper()
+        rec = scan.get(target, {})
+        add(f"| {_fmt(row.get('Target'))} "
+            f"| {_fmt(row.get('Operation'))} "
+            f"| {_fmt(row.get('Seq'))} "
+            f"| {_fmt(row.get('Scope'))} "
+            f"| {_fmt(row.get('Qty/unit'))} "
+            f"| {_fmt(row.get('Source'))} "
+            f"| {str(row.get('Reason') or '—')[:70]} "
+            f"| {_where(rec, pack, page_index)} |")
+    add("")
+
+    # ── what each sheet could be read for ────────────────────────────────────
+    # A FIELD MISSING FROM THIS EXTRACT IS NOT A FIELD MISSING FROM THE DRAWING.
+    #
+    # This section reports what each sheet could be read for, and it does that by looking for
+    # materials / thicknesses_mm / surface_finishes on the record. The trimmed extract that
+    # supplies the page numbers carries only part_number, pages and page_roles — so against
+    # one of those every row came out "material **no**, thickness **no**, finish **no**",
+    # for a pack whose page 4 plainly reads "MATERIAL: MILD STEEL", "1.5 THK", "POWDER
+    # COATED". That is not a weak answer, it is a confident wrong one, and it would have gone
+    # to an estimator as a drawing-quality assessment.
+    #
+    # So the section is built only from an extract that actually carries the fields, and
+    # otherwise says what it needs. Refusing to answer is the honest failure mode; the whole
+    # document exists to stop people guessing from it.
+    _quality_fields = ("materials", "thicknesses_mm", "surface_finishes", "geometry_rollup")
+    _has_quality = any(any(k in rec for k in _quality_fields) for rec in scan.values())
+    if scan and not _has_quality:
+        add("## Drawing quality, sheet by sheet")
+        add("")
+        add("> **Not produced.** This ran against a trimmed extract carrying only part "
+            "numbers and page numbers. Reporting from it would have said every drawing "
+            "states no material, no thickness and no finish — which is false: page 4 alone "
+            "reads *MATERIAL: MILD STEEL*, *1.5 THK*, *POWDER COATED*. Re-run with the full "
+            "`output/json/<job>.json` and this section builds itself.")
+        add("")
+    if scan and _has_quality:
+        add("## Drawing quality, sheet by sheet")
+        add("")
+        add("| File and page | Part | Material stated | Thickness stated | Finish stated | "
+            "Geometry | What it could not give |")
+        add("|---|---|---|---|---|---|---|")
+        for code, rec in sorted(scan.items(),
+                               key=lambda kv: ((kv[1].get("pages") or [999])[0], kv[0])):
+            # ONLY THINGS THAT ARE DRAWINGS. A line with no page is a catalogue item, a
+            # commercial line, or a fastener off a BOM table — PACKAGING, DELIVERY, FIXING17.
+            # Graded here they came out "could not give: thickness, finish, cut length",
+            # which reads as a deficient drawing pack and is nonsense: packaging is not a
+            # drawing, and an M8 nyloc nut has no thickness because it is bought, not because
+            # somebody forgot to write one. Same false-negative as grading a pack from a
+            # trimmed extract, in a different place.
+            if not (rec.get("pages") or []):
+                continue
+            geom = rec.get("geometry_rollup") or {}
+            reliability = ((geom.get("confidence") or {}).get("geometry_reliability"))
+            # A PURCHASED PART NAMED ON AN ASSEMBLY SHEET IS NOT AN INCOMPLETE DETAIL.
+            # The bearing and the rivets appear on p.2 because that is where they are listed,
+            # and they have no detail drawing because they do not need one. Saying what they
+            # ARE beats listing four fields they were never going to carry.
+            _roles = [str(r).lower() for r in (rec.get("page_roles") or [])]
+            if "bought_in" in _roles and "detail" not in _roles:
+                missing = ["bought in — listed on an assembly sheet, no detail drawing needed"]
+            else:
+                missing = []
+                if not rec.get("materials"):
+                    missing.append("material")
+                if not rec.get("thicknesses_mm"):
+                    missing.append("thickness")
+                if not rec.get("surface_finishes"):
+                    missing.append("finish")
+                if not (geom.get("estimated_cut_length_mm") or 0):
+                    missing.append("cut length")
+            add(f"| {_where(rec, pack, page_index)} | {code or _fmt(rec.get('description'))} "
+                # Same rule as the HTML table's cell -- see _material_stated. Two copies of
+                # one table disagreeing about what a part is made of is worse than either
+                # answer alone.
+                f"| {_material_stated(rec) if _material_stated(rec) != 'no' else '**no**'} "
+                f"| {', '.join(str(t) for t in rec.get('thicknesses_mm') or []) or '**no**'} "
+                f"| {', '.join(str(f) for f in rec.get('surface_finishes') or []) or '**no**'} "
+                f"| {_fmt(rec.get('geometry_source'))}"
+                f"{f' ({reliability:.0%})' if isinstance(reliability, (int, float)) else ''} "
+                f"| {', '.join(missing) or 'nothing — complete'} |")
+        add("")
+
+    # ── where a part number stopped tracing, and what it cost ────────────────
+    # FOR DESIGN AS MUCH AS FOR THE ESTIMATOR. Every entry here is a place the engine had to
+    # size or price a part from something that is not a drawing OF that part. Some of those
+    # are our reader's fault and some are the pack's, and the only way to tell which is to
+    # print both the break and what the estimate did instead.
+    _untraced = _tracing_failures(scan, pack, steel_calc, material, page_index)
+    if _untraced:
+        add("## Where a part number stopped tracing through the pack")
+        add("")
+        _at_stake = round(sum(u["gbp"] or 0 for u in _untraced), 2)
+        add(f"{_plural(len(_untraced), 'part')} could not be followed from the BOM through to "
+            f"a drawing or a flat of its own"
+            + (f", carrying {_gbp(_at_stake)} between them" if _at_stake else "")
+            + ". Each was still costed — from whatever the engine could reach — and that "
+              "substitution is what the last column names. **Where the break is ours we will "
+              "fix the reader; where it is the pack's, this is the list to send Design.**")
+        add("")
+        add("| Part | What it is | £ on this job | Blank used | Which file and page "
+            "| Where the trail broke |")
+        add("|---|---|---|---|---|---|")
+        for u in _untraced:
+            add(f"| {u['code']} | {u['description'] or '—'} | {_gbp_or(u['gbp'], '—')} "
+                f"| {u['blank'] or '—'} | {u['where']} | {'; '.join(u['why'])} |")
+        add("")
+
+    # ── what the pack does not contain, and what it costs ────────────────────
+    # ASKED DIRECTLY AND ANSWERED DIRECTLY. "Which drawings are missing, and does it hurt the
+    # price?" is a different question from "how good are the drawings we have", and the
+    # answer is usually "none of them, for money" — a bought-in bolt has no detail drawing
+    # because it does not need one, and saying so stops somebody chasing Design for it.
+    #
+    # A LINE WITH NO SHEET IS ONLY A PROBLEM IF ITS PRICE DEPENDED ON ONE. So each is
+    # classified by what its money actually rests on, not by the absence alone.
+    if scan:
+        no_sheet = []
+        for row in bom:
+            code = row["code"].upper()
+            if not code:
+                continue
+            rec = scan.get(code) or {}
+            if rec.get("pages"):
+                continue
+            cut_here = _sdi_cuts(code, steel, material, (record_lines or {}).get(code))
+            # A SECTION IS NOT CUT FROM SHEET. The leg's 15.88 × 15.88 profile sat in the
+            # Blank L column and this table told the reader its "blank and gauge" came from
+            # nowhere. The record knows it is priced by length.
+            section_here = bool(((record_lines or {}).get(code) or {}).get("length"))
+            unit, qty = _money(row.get("price")), _money(row.get("qty"))
+            no_sheet.append({
+                "code": row["code"], "desc": _description(row), "cut": cut_here,
+                "section": section_here,
+                "gbp": round(unit * qty, 2) if unit and qty else None,
+                "priced": row.get("price") not in (None, ""),
+            })
+        add("## Drawings the pack does not contain, and what that costs")
+        add("")
+        # THE ENGINE'S OWN VERDICT ON THE PACK, WHERE SOMEBODY WILL READ IT. It decides
+        # whether the drawings supported a credible cost, suppresses its own headline when
+        # they did not, and prints one line to a console. The workbook still computes a Unit
+        # Cost, because that is a different figure — so the estimate arrives priced and the
+        # reason to doubt it arrives nowhere. Stated here, with the money on it, because "we
+        # priced what we could" is only honest if it is followed by what we could not.
+        if sufficiency.get("provisional") or str(
+                sufficiency.get("status") or "") in ("provisional", "insufficient_data"):
+            _ratio = _money(sufficiency.get("credible_cost_ratio"))
+            _fab = sufficiency.get("fabricated_part_count")
+            _with = sufficiency.get("parts_with_dxf")
+            # "PRICED IN FULL" IS A CLAIM, AND IT HAS TO BE TRUE.
+            #
+            # This paragraph was written about a different gap — geometry READ off a view
+            # rather than measured — and it opened by asserting the money was complete so
+            # that the reader worried about the right thing. Then D-078 made deliberately
+            # unpriced lines normal: plating, freight, packaging and delivery stay visibly
+            # awaiting a current price rather than carrying a figure off anybody's sheet.
+            # On 7332-01 that is four lines, and the report still opened by telling Howard
+            # the job was priced in full. The engine was contradicting its own policy in
+            # its own report, which is worse than either answer on its own.
+            #
+            # Counted the way the tables below count, from the same _price_source that
+            # writes each line's verdict, so the sentence and the rows cannot disagree.
+            # Called without `record`, because the recording pass belongs to the table that
+            # renders the line, not to a count taken over its shoulder.
+            # COUNTED OFF `bom`, WHICH IS THE LIST THE PRICE TABLE ITSELF WALKS.
+            #
+            # `material_rows` is the reconciliation summary — one row per block, carrying a
+            # description and a total — and asking it for price sources returns nothing,
+            # silently, because none of its rows has a code. A sentence that counts a
+            # different list from the table under it is how a report ends up disagreeing
+            # with itself, which is the fault being fixed here, not a new one to introduce.
+            #
+            # Called without `record`: the recording pass belongs to the table that renders
+            # each line, not to a count taken over its shoulder.
+            _awaiting_rows = [
+                _r for _r in bom
+                if _r.get("code")
+                and str(_price_source(_r, provenance, steel) or "")
+                .replace("*", "").strip().upper().startswith("NOT PRICED")
+            ]
+            _n_await = len(_awaiting_rows)
+            add(f"> **This job is priced "
+                + (f"except for {_n_await} line(s) still awaiting a current price, and "
+                   f"some of what IS priced is read rather than measured.** "
+                   if _n_await else
+                   "in full, and some of it is read rather than measured.** ")
+                # A SECOND TOTAL, ON A PAGE THAT NAMES THE FIRST ONE AS THE REAL ONE.
+                #
+                # This printed `document_total_provisional_gbp` -- the ENGINE's own sum over
+                # its part estimates, before the sheet's blocks, its absorption divisor and
+                # its customer terms. On 401912-02 that is GBP 321.88 against a workbook
+                # reading GBP 150.32, and four sentences later this same paragraph says "the
+                # unit cost ... is what the sheet's own cells add up to". So the page carried
+                # two totals for one job, asserted the smaller one was real, and left the
+                # larger one traceable to nothing an estimator can open.
+                #
+                # The RATIO is the point of the sentence and it is kept: it is a statement
+                # about how much of the work rests on measurement. Its denominator is an
+                # internal working figure, so it is described rather than printed -- a number
+                # that appears on no other deliverable is worse than no number at all. This
+                # is the steel comparator's lesson (D-128/D-130) applied to a total.
+                + (f"**{_ratio:.0%} of what it assembled rests on figures it considers "
+                   f"credible** — the rest on geometry read off a view, or on prices it "
+                   f"could not verify. "
+                   if _ratio is not None else "")
+                + (f"{_with} of {_fab} fabricated part(s) have a DXF; the others were sized "
+                   f"from the drawing rather than measured. "
+                   if _fab else "")
+                + ("The unit cost is a real figure — it is what the sheet's own cells add "
+                   "up to — but it is NOT the finished price: the lines above that say "
+                   "they are awaiting a rate carry no money at all, so this total can only "
+                   "go up when they are priced. "
+                   if _n_await else
+                   "Every line is costed and the unit cost is a real figure — it is what "
+                   "the sheet's own cells add up to. ")
+                + "What follows is which lines rest on a "
+                  "reading rather than a measurement, so they can be checked first rather "
+                  "than the whole estimate being doubted.")
+            add("")
+            _weak = [u for u in (sufficiency.get("unreliable_parts") or [])
+                     if isinstance(u, dict)]
+            if _weak:
+                add("| Part | What it is | £ on this job | Why the engine doubts it |")
+                add("|---|---|---|---|")
+                for _u in sorted(_weak,
+                                 key=lambda u: -(_money(u.get("extended_cost_gbp")) or 0)):
+                    _rec = scan.get(str(_u.get("part_number") or "").upper()) or {}
+                    add(f"| {_fmt(_u.get('part_number'))} "
+                        f"| {_clip(_u.get('description'), 44)} "
+                        f"| {_gbp_or(_u.get('extended_cost_gbp'), '—')} "
+                        f"| {', '.join(str(r) for r in (_u.get('reasons') or [])) or 'not recorded'} "
+                        f"{'· ' + _where(_rec, pack, page_index) if _rec.get('pages') else ''} |")
+                add("")
+                add("> A part DXF or a SOLIDWORKS model for the parts above is the single "
+                    "thing that would move those lines from read to measured. Every other "
+                    "line in this estimate is unaffected by it.")
+                add("")
+        if not no_sheet:
+            add("Every costed line on this job is owned by a sheet in the pack. Nothing is "
+                "priced off a drawing that was not supplied.")
+            add("")
+        else:
+            _at_risk = [n for n in no_sheet if n["cut"]]
+            add(f"{len(no_sheet)} costed line(s) have no sheet of their own in this pack. "
+                + (f"**{len(_at_risk)} of them are parts SDI cuts** — those are the ones "
+                   f"where a missing drawing moves the price."
+                   if _at_risk else
+                   "**None of them is a part SDI cuts**, so no missing drawing is holding up "
+                   "a fabricated cost: each is a bought item, a fastener off a BOM table, or "
+                   "a commercial line, and none of them would have a detail drawing even on "
+                   "a complete pack."))
+            add("")
+            add("| Line | What it is | £ on this job | Does the missing sheet move the £ |")
+            add("|---|---|---|---|")
+            for item in sorted(no_sheet, key=lambda n: -(n["gbp"] or 0)):
+                if item.get("section"):
+                    impact = ("**Yes** — this is section stock priced by length, so its "
+                              "profile and cut length came from somewhere other than a "
+                              "detail drawing. Check them against the GA or the model.")
+                elif item["cut"]:
+                    impact = ("**Yes** — this is cut from sheet, so its blank and gauge came "
+                              "from somewhere other than a detail drawing. Check them.")
+                elif not item["priced"]:
+                    impact = ("No — it is unpriced, and a drawing would not price it. It "
+                              "needs a rate, not a sheet.")
+                else:
+                    # NOT "priced from a book". Packaging, delivery and the powder line are
+                    # not bought from anybody's catalogue — one is computed from coated
+                    # area, two are priced for the order — and calling all three a book
+                    # price is a claim about the source that the BOM table above contradicts.
+                    impact = ("No — it is not a drawn part. Its price and its source are on "
+                              "the bill of materials above.")
+                add(f"| {item['code']} | {item['desc']} "
+                    f"| {_gbp(item['gbp']) if item['gbp'] is not None else 'no price'} "
+                    f"| {impact} |")
+            add("")
+        # Pages nothing claimed. Derived from the sheets the parts themselves name — the
+        # highest page any record claims is the only page count this document can honestly
+        # know, so a gap below is "no part was traced to this sheet", not "the PDF is short".
+        claimed = sorted({int(p) for rec in scan.values() for p in (rec.get("pages") or [])
+                          if isinstance(p, (int, float))})
+        if claimed:
+            gaps = [p for p in range(1, max(claimed) + 1) if p not in claimed]
+            if gaps:
+                add(f"Within p.1–p.{max(claimed)}, **no costed part was traced to "
+                    f"{', '.join(f'p.{p}' for p in gaps)}**. Those sheets are usually the "
+                    f"cover, the general arrangement and the BOM table, which own no part of "
+                    f"their own — but they are also where a part would hide if its drawing "
+                    f"were read and never joined to a cost, so they are named rather than "
+                    f"assumed harmless.")
+            else:
+                add(f"Every sheet from p.1 to p.{max(claimed)} is claimed by at least one "
+                    f"costed part.")
+            add("")
+
+    # DECISIONS FIRST. The section "For the estimator to confirm" is emitted where its
+    # inputs are computed, between the questions and the reconciliation; the estimator
+    # wants it above everything else, as the report has it. Hoisted rather than rewritten,
+    # so the section's own tests and the tab's parser see the same block.
+    lines = _hoist_section(lines, "## For the estimator to confirm",
+                           before="## The questions, answered first")
+    return "\n".join(lines)
+
+
+def _hoist_section(lines: List[str], heading: str, before: str) -> List[str]:
+    """Move the '## heading' section (to the next '## ') in front of '## before'."""
+    if heading not in lines or before not in lines:
+        return lines
+    start = lines.index(heading)
+    if start < lines.index(before):
+        return lines
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")),
+               len(lines))
+    block = lines[start:end]
+    rest = lines[:start] + lines[end:]
+    at = rest.index(before)
+    return rest[:at] + block + rest[at:]
+
+
+# ── the covering note, in the shape an estimator actually reads ──────────────
+#
+# THE FORMAT IS NOT DECORATION; IT IS THE SPECIFICATION.
+#
+# What went out with 12349-02 was a headline reading "not reported/unit at 7 off" over a list
+# of filenames. James: "the write up is very poor. it needs to be in this format" — and then
+# the note he had written by hand for 12552, which is the thing to reproduce. It works because
+# it answers, in order and before any table: what does it cost, what is the biggest number
+# made of, what is the labour, what needs a person, what is wrong with the pack, and what is
+# wrong with US. An estimator can act on each of those; a list of attachments is not something
+# anybody can act on.
+#
+# Every figure is read from the workbook's own calculated cells through _gather, so this note
+# and the full document cannot disagree — they are the same numbers rendered twice.
+
+_EMAIL_CSS = ("font:14px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;"
+              "color:#1c2530;max-width:860px")
+_TH = ('style="text-align:left;padding:4px 12px 4px 0;border-bottom:1px solid #c8d2dc;'
+       'font-weight:600;white-space:nowrap"')
+_TD = 'style="padding:3px 12px 3px 0;border-bottom:1px solid #edf1f5;vertical-align:top"'
+_NUM = ('style="padding:3px 12px 3px 0;border-bottom:1px solid #edf1f5;text-align:right;'
+        'white-space:nowrap"')
+
+
+def _clip(text: Any, limit: int) -> str:
+    """Shorten on a WORD boundary, and say that it was shortened.
+
+    "CNC Joinery — 5mm HIGH IMPACT ACRYLIC (12349-02-" is a machine cutting a string at
+    character 48. An estimator reads that as software that does not know what it is holding,
+    and they are not wrong. Break where the words break, and mark it.
+    """
+    words = str(text if text is not None else "").split()
+    if not words:
+        return "—"
+    out = ""
+    for word in words:
+        if out and len(out) + 1 + len(word) > limit:
+            return out + " …"
+        out = f"{out} {word}".strip() if out else word
+    return out
+
+
+def _english_plural(noun: str) -> str:
+    """The plural of an ordinary English noun.
+
+    IT APPENDED "s" TO ANYTHING, so `_plural(3, "quantity")` produced **"3 quantitys"** — on
+    the covering note, in the section about quantity breaks, where the word is unavoidable.
+    That is the same failure `_plural` itself was written to fix one step further in: a
+    document that looks generated rather than written, and a reader who trusts the arithmetic
+    a little less for it.
+
+    Deliberately small. It handles the endings English actually inflects — a consonant plus
+    -y, and the sibilant endings that take -es — and nothing else. Anything irregular is
+    passed explicitly at the call site, which is what the `plural` argument has always been
+    for. A general pluraliser would be a library and a source of new wrong answers.
+    """
+    word = str(noun)
+    if not word:
+        return word
+    low = word.lower()
+    if low.endswith("y") and len(low) > 1 and low[-2] not in "aeiou":
+        return word[:-1] + "ies"
+    if low.endswith(("s", "x", "z", "ch", "sh")):
+        return word + "es"
+    return word + "s"
+
+
+def _plural(count: Any, noun: str, plural: str = "") -> str:
+    """"1 line" and "2 lines". A note an estimator forwards to a customer's engineer should
+    not read "1 part number(s)" — small, and it is the difference between a document that
+    looks written and one that looks generated."""
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        return f"{count} {_english_plural(noun)}"
+    return f"{n} {noun}" if n == 1 else f"{n} {plural or _english_plural(noun)}"
+
+
+def _e(text: Any) -> str:
+    return (str(text if text is not None else "").replace("&", "&amp;")
+            .replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _table(headers: List[str], rows: List[List[Any]], numeric: Optional[set] = None) -> str:
+    numeric = numeric or set()
+    # A ROW THAT IS NOT AS WIDE AS THE HEADER SILENTLY SHIFTS COLUMNS. §3 emitted seven cells
+    # for an eight-column header, so the file list rendered under "Drawing no." and "Which
+    # drawing files and pages" came out blank on a client quote. enumerate() just stops early
+    # and says nothing. A mismatch is a construction error in the caller, not something to
+    # paper over, so it is refused here where it is cheap to see rather than in front of a
+    # customer where it is not.
+    _n = len(headers)
+    _bad = next(((i, len(r)) for i, r in enumerate(rows) if len(r) != _n), None)
+    if _bad is not None:
+        raise ValueError(
+            f"_table: row {_bad[0]} has {_bad[1]} cells for {_n} headers "
+            f"({', '.join(map(str, headers))}) — a width mismatch shifts every column after it")
+    head = "".join(f"<th {_TH}>{_e(h)}</th>" for h in headers)
+    body = "".join(
+        "<tr>" + "".join(
+            f"<td {_NUM if i in numeric else _TD}>{_e(cell)}</td>"
+            for i, cell in enumerate(row)) + "</tr>"
+        for row in rows)
+    return (f'<table style="border-collapse:collapse;margin:10px 0;width:100%">'
+            f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
+
+
+def _setup_and_run(labour_rows: List[Dict[str, Any]], order_qty: Any = 1) -> Dict[str, Any]:
+    """How much of the labour is set-up, which is the whole of the quantity story.
+
+    Set-up does not move with the order and run time does. Stating the split is what lets an
+    estimator answer "what would 50 off cost" without another run — and on 12552 it was
+    £247.40 of £323.84, which is not a detail.
+    """
+    total = round(sum(_money(r.get("total_value_gbp")) or 0 for r in labour_rows), 2)
+    # THE SHEET RECORDS SET-UP IN MINUTES, NOT IN POUNDS. The read-back carries
+    # `setup_minutes` and `dept_rate_gbp_per_hour`; this asked for `setup_cost_gbp`, got
+    # nothing on every row, and concluded there was no set-up to report — so the one
+    # sentence that answers "what would 50 off cost" never printed. Total Value is per
+    # UNIT and the sheet has already divided the set-up by the order quantity, so the
+    # conversion divides by it too.
+    setup = 0.0
+    known = False
+    for r in labour_rows:
+        mins = _money(r.get("setup_minutes"))
+        rate = _money(r.get("dept_rate_gbp_per_hour"))
+        if mins is None or rate is None:
+            continue
+        known = True
+        setup += (rate / 60.0) * mins / max(1, int(order_qty or 1))
+    setup = round(setup, 2)
+    return {"total": total, "setup": setup, "run": round(total - setup, 2),
+            "rows": len(labour_rows), "known": known}
+
+
+# WHAT THE REFUSAL SAYS FOR EACH REASON THE PRICE COULD NOT BE CHECKED (D-366). The keys are
+# the read-back's own cause codes (wep_readback_from_xlsx). "headline" ends the subject line.
+# "happened" takes the read-back's plain detail where it has one. "means" says what that does
+# and does not tell you about the figures. "steps" is the repair for THIS cause. The note used
+# to give the #DIV/0! repair for every cause, so an Excel that had merely been busy sent the
+# estimator looking for "a labour row with no throughput".
+_REFUSAL_BY_CAUSE: Dict[str, Dict[str, Any]] = {
+    "excel_busy": {
+        "headline": "Excel was busy, so the price was not checked",
+        "happened": ("The estimate was built and the workbook written, but when the engine "
+                     "went to read the calculated totals back, {detail}."),
+        "default_detail": "Excel was busy and would not answer",
+        "means": ("Nothing is known to be wrong with the figures. They are unchecked: the "
+                  "checks that compare the sheet's rows with its totals could not run."),
+        "steps": (
+            "Close Excel on the PC that runs the estimates, and end any EXCEL.EXE still "
+            "listed in Task Manager (a run stopped part-way can leave one behind).",
+            "Re-run the job. The new run reads the totals back, runs its checks and writes "
+            "the normal covering note.",
+            "If it happens again, open Excel by hand on that PC and clear anything it is "
+            "waiting on (a sign-in, licence, update or recovered-files message), then "
+            "re-run.",
+        ),
+    },
+    "excel_unavailable": {
+        "headline": "no Excel on this machine, so the price was not calculated",
+        "happened": ("The estimate was built and the workbook written, but {detail}, so "
+                     "nothing calculated its formulas and there was no total to read."),
+        "default_detail": "this machine cannot run Excel",
+        "means": ("The formulas are intact and calculate when the workbook is opened in "
+                  "Excel, but no check has been run on the result."),
+        "steps": ("Re-run the job on the estimating PC, which has Excel.",),
+    },
+    "excel_failed": {
+        "headline": "Excel failed while checking the price",
+        "happened": "The estimate was built and the workbook written, but {detail}.",
+        "default_detail": "Excel failed while opening or calculating the workbook",
+        "means": "Nothing is known to be wrong with the figures, but they are unchecked.",
+        "steps": (
+            "Open the workbook in Excel yourself. If it opens and shows its totals, re-run "
+            "the job: the failure was Excel's, not the estimate's.",
+            "If Excel reports a problem with the file, do not repair it by hand. Send this "
+            "note and the workbook to the engine team.",
+        ),
+    },
+    "totals_not_calculated": {
+        "headline": "the workbook's total did not calculate",
+        "happened": "The estimate was built and the workbook written, but {detail}.",
+        "default_detail": ("Excel calculated the workbook, but its Total Unit Cost Price came "
+                           "back blank or as an error"),
+        "means": "The workbook has no price until that error is cleared.",
+        "steps": (
+            "Open the workbook in Excel and find the total showing an error (#DIV/0!, "
+            "#VALUE!).",
+            "Run tools\\preflight_before_you_send_it.py against it. It names the rows that "
+            "stop the total.",
+            "Send that list to the engine team (the usual cause is a labour row with no "
+            "throughput) and re-run the job once it is fixed.",
+        ),
+    },
+}
+# Any other cause, or a record stamped before causes were recorded.
+_REFUSAL_UNKNOWN: Dict[str, Any] = {
+    "headline": "the price could not be checked",
+    "happened": "The engine could not read the calculated totals back from the workbook{detail}.",
+    "default_detail": "",
+    "means": "The figures are unchecked.",
+    "steps": (
+        "Open the workbook in Excel and check the totals calculate (no #DIV/0!).",
+        "Run tools\\preflight_before_you_send_it.py against it. It names the blocking rows.",
+        "Fix the cause and re-run the job.",
+    ),
+}
+
+
+def do_not_send_note(stem: str, why: str, *, cause: str = "", detail: str = "",
+                     quantity_why: str = "", recalculated_later: Optional[bool] = None,
+                     money_refused: Optional[bool] = None) -> Dict[str, str]:
+    """The covering note for a pack that must not go out. It is a refusal, not a summary.
+
+    WHAT THIS REPLACES. A pack went out whose quantities were finally right and whose money
+    was gone — #DIV/0! through the labour SUM, "not readable from the sheet" — under a
+    covering email that summarised it like any other. The system had already detected the
+    state (money_provenance: the record cannot evidence a price) and shipped anyway;
+    detection without refusal is a comment.
+
+    This note is what goes in the email's place. The subject leads with DO NOT SEND so no
+    mail client, preview, or skim can mistake it. The workbook itself still ships to the
+    ESTIMATOR, because repairing it needs the file, but nothing that reads like a price goes
+    with it.
+
+    IN WORDS AN ESTIMATOR CAN ACT ON (D-366). James Gray, 30 Sep, on the 14:12 M&S plywood
+    note: "the e-mail explanation is not great". Its only reason was the record's internal
+    sentence ("the workbook's accepted row grouping reached this record but its calculated
+    totals did not…"), and its repair was the #DIV/0! one, when Excel had simply been busy.
+    The note now says what happened, what it means for the figures and what to do for THIS
+    cause. The record's own words stay at the foot, for the engine team.
+
+    `why` is money_provenance's sentence. `cause` and `detail` are the read-back's code and
+    plain reason. `quantity_why` is set when the book was costed at the wrong quantity.
+    `recalculated_later` says whether Excel calculated the book later in the same run.
+    `money_refused` defaults to "yes" unless only a quantity reason was given."""
+    _stem = str(stem or "this job").strip() or "this job"
+    _why = str(why or "").strip()
+    if _why and _why[-1] not in ".!?":
+        _why += "."
+    _qty = str(quantity_why or "").strip()
+    _money = (bool(money_refused) if money_refused is not None
+              else bool(_why or cause or detail) or not _qty)
+
+    headlines: List[str] = []
+    happened: List[str] = []
+    means: List[str] = []
+    steps: List[str] = []
+    if _money:
+        spec = _REFUSAL_BY_CAUSE.get(str(cause or "").strip(), _REFUSAL_UNKNOWN)
+        _detail = str(detail or "").strip().rstrip(".")
+        if spec is _REFUSAL_UNKNOWN:
+            _said = f": {_detail}" if _detail else ""
+        else:
+            _said = _detail or spec["default_detail"]
+        headlines.append(spec["headline"])
+        _happened = spec["happened"].format(detail=_said)
+        if spec is _REFUSAL_BY_CAUSE["excel_busy"] and recalculated_later is not None:
+            _happened += (" Excel did open and calculate the workbook later in the same run, "
+                          "so this was a hold-up on the PC, not a fault in the estimate."
+                          if recalculated_later else
+                          " Excel could not calculate the workbook later in the run either.")
+        happened.append(_happened)
+        means.append(spec["means"])
+        steps.extend(spec["steps"])
+    if _qty:
+        headlines.append("costed at the wrong quantity")
+        happened.append(f"The job was costed at the wrong quantity: {_qty}.")
+        steps.append("Make sure the re-run is at the quantity that was asked for."
+                      if _money else "Re-run the job at the quantity that was asked for.")
+    means.append("No quote goes with this pack.")
+
+    subject = f"DO NOT SEND — {_stem}: {'; '.join(headlines)}"
+    closing = ("The workbook is attached so you can look at it. Do not send it or quote from "
+               "it. Nothing in it should be read as a price until a re-run has checked it.")
+    text = (
+        f"{subject}\n\n"
+        f"What happened\n" + "".join(f"  {h}\n" for h in happened) + "\n"
+        f"What it means\n  {' '.join(means)}\n\n"
+        f"What to do\n" + "".join(f"  {n}. {s}\n" for n, s in enumerate(steps, 1)) + "\n"
+        f"{closing}"
+        + (f"\n\nFor the engine team: {_why}" if _why else "")
+    )
+    html = (
+        f"<h2 style='color:#7f2a2a'>{_e(subject)}</h2>"
+        f"<h3>What happened</h3>" + "".join(f"<p>{_e(h)}</p>" for h in happened)
+        + f"<h3>What it means</h3><p>{_e(' '.join(means))}</p>"
+        f"<h3>What to do</h3><ol>" + "".join(f"<li>{_e(s)}</li>" for s in steps) + "</ol>"
+        f"<p><b>The workbook is attached so you can look at it. Do not send it or quote from "
+        f"it.</b> Nothing in it should be read as a price until a re-run has checked it.</p>"
+        + (f"<p style='color:#666;font-size:12px'>For the engine team: {_e(_why)}</p>"
+           if _why else "")
+    )
+    return {"subject": subject, "html": html, "text": text}
+
+
+def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
+                   client: str = "", deliverables: Optional[List[str]] = None,
+                   provisional: bool = True,
+                   quantity_sweep: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """Subject, HTML and plain text for one finished estimate, in seven sections."""
+    g = _gather(workbook, scan_json)
+    scan, final, pack = g["scan"], g["final"], g["pack"]
+    totals, bom, steel_calc = g["totals"], g["bom"], g["steel_calc"]
+    material, provenance = g["material"], g["provenance"]
+    labour_rows, material_rows = g["labour_rows"], g["material_rows"]
+    order_qty = g["order_qty"] or 1
+    page_index = g["page_index"]
+    job = str(g["stem"]).split("_")[0]
+    record, record_lines = g["record"], g["record_lines"]
+    _gaps = (record or {}).get("gaps") or {}
+
+    # A LINE AT £0.00 IS THE ONE THIS SECTION EXISTS FOR, AND IT WAS NOT COUNTED.
+    #
+    # This asked `price in (None, "")`. 12349-02's wood screws, flange buttons, bumpons and
+    # all three acrylic/MDF lines carry a price of 0.0 — a number, not a blank — so none of
+    # them matched, `needs_a_person` came out EMPTY, and section 5 did not render at all.
+    # The message still said "it stays unissued until the lines in §5 are settled", above a
+    # document with no §5 in it. Zero IS the condition: it is what a blank reads as once the
+    # cell has been written.
+    def _reads_as_free(row) -> bool:
+        if "costed in" in str(row.get("text") or "").lower():
+            return False          # its money is in a fabricated block, not missing
+        price = _money(row.get("price"))
+        return price is None or price == 0
+    _unpriced = [r for r in bom if _reads_as_free(r)]
+    # HOUSE RATE OR MARKET GUESS — THE RECORD SAYS WHICH. This searched the printed source
+    # phrase for "indicative" and called every hit an AI market indication, so the
+    # plating's config £/kg and the felt pad's config commodity were reported to Tim as
+    # figures that "move between runs". They do not. The same split the Explanation tab
+    # uses, from costed_facts, with the same extended sum.
+    if record:
+        _house, _market = _split_by_firmness(bom, record_lines, _gaps)
+        _house_gbp = float(_gaps.get("indicative_house_gbp") or 0.0)
+        _market_gbp = float(_gaps.get("indicative_market_gbp") or 0.0)
+    else:
+        _house = []
+        _market = [r for r in bom
+                   if _money(r.get("price"))
+                   and any(t in (f"{r.get('supplier') or ''} "
+                                 f"{_price_source(r, provenance, scan) or ''}").lower()
+                           for t in _INDICATIVE)]
+        _house_gbp = 0.0
+        _market_gbp = round(sum((_money(r.get("price")) or 0) * (_money(r.get("qty")) or 0)
+                                for r in _market), 2)
+    _indicative = _market + _house
+    # ONE LINE, ONE VERDICT — the same fix as the Explanation tab, for the same reason and
+    # from the same cause: a formula cell reads back as no number, so a line the record has
+    # already classified as priced was listed here a second time as costing nothing.
+    _classified_ids = {id(r) for r in _indicative}
+    _unpriced = [r for r in _unpriced if id(r) not in _classified_ids]
+    needs_a_person = _unpriced + _indicative
+    labour = _setup_and_run(labour_rows, order_qty)
+    untraced = _tracing_failures(scan, pack, steel_calc, material, page_index)
+
+    _steel_total = round(sum(_money(r.get("total_value_gbp")) or 0
+                             for r in material_rows if r.get("block") == "steel"), 2)
+    _bought_total = round((totals.get("material") or 0) - _steel_total, 2)
+
+    # AN EMPTY PACK IS NOT A PROVISIONAL ESTIMATE. 11908-21's re-run went out headed
+    # "PROVISIONAL. not reported/unit at 1 off" — the triggering email carried NO
+    # ATTACHMENTS, so nothing was scanned, nothing was costed, and the note still walked
+    # its seven sections and dressed the nothing as a draft price. A reader on a phone
+    # cannot tell that from a broken estimate. When there is no BOM, no material, no
+    # labour and no unit figure, there is exactly one thing worth saying, in the subject.
+    if not bom and not material_rows and not labour_rows and not _money(totals.get("unit")):
+        _empty_subject = (f"{job} — SDI Intelligence: NOTHING WAS ESTIMATED — "
+                          f"the pack arrived empty")
+        _empty_html = (
+            f'<div style="{_EMAIL_CSS}">'
+            f"<p><b>{_e(job)}</b></p>"
+            f"<p><b>No estimate was produced.</b> The run received no drawings to work "
+            f"from: no BOM line, no material row, no labour row and no unit cost exist "
+            f"in the workbook. The usual cause is the triggering email being sent "
+            f"without its attachments, or an empty job folder.</p>"
+            f"<p>Nothing attached to this message is a price. Re-send the job with the "
+            f"drawing pack attached (PDF, DXF and CAD files) and it will run in full.</p>"
+            f"</div>")
+        _empty_text = (f"{job}: no estimate was produced — the run received no drawings "
+                       f"(no BOM, material, labour or unit cost). Usual cause: the "
+                       f"triggering email had no attachments. Re-send the job with the "
+                       f"drawing pack attached.")
+        return {"subject": _empty_subject, "html": _empty_html, "text": _empty_text}
+
+    _mfg = [d for d in ((record or {}).get("decisions_required") or [])
+            if isinstance(d, dict) and d.get("kind") == "manufacturing_decision"]
+    _state = "PROVISIONAL. " if provisional else ""
+    # THE ONE TALLY in the subject line too — the same phrase as the report banner, the
+    # explanation and the quote's draft strip, so the e-mail cannot count the same open
+    # items a fourth way ("2 unpriced + 2 INDICATIVE + 1 length" was the e-mail's version
+    # of the report's "3 inputs" and the table's five rows).
+    _need = (f"{_plural(len(needs_a_person), 'line')} need a person."
+             if needs_a_person else "No line is waiting on a person.")
+    if _mfg:
+        _need += f" {_plural(len(_mfg), 'decision')} open."
+    if record:
+        from costed_facts import outstanding_summary as _osum
+        _o = _osum(record)
+        if _o["total"]:
+            _need = f"To confirm: {_o['phrase']}."
+        elif not needs_a_person:
+            _need = "Nothing is waiting on a person."
+    subject = (f"{job} — SDI Intelligence estimate, {_state}"
+               f"{_gbp(totals.get('unit'))}/unit at {order_qty} of. {_need}")
+
+    h: List[str] = [f'<div style="{_EMAIL_CSS}">']
+    add = h.append
+    # IT OPENS AS A MESSAGE, BECAUSE IT IS ONE. James Gray, 18 Sep 2026: "It starts as a
+    # report, not a message to Dave." It led with a job/client/quantity strap and a large
+    # number, which is a document header; a person opening their email needs a sentence first
+    # saying what this is and what is wanted of them. The detail below is unchanged -- what
+    # was missing was the line that makes it a note rather than an artefact.
+    add(f"<p>Here is the estimate for <b>{_e(job)}</b>"
+        f"{' (' + _e(client) + ')' if client else ''}, costed at {order_qty} off. "
+        f"The figures come from the workbook's own calculated cells — please read the "
+        f"outstanding items below before anything goes to the customer.</p>")
+    add(f"<p><b>{_e(job)}</b>{' &middot; ' + _e(client) if client else ''} &middot; "
+        f"{order_qty} of &middot; {_e(_state.strip().rstrip('.') or 'FOR REVIEW')}</p>")
+    # ── THE HEADLINE TOTAL, AND THE CELL IT CAME FROM ───────────────────────────
+    #
+    # `publishable_total` refuses a total with no workbook cell behind it. That is the
+    # £321.88 rule made live: `AI Explanation!A111` printed the engine's own sum over its
+    # part estimates as though it were the job's cost, and nobody could open a cell to check
+    # it. Where the sheet's total is traceable this names the cell beside it; where it is
+    # not, the reader is told rather than shown a figure that cannot be checked.
+    from displayed_charge import publishable_total as _pub_total       # noqa: PLC0415
+    _job_total = _pub_total({"run": {"unit_cost_gbp": _money(totals.get("unit")),
+                                     "unit_cell": totals.get("unit_cell"),
+                                     "unit_cell_value": totals.get("unit_cell_value")}})
+    # AND IT PRINTS WHAT THE FACT VOUCHED FOR. The first cut called `publishable_total` and
+    # then printed `totals["unit"]` anyway, using the fact only to decide whether to append a
+    # cell reference — so a total the fact had REFUSED still appeared, merely without its
+    # provenance. That is the refusal reduced to a formatting preference.
+    if _job_total.get("amount") is not None:
+        add(f'<p style="font-size:26px;margin:12px 0 4px">'
+            f'<b>{_e(_gbp(_job_total["amount"]))}</b>'
+            f'<span style="color:#5b6b7d;font-size:14px"> per unit, ex VAT'
+            + (f' &middot; {_e(_job_total["cell"])}' if _job_total.get("cell") else "")
+            + '</span></p>')
+    else:
+        add('<p style="font-size:18px;margin:12px 0 4px"><b>UNIT COST PENDING</b>'
+            '<span style="color:#5b6b7d;font-size:14px"> — '
+            + _e(_job_total.get("why") or "the sheet's total could not be traced to a cell")
+            + '</span></p>')
+    # "a set of explains" is not English. It survived because nobody reads their own
+    # boilerplate, which is precisely why generated copy needs the same care as a figure.
+    add("<p>Every figure below is read from the workbook's own calculated cells — nothing "
+        "is re-derived here. It is meant to be something you can check line by line, so "
+        "please say if anything is wrong or missing.</p>")
+    if deliverables:
+        add("<p>Attached: " + " &middot; ".join(f"<b>{_e(_basename(d))}</b>"
+                                                for d in deliverables) + ".")
+        # "No customer quote" reads as "we did not produce one", when a draft exists and is
+        # deliberately being held. The distinction matters to anybody deciding what to send.
+        add(" No customer quotation is attached or issued — it is held until the "
+            "outstanding lines below are settled.</p>"
+            if provisional else "</p>")
+
+    # WHERE THE PANEL GOES. Built at the very end, from the same values the sections are
+    # built from, and put HERE — above everything. See the block by that name below.
+    _focus_at = len(h)
+
+    # 1 ─ the number
+    add("<h3>1. The number</h3>")
+    _rows = [["Material", _gbp(totals.get("material"))],
+             ["Labour", _gbp(totals.get("labour"))]]
+    _sub = round((totals.get("material") or 0) + (totals.get("labour") or 0), 2)
+    _rows.append(["Subtotal", _gbp(_sub)])
+    _other = _money(_fe_totals(final).get("other_gbp"))
+    if _other:
+        _rows.append([(final.get("unit_price_composition") or {}).get("basis")
+                      or "the unit cell's own uplift", f"+{_gbp(_other)}"])
+    # THE SAME TOTAL, PUBLISHED A SECOND TIME. The headline above asks `publishable_total`;
+    # this row printed `totals["unit"]` directly, so a total the fact had refused still
+    # appeared four lines further down. Withholding a figure in one place and printing it in
+    # another is not withholding it — it is the five-surfaces lesson inside one document.
+    _rows.append([f"Unit cost, {order_qty} of",
+                  _gbp(_job_total["amount"]) + (f"  ({_job_total['cell']})"
+                                                if _job_total.get("cell") else "")
+                  if _job_total.get("amount") is not None else "PENDING — not traceable"])
+    add(_table(["", "£"], _rows, numeric={1}))
+    # NAMED BY BLOCK, from the rows themselves. This said "bought-in and commercial X plus
+    # sheet steel Y", where X was (material - steel) — so on any job with an acrylic, MDF or
+    # tube block, material the sheet holds in a third place was announced as bought-in.
+    _by_block = {}
+    for _r in material_rows:
+        _by_block[_r.get("block") or "?"] = round(
+            _by_block.get(_r.get("block") or "?", 0.0)
+            + (_money(_r.get("total_value_gbp")) or 0), 2)
+    _BLOCK_WORDS = {"bom": "bought-in and commercial", "steel": "sheet steel",
+                    "other_sheet": "other sheet material", "tube": "tube and section"}
+    if _by_block:
+        add("<p>Material is "
+            + ", ".join(f"{_BLOCK_WORDS.get(b, b)} {_gbp(v)}"
+                        for b, v in sorted(_by_block.items(), key=lambda kv: -kv[1]))
+            + f". Labour is {_plural(labour['rows'], 'sheet row')}.</p>")
+    else:
+        add(f"<p>Material is bought-in and commercial {_gbp(_bought_total)} plus sheet steel "
+            f"{_gbp(_steel_total)}. Labour is {_plural(labour['rows'], 'sheet row')}.</p>")
+
+    # ── THE PRICE BREAK, ON THE PAGE SOMEBODY FORWARDS ────────────────────────────
+    #
+    # "does it present one s/sheet for all the units, or a s/sheet for each."
+    #
+    # A workbook each — the estimators' own template holds one order quantity, so five
+    # quantities is five files. That is right for the SHEETS and wrong for the NOTE: five
+    # attachments named _qty1, _qty50, _qty100 and nothing that puts the curve on one page,
+    # so the only way to see what 500 off does to the unit cost was to open five workbooks
+    # and write the numbers down. The engine has the whole table in hand by this point.
+    #
+    # It carries the two caveats with it, because a price break is exactly the figure
+    # somebody lifts into a quotation. Freight per unit falls with the quantity and is
+    # re-priced here; bought-in prices do NOT step down, so every one of these is a little
+    # dear at the top of the range and the note has to say so where the numbers are, not in
+    # a banner inside a file nobody opened.
+    _qs_rows = [r for r in ((quantity_sweep or {}).get("rows") or [])
+                if isinstance(r, dict) and _money(r.get("unit"))]
+    if len(_qs_rows) > 1:
+        _base = (quantity_sweep or {}).get("baseline_quantity") or order_qty
+        _at_one = next((_money(r.get("unit")) for r in _qs_rows
+                        if int(r.get("quantity") or 0) == _base), None)
+        add(f"<h4>At the other quantities</h4>")
+        add(_table(["Of", "Material £", "Labour £", "Unit £", "vs " + str(_base) + " of"],
+                   [[_fmt(r.get("quantity")), _gbp_or(r.get("material"), "—"),
+                     _gbp_or(r.get("labour"), "—"), _gbp_or(r.get("unit"), "—"),
+                     ("—" if not _at_one or not _money(r.get("unit"))
+                      else f"{(_money(r['unit']) / _at_one - 1) * 100:+.0f}%")]
+                    for r in _qs_rows], numeric={0, 1, 2, 3, 4}))
+        _saved = [str(v) for v in ((quantity_sweep or {}).get("variants") or [])]
+        # THE QUANTITIES THIS RUN ACTUALLY COSTED, NOT AN ILLUSTRATIVE 500.
+        #
+        # James Gray, 18 Sep 2026: "It discusses 500-off although this job was tested at 1 and
+        # 3." The prose carried 500 as a rhetorical example from whichever job it was written
+        # for, and an estimator reading a note about their own job has no way to know that --
+        # it reads as a quantity somebody priced. The sentence says the same thing using the
+        # breaks in front of them.
+        _q_lo = _fmt(_qs_rows[0].get("quantity")) if _qs_rows else str(_base)
+        _q_hi = _fmt(_qs_rows[-1].get("quantity")) if _qs_rows else str(_base)
+        add(f"<p>{_plural(len(_qs_rows), 'quantity')} priced from this one estimate by "
+            f"recalculating the sheet, not by re-running the job — a blank is a blank at "
+            f"{_q_lo} off and at {_q_hi}, and re-reading the drawings once per quantity "
+            f"would take hours to produce the same geometry. "
+            + (f"{_plural(len(_saved), 'workbook')} filed alongside this one, one per "
+               f"quantity, each opening on a page that says what it is. "
+               if _saved else
+               # NOT SILENCE WHEN NO COPIES WERE FILED. The sentence used to vanish, and an
+               # absent sentence about other quantities reads as "there are none" — which is
+               # the opposite of what one workbook carrying all of them means. Say where
+               # they are instead.
+               "Every quantity is in THIS workbook: the Material Price Break tab prices each "
+               "line across the breaks, and the Estimate sheet follows whatever order "
+               "quantity is in D6. No separate copies are filed. ")
+            # SAY ONLY WHAT THE SHEET ACTUALLY CARRIES. With freight at £0 this claimed
+            # the larger quantities were "overstated by the freight", and with every
+            # bought-in unpriced it promised discounts that exist nowhere — two caveats
+            # about money that is not on the sheet.
+            + ("Packaging and delivery are re-priced at each quantity: they are worked out "
+               "for the whole order and divided by it, so the pallet does not ride on every "
+               "unit. "
+               if (quantity_sweep or {}).get("freight_repriced") else
+               ("<b>Packaging and delivery are still priced at the baseline quantity</b> on "
+                "these lines, so the larger quantities are overstated by the freight. "
+                if any(_money(v) for v in ((quantity_sweep or {})
+                                           .get("freight_on_sheet") or {}).values()) else
+                "<b>Packaging and delivery are unpriced (£0) at every quantity</b> — the "
+                "estimator's own per-order figures go in before any of these is quoted. "))
+            + ((f"<b>Bought-in prices do not step down</b> — the template's quantity "
+                f"price-break lookup is overwritten with a fixed price, so every bought-in "
+                f"line costs the same at {_q_hi} off as at {_q_lo}. Treat the larger quantities as the "
+                f"top of the range and the shape of the curve as sound; the quantity you "
+                f"intend to quote should be run properly.</p>")
+               if any(_r.get("block") == "bom" and _money(_r.get("total_value_gbp"))
+                      for _r in material_rows) else
+               "The quantity you intend to quote should be run properly.</p>"))
+
+    # 2 ─ THE FABRICATED MATERIAL, EVERY BLOCK OF IT.
+    #
+    # This rendered the STEEL block and called everything else "bought-in and commercial",
+    # a figure it computed as (material total - steel). On 12349-02 that headed section 3
+    # with GBP 69.99 over rows adding to GBP 39.28: the acrylic and the MDF are in the
+    # sheet's OTHER SHEET MATERIAL block, which nothing here drew, so GBP 30.71 of material
+    # was in the note's arithmetic and on none of its lines — in a document whose first
+    # sentence promises every figure is read from the workbook's own cells.
+    #
+    # Every block the sheet has, each with its own subtotal, and the four reconciled against
+    # Total Material Cost underneath. A residual is stated rather than absorbed.
+    _BLOCK_TITLES = [
+        ("steel", "Sheet steel", True),
+        ("other_sheet", "Other sheet material — acrylic, MDF, board", True),
+        ("tube", "Tube and section", False),
+    ]
+    _fab_total = 0.0
+    _fab_present = [(b, t, n) for b, t, n in _BLOCK_TITLES
+                    if any(r.get("block") == b for r in material_rows)]
+    if _fab_present:
+        add("<h3>2. The material we cut, block by block</h3>")
+        if any(n for _, _, n in _fab_present):
+            add("<p><b>Priced by nest, not by area.</b> Each line in the nested blocks "
+                "below is<br><code>ROUNDUP(sheet price ÷ how many nest per sheet, 2) × qty "
+                "× 1.04 scrap</code><br>There is no per-piece figure on the sheet — please "
+                "don't divide these back out.</p>")
+        for _block, _title, _nested in _fab_present:
+            _rows_b = [r for r in material_rows if r.get("block") == _block]
+            _sub = round(sum(_money(r.get("total_value_gbp")) or 0 for r in _rows_b), 2)
+            _fab_total += _sub
+            add(f"<p><b>{_e(_title)} — {_gbp(_sub)}</b></p>")
+            _srows = []
+            for r in sorted(_rows_b, key=lambda r: -(_money(r.get("total_value_gbp")) or 0)):
+                _code = str(r.get("description") or "").split(" ")[0].strip().upper()
+                _rec = scan.get(_code) or {}
+                # THE SHEET'S OWN CELLS, not the AI Material Detail tab. Those are two
+                # records of one fact and they differ — the detail tab holds the engine's
+                # blank-area figure, this holds what the estimate was actually built from.
+                _blank = (f"{_fmt(r.get('length_mm'))} × {_fmt(r.get('width_mm'))}"
+                          if r.get("length_mm") else "—")
+                _srows.append([
+                    str(r.get("description") or "—"), _blank,
+                    _fmt(r.get("gauge") or r.get("thickness_mm")
+                         or _rec.get("normalized_thickness_mm")),
+                    _fmt(r.get("qty_per_unit")), _fmt(r.get("qty_per_sheet")),
+                    _gbp_or(r.get("total_value_gbp"), "—"),
+                    _drawing_no(_rec), _where(_rec, pack, page_index),
+                ])
+            add(_table(["Part", "Blank mm", "Ga", "Qty", "Nest/sheet", "£ line total",
+                        "Drawing no.", "Which drawing files and pages"],
+                       _srows, numeric={3, 4, 5}))
+
+    # 3 ─ bought-in and commercial, from the same record as everything else
+    _bom_rows = [r for r in material_rows if r.get("block") == "bom"]
+    _bom_total = round(sum(_money(r.get("total_value_gbp")) or 0 for r in _bom_rows), 2)
+    if _bom_rows or bom:
+        add(f"<h3>3. Bought-in and commercial — {_gbp(_bom_total if _bom_rows else _bought_total)}</h3>")
+        _brows = []
+        _src_by_code = {str(r.get("code") or "").upper(): r for r in bom}
+        for r in sorted(_bom_rows or [], key=lambda r: -(_money(r.get("total_value_gbp")) or 0)):
+            _code = str(r.get("part_code") or "").strip()
+            _rec = scan.get(_code.upper()) or {}
+            _srow = _src_by_code.get(_code.upper())
+            _brows.append([
+                _code or "—", str(r.get("description") or "—"),
+                _fmt(r.get("qty_per_unit")), _gbp_or(r.get("unit_price_gbp"), "—"),
+                _gbp_or(r.get("total_value_gbp"), "0.00"),
+                (_price_source(_srow, provenance, scan, record=record_lines) if _srow else "")
+                or str(r.get("supplier") or "") or "source not named on the sheet",
+                # THE DRAWING NUMBER, then the files. The header carries both columns and the
+                # fallback path below fills both; this read-back path emitted only the file
+                # list, so it landed one column left — under "Drawing no." — and "Which
+                # drawing files and pages" came out empty. Eight headers need eight cells.
+                _drawing_no(_rec),
+                _where(_rec, pack, page_index),
+            ])
+        if not _bom_rows:
+            # Pre-read-back fallback: the workbook scan, as before.
+            for row in sorted(bom, key=lambda r: -((_money(r.get("price")) or 0)
+                                                   * (_money(r.get("qty")) or 0))):
+                if _is_costed_in_a_block(row.get("text")):
+                    continue
+                _u, _q = _money(row.get("price")), _money(row.get("qty"))
+                _rec = scan.get(str(row.get("code") or "").upper()) or {}
+                _brows.append([
+                    row.get("code") or "—", _description(row), _fmt(row.get("qty")),
+                    _gbp_or(_u, "—"),
+                    _gbp_or(round(_u * _q, 2) if _u and _q else None, "0.00"),
+                    _price_source(row, provenance, scan, record=record_lines)
+                    or "source not named on the sheet",
+                    # THE NUMBER OFF THE TITLE BLOCK, not just the file it is printed in.
+                    # Section 2 carried this and these two did not, so a reader checking a
+                    # bought-in line or an operation had the filename and had to open it to
+                    # learn which drawing it is. Blank on a line with no drawing of its own,
+                    # which is most bought-ins and is the honest answer for them.
+                    _drawing_no(_rec),
+                    _where(_rec, pack, page_index),
+                ])
+        add(_table(["Line", "What it is", "Qty", "£/ea", "£ ext", "Source",
+                    "Drawing no.", "Which drawing files and pages"],
+                   _brows, numeric={2, 3, 4}))
+        if _market:
+            _one = len(_market) == 1
+            add(f"<p><b>{len(_market)} of those lines "
+                f"{'is a researched market price' if _one else 'are researched market prices'} "
+                f"rather than "
+                f"{'a catalogue price' if _one else 'catalogue prices'} — {_gbp(_market_gbp)}"
+                f"{'' if _one else ' between them'}.</b> "
+                f"{'It moves' if _one else 'They move'} between runs, so an estimate "
+                f"resting on {'it' if _one else 'them'} cannot be reproduced.</p>")
+        if _house:
+            _one = len(_house) == 1
+            add(f"<p><b>{len(_house)} of those lines "
+                f"{'is priced on an SDI house rate' if _one else 'are priced on SDI house rates'}"
+                f" marked INDICATIVE — {_gbp(_house_gbp)}"
+                f"{'' if _one else ' between them'}.</b> "
+                f"{'It is' if _one else 'They are'} configured, so {'it' if _one else 'they'} "
+                f"reproduce between runs; verify against a supplier or plater quote, or "
+                f"accept deliberately.</p>")
+
+    # ── HOW PACKAGING AND DELIVERY WERE WORKED OUT ────────────────────────────────
+    #
+    # "change the e-mail to include a detailed computational description of the delivery and
+    # palleting costs also please."
+    #
+    # On 11908-21 these two were £160 of a £249 unit — 64%, against £3.74 of MDF — and the
+    # note said only that they were market indications. An estimator could see THAT the
+    # number was wrong and had nothing to argue with. The shipment the engine described is
+    # what the market was asked to price, so the shipment is what has to be shown: every part
+    # it weighed, the density it used, what it came to, and whether that made it a parcel or
+    # a pallet. A description that says "about 49 kg" for a 2.3 kg tray then names the part
+    # carrying the other 46 kg, instead of hiding it in a total.
+    _commercial = [c for c in (g["scan_doc"] or {}).get("commercial_lines", [])
+                   if isinstance(c, dict)] if isinstance(g["scan_doc"], dict) else []
+    if _commercial:
+        add("<h4>How packaging and delivery were worked out</h4>")
+        _basis = next((c.get("basis") for c in _commercial
+                       if isinstance(c.get("basis"), dict)), {}) or {}
+        _counted = [r for r in (_basis.get("counted_parts") or []) if isinstance(r, dict)]
+        if _counted:
+            add(_table(["Part", "Blank mm", "Ga", "Material", "kg/m³", "Qty/unit",
+                        "kg each", "kg in the order"],
+                       [[r.get("part_number") or "—",
+                         f"{_fmt(r.get('length_mm'))} × {_fmt(r.get('width_mm'))}",
+                         _fmt(r.get("thickness_mm")), _fmt(r.get("material")),
+                         _fmt(r.get("density_kg_m3")), _fmt(r.get("per_assembly")),
+                         _fmt(r.get("kg_each")), _fmt(r.get("kg_in_order"))]
+                        for r in _counted], numeric={2, 4, 5, 6, 7}))
+        _skipped = _basis.get("parts_without_a_blank")
+        _phantom = _basis.get("parts_with_an_impossible_blank")
+        _size = _basis.get("largest_part_mm") or []
+        add(f"<p>That is <b>{_fmt(_basis.get('order_weight_kg'))} kg</b> for the whole order"
+            + (f", largest panel {_fmt(_size[0])} × {_fmt(_size[1])} mm" if len(_size) == 2
+               else "")
+            + f", from {_plural(_basis.get('parts_measured') or 0, 'part')} the engine could "
+              f"measure"
+            + (f"; {_plural(_skipped, 'part')} had no blank to weigh" if _skipped else "")
+            + (f"; <b>{_plural(_phantom, 'part')} were left out because the blank recorded "
+               f"for them fits no sheet the material is stocked in</b> — that is a defect "
+               f"upstream, not a gap in the drawings" if _phantom else "")
+            + ". Weight is blank area × gauge × the material's density, times how many are "
+              "made. It decides the next line.</p>")
+        # WHAT WAS LEFT OUT, BY NAME. A unit weight that comes up short against the title
+        # block is a part that was not weighed, and a tally of "2 parts had no blank" cannot
+        # tell anybody which. Named, it is one line for design to answer.
+        _out = [r for r in (_basis.get("left_out_parts") or []) if isinstance(r, dict)]
+        _out = [r for r in _out if "weighed through its children" not in str(r.get("reason"))]
+        if _out:
+            add(f"<p><b>Not weighed.</b> "
+                + "; ".join(f"{_fmt(r.get('part_number') or r.get('description'))} "
+                            f"({_fmt(r.get('reason'), 'no reason recorded')})"
+                            for r in _out[:12])
+                + (f"; and {len(_out) - 12} more" if len(_out) > 12 else "")
+                + ". If the unit weight above is lighter than the title block, these are the "
+                  "parts carrying the difference.</p>")
+        try:
+            from commercial_lines import shipment_shape as _shape
+            _sh = _shape(_basis)
+        except Exception:                                        # noqa: BLE001
+            _sh = ""
+        _plan = _basis.get("shipment") or {}
+        if _sh:
+            add(f"<p><b>Priced as a {_sh}.</b> "
+                + ("One carton a person can lift and a courier will take, so it was asked "
+                   "for as a parcel rather than palletised haulage."
+                   if _sh == "parcel" else
+                   f"{_plural(_plan.get('carton_count') or 0, 'carton')} on "
+                   f"{_plural(_plan.get('pallet_count') or 0, 'pallet')}, so it was asked "
+                   f"for as palletised haulage.")
+                + " Both descriptions used to say <i>a pallet</i> whatever the order was — "
+                  "which is how a 2.3 kg tray came back at £95 to box and £65 to deliver. "
+                  "The lookup answers the question it is asked.</p>")
+        add(_table(["Line", "Asked for", "£ for the order", "÷ units", "£/unit"],
+                   [[c.get("code") or "—", str(c.get("described_as") or "")[:120],
+                     _gbp_or(c.get("order_gbp"), "—"),
+                     _fmt(c.get("order_quantity")), _gbp_or(c.get("unit_gbp"), "—")]
+                    for c in _commercial], numeric={2, 3, 4}))
+
+    # DOES THE MATERIAL ADD UP. The claim that makes the rest worth reading, and the one a
+    # reader can check without leaving the message.
+    _mat_sheet = _money(totals.get("material"))
+    if _mat_sheet is not None and material_rows:
+        _lines_total = round(_fab_total + _bom_total, 2)
+        _gap = round(_mat_sheet - _lines_total, 2)
+        add(f"<p><b>Material reconciliation.</b> The blocks above come to "
+            f"{_gbp(_lines_total)} against the sheet's Total Material Cost of "
+            f"{_gbp(_mat_sheet)}"
+            # A PENNY IS ROUNDING, NOT A MISSING BLOCK. Each row is read at two decimals
+            # and the sheet sums the unrounded cells, so a £0.01 gap is arithmetic. Saying
+            # "a block was not read back" about a penny sent 7332-01's reader hunting for
+            # a block that was on the page.
+            + (f" — they agree.</p>" if abs(_gap) < 0.005 else
+               f" — they agree to the penny ({_gbp(abs(_gap))} of rounding across the "
+               f"rows).</p>" if abs(_gap) <= 0.02 else
+               f", a difference of {_gbp(abs(_gap))}. That difference is on the sheet and "
+               f"on no line here, which means a block was not read back. Treat the sheet's "
+               f"figure as the total.</p>"))
+
+    # 4 ─ labour
+    if labour_rows:
+        # HEADED WITH THE SHEET'S OWN TOTAL, NOT THE SUM OF THE ROWS BELOW IT. Those are two
+        # different numbers whenever a row could not be read back, and a note whose section 4
+        # contradicts its section 1 is worse than one that admits the gap: the reader stops
+        # trusting both figures rather than the one that is short.
+        _lab_sheet = _money(totals.get("labour"))
+        add(f"<h3>4. Labour — {_gbp(_lab_sheet if _lab_sheet is not None else labour['total'])}"
+            f" across {labour['rows']} sheet rows</h3>")
+        _lrows = [[str(r.get("operation") or r.get("description") or "—"),
+                   str(r.get("description") or "—"),
+                   r.get("department") or "—",
+                   _fmt(r.get("setup_minutes")), _fmt(r.get("batch_hours")),
+                   _gbp_or(r.get("dept_rate_gbp_per_hour"), "—"),
+                   _gbp_or(r.get("total_value_gbp"), "—")]
+                  for r in sorted(labour_rows,
+                                  key=lambda r: -(_money(r.get("total_value_gbp")) or 0))]
+        add(_table(["Operation", "What it covers", "Dept", "Set-up min", "Batch hrs",
+                    "£/hr", "£"], _lrows, numeric={3, 4, 5, 6}))
+        if labour["known"] and labour["setup"]:
+            add(f"<p><b>About {_gbp(labour['setup'])} of the {_gbp(labour['total'])} in this "
+                f"table is set-up</b>, all of it landing on {_plural(order_qty, 'item')}. "
+                f"Run time is "
+                f"{_gbp(labour['run'])}. That is the quantity story in one line: raise the "
+                f"order and the set-up spreads while the run time stays put. Say the word "
+                f"and I'll run a larger quantity properly rather than project it.</p>")
+        if _lab_sheet is not None and abs(_lab_sheet - labour["total"]) >= 0.01:
+            add(f"<p><b>The rows above come to {_gbp(labour['total'])} against the sheet's "
+                f"{_gbp(_lab_sheet)}</b> — {_gbp(round(abs(_lab_sheet - labour['total']), 2))} "
+                f"of labour is on the sheet and not in this table, because the read-back could "
+                f"not resolve every row. Treat the sheet's figure as the total and this table "
+                f"as most of the detail behind it.</p>")
+
+    # 5 ─ what needs a person
+    if needs_a_person:
+        add(f"<h3>5. {_plural(len(needs_a_person), 'line')} that need you</h3>")
+        _nrows = []
+        for row in sorted(needs_a_person,
+                          key=lambda r: -((_money(r.get("price")) or 0)
+                                          * (_money(r.get("qty")) or 0))):
+            _u, _q = _money(row.get("price")), _money(row.get("qty"))
+            _is_market = row in _market
+            _is_house = row in _house
+            _label = str(((_record_line(record_lines, row) or {}).get("price_origin")
+                          or {}).get("label") or "")
+            _nrows.append([
+                row.get("code") or "—", _description(row),
+                _gbp_or(round(_u * _q, 2) if _u and _q else None, "£0.00"),
+                ("A researched market price, not a catalogue price. Replace it, or accept "
+                 "it deliberately." if _is_market else
+                 f"An SDI house rate marked INDICATIVE — verify it, or accept it "
+                 f"deliberately. {_label}".strip() if _is_house else
+                 "The line is costing nothing — nothing we can query holds a rate for this."),
+                _where(scan.get(str(row.get("code") or "").upper()) or {}, pack, page_index),
+            ])
+        add(_table(["Line", "What it is", "On the sheet now", "What's needed",
+                    "Which drawing files and pages"], _nrows, numeric={2}))
+        if _market:
+            # WHAT IS WANTED, IN THE WORDS OF THE PERSON BEING ASKED. This said "Overwrite
+            # anything tagged AI ESTIMATE — INDICATIVE, NOT A QUOTE", which quotes the
+            # workbook's own internal marker at an estimator as though it were an instruction
+            # from the machine. What they actually need to know is that these lines need a
+            # CURRENT SOURCE — SDI Live, a supplier, or a researched price with its date —
+            # and that the sheet follows once one is in.
+            add("<p>These lines need a current source — SDI Live, a supplier price, or a "
+                "researched figure with its date. Enter it against the line and the sheet "
+                "recalculates.</p>")
+        else:
+            add("<p>Enter a figure against any line above and the sheet recalculates.</p>")
+    if _mfg:
+        # THE DECISIONS, NOT JUST THE PRICES. The report leads with these and the quote
+        # counts them in its draft strip; a note that listed only the unpriced lines told
+        # Tim there was nothing else to decide. From the record, in the report's words.
+        if not needs_a_person:
+            add(f"<h3>5. {_plural(len(_mfg), 'decision')} that need you</h3>")
+        else:
+            add(f"<h4>And {_plural(len(_mfg), 'manufacturing decision')} still open</h4>")
+        add(_table(["Decision", "Part", "Current assumption", "Action", "£ at stake"],
+                   [[str(d.get("issue") or ""), str(d.get("part") or "—"),
+                     str(d.get("assumption") or ""), str(d.get("action") or ""),
+                     _gbp_or(d.get("gbp_at_stake"), "—")] for d in _mfg], numeric={4}))
+        add("<p>The finish this price contains: <b>"
+            f"{_e((record or {}).get('finishes_charged') or 'none charged')}</b>.</p>")
+
+    # 6 ─ every operation, and who decided it
+    #
+    # THE ROUTE IS HALF THE ESTIMATE AND IT WAS NOT IN THE NOTE AT ALL. Section 4 says what
+    # the labour costs; this says what we think the shop actually does to each part and on
+    # whose authority — drawn, inferred, or read by a model. An operation nobody drew is the
+    # cheapest thing on the sheet to strike out and the easiest to miss.
+    if g["routes"]:
+        # AN OPERATION WE RULED OUT IS NOT AN OPERATION. The table listed both together and
+        # counted them in one number, so 11908-21 read "16 lines" over rows that include
+        # "folding — the part does not fold" and "laser_cutting — assembly parent has no
+        # independently measured fabricated leaf". Neither is done, neither is charged, and a
+        # laser row against an MDF tray is the kind of thing that loses a reader's trust in
+        # the fifteen rows that ARE right.
+        #
+        # Both are worth printing — a ruled-out operation with its reason is how somebody
+        # checks we did not miss one — but they are different questions and go in different
+        # tables. An applied operation carries a quantity; a ruling has none.
+        _applied = [r for r in g["routes"] if _money(r.get("Qty/unit")) is not None]
+        _ruled_out = [r for r in g["routes"] if _money(r.get("Qty/unit")) is None]
+        add(f"<h3>6. Every operation, and who decided it — "
+            f"{_plural(len(_applied), 'line')}</h3>")
+        _rrows = []
+        for row in _applied:
+            _rec = scan.get(str(row.get("Target") or "").upper(), {})
+            _rrows.append([
+                _fmt(row.get("Target")), _fmt(row.get("Operation")), _fmt(row.get("Seq")),
+                _fmt(row.get("Scope")), _fmt(row.get("Qty/unit")), _fmt(row.get("Source")),
+                str(row.get("Reason") or "—"), _drawing_no(_rec),
+                _where(_rec, pack, page_index),
+            ])
+        add(_table(["Part", "Operation", "Seq", "Scope", "Qty", "Decided by",
+                    "On what basis", "Drawing no.", "Which drawing files and pages"], _rrows,
+                   numeric={2, 4}))
+        _inferred = [r for r in _applied
+                     if "infer" in str(r.get("Source") or "").lower()]
+        if _inferred:
+            add(f"<p><b>{_plural(len(_inferred), 'operation')} inferred rather than drawn</b> "
+                f"— {', '.join(sorted({str(r.get('Operation') or '?') for r in _inferred}))}. "
+                f"Confirm them or tell me to drop them.</p>")
+
+        if _ruled_out:
+            add(f"<p><b>{_plural(len(_ruled_out), 'operation')} ruled out</b>, with the "
+                f"reason. Nothing here is done or charged; it is printed so somebody can "
+                f"check we did not rule out something we should be doing.</p>")
+            add(_table(["Part", "Operation", "Why it is not done", "Decided by"],
+                       [[_fmt(r.get("Target")), _fmt(r.get("Operation")),
+                         str(r.get("Reason") or "—"), _fmt(r.get("Source"))]
+                        for r in _ruled_out]))
+
+    # 7 ─ the drawing pack, in full
+    add("<h3>7. The drawing pack</h3>")
+    # WHAT THE PACK COST US, SAID OUT LOUD. James's rule: when the engine has to code
+    # around a pack — a drawing export staged as a flat, a stray file, a BOM line with no
+    # drawing — the e-mail says so, or the drawing office never hears it and every pack
+    # costs another engine fix. Evidence-only, from the record's one list.
+    try:
+        from costed_facts import pack_shortfalls as _psf
+        _shortfalls = _psf(g.get("scan_doc") or {})
+    except Exception:                                            # noqa: BLE001
+        _shortfalls = []
+    if _shortfalls:
+        add(f"<p><b>{_plural(len(_shortfalls), 'pack issue')} the engine had to work "
+            f"around.</b> These are the pack's, not the estimate's — each was handled, "
+            f"but a cleaner pack removes the risk entirely:</p>")
+        add("<ul>" + "".join(f"<li>{_e(s)}</li>" for s in _shortfalls[:8]) + "</ul>")
+    _sheets = sorted({int(p) for rec in scan.values() for p in (rec.get("pages") or [])
+                      if isinstance(p, (int, float))})
+    if _sheets:
+        add(f"<p>{_plural(len(pack) or 1, 'document')}, p.1–p.{max(_sheets)}. "
+            f"{_plural(len([r for r in scan.values() if r.get('pages')]), 'costed part')} "
+            f"traced to a sheet of their own.</p>")
+
+    # Sheet by sheet — refused outright rather than answered wrongly from a trimmed extract.
+    if scan and not _pack_was_read_in_full(scan):
+        add("<p><b>Drawing quality, sheet by sheet: not produced.</b> This ran against a "
+            "trimmed extract carrying only part numbers and page numbers. Reporting from it "
+            "would have said every drawing states no material, no thickness and no finish — "
+            "which is false. Re-run against the full job JSON and this builds itself.</p>")
+    elif scan:
+        add("<p><b>Drawing quality, sheet by sheet.</b></p>")
+        _qrows = []
+        for code, rec in sorted(scan.items(),
+                                key=lambda kv: ((kv[1].get("pages") or [999])[0], kv[0])):
+            if not (rec.get("pages") or []):
+                continue
+            _rel = ((rec.get("geometry_rollup") or {}).get("confidence") or {}).get(
+                "geometry_reliability")
+            _qrows.append([
+                _where(rec, pack, page_index), code or _fmt(rec.get("description")),
+                _drawing_no(rec),
+                _material_stated(rec),
+                _gauge_stated(rec),
+                ", ".join(str(f) for f in rec.get("surface_finishes") or []) or "no",
+                (f"{_fmt(rec.get('geometry_source'))}"
+                 + (f" ({_rel:.0%})" if isinstance(_rel, (int, float)) else "")),
+                ", ".join(_what_a_sheet_could_not_give(rec)) or "nothing — complete",
+            ])
+        add(_table(["Which drawing files and pages", "Part", "Drawing no.",
+                    "Material stated", "Thickness stated", "Finish stated", "Geometry",
+                    "What it could not give"], _qrows))
+
+    # Drawings the pack does not contain, and whether that costs anything.
+    _no_sheet = _missing_drawings(bom, scan, g["steel"], material, record=record_lines)
+    if _no_sheet:
+        _bites = [n for n in _no_sheet if n["cut"] or not n["priced"]]
+        add(f"<p><b>{_plural(len(_no_sheet), 'line')} with no sheet of their own"
+            + (f", of which {len(_bites)} "
+               f"{'affects' if len(_bites) == 1 else 'affect'} the price."
+               if _bites else
+               ". None of them affects the price — "
+               + _what_they_are(_no_sheet)
+               + ", none of which would carry a detail drawing on a complete pack.")
+            + "</b></p>")
+        if _bites:
+            add(_table(["Line", "What it is", "£ on this job", "Does the missing sheet bite?"],
+                       [[n["code"] or "—", n["desc"], _gbp_or(n["gbp"], "no price"),
+                         ("Yes — section stock priced by length, with no drawing of its own "
+                          "to take the profile and cut length from"
+                          if n.get("section") else
+                          "Yes — we cut this part and had no drawing of it to size it from"
+                          if n["cut"] else
+                          "Yes — it has no price and no sheet to read one from")]
+                        for n in _bites], numeric={2}))
+
+    if untraced:
+        _at_stake = round(sum(u["gbp"] or 0 for u in untraced), 2)
+        add(f"<p><b>{_plural(len(untraced), 'part number')} could not be followed from the "
+            f"BOM through to a drawing or a flat of its own"
+            + (f", carrying {_gbp(_at_stake)} between them" if _at_stake else "")
+            + ".</b> Each was still costed, from whatever the engine could reach — the last "
+              "column says what it used instead. Where the break is ours we will fix the "
+              "reader; where it is the pack's, this is the list for Design.</p>")
+        add(_table(["Part", "Drawing no.", "What it is", "£ on this job", "Blank used",
+                    "Which drawing files and pages", "Where the trail broke"],
+                   [[u["code"], u.get("drawing_no") or "—", u["description"] or "—",
+                     _gbp_or(u["gbp"], "—"), u["blank"] or "—", u["where"],
+                     "; ".join(u["why"])]
+                    for u in untraced], numeric={3}))
+    else:
+        add("<p>Every costed part traced from the BOM through to a drawing or a flat of its "
+            "own. Nothing here for Design.</p>")
+
+    # Sheets nothing claimed. Derived from the pages the parts themselves name, so a gap is
+    # "no costed part was traced to this sheet", never "the PDF is short".
+    if _sheets:
+        _gaps = [p for p in range(1, max(_sheets) + 1) if p not in _sheets]
+        add(f"<p>Within p.1–p.{max(_sheets)}, "
+            + (f"<b>no costed part was traced to "
+               f"{', '.join(f'p.{p}' for p in _gaps)}</b>. Those are usually the cover, the "
+               f"general arrangement and the BOM table, which own no part of their own — but "
+               f"they are also where a part would hide if its drawing were read and never "
+               f"joined to a cost, so they are named rather than assumed harmless."
+               if _gaps else
+               "every sheet is claimed by at least one costed part.") + "</p>")
+
+    # 8 ─ ours, not yours
+    #
+    # ONLY WHAT WE CAN ACTUALLY OWN. This listed every break in section 6 and called them all
+    # engine defects, which is a claim the engine is not in a position to make: a part with no
+    # sheet in the pack may be our reader or may be a drawing nobody issued. So it names the
+    # SUBSTITUTIONS — a size the engine reached for when it had no measurement — because those
+    # are ours whatever the pack looks like, and leaves the rest in section 6 for us to settle
+    # between us.
+    _substituted = [u for u in untraced
+                    if any(w in _UNTRACED_GEOMETRY.values() for w in u["why"])]
+    _ours = [f"{u['code']} — {u['why'][0]}"
+             + (f" ({_gbp(u['gbp'])} on this job)" if u["gbp"] else "")
+             for u in _substituted[:6]]
+    if _ours:
+        add("<h3>8. Ours, not yours</h3>")
+        add("<p>Where the engine had no measurement it used something else rather than "
+            "leaving the line blank. Each of these is a substitution we made, and ours to "
+            "fix — nothing here needs anything from you:</p>")
+        add("<ul>" + "".join(f"<li>{_e(o)}</li>" for o in _ours) + "</ul>")
+
+    _scan_doc_rid = g.get("scan_doc") if isinstance(g.get("scan_doc"), dict) else {}
+    _rid = str(_scan_doc_rid.get("run_id") or "")
+    if _rid:
+        add(f'<p style="color:#5b6b7d;font-size:12px;margin-top:14px">Run '
+            f'<code>{_e(_rid)}</code> &middot; quantity {order_qty} &middot; unit '
+            f'{_e(_gbp(totals.get("unit")))} — every attachment above carries this run.</p>')
+    add(f'<p style="color:#5b6b7d;font-size:12px;margin-top:18px">Produced by SDI '
+        f'Intelligence{" for " + _e(client) if client else ""}. '
+        f'The full line-by-line document is the <b>AI Explanation</b> tab in the attached '
+        f'workbook and {_report_section("explained")} of the report — every row with the drawing page it came '
+        f'from, which reader decided it, and what it charges.</p>')
+    # ── WHAT NEEDS YOUR EYE ───────────────────────────────────────────────────────
+    #
+    # "do we highlight what the estimators should be focussing on? or is that littered
+    # across the e-mail with the details?"
+    #
+    # Littered. §5 held the unpriced lines, §3 the indicative prices and the freight, §6 the
+    # parts that could not be traced and the pack's own failures, §7 the substitutions — so
+    # assembling the list of things that actually need a person meant reading all eight
+    # sections and keeping score. An estimator with eleven enquiries open does not do that;
+    # they read the number, glance down, and file it.
+    #
+    # So the list is assembled here and put at the TOP, ordered by the money each item moves.
+    # Built LAST, from the same values the sections were built from, so it cannot say
+    # something the body of the message contradicts — the failure this whole document exists
+    # to avoid. It points at the section rather than restating it: one line each, the money
+    # at stake, and where to look.
+    #
+    # It says so when there is nothing, too. "Nothing here needs you" is a finding, and an
+    # absent panel reads as an unwritten one.
+    _focus: List[tuple] = []                                 # (£ at stake, html)
+
+    # WHAT WAS PRICED COMES BEFORE HOW MUCH. A run given the wrong Drawing Number prices a
+    # different product in full confidence (11650-02, 23 Sep 2026: the cabinet top, with the
+    # kit set aside), so the product and what was left out lead the list, above any money.
+    try:
+        from route_compiler import product_scope_sentences as _pss
+        import html as _html_mod
+        for _k, _line in enumerate(_pss(g.get("scan_doc"))):
+            _focus.append((20_000_000.0 - _k, _html_mod.escape(_line)))
+    except Exception:                                                # noqa: BLE001
+        pass
+
+    _unpriced_n = len(_unpriced)
+    if _unpriced_n:
+        _focus.append((10_000_000.0, (                       # no price is the top of any list
+            f"<b>{_plural(_unpriced_n, 'line')} "
+            f"{'carries' if _unpriced_n == 1 else 'carry'} no price.</b> "
+            f"{'It sums' if _unpriced_n == 1 else 'They sum'} as free, so the unit cost above "
+            f"is understated by whatever {'it is' if _unpriced_n == 1 else 'they are'} worth. "
+            f"§5 lists {'it' if _unpriced_n == 1 else 'them'}.")))
+    # THE SAME SUM §3 PRINTS. This summed unit prices (£16.03 on 7332-01) while §3 summed
+    # price × qty (£16.63); both now read the record's extended figure.
+    if _market:
+        _focus.append((_market_gbp, (
+            f"<b>{_plural(len(_market), 'line')} priced from a market indication</b>, "
+            f"{_gbp(_market_gbp)} in total — a figure to check against a supplier, not a "
+            f"quotation. §5.")))
+    if _house:
+        _focus.append((_house_gbp, (
+            f"<b>{_plural(len(_house), 'line')} priced on an SDI house rate marked "
+            f"INDICATIVE</b>, {_gbp(_house_gbp)} in total — configured and reproducible; "
+            f"verify against a supplier or plater quote. §5.")))
+    # THE MANUFACTURING DECISIONS, EACH ON ITS OWN LINE. The report puts them first and the
+    # quote counts them; the panel that says "what needs your eye" cannot leave them out.
+    for d in _mfg:
+        _at = _money(d.get("gbp_at_stake")) or 0.0
+        _action = str(d.get("action") or "")
+        _action = _action[:1].upper() + _action[1:]      # not .capitalize(): "GA" stays "GA"
+        _focus.append((_at, (
+            f"<b>{_e(str(d.get('issue') or 'A manufacturing decision is open'))}.</b> "
+            f"{_e(str(d.get('assumption') or ''))}. "
+            f"{_e(_action)}"
+            + (f" — {_gbp(_at)} rides on it." if _at else ".") + " §5.")))
+    _freight_gbp = round(sum(_money(c.get("unit_gbp")) or 0 for c in _commercial), 2)
+    _unit_gbp = _money(totals.get("unit")) or 0
+    if _freight_gbp and _unit_gbp:
+        _pc = _freight_gbp / _unit_gbp * 100
+        _focus.append((_freight_gbp, (
+            f"<b>Packaging and delivery are {_gbp(_freight_gbp)} a unit — "
+            f"{_pc:.0f}% of the price.</b> Asked of the market against the shipment "
+            f"described in §3, where the whole working is shown. "
+            + ("Worth a look at that weight before it goes out." if _pc >= 25 else
+               "The arithmetic is under §3."))))
+    if untraced:
+        _focus.append((5.0, (
+            f"<b>{_plural(len(untraced), 'part')} could not be traced through the drawing "
+            f"pack.</b> Each one is a figure resting on less evidence than the rest. §6 names "
+            f"them and says what was missing.")))
+    _adapter = [p for p in (final.get("adapter_problems") or []) if p]
+    if _adapter:
+        _focus.append((4.0, (
+            f"<b>{_plural(len(_adapter), 'row')} did not read back cleanly</b> from the "
+            f"sheet. §7.")))
+    if _qs_rows and len(_qs_rows) > 1:
+        _focus.append((3.0, (
+            "<b>Bought-in prices do not step down at quantity</b> on the price-break table "
+            "in §1, so the larger quantities are the top of the range.")))
+
+    _focus.sort(key=lambda x: -x[0])
+    _panel = ['<div style="border-left:4px solid #B8860B;padding:2px 0 2px 14px;margin:16px 0">']
+    _panel.append("<p style=\"margin:6px 0\"><b>What needs your eye</b></p>")
+    if _focus:
+        _panel.append("<ol style=\"margin:6px 0 6px 18px;padding:0\">"
+                      + "".join(f"<li style='margin:4px 0'>{t}</li>" for _, t in _focus)
+                      + "</ol>")
+        if provisional:
+            _panel.append("<p style=\"margin:6px 0\">Until those are settled this stays "
+                          "provisional and no customer quote is attached.</p>")
+    else:
+        _panel.append("<p style=\"margin:6px 0\">Nothing on this estimate is waiting on a "
+                      "person: every line carries a price the engine can stand behind, every "
+                      "part was traced through the pack, and the sheet read back cleanly. "
+                      "The sections below are the working, not a list of problems.</p>")
+    _panel.append("</div>")
+    h.insert(_focus_at, "\n".join(_panel))
+
+    add("</div>")
+    html = "\n".join(h)
+    return {"subject": subject, "html": html, "text": _as_text(html)}
+
+
+_TAG = re.compile(r"<[^>]+>")
+
+
+def _as_text(html: str) -> str:
+    """A plain-text alternative that keeps the shape. Not a general HTML renderer: it reads
+    only the markup produced above, which is why it can be this short."""
+    text = html
+    for pattern, repl in (
+            (r"</h3>", "\n"), (r"<h3[^>]*>", "\n\n"), (r"</p>", "\n"),
+            (r"</tr>", "\n"), (r"</li>", "\n"), (r"<br\s*/?>", "\n"),
+            (r"</t[dh]>", "  ")):
+        text = re.sub(pattern, repl, text)
+    text = _TAG.sub("", text)
+    text = (text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+            .replace("&quot;", '"').replace("&middot;", "·"))
+    lines = [ln.rstrip() for ln in text.splitlines()]
+    out: List[str] = []
+    for line in lines:
+        if line.strip() or (out and out[-1].strip()):
+            out.append(line)
+    return "\n".join(out).strip() + "\n"
+
+
+# ── the same document, in a shape other renderers can use ────────────────────
+#
+# PARSED BACK OUT OF THE MARKDOWN, DELIBERATELY. The obvious design is a structured
+# intermediate that both the markdown and the workbook tab render from, and it is the wrong
+# one here: it means rewriting four hundred lines of emit code that an estimator is about to
+# rely on, to gain a separation nothing yet needs. What IS needed is that the tab, the report
+# section and the email cannot drift from the document — and re-reading the document gives
+# that by construction, because there is only one document.
+#
+# This is safe to parse only because it is machine-written: every table is emitted by the
+# code above with a fixed shape, so there is no markdown here that this does not produce.
+# The moment a human is allowed to edit the text, this goes.
+
+_MD_STRIP = ("**", "`", "*")
+
+
+def plain(text: str) -> str:
+    """Markdown emphasis removed, for a renderer that has its own — a cell, or a <td>."""
+    out = str(text or "")
+    for token in _MD_STRIP:
+        out = out.replace(token, "")
+    return out.strip()
+
+
+def sections(markdown: str) -> List[Dict[str, Any]]:
+    """The document as [{title, intro, tables:[{columns, rows}], notes}].
+
+    Every string is left exactly as the document wrote it, markdown and all: a renderer that
+    wants plain text calls plain() on the cells it is placing. Stripping here would throw away
+    the emphasis the HTML report wants to keep.
+    """
+    out: List[Dict[str, Any]] = []
+    current: Optional[Dict[str, Any]] = None
+    table: Optional[Dict[str, Any]] = None
+
+    def _cells(line: str) -> List[str]:
+        return [c.strip() for c in line.strip().strip("|").split("|")]
+
+    for line in str(markdown or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            current = {"title": stripped[3:].strip(), "intro": [], "tables": [], "notes": []}
+            out.append(current)
+            table = None
+            continue
+        if current is None:
+            continue
+        if not stripped:
+            table = None
+            continue
+        if stripped.startswith("|"):
+            # The separator row carries no content — it only tells markdown a table started.
+            if set(stripped) <= set("|-: "):
+                continue
+            if table is None:
+                table = {"columns": _cells(stripped), "rows": []}
+                current["tables"].append(table)
+            else:
+                table["rows"].append(_cells(stripped))
+            continue
+        table = None
+        if stripped.startswith(">"):
+            current["notes"].append(stripped.lstrip("> ").strip())
+        else:
+            current["intro"].append(stripped)
+    return out
+
+
+def worksheet_rows(parsed: List[Dict[str, Any]]) -> List[List[str]]:
+    """The document as flat spreadsheet rows — one list of cells per sheet row.
+
+    A tab is not a document: it has no headings, no paragraphs and no emphasis, only cells.
+    So a section title becomes a row of its own, prose becomes a single wide cell, and a table
+    becomes its header row followed by its rows. Markdown is stripped, because a cell renders
+    `**£11.48**` as those characters.
+
+    Column count varies by section and that is correct — Excel does not mind, and forcing
+    every section onto the widest table's columns would put the reconciliation's five columns
+    under the bill of materials' ten.
+    """
+    out: List[List[str]] = []
+    for section in parsed:
+        if out:
+            out.append([])
+        out.append([plain(section["title"])])
+        for line in section.get("intro") or []:
+            out.append([plain(line)])
+        for table in section.get("tables") or []:
+            out.append([])
+            out.append([plain(c) for c in table["columns"]])
+            for row in table["rows"]:
+                out.append([plain(c) for c in row])
+        for note in section.get("notes") or []:
+            out.append([])
+            out.append([plain(note)])
+    return out

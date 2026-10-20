@@ -220,7 +220,26 @@ def fetch_historical_rows(conn, part_numbers: Optional[List[str]] = None) -> Lis
 def line_confidence_and_provisos(
     part: Dict[str, Any], calib_line: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
-    """One confidence figure + a provisos worklist per line, from every signal
+    """DEPRECATED FOR CONFIDENCE — use confidence.assess_part.
+
+    THE SCALAR HERE IS NOT THE AUTHORITY. This was the third confidence
+    implementation in the codebase, alongside private ladders in
+    job_decision_report and estimation_report that disagreed with each other
+    about the same part in the same file. It has no callers in the reporting
+    pipeline and must not acquire any: a fourth opinion does not resolve three,
+    and a scalar cannot say WHICH field is missing, which is the only thing an
+    estimator can act on.
+
+    confidence.assess_part reports per field — material identity, thickness,
+    geometry, route, material price, labour rate, completeness — each with its
+    own status, source and reason, and takes the WEAKEST REQUIRED field as the
+    line's status rather than averaging. Averaging is how a part with no
+    material price at all lands in the sixties and reads as partial knowledge.
+
+    The PROVISOS half is a different thing and is not superseded: it is a
+    worklist of things to tell a reader, not a claim about how much we know.
+
+    One confidence figure + a provisos worklist per line, from every signal
     we already hold. Absorbs post_scan's _learning_flag so flags and confidence
     are a single system."""
     provisos: List[str] = []

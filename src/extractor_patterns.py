@@ -50,6 +50,163 @@ def normalize_text(text: str) -> str:
     return " ".join((text or "").replace("\x00", " ").replace("\n", " ").replace("\r", " ").split())
 
 
+# ── THE SPECIFICATION LEGEND IS NOT WORK — ONE READER FOR EVERY DOOR ─────────────────────
+# document_builder learned this on 10975-02 (EPDM tape welded and powder coated from the border
+# text) and stripped the legend before ITS operation scan. The page-level scan below never did,
+# and every part takes its sheet's operations from it (part_index), so on 12173-02 (17:34 book)
+# the border's "WELD SPECIFICATION: ALL WELDS TO BE TIG UNLESS STATED" — read cleanly by OCR
+# where pdfplumber interleaves it — put Weld (CO2) and dressing on 29 parts: tab-and-slot
+# pocket sides and shelves, the rack and trough, meshes, risers, hook saddles and an MFC back.
+# The legend says HOW a weld the drawing calls up is made; it never says THAT a part is welded.
+# Vocabulary in config (SPECIFICATION_LEGEND_HEADINGS / _STOPS / SPECIFICATION_DEFAULT_SENTENCES).
+_LEGEND_DEFAULT_HEADINGS = [
+    r"(?:FINISH|WELD(?:ING)?|CHINA MATERIAL)\s+SPECIFICATIONS?\s*:", r"GENERAL TOLERANCES\s*:",
+    r"TIMBER PRODUCTS\s*:", r"GLASS:\s*NO GLASS", r"WIRING:\s*ALL ELECTRICAL"]
+_LEGEND_DEFAULT_STOPS = [
+    r"(?:FINISH|WELD(?:ING)?|CHINA MATERIAL)\s+SPECIFICATIONS?\s*:", r"GENERAL TOLERANCES\s*:",
+    r"TIMBER PRODUCTS\s*:", r"GLASS\s*:", r"WIRING\s*:", r"DRAWING\s+No", r"DRAWN\b",
+    r"CHECKED\b", r"REVISION TABLE", r"ITEM\s+DWG", r"WEIGHT\s*:", r"MATERIAL\s*:",
+    r"FINISH\s*:", r"SCALE\b", r"MAX LOADING"]
+_LEGEND_DEFAULT_SENTENCES = [
+    r"\bALL\s+WELDS?\b[^.;\n•]{0,60}?\bUNLESS\s+(?:OTHERWISE\s+)?(?:STATED|SPECIFIED|NOTED|SHOWN|INDICATED)\b",
+    r"\bRESISTANCE\s+WELDING\s+WIRE\s+TO\s+WIRE\b[^•\n]{0,80}"]
+_LEGEND_RES: Dict[str, Any] = {}
+
+
+def _legend_res():
+    if not _LEGEND_RES:
+        try:
+            import config as _cfg
+            heads = list(getattr(_cfg, "SPECIFICATION_LEGEND_HEADINGS", None) or _LEGEND_DEFAULT_HEADINGS)
+            stops = list(getattr(_cfg, "SPECIFICATION_LEGEND_STOPS", None) or _LEGEND_DEFAULT_STOPS)
+            sents = list(getattr(_cfg, "SPECIFICATION_DEFAULT_SENTENCES", None) or _LEGEND_DEFAULT_SENTENCES)
+        except Exception:                                            # noqa: BLE001
+            heads, stops, sents = _LEGEND_DEFAULT_HEADINGS, _LEGEND_DEFAULT_STOPS, _LEGEND_DEFAULT_SENTENCES
+        _LEGEND_RES["start"] = re.compile("|".join(heads), re.IGNORECASE)
+        _LEGEND_RES["stop"] = re.compile("|".join(stops), re.IGNORECASE)
+        _LEGEND_RES["sentences"] = [re.compile(x, re.IGNORECASE) for x in sents]
+    return _LEGEND_RES
+
+
+def strip_specification_legend(text: Any) -> str:
+    """The text with the specification legend removed, for OPERATION-CUE scanning only.
+
+    Two forms are removed. A legend BLOCK runs from a heading ("WELD SPECIFICATION:") to the
+    next title-block field or heading; a heading used as a stop is consumed by the next pass.
+    A DEFAULT SENTENCE ("ALL WELDS TO BE TIG UNLESS STATED") is removed wherever it stands,
+    because a read that lost the heading still reads the legend. Everything else — a view's
+    "CORNERS TO BE WELDED", a title block's "FINISH: WELDED" — is kept."""
+    s = str(text or "")
+    res = _legend_res()
+    out: List[str] = []
+    pos = 0
+    while pos < len(s):
+        m = res["start"].search(s, pos)
+        if not m:
+            out.append(s[pos:])
+            break
+        out.append(s[pos:m.start()])
+        stop = res["stop"].search(s, m.end())
+        pos = stop.start() if stop else len(s)
+    kept = " ".join(part for part in out if part)
+    for rx in res["sentences"]:
+        kept = rx.sub(" ", kept)
+    return kept
+
+
+def cites_only_specification_legend(evidence: Any) -> bool:
+    """A quoted reason that is the pack's specification legend and nothing else: a statement
+    of how, not that. "ALL WELDS TO BE TIG UNLESS STATED" for a weld (D-393); since D-403 any
+    operation — "ALWAYS REMOVE BURRS AND SHARP CORNERS" quoted for a deburr is the border's
+    standing instruction, not this sheet's note. True when the legend's default sentences and
+    blocks account for every word of the evidence."""
+    text = str(evidence or "").strip()
+    if not text:
+        return False
+    if legend_cues_set_aside(text):
+        return True
+    kept = strip_specification_legend(text)
+    for rx in _legend_res()["sentences"]:
+        kept = rx.sub(" ", kept)
+    if normalize_text(kept).upper() == normalize_text(text).upper():
+        return False                      # nothing in it was the legend ("UP 90° R 1")
+    return not re.search(r"[A-Za-z]{3,}", kept)
+
+
+def weld_process_stated(text: Any) -> Optional[Dict[str, Any]]:
+    """The weld PROCESS a sheet's specification states, or None (D-393).
+
+    "ALL WELDS TO BE TIG UNLESS STATED" says how a weld is made, never that a part is welded —
+    strip_specification_legend removes it before any cue is read. But on a part whose own
+    sheet DOES state a weld (a fillet symbol, FINISH: WELDED) the same sentence is the one
+    statement of process the pack makes, and the rate card has one arc-weld row (Weld (CO2)),
+    so a TIG weld is charged there. This reads the process so the row can say so.
+
+    Matched on the text with its whitespace removed — a letter-spaced border and the squashed
+    sheet text weld_symbols keeps both read the same — against config's patterns and words.
+    Returns {"process", "word", "statement", "default"}; `default` is True when the sentence
+    carries an "UNLESS ... STATED" clause (a pack default, not a note on this joint)."""
+    squashed = re.sub(r"\s+", "", str(text or "")).upper()
+    if not squashed:
+        return None
+    try:
+        import config as _cfg
+        vocab = dict(getattr(_cfg, "WELD_PROCESS_VOCAB", None) or {})
+        patterns = list(getattr(_cfg, "WELD_PROCESS_STATEMENT_PATTERNS", None) or [])
+    except Exception:                                                # noqa: BLE001
+        vocab, patterns = {}, []
+    if not vocab or not patterns:
+        return None
+    words = "|".join(sorted((re.escape(str(w).upper()) for w in vocab), key=len, reverse=True))
+    for pat in patterns:
+        try:
+            m = re.search(str(pat).replace("{proc}", words), squashed)
+        except re.error:
+            continue
+        if not m:
+            continue
+        word = m.group(1).upper()
+        tail = squashed[m.end():m.end() + 40]
+        return {"process": str(vocab.get(word) or word),
+                "word": word,
+                "statement": m.group(0),
+                "default": bool(re.match(r"UNLESS(?:OTHERWISE)?(?:STATED|SPECIFIED|NOTED|SHOWN)",
+                                         tail))}
+    return None
+
+
+_SIZE_WITH_UNITS = re.compile(
+    r"(?<![\w.])(\d+(?:\.\d+)?)\s*(mm|cm|m)?\s*[x×]\s*(\d+(?:\.\d+)?)\s*(mm|cm|m)?"
+    r"(?:\s*[x×]\s*(\d+(?:\.\d+)?)\s*(mm|cm|m)?)?(?![\w.])", re.IGNORECASE)
+
+
+def size_mixing_units(text: Any) -> Optional[Dict[str, Any]]:
+    """A printed size whose figures carry DIFFERENT units ("50mm x 10mm x 2m"), else None (D-426).
+
+    8188-08's GA lists 14 of "KINGDOM: 50mm x 10mm x 2m MAGNET"; the market lookup priced fourteen
+    two-metre magnets at £48.50 each (£706), where the GA's note calls them neo magnets taped to
+    the underside — most likely 2 mm. Nothing in the size says which, so it is a question, not a
+    correction: the line is priced as printed and the mix of units is put to a person."""
+    for m in _SIZE_WITH_UNITS.finditer(str(text or "")):
+        units = [u.lower() for u in m.groups()[1::2] if u]
+        if len(set(units)) > 1:
+            figures = [f"{v}{(u or '').lower()}" for v, u in zip(m.groups()[0::2], m.groups()[1::2])
+                       if v]
+            return {"text": m.group(0).strip(), "figures": figures, "units": sorted(set(units))}
+    return None
+
+
+def legend_cues_set_aside(text: Any) -> List[str]:
+    """The operations a page's legend alone would have cued (weld and dressing), for the record:
+    what the full text cues and the legend-stripped text does not."""
+    full = normalize_text(str(text or "")).upper()
+    kept = normalize_text(strip_specification_legend(text)).upper()
+
+    def _weld(t: str) -> bool:
+        return bool("WELD" in t or re.search(r"\b(?:TIG|MIG)\b", t))
+    return ["welding"] if _weld(full) and not _weld(kept) else []
+
+
 def _findall_unique(pattern: str, text: str, flags: int = 0) -> List[str]:
     matches = re.findall(pattern, text, flags=flags)
     flattened: List[str] = []
@@ -76,6 +233,41 @@ def _safe_float(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+# The band a drawing prints as its GENERAL tolerance table (±0.5/1.0/1.5/2.0 by length). It
+# reads as a run of thicknesses and is not a gauge. Matches document_builder._TOLERANCE_TABLE_VALUES.
+_TOLERANCE_TABLE_VALUES = frozenset({0.5, 1.0, 1.5, 2.0})
+_MIN_SHEET_THICKNESS_MM = 0.8
+
+
+def _primary_thickness_mm(thicknesses) -> Optional[float]:
+    """The title block's own stated thickness, with a tolerance table filtered out.
+
+    8352's drawing carries a general tolerance table (0.5/1.0/1.5/2.0 by length band). Taking the
+    FIRST thickness put 0.5mm on six mild-steel parts as the title block's gauge; the model then
+    had to overrule each one, flagging a gauge disagreement that was pure noise. A LONE 2.0 is a
+    real gauge and must survive, but 2.0 sitting inside the whole band is a tolerance value — so
+    the band is only stripped when the WHOLE of it is present, exactly as the costing picker
+    decides. What survives, at or above the sheet floor, is the stated gauge; nothing surviving
+    means the title block named no thickness of its own, and None is the honest answer.
+    """
+    floats = []
+    for v in thicknesses or ():
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if f > 0:
+            floats.append(f)
+    if not floats:
+        return None
+    if _TOLERANCE_TABLE_VALUES <= {round(f, 1) for f in floats}:
+        floats = [f for f in floats if round(f, 1) not in _TOLERANCE_TABLE_VALUES]
+    for f in floats:
+        if f >= _MIN_SHEET_THICKNESS_MM:
+            return f
+    return None
 
 
 def canonical_material(value: Optional[str]) -> Optional[str]:
@@ -304,9 +496,17 @@ def _extract_following_line_values(text: str, label_pattern: str, max_lines: int
 
 
 def _extract_part_number_candidates(text: str) -> List[str]:
+    # Dates are blanked before the scan. A title block puts a date immediately after a name —
+    # "DRAWN BY: P.Andrew - 14/11/2023" — and the day of the month then completes a part number
+    # that the name started. Masking the date leaves "P.Andrew - " with nothing to pair with.
+    #
+    # This is the second of two defences; config's PART_NUMBER_PATTERN also requires a digit in
+    # the head. Either would have stopped ANDREW-14 on its own, and the title block is the one
+    # place on a drawing where prose and part numbers sit this close together.
+    masked = re.sub(DATE_PATTERN, lambda m: " " * len(m.group(0)), text or "", flags=re.IGNORECASE)
     candidates: List[str] = []
     for pattern in PART_NUMBER_PATTERNS:
-        candidates.extend(_findall_unique(pattern, text, flags=re.IGNORECASE))
+        candidates.extend(_findall_unique(pattern, masked, flags=re.IGNORECASE))
     return _dedupe_strings(candidates)
 
 
@@ -326,6 +526,12 @@ def _looks_like_part_number(value: str) -> bool:
     if len(parts) == 2 and len(parts[0]) == 1 and len(parts[1]) == 1:
         return False
     if len(parts) == 2 and len(parts[0]) <= 2 and len(parts[1]) <= 2:
+        return False
+    # The head has to carry a digit. A pure-alpha head is prose: ANDREW-14 was a draughtsman and
+    # a date, PANEL-02 is a note. Real codes are 10575-02, BE2030-10, 12173-02-GA. The rule lives
+    # here as well as in the pattern so it holds for every route into this filter, not only the
+    # one regex that happened to produce the fault.
+    if parts and not any(ch.isdigit() for ch in parts[0]):
         return False
     return bool(re.fullmatch(r"[A-Z0-9_]+(?:\s*-\s*[A-Z0-9_]+){1,4}", normalized))
 
@@ -392,7 +598,9 @@ def _extract_revision_from_context(text: str, part_numbers: List[str]) -> List[s
         pattern = re.escape(normalize_text(part_number)) + r"\s+([A-Z0-9]{1,4})\b"
         for value in _findall_unique(pattern, normalized, flags=re.IGNORECASE):
             cleaned = normalize_text(value).upper()
-            if cleaned in {"TTI", "A3"}:
+            # A sheet size is not a revision (D-454: no customer's initials listed here; a
+            # three-letter token fails the revision shape below anyway).
+            if re.fullmatch(r"A[0-4]", cleaned):
                 continue
             if re.fullmatch(r"\d{1,3}|[A-Z]\d{0,2}", cleaned):
                 revisions.append(cleaned)
@@ -523,7 +731,33 @@ def _extract_sheet_size_candidates(text: str) -> List[str]:
     return _dedupe_strings(cleaned)
 
 
-def _extract_description_candidates(text: str) -> List[str]:
+def _table_column_words() -> set:
+    """The parts-table column headers (config PARTS_TABLE_COLUMN_WORDS; the parts-list
+    reader's own header words when config does not say)."""
+    words = None
+    try:
+        import config as _cfg
+        words = getattr(_cfg, "PARTS_TABLE_COLUMN_WORDS", None)
+    except Exception:                                            # noqa: BLE001
+        words = None
+    if not words:
+        # The parts-list reader's header words (_bom_words_reader.HEADER_TOKENS), written
+        # out rather than imported: this module ships to the scan service, and importing the
+        # reader there would pull the whole table extractor after it for a default.
+        words = ("ITEM", "DWG", "NO", "NO.", "DESCRIPTION", "QTY", "QTY.")
+    return {str(w).strip().upper() for w in words if str(w).strip()}
+
+
+def starts_with_a_table_column(value: Any) -> bool:
+    """True when a value begins with a parts-table column header — the head of a table read
+    as if it were a title field ("QTY 1 <code> FRONT FRAME ASSEMBLY 1 …")."""
+    tokens = str(value or "").strip().split()
+    if not tokens:
+        return False
+    return tokens[0].upper().rstrip(":") in _table_column_words()
+
+
+def _extract_description_candidates(text: str, refused: Optional[List[str]] = None) -> List[str]:
     values = _extract_labeled_value(
         text,
         r"DESCRIPTION\s*[:\-]?",
@@ -534,6 +768,17 @@ def _extract_description_candidates(text: str) -> List[str]:
         if len(value) < 3:
             continue
         if "PROJECT TITLE" in value.upper():
+            continue
+        # A DESCRIPTION LABEL FOLLOWED BY ANOTHER COLUMN HEADER IS A TABLE HEAD, NOT A TITLE.
+        # 12173-02: on SDI's template "DESCRIPTION" is only the parts list's column, so the
+        # value after it began "QTY 1 12173-03-202 FRONT FRAME ASSEMBLY 1 …" and frame weld
+        # 201 was titled with row 1 of its own parts list. Every DESCRIPTION candidate on the
+        # four sheets read was parts-table text. Refused here; nothing invented in its place —
+        # the refused text is kept (title block `descriptions_refused`) so the graph can say
+        # that no reader titled the part.
+        if starts_with_a_table_column(value):
+            if refused is not None:
+                refused.append(value)
             continue
         cleaned.append(value)
     return cleaned
@@ -580,13 +825,178 @@ def _extract_colour_candidates(text: str) -> List[str]:
     )
 
 
-def _extract_thickness_fallbacks(text: str) -> List[str]:
-    normalized = normalize_text(text)
-    values = _findall_unique(r"\b(\d+(?:\.\d+)?)\s*mm\b", normalized, flags=re.IGNORECASE)
-    filtered: List[str] = []
+# Cross-reference / placeholder phrases a MATERIAL field may carry on GA / parent sheets
+# ("MATERIAL: SEE INDIVIDUAL DRAWINGS") — these are NOT materials and must not be accepted
+# as one when the keyword list doesn't recognise the labelled value.
+def is_cross_reference_note(value: Any) -> bool:
+    """True when a MATERIAL or FINISH value is an instruction, not an answer.
+
+    "REFER TO INDIVIDUAL COMPONENT DRAWINGS" is what a GA puts in those fields when the real
+    values live on the component sheets. It is not a material and it is not a finish, and on
+    10575-02 the engine stored it as both: the material could not be priced (£0.00) and no finish
+    was ever routed, so a powder-coated job carried £0.00 of powder and £0.00 of P.Coat labour.
+    Nothing failed. The job was simply costed as though the parts were made of nothing and
+    finished with nothing.
+
+    The guard already existed — `_MATERIAL_REF_NOTE_RE`, below — but only on the title-block
+    reader. This value arrived from `llm_full_extract`, a different path with no such check, and
+    that is the hole. Exported so every path that accepts a material or a finish can use the ONE
+    definition rather than growing its own.
+    """
+    return bool(_MATERIAL_REF_NOTE_RE.search(normalize_text(value).upper())) if value else False
+
+
+_MATERIAL_REF_NOTE_RE = re.compile(
+    r"\b(SEE|REFER|INDIVIDUAL|ASSEMBLY|DRAWING|DRAWINGS|SHOWN|ABOVE|BELOW|VARIOUS|"
+    r"AS\s+PER|TBC|TBA|N/?A|NONE)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_material_candidates(text: str) -> List[str]:
+    """Labelled 'MATERIAL:' extraction — the authoritative part callout, read the same
+    way FINISH and COLOUR are (rather than a whole-page keyword scan). Excludes the
+    'MATERIAL SPECIFICATION(S)' legend heading via negative lookahead so the generic
+    grade table (Q195/Q235/SPCC/TIMBER PRODUCTS) can never masquerade as the part's
+    material. Returns cleaned material tokens: a known keyword if one sits inside the
+    labelled value, else the short labelled callout itself (e.g. 'MARINE PLY', 'TILES')
+    so downstream family mapping can resolve materials the keyword list doesn't list."""
+    values = _extract_labeled_values(
+        text,
+        r"MATERIAL(?!\s*SPEC)\s*[:\-]",
+        TITLE_BLOCK_STOP_LABELS,
+    )
+    out: List[str] = []
     for value in values:
+        # a cramped title block can run the labelled field straight into the legend text,
+        # and straight into the sheet's standing notes — "16mm MFC DO NOT SCALE" is one
+        # value to the reader and two facts to a person. Truncate at the note, then blank
+        # the legend phrases; what is left is the callout.
+        v = _strip_material_boilerplate(
+            _truncate_at_drawing_note(normalize_text(value))).strip(" :;-,.")
+        if not v:
+            continue
+        keyword_hits = _findall_unique(MATERIAL_PATTERN, v, flags=re.IGNORECASE)
+        if keyword_hits:
+            out.extend(keyword_hits)
+        elif (len(v) <= 25 and re.fullmatch(r"[A-Za-z][A-Za-z /+.\-]*", v)
+              and not _MATERIAL_REF_NOTE_RE.search(v)):
+            # a short alpha callout the keyword list does not yet know (e.g. MARINE PLY,
+            # TILES) — but NOT a cross-reference note like "SEE INDIVIDUAL DRAWINGS" that
+            # a GA/parent sheet puts in its MATERIAL field. Those fall through to the
+            # keyword fallback / engine default instead of becoming a bogus material.
+            out.append(v)
+        elif len(v) <= 40 and _print_stock_weight_re().search(v.upper()):
+            # A STOCK NAMED BY ITS WEIGHT (D-402): "400 MIC", "300 GSM SILK". The alpha arm
+            # refused it for its digits, the page scan ran instead, and the legend's words
+            # became the part's material. The callout is the sheet's answer; kept as printed.
+            out.append(v)
+    seen: set = set()
+    unique: List[str] = []
+    for token in out:
+        key = token.upper()
+        if key not in seen:
+            seen.add(key)
+            unique.append(token)
+    return unique
+
+
+# A TOLERANCE IS NOT A GAUGE (D-392). The M&S border prints "OVER 120mm UP TO 1000mm +/-1.0mm"
+# beside the coating paragraph's "THICKNESS COVERAGE", and the text layer runs them together:
+# "+/-1.0mm THICKNESS" read as a 1 mm gauge on every sheet of 12696-01 and 12173-02, and the
+# fallback scan took every "+/-0.5mm ... +/-2.0mm" as a candidate too. A figure that follows a
+# tolerance sign is a tolerance, whatever word follows it.
+_TOLERANCE_FIGURE_RE = re.compile(r"(?:\+/-|±|\+-|-/\+|\+\s*/\s*-)\s*\d+(?:\.\d+)?\s*(?:MM|mm)?",
+                                  re.IGNORECASE)
+
+
+def _text_for_gauges(text: str) -> str:
+    """The page text a gauge may be read from: tolerances and the specification legend removed."""
+    return _TOLERANCE_FIGURE_RE.sub(" ", strip_specification_legend(normalize_text(text)))
+
+
+_SECTION_SIZE_RE = re.compile(
+    r"\b\d+(?:\.\d+)?\s*[xX×]\s*\d+(?:\.\d+)?(?:\s*[xX×]\s*\d+(?:\.\d+)?)?\s*(?:MM|mm)?\b")
+
+
+def _section_words_re():
+    if "section_words" not in _VOCAB_RES:
+        try:
+            import config as _cfg
+            _w = list(getattr(_cfg, "SECTION_CALLOUT_WORDS", None) or [])
+        except Exception:                                            # noqa: BLE001
+            _w = []
+        _VOCAB_RES["section_words"] = re.compile(
+            r"\b(?:" + "|".join(_w or [r"TUBE", r"SECTION", r"OVAL", r"SHS", r"RHS", r"CHS"]) + r")\b",
+            re.IGNORECASE)
+    return _VOCAB_RES["section_words"]
+
+
+def names_a_section(text: str, start: int, end: int, window: int = 60) -> bool:
+    """Does the size at text[start:end] name a stock SECTION — "40 x 20mm … OVAL TUBE",
+    "30 x 30 x 2mm SHS" — rather than a blank (D-406)? A section word within `window`
+    characters after it (or a few before) says so."""
+    after = text[end:end + window]
+    before = text[max(0, start - 20):start]
+    return bool(_section_words_re().search(after) or _section_words_re().search(before))
+
+
+def strip_section_sizes(text: str) -> str:
+    """The text with every size that names a section blanked, so neither its terms nor its
+    pair can be read as a gauge or a blank."""
+    out = text or ""
+    for m in reversed(list(_SECTION_SIZE_RE.finditer(out))):
+        if names_a_section(out, m.start(), m.end()):
+            out = out[:m.start()] + " " * (m.end() - m.start()) + out[m.end():]
+    return out
+
+
+def _weight_qualifier_re():
+    if "weight_qual" not in _VOCAB_RES:
+        try:
+            import config as _cfg
+            _q = list(getattr(_cfg, "WEIGHT_QUALIFIERS_NOT_THE_PARTS", None) or [])
+        except Exception:                                            # noqa: BLE001
+            _q = []
+        _VOCAB_RES["weight_qual"] = re.compile(
+            r"\b(?:" + "|".join(_q or [r"ESTIMATED", r"BAGS?", r"LOAD(?:ING)?"]) + r")\b"
+            r"[^.;:\n]{0,40}?\bWEIGHTS?\b[^0-9\n]{0,8}[0-9]+(?:\.[0-9]+)?\s*(?:KG|G)\b",
+            re.IGNORECASE)
+    return _VOCAB_RES["weight_qual"]
+
+
+def strip_weights_not_the_parts(text: str) -> str:
+    """"ESTIMATED BAG WEIGHT - 1.5kg" is the customer's goods, not the part on the sheet
+    (D-406): every weight the sheet qualifies as something else's is blanked before the
+    title block's own WEIGHT: is read."""
+    return _weight_qualifier_re().sub(" ", text or "")
+
+
+def _not_before_words() -> set:
+    if "not_before" not in _VOCAB_RES:
+        try:
+            import config as _cfg
+            _w = getattr(_cfg, "GAUGE_NOT_BEFORE_WORDS", None) or ()
+        except Exception:                                            # noqa: BLE001
+            _w = ()
+        _VOCAB_RES["not_before"] = {str(w).upper() for w in _w}
+    return _VOCAB_RES["not_before"]
+
+
+def _extract_thickness_fallbacks(text: str) -> List[str]:
+    # A SECTION'S SIZE IS NOT A GAUGE (D-406): "40 x 20mm OVAL TUBE" read 20 mm on 12675-01.
+    # NOR IS A TAPE'S WIDTH (D-421): "20MM MAG TAPE" read 20 mm on 8188-08 — a size followed by
+    # the thing it sizes (config.GAUGE_NOT_BEFORE_WORDS) is that thing's.
+    normalized = strip_section_sizes(_text_for_gauges(text))
+    stop = _not_before_words()
+    filtered: List[str] = []
+    for m in re.finditer(r"\b(\d+(?:\.\d+)?)\s*mm\b", normalized, flags=re.IGNORECASE):
+        value = m.group(1)
         number = _safe_float(value)
         if number is None:
+            continue
+        nxt = re.match(r"\s*([A-Za-z]+)", normalized[m.end():m.end() + 24])
+        if nxt and nxt.group(1).upper() in stop:
             continue
         if 0.2 <= number <= 20.0 and value not in filtered:
             filtered.append(value)
@@ -650,23 +1060,254 @@ def _infer_flat_pattern_dimensions(text: str) -> List[float]:
     return chosen if len(chosen) == 2 else []
 
 
+# ── Spec-legend boilerplate that carries material words in a NON-part context ──
+# Retail-display drawings (M&S and others) print a standard MATERIAL SPECIFICATIONS
+# legend that lists generic material categories and grade rules for the WHOLE product
+# range, e.g. "... UP TO 3mm THICK FOR POWDER COATED STEEL ... TIMBER PRODUCTS:
+# • Q235 OVER 3mm THICK ...". The word TIMBER in "TIMBER PRODUCTS:" is a SECTION
+# HEADER in that legend, not a statement that this part is made of timber. Because
+# the material scan reads the whole page, that header (and "WOOD PRODUCTS") gets
+# stamped onto steel parts whose own material callout is absent on the page — the
+# part is then routed through the timber/joinery path (saw/glue/CNC) in error.
+# Strip these boilerplate phrases before scanning so ONLY genuine callouts remain.
+# This never removes a real material: no drawing writes "TIMBER PRODUCTS" to mean
+# the part IS timber, and a genuine timber part keeps its own standalone TIMBER/
+# MDF/PLYWOOD callout (not followed by "PRODUCTS"). General across every drawing
+# that carries the legend, not a per-job patch.
+_MATERIAL_BOILERPLATE_RE = re.compile(
+    r"\bTIMBER\s+PRODUCTS\b"
+    r"|\bWOOD\s+PRODUCTS\b"
+    r"|\bMATERIAL\s+SPECIFICATIONS?\b"
+    r"|\bFOR\s+POWDER\s+COATED\s+STEEL\b"
+    r"|\bFOR\s+CHROME[,\s]+ZINC\s+PLATE\b"
+    # ── A RAL COLOUR NAME IS NOT A MATERIAL ─────────────────────────────────────────
+    #
+    # 12552's 02-09M is MILD STEEL powder coated RAL9006, whose registered name is WHITE
+    # ALUMINIUM. Its title block extracts as labels-then-values, so "MATERIAL:" is followed
+    # immediately by "COLOUR:" and the labelled read returns nothing; the whole-page keyword
+    # fallback then scans the page and finds ALUMINIUM — inside the colour name — BEFORE it
+    # reaches MILD STEEL, and _first_or_none takes the first. A 1.5 mm steel cover is costed
+    # as aluminium: a third of the density, a different rate, a different supplier.
+    #
+    # RAL's own palette is full of these. 9006 White Aluminium, 9007 Grey Aluminium, 8004
+    # Copper Brown, 9022 Pearl Light Grey. Any of them lands a metal word on a page whose
+    # part is made of something else, and the more carefully a drawing office names its
+    # colour the worse the misread gets.
+    #
+    # Blanked as a phrase, not as a word: "ALUMINIUM" on its own is still a perfectly good
+    # material callout, and a part genuinely made of aluminium and coated RAL9006 still reads
+    # correctly from its MATERIAL field or from any other mention on the sheet.
+    # The words between the RAL code and the metal word must not themselves be material
+    # words. Without that guard the filler is greedy: on "RAL9006 WHITE ALUMINIUM MILD STEEL"
+    # it swallows "WHITE ALUMINIUM MILD " to reach STEEL, and blanks the part's real material
+    # along with the colour name — turning a misread into a blank, which is worse.
+    r"|\bRAL\s*\d{3,4}[\s\-–—:]*"
+    r"(?:(?!ALUMINIUM|ALUMINUM|COPPER|SILVER|BRASS|BRONZE|STEEL|MILD|GOLD)[A-Z]+[\s\-]+){0,2}"
+    r"(?:ALUMINIUM|ALUMINUM|COPPER|SILVER|BRASS|BRONZE|GOLD)\b",
+    re.IGNORECASE,
+)
+
+# WHERE THE MATERIAL FIELD ENDS AND THE DRAWING'S STANDING NOTES BEGIN.
+#
+# A cramped title block runs the labelled value straight into the sheet's boilerplate, and
+# the labelled-value reader has no other signal for where to stop. On 12422-24 the end cap's
+# "MATERIAL: 16mm MFC" ran into "DO NOT SCALE" and, because the keyword list did not know
+# MFC, the whole run reached the sheet as the material "MFC DO NOT" — in the BOM
+# description, in the labour block, and in the group key that decides which parts share a
+# setup.
+#
+# These are the phrases every engineering drawing carries and no material ever contains, so
+# the value is TRUNCATED at the first one rather than blanked: what precedes it is the
+# genuine callout and must survive. config.JUNK_PART_TOKENS is the same idea applied to part
+# numbers; a phrase that disqualifies a part number cannot be part of a material either.
+_MATERIAL_NOTE_START_RE = re.compile(
+    r"\b(?:DO\s+NOT(?:\s+SCALE)?"
+    r"|ALL\s+DIMENSIONS?"
+    r"|UNLESS\s+(?:OTHERWISE\s+)?(?:STATED|SPECIFIED)"
+    r"|REMOVE\s+(?:ALL\s+)?BURRS?"
+    r"|TOLERANCES?\b"
+    r"|THIS\s+DRAWING"
+    r"|PROPERTY\s+OF"
+    r"|CONFIDENTIAL"
+    r"|REF(?:ERENCE)?\s+ONLY"
+    r"|THIRD\s+ANGLE"
+    r"|SCALE\s*[:=]"
+    r"|BREAK\s+SHARP\s+EDGES?)\b",
+    re.IGNORECASE,
+)
+
+
+def _truncate_at_drawing_note(text: str) -> str:
+    """The part of a labelled value that precedes the sheet's standing notes."""
+    match = _MATERIAL_NOTE_START_RE.search(text or "")
+    return (text or "")[:match.start()] if match else (text or "")
+
+
+# A REVISION NOTE THAT REMOVES SOMETHING IS NOT A MATERIAL CALLOUT.
+#
+# On 10575-02 the note "MDF PANEL REMOVED" set the part's material to MDF and it was priced as
+# board. The note records what came OFF the drawing; the keyword scan saw only the letters.
+#
+# Same shape as the spec-legend leak above — a material word in a non-part context — so it is
+# handled the same way, by blanking before the scan rather than by second-guessing afterwards.
+_MATERIAL_NEGATION_RE = re.compile(
+    r"\b(?:REMOVED|DELETED|OMITTED|SUPERSEDED|CANCELLED|CANCELED"
+    r"|NOT\s+(?:USED|REQUIRED|APPLICABLE)"
+    r"|NO\s+LONGER\s+(?:USED|REQUIRED|APPLIES))\b",
+    re.IGNORECASE,
+)
+# How far a removal verb may sit from the material word and still be about it. Short on purpose:
+# a verb at the other end of the sheet is describing something else, and letting it reach back
+# would lose genuine callouts.
+_NEGATION_WINDOW_CHARS = 30
+
+
+def _strip_negated_materials(text: str) -> str:
+    """Blank material words that a nearby removal verb says are not there.
+
+    Only the material token is blanked, never the clause around it. A drawing carrying
+    "MATERIAL: MDF" and, separately, "REV C ALUMINIUM PANEL REMOVED" must keep MDF and drop
+    ALUMINIUM — blanking the clause would have taken both.
+
+    Proximity to a revision marker is deliberately NOT the signal. Revision blocks are where
+    material changes are recorded, and "REV D MATERIAL NOW 18MM MDF" is the most authoritative
+    statement of material on the sheet. Negation is the signal.
+    """
+    src = text or ""
+    out = list(src)
+    for match in re.finditer(MATERIAL_PATTERN, src, flags=re.IGNORECASE):
+        window = src[match.end():match.end() + _NEGATION_WINDOW_CHARS]
+        verb = _MATERIAL_NEGATION_RE.search(window)
+        if not verb:
+            continue
+        # Another material word between this one and the verb means the verb belongs to that
+        # one, not to this. Without the check a labelled callout loses to a later note.
+        if re.search(MATERIAL_PATTERN, window[:verb.start()], flags=re.IGNORECASE):
+            continue
+        for i in range(match.start(), match.end()):
+            out[i] = " "
+    return "".join(out)
+
+
+_VOCAB_RES: Dict[str, Any] = {}
+
+
+def _print_stock_weight_re():
+    if "print_stock" not in _VOCAB_RES:
+        try:
+            import config as _cfg
+            _pat = getattr(_cfg, "PRINT_STOCK_WEIGHT_PATTERN", None)
+        except Exception:                                            # noqa: BLE001
+            _pat = None
+        _VOCAB_RES["print_stock"] = re.compile(
+            _pat or r"^\s*\d+(?:\.\d+)?\s*(?:MIC|MICRONS?|MU|GSM|G/?M2)\b", re.IGNORECASE)
+    return _VOCAB_RES["print_stock"]
+
+
+def _material_legend_re():
+    if "legend" not in _VOCAB_RES:
+        try:
+            import config as _cfg
+            _phr = list(getattr(_cfg, "MATERIAL_LEGEND_PHRASES", None) or [])
+        except Exception:                                            # noqa: BLE001
+            _phr = []
+        _VOCAB_RES["legend"] = re.compile("|".join(_phr), re.IGNORECASE) if _phr else None
+    return _VOCAB_RES["legend"]
+
+
+def _strip_material_boilerplate(text: str) -> str:
+    """Blank out standard spec-legend phrases that carry a material word in a
+    non-part context (legend headers, grade-rule bullets) so they cannot set the
+    part's material family. Genuine part callouts are untouched."""
+    out = _MATERIAL_BOILERPLATE_RE.sub(" ", text or "")
+    _legend = _material_legend_re()
+    if _legend is not None:
+        out = _legend.sub(" ", out)
+    return _strip_negated_materials(out)
+
+
+def material_field_states_something(text: str) -> bool:
+    """Does a labelled MATERIAL field on this text name a material — resolved or not (D-402)?
+
+    A field that names something is the sheet's answer, and the whole-page keyword scan must
+    not run over it: 9598-02-02G's "MATERIAL: 400 MIC" was refused by the keyword list, the
+    page was scanned instead, and the legend's TIMBER became the graphic's material. A
+    pointer ("REFER TO INDIVIDUAL COMPONENT DRAWINGS") or a bare gauge ("2MM") names nothing."""
+    for value in _extract_labeled_values(text or "", r"MATERIAL(?!\s*SPEC)\s*[:\-]",
+                                         TITLE_BLOCK_STOP_LABELS):
+        v = _strip_material_boilerplate(_truncate_at_drawing_note(normalize_text(value))).strip(" :;-,.")
+        if not v or _MATERIAL_REF_NOTE_RE.search(v):
+            continue
+        if re.search(r"[A-Za-z]{3,}", v) and not re.fullmatch(r"[\d.\s]*MM\s*(?:THK|THICK)?", v, re.IGNORECASE):
+            return True
+    return False
+
+
+def fold_note_count(text: str) -> Dict[str, Any]:
+    """What the sheet's own words say about folds: {count, evidence} (D-405).
+
+    FOLD_PATTERN matches the bare words FOLD / BEND as well as an UP/DOWN angle callout, and
+    every match was a fold: 9598-02-01M prints "UP 90° R 1", "DOWN 180° R 0.5" and "BLOB WELD
+    BOTH ENDS TO STOP FOLD OPENING", and the note rung read three on a sheet with two bends —
+    the word FOLD in the weld note names the hem the callout already counts. Where a sheet
+    prints callouts, the callouts are its statement and a bare word is a reference to one of
+    them; a bare word counts only on a sheet that prints no callout at all. The strings are
+    kept so the sentence that quotes the count can say what it counted."""
+    t = text or ""
+    callouts = [" ".join(m.split()) for m in re.findall(
+        r"(?:\bUP\b|\bDOWN\b)\s+\d+(?:\.\d+)?\s*°", t, flags=re.IGNORECASE)]
+    if callouts:
+        return {"count": len(callouts), "evidence": callouts}
+    words = [m.upper() for m in re.findall(r"\b(?:EXT\s+FOLD|INT\s+FOLD|FOLD|BEND)\b", t,
+                                           flags=re.IGNORECASE)]
+    return {"count": len(words), "evidence": words}
+
+
 def extract_title_block_fields(text: str) -> Dict[str, Any]:
     raw_text = text or ""
     normalized_text = normalize_text(raw_text)
     part_number_values = _extract_part_number_candidates(normalized_text)
-    materials = [canonical_material(value) for value in _findall_unique(MATERIAL_PATTERN, normalized_text, flags=re.IGNORECASE)]
+    # Material is read PRIMARY from the labelled "MATERIAL:" field (authoritative, the
+    # same way FINISH/COLOUR are extracted). Only when no labelled callout exists do we
+    # fall back to a whole-page keyword scan — and that scan runs on de-boilerplated text
+    # so the spec-legend "TIMBER PRODUCTS:" header and grade bullets can never be read as
+    # the part's material. This asymmetry (labelled FINISH/COLOUR but keyword MATERIAL)
+    # was the source of the family leak that put TIMBER on steel detail sheets.
+    # NOT pre-stripped here: _extract_material_candidates already runs the labelled value
+    # through _strip_material_boilerplate, which now carries the negation strip. Doing it twice
+    # collapses the blanked run of spaces and brings the removal verb within reach of the
+    # labelled callout itself — "MATERIAL: MDF ... ALUMINIUM PANEL REMOVED" then lost MDF too.
+    labelled_materials = _extract_material_candidates(raw_text)
+    if labelled_materials:
+        materials = [canonical_material(value) for value in labelled_materials]
+    elif material_field_states_something(raw_text):
+        # THE FIELD NAMED SOMETHING THE READER COULD NOT RESOLVE (D-402). That is the sheet's
+        # answer, recorded as unresolved by the readers downstream; the page is NOT scanned,
+        # because the page's other material words are the legend's and another part's.
+        materials = []
+    else:
+        # The page scan runs with the specification legend removed as well as the standing
+        # phrases: "• 304 - STAINLESS STEEL" and "WHERE SPECIFIED ALL TIMBER-BASED PRODUCTS"
+        # are the border's words on every sheet, never this part's (D-402).
+        material_scan_text = _strip_material_boilerplate(strip_specification_legend(normalized_text))
+        materials = [canonical_material(value) for value in _findall_unique(MATERIAL_PATTERN, material_scan_text, flags=re.IGNORECASE)]
     drawing_numbers = _extract_drawing_number_candidates(raw_text) or _findall_unique(DRAWING_NUMBER_PATTERN, normalized_text, flags=re.IGNORECASE)
     revisions = _extract_revision_candidates(raw_text)
     dates = _findall_unique(DATE_PATTERN, normalized_text, flags=re.IGNORECASE)
     material_values = [material for material in materials if material]
     finishes = _extract_finish_candidates(raw_text) or [_normalize_finish(value) for value in _findall_unique(FINISH_PATTERN, normalized_text, flags=re.IGNORECASE)]
-    thicknesses = _findall_unique(THICKNESS_PATTERN, normalized_text, flags=re.IGNORECASE) or _extract_thickness_fallbacks(raw_text)
+    # A GAUGE IS A SHEET OR BOARD THICKNESS (D-392): "UP TO 1000mm" running into the coating
+    # paragraph's "THICKNESS COVERAGE" is not one, whatever the words beside it.
+    thicknesses = [value for value in _findall_unique(THICKNESS_PATTERN, _text_for_gauges(raw_text), flags=re.IGNORECASE)
+                   if (_safe_float(value) is not None and 0.2 <= _safe_float(value) <= 50.0)] \
+        or _extract_thickness_fallbacks(raw_text)
     revision_updates = _extract_revision_update_thicknesses(raw_text)
     if revision_updates:
         ordered_thicknesses = revision_updates + [value for value in thicknesses if value not in revision_updates]
         thicknesses = ordered_thicknesses
-    descriptions = _extract_description_candidates(raw_text)
-    colours = _extract_colour_candidates(raw_text) or _findall_unique(COLOUR_PATTERN, normalized_text, flags=re.IGNORECASE)
+    descriptions_refused: List[str] = []
+    descriptions = _extract_description_candidates(raw_text, descriptions_refused)
+    colours =_extract_colour_candidates(raw_text) or _findall_unique(COLOUR_PATTERN, normalized_text, flags=re.IGNORECASE)
     drawn_by = _extract_drawn_by_candidates(raw_text)
     modified_by = _extract_modified_by_candidates(raw_text)
     clients = _extract_client_candidates(raw_text)
@@ -683,13 +1324,14 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
         "materials": material_values,
         "surface_finishes": finishes,
         "colours": colours,
-        "weights": _findall_unique(WEIGHT_PATTERN, text, flags=re.IGNORECASE),
+        "weights": _findall_unique(WEIGHT_PATTERN, strip_weights_not_the_parts(text), flags=re.IGNORECASE),
         "drawn_by": drawn_by,
         "modified_by": modified_by,
         "sheet_refs": sheet_refs,
         "sheet_sizes": sheet_sizes,
         "scale": scale,
         "descriptions": descriptions,
+        "descriptions_refused": descriptions_refused,
         "clients": clients,
         "project_titles": project_titles,
         "quantities": _findall_unique(QUANTITY_PATTERN, normalized_text, flags=re.IGNORECASE),
@@ -697,7 +1339,7 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
         "normalized": {
             "primary_material": _first_or_none(material_values),
             "primary_finish": _first_or_none(finishes),
-            "primary_thickness_mm": _first_or_none(thicknesses),
+            "primary_thickness_mm": _primary_thickness_mm(thicknesses),
         },
         "confidence": {
             "drawing_numbers": _confidence(0.95 if drawing_numbers else 0.0),
@@ -735,6 +1377,7 @@ def merge_title_block_fields(primary: Dict[str, Any], fallback: Dict[str, Any]) 
         "sheet_sizes": _pick_preferred(primary, fallback, "sheet_sizes"),
         "scale": _pick_preferred(primary, fallback, "scale"),
         "descriptions": _pick_preferred(primary, fallback, "descriptions"),
+        "descriptions_refused": _pick_preferred(primary, fallback, "descriptions_refused"),
         "clients": _pick_preferred(primary, fallback, "clients"),
         "project_titles": _pick_preferred(primary, fallback, "project_titles"),
         "quantities": _pick_preferred(primary, fallback, "quantities"),
@@ -757,7 +1400,21 @@ def merge_title_block_fields(primary: Dict[str, Any], fallback: Dict[str, Any]) 
     return merged
 
 
-def extract_bom_rows(text: str) -> List[Dict[str, Any]]:
+def extract_bom_rows(text: str, *, source: str = "bom_table",
+                     source_page: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Parts-table rows from a page's text, EACH ONE STAMPED WITH WHO READ IT AND WHERE.
+
+    WHY THE STAMP IS NOT A NICETY. Six readers can produce a BOM row — this table parser, the
+    vision model, the SolidWorks API, the whole-document LLM pass, the assembly tree and the DXF
+    filename — and until now not one row carried which. Every artefact that tried to show an
+    estimator where a line came from printed a blank, and the quality of a reader could not be
+    judged from its output because its output was anonymous.
+
+    It also unlocks the material. The parts table on an SDI drawing frequently has no material
+    column at all — the material is in the title block of the detail sheet — so the honest way
+    to fill "material" against a row is to resolve it from the page the row was read from, which
+    is impossible while the row does not know its page.
+    """
     try:
         from part_identity import normalize_bom_row, preprocess_bom_text
 
@@ -781,6 +1438,11 @@ def extract_bom_rows(text: str) -> List[Dict[str, Any]]:
                 "part_number": normalized_part,
                 "description": normalized_description,
                 "quantity": _safe_int(qty),
+                # WHO READ IT AND WHERE. Stamped at the point of creation, because anywhere
+                # later is a guess: by the time rows from several pages and several readers have
+                # been merged, nothing can say which of them produced a given line.
+                "source": source,
+                "source_page": source_page,
             }
         )
     if rows:
@@ -814,6 +1476,11 @@ def extract_bom_rows(text: str) -> List[Dict[str, Any]]:
                 "part_number": normalized_part,
                 "description": normalized_description,
                 "quantity": _safe_int(qty),
+                # WHO READ IT AND WHERE. Stamped at the point of creation, because anywhere
+                # later is a guess: by the time rows from several pages and several readers have
+                # been merged, nothing can say which of them produced a given line.
+                "source": source,
+                "source_page": source_page,
             }
         )
     deduped_rows: List[Dict[str, Any]] = []
@@ -838,7 +1505,10 @@ def classify_dimensions(text: str) -> Dict[str, Any]:
         tolerance_noise_values = {"0.5", "1.0", "1.5", "2.0", "120", "1000", "2000", "4000"}
     else:
         tolerance_noise_values = set()
-    overall_sizes_raw = re.findall(LENGTH_BY_WIDTH_PATTERN, text, flags=re.IGNORECASE)
+    # A SIZE THAT NAMES A SECTION IS THE STOCK'S PROFILE, NOT A BLANK (D-406): "40 x 20mm
+    # STAINLESS STEEL FLAT SIDED OVAL TUBE" gave 12675-01-02 a 40 x 20 blank.
+    overall_sizes_raw = [m.groups() for m in re.finditer(LENGTH_BY_WIDTH_PATTERN, text, flags=re.IGNORECASE)
+                         if not names_a_section(text, m.start(), m.end())]
     overall_sizes = [f"{left} x {right}" for left, right in overall_sizes_raw]
     slot_sizes = [f"{left} x {right}" for left, right in re.findall(SLOT_SIZE_PATTERN, text, flags=re.IGNORECASE)]
 
@@ -921,6 +1591,7 @@ def extract_feature_cues(text: str) -> Dict[str, Any]:
     text = normalize_text(text)
     dimensions = classify_dimensions(text)
 
+    _fold_note = fold_note_count(text)
     return {
         "angles_deg": dimensions["angles_deg"],
         "hole_sizes_mm": dimensions["hole_sizes_mm"],
@@ -930,11 +1601,16 @@ def extract_feature_cues(text: str) -> Dict[str, Any]:
         "all_dimensions_mm": dimensions["all_dimensions_mm"],
         "slot_sizes_mm": dimensions["slot_sizes_mm"],
         "edge_distances_mm": dimensions["edge_distances_mm"],
-        "fold_count_textual": len(re.findall(FOLD_PATTERN, text, flags=re.IGNORECASE)),
+        "fold_count_textual": _fold_note["count"],
+        "fold_count_textual_evidence": _fold_note["evidence"],
         "flat_pattern_detected": bool(re.search(FLAT_PATTERN_PATTERN, text, flags=re.IGNORECASE)),
         "slot_detected": bool(re.search(SLOT_PATTERN, text, flags=re.IGNORECASE)),
         "laser_text_detected": bool(re.search(LASER_PATTERN, text, flags=re.IGNORECASE)),
-        "weld_detected": bool(re.search(WELD_PATTERN, text, flags=re.IGNORECASE)),
+        # The legend's "ALL WELDS TO BE TIG" is not a weld on this sheet (see
+        # strip_specification_legend): the cue, and the "Weld text cue detected" flag it
+        # raises, read the text without it.
+        "weld_detected": bool(re.search(WELD_PATTERN, strip_specification_legend(text),
+                                        flags=re.IGNORECASE)),
         "tapped_detected": bool(re.search(TAP_PATTERN, text, flags=re.IGNORECASE)),
         "countersink_detected": bool(re.search(CSK_PATTERN, text, flags=re.IGNORECASE)),
         "deburr_detected": bool(re.search(DEBURR_PATTERN, text, flags=re.IGNORECASE)),
@@ -955,7 +1631,8 @@ def extract_feature_cues(text: str) -> Dict[str, Any]:
             "holes": _confidence(0.88 if dimensions["hole_sizes_mm"] or "HOLE" in text.upper() else 0.0),
             "folds": _confidence(0.88 if dimensions["fold_values_mm"] or dimensions["angles_deg"] or re.search(FOLD_PATTERN, text, flags=re.IGNORECASE) else 0.0),
             "slots": _confidence(0.88 if dimensions["slot_sizes_mm"] or re.search(SLOT_PATTERN, text, flags=re.IGNORECASE) else 0.0),
-            "welding": _confidence(0.9 if re.search(WELD_PATTERN, text, flags=re.IGNORECASE) else 0.0),
+            "welding": _confidence(0.9 if re.search(WELD_PATTERN, strip_specification_legend(text),
+                                                    flags=re.IGNORECASE) else 0.0),
             "tapping": _confidence(0.9 if re.search(TAP_PATTERN, text, flags=re.IGNORECASE) else 0.0),
             "countersinking": _confidence(0.9 if re.search(CSK_PATTERN, text, flags=re.IGNORECASE) else 0.0),
         },
@@ -988,10 +1665,17 @@ def extract_process_notes(text: str) -> Dict[str, Any]:
         "LASER",
         "DRILL",
         "PUNCH",
+        # A finish note naming ONE face ("PAINTED TOP FACE", 12173-03-02J) is kept so the
+        # coated-area reader can see it; it adds no operation (config "finish_one_face").
+        "FACE",
     ]
 
+    _weld_text = strip_specification_legend(text)
     for operation, pattern in PROCESS_NOTE_PATTERNS.items():
-        if re.search(pattern, text, flags=re.IGNORECASE):
+        # A weld is read from the notes with the legend taken out: the border's weld
+        # specification is not a weld note on this sheet.
+        _t = _weld_text if operation == "welding" else text
+        if re.search(pattern, _t, flags=re.IGNORECASE):
             note_hits.append(operation)
             if operation in operation_note_types:
                 operations.append(operation)
@@ -1102,20 +1786,27 @@ def infer_operations_from_text(
     if powder_text or powder_finish:
         operations.append("powder_coating")
 
+    # A WELD IS READ OFF THE SHEET, NOT OFF ITS BORDER. "WELD SPECIFICATION: ALL WELDS TO BE
+    # TIG UNLESS STATED" and "RESISTANCE WELDING WIRE TO WIRE" print on every sheet of the pack
+    # and say how a weld is made, not that this part has one (12173-02: 29 parts welded and
+    # dressed from it). Weld and dressing cues read the text with the legend removed; "FINISH:
+    # WELDED", "WELD AND DRESS" and "CORNERS TO BE WELDED" are the sheet's own and are kept.
+    weld_text = normalize_text(strip_specification_legend(text)).upper()
     weld_keywords = (
-        "WELD" in text
-        or re.search(r"\bMIG\b", text, flags=re.IGNORECASE)
-        or re.search(r"\bTIG\b", text, flags=re.IGNORECASE)
-        or "WELD INT" in text
-        or "WELD FLUSH" in text
-        or "WELD CLOSED" in text
-        or "WELD CORNER" in text
-        or re.search(WELD_PATTERN, text, flags=re.IGNORECASE)
+        "WELD" in weld_text
+        or re.search(r"\bMIG\b", weld_text, flags=re.IGNORECASE)
+        or re.search(r"\bTIG\b", weld_text, flags=re.IGNORECASE)
+        or "WELD INT" in weld_text
+        or "WELD FLUSH" in weld_text
+        or "WELD CLOSED" in weld_text
+        or "WELD CORNER" in weld_text
+        or re.search(WELD_PATTERN, weld_text, flags=re.IGNORECASE)
     )
     if weld_keywords and not assembly_join_weld:
         operations.append("welding")
 
-    if ("DRESS" in text and "WELD" in text) or "DRESS WELD" in text or "DRESS FLUSH" in text:
+    if ("DRESS" in weld_text and "WELD" in weld_text) or "DRESS WELD" in weld_text \
+            or "DRESS FLUSH" in weld_text:
         operations.append("dress_welds")
 
     if "WET SPRAY" in text or "SPRAY PAINT" in text or "PAINT" in fin_text:
@@ -1131,7 +1822,17 @@ def infer_operations_from_text(
     if is_acrylic and "laser_cutting" not in operations:
         operations.append("laser_cutting")
 
-    if "DIAMOND POLISH" in text or "MATT POLISH" in text or "POLISH" in text:
+    # diamond_polish only on a GENUINE polish cue. Bare "POLISH" was matching the standard
+    # boilerplate "CHROME PLATING - POLISHING SPECIFICATION IS 400 GRIT FINAL POLISH", which
+    # sits on every page, inventing a diamond-polish op on parts that are powder coated / raw.
+    # Suppress bare "POLISH" when it only appears in that spec-legend context.
+    _polish_boilerplate = ("POLISHING SPECIFICATION" in text
+                           or "FINAL POLISH" in text
+                           or "GRIT" in text)
+    _genuine_polish_cue = ("DIAMOND POLISH" in text or "MATT POLISH" in text
+                           or "MIRROR POLISH" in text or "FLAME POLISH" in text
+                           or "EDGE POLISH" in text)
+    if _genuine_polish_cue or ("POLISH" in text and not _polish_boilerplate):
         operations.append("diamond_polish")
 
     if "GLUE" in text or "BONDING" in text or "BONDED" in text:
@@ -1183,6 +1884,7 @@ def build_textual_manufacturing_summary(
     notes_text: str = "",
     page_role_hint: Optional[str] = None,
     has_cut_length: bool = False,
+    source_page: Optional[int] = None,
 ) -> Dict[str, Any]:
     full_text = normalize_text(text)
     title_text = normalize_text(title_block_text) or full_text
@@ -1190,7 +1892,7 @@ def build_textual_manufacturing_summary(
     notes_source = normalize_text(notes_text) or full_text
 
     title_block = merge_title_block_fields(extract_title_block_fields(title_text), extract_title_block_fields(full_text))
-    bom_rows = extract_bom_rows(bom_source)
+    bom_rows = extract_bom_rows(bom_source, source_page=source_page)
     dimensions = classify_dimensions(full_text)
     feature_cues = extract_feature_cues(full_text)
     process_notes = extract_process_notes(notes_source)
@@ -1201,8 +1903,16 @@ def build_textual_manufacturing_summary(
         or feature_cues.get("angles_deg")
         or feature_cues.get("fold_count_textual")
     )
+    # THE STANDING SPECIFICATION IS NOT A ROUTE CUE, AT PAGE LEVEL AS AT PART LEVEL (D-438).
+    # The border legend — "POWDERCOATING: BETWEEN 80 - 120 MICRON", "Q195 UP TO 3mm THICK FOR
+    # POWDER COATED STEEL", "ALL WELDS TO BE TIG" — is printed on every sheet of a pack. The
+    # weld and material readers above read with it removed (D-394); this inference read the
+    # whole page, so every sheet minted powder_coating, and 8188-08-SA04 — an acrylic waves
+    # sub-assembly whose own title block states no finish at all — took a powder coat from
+    # the legend and carried it to the P.Coat row. A note stays on the sheet it is written
+    # on; a paragraph written on every sheet is a note on none of them.
     inferred_operations = infer_operations_from_text(
-        full_text + " " + notes_source,
+        strip_specification_legend(full_text) + " " + strip_specification_legend(notes_source),
         material=page_material,
         finishes=finishes,
         has_fold_geometry=has_fold_geometry,

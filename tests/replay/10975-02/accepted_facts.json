@@ -1,0 +1,13 @@
+{
+  "_reviewed": "James Gray + reviewer, 2026-09-08, acceptance run 09:36 on 416acbb",
+  "bom_identities": ["10975-02-A01", "10975-02-G01", "10975", "PACKAGING", "DELIVERY"],
+  "quantities": {"10975": 3, "10975-02-A01": 1, "10975-02-G01": 1},
+  "required_operations": {"10975-02-A01": ["linebend", "laser_cutting"]},
+  "forbidden_operations": {"10975-02-A01": ["folding", "hole_machining", "diamond_polish",
+                                            "welding", "powder_coating", "dress_welds"]},
+  "decisions_expected": 2,
+  "forbidden_names_everywhere": ["1100997755-E0P2D-GM0", "BI-CELLTAPE",
+                                 "BI-CLOSEDCELLTAPE", "VINYL-297X210",
+                                 "CELL TAPE^10975-02-"],
+  "phrase_counts": {"prices_missing": 3, "market_figures": 1, "manufacturing": 2}
+}

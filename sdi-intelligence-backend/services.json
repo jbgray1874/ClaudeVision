@@ -1,0 +1,953 @@
+{
+  "version": 1,
+  "generated_from": "sdi-intelligence-portal.html (main-2026)",
+  "services": [
+    {
+      "id": "estimating",
+      "name": "SDI Estimating Intelligence",
+      "status": "Live · parallel run",
+      "cls": "c-prog",
+      "category": "Live & in-flight",
+      "surface": "both",
+      "requires": "Runs on the SDI Intelligence server. Starting a job from outside the office opens once the server is live behind Microsoft sign-in and MFA; until then, in the office only.",
+      "desc": "Deterministic cost-estimating engine — SolidWorks PDF/DXF in, costed workbook out.",
+      "detail": "Live cost-estimating engine that mirrors the SDI estimating workbook to the cell. All 80 workbook formulas reverse-engineered. A growing RAG store of historical SDI jobs feeds comparables on material, labour and operations. Five-tier price chain with source attribution and confidence on every line — no priceless rows. Cell-level parity report against the manually completed workbook. In a <b>five-jobs-a-week parallel run</b> with James Ryan and Dave’s estimating team — Tim, Howard and Tony — ahead of GO-LIVE on Monday 2 November 2026, when the SDI Intelligence server goes live — confirmed by testing and the estimators’ sign-off (AI against manual, the variance, its causes and the estimator’s intervention), not by the date. Twenty-five packs are in the wave (24 issued, one held back), 43 since May, and twelve detailed reviews have come back from four estimators — Howard, Tim, Dave and Tony — and every point has gone into the engine as a rule that carries to every job: a change register of numbered decisions (D-016 to D-398) records who ruled it, on which job, whether it is generic or a scoped pilot, where it is implemented and the test that proves it. Where the engine and an estimator still differ, the line says so and names who is asked.<div style=\"margin-top:20px;padding:14px 16px;background:rgba(78,201,127,.06);border:1px solid rgba(78,201,127,.3);border-radius:6px\"><b style=\"color:var(--ok)\">Landed since 27 Aug 2026.</b><ul style=\"margin:9px 0 0 17px;line-height:1.85\"><li><b>The finished estimate is e-mailed automatically</b> to a saved recipients list the moment a run completes — workbook, report and covering note. The customer quote is withheld while an estimate is provisional.</li><li><b>An AI Explanation tab</b> in the workbook, the same text as section 14 of the job report and the covering e-mail: every material block and labour row reconciled to the sheet’s own totals, labour split into set-up and run with the figure at 1 to 250 off, and the lines that still need a person listed worst-first with the money at stake.</li><li><b>Parity from the portal</b> — the harness was rebuilt to measure the estimate rather than its own parser, and runs on every job with a manual sheet attached, filing a ledger row per job.</li><li><b>One estimate at every quantity asked for</b> (1, 50, 100, 250, 500), one workbook per quantity, with order-level freight divided per unit rather than a pallet landed on each.</li><li><b>A run is measured</b> — every phase timed, memory and CPU sampled during a live estimate. Those figures sized the shared workstation.</li></ul></div><div style=\"margin-top:14px;padding:14px 16px;background:rgba(78,201,127,.06);border:1px solid rgba(78,201,127,.3);border-radius:6px\"><b style=\"color:var(--ok)\">Landed 7 Sep 2026.</b><ul style=\"margin:9px 0 0 17px;line-height:1.85\"><li><b>One record behind every document</b> — the workbook tabs, the covering e-mail, the job report and the quote all read one costed record built after the sheet calculates, so money, sources, gaps, decisions, finish and release status are the same on all four. The job report is now <b>the estimator’s page</b>: unit cost and release status, then the decisions still open with the money riding on each, then the BOM under its assemblies and the priced route; the diagnostics collapsed beneath.</li><li><b>The workbook is five tabs, not nine</b> — the estimators’ own three, then AI Explanation (decisions first) and AI Provenance (value used → source → evidence → estimator action; the BOM hierarchy; the route decision by decision; identity through the pack).</li></ul></div><div style=\"margin-top:14px;padding:14px 16px;background:rgba(78,201,127,.06);border:1px solid rgba(78,201,127,.3);border-radius:6px\"><b style=\"color:var(--ok)\">Landed since 29 Sep 2026.</b><ul style=\"margin:9px 0 0 17px;line-height:1.85\"><li><b>A brief before the first run.</b> For 12173-02, 12696-01 and 9439-01-04 the drawings were read first and the right book written down as facts: the parts, the joints and whether they are symbols or notes, the coats, what is supplied by others, the quantity breaks. A checker scores every book against that file; a book that fails a fact is fixed in the engine and re-run, nothing is edited by hand.</li><li><b>A weld needs the part’s own evidence.</b> Weld symbols are read off each sheet’s vectors, a note on the sheet is the drawing’s statement, and a member stated FINISH: WELDED under a welded assembly is that assembly’s joint, charged once. The border legend’s “ALL WELDS TIG” is how a weld is made, not that one exists; the weld row names the process beside the rate charged. A part with no evidence of its own is asked, not charged.</li><li><b>The estimator’s brief, typed on the portal.</b> A render-only run takes a brief in a box on the run page (quantity, materials, sizes, finish, the customer), filed with the pack and read as stated facts; a run whose brief was not filed is stopped.</li><li><b>The quantity-break sheet says what the fall from one off is made of.</b> Under every break: packaging and delivery per unit, labour set-up per unit, run labour, and the unit cost with the spread money taken off.</li><li><b>The portal and the runner.</b> One machine runs one portal and the page warns of a second; a restarted runner releases its job and does not strand it; a job folder’s sub-folders are never read; a job’s own numbering is accepted as the product at any level.</li></ul></div><div style=\"margin-top:14px;padding:14px 16px;background:var(--bg-2);border:1px solid var(--line);border-radius:6px\"><b>After the parallel run — the automated pipeline, and on demand.</b> The parts exist as separate controls on the estimating page; the next step joins them into one run and keeps each available on its own.<ul style=\"margin:9px 0 0 17px;line-height:1.85\"><li><b>One button imports the full and latest drawing pack</b> from Document Manager into staging — latest revision by the data inside the file. <span class=\"chip c-plan\" style=\"font-size:10px\">Next</span></li><li><b>One click generates the estimate with its explains and e-mails it with the client quote.</b> <span class=\"chip c-plan\" style=\"font-size:10px\">Next</span></li><li><b>Parity at the time of the run</b> where a manual sheet exists, or <b>added afterwards</b> where the AI run comes first. <span class=\"chip c-prog\" style=\"font-size:10px\">Partly in</span></li><li><b>Amend the estimate, then generate the quote</b> from the estimator’s own figure. <span class=\"chip c-done\" style=\"font-size:10px\">In</span></li><li><b>Print the PDFs and DXFs of a pack</b> from the portal. <span class=\"chip c-done\" style=\"font-size:10px\">In</span></li><li><b>Beyond, no timetable:</b> China quotations (buttons in, analytics to follow) and multi-PDF packs (working, needs testing; runs against our model or purely against an LLM).</li></ul></div><div style=\"margin-top:22px;font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase\">Programme timeline</div><div style=\"display:grid;grid-template-columns:220px 1fr 100px;gap:14px 18px;align-items:center;padding:18px;background:var(--bg);border:1px solid var(--line);margin-top:8px\"><div style=\"font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase;padding-bottom:8px;border-bottom:1px solid var(--line)\">Phase</div><div style=\"font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase;padding-bottom:8px;border-bottom:1px solid var(--line)\">May 2026 → 2 NOV 2026</div><div style=\"font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase;padding-bottom:8px;border-bottom:1px solid var(--line);text-align:right\">Status</div><div>Build &amp; calibrate</div><div style=\"position:relative;height:12px;background:var(--panel);border-radius:3px;overflow:hidden\"><span style=\"position:absolute;top:0;left:0;width:33%;height:100%;background:var(--good);border-radius:3px\"></span></div><div style=\"text-align:right\"><span class=\"chip c-done\">Done</span></div><div>Estimator passive validation</div><div style=\"position:relative;height:12px;background:var(--panel);border-radius:3px;overflow:hidden\"><span style=\"position:absolute;top:0;left:33%;width:9%;height:100%;background:var(--good);border-radius:3px\"></span></div><div style=\"text-align:right\"><span class=\"chip c-done\">Done</span></div><div>Active estimator review</div><div style=\"position:relative;height:12px;background:var(--panel);border-radius:3px;overflow:hidden\"><span style=\"position:absolute;top:0;left:42%;width:19%;height:100%;background:var(--accent);border-radius:3px\"></span></div><div style=\"text-align:right\"><span class=\"chip c-prog\">Now</span></div><div>Automated pipeline, on demand</div><div style=\"position:relative;height:12px;background:var(--panel);border-radius:3px;overflow:hidden\"><span style=\"position:absolute;top:0;left:61%;width:20%;height:100%;background:var(--ink-dim);opacity:.6;border-radius:3px\"></span></div><div style=\"text-align:right\"><span class=\"chip c-plan\">Next</span></div><div>Stabilisation buffer</div><div style=\"position:relative;height:12px;background:var(--panel);border-radius:3px;overflow:hidden\"><span style=\"position:absolute;top:0;left:81%;width:19%;height:100%;background:var(--ink-dim);opacity:.4;border-radius:3px\"></span></div><div style=\"text-align:right\"><span class=\"chip c-plan\">Buffer</span></div></div><div style=\"margin-top:8px;display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase\"><span>1 May</span><span>26 May</span><span>15 Jun</span><span style=\"color:var(--accent);font-weight:600\">2 NOV GO-LIVE</span></div>",
+      "inputs": [
+        "SolidWorks PDF",
+        "DXF files",
+        "job folder path"
+      ],
+      "outputs": [
+        "Costed Excel workbook — five tabs: Estimate, Labour, Material Price Break, AI Explanation, AI Provenance",
+        "Covering e-mail, sent automatically",
+        "Job report HTML — the estimator’s page, decisions first",
+        "Customer quote (draft-marked, withheld while provisional)",
+        "Parity report and ledger",
+        "Normalised JSON with the costed record",
+        "Audit trail"
+      ],
+      "tech": [
+        "Python",
+        "PyMuPDF",
+        "pdfplumber",
+        "xAI Grok vision",
+        "SOLIDWORKS COM API",
+        "ezdxf",
+        "pyodbc → SQL Server"
+      ],
+      "phase": "Phase 1 · GO-LIVE 2 NOV 2026, WITH THE SERVER",
+      "invoke": "Run from the estimating page on this portal: pick the pack, set the quantities, name the recipients, attach the manual sheet if there is one. The finished estimate is e-mailed on completion. See <b>AI Tools</b> for the command-line equivalent.",
+      "next": "Reviews back on the eight packs awaiting them (12552, 12312-01, 12633-10, 12633-00, 12527-22, 12173-02, 12696-01 and 9439-01-04), with the M&amp;S re-runs with Dave; the supplier price lists (estimating’s contact spreadsheet is in hand and the requests go out this week) and a quoted-price entry on the run page, so a price the account manager already holds is entered once and reaches the estimate, the quote and the price history. Then run time on large packs (read the timing table, re-run only what a change affects), and the move from the laptop onto the SDI Intelligence server, live 2 Nov 2026.",
+      "app_url": "/estimating",
+      "app_category": "Apps"
+    },
+    {
+      "id": "hr-inventry",
+      "name": "SDI HR Inventry",
+      "status": "Built · being added to the app portal",
+      "cls": "c-prog",
+      "category": "Apps",
+      "surface": "app",
+      "desc": "Who is on site and staff sign-in and sign-out, through InVentry, for HR and managers.",
+      "requires": "Restricted to HR and managers. Personal data, so Microsoft sign-in with MFA is required on every device."
+    },
+    {
+      "id": "delivery-notes",
+      "name": "SDI Delivery Note Scanner",
+      "status": "Built · mobile screen being added",
+      "cls": "c-prog",
+      "category": "Apps",
+      "surface": "app",
+      "desc": "Photograph or upload a delivery note on any device; it is read and filed against the order."
+    },
+    {
+      "id": "account-manager-scanner",
+      "name": "SDI Account Manager Scanner",
+      "status": "Being added",
+      "cls": "c-plan",
+      "category": "Apps",
+      "surface": "app",
+      "desc": "The account managers' scanning app, in and out of the office."
+    },
+    {
+      "id": "client-brief-lite",
+      "name": "SDI Intelligence Brief to Book",
+      "status": "Built · in testing",
+      "cls": "c-prog",
+      "category": "Apps",
+      "surface": "app",
+      "desc": "Type a client brief — what it is, sizes, materials, finish, how many — and the estimating engine reads it as stated facts, sights the parts and files a provisional costing workbook for the estimators to look over. No drawings needed.",
+      "app_url": "brief-estimate.html",
+      "app_category": "Apps",
+      "requires": "Runs on the estimating service and its runner (the estimating laptop until the SDI Intelligence server is live on 2 Nov). A signed-in user, or a partner site with its own key. The book is provisional and never goes to a customer from here.",
+      "invoke": "Open the app, fill in customer, reference, quantity and the brief, press Run. The page follows the run and lists the workbook, report and covering note when it finishes. Another site queues the same run with POST /api/estimate/brief under its own key — see docs/Brief_to_Book_API.md.",
+      "phase": "Workstream 1 · BRIEF-ONLY RUNS FROM 6 OCT 2026",
+      "detail": "A brief alone is a pack (D-401). The service stages the brief as its own page beside the brief text, the runner reads it as an LLM-only run, the concept read is given the words and told there are no images, and the ordinary waterfall prices what it sights: every size the brief fixes is stamped <code>enquiry_brief</code>, every size it leaves open is an assumption the sheet names for confirmation, and nothing is ever stated as a price by the model. The finished book, report and covering note are fetched by run id, never by path, so a partner site sees its own run's files and nothing else on the share.",
+      "inputs": [
+        "Customer",
+        "Enquiry or drawing number",
+        "Quantity, and the breaks to price at",
+        "The brief, up to 4,000 characters",
+        "Recipients for the finished book (optional)"
+      ],
+      "outputs": [
+        "Costed workbook — five tabs, marked provisional",
+        "Job report HTML",
+        "Covering note",
+        "The run's log, live on the page"
+      ],
+      "tech": [
+        "Estimating service (FastAPI)",
+        "Estimating runner",
+        "xAI Grok concept read",
+        "Excel COM"
+      ]
+    },
+    {
+      "id": "technical-design",
+      "name": "SDI Technical Design Intelligence",
+      "status": "In build · Design Vault hard cases proven · go/no-go end Oct",
+      "cls": "c-prog",
+      "category": "Live & in-flight",
+      "surface": "intranet",
+      "desc": "Reads SolidWorks project data natively, and builds SDI its own PDM — Sept 2026 to Feb 2027.",
+      "detail": "Two threads run under one workstream. The <b>Document Manager API</b> tools (P1, P2) pull the correct drawing pack for a project straight into the estimating app and into the shop-floor Production folder — reading without a SolidWorks seat, read-only, never writing to the live CAD share. Then an <b>SDI in-house PDM</b> (P3.1–P3.4) gives engineering trustworthy file management, CAD-awareness, revision control and release workflows. It is built on GitLab + LFS with a DM API intelligence layer over PostgreSQL — it is <b>not</b> an integration with the SOLIDWORKS PDM vault.<div style=\"margin-top:20px;padding:12px 14px;background:rgba(78,201,127,.06);border:1px solid rgba(78,201,127,.3);border-radius:6px;font-size:13px\"><b style=\"color:var(--ok)\">Week to 2 Oct 2026 (Yogesh’s report).</b> <b>The Design Vault handles the hard scenarios</b> Ian asked to see proven before Phase 3: an administrator cancelling another user’s checkout for holiday cover, with the lock holder told and blocked from overwriting with a stale copy until they Get Latest; cross-project and library referencing, where Check Out lists the assembly and its referenced parts including those in other projects, pulls references read-only without locking, and “save a copy for this project” creates a new file rather than editing the shared source; workflow states separate from the lock (WIP and Released, with Revise returning a file to WIP and advancing the revision letter, and Publish Production recording the released revision); and a browser-only check-out and check-in by zip download with a small local agent, so laptops need no desktop install. Users and designer/admin roles are in Postgres. <b>The PDM handover meeting of 30 Sep</b> (Ian, Steve, James, Yogesh) confirmed that PDM Standard stores its metadata in SQL with the files as an archive on disk, that SQL access is permitted, and that PDM and SolidWorks versions must stay matched; Standard has no API, but its SQL can be linked to the archive files, which de-risks a later migration whichever way the October decision goes. <b>The extraction endpoint is hardened on live projects</b> 10875, 11676, 12173, 12432 and 12527, with 610 tests: a redundant-folder revision bug on 10875-01-GA (stale Rev A to E pulled instead of Rev G) fixed by recognising configurable archive markers such as Redundant, superseded and obsolete; the ambiguous-token response now carries a ranked list of candidates, with an opt-in rule to auto-select a single unrivalled master; and 11676-18’s missing PDF and STEP traced to a missing native drawing and an unlinked STEP, with a tightly gated same-folder PDF fallback shipped. <b>The design working session of 1 Oct</b> captured the requirements: library get-latest-only with path remapping; select all, single checkout; a BOM and linked-file listing at checkout; e-mail and in-tool notifications; workflow states; the Production Extraction tool embedded as a launch button; a limited QC/ECR login; cross-project referencing; and where AI adds most value, reference intelligence and cross-reference impact analysis over the Vault’s data rather than CAD generation. Jira is being configured as a company-managed project with a project, phase and task hierarchy. Direction from the daily meetings: carry on with the Vault’s complex functionality and <b>begin drawing and assembly/part (ASM/PRT) automation in parallel</b>, because Brief Lite is likely to need it.</div><div style=\"margin-top:14px;padding:14px 16px;background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.24);border-radius:6px\"><b style=\"color:var(--ok)\">Proven, and the seat is now installed.</b> Four SolidWorks COM tools are POC-complete and demoed to Ed Cooper and Ian B — C1 multi-format export (including <b>DXF flat patterns</b>), C2 the topple / weight / interference / hole-alignment check suite, C3 drawing generation from a model, C4 machine-tolerance validation against the TRUMPF tool list (in progress). Every one carried <i>go-live subject to SolidWorks licence</i>, and a <b>permanent seat is now installed on the estimating laptop</b> — so all four can run there, among them the DXF generation that answers the estimating engine’s largest accuracy limiter. Seats on the other machines are the remaining question.</div><div style=\"margin-top:14px;padding:12px 14px;background:rgba(78,201,127,.06);border:1px solid rgba(78,201,127,.3);border-radius:6px;font-size:13px\"><b style=\"color:var(--ok)\">Week to 11 Sep 2026 (Yogesh’s report).</b> P2 hardening after the 2 Sep approval: the two checkouts untangled (UAT on 8000, feature branch on 8001); the licence key and password-less e-mail fixed; the fifteen missing BOM previews diagnosed — twelve were library hardware pointing at a folder that did not exist, repointed and verified, three are sheet-metal parts to be re-saved in SolidWorks; the project-10975 crash traced to stale SolidWorks lock files opened as assemblies. P2 gained extraction history, diagnostics and a metrics endpoint, live mismatch alerts in Step 4 with recorded acknowledgement, and richer e-mail notifications; tests went from about 240 to 363. Six short demo videos with write-ups cover the SolidWorks COM API, the file-extraction endpoint, the DM API proof of concept and P2 itself. The design meeting with Ian B and Ed Cooper set the next actions: ISO release traceability, overwrite behaviour on re-run, an isometric preview for the estimating quote page, a “promote drawing files” button, and staging for self-service testing. P2 keeps 29 Sep with the feature branch merging to main w/c 21 Sep; P3.1 has started, Ubuntu and Docker installed for the PDM MVP.</div><div style=\"margin-top:14px;padding:12px 14px;background:var(--bg-2);border:1px solid var(--line);border-radius:6px;font-size:13px\"><b>Why the dates run to February.</b> Yogesh is the sole developer. Requirement collection, development, unit testing, peer review, deployment and go-live are all hands-on and must run one at a time — only user testing overlaps. That, plus leave from 10 Dec 2026 to 4 Jan 2027, is what pushes P3.3 and P3.4 into the new year. Re-based on 4 Sep 2026: each tool’s deployment days are now carved out of the next build, which moved P2 and the PDM phases right by one to three weeks. The dates are a capacity constraint, not an estimate of effort.</div><div style=\"margin-top:14px;padding:12px 14px;background:var(--bg-2);border:1px solid var(--line);border-radius:6px;font-size:13px\"><b>Week of 4 Sep 2026.</b> P2 demoed at the technical design meeting on 2 Sep (Ian B, Ed Cooper) and approved, with the name confirmed as <b>Production Design Extraction</b>. Landed: primary/supplementary assembly roles; a DWG/PDF revision-mismatch rule with severity-based alerts, surveyed across 297 Boots projects (436 matched pairs, 34 split); the OneDrive/toolbox missing-file problem solved via configured read-only roots (980 filenames indexed, 10 of 11 missing 11650 parts resolving); an audit log, a drive-health chip and a Step 5 shop-floor e-mail option. The P3 Design Vault feasibility is complete. Watch-points: network-scan speed over Wi-Fi, and the Vault POC needs a Linux/GitLab machine — the SDI Intelligence server, since ordered (w/c 5 Oct 2026) and live 2 Nov.</div>",
+      "sections": [
+        {
+          "title": "Delivery phases · tracker refs P1–P3.4",
+          "body": "<div style=\"display:grid;grid-template-columns:96px 1fr;gap:9px 14px;align-items:start;font-size:13px\"><span class=\"chip c-prog\" style=\"font-size:10px;text-align:center\">15 Sep 26</span><div><b>P1 · DM API — Design Files Extraction Tool.</b> Pulls the correct drawing pack and manufacturing files for a project into the estimating app. 90% on the 25 Sep tracker; endpoint live for the estimating app since 24 Aug 2026; deployment not yet started, so not confirmed live. The 12633-family scoping is now correct end to end — 582 tests, verified live against the W: share.</div><span class=\"chip c-prog\" style=\"font-size:10px;text-align:center\">2 Nov 26</span><div><b>P2 · Production Design Extraction (DM API — Production Folder auto-extraction).</b> Demoed and approved 2 Sep 2026; UI for user testing 8 Sep. Development complete; the feature branch merges to main next week, then a ten-phase review of the repository. User testing with Ed and Ian needs the server, so it goes live with the SDI Intelligence server on 2 November 2026, putting drawing packs in the production area for the estimators; was 24 Sep, then 29 Sep, then end Oct. Auto-collects the shop-floor drawing pack. Prefers the latest revision chosen <i>by data inside the file, not the filename</i>, and writes near-misses to <code>possible_candidates/</code> with a why-not-copied report rather than guessing.</div><span class=\"chip c-plan\" style=\"font-size:10px;text-align:center\">6 Nov 26</span><div><b>P3.1 · In-house PDM, Phase 1 (MVP).</b> Check-in/out, versioning, locking and history, so engineers can collaborate safely on work in progress. The hard scenarios are proven; the designers’ testing runs from 2 Nov on the server’s Linux side.</div><span class=\"chip c-plan\" style=\"font-size:10px;text-align:center\">30 Nov 26</span><div><b>P3.2 · PDM Phase 2 — CAD-aware.</b> Where-used, missing references, version consistency and released-reference checks.</div><span class=\"chip c-plan\" style=\"font-size:10px;text-align:center\">19 Jan 27</span><div><b>P3.3 · PDM Phase 3 — engineering revisions.</b> Approval workflow: WIP → pending approval → released / not-approved / obsolete.</div><span class=\"chip c-plan\" style=\"font-size:10px;text-align:center\">1 Feb 27</span><div><b>P3.4 · PDM Phase 4 — prototype release workflows.</b> Release routes for WIP, prototype and production components.</div></div>"
+        },
+        {
+          "title": "Behind these · R&amp;D pipeline, dates TBC",
+          "body": "<ul style=\"margin:0 0 0 17px;line-height:1.85;font-size:13px\"><li><b>F1 · PDF → ASM/PRT reconstruction</b> — rebuild 3D parts and assemblies from PDF drawings. POC pending</li><li><b>F2 · Autodesk 3DS Max API automation</b> — feed the SolidWorks/design pipeline. POC pending</li><li><b>F3 · BOM-to-Excel extraction</b> — using Ian’s custom-property spec, normalised with anomalies flagged. Marked a quick win</li><li><b>F4 · Electrical / AV schematic generation</b> — layouts connecting power, cabling, LED strips, displays and drivers. Concept</li></ul>"
+        }
+      ],
+      "inputs": [
+        "Live CAD share (W:), by project number",
+        "SolidWorks ASM/PRT/DRW",
+        "Technical subfolder or master assembly"
+      ],
+      "outputs": [
+        "Drawing pack into the estimating app",
+        "Production folder pack + why-not-copied report",
+        "BOM and cut lists (CSV/JSON)",
+        "DXF flat patterns, STEP, IGES, PDF/DWG (C1, licence permitting)"
+      ],
+      "tech": [
+        "Document Manager SDK",
+        "SOLIDWORKS COM API",
+        "GitLab + LFS",
+        "PostgreSQL",
+        "REST + MCP tools",
+        "Windows service"
+      ],
+      "phase": "Workstream 2 · SEP 2026 → FEB 2027",
+      "invoke": "P1’s REST endpoint is already wired into the estimating page — Extract Drawing Pack. P2 (Production Design Extraction) offers an operator UI; its user testing with the designers waits on the SDI Intelligence server, live 2 Nov 2026. The SDI Design Vault proof of concept now covers the hard cases: admin cancel-checkout, cross-project referencing, workflow states and browser-only check-out. The COM tools ship as an installable tray app. Full phase detail is on the <b>AI Programme</b> and <b>AI Roadmap</b> pages.",
+      "next": "<b>The SDI Design Vault go / no-go, end of October 2026.</b> It rests on Yogesh’s demonstrations of the hard cases, run in parallel with PDM: cross-project and library referencing, the deciding feature, is built and is demonstrated next, to be tested on Ian’s K-drive dummy projects. The designers’ hands-on testing follows from 2 Nov on the server’s Linux VM. The wider decision on how far to take the in-house Vault against PDM Standard, given that a two to three month build delivers the core workflow but not every PDM feature, is with Matt. <b>Next week:</b> the extraction branch merges to main and a ten-phase review of the repository follows; the Vault’s requested features (notifications, select-all checkout) are demonstrated; ASM/PRT automation begins for Brief Lite; Jira is kept current. <b>The drawing packs get prepared for manual estimating as well as for the AI engine</b> — the same tool serves both, so the estimators stop assembling packs by hand. P2 goes live with the SDI Intelligence server on 2 Nov, alongside the estimating engine and Drawing Search. PDM Standard’s cross-project behaviour was confirmed with Ian B on 29 Sep and is what the Vault has to match. Then decide which machines beyond the estimating laptop get a SolidWorks seat — the server’s Windows VM, with the licence manager on the host."
+    },
+    {
+      "id": "drawing-search",
+      "name": "SDI Drawing Search Intelligence",
+      "status": "Live · studio trial · K: drive search next",
+      "cls": "c-done",
+      "category": "Live & in-flight",
+      "surface": "intranet",
+      "desc": "Find the fixture that already exists before anybody draws a new one.",
+      "detail": "Drawing search for the design and technical teams — the project the delivery tracker calls the <b>Fixture Library</b>. <b>Live, out of UAT</b>, on 32,422 indexed drawings: search by what is actually printed on the sheet — the client, the material, the finish, the RAL, the job number, a line from a note — and open the SolidWorks or 3ds Max file straight from the result. SDI has drawn the same bracket, the same shelf and the same plinth many times over, and until now the only index of that was what a designer happened to remember.<div style=\"margin-top:20px;font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase\">Where it is</div><div style=\"margin-top:8px;line-height:1.75\"><b>Live.</b> UAT with the studio designers ran from Monday 7 Sep 2026 and it is out of UAT ahead of the ~25 Sep 2026 tracker date. Ian tested it and liked it, which is why it went in. It is on this portal’s menu as <b>SDI Drawing Search Intelligence</b>, directly below its user guide, and opens in a new tab at http://LC-328802:5000/. This week’s fixes came from watching real use: opening the right drawing, and not hiding drawings filed in unusual places — this year’s Boots Dynamix drawings were not showing at all and now are. The index grows as drawings are filed. The user guide is published on this portal as the <a href=\"#fixture-guide\" style=\"color:var(--accent)\">SDI Drawing Search Intelligence Guide</a>. Muhammad keeps this project through UAT and go-live while moving, from September, onto the business analysis for SDI Manufacturing Intelligence: mapping the live production spreadsheet for BOMs and routes for the warehouse, so that process can be automated and understood on the way into Sage X3, and mapping the design DXF process onto CNC machining — documented as a BRD and user stories, planned and executed with James Gray. Client Briefing, his other project, was held from 4 Sep and is back on the agenda from 16 Sep.</div><div style=\"margin-top:16px;padding:12px 14px;background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.22);border-radius:6px;line-height:1.65\"><b style=\"color:var(--accent)\">What decides its value now.</b> It went live before the 25 Sep 2026 date it was tracking, so the build overlaps listed on 4 Sep did not bite. The measure from here is designers using it on real jobs: the fixes come from watching real use, and a drawing filed in an unusual place is a bug to fix, not a limitation to accept. The studio trial is still running; the design and technical teams’ feedback is expected w/c 12 Oct, and changes from it. It runs from Muhammad’s machine until it goes live on the SDI Intelligence server on 2 Nov 2026, with the estimating engine. Dave has asked for search by UPC or drawing number on the K: drive as well as W:, which is the next change, so that anything there comes up just as quickly.</div><div style=\"margin-top:16px;line-height:1.75\"><b>What this is not.</b> It is not the estimating engine’s description matching pointed at a different table. That scores word overlap between two pieces of text; this searches the IMAGES, which is why it can find a fixture whose description never said what it looked like. The two may meet later — a drawing found here has a part code, and that code is a key the price chain already understands — but they are separate pieces of work today.</div>",
+      "sections": [
+        {
+          "title": "Delivery plan · phases and dates",
+          "body": "<div style=\"margin-bottom:12px;font-size:12.5px;color:var(--ink-dim)\">Owner <b>Muhammad Yazir</b> · stakeholders Ed and Stuart · tracker name <b>Fixture Library</b>. Transcribed from the All Projects delivery tracker.</div><div style=\"overflow-x:auto\"><table style=\"width:100%;min-width:560px;border-collapse:collapse;font-size:13px\"><thead><tr><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">#</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Phase</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Dates</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Status</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Notes</th></tr></thead><tbody><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"font-family:var(--mono);color:var(--ink-faint);padding:9px 10px 9px 0\">01</td><td style=\"padding:9px 10px 9px 0\"><b>Proof of concept</b></td><td style=\"font-family:var(--mono);font-size:11.5px;padding:9px 10px 9px 0;white-space:nowrap\">1 Jul 26</td><td style=\"padding:9px 10px 9px 0;white-space:nowrap\"><span class=\"chip c-done\" style=\"font-size:10px\">Done</span></td><td style=\"padding:9px 0;line-height:1.55;color:var(--ink-dim)\">Prototype demoed to Ed &amp; Stuart. Green light received.</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"font-family:var(--mono);color:var(--ink-faint);padding:9px 10px 9px 0\">02</td><td style=\"padding:9px 10px 9px 0\"><b>Development — round 1</b></td><td style=\"font-family:var(--mono);font-size:11.5px;padding:9px 10px 9px 0;white-space:nowrap\">2–31 Jul 26</td><td style=\"padding:9px 10px 9px 0;white-space:nowrap\"><span class=\"chip c-done\" style=\"font-size:10px\">Done</span></td><td style=\"padding:9px 0;line-height:1.55;color:var(--ink-dim)\">CLIP search, PDF indexing, GPU support, Flask UI, scan cache. 4 weeks.</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"font-family:var(--mono);color:var(--ink-faint);padding:9px 10px 9px 0\">03</td><td style=\"padding:9px 10px 9px 0\"><b>Unit testing</b></td><td style=\"font-family:var(--mono);font-size:11.5px;padding:9px 10px 9px 0;white-space:nowrap\">1–2 Aug 26</td><td style=\"padding:9px 10px 9px 0;white-space:nowrap\"><span class=\"chip c-done\" style=\"font-size:10px\">Done</span></td><td style=\"padding:9px 0;line-height:1.55;color:var(--ink-dim)\">Search accuracy, edge cases, GPU fallback, network safety.</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"font-family:var(--mono);color:var(--ink-faint);padding:9px 10px 9px 0\">04</td><td style=\"padding:9px 10px 9px 0\"><b>Integration testing — round 1</b></td><td style=\"font-family:var(--mono);font-size:11.5px;padding:9px 10px 9px 0;white-space:nowrap\">3–7 Aug 26</td><td style=\"padding:9px 10px 9px 0;white-space:nowrap\"><span class=\"chip c-done\" style=\"font-size:10px\">Done</span></td><td style=\"padding:9px 0;line-height:1.55;color:var(--ink-dim)\"><b>Finding:</b> Renders folders not indexed — ~162k of ~268k images. Sent back to dev.</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"font-family:var(--mono);color:var(--ink-faint);padding:9px 10px 9px 0\">05</td><td style=\"padding:9px 10px 9px 0\"><b>Development — round 2</b></td><td style=\"font-family:var(--mono);font-size:11.5px;padding:9px 10px 9px 0;white-space:nowrap\">1–15 Sep 26</td><td style=\"padding:9px 10px 9px 0;white-space:nowrap\"><span class=\"chip c-prog\" style=\"font-size:10px\">In progress</span></td><td style=\"padding:9px 0;line-height:1.55;color:var(--ink-dim)\">Indexing ~446k remaining images. Wider rules, security review, user guide.</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"font-family:var(--mono);color:var(--ink-faint);padding:9px 10px 9px 0\">06</td><td style=\"padding:9px 10px 9px 0\"><b>Integration testing — round 2</b></td><td style=\"font-family:var(--mono);font-size:11.5px;padding:9px 10px 9px 0;white-space:nowrap\">15–20 Sep 26</td><td style=\"padding:9px 10px 9px 0;white-space:nowrap\"><span class=\"chip c-plan\" style=\"font-size:10px\">Pending</span></td><td style=\"padding:9px 0;line-height:1.55;color:var(--ink-dim)\">Verify all ~268k images searchable. Confirm all 3 models accurate.</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"font-family:var(--mono);color:var(--ink-faint);padding:9px 10px 9px 0\">07</td><td style=\"padding:9px 10px 9px 0\"><b>UAT</b></td><td style=\"font-family:var(--mono);font-size:11.5px;padding:9px 10px 9px 0;white-space:nowrap\">7–25 Sep 26</td><td style=\"padding:9px 10px 9px 0;white-space:nowrap\"><span class=\"chip c-done\" style=\"font-size:10px\">Done</span></td><td style=\"padding:9px 0;line-height:1.55;color:var(--ink-dim)\">Studio designers tested on real projects from Mon 7 Sep; Ian tested it and it went in. Out of UAT ahead of the 25 Sep end date.</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"font-family:var(--mono);color:var(--ink-faint);padding:9px 10px 9px 0\">08</td><td style=\"padding:9px 10px 9px 0\"><b><b>Go live</b> · studio-wide</b></td><td style=\"font-family:var(--mono);font-size:11.5px;padding:9px 10px 9px 0;white-space:nowrap\">~25 Sep 26</td><td style=\"padding:9px 10px 9px 0;white-space:nowrap\"><span class=\"chip c-done\" style=\"font-size:10px\">Live</span></td><td style=\"padding:9px 0;line-height:1.55;color:var(--ink-dim)\">Live Sep 2026, ahead of date, on the portal menu at LC-328802:5000. The IIS/nginx deploy with AD authentication and the index on the K: drive remains the planned production home.</td></tr></tbody></table></div><div style=\"margin-top:14px;padding:11px 13px;background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.24);border-radius:6px;font-size:12.5px;line-height:1.6\"><b style=\"color:var(--accent)\">Read the dates as history.</b> The plan had UAT (7–25 Sep) overlapping development round 2 (to 15 Sep) and integration round 2 (to 20 Sep), with go-live on 25 Sep the day UAT ended. It went live ahead of that date, out of UAT, on 32,422 drawings; the rows above are the plan it was delivered against, not the current schedule.</div>"
+        }
+      ],
+      "inputs": [
+        "Drawing and render archive (~268k images)",
+        "PDFs, indexed page by page",
+        "Project folders on the studio share"
+      ],
+      "outputs": [
+        "Visually ranked matching drawings and renders",
+        "A reuse candidate at the point a job is scoped",
+        "Search index copied to the K: drive"
+      ],
+      "tech": [
+        "CLIP visual search",
+        "PDF indexing",
+        "GPU acceleration with CPU fallback",
+        "Flask",
+        "IIS / nginx",
+        "AD authentication"
+      ],
+      "phase": "Workstream 3 · 1 JUL 2026 → LIVE SEP 2026",
+      "invoke": "Live. Open it from this portal’s menu — <b>SDI Drawing Search Intelligence</b>, directly below the guide — which opens the application in a new tab at http://LC-328802:5000/. Read the <a href=\"#fixture-guide\" style=\"color:var(--accent)\">SDI Drawing Search Intelligence Guide</a> on this portal first. The IIS/nginx deployment with AD authentication and the index on the K: drive remains the planned production home.",
+      "next": "<b>The studio’s feedback, expected w/c 12 Oct 2026</b>, and the changes that come from it; <b>the K: drive search</b> Dave has asked for, by UPC or drawing number, as on W:. <b>Then it goes live on the SDI Intelligence server on 2 Nov 2026</b>, with the estimating engine, so it stops running from Muhammad’s machine. After that, integration with SDI Intelligence: joining the search to the portal is what turns a drawing found in the library into a part code the price chain already understands. One decision still open before the production home is built: whether AD integration is firm or nice-to-have. Muhammad and James are also analysing how to fast-track the creative design process by integrating creative-design automations with the search tool."
+    },
+    {
+      "id": "client-briefing",
+      "name": "SDI Client Briefing Intelligence",
+      "status": "In testing · demoed to Matt · WhatsApp on a test number",
+      "cls": "c-prog",
+      "category": "Live & in-flight",
+      "surface": "intranet",
+      "desc": "A client brief comes back structured and with precedent attached, not with a blank sheet. Held 4 Sep; back on from 16 Sep; version 2 runs on Jonathan’s live jobs. Demonstrated to Matt and tested with Jonathan on real briefs; WhatsApp connected on a test number.",
+      "detail": "The client-facing project on the same tracker, where it is called <b>Client Briefing</b>. A brief is captured and turned into something structured, and that structure is run against what SDI has already built so the response carries precedent: the fixtures, the drawings, and the jobs they were made for. Approved by Stuart and Bec, and scoped around a large job of Stuart’s that needs its requirements settled in detail before any of it is built.<div style=\"margin-top:20px;font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase\">Where it is</div><div style=\"margin-top:8px;line-height:1.75\"><b>Back on the agenda from 16 Sep 2026.</b> Held from 4 Sep 2026 with requirements gathering stopped at 25%; Muhammad has resumed it. It takes a brief however it arrives — e-mail, a recorded call, a WhatsApp voice note — and turns it into one consistent brief: which of the four teams it belongs to, what can be filled in from what SDI already knows about the account, and what is still missing, with the gaps that block work separated from those that can follow. <b>It never books anything itself; every brief goes to Jonathan to approve.</b> <b>Version 2, from the design team’s feedback.</b> The team saw version 1 and liked it, and asked for fewer words, a job’s size, how much information is in and whether it is booked at a glance, a view per person, 2D split from artwork, Jonathan’s calendar and a way to capture briefs by phone or WhatsApp. Of their 25 requests, 19 are done and 3 partly done. Version 2 runs beside version 1 <b>on live jobs</b> — the current jobs from Jonathan’s inbox, 24 on 29 Sep 2026, picked up automatically at no extra AI cost. Jonathan’s three everyday e-mails (chasing what is missing, booking the team, confirming it is booked) are drafted for him; he checks and sends them. His calendar is in the tool read-only. Voice notes are written up on SDI’s own machine, so the client is not recorded; WhatsApp is built and tested with sample messages and is connected on a test number. Underneath, e-mails are stored once, the facts extracted once, and planner, writer and checker agents write the brief, with every AI call logged — $2.92 so far. Nick and Andy see a clear opportunity for account management. Muhammad carries it alongside the business analysis for the Manufacturing / CNC SDI Intelligence automations.</div><div style=\"margin-top:16px;padding:12px 14px;background:rgba(78,201,127,.06);border:1px solid rgba(78,201,127,.3);border-radius:6px;line-height:1.65\"><b style=\"color:var(--ok)\">Demonstrated to Matt, tested with Jonathan, on WhatsApp (week to 6 Oct 2026).</b> <b>Demo to Matt:</b> he liked it and gave new directions, one of them <b>Brief Lite</b>, a lighter tool for account and project managers that turns a described brief into a full pack with concept visuals, a concept GA at the asked size, a one-page client sheet and an internal brief PDF, drawn from the SDI work already indexed (see SDI Intelligence ClientBriefLite). <b>Testing with Jonathan on real briefs:</b> most briefs were assigned to the right team, the correct details were pulled from his e-mails and calendar, and he was happy with the overall structure. <b>WhatsApp connected on a test number:</b> anyone set up on it can ask about any brief by voice note or text, such as the deadline for a job or who is booked on it, and it understands follow-up questions. <b>Status: working and in testing.</b> Next: the full web tool is shown to the studio team w/c 12 Oct to gather their reviews, and WhatsApp is tested further.</div><div style=\"margin-top:20px;font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase\">What already exists</div><div style=\"margin-top:8px;line-height:1.75\">It is not restarting from a blank page. <b>A web template is already developed</b> and is being enhanced rather than designed. <b>An e-mail AI agent analyses client communications</b>, which is what lets a brief arrive as an e-mail, a recorded call or a WhatsApp voice note and still come back structured. <b>Design and account manager details are collated</b> against the brief, so the right people and the account’s own history travel with it. The purpose, stated plainly, is to <b>promote communication and collaboration across the four teams</b>: one consistent brief, the gaps named, and nothing booked without Jonathan’s approval.</div><div style=\"margin-top:16px;padding:12px 14px;background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.22);border-radius:6px;line-height:1.65\"><b style=\"color:var(--accent)\">The tracker’s dates are not re-claimed.</b> Its plan — scope sign-off 21 Sep, build 25 Sep to 15 Oct, testing and UAT through October, release ~Nov 2026 — is kept for the record. The project is back on, but no date is claimed until Jonathan has run real briefs through it.</div><div style=\"margin-top:16px;line-height:1.75\"><b>How this differs from SDI Brief &amp; Concept Intelligence</b>, listed below: that one takes a brief and generates something NEW — renders, concepts, parametric 3D. This one takes a brief and finds what ALREADY EXISTS. A client asking for something SDI has built before should be shown it rather than sold a concept render of it.</div>",
+      "sections": [
+        {
+          "title": "Delivery plan · phases and dates",
+          "body": "<div style=\"margin-bottom:12px;font-size:12.5px;color:var(--ink-dim)\">Owner was <b>Muhammad Yazir</b> · approved by Stuart and Bec · tracker name <b>Client Briefing</b>. Transcribed from the All Projects delivery tracker as it stood; <b>held from 4 Sep 2026 and back on from 16 Sep 2026</b>, so every row from 03 onward is the former plan, not re-claimed until real briefs have run through it.</div><div style=\"overflow-x:auto\"><table style=\"width:100%;min-width:560px;border-collapse:collapse;font-size:13px\"><thead><tr><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">#</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Phase</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Dates</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Status</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Notes</th></tr></thead><tbody><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"font-family:var(--mono);color:var(--ink-faint);padding:9px 10px 9px 0\">01</td><td style=\"padding:9px 10px 9px 0\"><b>Proof of concept</b></td><td style=\"font-family:var(--mono);font-size:11.5px;padding:9px 10px 9px 0;white-space:nowrap\">25–31 Jul 26</td><td style=\"padding:9px 10px 9px 0;white-space:nowrap\"><span class=\"chip c-done\" style=\"font-size:10px\">Done</span></td><td style=\"padding:9px 0;line-height:1.55;color:var(--ink-dim)\">POC presented and approved by Stuart &amp; Bec. Proceed to full project.</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"font-family:var(--mono);color:var(--ink-faint);padding:9px 10px 9px 0\">02</td><td style=\"padding:9px 10px 9px 0\"><b>Requirements gathering</b></td><td style=\"font-family:var(--mono);font-size:11.5px;padding:9px 10px 9px 0;white-space:nowrap\">10 Aug – 21 Sep 26</td><td style=\"padding:9px 10px 9px 0;white-space:nowrap\"><span class=\"chip c-prog\" style=\"font-size:10px\">Resumed</span></td><td style=\"padding:9px 0;line-height:1.55;color:var(--ink-dim)\">Detailed sessions with Stuart. Stopped at 25% on 4 Sep 2026; resumed by Muhammad from 16 Sep 2026, now on brief intake with Jonathan approving each brief.</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"font-family:var(--mono);color:var(--ink-faint);padding:9px 10px 9px 0\">03</td><td style=\"padding:9px 10px 9px 0\"><b>Development</b></td><td style=\"font-family:var(--mono);font-size:11.5px;padding:9px 10px 9px 0;white-space:nowrap\">25 Sep – 15 Oct 26</td><td style=\"padding:9px 10px 9px 0;white-space:nowrap\"><span class=\"chip c-plan\" style=\"font-size:10px\">Pending</span></td><td style=\"padding:9px 0;line-height:1.55;color:var(--ink-dim)\">Build all features from approved requirements. 3 weeks.</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"font-family:var(--mono);color:var(--ink-faint);padding:9px 10px 9px 0\">04</td><td style=\"padding:9px 10px 9px 0\"><b>Unit &amp; integration testing</b></td><td style=\"font-family:var(--mono);font-size:11.5px;padding:9px 10px 9px 0;white-space:nowrap\">15–25 Oct 26</td><td style=\"padding:9px 10px 9px 0;white-space:nowrap\"><span class=\"chip c-plan\" style=\"font-size:10px\">Pending</span></td><td style=\"padding:9px 0;line-height:1.55;color:var(--ink-dim)\">Unit + integration tests. Bug fixes. Test report.</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"font-family:var(--mono);color:var(--ink-faint);padding:9px 10px 9px 0\">05</td><td style=\"padding:9px 10px 9px 0\"><b>UAT</b></td><td style=\"font-family:var(--mono);font-size:11.5px;padding:9px 10px 9px 0;white-space:nowrap\">15–30 Oct 26</td><td style=\"padding:9px 10px 9px 0;white-space:nowrap\"><span class=\"chip c-plan\" style=\"font-size:10px\">Pending</span></td><td style=\"padding:9px 0;line-height:1.55;color:var(--ink-dim)\">Client/studio team test on real scenarios. Sign-off from Stuart &amp; Bec.</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"font-family:var(--mono);color:var(--ink-faint);padding:9px 10px 9px 0\">06</td><td style=\"padding:9px 10px 9px 0\"><b><b>Go live</b> · production</b></td><td style=\"font-family:var(--mono);font-size:11.5px;padding:9px 10px 9px 0;white-space:nowrap\">~Nov 26</td><td style=\"padding:9px 10px 9px 0;white-space:nowrap\"><span class=\"chip c-plan\" style=\"font-size:10px\">Pending</span></td><td style=\"padding:9px 0;line-height:1.55;color:var(--ink-dim)\">Deploy to production. Handover &amp; training if needed.</td></tr></tbody></table></div><div style=\"margin-top:14px;padding:11px 13px;background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.24);border-radius:6px;font-size:12.5px;line-height:1.6\"><b style=\"color:var(--accent)\">What is being built now.</b> Muhammad has resumed it as brief intake: a brief in any form becomes one structured brief with its team, what the account already tells us and what is missing, and goes to Jonathan for approval before anything is booked. Version 2 is on Jonathan’s live jobs. The phases above get dates once the studio has used it.</div>"
+        }
+      ],
+      "inputs": [
+        "Client brief and requirements sessions",
+        "Signed-off scope document",
+        "The Drawing Search index"
+      ],
+      "outputs": [
+        "Structured brief",
+        "Matching fixtures with the jobs they came from",
+        "A briefing pack a client can be walked through"
+      ],
+      "tech": [
+        "Requirements-driven build (scope locked before development)",
+        "SDI Drawing Search Intelligence"
+      ],
+      "phase": "Workstream 3 · HELD 4 SEP 2026 · BACK ON FROM 16 SEP 2026 · IN TESTING",
+      "invoke": "Working and in testing. Version 2 runs on Jonathan’s live jobs; the full web tool is shown to the studio team w/c 12 Oct 2026 for their reviews.",
+      "next": "The studio team’s reviews of the full web tool, w/c 12 Oct 2026. Further WhatsApp testing on the test number. Brief Lite (see SDI Intelligence ClientBriefLite) once the OpenAI API credits for the concept visuals are arranged, with the SolidWorks assembly and part automation started in Technical Design. And the Client Briefing session asked of Acuity with Andy Baxter, Stuart McMurray and Muhammad, so this builds on what Sage X3 already provides. No release date is claimed until the studio has used it."
+    },
+    {
+      "id": "x3",
+      "name": "SDI Sage X3 Data Migration",
+      "status": "Loading estimating this week · all areas tested by 30 Oct 26",
+      "cls": "c-prog",
+      "category": "Internal tools",
+      "surface": "intranet",
+      "desc": "Every table in SDI Live classified, and each area loaded into Sage X3 and user-tested on real SDI data in the same cycle — estimating first.",
+      "detail": "The Access Supply Chain database behind SDI Live is being moved to <b>Sage X3</b>. Since 29 September 2026 <b>data loading and user acceptance testing are one cycle</b>: each area is loaded into test, tested by its own users on real SDI data, fixed, and then kept current by incremental updates — so UAT runs on the data SDI will actually go live with, and Acuity’s standard reports list becomes the test scripts. <b>Estimating goes first.</b> All 813 source tables are classified, every record in 8 of the 13 load templates has a status and a reason, and Acuity’s 16 new templates are mapped field by field.<div style=\"margin-top:16px;padding:12px 14px;background:rgba(78,201,127,.06);border:1px solid rgba(78,201,127,.3);border-radius:6px;line-height:1.65\"><b style=\"color:var(--ok)\">Three dates.</b> <b>Every area loaded and user-tested by Friday 30 October 2026.</b> Dress rehearsal and cutover follow in <b>November</b>, to be confirmed. The ERP itself goes live <b>4 January 2027</b>, which is not SDI Intelligence’s to move; from it the estimating engine reads material and supplier prices from X3.</div><div style=\"margin-top:14px;line-height:1.75\"><b>Where these figures come from.</b> James Gray’s e-mails to Acuity of 25 and 29 September 2026, the meeting pack attached to them (tab 13, data quality; tab 15, the plan) and <code>ASC_SageX3_NewTemplate_Mapping.xlsx</code>. The tables of 16 September are kept at the foot of this page as the record they were.</div>",
+      "sections": [
+        {
+          "title": "1 · Estimating first — load and user-test together",
+          "body": "<div style=\"line-height:1.7\"><p style=\"margin:0 0 10px\">The first full pass is the estimating data set — <b>products, prices, BOMs and routes</b> — loaded and user-tested end to end in X3 with Dave Wright’s team.</p><ul style=\"margin:0 0 0 18px;padding:0\"><li style=\"margin:6px 0\"><b>Functions today against X3.</b> How Dave’s team creates prices and imports BOMs and routes in Access — the production screens and the spreadsheet — and the X3 equivalents. Dave’s template is the starting point; the aim is to improve on it, not copy it.</li><li style=\"margin:6px 0\"><b>Pre-populated tables.</b> The X3 tables that must be in place before an estimate can be uploaded — product categories, units, work centres, labour and cost rates, price structures. Acuity has been asked for the list, with a template for any SDI supplies.</li><li style=\"margin:6px 0\"><b>Loading SDI’s data</b> into test: current products, work centres, BOMs (lowest level first), routes and prices.</li><li style=\"margin:6px 0\"><b>UAT on estimates.</b> Dave’s team uploads sample estimates with their BOMs, routes and prices, views them and runs the standard reports — including how multi-level BOMs and routes are created and maintained in X3, and <b>how the estimating tools connect</b>.</li><li style=\"margin:6px 0\"><b>Manufacturing actuals.</b> The actual routes and times recorded in production loaded back, so estimated and actual can be compared.</li><li style=\"margin:6px 0\"><b>Incremental updates.</b> Only the changes from Access, not a full dump and reload — keeping test current while users test, and through to cutover.</li></ul></div><div style=\"margin-top:14px;padding:11px 13px;background:rgba(78,201,127,.06);border:1px solid rgba(78,201,127,.3);border-radius:6px;font-size:12.5px;line-height:1.6\"><b style=\"color:var(--ok)\">Where this meets SDI Intelligence.</b> The estimating engine now writes a <b>BOMs and Routes</b> pair on every run — an estimate’s BOM and route in structured form, which is the shape an X3 upload takes. How the estimating tools connect is an explicit UAT item, not something to solve after go-live.</div>"
+        },
+        {
+          "title": "2 · All 813 source tables, classified",
+          "body": "<div style=\"overflow-x:auto\"><table style=\"width:100%;min-width:560px;border-collapse:collapse;font-size:13px\"><thead><tr><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Class</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Tables</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">What happens</th></tr></thead><tbody><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Carry the migration</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">21</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Loaded to X3, in seven areas: products and stock, BOMs and routes, works orders, sales, purchasing, GL, AR/AP</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Need a business decision</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">16</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Ten decisions in all, each with an SDI owner</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Custom-field (UDEF) tables</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">18</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Scoped from the reports users need</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>History</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">41</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Kept in the SDILive archive</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Duplicates</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">40</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Including dated backup copies; dropped</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Empty, system, transient or rebuilt in X3</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">677</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">MRP output, print and posting work tables. Whole areas — MRP planning, CRM, Access’s own reporting — drop out because X3 rebuilds them</td></tr></tbody></table></div><div style=\"margin-top:14px;padding:11px 13px;background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.24);border-radius:6px;font-size:12.5px;line-height:1.6\"><b style=\"color:var(--accent)\">Five of the ten decisions depend on X3 configuration.</b> Cost centres (D3) — the priority, because it decides how the GL opening balances load by dimension; several ship-to addresses per customer (D2); analysis codes (D6); pricing (D8); and operators (D10), loaded only if X3 needs them, since the list holds personal data. This replaces the “131 need a business decision” of the first 25 September e-mail.</div>"
+        },
+        {
+          "title": "3 · Data quality — every record with a status and a reason",
+          "body": "<div style=\"margin-bottom:12px;font-size:12.5px;color:var(--ink-dim)\">Done for 8 of the 13 load templates: products, BOMs, routes, works orders, customers, suppliers, open AR and open AP. Stock, open sales and purchase orders, product sites and GL balances follow once their rules are agreed.</div><div style=\"overflow-x:auto\"><table style=\"width:100%;min-width:560px;border-collapse:collapse;font-size:13px\"><thead><tr><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Area</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">In Access</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">What the analysis found</th></tr></thead><tbody><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Products</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">41,645</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">About <b>16,400 current</b>; 7,399 active two to five years ago need a keep-or-drop decision; 17,841 have no activity</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Descriptions</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">10,738</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Current products with no main description — <b>10,687 have the text in another description field</b>, fixed in the mapping; only <b>51</b> need one added</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>BOMs</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">30,745 current</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">13,116 lines to review; 20,099 with no activity</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Routes</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">31,232 current</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Operations; only <b>68</b> are missing times</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Works orders</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">936 open</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>918 have no end date</b>, which Acuity confirms is mandatory — one rule from Manufacturing clears them; 12 need a route</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Customers</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">217 good</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Active and complete; 52 possible duplicates, 28 incomplete, 202 not traded in two years</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Suppliers</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">623 good</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Active and complete; 130 incomplete (mostly addresses or postcodes), 492 not used in two years</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Open AR</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">730 · £8.51m net</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Every item belongs to a customer that is loading; nothing over 12 months old</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Open AP</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">2,014 · £4.97m net</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">The same; the only gap is due dates on payments on account, defaulted to the document date</td></tr></tbody></table></div><div style=\"margin-top:14px;padding:11px 13px;background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.24);border-radius:6px;font-size:12.5px;line-height:1.6\"><b style=\"color:var(--accent)\">Roughly 40% of the product, BOM and route data loads, and around 60% of customers and suppliers.</b> The rest stays in the SDILive archive, taken in full, verified and queryable before Access is switched off. Each record sits in one bucket — <b>good</b> (loads straight away), <b>incomplete</b> (fixed in the mapping or by the owner in Access), <b>possible duplicate</b> (merged or confirmed), <b>review</b> (kept or dropped from a list), <b>old</b> (dropped as a block). The good bucket of each area loads first, in dependency order, and is tested while the owners work the rest.</div>"
+        },
+        {
+          "title": "4 · Acuity’s new templates, mapped field by field",
+          "body": "<div style=\"margin-bottom:12px;font-size:12.5px;color:var(--ink-dim)\">From <code>ASC_SageX3_NewTemplate_Mapping.xlsx</code>: 16 YA004 templates, 207 fields — <b>121 mapped</b>, <b>47 fixed values</b>, <b>17 to review</b>, <b>22 waiting on Acuity</b>.</div><div style=\"overflow-x:auto\"><table style=\"width:100%;min-width:560px;border-collapse:collapse;font-size:13px\"><thead><tr><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Templates</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Position</th></tr></thead><tbody><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>ITF, TXT1–4</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">Product sites and the four product texts — ready once ITM loads</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>ITM</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">Products — needs the Access product group translated to X3 category codes (TCLCOD), built with Acuity</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>BOM</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">Manufacturing BOMs — orphan check first</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>BPC, BPS</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">Customers and suppliers — waiting on Acuity’s tax-rule, accounting, category and payment-terms codes</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>SOH, POH</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">Open sales and purchase orders — views built; order type SON, lines numbered in thousands, dates YYYYMMDD: nine view changes, fix now</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>BICX, BISX, GAS</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">Open AR, open AP, GL trial balance — <b>a new structure</b>, so the three views are rebuilt from the mapping</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>SMR</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">Stock opening balances — waiting on a stock-flag fix; four view changes</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>BUD</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">Budgets — in for review; budget code, version and fiscal year to confirm</td></tr></tbody></table></div><div style=\"margin-top:14px;padding:11px 13px;background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.24);border-radius:6px;font-size:12.5px;line-height:1.6\"><b style=\"color:var(--accent)\">Thirteen questions to Acuity, four critical.</b> Nothing loads without the X3 <b>site code</b> (S01A, to confirm), the <b>company code</b>, the <b>product category codes</b> and the <b>unit-of-measure codes</b>. High: tax rules, accounting codes, customer and supplier categories, payment terms, the AR and AP control accounts. Medium: the three GL dimensions, the budget code and fiscal year, the stock opening posting date. <b>Control totals</b> are agreed before load and checked after it, each with an owner: open sales orders 1,159 lines on 342 orders, £13,535,254; open purchase orders 1,166 lines on 338 orders, £5,675,222. <b>The route template is not among the sixteen</b> and is still asked of Acuity.</div>"
+        },
+        {
+          "title": "5 · The plan to 30 October",
+          "body": "<div style=\"margin-bottom:12px;font-size:12.5px;color:var(--ink-dim)\">Provisional and for agreement with Acuity; the estimating kick-off does not wait on it.</div><div style=\"overflow-x:auto\"><table style=\"width:100%;min-width:560px;border-collapse:collapse;font-size:13px\"><thead><tr><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Week</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">What happens</th></tr></thead><tbody><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>w/c 28 Sep</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">Kick-off call; agree the tables to pre-populate; test environment access; mapping fixes; key decisions — works-order end dates and the activity cutoff</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>w/c 5 Oct</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\"><b>Load the estimating data; UAT on estimates starts</b></td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>w/c 12 Oct</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\"><b>Estimating signed off</b>; first incremental update; customers and suppliers loaded, UAT starts on them</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>w/c 19 Oct</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">Manufacturing actuals; stock, open orders, open AR and AP, GL balances, with UAT</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>w/c 26 Oct</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">Works orders; <b>all areas loaded and user-tested by Friday 30 October</b></td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>November</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">Dress rehearsal and cutover, dates to be confirmed</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>4 Jan 2027</b></td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;vertical-align:top;font-variant-numeric:tabular-nums\">ERP go-live; the estimating engine’s prices read X3, with dual-running across the changeover</td></tr></tbody></table></div>"
+        },
+        {
+          "title": "6 · Resolved, still needed, and two sessions",
+          "body": "<div style=\"line-height:1.7\"><p style=\"margin:0 0 6px\"><b style=\"color:var(--ok)\">Resolved with Acuity.</b></p><ul style=\"margin:0 0 12px 18px;padding:0\"><li>Open items sent positive, the INV/CRN/PAY type driving the balance — AR and AP unblocked</li><li>One site, S01A, for finance and stock</li><li>The chart of accounts is already in X3</li><li>Product categories FGSL, FGML, PHANT, RAWML</li><li>BOMs follow products; multi-level loaded lowest level first, one file per level; the 32 orphan parents excluded</li><li>Obsolete products, templates and placeholders dropped; profit/loss codes created as service items</li><li><b>Routes and works orders are in scope</b>; every works order needs a route and start and end dates</li></ul><p style=\"margin:0 0 6px\"><b style=\"color:var(--accent)\">Still needed from Acuity.</b></p><ul style=\"margin:0 0 12px 18px;padding:0\"><li>The tables to pre-populate before an estimate uploads, with templates</li><li>Import templates for routes, and confirmation of the stock and open-order templates</li><li>Whether work centres are a separate master load before routes</li><li>Whether blank descriptions or zero prices are rejected on import</li><li>Test environment access and refresh; the recommended cutover method</li><li>Their recommended reporting approach in X3 (SEI or native), to map the 18 custom-field tables</li></ul><p style=\"margin:0\"><b>Reporting and sessions.</b> Acuity’s standard reports list is mapped against what users need and used in each area’s UAT, alongside an inventory of SDI’s Crystal Reports; tracing each required report to its source data decides which custom-field tables matter. Two sessions are asked for: <b>BOMs and routes in X3</b> with Dave and his team — structure, multi-level behaviour, and how a quoted job becomes a manufacturing BOM and route; and <b>Client Briefing</b> with Andy Baxter, Stuart McMurray and Muhammad, so the AI work on briefing builds on what X3 provides.</p></div>"
+        },
+        {
+          "title": "7 · Record, 16 Sep — the eleven extract views as first built",
+          "body": "<div style=\"margin-bottom:12px;font-size:12.5px;color:var(--ink-dim)\">Kept as the record of 16 September 2026. Superseded by Acuity’s new templates (section 4); routes and works orders are now in scope.</div><div style=\"margin-bottom:12px;font-size:12.5px;color:var(--ink-dim)\">Built extract views, proven against the source. Grouped by the category an owner would recognise rather than by template code.</div><div style=\"overflow-x:auto\"><table style=\"width:100%;min-width:560px;border-collapse:collapse;font-size:13px\"><thead><tr><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Sage template</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">What it carries</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Source table(s)</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Rows</th></tr></thead><tbody><tr><td style=\"padding:12px 10px 5px 0;font-family:var(--mono);font-size:9.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent)\" colspan=\"4\">Products / items</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>ITM</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Products</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">STK_STOCK + ASC_PMA_TBL</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">41,330</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>ITF</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Product sites</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">STK_STOCK + ASC_PMA_TBL</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">41,330</td></tr><tr><td style=\"padding:12px 10px 5px 0;font-family:var(--mono);font-size:9.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent)\" colspan=\"4\">Bills of material</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>BOMP</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Bills of material</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">ASC_BOM_TBL</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">61,648 lines<br>14,581 parents</td></tr><tr><td style=\"padding:12px 10px 5px 0;font-family:var(--mono);font-size:9.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent)\" colspan=\"4\">Customers / sales</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>BPC</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Customers</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">SL_ACCOUNTS + ASC_SL_ADDRESSES + SL_TERMS</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">500</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>SOH</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Open sales orders</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">ASC_COR_TBL</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">1,159<br>&pound;13,535,254</td></tr><tr><td style=\"padding:12px 10px 5px 0;font-family:var(--mono);font-size:9.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent)\" colspan=\"4\">Suppliers / purchasing</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>BPS</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Suppliers</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">PL_ACCOUNTS + PL_ADDRESSES</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">1,218</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>POH</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Open purchase orders</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">ASC_POR_TBL</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">1,166<br>&pound;5,675,222</td></tr><tr><td style=\"padding:12px 10px 5px 0;font-family:var(--mono);font-size:9.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent)\" colspan=\"4\">Finance &middot; ledgers</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>BICX</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Open accounts receivable</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">SL_TRANSACTIONS</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">843<br>~&pound;6.68M net</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>BISX</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Open accounts payable</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">PL_TRANSACTIONS</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">2,151<br>&pound;5,125,595</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>GAS</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">General ledger trial balance</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">SL_PL_NL_DETAIL</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">derived<br>nets to ~0</td></tr><tr><td style=\"padding:12px 10px 5px 0;font-family:var(--mono);font-size:9.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent)\" colspan=\"4\">Stock</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>SMR</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Stock opening balances</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">STK_STOCK + ASC_LOT_TBL</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">~40,000</td></tr></tbody></table></div>"
+        },
+        {
+          "title": "8 · Record, 16 Sep — the populated tables, by group",
+          "body": "<div style=\"margin-bottom:12px;font-size:12.5px;color:var(--ink-dim)\">Kept as the record of 16 September 2026: the ~300 populated tables analysed then. The final classification of all 813 is section 2.</div><div style=\"margin-bottom:12px;font-size:12.5px;color:var(--ink-dim)\">Roughly 300 source tables were analysed. Nothing is left without a disposition, because “nobody mentioned it” is how a table survives a migration by accident.</div><div style=\"overflow-x:auto\"><table style=\"width:100%;min-width:560px;border-collapse:collapse;font-size:13px\"><thead><tr><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Group</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">What is in it</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Volume</th><th style=\"text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-dim);font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap\">Disposition</th></tr></thead><tbody><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Core mapped</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">The 18 source tables behind the eleven templates above</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">18 tables</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b style=\"color:var(--ok)\">MIGRATE</b> &mdash; built and proven</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>UDEF family</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">SDI\\u2019s own additions to the Access schema. Populated: UDEF_WO_SHORTAGE_FROM_ORC (13,453), UDEF_COR_DATE_HIS_TBL (9,790), UDEF_ASC_ORC_ITEMS_T (4,810), UDEF_div_PL (490), UDEF_ASC_SOR_TBL_SC (449), UDEF_ASCSORTBL_68530446 (324), UDEF_TEMP_SL_COUNTRY (230), plus dated UDEF_ASC_DVY_TBL_* / UDEF_ASC_POR_TBL_* variants and UDEF_tab_Generic* config (0&ndash;4 rows)</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">~30k rows</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b style=\"color:var(--accent)\">REVIEW</b> &mdash; some are custom fields on live records and belong in X3 user fields, others are staging or temp and drop. <b>Not yet analysed.</b> Week 1 task</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Other ASC operational</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">Works orders ASC_WOR_TBL (53k), ASC_WKK_TBL (231k), job costing ASC_JBC_TBL (233k), kitting ASC_KIT_TBL (270k), deliveries ASC_DVY_TBL (144k), invoice detail ASC_INV_TBL (82k), planning ASC_PLN_TBL / ASC_MRP_*, capacity ASC_CAP_TBL (71k), labour ASC_LTU_TBL (814k) and ASC_TBI_TBL (64k)</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">~1.9M rows</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b style=\"color:var(--accent)\">DISPOSITION NEEDED</b> &mdash; each is migrate, rebuild natively in X3, archive or drop. Tied to the open routings question below</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Finance detail and history</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">SL_PL_NL_DETAIL (1.2M), NL_TRANSACTIONS (244k), SL/PL transaction and allocation history</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">~1.5M rows</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>ARCHIVE</b> &mdash; the openings go across as GAS; the history does not follow it</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Audit and quote history</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">ASC_HIS_TBL (1.6M) and the quote-history family</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">~1.6M rows</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>ARCHIVE</b> &mdash; cold storage, and available to the estimating engine as comparables rather than to X3</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Duplicates</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">_2 / _3 / _4 variants and dated backups of live tables</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">29 tables<br>~3.5M rows</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b style=\"color:var(--ink-dim)\">DROPPED</b> &mdash; confirmed and already removed from scope</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>System, config and reference</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">SYS_*, MetaData.*, Diagnostics.*, language labels, error logs, Workspace.*, UITest.*, sfdc.*, AIEstimating.*</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">~40+ tables</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b style=\"color:var(--ink-dim)\">DO NOT MIGRATE</b> &mdash; rebuilt natively or irrelevant. Reference data (currencies, countries, units of measure, VAT) is confirmed or rebuilt, not copied</td></tr><tr style=\"vertical-align:top;border-bottom:1px solid var(--line-soft)\"><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b>Crystal Reports</b></td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\">The reporting layer that sits on the Access database. These are <b>.rpt files, not tables</b>, so they were never in the table dump</td><td style=\"padding:9px 10px 9px 0;font-family:var(--mono);font-size:12px;white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums\">inventory<br>not captured</td><td style=\"padding:9px 10px 9px 0;line-height:1.5;vertical-align:top\"><b style=\"color:var(--accent)\">REBUILD OR RETIRE</b> &mdash; nothing migrates; each report is identified, its source tables traced, then rebuilt in X3 reporting or retired with an owner. <b>Register is a placeholder until the inventory is captured.</b> In the plan, due by end of October</td></tr></tbody></table></div>"
+        }
+      ],
+      "inputs": [
+        "The SDI Live Access database (Access Supply Chain) — 813 tables, 21 carried",
+        "Acuity’s 16 YA004 load templates and the field mapping",
+        "Dave’s estimating template, BOMs, routes and prices",
+        "Acuity’s standard reports list, as UAT scripts",
+        "Business owner decisions per bucket (review, duplicate, old)"
+      ],
+      "outputs": [
+        "Each area loaded and user-tested in X3 — estimating first",
+        "A status and reason for every record",
+        "Incremental updates from Access through to cutover",
+        "Control totals signed by each owner",
+        "A reports register: rebuild or retire"
+      ],
+      "tech": [
+        "Sage X3",
+        "SDI Live · Access Supply Chain",
+        "Extract views",
+        "pyodbc bridge",
+        "Acuity (implementation partner)"
+      ],
+      "phase": "ERP programme · data migration owned by SDI · all areas loaded and user-tested by 30 OCT 2026 · cutover NOV (TBC)",
+      "invoke": "Nothing to run. This is the plan of record: the classification of every table, the record-level data quality, the template mapping and the load-and-test plan by area. The meeting pack and the template mapping workbook carry the same content line by line.",
+      "next": "<b>This week the estimating tables (BOMs, routes, products) and customers and suppliers are loading into test;</b> user testing opens to estimating, then customer services, finance, warehouse and manufacturing once the first pass is in. Still from Acuity: the four critical configuration answers (site, company, category and unit-of-measure codes) and the route template. <b>Then the price seam:</b> from the ERP go-live the estimating engine reads its material and supplier prices from X3 rather than SDI Live, with dual-running validation across the changeover."
+    },
+    {
+      "id": "brief",
+      "name": "SDI Brief & Concept Intelligence",
+      "status": "Planned",
+      "cls": "c-plan",
+      "category": "Pipeline",
+      "surface": "intranet",
+      "desc": "Client brief → structured JSON → photorealistic concepts in hours.",
+      "detail": "Front of the pipeline. Verbal brief or spec sheet captured by Claude and converted to a structured Brief JSON: footprint, load, materials, brand, budget, quantity, lead time. The same JSON feeds the design generators (Firefly/Midjourney) and the estimating pipeline simultaneously. Photorealistic concepts in under two hours; sketch-to-3D via Vizcom for designers working from a napkin.",
+      "inputs": [
+        "Client brief (audio / text)",
+        "spec sheets",
+        "brand assets",
+        "budget & lead-time constraints"
+      ],
+      "outputs": [
+        "Brief JSON",
+        "concept renders (10+)",
+        "parametric 3D models"
+      ],
+      "tech": [
+        "Claude Sonnet (structured output)",
+        "Adobe Firefly v3",
+        "Midjourney API",
+        "Fusion 360 AI",
+        "Vizcom",
+        "Spline"
+      ],
+      "phase": "Phase 2 · Q3 2026",
+      "invoke": "POC scoping after go-live. The Brief JSON contract is the first artefact to lock down."
+    },
+    {
+      "id": "omniverse",
+      "name": "SDI Immersive Design Intelligence",
+      "status": "Discovery",
+      "cls": "c-plan",
+      "category": "Pipeline",
+      "surface": "intranet",
+      "desc": "Full-scale digital-twin walkthrough in NVIDIA Omniverse / Unreal Engine 5.",
+      "detail": "Immersive client review of designs before any steel is cut. Full-scale walkthrough in NVIDIA Omniverse or Unreal Engine 5, optionally via Vision Pro / Quest 3 headset. Client signs off in the room. The same Omniverse environment later hosts the factory digital twin used in Phase 5 robotic-cell validation (Isaac Sim).",
+      "inputs": [
+        "Parametric 3D model",
+        "brand textures",
+        "retail / store reference environment"
+      ],
+      "outputs": [
+        "Immersive walkthrough scene",
+        "client sign-off render",
+        "digital-twin scene (later phase)"
+      ],
+      "tech": [
+        "NVIDIA Omniverse",
+        "Unreal Engine 5",
+        "Isaac Sim (later)",
+        "Vision Pro / Quest 3"
+      ],
+      "phase": "Phase 2 · Q3 2026",
+      "invoke": "POC scoping with the internal design team. Hardware shortlist underway."
+    },
+    {
+      "id": "dfm",
+      "name": "SDI Design for Manufacture Intelligence",
+      "status": "Planned",
+      "cls": "c-plan",
+      "category": "Pipeline",
+      "surface": "intranet",
+      "desc": "Every design AI-reviewed before the shop floor — flags cost, suggests alternatives, auto-BOM.",
+      "detail": "AI review of every design before manufacture. Flags costly features with a £ impact estimate. Suggests redesign alternatives. Auto-generates flat patterns, bend sequences, weld sequences and full BOM. The BOM feeds straight into the estimating engine — closing the loop between design and estimate.<div style=\"margin-top:20px;padding:14px 16px;background:rgba(78,201,127,.06);border:1px solid rgba(78,201,127,.3);border-radius:6px\"><b style=\"color:var(--ok)\">Part of this is already proven, not planned.</b> The SolidWorks COM POC (Yogesh Kumar, complete mid-Aug 2026) already performs several of the checks this service was scoped to need:<ul style=\"margin:9px 0 0 17px;line-height:1.85\"><li><b>interference-check</b> — clash detection, exiting non-zero so it can gate a build rather than only reporting</li><li><b>hole-alignment-check</b> — cross-component hole-axis alignment. There is no SolidWorks API for this; it reads cylindrical-face geometry directly and flags near-misses</li><li><b>topple-analysis</b> — tip-over stability from centre of mass and support footprint, measured at ~25.9° on 12173-02-GA</li><li><b>weight-check</b> — mass against a limit</li><li><b>machine / standards validation</b> — in progress, against the TRUMPF tool list and SDI design standards. This is the DFM rules engine in all but name</li></ul><div style=\"margin-top:10px;padding-top:9px;border-top:1px dashed rgba(78,201,127,.25)\">And <b>export-dxf</b> and <b>export-package</b> generate the flat patterns, STEP and IGES this service was going to have to build. So the remaining work is narrower than the phase suggests: the <b>£ impact per feature</b>, the redesign suggestions, and wiring the generated BOM into the estimating engine. The geometry checks exist.</div></div>",
+      "inputs": [
+        "SolidWorks model (COM API)",
+        "manufacturing capability rules",
+        "TRUMPF tool list",
+        "price reference"
+      ],
+      "outputs": [
+        "DFM flag report (£ impact per feature)",
+        "flat patterns (export-dxf, proven)",
+        "clash + hole-alignment + stability checks (proven)",
+        "BOM → estimate"
+      ],
+      "tech": [
+        "SOLIDWORKS COM API (POC done)",
+        "Document Manager API (POC done)",
+        "custom rules engine",
+        "TRUMPF tool list"
+      ],
+      "phase": "Phase 3 · Q4 2026 — geometry checks already proven",
+      "invoke": "Partly built. The COM POC covers the geometry and export side; what remains is the cost model per feature and the BOM handoff into estimating. Note the proven half is held by a SolidWorks seat — the delivery tracker marks C1–C4 go-live subject to licence — so this phase can start from working code the day that is resolved."
+    },
+    {
+      "id": "scheduling",
+      "name": "SDI Production Scheduling Intelligence",
+      "status": "Planned",
+      "cls": "c-plan",
+      "category": "Pipeline",
+      "surface": "intranet",
+      "desc": "Optimal job sequencing across laser, brake, weld and coat — with dynamic rescheduling.",
+      "detail": "Operation routes from the estimating engine feed an AI scheduler. Optimal sequencing across laser, brake, weld and powder coat. Dynamic rescheduling when priorities shift. Material procurement triggered automatically. Accurate lead-time commitment at point of order. Capacity dashboard visible 2–4 weeks ahead.",
+      "inputs": [
+        "Operation routes from estimating",
+        "live shop-floor capacity",
+        "stock levels",
+        "priority overrides"
+      ],
+      "outputs": [
+        "Daily / weekly schedule",
+        "material trigger orders",
+        "lead-time commitments",
+        "capacity dashboard"
+      ],
+      "tech": [
+        "Custom scheduler",
+        "Seiki Systems",
+        "Sage X3 integration",
+        "procurement API"
+      ],
+      "phase": "Phase 4 · Q1 2027",
+      "invoke": "Gated on the Sage X3 migration providing the live operational data layer."
+    },
+    {
+      "id": "manufacture",
+      "name": "SDI Manufacture & Robotics Intelligence",
+      "status": "Planned",
+      "cls": "c-plan",
+      "category": "Pipeline",
+      "surface": "intranet",
+      "desc": "AI nesting · robotic brake · cobot weld · AI powder coat — feedback to the estimating engine.",
+      "detail": "AI nesting → laser auto-program (Lantek / ProNest). Robotic press brake with AI bend sequencing (Trumpf TruBend Cell or Amada HG-ATC). Cobot welding with vision path planning (UR + Vectis or Fanuc CRX). AI-controlled powder coat (Nordson / Gema). Every stage feeds back into the estimating engine’s RAG store for continuous calibration. Each robotic cell is a multi-£100k investment with 18–30 month payback.",
+      "inputs": [
+        "Operation route",
+        "flat patterns",
+        "tacked assembly geometry",
+        "powder application path"
+      ],
+      "outputs": [
+        "Nested sheets",
+        "pressed parts",
+        "welded assemblies",
+        "coated finished parts",
+        "feedback to RAG store"
+      ],
+      "tech": [
+        "Lantek Expert / Hypertherm ProNest",
+        "Trumpf TruBend Cell",
+        "Amada HG-ATC",
+        "UR10e + Vectis",
+        "Fanuc CRX-10iA/L",
+        "Nordson / Gema"
+      ],
+      "phase": "Phase 5 · Q1–Q3 2027",
+      "invoke": "Capex planning underway. First cell projected for Q1 2027."
+    },
+    {
+      "id": "inspection",
+      "name": "SDI Quality Inspection Intelligence",
+      "status": "Planned",
+      "cls": "c-plan",
+      "category": "Pipeline",
+      "surface": "intranet",
+      "desc": "Vision systems at every station — every part checked, deviations feed back into DFM rules.",
+      "detail": "Keyence IV3 at laser and brake stations — show 10 good parts, system is live. Cognex In-Sight 3800 deep learning at weld and powder coat — trained on SDI’s own good/bad examples. Every deviation logged against job number; defect patterns auto-update DFM rules and brake parameters. Target: 97%+ first-pass yield.",
+      "inputs": [
+        "Live camera feeds per station",
+        "reference drawings",
+        "job number"
+      ],
+      "outputs": [
+        "Pass / fail per part",
+        "deviation log → DFM rule updates",
+        "first-pass yield metric"
+      ],
+      "tech": [
+        "Keyence IV3",
+        "Cognex In-Sight 3800",
+        "deep-learning vision",
+        "pyodbc → SQL Server"
+      ],
+      "phase": "Phase 6 · Q2 2027",
+      "invoke": "Specced; quote in flight with Keyence for the laser cell."
+    },
+    {
+      "id": "md-agent",
+      "name": "SDI Chief of Staff Agent",
+      "status": "Concept",
+      "cls": "c-plan",
+      "category": "Co-worker agents",
+      "surface": "intranet",
+      "desc": "Matt Evans’ AI Chief of Staff — voice, email, WhatsApp, ERP, sales & finance intelligence.",
+      "detail": "A seven-layer agent that lives in the MD’s digital world. Starts highly suggestive; over 6–12 months transitions to acting, with Matt approving at decreasing frequency as trust builds. Year 2+: full autopilot on routine operations, escalating only genuine judgement calls. Layers: (1) Voice — always-on assistant. (2) Email — inbox intelligence and morning briefing. (3) WhatsApp — client / staff messaging. (4) ERP — live Access → Sage X3 view. (5) Sales intelligence — client profiles, reorder alerts. (6) Financial dashboard — P&L, margin, debtors. (7) Progressive autonomy model.",
+      "inputs": [
+        "Email (Gmail / Microsoft Graph)",
+        "WhatsApp Business",
+        "Access / Sage X3 DB",
+        "voice (Deepgram Nova-2)",
+        "calendar",
+        "CRM"
+      ],
+      "outputs": [
+        "Voice briefings",
+        "email drafts",
+        "WhatsApp replies",
+        "morning brief",
+        "pipeline alerts",
+        "financial snapshots"
+      ],
+      "tech": [
+        "Claude Sonnet API",
+        "Deepgram Nova-2 STT",
+        "ElevenLabs TTS",
+        "WhatsApp Business API",
+        "Twilio",
+        "pyodbc",
+        "n8n (self-hosted)"
+      ],
+      "phase": "Phase 3+ · progressive rollout",
+      "invoke": "Not yet built. Layer 1 (voice + email morning brief) is the proposed pilot post-go-live."
+    },
+    {
+      "id": "sales-agent",
+      "name": "SDI Sales Agent",
+      "status": "Planned",
+      "cls": "c-plan",
+      "category": "Co-worker agents",
+      "surface": "intranet",
+      "desc": "Quote follow-ups, client profiles from order history, reorder alerts, pipeline reporting.",
+      "detail": "Co-worker agent for the sales team. Drafts quote follow-up emails in SDI house style. Generates client profile cards from order history (average value, frequency, last contact, open quotes). Pipeline visualisation. Reorder alerts — \"TTI haven’t ordered in 6 weeks, last order was £28k; suggest a call.\" New-stock suggestions based on current levels, pipeline jobs and lead times. Auto-updates CRM from email and WhatsApp threads.",
+      "inputs": [
+        "Sales pipeline (CRM)",
+        "order history (Sage X3)",
+        "client comms threads",
+        "stock levels"
+      ],
+      "outputs": [
+        "Quote follow-up drafts",
+        "client profile cards",
+        "reorder alerts",
+        "pipeline report"
+      ],
+      "tech": [
+        "Claude Sonnet API",
+        "SDILive",
+        "Access Supply Chain / Sage X3",
+        "CRM integration"
+      ],
+      "phase": "Priority 2 — after the Chief of Staff Agent pilot",
+      "invoke": "Not yet built. Specced in the May 2026 strategy doc."
+    },
+    {
+      "id": "design-agent",
+      "name": "SDI Design Support Agent",
+      "status": "Planned",
+      "cls": "c-plan",
+      "category": "Co-worker agents",
+      "surface": "intranet",
+      "requires": "Runs on the engine host / SolidWorks workstation.",
+      "desc": "Drawing review notes, DFM flag summaries, BOM checking, SolidWorks DXF automation.",
+      "detail": "Co-worker agent for the design team. Auto-generates drawing review notes. Summarises DFM flags into plain language for client meetings. Structures client briefs from meeting notes. Checks BOM against the estimate workbook for omissions. Automates the SolidWorks DXF batch export step via Task Scheduler — replacing manual export.",
+      "inputs": [
+        "SolidWorks model + drawings",
+        "meeting notes",
+        "estimate workbook (for BOM cross-check)"
+      ],
+      "outputs": [
+        "Drawing review notes",
+        "DFM summary",
+        "structured brief",
+        "BOM diff",
+        "DXF batch export"
+      ],
+      "tech": [
+        "Claude Sonnet API",
+        "SolidWorks Task Scheduler",
+        "ezdxf",
+        "document_builder.py"
+      ],
+      "phase": "Priority 3",
+      "invoke": "DXF batch export automation is the most-requested first feature."
+    },
+    {
+      "id": "production-agent",
+      "name": "SDI Production Control Agent",
+      "status": "Planned",
+      "cls": "c-plan",
+      "category": "Co-worker agents",
+      "surface": "intranet",
+      "desc": "WO status drafts, capacity alerts, supplier chasing, material shortfall flags.",
+      "detail": "Co-worker agent for production control. Drafts work-order status updates to clients. Flags capacity bottlenecks. Chases supplier delivery dates. Cross-references stock against the scheduled jobs and flags material-shortfall risk before it bites. Drafts delivery confirmations and shipping documentation.",
+      "inputs": [
+        "WO schedule",
+        "stock levels",
+        "supplier order book",
+        "shop-floor status"
+      ],
+      "outputs": [
+        "Client status emails",
+        "capacity alerts",
+        "supplier chase drafts",
+        "shortfall risk reports"
+      ],
+      "tech": [
+        "Claude Sonnet API",
+        "Access → Sage X3",
+        "pyodbc",
+        "n8n"
+      ],
+      "phase": "Priority 3",
+      "invoke": "Not yet built."
+    },
+    {
+      "id": "finance-agent",
+      "name": "SDI Finance Agent",
+      "status": "Planned",
+      "cls": "c-plan",
+      "category": "Co-worker agents",
+      "surface": "intranet",
+      "desc": "Variance reporting, cost analysis, board-report drafting, aged-debtor chasing.",
+      "detail": "Co-worker agent for Charlotte Blackwell’s finance team. Variance reporting: estimated vs actual labour and materials from WO data. Cost analysis by customer and product family. Board-report drafting from the numbers. Aged-debtor chasing email drafts. Invoice processing assistance.",
+      "inputs": [
+        "Sage X3 financial data",
+        "WO actuals",
+        "estimate workbooks",
+        "AR / AP ledger"
+      ],
+      "outputs": [
+        "Variance report",
+        "margin analysis",
+        "board-report draft",
+        "debtor chase emails"
+      ],
+      "tech": [
+        "Claude Sonnet API",
+        "Access → Sage X3",
+        "pyodbc",
+        "Chart.js / Plotly"
+      ],
+      "phase": "Priority 4",
+      "invoke": "Not yet built."
+    },
+    {
+      "id": "voice-crm",
+      "name": "SDI Intelligence AM CRM",
+      "status": "Live · sandbox pilot",
+      "cls": "c-prog",
+      "category": "Co-worker agents",
+      "surface": "both",
+      "desc": "Nick’s sandbox tracker, read and updated by voice from the app portal — every change read back, confirmed, version-checked and journalled.",
+      "detail": "The first concrete voice pilot, requested by Nick Garrish (Account Director). Between 08:30 and 09:30 the system calls Nick, reads out his highest-priority or most out-of-date projects, takes the updates by voice, reads each proposed change back for explicit confirmation, and only then writes it to a SharePoint sandbox List. Every change is journalled (old value, new value, time, user, source) and a daily summary is emailed. <b>A custom Azure application is the workflow owner</b> — Microsoft Graph is the data path into Microsoft 365, not the application, and the speech/AI layer never writes records directly. Scope is deliberately narrow: the sandbox List only, records whose AM Owner is exactly <code>NG</code>, and the live project tracker in Teams is untouched until testing is approved.",
+      "sections": [
+        {
+          "title": "Microsoft Graph",
+          "body": "Reads and updates the selected SharePoint sandbox List. Access is granted to the application explicitly (selected-permissions consent) — no live-tracker permission is requested. No additional licence beyond the existing Microsoft 365 access."
+        },
+        {
+          "title": "Azure Communication Services",
+          "body": "Places and controls the outbound telephone call — dialling Nick’s mobile, playing prompts, receiving voice input, raising call events. ACS provides the telephone connection only; the conversation and all business logic sit in the application."
+        },
+        {
+          "title": "Speech and AI",
+          "body": "Azure AI Speech for listening and speaking, and an Azure-hosted language model for interpretation. This layer interprets and responds — it makes no record writes of its own."
+        },
+        {
+          "title": "Custom Azure application",
+          "body": "Python or C#, hosted in Azure. Schedules the call and selects the authorised NG projects, co-ordinates telephony + speech + AI, validates proposed changes, reads them back and obtains explicit confirmation, writes through Graph handling concurrent edits and retries safely, records the audit trail, co-ordinates report refreshes and sends the daily summary."
+        },
+        {
+          "title": "SharePoint List",
+          "body": "Structured sandbox records with required unique Project IDs, owner identity, status and next actions — defined fields, per-record forms, status views and version history. Use status <i>views</i> rather than moving or deleting records. Excel is retained as a reporting output, not the system of record."
+        },
+        {
+          "title": "Scheduling",
+          "body": "An Azure timer or Power Automate — use one scheduler, not both. Premium licensing is not required for the pilot: the Azure application schedules the calls and performs the updates directly. Assess Premium only if a selected flow genuinely requires it."
+        },
+        {
+          "title": "Audit and monitoring",
+          "body": "Pending and completed updates are recorded durably so a retry can never repeat a saved change. Failed writes, audit steps or report refreshes report their actual outcome — never a false “complete”. Raw call recording is not required by default."
+        },
+        {
+          "title": "Approval and boundaries",
+          "body": "IT and the SharePoint owner approve the sandbox, restrict human and application access, and enable version history. The application re-checks the NG owner and the record version at every update — a filtered view alone is not security. Nick is authenticated before any confidential project detail is read out."
+        },
+        {
+          "title": "Sage X3 — later, separate approval",
+          "body": "A separate service using Sage-supported interfaces, read-only initially (customer code, order status, invoiced value). Field ownership and stable ID mappings to be agreed with the X3 team ahead of the 4 January go-live. Tracker completion or hold status must never automatically close or alter an ERP order; live writeback requires a separately approved scope."
+        },
+        {
+          "title": "Not required for the pilot",
+          "body": "Copilot Studio voice capabilities and Office Scripts. Office Scripts are not needed for List updates and should not be assumed to refresh every workbook connection or pivot table — consider them only for specific Excel reporting tasks."
+        },
+        {
+          "title": "Indicative running cost",
+          "body": "One user, a 10–15 minute call on roughly 22 working days a month: an initial <b>£50–£150 per month</b> Azure operating allowance covers consumption-based voice, AI and application hosting. IT to confirm the selected services and tariffs before approval."
+        }
+      ],
+      "inputs": [
+        "Scheduled morning trigger (08:30–09:30)",
+        "Nick’s spoken updates via ACS",
+        "SharePoint sandbox List records (AM Owner = NG)",
+        "Sage X3 customer / order data (later, read-only)"
+      ],
+      "outputs": [
+        "Confirmed record updates in the sandbox List",
+        "Update journal (old / new value, confirmation, outcome)",
+        "Refreshed sandbox reporting (Excel or Power BI)",
+        "Daily email — saved changes, failed changes, outstanding actions"
+      ],
+      "tech": [
+        "Azure Communication Services (Call Automation)",
+        "Azure AI Speech",
+        "Azure-hosted language model",
+        "Microsoft Graph (selected permissions)",
+        "Microsoft Entra ID",
+        "SharePoint List",
+        "Python or C# on Azure",
+        "Power Automate or Azure timer"
+      ],
+      "phase": "Pilot · voice loop built against the sandbox workbook — writes gated until Nick approves",
+      "invoke": "Open the app, tap the mic and speak — e.g. “set the status on the Acme project to invoiced”. The change is read back and written only on an explicit yes, then journalled. Reads work as soon as the sandbox is configured; writes stay off until SDI_VOICECRM_WRITE and SDI_VOICECRM_APPROVED_BY are set. The live tracker is never touched. The outbound morning-call architecture described below is the next stage, not this build.",
+      "app_url": "voice-crm.html"
+    },
+    {
+      "id": "chatbots",
+      "name": "SDI ChatBot Intelligence",
+      "status": "Planned",
+      "cls": "c-plan",
+      "category": "Customer-facing",
+      "surface": "intranet",
+      "desc": "RAG chatbot on wearesdi.com + internal knowledge bot, grounded in SDI technical docs.",
+      "detail": "Two flavours. (1) Public-facing on wearesdi.com: a RAG-based bot (e.g. MxChat) trained on SDI technical documentation and case studies — answers engineering questions like a 24/7 product expert and captures brief requirements straight into the estimating pipeline. (2) Internal: a knowledge bot grounded in process docs, certifications and capabilities, routing complex enquiries to the right human.",
+      "inputs": [
+        "Web chat messages",
+        "internal Slack / Teams queries",
+        "SDI knowledge corpus"
+      ],
+      "outputs": [
+        "Conversational responses",
+        "captured Brief JSON → estimating",
+        "route-to-human escalations"
+      ],
+      "tech": [
+        "Claude Sonnet API",
+        "MxChat or custom RAG",
+        "pgvector / Qdrant",
+        "WordPress integration"
+      ],
+      "phase": "Phase 2 — alongside the website rebuild",
+      "invoke": "Knowledge corpus assembly is the first task. UI invocation will be the on-site chat widget; brief-capture handover is API-to-API."
+    },
+    {
+      "id": "voice",
+      "name": "SDI Voice Intelligence",
+      "status": "Planned",
+      "cls": "c-plan",
+      "category": "Customer-facing",
+      "surface": "intranet",
+      "desc": "Voice agents for enquiries, reception and support — natural conversation.",
+      "detail": "Spoken AI for routine inbound enquiries — order status, lead times, brochure requests — routed to humans when complexity warrants. Same Deepgram / ElevenLabs stack as the Chief of Staff Agent’s voice layer. Optional pilot: outbound voice agent for quote follow-ups.",
+      "inputs": [
+        "Inbound calls",
+        "caller intent",
+        "live ERP / CRM lookups"
+      ],
+      "outputs": [
+        "Spoken responses",
+        "routed call transfers",
+        "logged conversation summaries"
+      ],
+      "tech": [
+        "Deepgram Nova-2 STT",
+        "ElevenLabs TTS",
+        "Claude Sonnet",
+        "Twilio voice"
+      ],
+      "phase": "Phase 3+",
+      "invoke": "Not yet built. Pilot use-case selection pending."
+    },
+    {
+      "id": "brighthr",
+      "name": "SDI People Data Intelligence · BrightHR",
+      "status": "Live · Partner API",
+      "cls": "c-prog",
+      "category": "Internal tools",
+      "surface": "intranet",
+      "requires": "Needs the SDI network — it talks to the InVentry server on 10.0.0.241.",
+      "desc": "Signs staff in and out of InVentry to match who is clocked in on BrightHR Blip.",
+      "detail": "Keeps InVentry’s on-site register, and so the fire evacuation list, in line with who is clocked in on BrightHR Blip. Reads the Blip clockings, matches each person to their InVentry record (by PersonID, then email, then name), and signs people in or out through the InVentry Partner API, marking every action with the location <code>BRIGHTHR SYNC</code>. Every run is snapshotted to disk for audit. Guards: refuses data more than 15 minutes old, a Blip run with more than 2% failed lookups, or zero on site with failures; caps sign-outs at 25 per run; ignores clock-ins open longer than 20 hours (forgotten clock-outs); never signs out anyone whose lookup failed; only signs out records it manages. Runs every 5 minutes as a scheduled task.<div style=\"margin-top:18px;padding:14px;background:var(--bg);border:1px solid var(--line)\"><div style=\"font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px\">COO controls</div><div style=\"display:flex;gap:10px;flex-wrap:wrap;align-items:center\"><button class=\"run\" id=\"hr-blip-btn\" onclick=\"hrBlip()\">Who's clocked in?</button><button class=\"run\" style=\"background:transparent;color:var(--ink);border:1px solid var(--line)\" onclick=\"filesOpenRoot('HRSystemsOutput')\">View HR output folder →</button><button class=\"run\" id=\"hr-load-btn\" onclick=\"hrBlipLoad()\" title=\"Push the current on-site list into InVentry via the Partner API\" style=\"background:transparent;color:var(--ink);border:1px solid var(--line)\">Load to InVentry</button></div><div id=\"hr-blip-result\" class=\"muted\" style=\"margin-top:12px;font-size:12px;font-family:var(--mono);white-space:pre-wrap\"></div><div class=\"muted\" style=\"margin-top:10px;font-size:12px\">Press <b>Who's clocked in?</b> first, then <b>Load to InVentry</b> within 15 minutes. Load to InVentry asks you to confirm, then signs people in and out of InVentry and lists who it changed. They call <code>POST /api/hr/blip</code> and <code>POST /api/hr/blip/push</code>.</div></div>",
+      "inputs": [
+        "BrightHR Blip clockings (API key in .env)",
+        "InVentry Partner API key and partner secret",
+        "InVentry certificate pinned in INVENTRY_API_CA_BUNDLE"
+      ],
+      "outputs": [
+        "Sign-ins and sign-outs on InVentry (location BRIGHTHR SYNC)",
+        "Timestamped JSON snapshots (audit)",
+        "Push plan and status in the run log"
+      ],
+      "tech": [
+        "Python + requests",
+        "FastAPI router",
+        "BrightHR Blip API",
+        "InVentry Partner API"
+      ],
+      "phase": "Live — scheduled every 5 minutes, and on demand from the portal",
+      "invoke": "The COO or a director clicks <b>Who’s clocked in?</b> then <b>Load to InVentry</b> above. The scheduled task <i>BrightHR-InVentry Presence Sync</i> runs the same thing every 5 minutes. Command line: <code>python hr_blip.py</code> then <code>python hr_onsite_push.py</code> (add <code>--apply</code> to write). Endpoints: <code>POST /api/hr/blip</code>, <code>POST /api/hr/blip/push?apply=true</code>, <code>/api/hr/inventry/check</code>."
+    },
+    {
+      "id": "wearesdi",
+      "name": "SDI Web Intelligence",
+      "status": "Beta",
+      "cls": "c-prog",
+      "category": "Internal tools",
+      "surface": "intranet",
+      "desc": "Layered AI-readiness on the existing WordPress site — not a rewrite.",
+      "detail": "WordPress is the right engine for what SDI is doing — AI search engines love it for clean HTML, schema/JSON-LD support and B2B-intel integrations. Rather than rewrite the site, we layer six AI-native upgrades on top, and use this portal to mock new sections privately before they touch the staging WordPress clone.",
+      "sections": [
+        {
+          "title": "1 · LinkedIn → site insights feed",
+          "body": "Publish once on LinkedIn, syndicate automatically to a News / Insights section on wearesdi.com so AI crawlers see fresh SDI activity immediately. Tools: Elfsight feed widget or Jetpack Social with a filter on the relevant topics."
+        },
+        {
+          "title": "2 · AI-native SEO & content",
+          "body": "Adopt an AI SEO plugin — Rank Math with Content AI, or AIOSEO. These optimise for the technical vocabulary engineers and procurement people actually search, so SDI ranks for the high-intent, long-tail prompts AI search engines surface."
+        },
+        {
+          "title": "3 · RAG chatbot on site",
+          "body": "A retrieval-augmented chatbot (e.g. MxChat) trained on SDI’s own technical docs and case studies. Acts as a 24/7 technical sales assistant or \"AI product expert\" — not a generic FAQ bot. Same RAG pattern already running in the estimating engine."
+        },
+        {
+          "title": "4 · GA4 + B2B visitor identification",
+          "body": "GA4 wired to Sage X3 (when ready). Layer a B2B visitor-ID tool on top to surface which companies read which pages. Dealfront (Leadfeeder + Echobot, EU-built, GDPR-aligned) is the recommended path for the UK — Clearbit folded into HubSpot’s Breeze Intelligence and is no longer a standalone option. Albacross is an alternative. Track stakeholder journeys (multiple visitors from one prospect company) and conversion attribution back to the originating content."
+        },
+        {
+          "title": "5 · Predictive next-best content",
+          "body": "AI suggests the most relevant follow-up content to each visitor based on the current page — e.g. a Vue case study automatically surfaced when someone reads the cinema-display capability page. Lifts engagement and quote-request conversion."
+        },
+        {
+          "title": "6 · Multimodal search optimisation",
+          "body": "Tag SDI’s video and high-res facility imagery with ImageObject / VideoObject schema so AI tools can \"see\" the facility and processes, not just read text. Alt text, captions, transcripts — all built for AI ingestion as well as accessibility."
+        }
+      ],
+      "inputs": [
+        "Existing WordPress site",
+        "LinkedIn posts",
+        "SDI technical docs corpus",
+        "media library",
+        "Sage X3 (later)"
+      ],
+      "outputs": [
+        "Fresh insights feed",
+        "AI-optimised pages",
+        "RAG-grounded chat widget",
+        "company-level visitor identification",
+        "predictive content layer",
+        "multimodal schema"
+      ],
+      "tech": [
+        "WordPress",
+        "Elfsight / Jetpack Social",
+        "Rank Math Content AI",
+        "MxChat or custom RAG",
+        "GA4",
+        "Dealfront",
+        "schema.org JSON-LD"
+      ],
+      "phase": "Layer 1 mock-ups in progress — staging WordPress clone to follow",
+      "invoke": "Mock pages drafted in this portal behind your login. Once approved, applied to the WordPress staging clone before production.",
+      "link": "https://wearesdi.com",
+      "linkLabel": "Open wearesdi.com ↗"
+    },
+    {
+      "id": "obs",
+      "name": "SDI Recording Intelligence · OBS",
+      "status": "Live · James",
+      "cls": "c-done",
+      "category": "Internal tools",
+      "surface": "intranet",
+      "desc": "Professional screen recording and live streaming — AI demos, presentations, facility content and virtual camera for Teams.",
+      "detail": "OBS (Open Broadcaster Software) is the capture and broadcast layer at SDI. Record AI tool demos, estimating engine runs, design presentations and facility walkthroughs for the portal, SEEN content and client materials. Free, open source, runs locally. Download from obsproject.com if not already installed.",
+      "sections": [
+        {
+          "title": "First-time setup",
+          "body": "Settings → Video: Base Resolution 1920×1080, Output 1920×1080, FPS 30. Settings → Output → Recording: set a recordings folder (e.g. <code>C:\\SDIRecordings</code>). Settings → Audio: Desktop Audio = your speakers; Mic = your microphone.<br><br><b>Do not record straight to plain MP4.</b> An MP4 is only finalised when recording stops cleanly — a crash, a power loss or a flat battery leaves an <b>unplayable file with the whole recording lost</b>. Record to <b>MKV</b> (or <b>hybrid MP4</b> if your OBS offers it) and use <b>File → Remux Recordings</b> to produce an MP4 afterwards; remuxing is a container swap, it takes seconds and re-encodes nothing. This matters here because an engine run can last two hours.<br><br><b>Encoder:</b> <b>NVENC</b> on an NVIDIA GPU, <b>Intel QuickSync (QSV)</b> on an Intel Core Ultra machine — which is what the estimating laptop is, so NVENC will not be offered there. <b>x264</b> is the fallback and the only one that costs real CPU, which is worth avoiding while the engine is running."
+        },
+        {
+          "title": "Scene · AI Demo / Estimating Engine",
+          "body": "Add Scene “Engine Demo”. Sources → + → <b>Display Capture</b> (full screen). Add <b>Audio Input Capture</b> (your microphone). Press <b>Start Recording</b> before running the engine. Stop when done — the file lands in your configured recordings folder, then remux to MP4. Use this for parity run walkthroughs and portal demonstrations.<br><br>If Display Capture shows a <b>black screen</b>, that is the laptop’s hybrid graphics, not a broken install: use <b>Window Capture</b> on the specific window instead, or set OBS to the same GPU in Windows → Settings → Display → Graphics."
+        },
+        {
+          "title": "Scene · Presentation (screen + face cam)",
+          "body": "Add Scene “Presentation”. Sources: <b>Window Capture</b> (select your slides or browser) + <b>Video Capture Device</b> (webcam) + <b>Audio Input</b>. Drag the webcam source to the bottom-right and resize it. Use for recording portal walkthroughs, AI tool demonstrations or client-facing demos."
+        },
+        {
+          "title": "Scene · Facility Walkthrough",
+          "body": "Add Scene “Facility”. Sources: <b>Video Capture Device</b> (GoPro via USB, external camera or built-in laptop camera). Set output resolution to match your camera. Exports as MP4 for LinkedIn video, the SEEN newsletter or the wearesdi.com media library."
+        },
+        {
+          "title": "Virtual Camera → Teams / Zoom / Meet",
+          "body": "<b>Start Virtual Camera</b> is a button in the <b>Controls</b> dock, bottom-right of the main window, under Start Recording. In Teams: Settings → Devices → Camera → select <b>OBS Virtual Camera</b>. Everything in your active OBS scene broadcasts live into the call — switch scenes mid-call to share different layouts. Start the virtual camera <i>before</i> joining, or Teams may not list it. <br><br><i>Corrected 25 Aug 2026:</i> this page previously said Tools → VirtualCam and told you to install the <b>obs-virtualcam</b> plugin. The virtual camera has been built into OBS on Windows since version 26.1 — the plugin is obsolete and installing it on a current OBS is more likely to break the feature than enable it."
+        },
+        {
+          "title": "Streaming live · LinkedIn Live / YouTube",
+          "body": "Settings → Stream: select <b>YouTube</b> or <b>Custom RTMP</b> for LinkedIn Live. Paste your stream key from YouTube Studio or LinkedIn Live Events (you need to create the live event in advance on each platform to get the key). Press <b>Start Streaming</b>. OBS handles encoding; the platform handles distribution."
+        },
+        {
+          "title": "Hotkeys worth setting",
+          "body": "Settings → Hotkeys. Recommended: <b>Ctrl+Shift+R</b> Start/Stop Recording, <b>Ctrl+Shift+S</b> Start/Stop Streaming, <b>F1, F2…</b> per scene. Hotkeys fire even when OBS is minimised — useful when the engine is running full-screen and you need to stop recording without switching windows."
+        }
+      ],
+      "inputs": [
+        "Screen / window capture",
+        "Webcam or external camera (GoPro, USB cam)",
+        "Microphone",
+        "Stream key for LinkedIn Live or YouTube"
+      ],
+      "outputs": [
+        "MP4 recordings (local)",
+        "Live stream to YouTube / LinkedIn",
+        "Virtual camera feed into Teams / Zoom / Meet"
+      ],
+      "tech": [
+        "OBS Studio — free · obsproject.com",
+        "built-in Virtual Camera (OBS 26.1+)",
+        "NVENC / Intel QSV / x264 encoder",
+        "LinkedIn Live / YouTube Studio"
+      ],
+      "phase": "Live · introduced by James",
+      "invoke": "Launch OBS from the desktop. Select the right scene for the task, hit <b>Start Recording</b> or <b>Start Streaming</b>. Recordings land in your configured output folder (Settings → Output → Recording Path). Stop recording before closing the engine window."
+    },
+    {
+      "id": "tech-radar",
+      "name": "SDI Tech Radar Intelligence",
+      "status": "Live · on demand",
+      "cls": "c-done",
+      "category": "Meta",
+      "surface": "intranet",
+      "requires": "Runs on the engine host — reports appear in Status Reports.",
+      "desc": "Continuous intelligence scan of the global AI marketplace, tuned to SDI’s stack.",
+      "detail": "A standing, evidence-based view of where AI is heading across SDI’s entire technology stack. Uses Claude Opus 4.8 with live web search to track the newest large language models, OCR and document-extraction engines, computer-vision systems, geometry and mathematical estimating models, 3D and generative-design tools, and simulation platforms including NVIDIA Omniverse and digital twins. Each finding is assessed against how SDI actually works — the estimating engine, the co-worker agents and the design studio — and tagged ADOPT, TRIAL, ASSESS or HOLD so leadership can see at a glance what is proven, what is worth piloting and what to keep watching. Every run flags only what has changed since the last, giving the MD a true \"what’s new\" view. Runs on demand and can be scheduled weekly via Windows Task Scheduler.",
+      "inputs": [
+        "Live web search",
+        "SDI roadmap context",
+        "previous-run snapshot (for the what’s-new diff)"
+      ],
+      "outputs": [
+        "Dated HTML radar report → Status Reports",
+        "ADOPT / TRIAL / ASSESS / HOLD rings per area",
+        "what’s-new-since-last-run summary"
+      ],
+      "tech": [
+        "Claude Opus 4.8",
+        "web search tool",
+        "Python",
+        "HTML report + JSON snapshot"
+      ],
+      "phase": "Live — ten areas, six in the default run",
+      "invoke": "Run <code>python tech_radar.py</code> on the engine host (<code>--full</code> for all areas). Reports land in <code>output\\reports</code> and surface in Status Reports."
+    },
+    {
+      "id": "roadmap",
+      "name": "SDI AI Roadmap",
+      "status": "Live",
+      "cls": "c-done",
+      "category": "Meta",
+      "surface": "intranet",
+      "desc": "The full delivery plan — Phase 1 live, Phases 2–6 mapped through Q3 2027.",
+      "view": "roadmap"
+    }
+  ]
+}
