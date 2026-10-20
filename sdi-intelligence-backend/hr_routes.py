@@ -165,7 +165,7 @@ def blip_push(request: Request, apply: bool = False, force: bool = False, source
                 "warnings": [str(exc)]}
 
 
-# ── The HR InVentry app (app portal, reachable from outside the office) ──────
+# ── HRInventry Anywhere (app portal, reachable from outside the office) ─────
 #
 # A BrightHR check takes minutes and the App Proxy cuts a request off after
 # about 85 seconds, so the app starts a job here and polls for it. One job at a

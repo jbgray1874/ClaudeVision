@@ -198,7 +198,7 @@ _PUBLIC_ALLOW = (
     "/api/services",           # the catalogue
     "/api/me",                 # who am I
     "/api/voicecrm",           # Nick's app
-    "/api/hr/app",             # the HR InVentry app only - never the rest of /api/hr
+    "/api/hr/app",             # HRInventry Anywhere only - never the rest of /api/hr
     "/favicon.ico",
 )
 
