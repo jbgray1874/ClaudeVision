@@ -3313,6 +3313,7 @@ def _finalize_scan_summary(
                     "reliability": 1.0,
                     "extract_path": _sw_job.meta.get("extract_path"),
                     "top_assembly": _sw_job.meta.get("top_assembly"),
+                    "top_assembly_bbox_mm": _sw_job.meta.get("top_assembly_bbox_mm"),
                     # CHOSEN, WHEN IT COULD NOT BE READ. The top assembly's full-depth BOM
                     # becomes the job's component list at rank 90; on a folder of fifteen
                     # assemblies the extract can rule out anything that is somebody's child
@@ -3824,9 +3825,17 @@ def _finalize_scan_summary(
                     # printed table. apply_field keeps the stronger value and records the
                     # disagreement so an estimator sees that two sources differed.
                     from source_precedence import apply_field as _apply_qty
+                    from source_precedence import source_of as _qty_src
                     _prev = _p.get("quantity")
-                    if _apply_qty(_p, "quantity", _eff, "bom_tree"):
-                        print(f"   [bom_tree] {_p.get('part_number')} qty {_prev} -> {_eff} (GA tree)", flush=True)
+                    # THE ROW'S OWN COUNT TIMES ITS ASSEMBLY'S (D-552): submitted as the
+                    # tree's per-unit reading, which outranks the row it multiplies and
+                    # nothing measured or modelled.
+                    _q_source = ("bom_tree_per_unit"
+                                 if str(_qty_src(_p, "quantity") or "") == "bom_tree"
+                                 else "bom_tree")
+                    if _apply_qty(_p, "quantity", _eff, _q_source):
+                        print(f"   [bom_tree] {_p.get('part_number')} qty {_prev} -> {_eff} "
+                              f"(GA tree: its own count times its assembly's)", flush=True)
                     else:
                         print(f"   [bom_tree] {_p.get('part_number')} qty {_prev} KEPT "
                               f"(GA tree said {_eff}) — stronger source, disagreement flagged",

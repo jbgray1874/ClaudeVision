@@ -494,16 +494,65 @@ def resolve_effective_quantities(
             })
         effective[code] = _qty(r)
 
+    # ── THE ASSEMBLY'S OWN COUNT, NOT ITS FAMILY'S FIRST ROW (D-552) ──────────────────────
+    # 401918-01-GA lists 401918-01-401 x2; 401's own table lists 07M x1 and 08M x2. Every code
+    # on the job is family "401918", and the family's multiplier was set by the FIRST GA row
+    # (01M x1) — so 401's leaves came out at 1 and 2 where the rail needs 2 and 4. A table is
+    # the table OF a code, and that code has a count on its parent's table: a leaf on it is
+    # its own quantity times that count, times the count's own parent's, up to the GA. The
+    # family multiplier is kept for a table whose code no parent's table lists (the legacy
+    # multi-family packs), and for the named unit (one of the thing you ran).
+    _row_of: Dict[str, Dict[str, Any]] = {}
+    _group_of_row: Dict[str, str] = {}
+    for _src, _rows in groups.items():
+        for _r in _rows:
+            _c = _norm(_r.get("part_number"))
+            if _c and _c not in _row_of:
+                _row_of[_c] = _r
+                _group_of_row[_c] = _src
+    _main_key = _norm(main_ga)
+
+    def _node_count(code: str, _depth: int = 0) -> Optional[int]:
+        """How many of this assembly one unit holds: its row's quantity on its parent's table,
+        times its parent's count. None where no table lists it, or it is the unit itself."""
+        if not code or _depth > 12 or code == _main_key or code == _named:
+            return 1 if code in (_main_key, _named) and code else None
+        r = _row_of.get(code)
+        if r is None:
+            return None
+        src = _group_of_row.get(code, "")
+        own = _qty(r)
+        if _norm(src) == _main_key:
+            if code in install_context:
+                return 1
+            if _install_n > 1 and own % _install_n == 0:
+                own = own // _install_n
+            return own
+        up = _node_count(_norm(src), _depth + 1)
+        return own * up if up is not None else None
+
     # leaves from each sub-assembly drawing: own qty x parent's top-level multiplier
+    _summed_codes: set = set()
     for src, rows in groups.items():
         if src == main_ga:
             continue
+        _own_count = _node_count(_norm(src))
         for r in rows:
             code = _norm(r.get("part_number"))
             if not code:               # see the nameless-row note on the main-GA loop above
                 _nameless += 1
                 continue
             fam = _family(code)
+            if _own_count is not None:
+                # A CODE UNDER SEVERAL PARENTS TAKES EACH PARENT'S COUNT: FIXING105 is 2 on
+                # 201 (x1) and 2 on each 401 (x2) — six a rail, not whichever table came last.
+                _n_here = _qty(r) * _own_count
+                if code in _summed_codes:
+                    effective[code] = effective.get(code, 0) + _n_here
+                else:
+                    effective[code] = _n_here
+                    _summed_codes.add(code)
+                continue
 
             if fam:
                 # numeric fabricated part: multiply by its own family's top-level multiplier

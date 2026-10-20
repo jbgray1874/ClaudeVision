@@ -629,6 +629,11 @@ def normalize_native_extract(records: List[Dict[str, Any]],
     top = _pick_top_assembly(records, _amb, job_codes=job_codes)
     if top:
         job.meta["top_assembly"] = top.get("title")
+        # THE PRODUCT'S OWN SIZE (D-551): the analyser records every document's bounding box;
+        # the top assembly's is the assembled product's envelope, which packing is sized from.
+        _tb = [v for v in (_num(x) for x in (top.get("bbox_mm") or [])) if v]
+        if len(_tb) == 3:
+            job.meta["top_assembly_bbox_mm"] = [round(v, 1) for v in _tb]
         job.meta.update(_amb)
         for line in (top.get("bom") or []):
             pn = _clean_pn(line.get("part_number") or "")

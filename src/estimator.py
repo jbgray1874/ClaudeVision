@@ -13325,8 +13325,15 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                     _cust = job_customer(summary) if summary is not None else None
                 except Exception:                                    # noqa: BLE001
                     _cust = None
-                _cline = (_cl.packaging_line(parts, _oq, customer=_cust) if _code == "PACKAGING"
-                          else _cl.delivery_line(parts, _oq, customer=_cust))
+                # THE PRODUCT'S OWN SIZE (D-551): the model's top-assembly envelope, else the
+                # product's stated overall, so the pack is sized around the assembled product.
+                try:
+                    _env = _cl.product_envelope(summary, parts)
+                except Exception:                                    # noqa: BLE001
+                    _env = None
+                _cline = (_cl.packaging_line(parts, _oq, customer=_cust, envelope=_env)
+                          if _code == "PACKAGING"
+                          else _cl.delivery_line(parts, _oq, customer=_cust, envelope=_env))
             except Exception as _cl_exc:                    # noqa: BLE001
                 # THE ONE PATH WITH NO VOICE. A crash here used to land as a bare £0
                 # wearing the ordinary estimator-to-price text — indistinguishable from a

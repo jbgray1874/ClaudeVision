@@ -1993,6 +1993,19 @@ def dot_env_path() -> str:
 # is packing_factor (how much void a protective pack is) — declared on every plan, tuned here
 # for every job at once. Leave empty to accept the module defaults.
 #   e.g. {"pallet_max_weight_kg": 1000.0, "carton_internal_mm": [1150, 750, 550]}
+# ── HOW THE PRODUCT SHIPS (D-551) ─────────────────────────────────────────────────────────
+# James Gray, 20 Oct 2026: "we always assume assembly, and therefore packing and boxing". A
+# product of several made parts leaves SDI assembled, one pack per unit, the box sized from
+# the product's own overall size (the model's bounding box, else the GA's stated overall), and
+# the box calculator prices that box. Set ships_assembled_default False to pack loose parts
+# into standard cartons by volume and weight instead (the pre-D-551 behaviour); an estimator's
+# customer-change answer on a job overrides either way.
+PACKAGING_POLICY = {
+    "ships_assembled_default": True,
+    "stated_by": "James Gray",
+    "stated_on": "20 Oct 2026",
+}
+
 PALLETISING_CONFIG = {
     # "packing_factor": 0.8,               # a pack treated as ~20% void
     # "carton_internal_mm": [1200, 800, 600],

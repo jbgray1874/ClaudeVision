@@ -178,7 +178,9 @@ def file_a_workbook_per_quantity() -> bool:
 def sweep(xlsx_path: Any, quantities: List[int],
           sheet_name: str = "Estimate",
           save_variants: bool = False,
-          order_freight: Optional[Dict[str, float]] = None) -> Optional[Dict[str, Any]]:
+          order_freight: Optional[Dict[str, float]] = None,
+          order_freight_at: Optional[Dict[str, Dict[int, float]]] = None
+          ) -> Optional[Dict[str, Any]]:
     """Total Material, Total Labour and Unit Cost at each quantity, read from the sheet.
 
     Returns None with a printed reason rather than raising: this answers a question about an
@@ -223,7 +225,8 @@ def sweep(xlsx_path: Any, quantities: List[int],
             # Freight BEFORE the recalculation, so the totals this reads are the corrected
             # ones. Reading first and re-pricing after would report a number the saved
             # workbook does not contain.
-            _repriced = (_reprice_freight(ws, max_row, qty, order_freight or {})
+            _repriced = (_reprice_freight(ws, max_row, qty, order_freight or {},
+                                          order_freight_at or {})
                          if save_variants else {})
             excel.CalculateFull()
             row: Dict[str, Any] = {"quantity": qty}
@@ -391,7 +394,9 @@ _BANNER_SHEET = "READ THIS FIRST"
 
 
 def _reprice_freight(ws, max_row: int, qty: int,
-                     order_freight: Dict[str, float]) -> Dict[str, float]:
+                     order_freight: Dict[str, float],
+                     order_freight_at: Optional[Dict[str, Dict[int, float]]] = None
+                     ) -> Dict[str, float]:
     """Divide the ORDER's packaging and delivery by THIS quantity, in this variant.
 
     THE ONE THING A RECALCULATED SHEET GETS PLAINLY WRONG. Packaging and delivery are asked
@@ -415,6 +420,12 @@ def _reprice_freight(ws, max_row: int, qty: int,
         for wanted, order_gbp in order_freight.items():
             if not code.startswith(wanted):
                 continue
+            # THE ORDER PRICED AT THIS QUANTITY, where the line priced it (D-550): the boxes
+            # are a step, and the 1-off order divided by 150 smeared one pallet over 150 rails.
+            _at = (order_freight_at or {}).get(wanted) or {}
+            _own = _at.get(int(qty), _at.get(str(qty)))
+            if _own is not None:
+                order_gbp = _own
             per_unit = round(float(order_gbp) / max(1, qty), 2)
             ws.Cells(row, 10).Value = per_unit          # J — the line's unit price
             written[wanted] = per_unit
