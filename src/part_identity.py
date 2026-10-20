@@ -751,6 +751,91 @@ def mint_uncoded_row_identities(rows: Iterable[Any], code_key: str = "part_numbe
     return n
 
 
+# ── A CUT LIST OF SEVERAL SECTIONS IS SEVERAL MEMBERS (D-548) ─────────────────────────────
+#
+# 401918-01-03M, the frame weldment, prints its own table: "15.00 x 30.00 x 2.00mm TUBE 1164
+# x1 / 30.00 x 15.00 x 2.00mm TUBE 1294 x1 / 30.00 x 30.00 x 2.00mm TUBE 1395 x2". D-383 reads a
+# parent's table of pieces as that parent's own section, which is right when every piece is the
+# one section. Two sections cannot be one part's stock, so the table was turned into a question
+# and nothing was costed: the frame's 5.2 m of tube left the bill, with no saw row. Each row is a
+# member of the frame, cut and charged by length, so each is given an identity of its own here
+# — before the records are made and the tree is walked — and from then on it is an ordinary
+# made part under its weldment: section stock from its own words, its quantity from the row
+# times its parent's, a saw cut on the route. Kept visibly ours (identity_source), never put to
+# the catalogue. A table of one section keeps D-383's reading, on the parent.
+CUT_LIST_MEMBER_SOURCE = "cut_list_member"
+
+
+def _cut_list_profile(desc: str) -> Optional[Tuple[float, float, float, str]]:
+    try:
+        from section_profile import detect_section_stock
+    except Exception:                                                # noqa: BLE001
+        return None
+    s = detect_section_stock(desc)
+    if not s or s.get("detection_path") != "canonical_profile":
+        return None
+    a, b = float(s["a"]), float(s["b"])
+    return (min(a, b), max(a, b), float(s["t"]), str(s.get("profile_form") or ""))
+
+
+def rejoin_dimension_split_rows(rows: Iterable[Any], code_key: str = "part_number",
+                                desc_key: str = "description") -> int:
+    """A row whose "code" is a bare figure and whose words open with "x" is one size read in
+    two cells: "50.00" | "x 20.00 x 2.00mm TUBE 703" is "50.00 x 20.00 x 2.00mm TUBE 703", with
+    no code (D-548). Read as a code it minted a part called 50.00. Returns rows rejoined."""
+    n = 0
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        code = str(r.get(code_key) or "").strip()
+        desc = str(r.get(desc_key) or "").strip()
+        if re.fullmatch(r"\d+(?:\.\d+)?", code) and re.match(r"[xX×]\s*\d", desc):
+            r[desc_key] = f"{code} {desc}"
+            r[code_key] = ""
+            r.setdefault("review_flags", []).append(
+                f"'{code}' was the first figure of the row's size, not its code — rejoined")
+            n += 1
+    return n
+
+
+def mint_cut_list_member_identities(rows: Iterable[Any], code_key: str = "part_number",
+                                    desc_key: str = "description") -> int:
+    """Give each piece of a several-section cut list its own member identity (D-548).
+
+    Only uncoded rows whose table names its drawing (bom_parent) and whose words read as a
+    canonical section with a length. Grouped by parent; a parent whose pieces are all one
+    section is left to D-383. The identity is the parent's code with -CL and the row's
+    position in that table, so it sorts under its weldment and reads as ours. Returns rows
+    named."""
+    by_parent: Dict[str, List[Tuple[Dict[str, Any], Tuple[float, float, float, str]]]] = {}
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        code = str(r.get(code_key) or "").strip()
+        if code and not is_placeholder_identity(code):
+            continue
+        parent = str(r.get("bom_parent") or "").strip()
+        if not parent or r.get("bom_parent_known") is False:
+            continue
+        desc = " ".join(str(r.get(desc_key) or "").split())
+        prof = _cut_list_profile(desc)
+        if prof is None:
+            continue
+        by_parent.setdefault(parent, []).append((r, prof))
+    n = 0
+    for parent, pieces in by_parent.items():
+        if len({p[:3] for _, p in pieces}) < 2:
+            continue
+        for k, (r, _p) in enumerate(pieces, start=1):
+            r.setdefault("printed_code", str(r.get(code_key) or ""))
+            r[code_key] = f"{parent}-CL{k}"
+            r["identity_source"] = CUT_LIST_MEMBER_SOURCE
+            r["row_role"] = ROW_ROLE_PART
+            r["cut_list_member_of"] = parent
+            n += 1
+    return n
+
+
 def split_category_code_rows(rows: Iterable[Any], code_key: str = "part_number",
                              desc_key: str = "description") -> int:
     """Apply category_code_identities in place, keeping the printed code. Returns rows changed."""
@@ -783,7 +868,7 @@ def is_engine_minted_code(identity: Any) -> bool:
 
 
 # The identity sources this module and the graph write for a code the drawing did not print.
-_MINTED_IDENTITY_SOURCES = frozenset({"uncoded_row", "description_bought_in"})
+_MINTED_IDENTITY_SOURCES = frozenset({"uncoded_row", "description_bought_in", "cut_list_member"})
 
 
 def is_engine_minted_record(record: Any) -> bool:

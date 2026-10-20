@@ -1815,6 +1815,15 @@ def check_a_material_we_cannot_price_is_declared(summary: Any) -> List[Dict[str,
         _costed = _costed_rows.get(str(part.get("part_number") or "").strip().upper()) or {}
         if _line_carries_money(part) or _line_carries_money(_costed):
             continue
+        # AN ASSEMBLY'S MATERIAL IS ITS MEMBERS' (D-547). 401918-01-201/301/401 take the GA's
+        # "MATERIAL: STEEL" and cost nothing of their own, by design — their tube and sheet are
+        # costed on the parts they are welded from. Nothing is under-charged, so nothing is
+        # reported; the members' own materials are checked on their own lines.
+        _cm = str(((_costed.get("material_estimate") or {}) if isinstance(
+            _costed.get("material_estimate"), dict) else {}).get("cost_method") or "")
+        if _cm == "weldment_parent_material_in_children" or str(
+                (_me or {}).get("cost_method") or "") == "weldment_parent_material_in_children":
+            continue
         # And a pointer is not a material. "SEE INDIVIDUAL DRAWINGS" names no substance for
         # anyone to find a rate for, so demanding one is asking for the impossible.
         if any(w in material.upper() for w in _FINISH_POINTER_WORDS):

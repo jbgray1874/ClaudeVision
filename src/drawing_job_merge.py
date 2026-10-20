@@ -74,8 +74,8 @@ def part_number_from_dxf_path(path: Path) -> Optional[str]:
         # exist in the wild — 10975-02's whole pack is lettered, and with only the first
         # pattern the run staged two DXFs and matched zero: the flat's own code parsed as
         # nothing, and the 2 mm token and the BENDLINES count died with it.
-        [r"(?P<pn>\d{4,5}-\d{2}-\d{3}[A-Z]?)",
-         r"(?P<pn>\d{4,5}-\d{2}-[A-Z]{1,2}\d{1,3})"],
+        [r"(?P<pn>(?<!\d)\d{4,6}-\d{2}-\d{3}[A-Z]?)",
+         r"(?P<pn>(?<!\d)\d{4,6}-\d{2}-[A-Z]{1,2}\d{1,3})"],
     )
     for pattern in patterns:
         match = re.search(pattern, stem, flags=re.IGNORECASE)
@@ -86,7 +86,7 @@ def part_number_from_dxf_path(path: Path) -> Optional[str]:
 
 def job_prefix_from_path(path: Path) -> Optional[str]:
     """Job family prefix such as 9376-01 from drawing or DXF names."""
-    match = re.search(r"(\d{4,5}-\d{2})\b", path.stem, flags=re.IGNORECASE)
+    match = re.search(r"(?<!\d)(\d{4,6}-\d{2})\b", path.stem, flags=re.IGNORECASE)
     return match.group(1).upper() if match else None
 
 
@@ -863,7 +863,7 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
 def _loose_part_key(part_number: str) -> Tuple[str, str]:
     """Leading numeric block + trailing letter: '1449C' / '1449-01C' -> ('1449','C')."""
     k = _normalize_part_key(part_number)
-    m = re.match(r"^(\d{3,5})", k)
+    m = re.match(r"^(\d{3,6})", k)
     lead = m.group(1) if m else ""
     tail = k[-1] if k and k[-1].isalpha() else ""
     return lead, tail

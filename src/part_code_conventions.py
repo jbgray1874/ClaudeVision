@@ -142,7 +142,7 @@ def purchased_suffix(identity: str) -> str:
     SDI-fabricated: they carry no saw/glue/CNC/laser/weld fab labour" — and, having decided,
     appends "bought_in" to page_roles. But that runs at COSTING, and it is the only thing on
     a code like "12552-01-01X" that ever sets the role: document_builder's retag deliberately
-    excludes anything matching ^\\d{3,5}- as an SDI drawing reference, which was written to
+    excludes anything matching ^\\d{3,6}- as an SDI drawing reference, which was written to
     protect the parts we cut and protected the purchases with them.
 
     So every earlier stage saw page_roles ['assembly'] and concluded "not bought-in".

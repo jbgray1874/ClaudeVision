@@ -478,7 +478,7 @@ def bought_in_reason(part: Dict[str, Any]) -> str:
     #
     # MISSING IT COST THE WHOLE MILWAUKEE BEARING. On a code like "12552-01-01X" the
     # estimator's append is the ONLY thing that ever sets the bought_in role, because
-    # document_builder's retag skips anything matching ^\d{3,5}- as an SDI drawing reference
+    # document_builder's retag skips anything matching ^\d{3,6}- as an SDI drawing reference
     # — a rule written to protect the parts we cut, which protected the purchases with them.
     # So at geometry_inference the bearing's roles were ['assembly'] and this predicate said
     # False; it was handed 12552-01-01M's 650.7 x 178.7 flat by the sibling borrow, read as

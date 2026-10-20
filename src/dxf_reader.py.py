@@ -389,7 +389,7 @@ def extract_dxf_pages(dxf_path: Path) -> List[Dict[str, Any]]:
         pass
 
     part_numbers = re.findall(
-        r"\b(?:\d{4,5}[A-Z]?|[A-Z]{1,6}\d{0,4})\s*(?:-\s*[A-Z0-9_]{1,12}){1,4}\b",
+        r"\b(?:\d{4,6}[A-Z]?|[A-Z]{1,6}\d{0,4})\s*(?:-\s*[A-Z0-9_]{1,12}){1,4}\b",
         normalized,
         flags=re.IGNORECASE,
     )
@@ -613,7 +613,7 @@ def _parse_filename(path: Path) -> Dict[str, Any]:
 
     # ── M&S convention: detail part number after the LAST underscore ──────────
     # Matches: 4002-01, 4083-102, 4005-18, 4002-02M — NOT revL/MS/1.5mm/words.
-    _MS_PART_RE = re.compile(r'^(\d{4,5}-\d{2,4}[A-Z]?)$', re.IGNORECASE)
+    _MS_PART_RE = re.compile(r'^(\d{4,6}-\d{2,4}[A-Z]?)$', re.IGNORECASE)
     raw_segments = stem.split('_')
     if len(raw_segments) >= 2:
         last_seg = raw_segments[-1].strip()
@@ -649,7 +649,7 @@ def _parse_filename(path: Path) -> Dict[str, Any]:
     # Part number — first token(s) matching  NNNN-NN-NNN  or  NNNN-NN-GA  etc.
     pn_tokens: List[str] = []
     for t in tokens:
-        if re.match(r"^\d{4,5}([A-Z]|\-[A-Z0-9]+)*$", t, re.IGNORECASE) or \
+        if re.match(r"^\d{4,6}([A-Z]|\-[A-Z0-9]+)*$", t, re.IGNORECASE) or \
            re.match(r"^[A-Z]{1,4}\d{2,5}$", t, re.IGNORECASE):
             pn_tokens.append(t)
         elif pn_tokens and re.match(r"^[A-Z0-9]{1,8}$", t) and not any(

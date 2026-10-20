@@ -1319,6 +1319,7 @@ def _is_revision_table_noise(text: str) -> bool:
         "CODES ADDED",
         "FIRST ISSUE",
         "DRG NO DESCRIPTION DATE",
+        "DWG NO DESCRIPTION DATE",
         "REVISION TABLE",
     ]
     return any(marker in upper for marker in noise_markers) or len(text) > 120
@@ -2611,9 +2612,21 @@ def _finalize_scan_summary(
                 # (part_identity.category_code_identities) — the reconciler below and every
                 # reader of bom_rows see the same identity per article.
                 try:
-                    from part_identity import (mint_uncoded_row_identities,
+                    from part_identity import (mint_cut_list_member_identities,
+                                               mint_uncoded_row_identities,
+                                               rejoin_dimension_split_rows,
                                                split_category_code_rows)
                     _n_split = split_category_code_rows(_dp["rows"])
+                    _n_rejoin = rejoin_dimension_split_rows(_dp["rows"])
+                    if _n_rejoin:
+                        print(f"   [bom-identity] {_n_rejoin} row(s) whose size was read as "
+                              f"a code rejoined (D-548)", flush=True)
+                    # A CUT LIST OF SEVERAL SECTIONS IS SEVERAL MEMBERS (D-548), named before
+                    # the bought-in minter sees the rows, so a tube piece is never a BI- line.
+                    _n_members = mint_cut_list_member_identities(_dp["rows"])
+                    if _n_members:
+                        print(f"   [bom-identity] {_n_members} cut-list piece(s) of several "
+                              f"sections made members of their weldment (D-548)", flush=True)
                     _n_mint = mint_uncoded_row_identities(_dp["rows"])
                     if _n_mint:
                         print(f"   [bom-identity] {_n_mint} uncoded parts-list row(s) named "
@@ -3606,7 +3619,7 @@ def _finalize_scan_summary(
             # own part numbers sort first.
             def _ref_key(_r):
                 _pn = str(_r.get("part") or "")
-                return (0 if re.match(r"^\d{3,5}-", _pn) else 1, _pn)
+                return (0 if re.match(r"^\d{3,6}-", _pn) else 1, _pn)
 
             # A NAMELESS ROW STILL HAS TO BE FINDABLE. str(None) is "None", which names
             # nothing an estimator can look up; the description is what that row is known by

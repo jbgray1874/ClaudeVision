@@ -11690,6 +11690,16 @@ def _recognise_sdi_coded_bought_in(
         code = f"{prefix}{digits}"
         if code in seen or code in existing_pns:
             continue
+        # A COLOUR IS NOT A PURCHASE (D-547). 401918-01-GA's title block reads "COLOUR: CHALKY
+        # WHITE POWDER 248" on every sheet: the colour of the coat the powder line already
+        # charges. Read as a code it became a second, unpriced POWDER248 line "not linked to the
+        # GA". A coating code printed only inside the COLOUR / FINISH field, and on no parts-list
+        # row, names the coat; it is left to the powder line, never minted beside it.
+        if prefix in ("POWDER", "PAINT") and code not in _qty_by_code and re.search(
+                r"\b(?:COLOU?R|FINISH)\s*:?[^:\n]{0,60}$", all_text[max(0, m.start() - 80):m.start()],
+                flags=re.IGNORECASE):
+            seen.add(code)
+            continue
         seen.add(code)
         _qty = _qty_by_code.get(code)            # genuine structured qty, or None
         _qty_known = _qty is not None and _qty > 0
@@ -12098,7 +12108,7 @@ def _reconcile_bought_in(parts: List[Dict[str, Any]], *, all_text: str = "", deb
             return True
         import re as _re
         _pn = str(p.get("part_number") or "").upper()
-        if _re.match(r"^\d{4,5}-\d{2}-\d{2,3}[A-Z]?$", _pn) and (
+        if _re.match(r"^\d{4,6}-\d{2}-\d{2,3}[A-Z]?$", _pn) and (
             p.get("blank_length_mm") or p.get("overall_length_mm")
             or (p.get("dxf_raw_geometry") or {}).get("blank_area_mm2")
         ):
@@ -12719,6 +12729,13 @@ def stamp_members_coated_area(parts: Any) -> int:
     for _p in parts:
         if isinstance(_p, dict) and _p.get("owning_assembly"):
             _owned.setdefault(str(_p["owning_assembly"]).strip().upper(), []).append(_p)
+    # A WELDMENT'S PIECES ARE ITS AREA (D-548). 401918-01-03M is a frame welded from a cut list
+    # of three sections; it has no blank or section of its own — its tube is on its members —
+    # so as a member of 201 it added nothing and the frame's 0.56 m2 of tube left 201's coat.
+    _pieces: Dict[str, List[Dict[str, Any]]] = {}
+    for _p in parts:
+        if isinstance(_p, dict) and _p.get("cut_list_member_of"):
+            _pieces.setdefault(str(_p["cut_list_member_of"]).strip().upper(), []).append(_p)
     _faces = float((getattr(config, "POWDER_COSTING_POLICY", {}) or {}).get(
         "coated_faces_multiplier", 2.0) or 2.0)
     try:
@@ -12741,6 +12758,14 @@ def stamp_members_coated_area(parts: Any) -> int:
             if _m is None or _m is _asm or id(_m) in _seen:
                 continue
             _seen.add(id(_m))
+            _mpn = str(_m.get("part_number") or "").strip().upper()
+            if _pieces.get(_mpn):
+                # The weldment stands for its pieces, each at its count per weldment.
+                for _pc in _pieces[_mpn]:
+                    if id(_pc) not in _seen:
+                        _seen.add(id(_pc))
+                        _members.append(_pc)
+                continue
             _members.append(_m)
         if not _members:
             continue
