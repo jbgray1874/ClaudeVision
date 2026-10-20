@@ -1375,7 +1375,7 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             )
             if (
                 _pn_bi
-                and not _re_bi.match(r"^\d{3,5}-", _pn_bi)
+                and not _re_bi.match(r"^\d{3,6}-", _pn_bi)
                 and not _has_geom_bi
                 and _is_good_description(part.get("description"))
                 and "bought_in" not in page_roles
@@ -2300,7 +2300,7 @@ def _parse_bom_from_page_text(page_text: str) -> List[Dict[str, Any]]:
 
     _sdi_re = re.compile(
         r"(?:^|\s)(\d{1,3})\s+"
-        r"(\d{4,5}-\d{2}-\d{2,3}[A-Z]?)"
+        r"(\d{4,6}-\d{2}-\d{2,3}[A-Z]?)"
         r"\s+([A-Z][A-Z0-9 /\-\.&()]{0,60}?)"
         r"\s+(\d{1,4})"
         r"(?=\s+\d|\s*$|\s+[A-Z])",
@@ -2332,7 +2332,7 @@ def _parse_bom_from_page_text(page_text: str) -> List[Dict[str, Any]]:
     # This pass captures the top-level bay GA BOM (e.g. 1282-GA's seven lines).
     _ga_re = re.compile(
         r"(?:^|\s)(\d{1,3})\s+"
-        r"(\d{4,5}(?:-[A-Z0-9]{1,4}|\s-\s[A-Z0-9]{1,4}){1,3})-?"
+        r"(\d{4,6}(?:-[A-Z0-9]{1,4}|\s-\s[A-Z0-9]{1,4}){1,3})-?"
         r"\s+([A-Z0-9][A-Z0-9 /\-\.&()']{2,60}?)"
         r"\s+(\d{1,4})"
         r"(?=\s+\d|\s*$|\s+[A-Z])",
@@ -2509,6 +2509,78 @@ def restate_material_observations(summary: Dict[str, Any]) -> int:
     return changed
 
 
+def cut_list_member_records(bom_rows: Any, parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """A made record for each piece of a several-section cut list (D-548).
+
+    part_identity.mint_cut_list_member_identities names each row "<weldment>-CL<n>"; this is
+    where the row becomes the part SDI cuts: its section and its one cut length from its own
+    words (drawing_deterministic, the table being the drawing's own statement), a saw cut, and
+    its weldment as the parent the graph hangs it from. Never bought in, never put to the
+    catalogue, never sized as sheet. Its quantity is the row's; the tree multiplies it by its
+    weldment's as for any other child."""
+    from section_profile import detect_section_stock
+    # The part index may already hold a bare record for the code (it harvests every code the
+    # rows print); that record is the member, and is completed here rather than duplicated.
+    _existing = {str(p.get("part_number") or "").upper(): p for p in parts if isinstance(p, dict)}
+    out: List[Dict[str, Any]] = []
+    for row in bom_rows or []:
+        if not isinstance(row, dict) or str(row.get("identity_source") or "") != "cut_list_member":
+            continue
+        pn = str(row.get("part_number") or "").strip()
+        if not pn:
+            continue
+        desc = " ".join(str(row.get("description") or "").split())
+        sec = detect_section_stock(desc)
+        if not sec or not sec.get("length_mm"):
+            continue
+        rec = _existing.get(pn.upper())
+        _new = rec is None
+        if _new:
+            rec = _empty_part_record(pn, item_number=row.get("item_number"), description=desc,
+                                     quantity=None)
+            _apply_field(rec, "quantity", row.get("quantity") or 1, "bom_tree")
+        elif not str(rec.get("description") or "").strip() or rec.get("description") == pn:
+            rec["description"] = desc
+        rec["page_roles"] = ["section"]
+        rec["pages"] = []
+        rec["source"] = "cut_list_member"
+        rec["identity_source"] = "cut_list_member"
+        rec["printed_code"] = str(row.get("printed_code") or "")
+        rec["is_bought_in"] = False
+        rec["stock_form"] = "tube"
+        rec["cut_list_member_of"] = str(row.get("cut_list_member_of") or row.get("bom_parent") or "")
+        rec["bom_parent"] = rec["cut_list_member_of"]
+        stock = {k: sec.get(k) for k in ("a", "b", "t", "profile_form", "keyword")}
+        stock.update({"length_mm": float(sec["length_mm"]),
+                      "cut_lengths_mm": [float(sec["length_mm"])],
+                      "detection_path": "canonical_profile",
+                      "source": "drawing_deterministic", "source_text": desc})
+        rec["section_stock"] = stock
+        rec["textual_operations"] = ["saw"]
+        # A PIECE HAS NO SHEET OF ITS OWN; ITS WELDMENT'S SHEET IS ITS SHEET. 03M states FINISH:
+        # WELDED — how the frame leaves its sheet, coated later as 201 — and its pieces say the
+        # same, so the document's powder is not stamped onto each length of tube beside the
+        # assembly that is coated whole.
+        _par = _existing.get(rec["cut_list_member_of"].upper())
+        if isinstance(_par, dict):
+            if _par.get("surface_finishes") and not rec.get("surface_finishes"):
+                rec["surface_finishes"] = list(_par.get("surface_finishes") or [])
+                rec["finish_from_weldment"] = rec["cut_list_member_of"]
+            if _par.get("pages") and not rec.get("pages"):
+                rec["pages"] = list(_par.get("pages") or [])
+            for _k in ("normalized_material", "materials"):
+                if _par.get(_k) and not rec.get(_k):
+                    rec[_k] = _par.get(_k)
+        rec.setdefault("review_flags", []).append(
+            f"cut-list member of {rec['cut_list_member_of']}: its parts table lists pieces of "
+            f"more than one section, so each piece is a line of its own, cut and charged by "
+            f"length (D-548)")
+        if _new:
+            out.append(rec)
+            _existing[pn.upper()] = rec
+    return out
+
+
 def bought_in_rows_without_records(bom_rows: Any, parts: List[Dict[str, Any]]
                                    ) -> List[Dict[str, Any]]:
     """A bought-in record for every table row no record already stands for.
@@ -2530,9 +2602,11 @@ def bought_in_rows_without_records(bom_rows: Any, parts: List[Dict[str, Any]]
     _article_ids = category_code_identities(_rows)
     _existing_pns = {str(p.get("part_number") or "").upper() for p in parts
                      if isinstance(p, dict)}
-    _SDI_PN_RE = re.compile(r"^\d{4,5}-\d{2}-\d{2,3}[A-Z]?$")
+    _SDI_PN_RE = re.compile(r"^\d{4,6}-\d{2}-\d{2,3}[A-Z]?$")
     out: List[Dict[str, Any]] = []
     for _i, row in enumerate(_rows):
+        if str(row.get("identity_source") or "") == "cut_list_member":
+            continue                  # a piece SDI cuts, made by cut_list_member_records (D-548)
         _article = _article_ids.get(_i) or ""
         pn = _article or str(row.get("part_number") or "").strip()
         # A ROW SPLIT UPSTREAM ALREADY CARRIES ITS PER-ARTICLE IDENTITY. file_scan applies
@@ -2708,13 +2782,20 @@ def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
                 f"-> {[b.get('part_number') for b in bought_in_items]}"
             )
 
+    # The pieces of a several-section cut list are parts SDI cuts (D-548), made before the
+    # bought-in pass below could take them for purchases.
+    _cl_members = cut_list_member_records(
+        (summary.get("document_analysis") or {}).get("bom_rows") or [], parts)
+    if _cl_members:
+        parts.extend(_cl_members)
+
     # Fix B: bought_in records for non-SDI BOM rows (e.g. WINDMILL 1164: WSF45 ticket strip)
     _non_sdi_bought_in = bought_in_rows_without_records(
         (summary.get("document_analysis") or {}).get("bom_rows") or [], parts)
     # Fix C below reads both of these: the names now on the record, and the SDI code shape.
     _existing_pns = {str(p.get("part_number") or "").upper() for p in parts} | {
         str(r.get("part_number") or "").upper() for r in _non_sdi_bought_in}
-    _SDI_PN_RE = re.compile(r"^\d{4,5}-\d{2}-\d{2,3}[A-Z]?$")
+    _SDI_PN_RE = re.compile(r"^\d{4,6}-\d{2}-\d{2,3}[A-Z]?$")
     if _non_sdi_bought_in:
         parts.extend(_non_sdi_bought_in)
         if os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}:

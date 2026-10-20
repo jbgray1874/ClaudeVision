@@ -2913,7 +2913,7 @@ def build_part_graph(
             continue
         # A code that scans as an SDI drawing number is a real part whatever else is true;
         # the chimera's ten-digit head cannot pass this.
-        if re.match(r"^\d{4,5}-\d{2}\b", str(ident)):
+        if re.match(r"^\d{4,6}-\d{2}\b", str(ident)):
             continue
         # NOR IS A MIRROR OF ONE. "Mirror11650-03-GA" is SolidWorks' name for the opposite
         # hand of 11650-03-GA — a naming convention, not two rows zipped. It is spelled with
@@ -2926,7 +2926,7 @@ def build_part_graph(
             _mb = mirror_base(str(ident)) if is_mirror_code(str(ident)) else ""
         except Exception:                                            # noqa: BLE001
             _mb = ""
-        if _mb and re.match(r"^\d{4,5}-\d{2}\b", _mb):
+        if _mb and re.match(r"^\d{4,6}-\d{2}\b", _mb):
             continue
         # NO CHILD EXEMPTION. The first version skipped anything the hierarchy claimed as a
         # child — and the zipped BOM row is claimed by the GA precisely BECAUSE it came off

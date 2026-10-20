@@ -25,6 +25,7 @@ from config import (
     LENGTH_BY_WIDTH_PATTERN,
     MATERIAL_PATTERN,
     MODIFIED_BY_PATTERN,
+    PART_NUMBER_PATTERN,
     PART_NUMBER_PATTERNS,
     PITCH_PATTERN,
     PROCESS_NOTE_PATTERNS,
@@ -61,19 +62,34 @@ def normalize_text(text: str) -> str:
 # A number printed in a revision row is a PRIOR IDENTITY of this drawing — the last row's is
 # the current one — and a revision row's words belong to no field at all. So the table is
 # parsed once, kept as history, and struck from the text every field reader sees.
+#
+# THE HEADER IS "DWG NO" AS OFTEN AS "DRG NO", AND A ROW NEED NOT NAME A NUMBER (D-547).
+# 401918-01-GA prints "REV DWG NO DESCRIPTION DATE BY / A ALL COPY OF EXISING DESIGN + MINOR
+# UPDATES - NEW COLOUR 09/01/2026 IB / B - FIXINGS CHANGED TO STAINLESS 05/02/2026 IB", and
+# pdfplumber interleaves it with the specification block, so the text reads "MATERIAL: STEEL REV
+# DWG NO DESCRIPTION DATE BY" and "FINISH: POWDER COATED A ALL 09/01/2026 IB". With only DRG in
+# the header nothing was struck: every assembly and bought-in line took "STEEL REV" as its
+# material (a material no rate exists for) and the finish carried the row's date. A row whose
+# number column says ALL or "-" is still a row; it supersedes nothing.
 _REVISION_TABLE_CONTEXT = re.compile(
-    r"REVISION\s+TABLE|REV\s+DRG\s*NO|DRG\s*NO\s+DESCRIPTION\s+DATE", re.IGNORECASE)
+    r"REVISION\s+TABLE|REV\s+D[RW]G\s*NO|D[RW]G\s*NO\s+DESCRIPTION\s+DATE", re.IGNORECASE)
 _REVISION_TABLE_HEADER = re.compile(
-    r"REVISION\s+TABLE|REV\s+DRG\s*NO\s+DESCRIPTION\s+DATE(?:\s+BY)?"
-    r"|DRG\s*NO\s+DESCRIPTION\s+DATE(?:\s+BY)?", re.IGNORECASE)
+    r"REVISION\s+TABLE|REV\s+D[RW]G\s*NO\s+DESCRIPTION\s+DATE(?:\s+BY)?"
+    r"|D[RW]G\s*NO\s+DESCRIPTION\s+DATE(?:\s+BY)?", re.IGNORECASE)
+# What a struck header or row leaves behind: a word every labelled-field reader stops at
+# (TITLE_BLOCK_STOP_LABELS), so a field the table was interleaved with ends where the table
+# began instead of running on into the description of a prior issue. Not a word any reader
+# takes as a value, a code or a revision letter.
+REVISION_TABLE_STOP = "ENDOFREVISIONTABLE"
+_NO_NUMBER = {"ALL", "-"}
 
 
 def _revision_row_re() -> "re.Pattern":
-    # rev letter · the drawing number of that issue · what changed · date · initials
+    # rev letter · the drawing number of that issue (or ALL / -) · what changed · date · initials
     from config import PART_NUMBER_PATTERN as _PN
     return re.compile(
-        r"\b([A-Z]\d?)\s+(" + _PN + r")\s+"
-        r"((?:(?!\d{1,2}/\d{1,2}/\d{2,4}).){3,90}?)\s+"
+        r"\b([A-Z]\d?)\s+(" + _PN + r"|ALL\b|-(?=\s))\s+"
+        r"((?:(?!\d{1,2}/\d{1,2}/\d{2,4}).){0,90}?)\s*"
         r"(\d{1,2}/\d{1,2}/\d{2,4})\s+([A-Z]{1,3})\b")
 
 
@@ -84,14 +100,15 @@ def parse_revision_table(text: str) -> Dict[str, Any]:
     t = normalize_text(text or "")
     if not _REVISION_TABLE_CONTEXT.search(t):
         return {"rows": [], "current_number": "", "current_revision": "", "superseded": {}}
-    rows = [{"rev": m.group(1).upper(), "number": m.group(2).strip(),
+    rows = [{"rev": m.group(1).upper(),
+             "number": "" if m.group(2).strip().upper() in _NO_NUMBER else m.group(2).strip(),
              "description": " ".join(m.group(3).split()), "date": m.group(4),
              "by": m.group(5)} for m in _revision_row_re().finditer(t)]
     if not rows:
         return {"rows": [], "current_number": "", "current_revision": "", "superseded": {}}
     current = rows[-1]
     superseded = {r["number"]: current["number"] for r in rows[:-1]
-                  if r["number"] and r["number"] != current["number"]}
+                  if r["number"] and current["number"] and r["number"] != current["number"]}
     return {"rows": rows, "current_number": current["number"],
             "current_revision": current["rev"], "superseded": superseded}
 
@@ -103,8 +120,8 @@ def strip_revision_table(text: str) -> str:
     t = normalize_text(text or "")
     if not _REVISION_TABLE_CONTEXT.search(t):
         return t
-    t = _revision_row_re().sub(" ", t)
-    return " ".join(_REVISION_TABLE_HEADER.sub(" ", t).split())
+    t = _revision_row_re().sub(f" {REVISION_TABLE_STOP} ", t)
+    return " ".join(_REVISION_TABLE_HEADER.sub(f" {REVISION_TABLE_STOP} ", t).split())
 
 
 # ── THE SPECIFICATION LEGEND IS NOT WORK — ONE READER FOR EVERY DOOR ─────────────────────
@@ -476,6 +493,10 @@ TITLE_BLOCK_STOP_LABELS = [
     "SHEET",
     "WEIGHT",
     "UNLESS OTHERWISE STATED",
+    # The border's tolerance block follows the specification fields on every sheet that
+    # prints one; without it "COLOUR: CHALKY WHITE POWDER 248" read on into it (D-547).
+    "GENERAL TOLERANCES",
+    REVISION_TABLE_STOP,
 ]
 
 
@@ -705,8 +726,23 @@ def _extract_drawing_number_candidates(text: str) -> List[str]:
     if part_like:
         return _dedupe_strings(part_like)
 
-    context_matches: List[str] = []
+    # THE TITLE BLOCK'S OWN ROW: NUMBER, SCALE, REVISION (D-547). The SDI block prints the
+    # headings "DRAWING No SCALE REV" on one line and the values "401918-01-201 1:12 B" on
+    # another, so the labelled read finds the heading's neighbour (SCALE) and nothing else. A
+    # code followed by a scale ratio and a revision letter is that row whatever line it fell
+    # on; it outranks the first code a parts list happens to print, which named every
+    # assembly sheet of 401918-01-GA after its first member.
     normalized = normalize_text(text)
+    scale_row = [m.group(1) for m in re.finditer(
+        r"(" + PART_NUMBER_PATTERN + r")\s+\d+(?:\.\d+)?\s*:\s*\d+(?:\.\d+)?\s+[A-Z]\d?\b",
+        normalized, flags=re.IGNORECASE)]
+    scale_codes: List[str] = []
+    for value in scale_row:
+        scale_codes.extend(_extract_part_number_candidates(value))
+    if scale_codes:
+        return _dedupe_strings(scale_codes)
+
+    context_matches: List[str] = []
     for match in re.finditer(r"(?:PROJECT\s*TITLE\s*:?\s*)?.{0,120}?(" + DRAWING_NUMBER_PATTERN + r")\s+[A-Z0-9]{1,4}\b", normalized, flags=re.IGNORECASE):
         groups = [item for item in match.groups() if item]
         for group in groups:
@@ -884,11 +920,12 @@ def _extract_finish_candidates(text: str) -> List[str]:
 
 
 def _extract_colour_candidates(text: str) -> List[str]:
-    return _extract_labeled_value(
-        text,
-        r"(?:COLOUR|COLOR)\s*[:\-]?",
-        TITLE_BLOCK_STOP_LABELS,
-    )
+    # THE LABEL WITH ITS COLON FIRST (D-547). "NEW COLOUR COLOUR: CHALKY WHITE POWDER 248" is a
+    # revision row's "new colour" beside the field: read colon-less, the first COLOUR ran up
+    # to the second and the field came back as the word "COLOUR".
+    return (_extract_labeled_value(text, r"(?:COLOUR|COLOR)\s*:", TITLE_BLOCK_STOP_LABELS)
+            or _extract_labeled_value(text, r"(?:COLOUR|COLOR)\s*[:\-]?",
+                                      TITLE_BLOCK_STOP_LABELS))
 
 
 # Cross-reference / placeholder phrases a MATERIAL field may carry on GA / parent sheets

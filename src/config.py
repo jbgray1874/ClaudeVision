@@ -148,12 +148,12 @@ DRAWING_JOB_DISCOVERY = {
     "ignore_dxf_name_tokens": ["-GA_", "_GA_", "-GA.", "_GA."],
     "part_number_from_dxf_patterns": [
         # 2–3 digit suffix, optional letter  e.g. 9376-01-001  12242-01-01M  11367-09-08A
-        r"(?P<pn>\d{4,5}-\d{2}-\d{2,3}[A-Z]?)",
+        r"(?P<pn>(?<!\d)\d{4,6}-\d{2}-\d{2,3}[A-Z]?)",
         # LETTER-FIRST detail  e.g. 10975-02-A01 / -G01 / -X01 — a whole pack can be
         # lettered, and without this the run staged two DXFs and matched zero.
-        r"(?P<pn>\d{4,5}-\d{2}-[A-Z]{1,2}\d{1,3})",
+        r"(?P<pn>(?<!\d)\d{4,6}-\d{2}-[A-Z]{1,2}\d{1,3})",
         # GA / sub-assembly  e.g. 9376-01-GA (ignored downstream for geometry merge)
-        r"(?P<pn>\d{4,5}-\d{2}-[A-Z]{2,4})",
+        r"(?P<pn>(?<!\d)\d{4,6}-\d{2}-[A-Z]{2,4})",
     ],
 }
 SPREADSHEET_EXTENSIONS = {".xlsx", ".xls", ".csv", ".tsv"}
@@ -191,7 +191,7 @@ TITLE_BLOCK_LABELS = [
 # Every real SDI code has a digit up front: 10575-02, BE2030-10, 12173-02-GA. The alpha-led
 # catalogue codes — FIXING591, VINYL03, SUBPLAS72 — attach their digits directly and never take
 # the hyphenated shape this pattern reads, so nothing legitimate is lost by requiring one.
-PART_NUMBER_PATTERN = r"\b(?:\d{4,5}[A-Z]?|[A-Z]{1,6}\d{1,4}|FIXING\d*)(?:-[A-Z0-9_]{1,12}|\s-\s[A-Z0-9_]{1,12}){1,4}\b"
+PART_NUMBER_PATTERN = r"\b(?:\d{4,6}[A-Z]?|[A-Z]{1,6}\d{1,4}|FIXING\d*)(?:-[A-Z0-9_]{1,12}|\s-\s[A-Z0-9_]{1,12}){1,4}\b"
 PART_NUMBER_PATTERNS = [
     PART_NUMBER_PATTERN,
     r"\b[A-Z]{1,4}\s*-\s*\d{2,}\b",

@@ -68,6 +68,12 @@ FINISH_FAMILIES = {
     # the same way, and it is the reading that keeps powder off a bare bracket.
     "bare": ("RAW", "SELF COLOUR", "SELF-COLOUR", "MILL FINISH", "SCRAPED",
              "UNFINISHED", "NO FINISH", "NONE"),
+    # A MECHANICAL FINISH IS THE PART'S SURFACE, LEFT ON SHOW (D-549). 401918-01-01M, a 304
+    # stainless rub strip, states FINISH: BRUSHED / COLOUR: NATURAL; the GA states POWDER
+    # COATED for the steel it holds. Unrecognised, BRUSHED was an unread finish, so the
+    # document's coat was stamped onto the strip and it went through the booth with the frame.
+    # Grain is put on to be seen; a coat would cover it.
+    "brushed": ("BRUSHED", "GRAINED", "SATIN BRUSH"),
 }
 
 # Operations whose whole purpose is to apply or produce a surface, and the family each one

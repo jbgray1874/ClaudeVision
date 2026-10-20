@@ -54,7 +54,7 @@ _RE_WEIGHT = re.compile(r"WEIGHT[:\s]*([\d,]+(?:\.\d+)?)\s*g\b", re.I)
 # sheets pooled under a key that is no part, and a hand's sheet folded into its base. Every
 # "own sheet" rule (FINISH, weld symbols, the per-part facts below) keys on this read. Up to two
 # trailing segments are taken — a member of a sub-drawing (07-2-01M) and its hand (-H).
-_RE_DWGNO = re.compile(r"\b(\d{3,5}-\d{2}-[A-Z0-9]{1,4}(?:-[A-Z0-9]{1,4}){0,2})\b")
+_RE_DWGNO = re.compile(r"\b(\d{3,6}-\d{2}-[A-Z0-9]{1,4}(?:-[A-Z0-9]{1,4}){0,2})\b")
 # tube/section: "30.00 x 30.00 x 1.50mm TUBE" or "30 x 30 x 1.5mm" (RHS/SHS/tube)
 _RE_TUBE = re.compile(
     r"(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*mm?\b", re.I)
