@@ -418,6 +418,16 @@ def _estimate_policy_fingerprint_sha256(snapshot: Dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _reads_reused() -> Dict[str, Dict[str, int]]:
+    """What each store gave back so far this run — {store: {"reused": n, "computed": n}} —
+    or {} where nothing was read through a store (D-553/D-554)."""
+    try:
+        import run_timing
+        return run_timing.reuse_counts()
+    except Exception:                                        # noqa: BLE001
+        return {}
+
+
 def _build_estimate_policy_manifest() -> Dict[str, Any]:
     snap = _estimate_policy_snapshot_for_manifest()
     return {
@@ -14393,6 +14403,10 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         # reading the estimate later reports the build of the checkout it is reading FROM,
         # which may be days of pulls away from the one that wrote it.
         "engine_build": engine_build.describe(),
+        # WHAT EACH STORE GAVE BACK on the way here (D-553/D-554): answers reused against
+        # answers worked out, per store. On the document because a cache that never hits looks
+        # exactly like one that works, and the book is where somebody looks.
+        "reads_reused": _reads_reused(),
         "part_estimates": part_estimates,
         "canonical_route_shadow": canonical_route_shadow,
         "powder_coating_summary": powder_coating_summary,
