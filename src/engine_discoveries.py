@@ -124,6 +124,10 @@ _OURS = {
     # The identity/scope enforcement family: every one of these is the ENGINE failing to
     # hold its own seal — never a drawing gap and never an estimator decision.
     "identity_gate_did_not_enforce",
+    # A parent that names no member and carries no material of its own (D-560): the pack gave
+    # 401918-01-07M a cut list and the engine held nothing — the drawings said what it is
+    # made of, so the missing steel is our hand-off, never the drawing office's.
+    "memberless_assembly_carries_nothing",
     "removed_identity_on_the_sheet",
     "priced_identity_outside_published_graph",
     "two_roots_price_the_same_members",
