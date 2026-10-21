@@ -12790,6 +12790,18 @@ def stamp_members_coated_area(parts: Any) -> int:
         _took_coats = any(str(_m.get("coat_charged_on") or "").strip().upper() == _apn
                           for _m in _members)
         try:
+            from finish_rules import (_is_pointer as _fin_pointer, finish_families as _fin_families,
+                                      stated_finish as _stated_fin)
+        except Exception:                                            # noqa: BLE001
+            def _stated_fin(_p):                                     # type: ignore[misc]
+                return ""
+
+            def _fin_families(_t):                                   # type: ignore[misc]
+                return set()
+
+            def _fin_pointer(_t):                                    # type: ignore[misc]
+                return False
+        try:
             from document_builder import flat_blank_mm as _flat_blank_mm
         except Exception:                                            # noqa: BLE001
             def _flat_blank_mm(_p):                                  # type: ignore[misc]
@@ -12823,6 +12835,21 @@ def stamp_members_coated_area(parts: Any) -> int:
             # arriving by another road (D-286). Only a stated powder finish of its own, or the
             # op read from its own text with no finish inherited, is a coat on its own line.
             if _member_carries_its_own_coat(_m):
+                continue
+            # A MEMBER FINISHED ANOTHER WAY IS NOT IN THE CASE'S BOOTH (D-556). 401918-01-01M,
+            # a stainless rub strip, states FINISH: BRUSHED on its own sheet; D-549 kept the
+            # GA's powder op off it, and this sum then counted its 0.034 m2 into the GA's coat
+            # anyway, because "no powder op of its own" read as "coated as the case". A stated
+            # finish of another family — brushed, plated, anodised, wet spray — is the part's
+            # finish, complete on its own line; only a silent, RAW or pointing member is coated
+            # as the case. The judgement is finish_rules', one reader for every gate.
+            _own_fin = "" if _m.get("finish_inherited_from") else _stated_fin(_m)
+            _other = ((_fin_families(_own_fin) - {"powder", "bare"})
+                      if _own_fin and not _fin_pointer(_own_fin) else set())
+            if _other:
+                _left_out.append(f"{_m.get('part_number')} (its own sheet states "
+                                 f"{_own_fin.title()} — a {'/'.join(sorted(_other))} finish, "
+                                 f"not the case's coat)")
                 continue
             if _took_coats and "powder_coating" in _part_ops(_m):
                 continue

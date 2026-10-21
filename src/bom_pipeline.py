@@ -429,6 +429,34 @@ def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
         # would put the tube on the bill beside whatever its members already carry.
         _asm = bool(p.get("is_assembly_parent") or p.get("is_sub_assembly")
                     or str(p.get("canonical_kind") or "").lower() == "assembly")
+        # A WELDMENT WITH NO MEMBERS BUT ITS OWN PIECES IS A PART (D-557). 401918-01-07M is a
+        # tube frame drawn on one sheet with a two-row cut list (50 x 20 x 2 TUBE); the model
+        # lists it as an assembly — a weldment's cut-list bodies read as structure — so the
+        # guard below declined its pieces, and with no coded member to carry the tube the
+        # frame went on the bill with no material and no saw ("an assembly's material is its
+        # members'"). An assembly is its members' when it HAS members: a parent the readers
+        # give no coded child, only the codeless section rows of its own table, is a weldment
+        # cut from those pieces, and the table is its cut list.
+        if _asm:
+            _coded_kids = [str(c).strip() for c in (p.get("assembly_children") or [])
+                           if str(c).strip() and not str(c).strip().upper().startswith(
+                               (bare_code(str(p.get("part_number") or "")) + "-CL").upper())]
+            _roles = {str(r).lower() for r in (p.get("page_roles") or [])}
+            try:
+                from finish_rules import states_only_a_process, stated_finish
+                _welded_sheet = states_only_a_process(stated_finish(p))
+            except Exception:                                        # noqa: BLE001
+                _welded_sheet = False
+            _weldment_sheet = (("detail" in _roles and "assembly" not in _roles)
+                               or bool(re.search(r"\bWELDMENT\b",
+                                                 str(p.get("description") or ""), re.I))
+                               or _welded_sheet)
+            if not _coded_kids and _weldment_sheet:
+                _asm = False
+                p.setdefault("review_flags", []).append(
+                    f"{p.get('part_number')} is listed as an assembly but names no member of "
+                    f"its own — only the uncoded section pieces of its own detail sheet's "
+                    f"table — so it is costed as a weldment cut from those pieces (D-557)")
         try:
             from bought_in_policy import has_fabrication_evidence as _measured
             _sheet = bool(_measured(p))
