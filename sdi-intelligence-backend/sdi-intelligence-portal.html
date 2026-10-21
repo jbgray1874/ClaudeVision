@@ -2733,6 +2733,55 @@
         prices from the numbers estimating already trusts, still overwritable per job.
       </div>
 
+      <!-- ── THE STORES — a read made once is kept (D-553..D-555, Oct 2026) ─────────────── -->
+      <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:32px 0 8px">A read made once is kept — the stores, their keys, and the timing record</h3>
+      <p class="sub" style="margin-bottom:12px">Added 20–21 Oct 2026 (register rows D-553 to D-555). 0359342 spent 3,002 s of a 3,775 s run reading its PDFs — OCR and a local vision model over every page — and every re-run spent it again on bytes nothing had changed. The slow part of every reader is the <b>reading</b>; making sense of what it read is fast. So each store keeps the <b>raw reading</b> and the interpretation is made again on every run by whatever code is current — a parser fix, a new rule, a repaired bridge reach every stored read the next time it is used, with no new read.</p>
+      <div class="panel reveal" style="overflow-x:auto">
+        <table style="min-width:960px">
+          <tr><th>Store</th><th>What it keeps</th><th>Keyed on</th><th>Re-interpreted on a hit?</th><th>Where</th></tr>
+          <tr><td><b>pdf_readings</b> <span class="chip c-done" style="font-size:10px">new</span></td><td>The three raw readings of one PDF: pdfplumber text layer, pypdf text, the PaddleOCR + llava pass (without the fitz drawings, which geometry re-derives from the PDF)</td><td>The PDF's <b>bytes</b> · a fingerprint of the reader code and everything it reaches · the settings (VISION_* knobs, library versions)</td><td><span class="chip c-done" style="font-size:10px">Yes</span> — <code>summarise_document</code> and geometry run afresh</td><td><code>cache/pdf_readings/</code></td></tr>
+          <tr><td><b>vision_bom</b></td><td>The vision model's response to one rendered page</td><td>The page PNG · model · prompt version</td><td><span class="chip c-done" style="font-size:10px">Yes</span> — the stored response is re-parsed</td><td><code>cache/vision_bom/</code></td></tr>
+          <tr><td><b>llm_extract</b></td><td>The whole-pack transcription and the inference pass, each with the model's <b>whole response</b> (<code>_raw_full</code>)</td><td>The pack text · model · prompt · system message</td><td><span class="chip c-done" style="font-size:10px">Yes</span> since D-554 — parser, bridge and normaliser run over the kept words; entries kept before are used as they are</td><td><code>cache/llm_extract/</code></td></tr>
+          <tr><td><b>vision_concept</b></td><td>The concept read of a render or brief pack</td><td>The page PNGs · model · prompt version · the brief, the pack's printed words, the standards document, the sheet question — each only where it was sent</td><td><span class="chip c-done" style="font-size:10px">Yes</span></td><td><code>cache/vision_concept/</code></td></tr>
+          <tr><td><b>generated_prices</b></td><td>A market price once asked for</td><td>The specification</td><td>—</td><td><code>cache/generated_prices/</code></td></tr>
+          <tr><td><b>solidworks_extract</b></td><td>The native extract beside the job</td><td>The model files' modification times</td><td>—</td><td><code>_sw_native_extract.json</code> in the job folder</td></tr>
+        </table>
+      </div>
+      <div class="note reveal" style="margin-top:12px;animation-delay:.06s">
+        <h4>The key is the question — and a coding change misses by itself</h4>
+        Two reads are the same read when the same bytes were read by the same code under the same settings, so the
+        key hashes all three. The code part is not a version somebody remembers to bump: <code>read_store.fingerprint_code</code>
+        hashes the reader function's source <b>and everything in this codebase it reaches</b> — helpers three calls
+        down, module constants by value, sibling modules' functions — so a change anywhere a reader reaches misses,
+        and a change anywhere it does not reach leaves the kept reading alone. The document is keyed on its bytes,
+        never its name or path: a redrawn sheet under the same filename is a new read; the same sheet copied to a new
+        folder is not.<br><br>
+        <b>The store never costs the run.</b> One that cannot be read computes; one that cannot be written says so
+        once and returns what it computed; the reader's own failure is the run's and is raised once, untouched. A
+        PDF reading whose local vision model was asked and never answered — a server that was down, not a page with
+        nothing to say — serves that run and is not kept.<br><br>
+        <b>Fresh read</b> on the Run page sets <code>SDI_VISION_REFRESH</code>, <code>SDI_LLM_EXTRACT_REFRESH</code>
+        and <code>SDI_READ_REFRESH</code>: nothing kept is consulted, the new reads are kept, and nothing is
+        deleted — the caches are on the runner's machine and are every other job's settled answer.
+        <code>tools/diagnose/clear_llm_cache.py --job &lt;pack&gt;</code> clears one pack's entries from all three
+        document stores (it matches the kept PDF readings on the source name each records) and reports before it
+        deletes.
+      </div>
+      <div class="note reveal" style="margin-top:12px;animation-delay:.1s">
+        <h4>Where the time went, kept — and what each store gave back</h4>
+        Every run now leaves <code>&lt;stem&gt;_timing.json</code> beside its log (phases slowest first, an unfinished
+        phase marked, the unmeasured remainder) and one row per phase and per store on
+        <code>output/timing_history.csv</code> — the machine's record, never copied to the job — so "which phase do
+        we work on next" is answered across jobs rather than one log at a time. Each store counts every answer as
+        <b>reused</b> or <b>computed</b>; the counts are stamped on the estimate (<code>reads_reused</code>, beside
+        <code>engine_build</code>) and the Provenance sheet's header says them beside the build —
+        <i>Reads: pdf_readings 11 reused / 0 made; vision_bom 11 reused / 0 made</i> — because a cache that never
+        hits looks exactly like one that works, and the book is where somebody looks.<br><br>
+        <b>Still to come</b>, decided by the first timing tables: a checkpoint after the reads and before costing, so
+        a costing-only change re-costs from the saved reads; and one Excel session per run in place of the three
+        processes and seven recalculations a run with breaks drives today.
+      </div>
+
       <!-- ── RUNTIME ───────────────────────────────────────────────────────────────────── -->
       <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:32px 0 8px">Runtime — what runs where, and why the runner is a Scheduled Task</h3>
       <div class="panel reveal" style="overflow-x:auto">

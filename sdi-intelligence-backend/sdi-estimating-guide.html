@@ -390,6 +390,25 @@
       working.</td></tr>
     <tr><td class="k">Output folder</td><td>Written to the estimating share, in a dated sub-folder,
       so re-running never overwrites an earlier estimate.</td></tr>
+    <tr><td class="k">Running the same pack again</td><td><b>The first run of a pack is the slow
+      one.</b> Reading a drawing — the text layer, OCR and the local vision model over every page,
+      the paid model over the pack — is what takes the minutes, and from 21 Oct 2026 every one of
+      those readings is <b>kept on the runner</b>, keyed on the drawing's actual bytes, the reader
+      code and its settings. Run the same drawings again and they are given back rather than read
+      again; the engine still makes sense of them afresh, so a rule fixed since last time shows on
+      the new book. A redrawn sheet under the same filename is read again by itself; so is every
+      drawing after the engine's own reading code changes. Nothing to press — it is how a run
+      works now.</td></tr>
+    <tr><td class="k">Fresh read</td><td>The tick on the Run page. It makes the run <b>ask every
+      model and read every drawing again</b>, keeping the new answers; it deletes nothing. Use it to
+      measure the model, not to estimate — the same drawings can come back with a different route,
+      which is the thing the kept readings exist to prevent. A material you confirmed on the Set the
+      material step is not a reading and Fresh read does not touch it.</td></tr>
+    <tr><td class="k">Quantity and packing</td><td>Every quantity break you ask for is priced <b>at
+      its own quantity</b> — 150 off is 150 cartons, not one pallet divided by 150 — and the product
+      is taken to <b>ship assembled</b>, one carton sized around the model's overall size (or an
+      overall stated on the drawing) per unit, because SDI assembles, so packs and boxes. The
+      Explanation tab says which it did and from what size.</td></tr>
   </table>
 
   <div class="panel">
@@ -633,6 +652,13 @@
   action</b>: what was used, where it came from, how firm it is, and what — if anything — you
   are being asked to do about it. You open it when a figure looks wrong; you do not read it
   top to bottom.</p>
+  <p>Its second line names the <b>build</b> that costed the book — compare it with the log's if a
+  number looks like older code — and, since 21 Oct 2026, what the engine's stores gave back on the
+  way: <span class="mono">Reads: pdf_readings 11 reused / 0 made; vision_bom 11 reused / 0
+  made</span>. "Reused" is a drawing given back from a previous run of the same bytes; "made" is
+  one read this run. A first run shows everything made; a re-run of an unchanged pack shows
+  everything reused. If a re-run shows pages <i>made</i>, something changed — the drawing, the
+  settings or the engine's reading code — and the line is how you know.</p>
 
   <h3>The strength words</h3>
   <table>
