@@ -12905,7 +12905,12 @@ def _section_outer_area_m2(part: Dict[str, Any]) -> float:
     except Exception:                                                # noqa: BLE001
         return 0.0
     _perim = section_outer_perimeter_mm(_ss.get("a"), _ss.get("b"), _ss.get("profile_form"))
-    _len = _safe_float(_ss.get("length_mm")) or _safe_float(part.get("blank_length_mm"))
+    # EVERY PIECE OF THE CUT LIST IS COATED (D-563). length_mm is the longest piece; a part
+    # cut from several pieces (its own table's cut list, D-383/D-557) is coated over all of
+    # them — three pieces of 703 + 451 + 451 are 1,605 mm of tube, not 703.
+    _pieces = [_safe_float(x) for x in (_ss.get("cut_lengths_mm") or []) if _safe_float(x)]
+    _len = (sum(_pieces) if _pieces
+            else (_safe_float(_ss.get("length_mm")) or _safe_float(part.get("blank_length_mm"))))
     if not _perim or not _len or _len <= 0:
         return 0.0
     return round((_perim / 1000.0) * (_len / 1000.0), 6)

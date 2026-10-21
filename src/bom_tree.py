@@ -29,7 +29,7 @@ BOUGHT-IN INHERITANCE (added):
   generalises to any bought-in on any job — nothing part-number-specific.
 """
 from __future__ import annotations
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from collections import defaultdict
 import re
 
@@ -502,34 +502,44 @@ def resolve_effective_quantities(
     # its own quantity times that count, times the count's own parent's, up to the GA. The
     # family multiplier is kept for a table whose code no parent's table lists (the legacy
     # multi-family packs), and for the named unit (one of the thing you ran).
-    _row_of: Dict[str, Dict[str, Any]] = {}
-    _group_of_row: Dict[str, str] = {}
+    # A CODE'S ROWS, ONE PER TABLE THAT LISTS IT (D-561). The first version kept one row per
+    # code, so a sub-assembly listed under two parents took the first parent's count and its
+    # descendants were counted for one parent only — the same undercount D-552 closed for
+    # leaves, a level up. A table that lists the code twice keeps its first row, as before.
+    _rows_of: Dict[str, List[Tuple[Dict[str, Any], str]]] = {}
     for _src, _rows in groups.items():
+        _seen_here: set = set()
         for _r in _rows:
             _c = _norm(_r.get("part_number"))
-            if _c and _c not in _row_of:
-                _row_of[_c] = _r
-                _group_of_row[_c] = _src
+            if _c and _c not in _seen_here:
+                _seen_here.add(_c)
+                _rows_of.setdefault(_c, []).append((_r, _src))
     _main_key = _norm(main_ga)
 
     def _node_count(code: str, _depth: int = 0) -> Optional[int]:
-        """How many of this assembly one unit holds: its row's quantity on its parent's table,
-        times its parent's count. None where no table lists it, or it is the unit itself."""
+        """How many of this assembly one unit holds: its row's quantity on each parent's table,
+        times that parent's count, summed over every parent that lists it. None where no
+        table lists it, or it is the unit itself."""
         if not code or _depth > 12 or code == _main_key or code == _named:
             return 1 if code in (_main_key, _named) and code else None
-        r = _row_of.get(code)
-        if r is None:
+        rows = _rows_of.get(code)
+        if not rows:
             return None
-        src = _group_of_row.get(code, "")
-        own = _qty(r)
-        if _norm(src) == _main_key:
-            if code in install_context:
-                return 1
-            if _install_n > 1 and own % _install_n == 0:
-                own = own // _install_n
-            return own
-        up = _node_count(_norm(src), _depth + 1)
-        return own * up if up is not None else None
+        total, counted = 0, False
+        for r, src in rows:
+            own = _qty(r)
+            if _norm(src) == _main_key:
+                if code in install_context:
+                    return 1
+                if _install_n > 1 and own % _install_n == 0:
+                    own = own // _install_n
+                total, counted = total + own, True
+                continue
+            up = _node_count(_norm(src), _depth + 1)
+            if up is None:
+                continue
+            total, counted = total + own * up, True
+        return total if counted else None
 
     # leaves from each sub-assembly drawing: own qty x parent's top-level multiplier
     _summed_codes: set = set()
