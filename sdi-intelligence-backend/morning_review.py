@@ -35,6 +35,10 @@ Configuration (.env):
     SDI_REVIEW_FROM          mailbox to send from via Microsoft Graph (app-only,
                              Mail.Send restricted to that mailbox). Empty =
                              use the service's SMTP_* settings instead.
+    SDI_REVIEW_LISTEN_URL    where the "Listen" button goes. Empty = the app's own
+                             briefing page, which speaks on one tap.
+    SDI_REVIEW_CHATGPT_URL   where the "Ask ChatGPT" button goes. Empty = ChatGPT
+                             with the briefing question ready. "off" = no button.
 """
 from __future__ import annotations
 
@@ -48,6 +52,7 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
 
 def _opt(name: str, default: str = "") -> str:
@@ -429,6 +434,36 @@ def listen_url() -> str:
     return f"https://{hosts[0]}/app/voice-crm.html?briefing=1" if hosts else ""
 
 
+# What the ChatGPT button asks for. Named here so the question and the connector
+# name stay together: "Using SDI Tracker" is what makes ChatGPT pick our connector
+# rather than answering from the conversation.
+CHATGPT_ASK = ("Using SDI Tracker, give me my morning briefing: what changed in the "
+               "last 24 hours and what needs deciding today.")
+
+
+def chatgpt_url() -> str:
+    """The email's ChatGPT button, or "" to leave it out.
+
+    ── TWO BUTTONS, BECAUSE THEY DO DIFFERENT THINGS ───────────────────────────
+    Nick Garrish, 21 October 2026: "can the link to Sdi intelligence and the speech
+    be linked through directly to ChatGPT ... I think it currently still linked back
+    to the other agent?"
+
+    It can, and it is — alongside the app rather than instead of it. A ChatGPT deep
+    link arrives with the question asked and ANSWERED IN WRITING: nothing can make
+    it start speaking, because only the person can turn voice mode on. The app's
+    Listen button speaks on one tap, which is the whole point of it at 07:50. So the
+    email carries both: Listen to hear it now, Ask ChatGPT to take it further with
+    the connector's tools.
+
+    SDI_REVIEW_CHATGPT_URL overrides the address; "off" removes the button.
+    """
+    explicit = _opt("SDI_REVIEW_CHATGPT_URL")
+    if explicit:
+        return "" if explicit.lower() == "off" else explicit
+    return "https://chatgpt.com/?q=" + quote(CHATGPT_ASK)
+
+
 def _speak(text: Any) -> str:
     """Sheet text as it should be heard: capitalised words of four letters or
     more become ordinary words ("TESCO BANK" -> "Tesco Bank"), short ones stay
@@ -496,7 +531,7 @@ def spoken_briefing(review: dict, changes: list[dict], first_name: str = "Nick",
 def render(review: dict, words: dict, first_name: str = "Nick") -> dict:
     """Subject, plain text and HTML, laid out like Nick's own review."""
     d = date.fromisoformat(review["date"])
-    listen = listen_url()
+    listen, ask = listen_url(), chatgpt_url()
     c, p = review["counts"], review["previous_counts"]
     lines = [
         ("Active NG records reviewed", c["active"], p.get("active")),
@@ -511,6 +546,9 @@ def render(review: dict, words: dict, first_name: str = "Nick") -> dict:
     text = [f"Morning {first_name},", ""]
     if listen:
         text += [f"Listen to this briefing: {listen}", ""]
+    if ask:
+        text += [f"Ask ChatGPT about it (it answers in writing — tap voice mode to "
+                 f"hear it): {ask}", ""]
     text += [f"{d:%A} sandbox-only {review['owner']} review:", ""]
     text += [f"• {label}: {n}{_delta(n, b)}" for label, n, b in lines]
     text += ["", f"New movement: {words['movement']}", "", "Today's five questions", ""]
@@ -528,10 +566,26 @@ def render(review: dict, words: dict, first_name: str = "Nick") -> dict:
 
     e = html.escape
     h = [f"<p>Morning {e(first_name)},</p>"]
-    if listen:
-        h.append(f"<p><a href='{e(listen)}' style='display:inline-block;padding:8px 14px;"
-                 f"background:#0b5cad;color:#fff;border-radius:6px;text-decoration:none'>"
-                 f"&#9654; Listen to this briefing</a></p>")
+    if listen or ask:
+        # Inline-block buttons side by side, each with its own line of explanation
+        # underneath: on a phone at 07:50 the difference between "speaks now" and
+        # "answers in writing" is the whole choice being offered.
+        button = ("display:inline-block;padding:8px 14px;border-radius:6px;"
+                  "text-decoration:none;margin:0 8px 8px 0")
+        h.append("<p style='margin-bottom:4px'>")
+        if listen:
+            h.append(f"<a href='{e(listen)}' style='{button};background:#0b5cad;color:#fff'>"
+                     f"&#9654; Listen to this briefing</a>")
+        if ask:
+            h.append(f"<a href='{e(ask)}' style='{button};background:#fff;color:#0b5cad;"
+                     f"border:1px solid #0b5cad'>Ask ChatGPT about it</a>")
+        h.append("</p>")
+        note = []
+        if listen:
+            note.append("<b>Listen</b> reads this aloud straight away.")
+        if ask:
+            note.append("<b>ChatGPT</b> answers in writing — tap voice mode there to talk to it.")
+        h.append(f"<p style='font-size:12px;color:#666;margin-top:0'>{' '.join(note)}</p>")
     h += [f"<p>{d:%A} sandbox-only {e(review['owner'])} review:</p><ul>"]
     h += [f"<li>{e(label)}: <b>{n}</b>{e(_delta(n, b))}</li>" for label, n, b in lines]
     h += [f"</ul><p><b>New movement:</b> {e(words['movement'])}</p><p><b>Today's five questions</b></p><ol>"]
