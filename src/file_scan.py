@@ -889,13 +889,35 @@ _VISION_ENV_KNOBS = ("VISION_USE_OLLAMA", "VISION_OLLAMA_MODEL", "VISION_RENDER_
 _READER_LIBRARIES = ("PyMuPDF", "pdfplumber", "pypdf", "paddleocr", "ollama")
 
 
-def _vision_reading_is_whole(vision_pages: Any) -> bool:
-    """False when a page asked the local vision model and got nothing back — a server that was
-    down, not a page with nothing to say. That reading serves this run and is not kept."""
-    for p in vision_pages or []:
-        if isinstance(p, dict) and p.get("ollama_attempted") and not p.get("used_llava"):
-            return False
-    return True
+def _pages_the_local_model_left_unanswered(vision_pages: Any) -> int:
+    """Pages that asked the local vision model and got nothing back — a server that was down,
+    not a page with nothing to say."""
+    return sum(1 for p in (vision_pages or [])
+               if isinstance(p, dict) and p.get("ollama_attempted") and not p.get("used_llava"))
+
+
+def _local_vision_model_reachable(skip_vision: bool) -> Optional[bool]:
+    """Whether the local vision model (Ollama) would answer this run — part of the reading's
+    SETTINGS (D-564), so a reading made without it and one made with it are two readings.
+
+    THE FIRST POLICY DEFEATED THE STORE. D-554 kept no reading whose pages had asked the local
+    model and got nothing back, so that a server that was down did not freeze a degraded read.
+    On a machine where that server is never running, every page is asked and unanswered on
+    every run, so no reading was ever kept and every run re-read every page — the 13:10
+    401918 book, the second of the day, read its PDF again. The reading is now kept either
+    way, keyed on whether the model was there to ask: when it comes up, the key changes and
+    the pages are read again with it. None where the question does not arise."""
+    if skip_vision:
+        return None
+    try:
+        import vision_extraction as _ve
+        if not _ve._use_ollama() or getattr(_ve, "ollama", None) is None:
+            return None
+        _client = _ve.ollama.Client(timeout=3)
+        _client.list()
+        return True
+    except Exception:                                                # noqa: BLE001
+        return False
 
 
 def _thin_readings(readings: Dict[str, Any]) -> Dict[str, Any]:
@@ -933,17 +955,24 @@ def pdf_readings(pdf_path: Path) -> Dict[str, Any]:
         _fp = read_store.fingerprint_code(extract_with_pdfplumber, extract_with_pypdf, _ve)
         _ctx = {"skip_vision": skip_vision,
                 "env": {k: os.getenv(k) for k in _VISION_ENV_KNOBS},
-                "libraries": read_store.library_versions(*_READER_LIBRARIES)}
+                "libraries": read_store.library_versions(*_READER_LIBRARIES),
+                "local_vision_model_reachable": _local_vision_model_reachable(skip_vision)}
     except Exception as exc:                                     # noqa: BLE001
         print(f"   [read-store] {pdf_path.name}: the store was not consulted "
               f"({type(exc).__name__}: {exc}) — read afresh", flush=True)
         return _make()
     got = read_store.reuse("pdf_readings", content=_content, fingerprint=_fp, context=_ctx,
-                           compute=_make, source=pdf_path.name, thin=_thin_readings,
-                           keep=lambda r: _vision_reading_is_whole(r.get("vision")))
+                           compute=_make, source=pdf_path.name, thin=_thin_readings)
     if got.get("hit"):
         print(f"        reused the readings kept {got.get('created_utc')} — same bytes, same "
               f"reader code, same settings; interpreted afresh", flush=True)
+    else:
+        _unanswered = _pages_the_local_model_left_unanswered((got.get("raw") or {}).get("vision"))
+        if _unanswered:
+            print(f"        the local vision model was asked on {_unanswered} page(s) and never "
+                  f"answered — read kept as made without it; it is read again with the model "
+                  f"the first run after that model is up (or set VISION_USE_OLLAMA=0 to stop "
+                  f"asking)", flush=True)
     return got["raw"]
 
 

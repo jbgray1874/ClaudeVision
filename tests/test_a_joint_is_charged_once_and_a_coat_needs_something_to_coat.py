@@ -387,7 +387,7 @@ def test_the_members_area_leaves_the_boards_out():
     assert abs(asm["_powder_members_coated_m2"] - 1.0) < 1e-6
     assert asm["_powder_members"] == ["G-04M x1"]
     assert asm["_powder_members_left_out"] == ["G-01J (MDF)"]
-    assert "not counted, not metal: G-01J (MDF)" in asm["review_flags"][-1]
+    assert "not counted: G-01J (MDF)" in asm["review_flags"][-1]
 
 
 # ── 6. a hand that names its base and holds a blank is a measured flat ───────────────────

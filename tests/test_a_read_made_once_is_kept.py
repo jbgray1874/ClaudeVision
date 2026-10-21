@@ -278,14 +278,47 @@ def test_the_pdf_readings_are_kept_and_the_interpretation_is_the_same(store, tmp
     assert set(comp["context"]["env"]) == set(file_scan._VISION_ENV_KNOBS)
 
 
-def test_a_vision_pass_the_local_model_never_answered_is_not_kept():
+def test_a_vision_pass_the_local_model_never_answered_is_kept_and_said(monkeypatch, capsys):
+    """D-564: the first policy kept no such reading, so a machine whose local model is never
+    running re-read every page on every run (the 13:10 401918 book). Kept now, counted, and
+    said in the log; whether the model was there to ask is part of the key instead."""
     import file_scan
-    assert file_scan._vision_reading_is_whole([{"ollama_attempted": True, "used_llava": False}]) is False
-    assert file_scan._vision_reading_is_whole([{"ollama_attempted": True, "used_llava": True},
-                                               {"ollama_attempted": False, "used_llava": False}]) is True
-    assert file_scan._vision_reading_is_whole([]) is True
+    assert file_scan._pages_the_local_model_left_unanswered(
+        [{"ollama_attempted": True, "used_llava": False}, {"ollama_attempted": True, "used_llava": True},
+         {"ollama_attempted": False, "used_llava": False}]) == 1
+    assert file_scan._pages_the_local_model_left_unanswered([]) == 0
     src = (ROOT / "src" / "vision_extraction.py").read_text(encoding="utf-8")
     assert '"ollama_attempted": bool(is_critical and _use_ollama() and ollama is not None)' in src
+    fs = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    assert "keep=lambda r: _vision_reading_is_whole" not in fs
+    assert '"local_vision_model_reachable": _local_vision_model_reachable(skip_vision)' in fs
+
+
+def test_whether_the_local_model_is_there_to_ask_is_part_of_the_settings(monkeypatch):
+    import file_scan
+    import vision_extraction as ve
+    assert file_scan._local_vision_model_reachable(True) is None          # no vision pass at all
+    monkeypatch.setenv("VISION_USE_OLLAMA", "0")
+    assert file_scan._local_vision_model_reachable(False) is None         # not asked, so not a setting
+    monkeypatch.setenv("VISION_USE_OLLAMA", "1")
+    monkeypatch.setattr(ve, "ollama", None)
+    assert file_scan._local_vision_model_reachable(False) is None         # no client installed
+
+    class _Down:
+        def Client(self, timeout=None):
+            raise ConnectionError("refused")
+    monkeypatch.setattr(ve, "ollama", _Down())
+    assert file_scan._local_vision_model_reachable(False) is False
+
+    class _Up:
+        class Client:
+            def __init__(self, timeout=None):
+                pass
+
+            def list(self):
+                return {"models": []}
+    monkeypatch.setattr(ve, "ollama", _Up())
+    assert file_scan._local_vision_model_reachable(False) is True
 
 
 def test_the_store_keeps_the_readings_without_the_fitz_drawings():
