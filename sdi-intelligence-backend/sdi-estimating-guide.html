@@ -465,6 +465,13 @@
       file is ticked reference is refused — there would be no product to cost.</td>
       <td>The pack includes a customer's standards manual or spec alongside the product
       drawings.</td></tr>
+    <tr><td class="k">Delivery — we are delivering this order</td>
+      <td>Whether an order is delivered, and where to, is the <b>enquiry's</b> fact — no drawing
+      can say it — so the Run page asks. The box opens <b>unticked</b>: a collection job prices
+      no haulage. Tick it and give the <b>delivery postcode</b>, and the DELIVERY line is priced
+      to that postcode at every quantity break and says so on the book; the quote carries the
+      same. Before this, every job priced a delivery nobody had asked for.</td>
+      <td>The customer wants it delivered. Leave it unticked for collection or ex-works.</td></tr>
     <tr><td class="k">Member schedule — checked against the drawing</td>
       <td><b>LLM reads only.</b> Press <b>Load this job's schedule or last read</b> and the
       model's last read of this job fills a table — one line per thing cut or bought, with its
@@ -675,6 +682,21 @@
       priced it yet.</td><td><span class="tag bad">gap</span></td></tr>
   </table>
 
+  <div class="panel">
+    <p style="margin:0 0 6px 0"><b>Two reads worth knowing about when a row surprises you.</b></p>
+    <p style="margin:0"><b>The revision table is not the title block</b> (since 13 Oct 2026). A
+    sheet's revision table — <span class="mono">A 12341-01M INITIAL RELEASE · B 12340-01M PART
+    NUMBER CORRECTED</span> — names old drawing numbers and past changes. The engine now reads
+    it as history: an old number there never becomes the drawing's number, its words never
+    become the finish, and a struck-through row is left alone. If a part appears under a number
+    you recognise as superseded, that is the row to check.</p>
+    <p style="margin:6px 0 0 0"><b>Sheet notes reach the record</b> (since 14 Oct 2026). A note
+    such as <span class="mono">EDGED ALL AROUND</span> or an order code like
+    <span class="mono">2S/SL</span> is read whole and lands on the part it belongs to, so the
+    edging material and labour build from the drawn perimeter rather than standing as a flagged
+    ceiling. The Provenance row names the note it came from.</p>
+  </div>
+
   <h3>The blocks below the part table</h3>
   <table>
     <tr><th>Block</th><th>What it shows — and when to use it</th></tr>
@@ -763,6 +785,13 @@
       included — to be priced before issue"</i> — never as a silent £0 promise of a box.</li>
     <li>The finish it promises is the finish that is charged: on 7332-01, plated and diamond
       polished. Internal reasoning never appears on it.</li>
+    <li><b>Two pages follow the price page</b> (since 13 Oct 2026). <i>How we read your
+      enquiry</i>: what the pack held and what the run made of it, the chain read → concluded →
+      connected → costed, and four evidence cards quoting the pack's own words with their page.
+      <i>From drawing to price</i>: the made part with the longest route, followed end to end
+      from the drawing to its lines on the sheet. Both are written from the same record as the
+      book, so they cannot disagree with it; both quote only what the pack actually says — a
+      topic the pack is silent on gets no box.</li>
   </ul>
 
   <h2 id="email">7 · The covering e-mail — the note the engine wrote</h2>
@@ -780,6 +809,23 @@
     <tr><td class="k">What is attached</td><td>The workbook and the report. The client quote is
       attached only when nothing blocks it — a missing attachment is the engine being careful,
       not a fault.</td></tr>
+    <tr><td class="k">How packaging and delivery were worked out</td><td>Since 15 Oct 2026 the
+      note carries this section whenever either line was priced by a calculator: which drawing
+      dimension became the box's length, breadth and height and where that size came from (the
+      model's overall size, a stated overall, or the parts' measured blanks), whether the product
+      was boxed <b>whole</b> or as <b>parts</b> and why, and how the cartons were counted at
+      each break.</td></tr>
+    <tr><td class="k">AI Estimator Calculator Inputs</td><td>The box calculator's working in
+      full — the estimators' own <b>AI BOX CALCULATOR</b> sheet, read by the engine — so you can
+      re-do the box by hand: the cut sizes, the nests on the stock sheet, each panel pair's cost,
+      the running and set-up steps and the total. Written in plain words, not config keys. Put the
+      same box size and quantity into the sheet and it gives the same panel counts, pair costs
+      and TOTAL. (The sheet's own K10 sum drops one panel pair; the engine charges the complete
+      box and says so.)</td></tr>
+    <tr><td class="k">Who it comes from</td><td>Since 16 Oct 2026 every estimate e-mail is sent
+      <b>as the SDI Intelligence mailbox</b> through Microsoft Graph — the same sender as the
+      morning review — not over SMTP from whichever account the machine had. Reply to it and the
+      reply lands in that mailbox.</td></tr>
   </table>
 
 <h2 id="regen">8 · Re-issuing a quote after you have edited the sheet</h2>
