@@ -43,13 +43,14 @@
     },
     {
       "id": "hr-inventry",
-      "name": "SDI HR Inventry",
-      "status": "Built · being added to the app portal",
+      "name": "HRInventry Anywhere",
+      "status": "Built · awaiting approval",
       "cls": "c-prog",
       "category": "Apps",
       "surface": "app",
-      "desc": "Who is on site and staff sign-in and sign-out, through InVentry, for HR and managers.",
-      "requires": "Restricted to HR and managers. Personal data, so Microsoft sign-in with MFA is required on every device."
+      "app_url": "hr-inventry.html",
+      "desc": "See who is clocked in on BrightHR, and update InVentry’s on-site list — the fire roll call — from it, in or out of the office.",
+      "requires": "Restricted to named HR and managers (SDI_HR_APP_USERS). Personal data, so Microsoft sign-in with MFA is required on every device."
     },
     {
       "id": "delivery-notes",

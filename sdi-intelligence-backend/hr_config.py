@@ -182,3 +182,9 @@ INVENTRY_MAX_SIGN_OUTS_PER_RUN = int(_opt("INVENTRY_MAX_SIGN_OUTS_PER_RUN", "25"
 # window would flag one of those as forgotten by 21:00 the same day. 20h still
 # catches anything left open from a previous day.
 BLIP_MAX_CLOCKIN_AGE_HOURS = float(_opt("BLIP_MAX_CLOCKIN_AGE_HOURS", "20"))
+
+# ── HRInventry Anywhere (the app portal's HR app) ─────────────────────────
+# Who may open it: Microsoft sign-in email addresses, comma separated. It shows
+# who is in the building and writes to the fire roll call, so it is a named
+# list rather than "anyone in the tenant". Empty means nobody.
+HR_APP_USERS = {e.strip().lower() for e in _opt("SDI_HR_APP_USERS").split(",") if e.strip()}
