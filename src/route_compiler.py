@@ -417,6 +417,28 @@ class OperationDecision:
     settled_by_key: str = ""
 
 
+def at_least_once_per_instance(stated: Any, target_id: Any, quantities: Mapping[str, Any],
+                               scope: Any) -> Tuple[Any, bool]:
+    """An assembly-level operation happens at least once per instance of its target (D-558).
+
+    401918-01-401, a welded base frame drawn once and used twice on the GA: the model read the
+    frame's own sheet and said welding qty_per_unit 1 — asked "per finished product", it
+    answered per frame — and the compiler took that as the event's count, so the weld was
+    charged once beside a dressing charged twice. A stated count below the target's canonical
+    multiplicity is raised to it; a count at or above it stands (the model may already have
+    counted every instance). Returns (count, raised)."""
+    if str(scope or "") != "assembly" or stated is None:
+        return stated, False
+    try:
+        _stated = float(stated)
+        _mult = float((quantities or {}).get(target_id, 1.0) or 1.0)
+    except (TypeError, ValueError):
+        return stated, False
+    if _mult > _stated:
+        return _mult, True
+    return stated, False
+
+
 def make_claim(
     operation: Any,
     status: str,
@@ -5264,6 +5286,10 @@ def compile_job_route(
                 "scope": scope,
                 "target_id": target_id,
             })
+            # AT LEAST ONCE PER INSTANCE OF THE TARGET (D-558): a stated per-product count
+            # below the target's multiplicity is the model counting one frame of two.
+            _floored_qty, _floored = at_least_once_per_instance(
+                route.get("qty_per_unit"), target_id, graph_quantities, scope)
             claim = make_claim(
                 operation, REQUIRED, source,
                 subject_id=target_id,
@@ -5288,7 +5314,7 @@ def compile_job_route(
                 # from the canonical BOM -- which is the only place that knows how many of
                 # each part the product contains.
                 qty_per_unit=(
-                    route.get("qty_per_unit")
+                    _floored_qty
                     if (route.get("qty_per_unit") is not None and len(targets) == 1)
                     else graph_quantities.get(target_id, 1.0)
                 ),
@@ -5297,6 +5323,15 @@ def compile_job_route(
                 reason=_route_reason,
                 route_id=route_id,
             )
+            if _floored and route.get("qty_per_unit") is not None and len(targets) == 1:
+                issues.append({
+                    "code": "assembly_op_floored_to_target_count",
+                    "route_id": route_id,
+                    "operation": operation,
+                    "target": target_id,
+                    "stated": route.get("qty_per_unit"),
+                    "count": _floored_qty,
+                })
             add_claim(event_id, claim)
             if scope == "assembly":
                 explicit_assembly_events.setdefault(operation, []).append(
@@ -5555,8 +5590,11 @@ def compile_job_route(
                         # quantity is the part's own BOM multiplicity. The route's stated
                         # figure describes the group and is kept only where the event covers
                         # the group -- an assembly-scoped event, which has one target.
+                        # And at least once per instance of the target (D-558), as above.
                         qty_per_unit=(
-                            operation_quantities.get(operation)
+                            at_least_once_per_instance(
+                                operation_quantities.get(operation), target_id,
+                                graph["quantities"], scope)[0]
                             if (operation_quantities.get(operation) is not None
                                 and scope != "part")
                             else graph["quantities"].get(target_id, 1.0)
