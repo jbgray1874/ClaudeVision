@@ -8173,6 +8173,24 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                   f"the estimators' cutting speeds, the blank size, the hole count and the "
                   f"internal cut distance — all of which we already write into it. On 1310 "
                   f"it computes 311/hr where our model said 80 (Tim books 300).", flags)
+        elif (wb_op == "Laser (Metal)" and default_tp
+              and (_safe(g.get("run_hours_per_unit")) or _safe(g.get("bh")))):
+            # NO CALCULATOR ROW, SO THE ENGINE'S OWN CUT-PATH TIME (D-569). The template's
+            # Laser Rate Calculator lives on the Sheet Steel block's rows; a sheet metal costed
+            # elsewhere — the stainless strip in Other Sheet Material (D-559) — has no row for
+            # it to read, and the first cut fell to the department median (269/hr), losing the
+            # geometry the engine had already timed. The engine's run time per piece is the
+            # same cut-path arithmetic the calculator does, so it stands in here, and says so.
+            _rhpu_l = _safe(g.get("run_hours_per_unit"))
+            _bh_l = _safe(g.get("bh"))
+            _tp_l = (float(_qty) / _rhpu_l if (_rhpu_l and _rhpu_l > 0)
+                     else (order_qty * _qty) / float(_bh_l))
+            ws.cell(row=row, column=lb["col_throughput"], value=round(_tp_l, 4))
+            _rate_basis = "engine_time_model"
+            _flag(f"laser throughput for {', '.join(g.get('parts') or [])} is {_tp_l:.1f}/hr "
+                  f"from the engine's own cut-path time — the part is costed outside the Sheet "
+                  f"Steel block, so the template's Laser Rate Calculator has no row for it "
+                  f"(D-569); not the {default_tp}/hr department median.", flags)
         elif ((wb_op in _ONE_ROW_PER_JOB or wb_op in _PER_PART_OPS) and default_tp
               and not _group_carries_a_stated_shop_time(g, _stated_time_by_pn, _stated_ops_by_pn)):
             ws.cell(row=row, column=lb["col_throughput"], value=float(default_tp))

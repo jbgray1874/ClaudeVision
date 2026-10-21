@@ -211,6 +211,16 @@ def reconciled_bom_rows_for_job(
                 _v = r.get(_ev)
                 if _v not in (None, ""):
                     _row_out[_ev] = _v
+            # THE LENGTH COLUMN UNDER ANY OF ITS NAMES (D-565). The vision reader's schema
+            # calls it cut_length_mm; a table reader may call it length. 401918-01-07M's
+            # page-11 rows ("50.00 x 20.00 x 2.00mm TUBE | 703 | 1") reached the cut-list
+            # applier with no length under the one name it read, and the frame had no stock.
+            if _row_out.get("length_mm") in (None, ""):
+                for _alt in ("cut_length_mm", "length", "cut_length", "piece_length_mm"):
+                    _lv = _row_length_value(r.get(_alt))
+                    if _lv:
+                        _row_out["length_mm"] = _lv
+                        break
             flat.append(_row_out)
     # A reader that did not run is the only failure this module cannot see in its output:
     # the rows simply are not there, and a job read by one path looks exactly like a job
@@ -331,6 +341,24 @@ def apply_stated_edging_to_parts(parts: Any, bom_rows: Any) -> int:
     return n
 
 
+def _row_length_value(raw: Any) -> float:
+    """A length column's figure in mm, from a number or a printed string ("703", "703 mm",
+    "703.0"), or 0.0 where it holds none (D-565)."""
+    if raw in (None, "", False):
+        return 0.0
+    try:
+        v = float(raw)
+        return v if v > 0 else 0.0
+    except (TypeError, ValueError):
+        pass
+    m = re.search(r"(\d+(?:\.\d+)?)", str(raw))
+    try:
+        v = float(m.group(1)) if m else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+    return v if v > 0 else 0.0
+
+
 def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
     """A part's own parts table that lists its section pieces IS its cut list (D-383).
 
@@ -373,10 +401,13 @@ def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
         # THE TABLE'S OWN LENGTH COLUMN (D-429), where the description does not print one:
         # "ITEM QTY DESCRIPTION LENGTH" puts the piece's length beside the profile, not in it.
         if not s.get("length_mm"):
-            try:
-                _col_len = float(r.get("length_mm") or 0)
-            except (TypeError, ValueError):
-                _col_len = 0.0
+            # Under any of the column's names (D-565): length_mm, the vision schema's
+            # cut_length_mm, a table reader's length — a number or a printed string.
+            _col_len = 0.0
+            for _lk in ("length_mm", "cut_length_mm", "length", "cut_length", "piece_length_mm"):
+                _col_len = _row_length_value(r.get(_lk))
+                if _col_len:
+                    break
             if _col_len > 0:
                 s = dict(s, length_mm=_col_len)
         key = (min(float(s["a"]), float(s["b"])), max(float(s["a"]), float(s["b"])),
