@@ -12881,7 +12881,7 @@ def stamp_members_coated_area(parts: Any) -> int:
             f"({', '.join(_counted)}) — their sheets carry no coat "
             f"of their own, so they are coated as the assembly; override the area on the "
             f"sheet if the shop coats them before assembly"
-            + (f"; not counted, not metal: {', '.join(_left_out)}" if _left_out else ""))
+            + (f"; not counted: {', '.join(_left_out)}" if _left_out else ""))
         stamped += 1
     return stamped
 

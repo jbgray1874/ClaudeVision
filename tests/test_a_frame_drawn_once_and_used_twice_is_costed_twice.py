@@ -97,9 +97,21 @@ def test_an_assembly_with_coded_members_still_has_its_pieces_asked_not_costed():
     asm = {"part_number": "401918-01-07M", "description": "BASE FRAME - WELDMENT",
            "is_assembly_parent": True, "page_roles": ["detail"],
            "assembly_children": ["401918-01-08M"]}
-    assert bp.apply_stated_cut_list_to_parts([asm], _page_11_rows()) == 0
+    bracket = {"part_number": "401918-01-08M", "description": "BRACKET"}
+    assert bp.apply_stated_cut_list_to_parts([asm, bracket], _page_11_rows()) == 0
     assert "section_stock" not in asm
     assert "is an assembly" in asm["manufacturing_questions"][0]["issue"]
+
+
+def test_a_child_the_model_names_but_the_bill_does_not_hold_is_not_a_member():
+    """The model's tree can name a weldment's cut-list bodies as children; nothing on the bill
+    answers to them, so nothing carries the tube — the 13:10 book, after D-557's first cut."""
+    frame = {"part_number": "401918-01-07M", "description": "BASE FRAME - WELDMENT",
+             "is_assembly_parent": True, "is_sub_assembly": True, "page_roles": ["detail"],
+             "assembly_children": ["TUBE 50x20x2 - 703", "TUBE 50x20x2 - 451"],
+             "normalized_material": "MILD STEEL", "quantity": 2}
+    assert bp.apply_stated_cut_list_to_parts([frame], _page_11_rows()) == 1
+    assert sorted(frame["section_stock"]["cut_lengths_mm"]) == [451.0, 451.0, 703.0]
 
 
 def test_a_bare_assembly_record_with_uncoded_pieces_is_still_asked():

@@ -438,9 +438,16 @@ def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
         # give no coded child, only the codeless section rows of its own table, is a weldment
         # cut from those pieces, and the table is its cut list.
         if _asm:
+            # A MEMBER IS A RECORD ON THE BILL. The model's tree can name a weldment's
+            # cut-list bodies as children; nothing on the bill answers to those names, so
+            # nothing carries the tube. Only a child that is a part record counts here.
+            _records = {bare_code(str(q.get("part_number") or "")).upper()
+                        for q in (parts or []) if isinstance(q, dict) and q.get("part_number")}
+            _own_cl = (bare_code(str(p.get("part_number") or "")) + "-CL").upper()
             _coded_kids = [str(c).strip() for c in (p.get("assembly_children") or [])
-                           if str(c).strip() and not str(c).strip().upper().startswith(
-                               (bare_code(str(p.get("part_number") or "")) + "-CL").upper())]
+                           if str(c).strip()
+                           and bare_code(str(c)).upper() in _records
+                           and not str(c).strip().upper().startswith(_own_cl)]
             _roles = {str(r).lower() for r in (p.get("page_roles") or [])}
             try:
                 from finish_rules import states_only_a_process, stated_finish
