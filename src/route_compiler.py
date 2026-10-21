@@ -3408,13 +3408,23 @@ def build_part_graph(
         # — D-511's defect, re-opened by the line D-517 linked. A measured part whose
         # every child is bought is a cut part with inserts wherever it sits in the graph.
         _hardware_carrier = _carries_only_hardware(identity, record)
-        is_assembly = bool(not _hardware_carrier and (
+        # A WELDMENT CUT FROM ITS OWN PIECES IS A LEAF (D-577). Its "children" in the graph
+        # are the uncoded rows of its own cut list — the pieces it is sawn from, consumed as
+        # such (D-557/D-576) — and nothing on the bill answers to them. Called an assembly
+        # here, the workbook writer excluded its material as "carried by leaf children" and
+        # the frame reached the sheet priced by nothing: the record said part, the graph
+        # said assembly, and the writer read the graph.
+        _own_pieces = bool(record.get("weldment_from_own_cut_list"))
+        is_assembly = bool(not _hardware_carrier and not _own_pieces and (
             (identity == top_id
              and not (_product_is_leaf and identity == product_root))
             or identity in children
             or record.get("is_sub_assembly")
             or record.get("is_assembly_parent")
         ))
+        if _own_pieces and identity in children:
+            print(f"   [graph] {identity} is cut from the pieces of its own cut list — a part "
+                  f"sawn from section, not an assembly; its material is its own", flush=True)
         if _hardware_carrier:
             _hw = ", ".join(sorted(children.get(identity) or {}))
             print(f"   [graph] {identity} carries hardware ({_hw}) on its own sheet — a cut "

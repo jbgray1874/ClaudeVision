@@ -194,6 +194,7 @@ def prepare(summary: Dict[str, Any]) -> List[str]:
             candidate["cut_list_bodies_named_by_model"] = list(candidate["assembly_children"])
             candidate["assembly_children"] = []
         candidate["section_coverage_repair"] = {"source": req["source"], "pieces_mm": pieces}
+        _withdraw_provisional_blank(candidate)
         candidate.setdefault("review_flags", []).append(
             f"{p.get('part_number')} holds no member and no pieces, and its own sheet "
             f"(page {req['source'].get('page')}) prints a cut list: costed as a weldment cut "
@@ -202,6 +203,65 @@ def prepare(summary: Dict[str, Any]) -> List[str]:
         p.update(candidate)
         changed.append(owner)
     return changed
+
+
+_PROVISIONAL_BLANK_WORDS = "PROVISIONAL BLANK, NOT A MEASURED ONE"
+
+
+def _withdraw_provisional_blank(p: Dict[str, Any]) -> None:
+    """A record that is section stock has no sheet blank (D-577). The sheet-size pass had
+    given the frame a provisional 803 x 354 blank developed for ten folds, and that
+    question stayed open on the book beside the cut list that answers it."""
+    try:
+        from detail_page_geometry import PROVISIONAL_SOURCE as _prov
+    except Exception:                                                 # noqa: BLE001
+        _prov = "printed_extents_provisional"
+    holders = [p] + ([p["normalized_geometry"]] if isinstance(p.get("normalized_geometry"), dict) else [])
+    for h in holders:
+        if str(h.get("blank_length_mm_source") or "") == _prov or str(h.get("blank_width_mm_source") or "") == _prov:
+            for k in ("blank_length_mm", "blank_width_mm", "blank_length_mm_source", "blank_width_mm_source"):
+                h.pop(k, None)
+    for k in ("_blank_provisional", "blank_is_inferred", "blank_inferred_reason"):
+        p.pop(k, None)
+    p["review_flags"] = [f for f in (p.get("review_flags") or [])
+                         if not (isinstance(f, str) and f.startswith(_PROVISIONAL_BLANK_WORDS))]
+    p["manufacturing_questions"] = [
+        q for q in (p.get("manufacturing_questions") or [])
+        if not (isinstance(q, dict) and str(q.get("issue") or "").startswith("Blank of ")
+                and "provisional" in str(q.get("issue") or ""))]
+
+
+def _row_code(row: Dict[str, Any]) -> str:
+    c = str(row.get("part_code") or row.get("part_number") or "").strip()
+    if not c:
+        words = str(row.get("description") or "").split()
+        c = words[0] if words else ""
+    return c.upper()
+
+
+def audit_sheet(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The second stage (D-577): what the sheet actually wrote, read back. The hand-off
+    audit passed 07M on the 18:09 book — the canonical line carried 1011 mm and a price —
+    and the writer then left it off as an assembly's material. A requirement is met on the
+    sheet when a material row of the owner, or of one of its cut-list members, carries a
+    value; where the read-back did not run there is nothing to judge, and nothing is said."""
+    contract = summary.get("section_coverage_contract") or capture(summary)
+    final = summary.get("final_estimate") if isinstance(summary.get("final_estimate"), dict) else {}
+    rows = [r for r in (final.get("material_rows") or []) if isinstance(r, dict)]
+    if not rows:
+        return []
+    records = {code(p.get("part_number")): p for p in parts_of(summary)}
+    issues: List[Dict[str, Any]] = []
+    for req in contract.get("requirements") or []:
+        owner = req["part"]
+        members = {owner} | {pn for pn, rec in records.items()
+                             if code(rec.get("cut_list_member_of")) == owner}
+        value = sum(positive(r.get("total_value_gbp")) or 0.0 for r in rows if _row_code(r) in members)
+        if value <= 0:
+            expected = sum(r["length_mm"] * r["quantity"] for r in req["rows"])
+            issues.append({"part": owner, "code": "section_not_on_the_sheet",
+                           "expected_mm_per_owner": expected, "source": req["source"]})
+    return issues
 
 
 def audit(summary: Dict[str, Any], estimates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

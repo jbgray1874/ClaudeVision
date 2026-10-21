@@ -212,7 +212,8 @@ class TheBookSaysSo(unittest.TestCase):
     def test_nothing_here_names_a_job(self):
         """The job number lives in the module's docstring and comments, never in its logic."""
         src = (Path(__file__).resolve().parents[1] / "src" / "section_coverage_contract.py").read_text(encoding="utf-8")
-        body = src.split('"""', 2)[2]                                   # after the module docstring
+        import re
+        body = re.sub(r'"""[\s\S]*?"""', "", src)                          # every docstring
         logic = "\n".join(l for l in body.splitlines() if not l.strip().startswith("#"))
         self.assertNotIn("401918", logic)
         self.assertNotIn("07M", logic)
@@ -272,3 +273,77 @@ class TheReleaseIsHeld(unittest.TestCase):
         c.record_coverage(s, s["estimate_summary"]["canonical_part_estimates"])
         self.assertTrue(s["section_coverage_result"]["passed"])
         self.assertEqual(invariants.check_a_section_schedule_reaches_the_sheet(s), [])
+
+
+class TheSheetIsTheAuthority(unittest.TestCase):
+    """D-577, from the 18:09 book of 21 Oct: the hand-off audit passed — the canonical line
+    carried 1011 mm and a price — and the writer left 07M off the sheet as an assembly's
+    material, because the route graph called it an assembly on the strength of its own
+    cut-list rows. The graph now calls it a leaf, the stale provisional blank is withdrawn,
+    and a second audit reads what the sheet actually wrote."""
+
+    def test_a_weldment_cut_from_its_own_pieces_is_a_leaf_in_the_graph(self):
+        import route_compiler as rc
+        s = fixture(); c.prepare(s)
+        frame = c.parts_of(s)[0]
+        parts = [{"part_number": "FRAME-GA", "is_assembly_parent": True, "assembly_children": ["FRAME-X"]},
+                 frame]
+        job = {"assemblies": [
+            {"part_number": "FRAME-GA", "children": [{"part_number": "FRAME-X", "qty": 2}]},
+            # the sheet's own cut-list rows, as the extract names them under the frame
+            {"part_number": "FRAME-X", "children": [{"part_number": "", "description": "50 x 20 x 2mm TUBE", "qty": 1},
+                                                   {"part_number": "", "description": "50 x 20 x 2mm TUBE", "qty": 2}]}],
+            "routes": []}
+        out = rc.compile_job_route(parts, job, known_assemblies=["FRAME-GA"])
+        kinds = {n["part_number"]: n["kind"] for n in out["nodes"]}
+        self.assertEqual(kinds.get("FRAME-X"), "leaf", kinds)
+        self.assertEqual(kinds.get("FRAME-GA"), "assembly", kinds)
+
+    def test_the_provisional_blank_is_withdrawn_with_its_question(self):
+        s = fixture(); p = c.parts_of(s)[0]
+        p.update({"blank_length_mm": 803.0, "blank_width_mm": 354.0,
+                  "blank_length_mm_source": "printed_extents_provisional",
+                  "blank_width_mm_source": "printed_extents_provisional",
+                  "_blank_provisional": {"basis": "printed_extents_provisional"},
+                  "blank_is_inferred": True, "blank_inferred_reason": "PROVISIONAL BLANK, NOT A MEASURED ONE — x",
+                  "review_flags": ["PROVISIONAL BLANK, NOT A MEASURED ONE — FRAME-X: sized from its sheet"],
+                  "manufacturing_questions": [{"issue": "Blank of FRAME-X: provisional 803 x 354 mm from the dimensions printed on its own sheet"},
+                                              {"issue": "something else"}]})
+        c.prepare(s)
+        self.assertNotIn("blank_length_mm", p)
+        self.assertNotIn("_blank_provisional", p)
+        self.assertFalse(any(str(f).startswith("PROVISIONAL BLANK") for f in p["review_flags"]))
+        self.assertEqual([q["issue"] for q in p["manufacturing_questions"]], ["something else"])
+
+    def _with_sheet(self, rows):
+        s = fixture(); c.prepare(s)
+        s["final_estimate"] = {"material_rows": rows}
+        return s
+
+    def test_the_sheet_audit_wants_a_valued_row_for_the_owner_or_its_pieces(self):
+        s = self._with_sheet([{"block": "bom", "description": "FRAME-X  50.00 x 20.00 x 2.00mm TUBE",
+                               "qty_per_unit": 2, "total_value_gbp": 31.76}])
+        self.assertEqual(c.audit_sheet(s), [])
+        s = self._with_sheet([{"block": "steel", "description": "OTHER-01  PANEL", "qty_per_unit": 1,
+                               "total_value_gbp": 9.0}])
+        found = c.audit_sheet(s)
+        self.assertEqual(found[0]["code"], "section_not_on_the_sheet")
+        self.assertEqual(found[0]["expected_mm_per_owner"], 1011)
+        s = self._with_sheet([{"block": "bom", "part_code": "FRAME-X", "description": "tube", "qty_per_unit": 2,
+                               "total_value_gbp": 0}])
+        self.assertEqual(c.audit_sheet(s)[0]["code"], "section_not_on_the_sheet")
+
+    def test_no_read_back_means_nothing_to_judge(self):
+        s = fixture(); c.prepare(s)
+        self.assertEqual(c.audit_sheet(s), [])
+        s["final_estimate"] = {"material_rows": []}
+        self.assertEqual(c.audit_sheet(s), [])
+
+    def test_the_invariant_raises_the_sheet_stage_too(self):
+        s = self._with_sheet([{"block": "steel", "description": "OTHER-01  PANEL", "qty_per_unit": 1,
+                               "total_value_gbp": 9.0}])
+        c.record_coverage(s, [cost()])                                   # the hand-off passed
+        self.assertTrue(s["section_coverage_result"]["passed"])
+        found = invariants.check_a_section_schedule_reaches_the_sheet(s)
+        self.assertEqual(found[0]["code"], "section_schedule_not_priced")
+        self.assertIn("the workbook wrote no material row for it or its pieces", found[0]["message"])

@@ -2239,6 +2239,13 @@ def check_a_section_schedule_reaches_the_sheet(summary: Any) -> List[Dict[str, A
         except Exception:                                            # noqa: BLE001
             return []
     issues = [i for i in (result.get("issues") or []) if isinstance(i, dict)]
+    # THE SECOND STAGE: the rows the sheet wrote, read back (D-577). The hand-off can pass
+    # and the writer still leave the line off; the read-back is the authority.
+    try:
+        import section_coverage_contract as scc
+        issues = issues + scc.audit_sheet(dict(summary))
+    except Exception:                                                # noqa: BLE001
+        pass
     if not issues:
         return []
     said = []
@@ -2249,6 +2256,10 @@ def check_a_section_schedule_reaches_the_sheet(summary: Any) -> List[Dict[str, A
             said.append(f"{i.get('part')}{where}: {i.get('expected_mm_per_product', 0):g} mm of "
                         f"{'x'.join(f'{v:g}' for v in (i.get('profile_mm') or []))} section a "
                         f"product on the sheet, {i.get('priced_mm_per_product', 0):g} mm priced")
+        elif i.get("code") == "section_not_on_the_sheet":
+            said.append(f"{i.get('part')}{where}: {i.get('expected_mm_per_owner', 0):g} mm of "
+                        f"section on its sheet, and the workbook wrote no material row for it "
+                        f"or its pieces")
         else:
             said.append(f"{i.get('part') or 'the audit'}{where}: {i.get('code')}"
                         + (f" — {i['text']}" if i.get("text") else ""))
