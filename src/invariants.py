@@ -2185,10 +2185,12 @@ def check_a_memberless_assembly_carries_nothing(summary: Any) -> List[Dict[str, 
                  or _num((part.get("material_estimate") or {}).get("cost_per_part_gbp"))
                  or _num((part.get("material_estimate") or {}).get("unit_material_cost_gbp"))
                  or 0.0)
-        section = part.get("section_stock") if isinstance(part.get("section_stock"), dict) else {}
+        # A STORED LENGTH IS NOT MONEY. The first cut counted a section length as coverage;
+        # 401918-01-07M carried one (the model's envelope) and still cost nothing, because the
+        # assembly flag suppressed its material — so the check passed over the very record
+        # it exists for. Coverage is a priced material, a measured flat, or a bought-in price.
         has_road = bool(
             money > 0.005
-            or section.get("length_mm") or section.get("cut_lengths_mm")
             or part.get("dxf_measured_outline") or part.get("native_flat_pattern")
             or part.get("flat_pattern_detected")
             or bought_in_policy.is_bought_in(part))

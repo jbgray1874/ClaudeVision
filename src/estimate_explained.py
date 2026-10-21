@@ -3099,6 +3099,17 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     def _reads_as_free(row) -> bool:
         if "costed in" in str(row.get("text") or "").lower():
             return False          # its money is in a fabricated block, not missing
+        # CORRECTLY NOTHING IS NOT MISSING (D-568). The 13:10 401918 note led with "1 line
+        # carries no price. It sums as free" — the line was DELIVERY, held at £0 because the
+        # Run declared the order collected, which the report beside it explained correctly.
+        # The record classes such a line nil; the Explanation tab already reads that.
+        try:
+            _l = _record_line(record_lines, row)
+            if _l is not None and str(((_l.get("price_origin") or {})
+                                        ).get("firmness") or "") == "nil":
+                return False
+        except Exception:                                            # noqa: BLE001
+            pass
         price = _money(row.get("price"))
         return price is None or price == 0
     _unpriced = [r for r in bom if _reads_as_free(r)]

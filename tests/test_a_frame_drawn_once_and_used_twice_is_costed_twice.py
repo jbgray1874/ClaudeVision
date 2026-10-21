@@ -156,7 +156,7 @@ def _rail(route_qty=1):
                                                      {"part_number": "401918-01-01M", "qty": 1}]},
         {"part_number": "401918-01-401", "children": [{"part_number": "401918-01-07M", "qty": 1},
                                                       {"part_number": "401918-01-08M", "qty": 2}]}],
-        "routes": [{"operation": "welding", "parts": ["401918-01-401"], "scope": "assembly",
+        "routes": [{"operation": "welding", "part_numbers": ["401918-01-401"], "scope": "assembly",
                     "qty_per_unit": route_qty, "sequence": 20}]}
     return parts, job
 

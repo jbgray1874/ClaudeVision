@@ -58,7 +58,10 @@ def test_a_parent_with_members_is_their_business():
 
 
 def test_a_parent_that_carries_its_own_money_by_some_road_passes():
-    assert CHECK(_job(_frame(section_stock={"a": 20, "b": 50, "t": 2, "cut_lengths_mm": [703, 451, 451]}))) == []
+    # A stored length is NOT money (D-560a): a cut list the costing then suppressed still blocks.
+    assert CHECK(_job(_frame(section_stock={"a": 20, "b": 50, "t": 2, "cut_lengths_mm": [703, 154, 154]}))) != []
+    assert CHECK(_job(_frame(section_stock={"a": 20, "b": 50, "t": 2, "cut_lengths_mm": [703, 154, 154]},
+                             unit_material_cost_gbp=7.9))) == []
     assert CHECK(_job(_frame(unit_material_cost_gbp=12.4))) == []
     assert CHECK(_job(_frame(material_estimate={"cost_per_part_gbp": 12.4}))) == []
     assert CHECK(_job(_frame(dxf_measured_outline=True))) == []

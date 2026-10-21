@@ -4603,6 +4603,26 @@ def _ancestor_distances(identity: str, parents: Mapping[str, Set[str]]) -> Dict[
     return distances
 
 
+def _weldment_has_its_own_joints(part: Mapping[str, Any], part_number: str,
+                                 graph: Mapping[str, Any]) -> bool:
+    """A participant of a parent's welding event that is itself welded from pieces of its own
+    (D-566). 401918-01-03M FRAME - WELDMENT is welded from three tubes and then welded into
+    201 with its caps; the compatibility adapter read 03M's own WELDED as corroboration of
+    201's event and the frame's internal joints were never charged. Its own sheet's weld
+    evidence (symbols, FINISH: WELDED, a weld note) on a record that holds pieces — children
+    in the graph, a cut list of more than one piece, or a WELDMENT by name — is a weld of its
+    own, beside the parent's."""
+    own_evidence = bool(part.get("weld_symbols") or part.get("weld_stated_by_finish")
+                        or part.get("weld_stated_by_note"))
+    if not own_evidence:
+        return False
+    kids = (graph.get("children") or {}).get(part_number) or ()
+    ss = part.get("section_stock") if isinstance(part.get("section_stock"), Mapping) else {}
+    pieces = [x for x in (ss.get("cut_lengths_mm") or []) if x]
+    return bool(kids) or len(pieces) > 1 or bool(
+        re.search(r"\bWELDMENT\b", str(part.get("description") or ""), re.I))
+
+
 def _is_descendant(identity: str, ancestor: str, parents: Mapping[str, Set[str]]) -> bool:
     return identity != ancestor and ancestor in _ancestor_distances(identity, parents)
 
@@ -5438,6 +5458,18 @@ def compile_job_route(
                 source = str(operation_sources.get(operation) or fallback_source)
                 event_ids = sorted(
                     explicit_memberships.get((operation, part_number)) or [])
+                compatibility_target = part_number
+                # A WELDMENT INSIDE A WELDED ASSEMBLY HAS JOINTS OF ITS OWN (D-566): its word
+                # corroborates the parent's event AND claims an event of its own.
+                if (event_ids and operation == "welding"
+                        and _weldment_has_its_own_joints(part, part_number, graph)):
+                    _own_event = stable_id("decision", {
+                        "origin": "compatibility", "operation": operation,
+                        "scope": "part", "target_id": part_number})
+                    if _own_event not in event_ids:
+                        event_ids.append(_own_event)
+                    explicit_memberships.setdefault(
+                        ("welding", part_number), set()).add(_own_event)
                 if not event_ids and operation in ASSEMBLY_EVENT_OPERATIONS:
                     # A child record often repeats its parent's finish/weld wording. If an
                     # explicit assembly event already owns that operation, the child word is
