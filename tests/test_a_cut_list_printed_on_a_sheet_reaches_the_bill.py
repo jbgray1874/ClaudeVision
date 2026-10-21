@@ -218,3 +218,57 @@ class TheBookSaysSo(unittest.TestCase):
         self.assertNotIn("07M", logic)
 
 if __name__ == "__main__": unittest.main()
+
+
+class TheReleaseIsHeld(unittest.TestCase):
+    """The reviewer's qualification, 21 Oct: a BLOCKING invariant is acceptable only if the
+    release is genuinely held. A deliberately missing section: the estimator still gets the
+    working, the missing steel is named with its sheet and its millimetres, and the customer
+    copy cannot be produced or sent while the finding stands."""
+
+    def _job(self):
+        s = fixture(); c.prepare(s)
+        s.update({"job_number": "FRAME-GA", "job_output_stem": "FRAME-GA", "customer": "A Customer",
+                  "assumed_job_quantity": 1, "quantity": 1})
+        s["estimate_summary"] = {"part_estimates": [cost(length=703, quantity=2, price=5.0)],
+                                 "canonical_part_estimates": [cost(length=703, quantity=2, price=5.0)],
+                                 "assumed_job_quantity": 1}
+        c.record_coverage(s, s["estimate_summary"]["canonical_part_estimates"])
+        s["invariants"] = {"violations": invariants.check_a_section_schedule_reaches_the_sheet(s),
+                           "blocking": 1}
+        return s
+
+    def test_the_record_is_a_draft_with_the_missing_steel_named_first(self):
+        from costed_facts import costed_job
+        job = costed_job(self._job())
+        self.assertTrue(job["release"]["draft"])
+        checks = [d for d in job["decisions_required"] if d.get("kind") == "consistency_check"]
+        self.assertEqual(checks[0]["check_code"], "section_schedule_not_priced")
+        said = str(checks[0].get("issue") or "") + str(checks[0].get("current") or "")
+        self.assertIn("2022 mm", said)
+        self.assertIn("1406 mm priced", said)
+        self.assertIn("sheet 3", said)
+
+    def test_the_customer_copy_cannot_be_made_or_sent_while_it_stands(self):
+        import client_quote_html as q
+        from quote_state import CUSTOMER, PORTAL, NotReleasable, quote_state, release_meta_tag
+        s = self._job()
+        state = quote_state(s)
+        self.assertFalse(state["customer_releasable"])
+        gates = {b["gate"]: b["what"] for b in state["blocking"]}
+        self.assertIn("record_outstanding", gates)
+        with self.assertRaises(NotReleasable):
+            q.build_quote_html(s, job_stem="FRAME-GA", audience=CUSTOMER)
+        # The portal copy is still made — the estimator's working — and declares itself so,
+        # which is what the download and e-mail routes read before handing a file over.
+        html = q.build_quote_html(s, job_stem="FRAME-GA")
+        self.assertIn(release_meta_tag(PORTAL), html)
+        self.assertNotIn(release_meta_tag(CUSTOMER), html)
+
+    def test_once_the_steel_is_priced_the_finding_clears(self):
+        s = self._job()
+        s["estimate_summary"]["canonical_part_estimates"] = [cost(length=1011, quantity=2, price=15.88)]
+        s["estimate_summary"]["part_estimates"] = [cost(length=1011, quantity=2, price=15.88)]
+        c.record_coverage(s, s["estimate_summary"]["canonical_part_estimates"])
+        self.assertTrue(s["section_coverage_result"]["passed"])
+        self.assertEqual(invariants.check_a_section_schedule_reaches_the_sheet(s), [])
