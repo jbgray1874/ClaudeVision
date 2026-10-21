@@ -189,7 +189,7 @@ class TheBookSaysSo(unittest.TestCase):
     def test_the_invariant_audits_itself_when_no_hand_off_ran(self):
         s = fixture(); c.prepare(s)
         s["estimate_summary"] = {"canonical_part_estimates": [cost()]}
-        self.assertEqual(invariants.check_a_section_schedule_reaches_the_sheet(s), [])
+        self.assertEqual(invariants.check_a_section_schedule_reaches_the_sheet(s), [])   # no read-back: nothing to verify
         s["estimate_summary"] = {"canonical_part_estimates": [cost(length=703)]}
         self.assertEqual(invariants.check_a_section_schedule_reaches_the_sheet(s)[0]["code"],
                          "section_schedule_not_priced")
@@ -272,6 +272,24 @@ class TheReleaseIsHeld(unittest.TestCase):
         s["estimate_summary"]["part_estimates"] = [cost(length=1011, quantity=2, price=15.88)]
         c.record_coverage(s, s["estimate_summary"]["canonical_part_estimates"])
         self.assertTrue(s["section_coverage_result"]["passed"])
+        # An engine price alone no longer clears release once a workbook was read back:
+        # the charged cells have to say so (D-578).
+        from final_charge_contract import audit
+        s['workbook_labour'] = {'rows': [{'workbook_row':151, 'engine_operations':['saw'],
+                                          'part_numbers':['FRAME-X']}]}
+        s['final_estimate'] = {'source':'excel_calculated',
+            'totals':{'material_gbp':31.76,'labour_gbp':5},
+            'material_rows':[{'part_code':'FRAME-X','qty_per_unit':2,'unit_price_gbp':15.88,
+                              'total_value_gbp':31.76,'charged_cell':'Estimate!M11'}],
+            'labour_rows':[{'workbook_row':151,'part_numbers':'FRAME-X','department':'SAW',
+                            'batch_hours':0.1,'total_value_gbp':5,'charged_cell':'Estimate!M151'}]}
+        self.assertIn("final_charge_check_not_run", str(invariants.check_a_section_schedule_reaches_the_sheet(s)))
+        snapshot = {'sha256':'fixture', 'cells': {'Estimate!M11':31.76,'Estimate!M151':5,
+            'Estimate!H11':'FRAME-X','Estimate!K10':'Qty Per Unit','Estimate!K11':2,
+            'Estimate!C147':'Total Material Cost','Estimate!M147':31.76,
+            'Estimate!C223':'Total Labour Cost','Estimate!M223':5,'Estimate!F151':'FRAME-X'}}
+        s['final_charge_result'] = audit(s, snapshot)
+        self.assertTrue(s['final_charge_result']['passed'])
         self.assertEqual(invariants.check_a_section_schedule_reaches_the_sheet(s), [])
 
 
@@ -347,3 +365,33 @@ class TheSheetIsTheAuthority(unittest.TestCase):
         found = invariants.check_a_section_schedule_reaches_the_sheet(s)
         self.assertEqual(found[0]["code"], "section_schedule_not_priced")
         self.assertIn("the workbook wrote no material row for it or its pieces", found[0]["message"])
+
+
+class TheWriterPricesIt(unittest.TestCase):
+    """D-577, the writer's side: the block partition in populate_workbook sent 07M down the
+    assembly-rollup branch on the word WELDMENT and the edges to its own cut-list rows."""
+
+    def test_a_leaf_with_edges_has_nothing_to_roll_into(self):
+        import wb_populate as wb
+        s = {"estimate_summary": {"canonical_route_shadow": {"nodes": [
+            {"part_number": "FRAME-X", "kind": "leaf", "children": [{"part_number": "BI-TUBE-1"}]}]}}}
+        self.assertFalse(wb._has_children_to_carry_it("FRAME-X", [], s))
+        s["estimate_summary"]["canonical_route_shadow"]["nodes"][0]["kind"] = "assembly"
+        self.assertTrue(wb._has_children_to_carry_it("FRAME-X", [], s))
+
+    def test_a_line_priced_as_section_by_length_is_its_own_material(self):
+        import wb_populate as wb
+        for method in ("section_stock_config_rate", "catalogue_section_stock_length_rate", "section_stock_flat_rate"):
+            self.assertTrue(wb._line_is_its_own_section_stock(
+                {"cost_method": method, "stock_estimate": {"section_length_mm": 1011.0}}), method)
+        self.assertFalse(wb._line_is_its_own_section_stock({"cost_method": "section_stock_config_rate",
+                                                            "stock_estimate": {}}))
+        self.assertFalse(wb._line_is_its_own_section_stock({"cost_method": "nest_sheet",
+                                                            "stock_estimate": {"section_length_mm": 100}}))
+        self.assertFalse(wb._line_is_its_own_section_stock(None))
+
+    def test_the_partition_consults_it_before_the_rollup_branches(self):
+        src = (Path(__file__).resolve().parents[1] / "src" / "wb_populate.py").read_text(encoding="utf-8")
+        loop = src.split("    for pe in pes:", 1)[1]
+        self.assertLess(loop.index("if _line_is_its_own_section_stock(me):\n            name_is_assembly = False"),
+                        loop.index('if canonical_kind == "assembly":'))

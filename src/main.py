@@ -2122,6 +2122,21 @@ def main() -> None:
                     _val = summary.get(_carry)
                     if _val and not _target.get(_carry):
                         _target[_carry] = list(_val) if isinstance(_val, list) else _val
+            # THE CHARGED CELLS THEMSELVES (D-578): after Excel has calculated the book and
+            # the quantity sweep has read it, before the checks and the quotation. Every
+            # captured section requirement must be on the sheet at its quantity, charged,
+            # cut, and the saved file's own cached cells must agree. Always recomputed —
+            # a verdict kept from an earlier workbook is not this one's — and a failure of
+            # the checker is a finding, never a pass.
+            try:
+                from final_charge_contract import record as _record_final_charges
+                _record_final_charges(_target, xlsx_path)
+                summary["final_charge_result"] = _target.get("final_charge_result")
+            except Exception as _fc_exc:                                 # noqa: BLE001
+                _target["final_charge_result"] = summary["final_charge_result"] = {
+                    "schema": "final_charge_contract.v1", "applicable": True, "passed": False,
+                    "trace": [], "issues": [{"code": "final_charge_audit_failed", "part": "",
+                                             "text": f"{type(_fc_exc).__name__}: {_fc_exc}"}]}
             _inv = _check_job(_target)
             summary["invariants"] = _inv          # so anything reading `summary` agrees
             # NOT REWRITTEN HERE (D-361). D-359 wrote the banner again at this point, after
