@@ -68,7 +68,18 @@ def test_the_email_says_which_button_speaks():
     assert listen_at < ask_at, "the one that speaks comes first"
     assert "reads this aloud" in html
     assert "answers in writing" in html
-    assert "voice mode" in html
+
+
+def test_it_names_the_speaker_icon_and_not_the_voice_button():
+    """James Gray, 21 October 2026: "if I click the voice button it then starts again
+    and expects me to prompt by vouce." Voice mode opens a FRESH conversation; the
+    speaker icon under the answer is what reads the answer already on screen."""
+    out = mr.render(REVIEW, WORDS)
+    for body in (out["html"], out["text"]):
+        assert "speaker icon" in body, body[:600]
+    # and the words to say if you do go into voice mode
+    assert mr.CHATGPT_ASK in out["text"]
+    assert "voice mode" in out["html"]
 
 
 def test_the_text_only_email_carries_both_links_too():
