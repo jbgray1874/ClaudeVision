@@ -2216,6 +2216,50 @@ def check_a_memberless_assembly_carries_nothing(summary: Any) -> List[Dict[str, 
         parts=offenders[:10], count=len(offenders))]
 
 
+def check_a_section_schedule_reaches_the_sheet(summary: Any) -> List[Dict[str, Any]]:
+    """A cut list a part's own sheet prints is priced, in full, with its cut (D-576).
+
+    The contract (section_coverage_contract) captures the schedule from the sheet's words
+    before costing and audits the priced lengths at the hand-off to the workbook. Its
+    findings are raised here, BLOCKING, as the memberless check is: the book is made and
+    the release is held, and the first line of the decisions list says which sheet's steel
+    is not on the bill. Where the hand-off did not run (no workbook), the audit runs here
+    over the canonical estimates."""
+    if not isinstance(summary, dict):
+        return []
+    result = summary.get("section_coverage_result")
+    if not isinstance(result, dict):
+        try:
+            import section_coverage_contract as scc
+            ests = ((summary.get("estimate_summary") or {}).get("canonical_part_estimates")
+                    or (summary.get("estimate_summary") or {}).get("part_estimates") or [])
+            if not (summary.get("section_coverage_contract") or scc.capture(summary)["requirements"]):
+                return []
+            result = {"issues": scc.audit(dict(summary), list(ests))}
+        except Exception:                                            # noqa: BLE001
+            return []
+    issues = [i for i in (result.get("issues") or []) if isinstance(i, dict)]
+    if not issues:
+        return []
+    said = []
+    for i in issues[:6]:
+        src = i.get("source") or {}
+        where = f" (sheet {src.get('page')})" if src.get("page") else ""
+        if i.get("code") == "section_material_coverage_mismatch":
+            said.append(f"{i.get('part')}{where}: {i.get('expected_mm_per_product', 0):g} mm of "
+                        f"{'x'.join(f'{v:g}' for v in (i.get('profile_mm') or []))} section a "
+                        f"product on the sheet, {i.get('priced_mm_per_product', 0):g} mm priced")
+        else:
+            said.append(f"{i.get('part') or 'the audit'}{where}: {i.get('code')}"
+                        + (f" — {i['text']}" if i.get("text") else ""))
+    return [_violation(
+        "section_schedule_not_priced", BLOCKING,
+        f"{len(issues)} section schedule finding(s): " + "; ".join(said)
+        + ". A cut list printed on a part's own sheet is that part's steel; it is priced in "
+          "full, its cut on the route, or this says why not.",
+        issues=issues[:10], count=len(issues))]
+
+
 def check_prices_are_firm(summary: Any) -> List[Dict[str, Any]]:
     """Is every applied price one we have actually committed to honour?
 
@@ -4878,6 +4922,7 @@ CHECKS = (
     check_bom_lines_survive_the_merge,
     check_an_assembly_is_not_charged_as_a_blank,
     check_a_memberless_assembly_carries_nothing,
+    check_a_section_schedule_reaches_the_sheet,
     check_a_blank_and_its_cut_path_can_both_be_true,
     check_prices_are_firm,
     check_an_unresolved_reading_blocks_the_quote,
