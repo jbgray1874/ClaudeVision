@@ -4543,6 +4543,15 @@ MATERIAL_PRICE_BREAK_HEADERS = {
 }
 
 # Manual Estimate-tab inputs (override via env or extract_workbook_constants.py).
+# ── WHICH SHEET METALS ARE L5's STEEL (D-559) ─────────────────────────────────────────────
+# The Estimate sheet's Sheet Steel block costs every row from one figure, L5 "Sheet Steel Cost
+# Per Tonne". A metal whose MATERIAL_PRICE_GBP_PER_KG sits within this fraction of L5's £/kg
+# (mild steel, zintec, galvanised) is costed there; one that does not (stainless at £3.10,
+# aluminium at £2.75) is costed in Other Sheet Material at its own cost per sheet, because the
+# sheet would otherwise silently re-price it as mild steel. 401918-01-01M, 3 mm stainless, was
+# costed at £900/t on the 21 Oct 2026 book.
+SHEET_STEEL_RATE_FAMILY_TOLERANCE = 0.5
+
 WORKBOOK_INPUT_DEFAULTS = {
     "default_job_quantity": DEFAULT_JOB_QUANTITY,
     # L3 in workbook: Wire Cost Per Tonne. Blank sheet = £1600. Override via env or workbook scan.
