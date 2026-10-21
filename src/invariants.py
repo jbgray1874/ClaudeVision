@@ -2244,8 +2244,22 @@ def check_a_section_schedule_reaches_the_sheet(summary: Any) -> List[Dict[str, A
     try:
         import section_coverage_contract as scc
         issues = issues + scc.audit_sheet(dict(summary))
-    except Exception:                                                # noqa: BLE001
-        pass
+    except Exception as exc:                                         # noqa: BLE001
+        issues.append({"part": "", "code": "section_sheet_audit_failed", "text": str(exc)})
+    # THE THIRD STAGE: the charged cells themselves (D-578). The read-back record proves the
+    # engine's inputs reached rows; final_charge_contract proves the rows carry this
+    # quantity, a calculated positive charge whose arithmetic holds, a cut with hours on
+    # it, and that the saved file's own cached cells say the same. Always recomputed in
+    # main after Excel: a verdict kept from an earlier workbook is not this one's. Where a
+    # read-back exists and the check did not run, that is a finding — a missing check is
+    # never a pass; where no workbook was read back there is nothing to verify, and the
+    # price is already untraceable to the release gate.
+    final_charge = summary.get("final_charge_result")
+    if (summary.get("section_coverage_contract") or {}).get("requirements"):
+        if isinstance(final_charge, dict):
+            issues.extend(i for i in (final_charge.get("issues") or []) if isinstance(i, dict))
+        elif isinstance(summary.get("final_estimate"), dict) and summary["final_estimate"]:
+            issues.append({"part": "", "code": "final_charge_check_not_run"})
     if not issues:
         return []
     said = []
@@ -2260,6 +2274,16 @@ def check_a_section_schedule_reaches_the_sheet(summary: Any) -> List[Dict[str, A
             said.append(f"{i.get('part')}{where}: {i.get('expected_mm_per_owner', 0):g} mm of "
                         f"section on its sheet, and the workbook wrote no material row for it "
                         f"or its pieces")
+        elif i.get("code") == "section_material_row_missing_or_duplicate":
+            said.append(f"{i.get('part')}{where}: {i.get('matches', 0)} material row(s) on the "
+                        f"calculated sheet where one is required")
+        elif i.get("code") == "section_charged_quantity_mismatch":
+            said.append(f"{i.get('part')}{where}: the sheet charges {i.get('charged')} of this "
+                        f"section against {i.get('expected')} a product on the record")
+        elif i.get("code") == "section_cut_not_charged":
+            said.append(f"{i.get('part')}{where}: no cutting row with hours on it names this piece")
+        elif i.get("code") == "final_charge_check_not_run":
+            said.append("the workbook was read back but the charged-cell check did not run")
         else:
             said.append(f"{i.get('part') or 'the audit'}{where}: {i.get('code')}"
                         + (f" — {i['text']}" if i.get("text") else ""))

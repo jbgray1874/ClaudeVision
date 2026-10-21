@@ -5719,6 +5719,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             excluded.append(pe)
             print(f"   [wb_populate] excluded assembly rollup: {pn} "
                   f"(£{ext_total} carried by children)")
+        elif stock_form == "tube":
+            # A TUBE LINE THE ROLLUP BRANCHES DID NOT CLAIM IS WRITTEN (D-578). The branch
+            # below reads the word ASSEMBLY on a line nothing carries, flags it and writes
+            # nothing — a weldment named so but cut from its own tube left the sheet by it.
+            # The canonical-assembly, suppression and rollup branches above keep their
+            # authority; a tube line past them is a material row.
+            bom_parts.append(pe)
         elif name_is_assembly and stock_form not in STEEL_STOCK_FORMS and "bought_in" not in roles:
             # THE WORD "ASSEMBLY" IS NOT EVIDENCE THAT SOMETHING ELSE CARRIES THE COST.
             #

@@ -189,7 +189,7 @@ class TheBookSaysSo(unittest.TestCase):
     def test_the_invariant_audits_itself_when_no_hand_off_ran(self):
         s = fixture(); c.prepare(s)
         s["estimate_summary"] = {"canonical_part_estimates": [cost()]}
-        self.assertEqual(invariants.check_a_section_schedule_reaches_the_sheet(s), [])
+        self.assertEqual(invariants.check_a_section_schedule_reaches_the_sheet(s), [])   # no read-back: nothing to verify
         s["estimate_summary"] = {"canonical_part_estimates": [cost(length=703)]}
         self.assertEqual(invariants.check_a_section_schedule_reaches_the_sheet(s)[0]["code"],
                          "section_schedule_not_priced")
@@ -272,6 +272,24 @@ class TheReleaseIsHeld(unittest.TestCase):
         s["estimate_summary"]["part_estimates"] = [cost(length=1011, quantity=2, price=15.88)]
         c.record_coverage(s, s["estimate_summary"]["canonical_part_estimates"])
         self.assertTrue(s["section_coverage_result"]["passed"])
+        # An engine price alone no longer clears release once a workbook was read back:
+        # the charged cells have to say so (D-578).
+        from final_charge_contract import audit
+        s['workbook_labour'] = {'rows': [{'workbook_row':151, 'engine_operations':['saw'],
+                                          'part_numbers':['FRAME-X']}]}
+        s['final_estimate'] = {'source':'excel_calculated',
+            'totals':{'material_gbp':31.76,'labour_gbp':5},
+            'material_rows':[{'part_code':'FRAME-X','qty_per_unit':2,'unit_price_gbp':15.88,
+                              'total_value_gbp':31.76,'charged_cell':'Estimate!M11'}],
+            'labour_rows':[{'workbook_row':151,'part_numbers':'FRAME-X','department':'SAW',
+                            'batch_hours':0.1,'total_value_gbp':5,'charged_cell':'Estimate!M151'}]}
+        self.assertIn("final_charge_check_not_run", str(invariants.check_a_section_schedule_reaches_the_sheet(s)))
+        snapshot = {'sha256':'fixture', 'cells': {'Estimate!M11':31.76,'Estimate!M151':5,
+            'Estimate!H11':'FRAME-X','Estimate!K10':'Qty Per Unit','Estimate!K11':2,
+            'Estimate!C147':'Total Material Cost','Estimate!M147':31.76,
+            'Estimate!C223':'Total Labour Cost','Estimate!M223':5,'Estimate!F151':'FRAME-X'}}
+        s['final_charge_result'] = audit(s, snapshot)
+        self.assertTrue(s['final_charge_result']['passed'])
         self.assertEqual(invariants.check_a_section_schedule_reaches_the_sheet(s), [])
 
 
