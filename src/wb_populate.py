@@ -3028,7 +3028,10 @@ def canonicalise_part_estimates_for_workbook(
                     "be placed in a material block."
                 ),
             })
-    return [normalised[identity] for identity in order]
+    # THE SECTION SCHEDULE REACHED THE SHEET, OR THE RECORD SAYS WHERE IT DID NOT (D-576):
+    # the hand-off audit writes its result for the invariant; it never stops the book.
+    from section_coverage_contract import record_coverage
+    return record_coverage(summary, [normalised[identity] for identity in order])
 
 
 # A colour is a code or a named colour. Reading the whole sentence is what let a pointer

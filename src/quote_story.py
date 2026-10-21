@@ -484,8 +484,20 @@ def job_facts(summary: Dict[str, Any], parts: List[Dict[str, Any]],
     srcs = _pdf_sources(summary)
     names = [n.lower() for n, _ in srcs] + [str(x).lower() for x in
                                             (summary.get("scanned_documents") or [])]
-    dxf = sum(1 for n in names if n.endswith(".dxf"))
-    models = sum(1 for n in names if n.endswith((".sldprt", ".sldasm", ".step", ".stp")))
+    # WHAT THE RUN MATCHED, NOT WHAT THE FILE LIST WAS CALLED (D-575). The file names the
+    # record lists are the PDFs; the flats and the model are read from their own folders and
+    # recorded where they were applied. A pack with six matched DXFs and a SolidWorks tree
+    # applied read "0 flat patterns or 3D models" on the client's page.
+    _aug = summary.get("dxf_augmentation") if isinstance(summary.get("dxf_augmentation"), dict) else {}
+    dxf = (len([m for m in (_aug.get("matched") or []) if isinstance(m, dict)])
+           or sum(1 for n in names if n.endswith(".dxf")))
+    _sw = summary.get("solidworks_native") if isinstance(summary.get("solidworks_native"), dict) else {}
+    _swc = _sw.get("counts") if isinstance(_sw.get("counts"), dict) else {}
+    models = ((sum(int(_num(v) or 0) for k, v in _swc.items()
+                   if str(k).lower() in ("parts", "assemblies", "models", "part", "assembly"))
+               or (1 if _sw.get("found") else 0))
+              if _sw.get("found") else
+              sum(1 for n in names if n.endswith((".sldprt", ".sldasm", ".step", ".stp"))))
     bom_rows = ((summary.get("document_analysis") or {}).get("bom_rows") or [])
     concept = summary.get("concept_read") if isinstance(summary.get("concept_read"), dict) else {}
     labour = _labour_rows(summary)
@@ -618,8 +630,21 @@ def evidence_items(summary: Dict[str, Any], facts: Dict[str, Any]) -> List[Dict[
                            if w in " ".join(_material_name(p).lower() for p in made)],
                    avoid=[w for w in _MATERIAL_WORDS if w not in on_bill])
     groups = sorted(facts["by_material"].items(), key=lambda kv: -kv[1]["pieces"])
+    # A MADE PART'S SECTION IS MATERIAL TOO (D-575). A frame's tube pieces are charged on the
+    # Bill of Materials block at the section rate, not on a sheet block, so "sheet and
+    # section material" summed the sheet blocks and left the section out: £20.64 against
+    # £81.83 on a pack whose tubes were the larger part of its steel. A BOM-block row that
+    # belongs to a made part is that part's stock; a bought-in's row is not.
+    _made_codes = {str(p.get("part_number") or "").strip().upper() for p in made}
+
+    def _row_code(r: Dict[str, Any]) -> str:
+        c = str(r.get("part_code") or r.get("part_number") or "").strip()
+        if not c:   # the sheet's own description leads with the code: "X-03M-CL1  15.00 x 30 ..."
+            c = str(r.get("description") or "").split()[0] if str(r.get("description") or "").split() else ""
+        return c.upper()
     sheet_val = sum(_num(r.get("total_value_gbp")) or 0 for r in mats
-                    if str(r.get("block") or "") in ("steel", "other_sheet", "tube"))
+                    if str(r.get("block") or "") in ("steel", "other_sheet", "tube")
+                    or (str(r.get("block") or "bom") == "bom" and _row_code(r) in _made_codes))
     out.append({
         "topic": "material", "title": _TOPICS["material"]["title"], "saw": q,
         "concluded": ("Made from " + "; ".join(

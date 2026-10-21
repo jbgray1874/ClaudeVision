@@ -128,6 +128,9 @@ _OURS = {
     # 401918-01-07M a cut list and the engine held nothing — the drawings said what it is
     # made of, so the missing steel is our hand-off, never the drawing office's.
     "memberless_assembly_carries_nothing",
+    # A cut list the sheet prints that the bill does not price in full (D-576): the sheet
+    # said it, the engine lost it on the way to the workbook — ours.
+    "section_schedule_not_priced",
     "removed_identity_on_the_sheet",
     "priced_identity_outside_published_graph",
     "two_roots_price_the_same_members",

@@ -2604,6 +2604,21 @@ def pre_costing_passes(summary: Dict[str, Any]) -> None:
               flush=True)
 
 
+    # A SECTION SCHEDULE ON A PART'S OWN SHEET REACHES ITS RECORD (D-576), after every
+    # pre-costing pass that could have lost it: the requirement is captured from the sheet's
+    # words, a record with no members and no pieces is given them, and the hand-off audit
+    # later checks they were priced. A failure here is a finding on the book, not a stop.
+    try:
+        from section_coverage_contract import prepare as _prepare_section_coverage
+        _changed = _prepare_section_coverage(summary)
+        if _changed:
+            print(f"   [section-coverage] schedule restored from the sheet on "
+                  f"{', '.join(_changed)}", flush=True)
+    except Exception as _sc_exc:                                     # noqa: BLE001
+        print(f"   [section-coverage] not prepared ({type(_sc_exc).__name__}: {_sc_exc})",
+              flush=True)
+
+
 def _finalize_scan_summary(
     summary: Dict[str, Any],
     started: float,
