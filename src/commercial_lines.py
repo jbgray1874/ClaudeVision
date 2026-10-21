@@ -106,6 +106,27 @@ def _density_for(material: Any) -> float:
     return _DEFAULT_DENSITY_KG_M3
 
 
+def _product_root(parts: Any) -> Optional[str]:
+    """The one record that owns members and is owned by nothing — the product — or None where
+    the parts name no such record or more than one (D-562)."""
+    _key = lambda v: _re.sub(r"\s+", "", str(v or "")).upper()     # noqa: E731
+    owned: set = set()
+    parents: Dict[str, Dict[str, Any]] = {}
+    for p in parts or ():
+        if not isinstance(p, dict):
+            continue
+        for c in (p.get("assembly_children") or []):
+            if _key(c):
+                owned.add(_key(c))
+        for k in ("owning_assembly", "bom_parent", "cut_list_member_of"):
+            if _key(p.get(k)) and _key(p.get(k)) != _key(p.get("part_number")):
+                owned.add(_key(p.get("part_number")))
+        if p.get("assembly_children") or p.get("is_assembly_parent"):
+            parents[_key(p.get("part_number"))] = p
+    roots = [k for k in parents if k and k not in owned]
+    return roots[0] if len(roots) == 1 else None
+
+
 def product_envelope(summary: Any, parts: Any = None) -> Optional[Dict[str, Any]]:
     """The assembled product's overall size, {length, width, height, source, of} in mm, or
     None where nothing measured or stated it (D-551).
@@ -123,6 +144,15 @@ def product_envelope(summary: Any, parts: Any = None) -> Optional[Dict[str, Any]
                 "source": "the SolidWorks top assembly's bounding box",
                 "of": str(sw.get("top_assembly") or s.get("declared_product") or "")}
     declared = _re.sub(r"\s+", "", str(s.get("declared_product") or "")).upper()
+    if not declared:
+        # NO DECLARED PRODUCT, SO ONLY THE ONE ROOT WILL DO (D-562). The first version took
+        # the first record carrying an overall size, which on a pack read without a product
+        # name could be a component's — a box sized to a bracket. The product is the record
+        # that owns members and is owned by nothing; with two such roots, or none, nothing
+        # here can say which is the product, and the packer is left to the parts.
+        declared = _product_root(parts) or ""
+        if not declared:
+            return None
     for p in parts or ():
         if not isinstance(p, dict):
             continue
