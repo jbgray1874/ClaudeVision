@@ -1780,6 +1780,16 @@ def _is_sheet_metal(mat: str) -> bool:
     return any(k in m for k in ("STEEL", "MILD", "MS", "STAINLESS", "ALUM", "GALV", "CR4"))
 
 
+def _line_is_its_own_section_stock(material_estimate: Any) -> bool:
+    """A material estimate priced as section by length — the config or catalogue section
+    rate over a cut length — is the line's own stock (D-577): the line is written to the
+    bill as a tube line whatever its description calls it."""
+    me = material_estimate if isinstance(material_estimate, dict) else {}
+    method = str(me.get("cost_method") or "").lower()
+    length = (me.get("stock_estimate") or {}).get("section_length_mm") if isinstance(me.get("stock_estimate"), dict) else None
+    return "section_stock" in method and bool(_safe(length))
+
+
 def _has_children_to_carry_it(part_number: str, part_estimates: List[Dict[str, Any]],
                              summary: Dict[str, Any]) -> bool:
     """Is there anything in this job that a rollup could roll up INTO?
@@ -1796,7 +1806,11 @@ def _has_children_to_carry_it(part_number: str, part_estimates: List[Dict[str, A
         if not isinstance(_node, dict):
             continue
         if str(_node.get("part_number") or "").strip().upper() == _pn:
-            if _node.get("children"):
+            # A LEAF HAS NOTHING TO ROLL INTO (D-577). A weldment cut from its own pieces
+            # keeps the edges to its cut-list rows in the graph, and the graph calls it a
+            # leaf for that reason; those rows are its pieces, not members that carry its
+            # money. Edges alone made 401918-01-07M a "rollup" and its tube left the sheet.
+            if _node.get("children") and str(_node.get("kind") or "").lower() != "leaf":
                 return True
     _prefix = _pn + "-"
     return any(
@@ -5673,6 +5687,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                                 or re.search(r"ASSEMBL|WELDMENT", str(pe.get("description") or "").upper())
                                 or "weldment" in cost_method
                                 or "children" in cost_method)
+        # A LINE PRICED AS ITS OWN SECTION STOCK IS ITS OWN MATERIAL (D-577), whatever its
+        # name says. "BASE FRAME - WELDMENT" is a frame sawn from three pieces of tube that
+        # the estimator priced by length; the word WELDMENT sent it down the rollup branch
+        # and its steel was "carried by children" that are its own pieces. The 03M pieces
+        # reach the bill by this same road under their own codes; the frame goes the same way.
+        if _line_is_its_own_section_stock(me):
+            name_is_assembly = False
 
         # 1. commercial placeholders (PACKAGING / DELIVERY): write as blank-price
         #    (£0) BOM rows for the estimator to fill in, rather than dropping.

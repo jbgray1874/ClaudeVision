@@ -79,6 +79,15 @@ if a.recompile_repaired:
             print("REPAIRED CANONICAL LINE", e.get("part_number"), "qty", e.get("quantity"),
                   "length", (m.get("stock_estimate") or {}).get("section_length_mm"),
                   "unit material", m.get("unit_material_cost_gbp"))
+            # WHAT THE WRITER WILL READ (D-577): it excludes a line whose canonical kind is
+            # "assembly", or one flagged weldment_parent_material_suppressed, or an
+            # assembly-named line with no steel stock form whose children carry its money.
+            _rf = " ".join(str(f) for f in (e.get("review_flags") or []))
+            print("WRITER INPUTS", e.get("part_number"),
+                  "canonical_kind", repr(e.get("_canonical_kind")),
+                  "stock_form", repr(e.get("stock_form") or m.get("stock_form")),
+                  "material_suppressed", "weldment_parent_material_suppressed" in _rf,
+                  "assembly_children", e.get("assembly_children"))
             proof.setdefault("final_lines", []).append({"part": e.get("part_number"),
                 "quantity": e.get("quantity"), "unit_material_gbp": m.get("unit_material_cost_gbp"),
                 "section_length_mm": (m.get("stock_estimate") or {}).get("section_length_mm")})

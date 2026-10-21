@@ -347,3 +347,33 @@ class TheSheetIsTheAuthority(unittest.TestCase):
         found = invariants.check_a_section_schedule_reaches_the_sheet(s)
         self.assertEqual(found[0]["code"], "section_schedule_not_priced")
         self.assertIn("the workbook wrote no material row for it or its pieces", found[0]["message"])
+
+
+class TheWriterPricesIt(unittest.TestCase):
+    """D-577, the writer's side: the block partition in populate_workbook sent 07M down the
+    assembly-rollup branch on the word WELDMENT and the edges to its own cut-list rows."""
+
+    def test_a_leaf_with_edges_has_nothing_to_roll_into(self):
+        import wb_populate as wb
+        s = {"estimate_summary": {"canonical_route_shadow": {"nodes": [
+            {"part_number": "FRAME-X", "kind": "leaf", "children": [{"part_number": "BI-TUBE-1"}]}]}}}
+        self.assertFalse(wb._has_children_to_carry_it("FRAME-X", [], s))
+        s["estimate_summary"]["canonical_route_shadow"]["nodes"][0]["kind"] = "assembly"
+        self.assertTrue(wb._has_children_to_carry_it("FRAME-X", [], s))
+
+    def test_a_line_priced_as_section_by_length_is_its_own_material(self):
+        import wb_populate as wb
+        for method in ("section_stock_config_rate", "catalogue_section_stock_length_rate", "section_stock_flat_rate"):
+            self.assertTrue(wb._line_is_its_own_section_stock(
+                {"cost_method": method, "stock_estimate": {"section_length_mm": 1011.0}}), method)
+        self.assertFalse(wb._line_is_its_own_section_stock({"cost_method": "section_stock_config_rate",
+                                                            "stock_estimate": {}}))
+        self.assertFalse(wb._line_is_its_own_section_stock({"cost_method": "nest_sheet",
+                                                            "stock_estimate": {"section_length_mm": 100}}))
+        self.assertFalse(wb._line_is_its_own_section_stock(None))
+
+    def test_the_partition_consults_it_before_the_rollup_branches(self):
+        src = (Path(__file__).resolve().parents[1] / "src" / "wb_populate.py").read_text(encoding="utf-8")
+        loop = src.split("    for pe in pes:", 1)[1]
+        self.assertLess(loop.index("if _line_is_its_own_section_stock(me):\n            name_is_assembly = False"),
+                        loop.index('if canonical_kind == "assembly":'))
