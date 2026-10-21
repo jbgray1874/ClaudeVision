@@ -440,6 +440,25 @@ def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
                 held = None
             if held is not None and all(abs(h - k) < 0.05 for h, k in zip(held, key[:3])):
                 r["row_role"], r["consumed"] = "parent_cut_list", True
+                # THE SHEET'S OWN CUT LIST STANDS IN FOR THE LENGTH THE ROWS LEFT OUT (D-574).
+                # 401918-01-07M's two table rows reached here from both readers as the
+                # profile alone, "50.00 x 20.00 x 2.00mm TUBE", no length under any name;
+                # the sheet's text had already given the part its pieces, 703, 154 and 154,
+                # of that same section. The rows were consumed as a confirmation and the
+                # part — an assembly parent by the model's tree — went on to no pieces, so
+                # the weldment rule below (D-557) never ran and the frame carried nothing.
+                # A row that confirms the section the sheet's own cut list already measures
+                # is one of those pieces: the held lengths are the pieces, and the rest of
+                # the rule proceeds as if the table had printed them.
+                _held_pcs = [float(x) for x in (ss.get("cut_lengths_mm") or [])
+                             if isinstance(x, (int, float)) or str(x).replace(".", "", 1).isdigit()]
+                if _held_pcs and pn not in pieces:
+                    pieces[pn] = {key: list(_held_pcs)}
+                    rows_of.setdefault(pn, []).append(r)
+                    p.setdefault("review_flags", []).append(
+                        f"{p.get('part_number')}'s parts table prints its section without "
+                        f"lengths; the pieces are the sheet's own cut list as read from its "
+                        f"text ({', '.join(f'{v:g}' for v in _held_pcs)} mm) (D-574)")
         prof = pieces.get(pn)
         if not prof:
             continue
@@ -491,6 +510,20 @@ def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
                                or _welded_sheet)
             if not _coded_kids and _weldment_sheet:
                 _asm = False
+                # AND THE RECORD SAYS SO. The decision was local to this function, so the
+                # costing still read the model's flags and charged nothing for "an
+                # assembly's material" (D-574). A weldment cut from its own pieces is a part
+                # on the bill: its section is costed, its saw cuts timed, its own weld kept.
+                p["is_assembly_parent"] = False
+                p["is_sub_assembly"] = False
+                if str(p.get("canonical_kind") or "").lower() == "assembly":
+                    p["canonical_kind"] = "part"
+                p["weldment_from_own_cut_list"] = True
+                # The model's "children" were its cut-list bodies, names no record answers
+                # to; kept for the record under their own name, not as members.
+                if p.get("assembly_children"):
+                    p["cut_list_bodies_named_by_model"] = list(p.get("assembly_children") or [])
+                    p["assembly_children"] = []
                 p.setdefault("review_flags", []).append(
                     f"{p.get('part_number')} is listed as an assembly but names no member of "
                     f"its own — only the uncoded section pieces of its own detail sheet's "

@@ -135,8 +135,10 @@ def render_prompt(words: str, scene: str, cfg: Optional[Dict[str, Any]] = None,
                 f"eye level, with generous clear space around it; {dressing}. {style} "
                 f"Ignore the drawing's title block, parts tables, dimensions, notes and any human "
                 f"scale figure. Do not invent features, shelves, wheels or merchandise the drawing "
-                f"does not show. No people, no drawing annotations, no text, no prices, no captions, "
-                f"no watermarks.")
+                f"does not show; do not add a top, panel, surface or infill the drawing does not "
+                f"show — where the drawing shows an open frame, a bar or a rail, it stays open, "
+                f"the same slender section as drawn. No people, no drawing annotations, no text, "
+                f"no prices, no captions, no watermarks.")
     return (f"Photorealistic product visualisation of {words}, placed {scene}. The unit is the "
             f"subject, centred, seen from a slight three-quarter angle at eye level, with generous "
             f"clear space around it; {dressing}. {style} "
