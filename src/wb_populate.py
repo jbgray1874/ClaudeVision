@@ -1997,6 +1997,39 @@ def _board_sheet_price_from_kg_rate(material, thickness_mm, sheet_l_mm, sheet_w_
     return round(sheet_vol_m3 * float(density) * float(rate), 2)
 
 
+def _own_sheet_rate(mat: str) -> Optional[float]:
+    """The £/kg this sheet metal is priced at when that is NOT the Sheet Steel block's rate
+    (D-559), else None.
+
+    The Sheet Steel block costs every row from ONE figure, L5 "Sheet Steel Cost Per Tonne".
+    401918-01-01M, a 3 mm STAINLESS rub strip, landed there and was costed at £900/t — the
+    engine's own record had it at config's £3.10/kg, and the sheet silently re-priced it as
+    mild steel (£1.38 where a stainless sheet gives about £4.75; on a stainless panel the gap
+    is pounds). A metal whose configured £/kg sits within SHEET_STEEL_RATE_FAMILY_TOLERANCE
+    of L5's is L5's steel (mild, zintec, galvanised) and belongs in that block; one that does
+    not (stainless, aluminium) is costed in Other Sheet Material at its own cost per sheet,
+    which that block takes as an input. Rates and tolerance are config's; nothing is named
+    here."""
+    if config is None or not _is_sheet_metal(mat) or _is_board(mat):
+        return None
+    name = str(mat or "").strip().upper()
+    rates = getattr(config, "MATERIAL_PRICE_GBP_PER_KG", {}) or {}
+    rate = None
+    for k in (name, name.replace(" ", "_"), name.replace("_", " ")):
+        rate = rate if rate is not None else rates.get(k)
+    if not rate:
+        return None
+    try:
+        l5_per_kg = float((getattr(config, "WORKBOOK_INPUT_DEFAULTS", {}) or {})
+                          .get("sheet_steel_cost_per_tonne_gbp") or 0.0) / 1000.0
+        tol = float(getattr(config, "SHEET_STEEL_RATE_FAMILY_TOLERANCE", 0.5) or 0.5)
+    except (TypeError, ValueError):
+        return None
+    if l5_per_kg <= 0:
+        return None
+    return float(rate) if abs(float(rate) - l5_per_kg) / l5_per_kg > tol else None
+
+
 def _is_board(mat: str) -> bool:
     """Not sheet metal -- so it is costed by area in the Other Sheet Material block.
 
@@ -5687,6 +5720,23 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         #     stated-weight parts that DO carry a blank still route to the Sheet Steel block below.
         elif stock_form == "stated_weight" and blank_l is None and _safe(me.get("cost_per_part_gbp")):
             bom_parts.append(pe)
+        # 2c. A SHEET METAL PRICED AT ITS OWN RATE IS NOT L5's STEEL (D-559): stainless and
+        #     aluminium carry their own £/kg in config, and the Sheet Steel block would re-cost
+        #     them from the mild-steel £/tonne. With a blank they go to Other Sheet Material at
+        #     their own cost per sheet, which that block takes as an input.
+        elif ((stock_form in STEEL_STOCK_FORMS or _is_sheet_metal(mat)) and not _is_board(mat)
+              and blank_l is not None and _own_sheet_rate(mat)):
+            import costed_facts as _cf_own
+            _bd2c = _cf_own.blank_dimensions(pe)
+            if _safe(_bd2c.get("length_mm")) and _safe(_bd2c.get("width_mm")):
+                pe["_other_sheet_at_own_rate_gbp_per_kg"] = _own_sheet_rate(mat)
+                board_parts.append(pe)
+                _flag(f"{pn}: {str(mat).upper()} is priced at its own rate "
+                      f"(£{_own_sheet_rate(mat):.2f}/kg, config MATERIAL_PRICE_GBP_PER_KG), not "
+                      f"the Sheet Steel block's £/tonne — costed in Other Sheet Material at its "
+                      f"own cost per sheet (D-559).", flags)
+            else:
+                steel_parts.append(pe)
         # 3. steel (sheet or stated-weight, with real geometry) — but NOT a board/timber part.
         #    A timber panel costed by stated weight has stock_form 'stated_weight' (in
         #    STEEL_STOCK_FORMS); without the board guard it would be dumped in Sheet Steel and
@@ -6725,7 +6775,16 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # produces #VALUE! that propagates into M59 and poisons the whole total.
         # Board stock default 2440×1220 (standard sheet); use engine's if present.
         se = me.get("stock_estimate") or {}
-        sh = se.get("candidate_sheet_size_mm") or [2440, 1220]
+        sh = se.get("candidate_sheet_size_mm")
+        if not sh and pe.get("_other_sheet_at_own_rate_gbp_per_kg"):
+            # A sheet METAL here (D-559) nests into its own standard sheet, not a board's.
+            _std = (getattr(config, "STANDARD_SHEET_SIZES_MM", {}) or {}) if config else {}
+            _m_up = str(pe.get("normalized_material") or me.get("material") or "").upper()
+            for _k in (_m_up, _m_up.replace("_", " "), _m_up.replace(" ", "_")):
+                if _std.get(_k):
+                    sh = list(_std[_k][0])
+                    break
+        sh = sh or [2440, 1220]
         ws.cell(row=row, column=o["col_sheet_l"], value=_safe(sh[0]) if len(sh) > 0 else 2440)
         ws.cell(row=row, column=o["col_sheet_w"], value=_safe(sh[1]) if len(sh) > 1 else 1220)
         # Cost per sheet (col L): the WB formula M=(L/J)*(1+K)*D needs this input, else Cost Per

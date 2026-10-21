@@ -2138,6 +2138,82 @@ def check_an_assembly_is_not_charged_as_a_blank(summary: Any) -> List[Dict[str, 
         parts=offenders[:10], count=len(offenders), material_gbp=round(_money, 2))]
 
 
+def check_a_memberless_assembly_carries_nothing(summary: Any) -> List[Dict[str, Any]]:
+    """A record the hierarchy calls a parent, with no member to carry its material, and none
+    of its own (D-560).
+
+    "An assembly's material is its members'" is true only when it has members. 401918-01-07M
+    BASE FRAME - WELDMENT (x2) reached the 21 Oct 2026 book as an assembly with no children and
+    no material, and the report said exactly that sentence about it — in the soft voice, below
+    a £0.75 fixing flagged in bold. Fifty-odd pounds of tube per rail at 150 off, missing, and
+    the review list pointed the other way. Here it is the blocker it is.
+
+    A parent that names no member (no assembly_children, no part owned by it, no cut-list
+    piece of it) must carry its own money by some road: material on its own line, a section
+    cut list (D-557 costs a memberless weldment as a part), a measured flat, or a bought-in
+    price. One that carries none of these holds nothing and is held by nothing.
+    """
+    if not isinstance(summary, dict):
+        return _unevaluated("memberless_assembly", "This job is not a readable structure.")
+    parts = _parts(summary)
+    if len(parts) < 2:
+        return []
+    try:
+        import bought_in_policy
+    except Exception as exc:                                        # noqa: BLE001
+        return _unevaluated("memberless_assembly",
+                            f"The assembly predicate could not be imported ({exc}).")
+    _pn = lambda p: str(p.get("part_number") or "").strip().upper()      # noqa: E731
+    owned: Dict[str, set] = {}
+    for p in parts:
+        if not isinstance(p, dict):
+            continue
+        for key in ("owning_assembly", "bom_parent", "cut_list_member_of"):
+            owner = str(p.get(key) or "").strip().upper()
+            if owner and owner != _pn(p):
+                owned.setdefault(owner, set()).add(_pn(p))
+    offenders: List[Dict[str, Any]] = []
+    for part in parts:
+        if not isinstance(part, dict) or not bought_in_policy.is_assembly(part):
+            continue
+        members = {str(c).strip().upper() for c in (part.get("assembly_children") or [])
+                   if str(c).strip()} | owned.get(_pn(part), set())
+        members.discard(_pn(part))
+        if members:
+            continue
+        money = (_num(part.get("unit_material_cost_gbp"))
+                 or _num((part.get("material_estimate") or {}).get("cost_per_part_gbp"))
+                 or _num((part.get("material_estimate") or {}).get("unit_material_cost_gbp"))
+                 or 0.0)
+        section = part.get("section_stock") if isinstance(part.get("section_stock"), dict) else {}
+        has_road = bool(
+            money > 0.005
+            or section.get("length_mm") or section.get("cut_lengths_mm")
+            or part.get("dxf_measured_outline") or part.get("native_flat_pattern")
+            or part.get("flat_pattern_detected")
+            or bought_in_policy.is_bought_in(part))
+        if has_road:
+            continue
+        offenders.append({
+            "part_number": part.get("part_number"),
+            "description": str(part.get("description") or "")[:60],
+            "reason_it_is_a_parent": bought_in_policy.assembly_reason(part),
+            "quantity": part.get("quantity"),
+        })
+    if not offenders:
+        return []
+    return [_violation(
+        "memberless_assembly_carries_nothing", BLOCKING,
+        f"{len(offenders)} record(s) the hierarchy calls a parent name no member and carry no "
+        f"material of their own: "
+        + "; ".join(f"{o['part_number']} {o['description']} ({o['reason_it_is_a_parent']})"
+                    for o in offenders[:6])
+        + ". An assembly's material is its members' only when it has members — nothing on this "
+          "bill holds what these are made of. Give each a cut list or members, or cost it as a "
+          "part.",
+        parts=offenders[:10], count=len(offenders))]
+
+
 def check_prices_are_firm(summary: Any) -> List[Dict[str, Any]]:
     """Is every applied price one we have actually committed to honour?
 
@@ -4799,6 +4875,7 @@ CHECKS = (
     check_canonical_route_shadow,
     check_bom_lines_survive_the_merge,
     check_an_assembly_is_not_charged_as_a_blank,
+    check_a_memberless_assembly_carries_nothing,
     check_a_blank_and_its_cut_path_can_both_be_true,
     check_prices_are_firm,
     check_an_unresolved_reading_blocks_the_quote,
