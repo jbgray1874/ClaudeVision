@@ -41,6 +41,97 @@ _run_started: Optional[float] = None
 # do nothing and print nothing, and the [timing] table is exactly what it was.
 _detail = False
 _last_stage = ""
+
+# ── WHERE THE TIME WENT, KEPT (D-553) ───────────────────────────────────────────────────
+# The table was printed into the run log and nowhere else, so "which phase do we work on
+# next" could be answered one job at a time, by reading logs. Making re-runs faster starts
+# with the same question asked across every job. So the end of each run leaves
+#   <stem>_timing.json in the logs folder (the runner copies that folder to the job's output),
+#   one row per phase appended to output/timing_history.csv beside the engine (the machine's
+#   record, not the job's: it is never copied),
+# and a reuse count per store — answers a cache gave back against answers it had to work
+# out — because a cache that never hits looks exactly like one that works.
+_identity: Dict[str, object] = {}
+_reuse: Dict[str, Dict[str, int]] = {}      # store -> {"reused": n, "computed": n}
+HISTORY_COLUMNS = ("finished_at", "stem", "product", "customer", "units", "breaks", "build",
+                   "kind", "name", "seconds", "reused", "computed", "total_seconds")
+
+
+def identify(**fields: object) -> None:
+    """Name the run the timing belongs to (stem, product, customer, units, breaks, build)."""
+    for k, v in fields.items():
+        if v is not None and str(v) != "":
+            _identity[k] = v
+
+
+def reuse(store: str, hit: bool) -> None:
+    """One answer from a store: given back as held (hit) or worked out and kept (miss)."""
+    if not store:
+        return
+    r = _reuse.setdefault(str(store), {"reused": 0, "computed": 0})
+    r["reused" if hit else "computed"] += 1
+
+
+def reuse_counts() -> Dict[str, Dict[str, int]]:
+    return {k: dict(v) for k, v in _reuse.items()}
+
+
+def record() -> Dict[str, object]:
+    """The run's timing as data: identity, phases (slowest first, unfinished marked), the
+    wall clock, the unmeasured remainder and the reuse counts."""
+    now = time.time()
+    phases = [{"phase": n, "seconds": round(s, 1)} for n, s in sorted(_done, key=lambda kv: -kv[1])]
+    phases += [{"phase": n, "seconds": round(now - b, 1), "unfinished": True}
+               for n, b in _open.items()]
+    total = round(now - _run_started, 1) if _run_started is not None else None
+    measured = round(_union_seconds(_spans), 1)
+    return {"schema": "run_timing.v1", "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            **{k: _identity.get(k) for k in ("stem", "product", "customer", "units", "breaks",
+                                              "build")},
+            "total_seconds": total,
+            "unmeasured_seconds": (round(total - measured, 1) if total is not None else None),
+            "phases": phases, "reuse": reuse_counts()}
+
+
+def write(logs_dir: object, history_csv: object) -> Dict[str, object]:
+    """Leave the record beside the run's log and one row per phase on the history. Never
+    raises: a run that finished is not undone by its bookkeeping. Returns what was written."""
+    import csv
+    import json
+    import os
+    out: Dict[str, object] = {"json": None, "history": None}
+    rec = record()
+    if not rec["phases"] and not rec["reuse"]:
+        return out
+    stem = str(_identity.get("stem") or "run")
+    try:
+        os.makedirs(str(logs_dir), exist_ok=True)
+        path = os.path.join(str(logs_dir), f"{stem}_timing.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh, indent=1)
+        out["json"] = path
+    except Exception:                                        # noqa: BLE001
+        pass
+    try:
+        path = str(history_csv)
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        new = not os.path.exists(path)
+        base = {k: rec.get(k) for k in ("finished_at", "stem", "product", "customer", "units",
+                                         "breaks", "build", "total_seconds")}
+        with open(path, "a", encoding="utf-8", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(HISTORY_COLUMNS))
+            if new:
+                w.writeheader()
+            for ph in rec["phases"]:
+                w.writerow({**base, "kind": "phase", "name": ph["phase"],
+                            "seconds": ph["seconds"], "reused": "", "computed": ""})
+            for store, c in sorted(rec["reuse"].items()):
+                w.writerow({**base, "kind": "reuse", "name": store, "seconds": "",
+                            "reused": c["reused"], "computed": c["computed"]})
+        out["history"] = path
+    except Exception:                                        # noqa: BLE001
+        pass
+    return out
 # name -> {"calls", "seconds", "cache_hits", "failed"}
 _counters: Dict[str, Dict[str, float]] = {}
 # The phases file_scan and main already bracket, as the stage a partner page shows.
@@ -123,6 +214,8 @@ def reset() -> None:
     _done.clear()
     _spans.clear()
     _counters.clear()
+    _identity.clear()
+    _reuse.clear()
     _detail, _last_stage = False, ""
     _run_started = time.time()
 

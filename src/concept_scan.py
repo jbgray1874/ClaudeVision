@@ -1883,9 +1883,19 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
             raw = entry.get("raw_response", "")
             parsed = parse_concept_response(raw)
             if parsed is not None:
+                try:
+                    import run_timing as _rt_cs
+                    _rt_cs.reuse("vision_concept", True)
+                except Exception:                            # noqa: BLE001
+                    pass
                 return dict({"parsed": parsed, "raw_response": raw, "cache_hit": True}, **_extra)
         except (OSError, ValueError):
             pass                                     # corrupt entry → re-fetch
+    try:
+        import run_timing as _rt_cs_miss
+        _rt_cs_miss.reuse("vision_concept", False)
+    except Exception:                                        # noqa: BLE001
+        pass
 
     # A render read calls exactly as it always has; only a sheet read or a re-ask says more —
     # and a re-read is given the previous read's bill to keep (D-492), outside the key.

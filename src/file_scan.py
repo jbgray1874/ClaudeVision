@@ -883,12 +883,76 @@ def merge_job_pdf_summaries(
     return merged, primary_pdf
 
 
+# The knobs the OCR/vision reader takes from the environment: part of what a reading depends on.
+_VISION_ENV_KNOBS = ("VISION_USE_OLLAMA", "VISION_OLLAMA_MODEL", "VISION_RENDER_DPI",
+                     "VISION_MAX_SIDE")
+_READER_LIBRARIES = ("PyMuPDF", "pdfplumber", "pypdf", "paddleocr", "ollama")
+
+
+def _vision_reading_is_whole(vision_pages: Any) -> bool:
+    """False when a page asked the local vision model and got nothing back — a server that was
+    down, not a page with nothing to say. That reading serves this run and is not kept."""
+    for p in vision_pages or []:
+        if isinstance(p, dict) and p.get("ollama_attempted") and not p.get("used_llava"):
+            return False
+    return True
+
+
+def _thin_readings(readings: Dict[str, Any]) -> Dict[str, Any]:
+    """What the store keeps: the readings without the vision pages' fitz drawings, which
+    geometry re-derives from the PDF itself every run (and which do not survive JSON)."""
+    thin = dict(readings)
+    thin["vision"] = [{k: v for k, v in p.items() if k != "drawings"} if isinstance(p, dict) else p
+                      for p in (readings.get("vision") or [])]
+    return thin
+
+
+def pdf_readings(pdf_path: Path) -> Dict[str, Any]:
+    """The three raw readings of one PDF — its text layer (pdfplumber), its pypdf text and its
+    OCR/vision pass — from the read store when these same bytes were last read by this same
+    reader code under these same settings, else made now and kept (D-554).
+
+    THE READING IS KEPT, THE INTERPRETATION IS NOT. summarise_document and the geometry pass
+    run on every job from these readings with whatever code is current, so a rule fixed in the
+    interpreter reaches a kept reading on its next use. 0359342 spent 3,002 s of a 3,775 s run
+    in this loop — OCR and a local vision model over every page — and every re-run spent it
+    again on bytes nothing had changed.
+    """
+    skip_vision = os.getenv("SKIP_VISION_EXTRACTION", "").lower() in {"1", "true", "yes"}
+    pdf_path = Path(pdf_path)
+
+    def _make() -> Dict[str, Any]:
+        return {"plumber": extract_with_pdfplumber(pdf_path),
+                "pypdf": extract_with_pypdf(pdf_path),
+                "vision": [] if skip_vision else extract_document_vision(pdf_path)}
+
+    try:
+        import read_store
+        import vision_extraction as _ve
+        _content = pdf_path.read_bytes()
+        _fp = read_store.fingerprint_code(extract_with_pdfplumber, extract_with_pypdf, _ve)
+        _ctx = {"skip_vision": skip_vision,
+                "env": {k: os.getenv(k) for k in _VISION_ENV_KNOBS},
+                "libraries": read_store.library_versions(*_READER_LIBRARIES)}
+    except Exception as exc:                                     # noqa: BLE001
+        print(f"   [read-store] {pdf_path.name}: the store was not consulted "
+              f"({type(exc).__name__}: {exc}) — read afresh", flush=True)
+        return _make()
+    got = read_store.reuse("pdf_readings", content=_content, fingerprint=_fp, context=_ctx,
+                           compute=_make, source=pdf_path.name, thin=_thin_readings,
+                           keep=lambda r: _vision_reading_is_whole(r.get("vision")))
+    if got.get("hit"):
+        print(f"        reused the readings kept {got.get('created_utc')} — same bytes, same "
+              f"reader code, same settings; interpreted afresh", flush=True)
+    return got["raw"]
+
+
 def extract_pdf_summary(pdf_path: Path) -> Dict[str, Any]:
     """PDF extract + geometry only — no writeup, DXF merge, or estimate."""
-    skip_vision = os.getenv("SKIP_VISION_EXTRACTION", "").lower() in {"1", "true", "yes"}
-    plumber_pages = extract_with_pdfplumber(pdf_path)
-    pypdf_pages = extract_with_pypdf(pdf_path)
-    vision_pages = [] if skip_vision else extract_document_vision(pdf_path)
+    readings = pdf_readings(pdf_path)
+    plumber_pages = readings["plumber"]
+    pypdf_pages = readings["pypdf"]
+    vision_pages = readings["vision"]
     summary = summarise_document(pdf_path, plumber_pages, pypdf_pages, vision_pages=vision_pages)
     processed_pages = summary.get("pages", [])
     geometry_results = analyse_document_geometry(processed_pages, pdf_path=pdf_path)
@@ -1013,6 +1077,7 @@ def scan_folder_job(
     # and this loop is the first piece of it: the runner's only evidence was three "no output
     # for 130s" notices. run_timing's own advice when the unmeasured row is the biggest one is
     # to bracket more rather than optimise anything, so that is what these are.
+    run_timing.identify(stem=job_folder.name)
     run_timing.mark("start extract_pdf_summary")
     for pdf_path in sorted(pdfs, key=lambda p: p.name.lower()):
         print(f"      • Extracting {pdf_path.name}")
@@ -3313,6 +3378,7 @@ def _finalize_scan_summary(
                     "reliability": 1.0,
                     "extract_path": _sw_job.meta.get("extract_path"),
                     "top_assembly": _sw_job.meta.get("top_assembly"),
+                    "top_assembly_bbox_mm": _sw_job.meta.get("top_assembly_bbox_mm"),
                     # CHOSEN, WHEN IT COULD NOT BE READ. The top assembly's full-depth BOM
                     # becomes the job's component list at rank 90; on a folder of fifteen
                     # assemblies the extract can rule out anything that is somebody's child
@@ -3824,9 +3890,17 @@ def _finalize_scan_summary(
                     # printed table. apply_field keeps the stronger value and records the
                     # disagreement so an estimator sees that two sources differed.
                     from source_precedence import apply_field as _apply_qty
+                    from source_precedence import source_of as _qty_src
                     _prev = _p.get("quantity")
-                    if _apply_qty(_p, "quantity", _eff, "bom_tree"):
-                        print(f"   [bom_tree] {_p.get('part_number')} qty {_prev} -> {_eff} (GA tree)", flush=True)
+                    # THE ROW'S OWN COUNT TIMES ITS ASSEMBLY'S (D-552): submitted as the
+                    # tree's per-unit reading, which outranks the row it multiplies and
+                    # nothing measured or modelled.
+                    _q_source = ("bom_tree_per_unit"
+                                 if str(_qty_src(_p, "quantity") or "") == "bom_tree"
+                                 else "bom_tree")
+                    if _apply_qty(_p, "quantity", _eff, _q_source):
+                        print(f"   [bom_tree] {_p.get('part_number')} qty {_prev} -> {_eff} "
+                              f"(GA tree: its own count times its assembly's)", flush=True)
                     else:
                         print(f"   [bom_tree] {_p.get('part_number')} qty {_prev} KEPT "
                               f"(GA tree said {_eff}) — stronger source, disagreement flagged",

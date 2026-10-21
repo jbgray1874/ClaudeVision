@@ -55,6 +55,8 @@ param(
     # service checks and writes the ticked changes; only the e-mail read runs on the engine.
     # extractor_patterns comes with json_normaliser, which strips the drawing's specification
     # legend through that one shared reader (it reads only config).
+    # run_timing comes with llm_full_extract, whose read store counts each answer it gives
+    # back as reused or computed on the run's timing record (D-553).
     #
     # The first version of this script sent all 990 tracked files, which would have put 183
     # test files, several hundred one-off src/_probe_*.py scripts, a prototype for a
@@ -67,6 +69,7 @@ param(
         "tools/diagnose/",
         "src/llm_scan_price.py",
         "src/llm_full_extract.py",
+        "src/run_timing.py",
         "src/config.py",
         "src/bought_in_recogniser.py",
         "src/part_code_conventions.py",

@@ -629,6 +629,11 @@ def normalize_native_extract(records: List[Dict[str, Any]],
     top = _pick_top_assembly(records, _amb, job_codes=job_codes)
     if top:
         job.meta["top_assembly"] = top.get("title")
+        # THE PRODUCT'S OWN SIZE (D-551): the analyser records every document's bounding box;
+        # the top assembly's is the assembled product's envelope, which packing is sized from.
+        _tb = [v for v in (_num(x) for x in (top.get("bbox_mm") or [])) if v]
+        if len(_tb) == 3:
+            job.meta["top_assembly_bbox_mm"] = [round(v, 1) for v in _tb]
         job.meta.update(_amb)
         for line in (top.get("bom") or []):
             pn = _clean_pn(line.get("part_number") or "")
@@ -718,7 +723,15 @@ def native_extract_for_job(
             if native_files_state(_src)["count"]:
                 _analyse_from = _src
                 break
-    if jp is not None and run and _analyse_from is not None and _should_run(jp, _analyse_from):
+    _must_run = bool(jp is not None and run and _analyse_from is not None
+                     and _should_run(jp, _analyse_from))
+    try:
+        import run_timing as _rt_sw
+        if jp is not None and (jp.exists() or _must_run):
+            _rt_sw.reuse("solidworks_extract", not _must_run)
+    except Exception:                                        # noqa: BLE001
+        pass
+    if _must_run:
         _produced: List[str] = []
         _run_error = _run_analyser(_analyse_from, analyser=analyser, python_exe=python_exe,
                                    out_path=jp, produced=_produced)

@@ -33,6 +33,16 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import config
+try:
+    from service_config import the_service_config
+except ImportError:                    # loaded by path, without this folder on sys.path
+    import importlib.util as _ilu
+    import pathlib as _pl
+    _scs = _ilu.spec_from_file_location("service_config", _pl.Path(__file__).with_name("service_config.py"))
+    _scm = _ilu.module_from_spec(_scs)
+    _scs.loader.exec_module(_scm)
+    the_service_config = _scm.the_service_config
+config = the_service_config(config)   # this service's, even where the engine's holds the name
 
 # What the engine can actually read. Copying a .docx into the pack would not break anything, but
 # it would sit in the folder implying it was considered, and the folder is meant to be the

@@ -65,9 +65,24 @@ def test_the_box_line_prices_one_carton_around_the_product():
         "the set-up is spread over the order's cartons at each break")
 
 
-def test_an_unwelded_product_still_packs_by_its_parts():
+def test_an_unwelded_product_still_packs_by_its_parts_when_the_policy_is_off(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "PACKAGING_POLICY", {"ships_assembled_default": False},
+                        raising=False)
     o = cl.describe_order([_unit(welded=False)] + _parts(welded=False), 1)
     assert not o["shipment"].get("ships_assembled") and "assembled_unit" not in o
+
+
+def test_under_the_packing_policy_an_unwelded_product_with_a_size_ships_assembled(monkeypatch):
+    """James, 20 Oct 2026: "we always assume assembly, and therefore packing and boxing"
+    (D-551). The weld is no longer what decides it; the policy is, and it says so."""
+    import config
+    monkeypatch.setattr(config, "PACKAGING_POLICY",
+                        {"ships_assembled_default": True, "stated_by": "James Gray",
+                         "stated_on": "20 Oct 2026"}, raising=False)
+    o = cl.describe_order([_unit(welded=False)] + _parts(welded=False), 1)
+    assert o["shipment"].get("ships_assembled") is True
+    assert "packing policy" in o["assembled_unit"]["basis"]
 
 
 def test_a_product_with_no_overall_size_packs_by_its_parts():

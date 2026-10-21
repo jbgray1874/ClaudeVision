@@ -427,6 +427,25 @@ def main() -> None:
     # quantity; everything downstream reads what it decided.
     if getattr(args, "order_qty", None):
         os.environ["SDI_ORDER_QTY"] = str(int(args.order_qty))
+    # WHO THIS TIMING BELONGS TO (D-553), said before anything is timed.
+    try:
+        import run_timing as _rt_id
+        _rt_id.identify(product=str(getattr(args, "product", None) or "").strip() or None,
+                        customer=str(getattr(args, "customer", None) or "").strip() or None,
+                        units=getattr(args, "order_qty", None),
+                        breaks=",".join(str(q) for q in (getattr(args, "quantity_breaks", None) or []))
+                        or None)
+    except Exception:                                        # noqa: BLE001
+        pass
+    # THE BREAKS TOO (D-550). A per-order line (packaging, delivery) is priced at a fixed list
+    # of breaks and the run's own break was not among them: 401918's 150-off column divided the
+    # 1-off pallet by 150. The lines price every break the run asks for.
+    try:
+        _qb = sorted({int(q) for q in (getattr(args, "quantity_breaks", None) or []) if int(q) >= 1})
+        if _qb:
+            os.environ["SDI_QUANTITY_BREAKS"] = ",".join(str(q) for q in _qb)
+    except (TypeError, ValueError):
+        pass
     # THE PRODUCT, THE SAME WAY AND FOR THE SAME REASON. The portal's Drawing Number names
     # the one assembly that ships; route_compiler.declared_product_of reads it, and the scan
     # stamps it on the summary so a saved summary replays the same roots.
@@ -772,10 +791,11 @@ def main() -> None:
     if getattr(args, "fresh_read", False):
         os.environ["SDI_VISION_REFRESH"] = "1"
         os.environ["SDI_LLM_EXTRACT_REFRESH"] = "1"
-        print("   [fresh-read] both LLM caches bypassed — every page goes to the model and "
-              "the whole-pack read is re-driven. The answer may differ from the last run: "
-              "that is what is being measured, and it is why a normal estimate does not do "
-              "this.", flush=True)
+        os.environ["SDI_READ_REFRESH"] = "1"      # the read store too (D-554): nothing kept is consulted
+        print("   [fresh-read] both LLM caches and the read store bypassed — every page goes "
+              "to the model, every document is read again and the whole-pack read is "
+              "re-driven. The answer may differ from the last run: that is what is being "
+              "measured, and it is why a normal estimate does not do this.", flush=True)
     dxf_only_primary = bool(dxf_from_cli and not drawing_arg)
     job_cfg = getattr(config, "DRAWING_JOB_DISCOVERY", {}) or {}
     folder_as_job = bool(job_cfg.get("folder_as_job", False))
@@ -1781,6 +1801,7 @@ def main() -> None:
                               "carries every quantity, so no per-quantity copies are filed.",
                               flush=True)
                     _order_freight: Dict[str, float] = {}
+                    _order_freight_at: Dict[str, Dict[int, float]] = {}
                     try:
                         from commercial_lines import collect_lines as _collect_cl
                         summary["commercial_lines"] = _collect_cl(summary)
@@ -1788,8 +1809,16 @@ def main() -> None:
                         pass
                     for _cl in (summary.get("commercial_lines") or []):
                         if isinstance(_cl, dict) and _cl.get("order_gbp"):
-                            _order_freight[str(_cl.get("code") or "").upper()] = float(
-                                _cl["order_gbp"])
+                            _code_cl = str(_cl.get("code") or "").upper()
+                            _order_freight[_code_cl] = float(_cl["order_gbp"])
+                            # EACH BREAK'S OWN ORDER FIGURE (D-550): the boxes are a step, not
+                            # a rate, so a variant takes the order cost priced AT its quantity.
+                            try:
+                                _order_freight_at[_code_cl] = {
+                                    int(q): float(v) for q, v in
+                                    (_cl.get("order_gbp_at_breaks") or {}).items()}
+                            except (TypeError, ValueError):
+                                pass
                     # THE BREAK TABLE IS FILLED BEFORE THE SWEEP RECALCULATES. The
                     # 19:02 book had the sheet perfectly right and the Quantity Breaks
                     # comparison flat at £4.09 material: the sweep set D6 to each
@@ -1872,7 +1901,8 @@ def main() -> None:
                               "will read flatter than the truth. The tab says so on its "
                               "face.", flush=True)
                     _swept = _sweep(xlsx_path, _breaks, save_variants=_save,
-                                    order_freight=_order_freight or None)
+                                    order_freight=_order_freight or None,
+                                    order_freight_at=_order_freight_at or None)
                     if _swept:
                         (summary.setdefault("saved_output_paths", {}))["quantity_variants"] = \
                             list(_swept.get("variants") or [])
@@ -2480,6 +2510,17 @@ if __name__ == "__main__":
             if _rt.detail_on():
                 import json as _json_api
                 print("[api-timing] " + _json_api.dumps(_rt.report_json()), flush=True)
+            # KEPT, NOT ONLY PRINTED (D-553): the record beside the run's log, and a row per
+            # phase on the machine's history, so the next speed step is decided across jobs.
+            try:
+                import config as _cfg_rt
+                import engine_build as _eb_rt
+                _rt.identify(build=(_eb_rt.describe() or {}).get("commit"))
+                _written = _rt.write(_cfg_rt.LOG_DIR, _cfg_rt.OUTPUT_DIR / "timing_history.csv")
+                if _written.get("json"):
+                    print(f"   [timing] record: {_written['json']}", flush=True)
+            except Exception:                                    # noqa: BLE001
+                pass
         except Exception:                                        # noqa: BLE001
             # Never let instrumentation take down a run that otherwise finished.
             pass

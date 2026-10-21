@@ -221,6 +221,15 @@ def _default_cache_dir() -> str:
 DEFAULT_CACHE_DIR = _default_cache_dir()
 
 
+def _reuse(store: str, hit: bool) -> None:
+    """Count the answer on the run's timing record (D-553); never a failure."""
+    try:
+        import run_timing
+        run_timing.reuse(store, hit)
+    except Exception:                                        # noqa: BLE001
+        pass
+
+
 def _cache_key(png_bytes: bytes, model: str, prompt_version: str) -> str:
     h = hashlib.sha256()
     h.update(png_bytes)
@@ -262,6 +271,7 @@ def get_vision_bom_cached(png_bytes: bytes, model: str, pdf_name: str, page_inde
                 entry = json.load(fh)
             raw = entry.get("raw_response", "")
             parsed = parse_vision_response(raw)  # re-parse fresh (free parser fixes)
+            _reuse("vision_bom", True)
             return {"parsed": parsed, "raw_response": raw, "cache_hit": True}
         except Exception:
             pass  # corrupt/old cache entry -> fall through and re-fetch
@@ -270,6 +280,7 @@ def get_vision_bom_cached(png_bytes: bytes, model: str, pdf_name: str, page_inde
         return {"parsed": None, "raw_response": "", "cache_hit": False, "skipped": True}
 
     # miss (or refresh / no-cache): call Grok
+    _reuse("vision_bom", False)
     raw = call_vision_llm(png_bytes, model=model)
     parsed = parse_vision_response(raw)
 

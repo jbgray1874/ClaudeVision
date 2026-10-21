@@ -106,8 +106,52 @@ def _density_for(material: Any) -> float:
     return _DEFAULT_DENSITY_KG_M3
 
 
-def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]:
+def product_envelope(summary: Any, parts: Any = None) -> Optional[Dict[str, Any]]:
+    """The assembled product's overall size, {length, width, height, source, of} in mm, or
+    None where nothing measured or stated it (D-551).
+
+    The model first: the SolidWorks top assembly's bounding box is the product as built. Then
+    a stated overall on the product's own record (the GA's title block or its read). Never the
+    largest figures printed on the GA — a person drawn beside the product for scale prints
+    "1644mm" on 401918-01-GA, and a box sized to that is a box for the person."""
+    s = summary if isinstance(summary, dict) else {}
+    sw = s.get("solidworks_native") if isinstance(s.get("solidworks_native"), dict) else {}
+    bb = [v for v in (_num(x) for x in (sw.get("top_assembly_bbox_mm") or [])) if v]
+    if len(bb) == 3:
+        d = sorted(bb, reverse=True)
+        return {"length": d[0], "width": d[1], "height": d[2],
+                "source": "the SolidWorks top assembly's bounding box",
+                "of": str(sw.get("top_assembly") or s.get("declared_product") or "")}
+    declared = _re.sub(r"\s+", "", str(s.get("declared_product") or "")).upper()
+    for p in parts or ():
+        if not isinstance(p, dict):
+            continue
+        pn = _re.sub(r"\s+", "", str(p.get("part_number") or "")).upper()
+        if declared and pn != declared:
+            continue
+        env = p.get("product_envelope_mm") if isinstance(p.get("product_envelope_mm"), dict) else {}
+        dims = [_num(env.get(k)) for k in ("length", "width", "height")]
+        if all(dims):
+            d = sorted(dims, reverse=True)
+            return {"length": d[0], "width": d[1], "height": d[2],
+                    "source": str(env.get("source") or "the product's stated overall size"),
+                    "of": str(p.get("part_number") or "")}
+        stated = str(p.get("overall_size_mm") or "")
+        nums = [float(x) for x in _re.findall(r"\d+(?:\.\d+)?", stated)]
+        if len(nums) >= 3 and all(n > 0 for n in nums[:3]):
+            d = sorted(nums[:3], reverse=True)
+            return {"length": d[0], "width": d[1], "height": d[2],
+                    "source": "the overall size stated on the product's own sheet",
+                    "of": str(p.get("part_number") or "")}
+    return None
+
+
+def describe_order(parts: List[Dict[str, Any]], order_qty: Any,
+                   envelope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The shipment, in the terms a haulier or a packer would ask for.
+
+    `envelope` is the assembled product's overall size (product_envelope), where the run
+    established one: with it, the product ships assembled by the packing policy (D-551).
 
     Built from what the engine already measured, not from anything new: every part's blank,
     its gauge, its material's density, and how many of the assembly are being made. A part
@@ -266,6 +310,10 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
     # AN ASSEMBLED PRODUCT SHIPS AS ITSELF (D-530). A welded unit cannot be flat-packed, so it
     # is not split into 25 kg cartons of its parts: one pack per unit, sized from the product's
     # own overall dimensions, weighing what its parts weigh. Packed by parts otherwise.
+    if _unit is None and isinstance(envelope, dict) and all(
+            _num(envelope.get(k)) for k in ("length", "width", "height")):
+        _unit = {"part_number": envelope.get("of") or "the product",
+                 "product_envelope_mm": dict(envelope)}
     _assembled = _assembled_unit(_unit, parts, weight_kg)
     if _assembled:
         out["assembled_unit"] = {k: v for k, v in _assembled.items() if k != "_assembled_unit"}
@@ -301,12 +349,20 @@ def _assembled_unit(unit: Optional[Dict[str, Any]], parts: List[Dict[str, Any]],
         ops = {str(o).strip().lower() for o in (p.get("inferred_operations") or [])}
         return bool(ops & _WELD_OPS) or bool(p.get("welded_to_hosts")) \
             or bool(p.get("weld_stated_by_brief"))
-    if not (_welded(unit) or any(_welded(p) for p in parts or () if isinstance(p, dict))):
+    welded = _welded(unit) or any(_welded(p) for p in parts or () if isinstance(p, dict))
+    # THE POLICY (D-551): the product leaves assembled, one pack per unit, whether or not it
+    # is welded — "we always assume assembly, and therefore packing and boxing". A welded
+    # unit shipped assembled before the policy and still does with it switched off.
+    _pol = getattr(config, "PACKAGING_POLICY", {}) or {}
+    if not welded and not _pol.get("ships_assembled_default", False):
         return None
+    basis = ("a welded unit, which cannot be flat-packed" if welded else
+             f"SDI ships the product assembled (packing policy, {_pol.get('stated_by') or 'config'}"
+             f"{', ' + str(_pol.get('stated_on')) if _pol.get('stated_on') else ''})")
     return {"_assembled_unit": True, "part_number": unit.get("part_number"),
             "envelope_mm": dims, "unit_weight_kg": round(unit_weight_kg, 2) or None,
             "envelope_source": str(env.get("source") or "the product's overall size"),
-            "basis": "a welded unit, which cannot be flat-packed"}
+            "basis": basis}
 
 
 def _commercial_researcher(brief: Dict[str, Any]) -> Dict[str, Any]:
@@ -645,7 +701,7 @@ def _box_method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # The same arithmetic at every break: only the set-up share moves with quantity, and
     # the break table divides real order costs, so each column carries its own share.
     _at: Dict[int, float] = {}
-    for _q in sorted(set([1, qty]) | set(_BREAKS_DEFAULT)):
+    for _q in break_quantities(qty):
         _rq = box_costing.price_box(L, B, H, _q)
         if _rq.get("priced"):
             _at[_q] = round(float(_rq[_fkey]) * _q, 2)
@@ -754,13 +810,24 @@ def _box_applied_assembled(order: Dict[str, Any], plan: Dict[str, Any], L: float
         "packed": f"The assembled product {name}",
         "why": (f"{au.get('basis') or 'a welded unit, which cannot be flat-packed'}, so it "
                 f"ships assembled, one carton around each unit, rather than as loose parts"),
-        "dims": [
+        # A D-551 envelope (a model's bounding box, a stated overall) comes largest side first:
+        # which side stands up is the packer's call and the board is the same either way, so
+        # its sides are named by size. A read's envelope keeps its drawn orientation (the
+        # footprint, then the height) and is named by it.
+        "dims": ([
+            {"box": "Length (L)", "mm": L,
+             "from": f"the product's longest overall dimension — {src}"},
+            {"box": "Breadth (B)", "mm": B,
+             "from": f"the product's second overall dimension — {src}"},
+            {"box": "Height (H)", "mm": H,
+             "from": f"the product's smallest overall dimension — {src}"},
+        ] if L >= B >= H and H < L else [
             {"box": "Length (L)", "mm": L,
              "from": f"the longer side of the product's footprint (width or depth) — {src}"},
             {"box": "Breadth (B)", "mm": B,
              "from": f"the shorter side of the product's footprint — {src}"},
             {"box": "Height (H)", "mm": H, "from": f"the product's overall height — {src}"},
-        ],
+        ]),
         "fit": ("the box is the product's overall size; the only room inside is the sheet's "
                 "panel oversize"),
         "count": f"one carton per unit ordered: {_n_of(qty, 'unit')} = {_n_of(n, 'carton')}",
@@ -826,7 +893,7 @@ def _box_cartons_from_shipment(order: Dict[str, Any], qty: int, box_costing: Any
     order_gbp = round(per * n, 2)
     at: Dict[int, float] = {}
     ship_parts = order.get("shippable_parts") or []
-    for q in sorted(set([1, qty]) | set(_BREAKS_DEFAULT)):
+    for q in break_quantities(qty):
         nq: Optional[float] = float(n) if q == qty else None
         if nq is None and ship_parts:
             try:
@@ -990,8 +1057,7 @@ def _sdi_live_rate(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]
 
                     t_now, said, missing = _total(qty)
                     if t_now > 0:
-                        breaks = sorted({1, qty} | set(_BREAKS_DEFAULT)
-                                        | {int(b) for b in (order.get("quantity_breaks") or []) if _num(b)})
+                        breaks = break_quantities(qty, order.get("quantity_breaks"))
                         result = {"order_gbp": round(t_now, 2), "source_class": "sdi_commercial_rate",
                                   "source_name": "AIEstimating.CommercialRate x the counted shipment",
                                   "working": (" + ".join(said) + f" = GBP {t_now:,.2f} the order"
@@ -1062,8 +1128,7 @@ def _sdi_live_rate(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]
                     # A PER-UNIT FIGURE STAYS PER UNIT AT EVERY BREAK (D-452). A past quote's
                     # line is a per-unit share; written as one order figure it was divided by
                     # the break, so fifty headers carried £0.20 of packaging each.
-                    _bq = sorted({1, qty} | {int(b) for b in (order.get("quantity_breaks") or []) if _num(b)}
-                                 | set(_BREAKS_DEFAULT))
+                    _bq = break_quantities(qty, order.get("quantity_breaks"))
                     result = {"order_gbp": round(median * qty, 2),
                               "order_gbp_at_breaks": {q: round(median * q, 2) for q in _bq},
                               "source_class": "sdi_history",
@@ -1090,6 +1155,26 @@ def sdi_live_status(code: str, order: Dict[str, Any]) -> str:
 
 
 _BREAKS_DEFAULT = (1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000)
+
+
+def break_quantities(qty: Any, extra: Any = None) -> List[int]:
+    """Every quantity a per-order line is priced at: 1, the order, the standard breaks, any
+    the caller holds, and THE RUN'S OWN BREAKS (D-550). main.py hands those down as
+    SDI_QUANTITY_BREAKS; without them the break table found no figure at 150 and divided the
+    1-off order — one pallet — by 150."""
+    out = {1} | set(_BREAKS_DEFAULT)
+    try:
+        out.add(max(1, int(qty)))
+    except (TypeError, ValueError):
+        pass
+    for b in (extra or []):
+        if _num(b):
+            out.add(int(b))
+    for tok in os.environ.get("SDI_QUANTITY_BREAKS", "").split(","):
+        tok = tok.strip()
+        if tok.isdigit() and int(tok) >= 1:
+            out.add(int(tok))
+    return sorted(out)
 
 
 _SHIPMENT_STATUS: Dict[str, str] = {}
@@ -1199,7 +1284,7 @@ def _counted_shipment_price(code: str, order: Dict[str, Any]) -> Optional[Dict[s
         return n
     n_now = _count(qty) or 0.0
     at = {}
-    for q in sorted(set(_BREAKS_DEFAULT) | {qty}):
+    for q in break_quantities(qty):
         n = _count(q)
         if n:
             at[q] = round(unit_gbp * n, 2)
@@ -1497,8 +1582,9 @@ def shipment_shape(order: Dict[str, Any]) -> str:
     return "pallet"
 
 
-def packaging_line(parts: List[Dict[str, Any]], order_qty: Any, customer: Any = None) -> Dict[str, Any]:
-    order = describe_order(parts, order_qty)
+def packaging_line(parts: List[Dict[str, Any]], order_qty: Any, customer: Any = None,
+                   envelope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    order = describe_order(parts, order_qty, envelope=envelope)
     order["customer"] = str(customer or "").strip()
     size = order.get("largest_part_mm")
     where = (f"largest panel {size[0]:.0f} x {size[1]:.0f}mm, " if size else "")
@@ -1515,8 +1601,9 @@ def packaging_line(parts: List[Dict[str, Any]], order_qty: Any, customer: Any = 
                  "PACKAGING")
 
 
-def delivery_line(parts: List[Dict[str, Any]], order_qty: Any, customer: Any = None) -> Dict[str, Any]:
-    order = describe_order(parts, order_qty)
+def delivery_line(parts: List[Dict[str, Any]], order_qty: Any, customer: Any = None,
+                  envelope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    order = describe_order(parts, order_qty, envelope=envelope)
     order["customer"] = str(customer or "").strip()
     weight = (f"about {order['order_weight_kg']:.0f} kg" if order.get("order_weight_kg")
               else "a part pallet")

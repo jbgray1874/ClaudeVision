@@ -287,6 +287,12 @@ SOURCE_RANK: Dict[str, int] = {
     # priced at all, which is why it exists; it is not a substitute for a flat pattern.
     "pdf_overall_dims": 65,
     "bom_tree": 60,
+    # THE TREE'S PER-UNIT COUNT OUTRANKS THE ROW'S OWN (D-552). A parts-list row states how
+    # many of a part its assembly holds; the tree multiplies that by how many of the assembly
+    # one unit holds. Both are the bill of materials, and submitted under one name the second
+    # read as "one reader, two readings" and was refused — 401's members stayed at 1 and 2.
+    # A measured or modelled count (the SolidWorks tree) still outranks both.
+    "bom_tree_per_unit": 61,
     "override_rule": 50,
     "llm_extract": 40,
     "llm_full_extract": 40,
@@ -527,6 +533,7 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "vision":                 "the parts table, read from the image by the vision model",
     "pdf_overall_dims":       "the drawing's overall dimensions",
     "bom_tree":               "the bill of materials",
+    "bom_tree_per_unit":      "the bill of materials, times its assembly's own count",
     "override_rule":          "an SDI override rule",
     "llm_extract":            "Grok (xAI)",
     "llm_full_extract":       "Grok (xAI)",
@@ -814,6 +821,7 @@ EVIDENCE_FAMILY: Dict[str, str] = {
     "drawn_on_sheet": "the drawing",
     "bom_table": "the drawing",
     "bom_tree": "the drawing",
+    "bom_tree_per_unit": "the drawing",
     "pdf_overall_dims": "the drawing",
     "llm_extract": "the drawing",
     "llm_full_extract": "the drawing",
