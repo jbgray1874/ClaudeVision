@@ -144,6 +144,53 @@ def _is_mirror(code: Any) -> bool:
 _CATEGORY_CODES = {"FIXING", "FIXINGS", "FIXINGTBC", "STDPART", "HARDWARE"}
 
 
+def _carry_section_length(row: Dict[str, Any], other: Dict[str, Any]) -> None:
+    """A piece's length printed in one reader's line is not lost because the other reader's
+    line left it out (D-573).
+
+    401918-01-07M's cut list prints "50.00 x 20.00 x 2.00mm TUBE 703 1 / 154 2". The text
+    layer read the length into the line; vision transcribed the profile alone. The row
+    contest settled the code and the quantity, the field merge kept the winner's description
+    because it was not empty, and the length went with the loser's words: the frame's two
+    pieces reached the cut-list rule with no length, so it attached nothing, and the frame
+    went on the book with no tube and no saw. A length is a field of its own: where the kept
+    line has none and the other line prints one for the same section, it is carried under
+    the name the cut-list rule reads, and the row says where it came from."""
+    if any(_row_length_value(row.get(k)) for k in ("cut_length_mm", "length_mm", "length")):
+        return
+    try:
+        from bom_pipeline import _row_length_value as _lv
+        from section_profile import detect_section_stock
+    except Exception:                                                 # pragma: no cover
+        return
+    mine = detect_section_stock(str(row.get("description") or ""))
+    if not mine or mine.get("length_mm"):
+        return
+    theirs = detect_section_stock(str(other.get("description") or ""))
+    length = float((theirs or {}).get("length_mm") or 0) or next(
+        (_lv(other.get(k)) for k in ("cut_length_mm", "length_mm", "length") if _lv(other.get(k))), 0.0)
+    if not length or not theirs:
+        return
+    same = all(abs(float(mine.get(k) or 0) - float(theirs.get(k) or 0)) < 0.05 for k in ("a", "b", "t"))
+    if not same:
+        return
+    row["cut_length_mm"] = length
+    row["cut_length_mm_source"] = str(other.get("source") or "the other reader")
+    row["flag"] = (str(row.get("flag") or "") + ("; " if row.get("flag") else "")
+                   + f"length {length:g} mm carried from the other reader's line")
+
+
+def _row_length_value(v: Any) -> float:
+    try:
+        from bom_pipeline import _row_length_value as _lv
+        return float(_lv(v) or 0.0)
+    except Exception:                                                 # pragma: no cover
+        try:
+            return float(v or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+
 def _identity(code: Any) -> str:
     """A code that names one article. "FIXING", "STD PART", "P/P", "-", "TBC" name a category
     or nothing — the minter's own rule — so rows carrying them are told apart by their words.
@@ -247,6 +294,7 @@ def reconcile_page(a_bom: Optional[Dict[str, Any]], b_bom: Optional[Dict[str, An
                                         loser_source=PATH_B_SOURCE, decided=_decided,
                                         label=f"[{parent_label}] item {item}")
                 findings.extend(_notes)
+                _carry_section_length(row, b)
                 merged.append(row)
             elif two_lines:
                 # TWO READINGS OF TWO LINES. The readers numbered the table differently (an
@@ -281,6 +329,11 @@ def reconcile_page(a_bom: Optional[Dict[str, Any]], b_bom: Optional[Dict[str, An
                                         label=f"[{parent_label}] item {item}")
                 findings.extend(_notes)
                 row["source"] = "B_OVERRIDE"; row["confidence"] = "LOW"
+                # Either reader's line may be the one that printed the length: the text
+                # layer's words outrank vision's in the merge, so vision's own line is
+                # consulted too, as it was before the merge replaced its description.
+                _carry_section_length(row, a)
+                _carry_section_length(row, b)
                 diff = []
                 if not code_agree:
                     diff.append(f"code A='{a.get('part_ref','')}' vs B='{b.get('part_ref','')}'")

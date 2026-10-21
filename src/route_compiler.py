@@ -5459,17 +5459,6 @@ def compile_job_route(
                 event_ids = sorted(
                     explicit_memberships.get((operation, part_number)) or [])
                 compatibility_target = part_number
-                # A WELDMENT INSIDE A WELDED ASSEMBLY HAS JOINTS OF ITS OWN (D-566): its word
-                # corroborates the parent's event AND claims an event of its own.
-                if (event_ids and operation == "welding"
-                        and _weldment_has_its_own_joints(part, part_number, graph)):
-                    _own_event = stable_id("decision", {
-                        "origin": "compatibility", "operation": operation,
-                        "scope": "part", "target_id": part_number})
-                    if _own_event not in event_ids:
-                        event_ids.append(_own_event)
-                    explicit_memberships.setdefault(
-                        ("welding", part_number), set()).add(_own_event)
                 if not event_ids and operation in ASSEMBLY_EVENT_OPERATIONS:
                     # A child record often repeats its parent's finish/weld wording. If an
                     # explicit assembly event already owns that operation, the child word is
@@ -5493,6 +5482,24 @@ def compile_job_route(
                     ]
                     if len(most_specific) == 1:
                         event_ids = [most_specific[0][1]]
+                # A WELDMENT INSIDE A WELDED ASSEMBLY HAS JOINTS OF ITS OWN (D-566, placed
+                # here by D-572): its word corroborates the parent's event AND claims an event
+                # of its own. This has to follow the ancestor lookup above, not precede it: a
+                # member named on the parent's route arrives with its event ids filled, but a
+                # member the ancestor lookup absorbs — 401918-01-03M under 201, 07M under 401,
+                # each with a fillet on its own sheet, FINISH: WELDED and WELDMENT in its name
+                # — arrives with none, and the check sat before the lookup, so it was never
+                # asked; the lookup then folded the frame's own joints into the parent's
+                # event and neither frame was welded on the book.
+                if (event_ids and operation == "welding"
+                        and _weldment_has_its_own_joints(part, part_number, graph)):
+                    _own_event = stable_id("decision", {
+                        "origin": "compatibility", "operation": operation,
+                        "scope": "part", "target_id": part_number})
+                    if _own_event not in event_ids:
+                        event_ids.append(_own_event)
+                    explicit_memberships.setdefault(
+                        ("welding", part_number), set()).add(_own_event)
                 # Dressing is one event attached to the weld event, not a separate dressing
                 # charge on every participant which happened to carry the inferred word.
                 if not event_ids and operation == "dress_welds":

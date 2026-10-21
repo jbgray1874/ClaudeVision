@@ -57,6 +57,74 @@ def test_the_reconciler_carries_the_length_under_the_one_name_the_applier_reads(
     assert '_row_out["length_mm"] = _lv' in src
 
 
+# ── D-573: a length one reader printed survives the other reader winning the row ────────
+
+def _ab(item, a_desc, a_qty, b_desc, b_qty):
+    import merge_boms as mb
+    a = [{"item_number": item, "part_ref": "", "description": a_desc, "quantity": a_qty}]
+    b = [{"item_number": item, "part_ref": "", "description": b_desc, "quantity": b_qty}]
+    rows, _ = mb.reconcile_page({"rows": a}, {"rows": b}, "90001-01-07M")
+    return rows
+
+
+def test_the_text_layers_length_is_kept_when_vision_wins_the_row():
+    """The field merge already ranks the text layer's words over vision's, so the length it
+    printed stays in the description whichever reader won the row."""
+    rows = _ab("1", "50.00 x 20.00 x 2.00mm TUBE 703", 1, "50.00 x 20.00 x 2.00mm TUBE", 2)
+    assert len(rows) == 1 and rows[0]["source"] == "B_OVERRIDE"
+    assert rows[0]["description"].endswith("TUBE 703")
+
+
+def test_visions_length_is_carried_when_the_text_layer_printed_none():
+    rows = _ab("2", "50.00 x 20.00 x 2.00mm TUBE", 2, "50.00 x 20.00 x 2.00mm TUBE 154", 2)
+    assert rows[0]["source"] == "BOTH" and rows[0]["cut_length_mm"] == 154.0
+    assert "carried from the other reader" in rows[0]["flag"] and rows[0]["cut_length_mm_source"]
+    rows = _ab("2", "50.00 x 20.00 x 2.00mm TUBE", 1, "50.00 x 20.00 x 2.00mm TUBE 154", 2)
+    assert rows[0]["source"] == "B_OVERRIDE" and rows[0]["cut_length_mm"] == 154.0
+
+
+def test_a_different_section_lends_no_length_and_a_printed_one_is_not_overwritten():
+    rows = _ab("3", "30.00 x 30.00 x 2.00mm TUBE 999", 1, "50.00 x 20.00 x 2.00mm TUBE", 2)
+    assert "cut_length_mm" not in rows[0]
+    rows = _ab("4", "50.00 x 20.00 x 2.00mm TUBE 703", 1, "50.00 x 20.00 x 2.00mm TUBE 154", 2)
+    assert "cut_length_mm" not in rows[0]                             # vision's own line prints 154
+
+
+def test_rows_without_lengths_take_the_sheets_own_cut_list_as_the_pieces():
+    """D-574. Both readers gave the profile alone; the sheet's text had already measured the
+    pieces. The frame — an assembly parent by the model's tree, with no coded member — is
+    costed as a weldment cut from those pieces (D-557), not left with nothing."""
+    rows = [{"part_number": "", "description": "50.00 x 20.00 x 2.00mm TUBE", "quantity": 1,
+             "bom_parent": "90001-01-07M", "bom_parent_known": True},
+            {"part_number": "", "description": "50.00 x 20.00 x 2.00mm TUBE", "quantity": 2,
+             "bom_parent": "90001-01-07M", "bom_parent_known": True}]
+    mint_uncoded_row_identities(rows)
+    frame = {"part_number": "90001-01-07M", "description": "BASE FRAME - WELDMENT",
+             "normalized_material": "MILD STEEL", "quantity": 2, "page_roles": ["detail"],
+             "is_assembly_parent": True, "is_sub_assembly": True,
+             "assembly_children": ["50.00 x 20.00 x 2.00mm TUBE"],
+             "section_stock": {"a": 20.0, "b": 50.0, "t": 2.0, "length_mm": 703.0,
+                               "cut_lengths_mm": [703.0, 154.0, 154.0], "profile_form": "RHS"}}
+    assert bp.apply_stated_cut_list_to_parts([frame], rows) == 1
+    assert sorted(frame["section_stock"]["cut_lengths_mm"]) == [154.0, 154.0, 703.0]
+    assert all(r.get("consumed") for r in rows)
+    flags = " ".join(str(f) for f in frame["review_flags"])
+    assert "D-574" in flags and "costed as a weldment cut from those pieces (D-557)" in flags
+    # The record now says it is a part, so the costing charges its section rather than nothing.
+    assert frame["is_assembly_parent"] is False and frame["is_sub_assembly"] is False
+    assert frame["weldment_from_own_cut_list"] is True
+
+
+def test_the_carried_length_reaches_the_frames_stock():
+    rows = _ab("1", "50.00 x 20.00 x 2.00mm TUBE 703", 1, "50.00 x 20.00 x 2.00mm TUBE", 2)
+    row = dict(rows[0], part_number="", bom_parent="90001-01-07M", bom_parent_known=True)
+    mint_uncoded_row_identities([row])
+    frame = {"part_number": "90001-01-07M", "description": "BASE FRAME - WELDMENT",
+             "normalized_material": "MILD STEEL", "quantity": 2, "page_roles": ["detail"]}
+    assert bp.apply_stated_cut_list_to_parts([frame], [row]) == 1
+    assert frame["section_stock"]["cut_lengths_mm"] == [703.0, 703.0]
+
+
 # ── D-560 amended: a stored length is not money ─────────────────────────────────────────
 
 def test_a_memberless_parent_with_a_length_but_no_money_still_blocks():
@@ -110,6 +178,25 @@ def test_the_inner_weldments_own_joints_are_charged_beside_the_parents():
     dress = {d["target_id"] for d in out["decisions"]
              if d["operation"] == "dress_welds" and d["status"] == "required"}
     assert "90001-01-03M" in dress
+
+
+def test_a_weldment_the_ancestor_lookup_absorbs_still_keeps_its_own_joints():
+    """D-572. The route names only the parent; the frame is not on its part list, so it
+    arrives at the adapter with no event and the ancestor lookup folds its WELDED word into
+    201's event. On the 401918-01-GA 15:02 book that left 03M and 07M with no weld at all.
+    The own-joints check has to run after that lookup, not before it."""
+    parts, job = _frame_in_a_frame()
+    job["routes"] = [{"operation": "welding", "part_numbers": ["90001-01-201"],
+                      "scope": "assembly", "qty_per_unit": 1}]
+    out = rc.compile_job_route(parts, job, known_assemblies=["90001-01-GA", "90001-01-201", "90001-01-03M"])
+    welds = {d["target_id"] for d in out["decisions"]
+             if d["operation"] == "welding" and d["status"] == "required"}
+    assert "90001-01-201" in welds and "90001-01-03M" in welds, welds
+    dress = {d["target_id"] for d in out["decisions"]
+             if d["operation"] == "dress_welds" and d["status"] == "required"}
+    assert "90001-01-03M" in dress
+    # The cap, with no joints of its own, is still only the parent's participant.
+    assert "90001-01-02M" not in welds
 
 
 def test_a_cap_with_no_joints_of_its_own_claims_no_second_event():

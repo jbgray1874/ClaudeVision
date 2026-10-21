@@ -67,6 +67,9 @@ def test_the_words_come_from_the_record_and_the_prompt_keeps_the_drawing_and_ask
     assert "Preserve the unit's complete form, proportions, structure, materials and stated finish" in prompt
     assert "Ignore the drawing's title block, parts tables, dimensions" in prompt
     assert "Do not invent features" in prompt and "No people" in prompt and "no text" in prompt
+    # The first live picture drew a solid top on an open rail: an open frame stays open.
+    assert "do not add a top, panel, surface or infill the drawing does not show" in prompt
+    assert "a bar or a rail, it stays open" in prompt
     plain = qr.render_prompt(words, "inside a Tesco store, on the shop floor", {}, from_drawing=False)
     assert "drawing" not in plain and "No text, no captions, no price tags, no people." in plain
 
