@@ -609,6 +609,42 @@ QUOTE_DOCUMENT = {
     "max_pages_read": 60,
 }
 
+# ── THE UNIT PICTURED IN THE CLIENT'S OWN SETTING (D-571) ───────────────────────────────
+# James Gray, 21 Oct 2026: "take the unit in the GA and turn it into a rendered image with a
+# suitable backdrop depending on the client — if it's Tesco, put it into a Tesco store — with a
+# small amount of landscaping and some space around it." The first page of the quotation shows
+# an artist's impression drawn by the image model from WORDS — the record's description of the
+# unit and, where a GA render is to hand, the vision model's description of its appearance —
+# placed in the customer's scene. No drawing reaches the image model. Made once per prompt and
+# model (the read store), labelled an artist's impression on the page, and the general
+# arrangement stands in whenever a picture cannot be had.
+QUOTE_RENDER = {
+    "enabled": True,                  # SDI_QUOTE_RENDER_ENABLED=0 switches one machine off
+    # THE DRAWING IS THE REFERENCE: the GA's first sheet goes to the image model as an image
+    # EDIT, so the picture is of THIS unit. These are the edit model and its picture shape.
+    "model": "grok-imagine-image-2.0",
+    "aspect_ratio": "3:2",
+    "resolution": "2k",
+    "quality": "medium",
+    # When the edit endpoint refuses, the unit is drawn from its description instead.
+    "text_model": "grok-2-image",
+    # The scene for a customer the table below does not name: their own store.
+    "scene_template": "inside a {customer} store, on the shop floor",
+    "default_scene": "on a bright, modern retail shop floor",
+    "dressing": ("restrained planting in separate planters at the edges of the scene, a hint of "
+                 "the store beyond, and a clean, uncluttered floor"),
+    "style": "Soft natural daylight, subtle shadows, a calm backdrop, shallow depth of field.",
+}
+
+# A CUSTOMER WHOSE SETTING IS NOT SIMPLY ITS OWN STORE. A brand sold through other retailers, a
+# maker with no shop floor of its own. Keyed on the customer's name as the run resolves it; the
+# template above is the rule and this table holds the exceptions.
+CUSTOMER_QUOTE_SCENES = {
+    "TTI": "on the power-tool wall of a Milwaukee tool retailer",
+    "TECHTRONIC INDUSTRIES": "on the power-tool wall of a Milwaukee tool retailer",
+    "DYSON": "in a Dyson demo store, among the brand's machines",
+}
+
 MATERIAL_PRICE_BREAK = {
     "enabled": True,
     "sheet": "Material Price Break",

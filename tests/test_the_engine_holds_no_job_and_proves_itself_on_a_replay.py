@@ -39,6 +39,9 @@ _SCOPED_TABLES = {("config.py", "JOB_DECISIONS"), ("config.py", "CUSTOMER_FINISH
                   # The brand mark a customer's documents carry (D-510): the same kind of
                   # customer fact as the finish standards — a table, read by one lookup.
                   ("config.py", "CUSTOMER_LOGO_BRANDS"),
+                  # The setting a customer's quotation pictures the unit in (D-571): a table of
+                  # exceptions to a template that uses the customer's own name.
+                  ("config.py", "CUSTOMER_QUOTE_SCENES"),
                   ("live_enquiry_collector.py", "DEFAULT_CUSTOMER_ALIASES")}
 _ENTRY_POINTS = ("main.py", "file_scan.py")
 
