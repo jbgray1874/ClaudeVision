@@ -547,8 +547,10 @@ def render(review: dict, words: dict, first_name: str = "Nick") -> dict:
     if listen:
         text += [f"Listen to this briefing: {listen}", ""]
     if ask:
-        text += [f"Ask ChatGPT about it (it answers in writing — tap voice mode to "
-                 f"hear it): {ask}", ""]
+        text += [f"Ask ChatGPT about it: {ask}",
+                 "  It answers in writing. To hear it, tap the speaker icon under the "
+                 "answer — the voice button starts a new conversation instead.",
+                 f'  Or in ChatGPT voice mode just say: "{CHATGPT_ASK}"', ""]
     text += [f"{d:%A} sandbox-only {review['owner']} review:", ""]
     text += [f"• {label}: {n}{_delta(n, b)}" for label, n, b in lines]
     text += ["", f"New movement: {words['movement']}", "", "Today's five questions", ""]
@@ -580,12 +582,19 @@ def render(review: dict, words: dict, first_name: str = "Nick") -> dict:
             h.append(f"<a href='{e(ask)}' style='{button};background:#fff;color:#0b5cad;"
                      f"border:1px solid #0b5cad'>Ask ChatGPT about it</a>")
         h.append("</p>")
+        # NAMING THE RIGHT BUTTON. This used to say "tap voice mode there to hear it",
+        # which sends you to the one control that does not do that: voice mode starts a
+        # FRESH conversation and waits for you to speak, rather than reading the answer
+        # already on screen. The speaker icon under the answer is the one that reads it.
         note = []
         if listen:
             note.append("<b>Listen</b> reads this aloud straight away.")
         if ask:
-            note.append("<b>ChatGPT</b> answers in writing — tap voice mode there to talk to it.")
-        h.append(f"<p style='font-size:12px;color:#666;margin-top:0'>{' '.join(note)}</p>")
+            note.append("<b>ChatGPT</b> answers in writing: tap the <b>speaker icon under "
+                        "its answer</b> to hear it. Or, in ChatGPT voice mode, just say "
+                        f"&ldquo;{e(CHATGPT_ASK)}&rdquo;")
+        h.append(f"<p style='font-size:12px;color:#666;margin-top:0;line-height:1.5'>"
+                 f"{' '.join(note)}</p>")
     h += [f"<p>{d:%A} sandbox-only {e(review['owner'])} review:</p><ul>"]
     h += [f"<li>{e(label)}: <b>{n}</b>{e(_delta(n, b))}</li>" for label, n, b in lines]
     h += [f"</ul><p><b>New movement:</b> {e(words['movement'])}</p><p><b>Today's five questions</b></p><ol>"]
