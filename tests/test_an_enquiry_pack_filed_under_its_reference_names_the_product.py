@@ -39,6 +39,22 @@ def test_the_reference_and_the_drawing_number_both_name_the_product():
     assert pi.title_from_files("ROL2021-2465-00", [PACK]) == "UNIVERSAL MIDFLOOR 1200 RAIL"
 
 
+def test_the_estimators_own_filing_with_a_role_token_is_the_same_pack():
+    """Renamed on the day to "0351292-GA-UNIVERSAL …" and typed as "0351292-GA": the reference
+    with a role glued on, each side. Both name the pack; the role says assembly."""
+    renamed = "0351292-GA-UNIVERSAL MIDFLOOR 1200 RAIL-ROL2021-2465-00.pdf"
+    d = pi.drawing_of_file(renamed)
+    assert (d["number"], d["reference"], d["title"]) == ("ROL2021-2465-00", "0351292", "UNIVERSAL MIDFLOOR 1200 RAIL")
+    assert d["is_assembly"]
+    for typed in ("0351292-GA", "0351292 GA", "0351292", "ROL2021-2465-00"):
+        for pack in (renamed, PACK):
+            r = pi.resolve_product(typed, [pack])
+            assert r["status"] == "ok", (typed, pack, r)
+    plain = pi.drawing_of_file("0351292-GA UNIVERSAL MIDFLOOR 1200 RAIL.pdf")
+    assert (plain["number"], plain["is_assembly"], plain["top_sheet"]) == ("0351292", True, True)
+    assert pi.resolve_product("0351292-GA", ["0351292-GA UNIVERSAL MIDFLOOR 1200 RAIL.pdf"])["status"] == "ok"
+
+
 def test_another_reference_names_nothing_and_the_page_says_what_is_here():
     r = pi.resolve_product("0351293", [PACK])
     assert r["status"] == "none"
