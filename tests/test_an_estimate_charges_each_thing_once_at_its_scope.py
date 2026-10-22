@@ -936,8 +936,9 @@ def test_a_project_cost_charged_once_is_not_an_unpriced_rate():
 def test_the_banner_says_the_report_adds_the_checks_it_had_not_seen():
     import costed_facts as cf
     src = (ROOT / "src" / "costed_facts.py").read_text(encoding="utf-8")
-    assert "the consistency checks had not run when this was counted — the report's" in src
-    assert "total adds any check they raise" in src
+    assert "a provisional count at workbook population — the consistency checks had not" in src
+    assert "the report carries the final release status" in src
+    assert "adds any check they raise" in src
     assert hasattr(cf, "outstanding_summary")
 
 

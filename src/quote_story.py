@@ -949,6 +949,39 @@ def _head(sdi_logo: str, cust_header: str, middle: str) -> str:
             f'<div class="cust">{cust_header}</div></div>')
 
 
+def open_items(summary: Dict[str, Any]) -> int:
+    """How many items the costed record still holds open — its own `release.outstanding`,
+    the count of rows a person owes before the quotation is more than a draft, which is the
+    report's headline count and the release gate's reason (D-580). Nothing is counted here."""
+    try:
+        from costed_facts import costed_job
+        rel = costed_job(summary).get("release") or {}
+        if not rel.get("draft"):
+            return 0
+        return max(1, int(_num(rel.get("outstanding")) or 0))
+    except Exception:                                                # noqa: BLE001
+        return 0
+
+
+def _sourced_words(facts: Dict[str, Any]) -> str:
+    """"every line sourced" is true of a released document and not of a draft (D-580): a
+    page claiming it beside open findings claimed what the record did not support. The
+    words for a draft stay a customer's words — what is being confirmed, not who owes it."""
+    n = int(facts.get("open_items") or 0)
+    if n <= 0:
+        return "Nested sheets, departmental rates and every line sourced."
+    return (f"Nested sheets and departmental rates; {_g(n)} item{'s' if n != 1 else ''} "
+            f"{'are' if n != 1 else 'is'} being confirmed before the price is final.")
+
+
+def _traced_words(facts: Dict[str, Any]) -> str:
+    n = int(facts.get("open_items") or 0)
+    if n <= 0:
+        return "kept its working, so every line on the price can be traced back to your own pages."
+    return (f"kept its working, so each line on the price can be traced back to your own pages; "
+            f"{_g(n)} item{'s' if n != 1 else ''} {'are' if n != 1 else 'is'} still being confirmed.")
+
+
 def reading_page(summary: Dict[str, Any], facts: Dict[str, Any], *, customer: str,
                  product: str, job_number: str, unit_price: Optional[float], qty: int,
                  sdi_logo: str, cust_header: str, page_no: str) -> str:
@@ -990,8 +1023,7 @@ def reading_page(summary: Dict[str, Any], facts: Dict[str, Any], *, customer: st
          f"{len(facts['bought'])} bought in."),
         ("03 · CONNECTED", "Turned the design into a route", chain_route,
          "Every made part given a blank, a gauge and a path through SDI's departments."),
-        ("04 · COSTED", "Priced it in SDI's workbook", costed,
-         "Nested sheets, departmental rates and every line sourced."),
+        ("04 · COSTED", "Priced it in SDI's workbook", costed, _sourced_words(facts)),
     ]
     chain_html = "".join(
         f'<div><div class="qs-k">{_esc(k)}</div><h3>{_esc(h)}</h3>'
@@ -1026,7 +1058,7 @@ def reading_page(summary: Dict[str, Any], facts: Dict[str, Any], *, customer: st
       <h2>We read your {_esc(pack_kind)} the way an engineer would.</h2>
       <p style="margin:0;color:#d9dcd6;font-size:13.5px;line-height:1.45">SDI Intelligence worked
       out what the product is made of, how SDI would make each part and what it costs — and
-      kept its working, so every line on the price can be traced back to your own pages.</p>
+      {_esc(_traced_words(facts))}</p>
       <div class="qs-io">
         <div class="qs-in"><div class="qs-lbl">What we were given</div><ul>{li(given)}</ul></div>
         <div class="qs-out"><div class="qs-lbl">What we produced</div><ul>{li(produced)}</ul></div>
@@ -1210,6 +1242,7 @@ def story_pages(summary: Dict[str, Any], parts: List[Dict[str, Any]], *, custome
         return "", ""
     facts["markup"] = markup
     facts["agree"] = figures_agree(summary, facts, unit_price, markup)
+    facts["open_items"] = open_items(summary)                        # the record's, not ours
     pages = []
     try:
         pages.append(reading_page(summary, facts, customer=customer, product=product,

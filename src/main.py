@@ -341,8 +341,13 @@ def _rewrite_estimate_banner(xlsx_path, summary) -> None:
                 for _bcell in _brow:
                     if isinstance(_bcell.value, str) and _bcell.value.startswith(
                             ("PROVISIONAL —", "DRAFT —")):
+                        # A PROVISIONAL COUNT, SAID SO (D-580): the cell is written before the
+                        # checks run and is never rewritten after (D-361); the final release
+                        # status lives on the report, and this says where.
                         _bcell.value = (f"DRAFT — {_total_b} item(s) to confirm: {_phrase_b} "
-                                        f"(each is listed on the AI Explanation tab)")
+                                        f"(a provisional count at workbook population — the "
+                                        f"final release status is on the report; each is "
+                                        f"listed on the AI Explanation tab)")
                         _bhits += 1
                     elif (isinstance(_bcell.value, str)
                           and _bcell.value.startswith("OUTSTANDING ESTIMATOR INPUTS (")
