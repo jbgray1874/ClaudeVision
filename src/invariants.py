@@ -2333,6 +2333,68 @@ def check_a_printed_quantity_is_not_divided_without_evidence(summary: Any) -> Li
         rows=bad, count=len(bad))]
 
 
+def check_a_charged_identity_is_whole_and_charged_once(summary: Any) -> List[Dict[str, Any]]:
+    """A charged bought item carries its whole identity, and one article is one line (D-584).
+
+    The words reader cut "ISO 7380-1 - M8 x 16" to "ISO" at a table's right edge, and the
+    bare prefix became a chargeable line at £10 each beside the full designation the other
+    reader read at 15p: twelve screws charged twice, under two names. Two findings, both
+    BLOCKING: an identity that is a bare standard prefix (DIN, ISO …) with no designation
+    behind it; and two charged lines that are one article — the same description under two
+    codes, or one code a prefix of the other. The reader is fixed; this holds the book to it."""
+    if not isinstance(summary, dict):
+        return []
+    try:
+        from part_code_conventions import is_supplier_article
+    except Exception:                                                # noqa: BLE001
+        return []
+    rows: List[Dict[str, Any]] = []
+    final = summary.get("final_estimate") if isinstance(summary.get("final_estimate"), dict) else {}
+    for r in (final.get("material_rows") or []):
+        if isinstance(r, dict) and (r.get("part_code") or r.get("description")):
+            rows.append({"code": str(r.get("part_code") or "").strip(),
+                         "desc": str(r.get("description") or ""), "money": r.get("total_value_gbp")})
+    if not rows:
+        es = summary.get("estimate_summary") or {}
+        for p in (es.get("canonical_part_estimates") or es.get("part_estimates") or []):
+            if not isinstance(p, dict):
+                continue
+            me = p.get("material_estimate") if isinstance(p.get("material_estimate"), dict) else {}
+            money = me.get("extended_material_cost_gbp") or me.get("unit_material_cost_gbp")
+            if money:
+                rows.append({"code": str(p.get("part_number") or "").strip(),
+                             "desc": str(p.get("description") or ""), "money": money})
+
+    def _flat(s: str) -> str:
+        return re.sub(r"[^A-Z0-9]", "", str(s or "").upper())
+
+    out: List[str] = []
+    seen_desc: Dict[str, str] = {}
+    codes = [(_flat(r["code"]), r) for r in rows if r["code"]]
+    for code, r in codes:
+        raw = r["code"]
+        if raw.isalpha() and is_supplier_article(raw + "1"):
+            out.append(f"'{raw}' ({r['desc'][:40]}) is a standard's prefix with no designation behind it")
+        d = _flat(r["desc"])
+        if d and len(d) >= 6:
+            if d in seen_desc and seen_desc[d] != code:
+                out.append(f"'{seen_desc[d]}' and '{raw}' are both charged for {r['desc'][:40]!r}")
+            seen_desc.setdefault(d, code)
+    for a, ra in codes:
+        for b, rb in codes:
+            if a and b and a != b and b.startswith(a) and len(a) >= 2 and ra["code"].isalpha():
+                out.append(f"'{ra['code']}' is charged beside '{rb['code']}', of which it is the prefix")
+    out = list(dict.fromkeys(out))
+    if not out:
+        return []
+    return [_violation(
+        "charged_identity_collision", BLOCKING,
+        f"{len(out)} charged line(s) carry an incomplete identity or charge one article twice: "
+        + "; ".join(out[:6])
+        + ". One article is one line, under its whole designation.",
+        lines=out, count=len(out))]
+
+
 def check_a_sheet_blank_and_a_bought_item_reach_the_charged_cells(summary: Any) -> List[Dict[str, Any]]:
     """Every canonical blank and bought item is on the calculated sheet at its quantity, in
     its block, charged, with the arithmetic holding and the saved cells agreeing — and every
@@ -5058,6 +5120,7 @@ CHECKS = (
     check_a_memberless_assembly_carries_nothing,
     check_a_section_schedule_reaches_the_sheet,
     check_a_printed_quantity_is_not_divided_without_evidence,
+    check_a_charged_identity_is_whole_and_charged_once,
     check_a_sheet_blank_and_a_bought_item_reach_the_charged_cells,
     check_a_blank_and_its_cut_path_can_both_be_true,
     check_prices_are_firm,
