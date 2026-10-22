@@ -57,39 +57,39 @@ def _get_token() -> str:
     return bh.get_access_token()
 
 
-def _load_active_employees() -> list:
-    p = Path(cfg.HR_SNAPSHOT_DIR) / "latest.json"
-    if not p.exists():
-        raise RuntimeError("No employee snapshot — run hr_pull.py first.")
-    return json.loads(p.read_text(encoding="utf-8")).get("records") or []
+STAFF_LIST_ATTEMPTS = 3   # reading BrightHR's staff list, with a longer pause each time
+STAFF_LIST_PAUSE = 15     # seconds before the second try; doubled before the third
 
 
-def _current_staff(token: str) -> tuple:
+def _current_staff(token: str) -> list:
     """Everyone BrightHR lists as employed, read fresh on every run.
 
     Only these people are asked about, so anyone missing here is missing from
-    the on-site list however long they have been clocked in. The saved list
-    (latest.json) was the source and failed twice over: only hr_pull.py writes
-    it and nothing runs that on a schedule, so a new starter was never asked
-    about; and it keeps only staff with an email address, which leaves out
-    warehouse staff who have none. The clockings lookup needs only the
-    BrightHR id, so that is all this requires.
-
-    Returns (staff, warning). If BrightHR's staff list cannot be read, the saved
-    list is used and the warning says so, rather than the run failing.
+    the on-site list however long they have been clocked in. There is no saved
+    list to fall back on, on purpose: the one this used to read was months old
+    and kept only staff with an email address, so new starters and warehouse
+    staff were never asked about. A list that can be out of date is worse than
+    none, so if BrightHR's cannot be read the run fails, says why, and changes
+    nothing. The clockings lookup needs only the BrightHR id, so that is all
+    this requires; leavers are left out.
     """
-    try:
-        import hr_brighthr as bh
-        staff = [e for e in (bh.normalise_employee(r) for r in bh.fetch_employees(token))
-                 if e["id"] and not e["terminated"]]
+    import hr_brighthr as bh
+    problem = "could not be read"
+    for attempt in range(STAFF_LIST_ATTEMPTS):
+        if attempt:
+            time.sleep(STAFF_LIST_PAUSE * attempt)
+        try:
+            staff = [e for e in (bh.normalise_employee(r) for r in bh.fetch_employees(token))
+                     if e["id"] and not e["terminated"]]
+        except Exception as exc:
+            problem = f"could not be read ({exc})"
+            _log(f"  staff list attempt {attempt + 1}: {problem}")
+            continue
         if staff:
-            return staff, None
-        reason = "BrightHR returned an empty staff list"
-    except Exception as exc:              # fall back, and say so
-        reason = f"BrightHR's staff list could not be read ({exc})"
-    saved = _load_active_employees()
-    return saved, (f"{reason}; checked the saved list of {len(saved)} instead, which can "
-                   f"miss new starters and staff without an email address.")
+            return staff
+        problem = "came back empty"
+    raise RuntimeError(f"BrightHR's staff list {problem}, so nobody was checked and nothing "
+                       f"was changed. Try again in a few minutes.")
 
 
 class _Throttle:
@@ -291,9 +291,7 @@ def _run_blip() -> dict:
     _log("BLIP start — querying current clockings (concurrent)")
 
     token = _get_token()
-    employees, staff_warning = _current_staff(token)
-    if staff_warning:
-        _log(f"  {staff_warning}")
+    employees = _current_staff(token)
     emp_index = {e["id"]: e for e in employees if e.get("id")}
     _log(f"  {len(employees)} active employees to check")
 
@@ -354,7 +352,7 @@ def _run_blip() -> dict:
         "query_failures": failures,
         "fail_pct": round(fail_pct, 2),
         "status": "ok",
-        "warnings": [staff_warning] if staff_warning else [],
+        "warnings": [],
     }
 
     # A snapshot built from failed queries under-reports who is in the building.

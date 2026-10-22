@@ -80,7 +80,12 @@ import hr_blip
 def blip(request: Request, x_sdi_key: str | None = Header(default=None)):
     """Query current Blip clockings — who is on site right now."""
     _check_key(x_sdi_key, request)
-    return hr_blip.run_blip()
+    try:
+        return hr_blip.run_blip()
+    except RuntimeError as exc:
+        # e.g. BrightHR's staff list could not be read: the portal prints the
+        # reason rather than a bare 500.
+        raise HTTPException(status_code=502, detail=str(exc))
 
 
 @router.get("/blip/latest")
