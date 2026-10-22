@@ -102,6 +102,33 @@ def test_the_construction_is_said_in_the_records_own_members():
     assert "4 x base angle in 3 mm sheet, folded" in words
     assert "1 x anti scratch strip in 3 mm sheet" in words
     assert "hex nut" not in words
+
+
+def test_visible_hardware_stays_and_a_guessed_member_is_left_out():
+    """Four safeguards from the reviewer, 22 Oct: feet and castors the drawing lists stay in
+    the brief, fasteners do not; a member whose profile or gauge was inferred is left out
+    rather than drawn confidently wrong; the prompt version and the record it was made from
+    travel with the picture, and a changed prompt is a new picture."""
+    parts = [{"part_number": "H1", "description": "ADJUSTING FOOT M10", "quantity": 6, "is_bought_in": True},
+             {"part_number": "H2", "description": "SWIVEL CASTOR 50MM", "quantity": 4, "page_roles": ["bought_in"]},
+             {"part_number": "H3", "description": "M8 X 16 BUTTON HEAD SCREW", "quantity": 12, "is_bought_in": True},
+             {"part_number": "G1", "description": "GUESSED PANEL", "quantity": 1, "normalized_material": "MILD STEEL",
+              "normalized_thickness_mm": 2, "blank_is_inferred": True},
+             {"part_number": "G2", "description": "WALL-READ LEG", "quantity": 2, "normalized_material": "MILD STEEL",
+              "section_stock": {"a": 30, "b": 30, "t": 2, "review_section_profile": True}},
+             {"part_number": "R1", "description": "TOP RAIL", "quantity": 1, "normalized_material": "MILD STEEL",
+              "section_stock": {"a": 30, "b": 15, "t": 2, "detection_path": "canonical_profile"}}]
+    words = qr.product_words({}, parts, product="Rail")
+    assert "6 x adjusting foot m10 (bought in, as the parts list shows)" in words
+    assert "4 x swivel castor 50mm (bought in" in words
+    assert "button head screw" not in words
+    assert "guessed panel" not in words and "wall-read leg" not in words
+    assert "1 x top rail in 30 x 15 rectangular tube" in words
+    assert qr.PROMPT_VERSION == "r3"
+    src = Path(qr.__file__).read_text(encoding="utf-8")
+    assert 'fingerprint=read_store.fingerprint_code(render_prompt) + ":" + PROMPT_VERSION' in src
+    assert '"prompt_version": PROMPT_VERSION, "source_record": _record_identity(summary)' in src
+    assert qr._record_identity({"declared_product": "ROL-1", "generated_at": "2026-10-22T19:02"}) == "ROL-1 · 2026-10-22T19:02"
     plain = qr.render_prompt(words, "inside a Tesco store, on the shop floor", {}, from_drawing=False)
     assert "drawing" not in plain and "No text, no captions, no price tags, no people." in plain
 

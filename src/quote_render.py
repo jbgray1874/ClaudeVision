@@ -38,7 +38,10 @@ from typing import Any, Dict, List, Optional
 
 import config
 
-PROMPT_VERSION = "r2"
+# Bumped whenever the words or the prompt change shape (D-585: r3). The read store keys a
+# picture on the GA image, the prompt text, this version and the prompt code's own
+# fingerprint, so a changed brief is never answered with the old picture.
+PROMPT_VERSION = "r3"
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
 _XAI_BASE = "https://api.x.ai/v1"
@@ -156,12 +159,40 @@ def _finish_by_material(parts: Any) -> List[str]:
     return [f"the {m} {f}" for m, f in seen.items()]
 
 
-def _construction_words(parts: Any, limit: int = 6) -> str:
-    """The made members as the record holds them — tube by profile, sheet by gauge — in a
-    short list the picture can be held to."""
+# Bought items a customer SEES on the unit — feet, castors, end caps, handles — stay in the
+# brief when the drawing lists them; fasteners and inserts are left out as detail.
+_VISIBLE_HARDWARE = ("FOOT", "FEET", "GLIDE", "LEVELLER", "LEVELER", "CASTOR", "CASTER",
+                     "WHEEL", "END CAP", "ENDCAP", "CAP", "HANDLE", "HOOK", "BUMPER", "KNOB")
+_FASTENER_WORDS = ("SCREW", "BOLT", "NUT", "WASHER", "RIVET", "INSERT", "BUSH", "STUD",
+                   "FIXING", "FASTENER")
+
+
+def _reliable_member(p: Dict[str, Any], sec: Dict[str, Any]) -> bool:
+    """Only a member whose profile or gauge the record read, never one it guessed: an
+    inferred blank, a section flagged for review or read by inference, a gauge from a
+    sibling or a guess, would make the picture confidently wrong."""
+    if p.get("blank_is_inferred") or p.get("_blank_provisional"):
+        return False
+    if sec and (sec.get("review_section_profile")
+                or "inference" in str(sec.get("detection_path") or "").lower()):
+        return False
+    try:
+        from source_precedence import source_of
+        src = str(source_of(p, "normalized_thickness_mm") or "").lower()
+        if "inference" in src or "borrow" in src or "sibling" in src:
+            return False
+    except Exception:                                                # noqa: BLE001
+        pass
+    return True
+
+
+def _construction_words(parts: Any, limit: int = 8) -> str:
+    """The members as the record holds them — tube by profile, sheet by gauge, and the
+    visible hardware the drawing lists — in a short list the picture can be held to. Only
+    what the record read; a guessed member is left out rather than drawn."""
     members: List[str] = []
     for p in parts or []:
-        if not isinstance(p, dict) or p.get("is_bought_in") or p.get("commercial_line"):
+        if not isinstance(p, dict) or p.get("commercial_line"):
             continue
         desc = " ".join(str(p.get("description") or p.get("part_number") or "").split()).lower()
         if not desc:
@@ -170,7 +201,14 @@ def _construction_words(parts: Any, limit: int = 6) -> str:
             qty = int(round(float(p.get("quantity") or 1)))
         except (TypeError, ValueError):
             qty = 1
+        up = desc.upper()
+        if p.get("is_bought_in") or "bought_in" in [str(r).lower() for r in (p.get("page_roles") or [])]:
+            if any(w in up for w in _VISIBLE_HARDWARE) and not any(w in up for w in _FASTENER_WORDS):
+                members.append(f"{qty} x {desc} (bought in, as the parts list shows)")
+            continue
         sec = p.get("section_stock") if isinstance(p.get("section_stock"), dict) else {}
+        if not _reliable_member(p, sec):
+            continue
         me = p.get("material_estimate") if isinstance(p.get("material_estimate"), dict) else {}
         t = p.get("normalized_thickness_mm") or me.get("thickness_mm")
         if sec and sec.get("a") and sec.get("b"):
@@ -220,6 +258,16 @@ def render_prompt(words: str, scene: str, cfg: Optional[Dict[str, Any]] = None,
             f"No text, no captions, no price tags, no people.")
 
 
+def _record_identity(summary: Any) -> str:
+    """Which record the picture was made from (D-585): the product and the run's stamp, so a
+    picture can be told from a rerun's — a changed costing record is not a changed picture
+    unless the words changed with it."""
+    s = summary if isinstance(summary, dict) else {}
+    return " · ".join(str(v) for v in (s.get("declared_product") or s.get("product"),
+                                       s.get("generated_at") or s.get("run_started_at")
+                                       or s.get("timestamp")) if v)
+
+
 def artist_impression(summary: Any, parts: Any, customer: Any, ga_png: Optional[bytes] = None,
                       product: Any = None) -> Optional[Dict[str, Any]]:
     """{'png': bytes, 'prompt': str, 'scene': str, 'words': str, 'reused': bool,
@@ -254,7 +302,8 @@ def artist_impression(summary: Any, parts: Any, customer: Any, ga_png: Optional[
                 b64 = (got.get("raw") or {}).get("png_b64")
                 if b64:
                     return {"png": base64.b64decode(b64), "prompt": prompt, "scene": scene,
-                            "words": words, "reused": bool(got.get("hit")), "from_drawing": True}
+                            "words": words, "reused": bool(got.get("hit")), "from_drawing": True,
+                            "prompt_version": PROMPT_VERSION, "source_record": _record_identity(summary)}
             except Exception as exc:                                 # noqa: BLE001
                 print(f"   [quote] the drawing could not be taken as the reference "
                       f"({type(exc).__name__}: {exc}) — drawing the unit from its description instead",
@@ -273,7 +322,8 @@ def artist_impression(summary: Any, parts: Any, customer: Any, ga_png: Optional[
         if not b64:
             return None
         return {"png": base64.b64decode(b64), "prompt": prompt, "scene": scene, "words": words,
-                "reused": bool(got.get("hit")), "from_drawing": False}
+                "reused": bool(got.get("hit")), "from_drawing": False,
+                "prompt_version": PROMPT_VERSION, "source_record": _record_identity(summary)}
     except Exception as exc:                                         # noqa: BLE001
         print(f"   [quote] artist's impression not made ({type(exc).__name__}: {exc}) — the page "
               f"shows the drawing", flush=True)
