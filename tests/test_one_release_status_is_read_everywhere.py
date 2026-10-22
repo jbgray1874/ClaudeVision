@@ -81,14 +81,20 @@ def test_the_workbook_cell_says_it_is_a_provisional_count():
     assert "the report carries the final release status" in cfs
 
 
-def test_the_story_claims_every_line_sourced_only_when_nothing_is_open():
-    assert quote_story._sourced_words({"open_items": 0}) == \
-        "Nested sheets, departmental rates and every line sourced."
-    assert "every line sourced" not in quote_story._sourced_words({"open_items": 3})
+def test_the_story_never_claims_every_line_sourced_and_says_what_is_being_confirmed():
+    """"Nothing open" does not prove "every line sourced": a requirement never captured leaves
+    no open item. The page claims what is true of every estimate and, on a draft, says how
+    many items are being confirmed."""
+    settled = quote_story._sourced_words({"open_items": 0})
+    assert "every line sourced" not in settled
+    assert "sources and assumptions recorded in the estimate" in settled
     assert "3 items are being confirmed before the price is final" in quote_story._sourced_words({"open_items": 3})
-    assert "every line on the price can be traced back" in quote_story._traced_words({"open_items": 0})
+    assert "every line on the price can be traced back" not in quote_story._traced_words({"open_items": 0})
+    assert "sources and assumptions recorded in the estimate" in quote_story._traced_words({"open_items": 0})
     assert "1 item is still being confirmed" in quote_story._traced_words({"open_items": 1})
     assert "2 items are still being confirmed" in quote_story._traced_words({"open_items": 2})
+    src = (ROOT / "src" / "quote_story.py").read_text(encoding="utf-8")
+    assert "every line sourced" not in src.split("def _sourced_words")[1].split("def reading_page")[0].replace('"Every line sourced" was', "")
 
 
 def test_open_items_are_the_records_not_a_count_of_our_own():

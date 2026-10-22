@@ -964,12 +964,14 @@ def open_items(summary: Dict[str, Any]) -> int:
 
 
 def _sourced_words(facts: Dict[str, Any]) -> str:
-    """"every line sourced" is true of a released document and not of a draft (D-580): a
-    page claiming it beside open findings claimed what the record did not support. The
-    words for a draft stay a customer's words — what is being confirmed, not who owes it."""
+    """What the costing page may claim (D-580). "Every line sourced" was claimed whatever the
+    record held open, and "nothing open" would not have proved it either: a requirement
+    the engine never captured leaves no open item. So the page says what is true of every
+    estimate — the sources and assumptions are recorded in it — and, on a draft, how many
+    items are being confirmed, in a customer's words."""
     n = int(facts.get("open_items") or 0)
     if n <= 0:
-        return "Nested sheets, departmental rates and every line sourced."
+        return "Nested sheets and departmental rates; sources and assumptions recorded in the estimate."
     return (f"Nested sheets and departmental rates; {_g(n)} item{'s' if n != 1 else ''} "
             f"{'are' if n != 1 else 'is'} being confirmed before the price is final.")
 
@@ -977,8 +979,8 @@ def _sourced_words(facts: Dict[str, Any]) -> str:
 def _traced_words(facts: Dict[str, Any]) -> str:
     n = int(facts.get("open_items") or 0)
     if n <= 0:
-        return "kept its working, so every line on the price can be traced back to your own pages."
-    return (f"kept its working, so each line on the price can be traced back to your own pages; "
+        return "kept its working, with its sources and assumptions recorded in the estimate."
+    return (f"kept its working, with its sources and assumptions recorded in the estimate; "
             f"{_g(n)} item{'s' if n != 1 else ''} {'are' if n != 1 else 'is'} still being confirmed.")
 
 
