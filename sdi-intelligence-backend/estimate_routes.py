@@ -1,0 +1,2940 @@
+"""
+Estimating endpoints for the intranet — the SDI Estimating Intelligence page.
+
+Mount in app.py with two lines:
+    from estimate_routes import router as estimate_router
+    app.include_router(estimate_router)
+
+WHY THIS IS A QUEUE AND NOT A SUBPROCESS ANY MORE.
+
+The engine drives SOLIDWORKS and Excel through COM. COM needs a licensed,
+interactive desktop session — not a Windows service — so whatever runs an
+estimate needs a SOLIDWORKS seat, an Office licence and somebody logged in.
+SDI-APP01 has none of those and cannot get them: it already carries the PDM
+archive service, the SolidNetWork licence manager, the TRUMPF stack and two SQL
+Server instances on 32 GB, and a hung Excel on that box is a PDM outage rather
+than a failed estimate.
+
+So the work moves and the web service stays. This service holds the page, the
+queue and the run history — no COM, no Excel, no seat — and can sit on SDI-APP01
+today. A RUNNER on a machine that does have a seat polls for work, executes it
+locally and reports back.
+
+THE RUNNER DIALS OUT. It is never connected TO. That means no inbound firewall
+rule, no fixed address, and a runner that is somebody's laptop can move desks,
+go home, or join over VPN without anything being reconfigured.
+
+A runner is a ROLE, not a machine. One laptop today, a dedicated host when one
+is bought, two hosts when throughput matters — the same code, and capacity is
+however many are checked in.
+
+Endpoints (all require header  X-SDI-Key: <SDI_API_KEY> when a key is set):
+
+    the page
+      POST /api/estimate                 queue a run  -> {run_id, output_path}
+      GET  /api/estimate/{run_id}        progress
+      GET  /api/estimate                 every run this service knows about
+      GET  /api/estimate/runners         who is checked in, and is anyone
+
+    the runner
+      POST /api/estimate/runner/claim              take the oldest queued run
+      POST /api/estimate/runner/{run_id}/progress  log lines + renew the lease
+      POST /api/estimate/runner/{run_id}/complete  done or failed, with results
+"""
+
+from __future__ import annotations
+
+import json
+import mimetypes
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
+from pydantic import BaseModel
+
+import config
+import docmgr
+import estimate_email
+import quote_release
+import staging
+
+router = APIRouter(prefix="/api/estimate", tags=["estimate"])
+
+# ── ESTIMATOR OVERRIDE: run the engine's quote regenerator OUT OF PROCESS ─────
+# The regenerator lives in the engine's src/ and imports the engine's config; this
+# service has its OWN config, so importing it in-process would collide on the module
+# name. A subprocess keeps the two configs in separate interpreters — the isolation
+# the in-process path could not guarantee — for a job that is a ~1s xlsx read anyway.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_ENGINE_PYTHON = os.getenv(
+    "SDI_ENGINE_PYTHON", str(_REPO_ROOT / ".venv" / "Scripts" / "python.exe"))
+_OVERRIDE_CLI = str(_REPO_ROOT / "src" / "client_quote_regen.py")
+_PARITY_CLI = str(_REPO_ROOT / "src" / "parity_run.py")
+_PRINT_CLI = str(_REPO_ROOT / "src" / "drawings_print.py")
+_MATERIAL_CLI = str(_REPO_ROOT / "src" / "material_confirmation.py")
+_PRODUCT_CLI = str(_REPO_ROOT / "src" / "product_identity.py")
+_MAX_OVERRIDE_UPLOAD_BYTES = int(os.getenv("SDI_MAX_OVERRIDE_UPLOAD_MB", "20")) * 1024 * 1024
+
+# Where finished estimates are filed. A DRIVE LETTER IS NOT A LOCATION: K: is the
+# default mapping here and "sometimes falls off", and a service account never has
+# one at all. The UNC form is the only spelling that means the same thing to a
+# laptop today and to a dedicated host later.
+OUTPUT_ROOT = Path(os.getenv(
+    "SDI_ESTIMATE_OUTPUT_ROOT",
+    r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\AISheets"))
+
+_MAX_LOG_LINES = 4000
+
+# How long a runner's claim on a run survives without word from it. A laptop that
+# sleeps mid-estimate must not leave a job "running" for ever while an estimator
+# watches a spinner — the lease expires, the run is failed with a reason, and the
+# queue moves on.
+#
+# THREE MINUTES WAS A BET THAT LOST FOUR TIMES IN ONE MORNING, ALL OF THEM WRONGLY.
+# 11650 was killed at 180s, 181s, 180s and 180s while the engine was working perfectly:
+# it goes quiet for minutes driving Excel and SOLIDWORKS over COM, and _execute runs
+# INLINE in the poll loop, so during a run the runner does not poll either. Nothing spoke,
+# so the service concluded the machine had died and destroyed a completed piece of work.
+#
+# The two errors are not symmetric. Expiring too early throws away real work and tells the
+# operator to go and check a laptop that was never asleep. Expiring too late leaves a queue
+# blocked — annoying, recoverable, and now recoverable ON PURPOSE: the short lease was
+# compensating for having no way to release a stuck claim, and POST /{run_id}/abandon is
+# that way. The compensation can go.
+#
+# The runner also heartbeats now, every LEASE/6 while the engine process is alive, so a
+# genuinely dead machine is still noticed within a few beats of the truth.
+LEASE_SECONDS = int(os.getenv("SDI_RUNNER_LEASE_SECONDS", "900"))
+
+# A runner that has not polled within this is treated as gone, and the page says
+# so rather than quietly queueing work nobody will pick up.
+RUNNER_ONLINE_SECONDS = int(os.getenv("SDI_RUNNER_ONLINE_SECONDS", "90"))
+# TWO RUNNERS ARE TWO THAT ARE BOTH STILL TALKING. A live runner checks in every 5 s, so two
+# real ones both appear inside 20 s. Judged over the 90 s online window instead, every restart
+# showed a conflict for a minute and a half — the process just stopped still counted — and on
+# 23 Sep 2026 the page told James "Two runners are running on this machine... Stop one" about
+# a runner that had been ended on purpose seconds before.
+RUNNER_CONFLICT_SECONDS = int(os.getenv("SDI_RUNNER_CONFLICT_SECONDS", "20"))
+
+
+# ── access gate, identical to app.py's ───────────────────────────────────────
+def _check_key(x_sdi_key: Optional[str]) -> str:
+    """Admit the portal's key or a partner site's (config.PARTNER_KEYS, D-401), and say
+    which: "" for the portal, the site's name for a partner, so a run can carry who asked."""
+    if not config.API_KEY and not getattr(config, "PARTNER_KEYS", None):
+        return ""
+    if config.API_KEY and x_sdi_key == config.API_KEY:
+        return ""
+    for _name, _key in (getattr(config, "PARTNER_KEYS", None) or {}).items():
+        if x_sdi_key and x_sdi_key == _key:
+            return str(_name)
+    raise HTTPException(status_code=401, detail="Invalid or missing X-SDI-Key")
+
+
+# ── path safety ──────────────────────────────────────────────────────────────
+def _within_a_root(target: str) -> Optional[Path]:
+    """The same containment rule app.py serves files under. Repeated here rather
+    than imported so a change to one is a deliberate change to both."""
+    t = os.path.normcase(os.path.normpath(target))
+    for root in config.FILE_ROOTS:
+        r = os.path.normcase(os.path.normpath(root))
+        if t == r or t.startswith(r + os.sep):
+            return Path(os.path.normpath(target))
+    return None
+
+
+_UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def run_folder_name(started_at: float, units: int) -> str:
+    """The name of the folder ONE run files into.
+
+    NOTHING IS EVER OVERWRITTEN. Every run of a drawing lands in its own folder,
+    so a re-run cannot replace the quote belonging to an earlier workbook — which
+    is what made the flat layout wrong. The engine names the workbook from the job
+    NUMBER with a timestamp and the quote from the job STEM without one, so a
+    second run left two spreadsheets beside a single report that described only
+    the newer of them. An estimator opening the older one got a report for a
+    different estimate, with nothing on screen saying so.
+
+    Sortable-first date, so Explorer's default name order is time order. The
+    quantity is in the name because a re-run at a different quantity is a
+    DIFFERENT ESTIMATE, and it is the one thing you cannot tell from a timestamp.
+    """
+    stamp = time.strftime("%Y-%m-%d %H-%M-%S", time.localtime(started_at))
+    return f"{stamp} ({int(units)} off)"
+
+
+def safe_segment(text: Any) -> str:
+    """A client name and a drawing number become FOLDER names, and a folder name
+    is not free text. Windows refuses some characters outright and silently
+    truncates a trailing dot; a name that survives typing must also survive
+    being a directory. Sanitised on the SERVER because the page can be bypassed."""
+    cleaned = _UNSAFE.sub("-", str(text or "")).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned).rstrip(". ")
+    return cleaned[:120]
+
+
+# ── registries ───────────────────────────────────────────────────────────────
+@dataclass
+class Run:
+    run_id: str
+    client: str
+    drawing_number: str
+    units: int
+    job_folder: str
+    output_path: str
+    # The other quantities this estimate is wanted at. The run happens at `units`; these
+    # are recalculated from the finished workbook and filed beside it. Defaulted, so every
+    # existing caller and every queued run that predates this field still constructs.
+    quantity_breaks: List[int] = field(default_factory=list)
+    status: str = "queued"          # queued | running | done | error
+    error: str = ""
+    queued_at: float = field(default_factory=time.time)
+    started_at: Optional[float] = None      # when a runner claimed it
+    finished_at: Optional[float] = None
+    runner: str = ""                        # which runner is doing it
+    # ONE PDF, NOT A PACK. An M&S-style enquiry is a hundred unrelated drawings that each
+    # want their own estimate, which is main.py's --pdf mode; a job FOLDER is the 11650
+    # case, where every drawing in it contributes to one BOM. The two are different
+    # questions about the same files, and the runner has to be told which was asked.
+    pdf_path: str = ""
+    manual_workbook: str = ""               # parity partner, if one was attached to this run
+    batch_id: str = ""                      # which enquiry this drawing came in with
+    # THE SECOND OPINION, KEPT BESIDE THE FIRST AND NEVER MIXED INTO IT. An LLM read of the
+    # drawing arrives in seconds; the engine's estimate takes tens of minutes and runs one
+    # at a time. Holding both on the run means the page can show the fast answer now and
+    # the real one when it lands -- and can show where they disagree, which is the entire
+    # reason for having two methods rather than a faster one.
+    llm_price_gbp: Optional[float] = None
+    llm: Dict[str, Any] = field(default_factory=dict)
+    engine_price_gbp: Optional[float] = None
+    # WHETHER A RUNNER SHOULD EVER PICK THIS UP. Nothing sets this False any more: an
+    # LLM-only enquiry used to end at the fast text read — no runner, no workbook — and
+    # since 22 Sep 2026 it queues a runner job like every other method, because "populate
+    # the pricing s/sheet from the LLM only model" is a workbook and workbooks are runner
+    # work. The field stays because the claim filter reads it and because the next method
+    # that genuinely needs no runner will want it back.
+    wants_engine: bool = True
+    # THE VISION MODEL ALONE, AS A MEASUREMENT. Distinct from wants_engine, which decides
+    # whether a runner picks the run up at all: this run DOES need a runner -- it produces a
+    # workbook and deliverables like any other -- it simply reads the pack with one reader
+    # instead of four. main.py --llm-only turns off the deterministic BOM reader, the DXF
+    # flat patterns and the SolidWorks extract, and says so on every run it produces.
+    llm_only: bool = False
+    # ASK THE MODEL AGAIN, FOR THIS RUN ONLY. The two LLM caches are keyed on content, so a
+    # pack that has not changed replays its stored answers and never reaches Grok -- which is
+    # right for an estimate and wrong for a measurement of the model. Nothing is deleted: the
+    # engine is told to bypass them, so no other job loses its settled answer.
+    fresh_read: bool = False
+    # THE INSTRUCTION WAS GIVEN AND NOT CARRIED OUT. Set when the engine's own command line
+    # comes back on the log without a flag this run asked for -- either of them; see
+    # _check_the_engine_was_told below. It forces the outcome to a failure whatever the runner
+    # reports, because a run that answered a different question did not succeed at this one.
+    #
+    # NOT NAMED llm_only_refused ANY MORE. It was, while --llm-only was the only flag that
+    # could go missing; a second one arrived within the hour, and a field whose name covers
+    # half of what it means is how the second case ends up with its own parallel flag and its
+    # own half of the check.
+    instruction_refused: bool = False
+    # Said once. The command echo arrives on one line, but the guard reads every progress
+    # line, and a warning repeated down the log stops being read.
+    breaks_warned: bool = False
+    qty_warned: bool = False
+    # AND THE REASON, KEPT SEPARATELY FROM `error`. /complete assigns `run.error = req.error`
+    # unconditionally — the runner's own verdict, which on this path is None, because the
+    # engine exited 0 and the runner has nothing to complain about. Holding the reason only in
+    # `error` meant the guard wrote a full explanation and the completion handler blanked it
+    # one line later, leaving a failed run with no stated cause.
+    refusal_reason: str = ""
+    # STOP MEANS STOP, NOT "LOOK STOPPED". Abandoning a run frees the queue and leaves the
+    # engine running -- SOLIDWORKS and Excel carry on driving a desktop nobody is watching,
+    # for the fifteen minutes the job had left, and the next run queues behind work that has
+    # already been given up on. The runner cannot be interrupted from here, so it is TOLD, on
+    # the heartbeat it already sends, and it does the killing at its end.
+    cancel_requested: bool = False
+    # WHO GETS THIS ONE, decided when the job was queued and not when it finished. A person
+    # saw the box, and what they left in it is what happens; empty means nobody, so an engine
+    # test does not land in an estimator's inbox at two in the morning.
+    email_to: List[str] = field(default_factory=list)
+    email_quote: bool = False
+    email_result: Dict[str, Any] = field(default_factory=dict)
+    # WHO ASKED (D-401): "" for the portal, else the partner site whose key queued the run.
+    requested_by: str = ""
+    lease_until: float = 0.0
+    # WHICH RUNNER PROCESS CLAIMED IT (D-369). The runner's id is the machine's (host and
+    # network card), so a runner restarted mid-job comes back under the same id; only the
+    # process tells the two apart. Empty for a runner too old to say.
+    claimed_by_process: str = ""
+    log: List[str] = field(default_factory=list)
+    deliverables: List[Dict[str, str]] = field(default_factory=list)
+
+    def line(self, text: str) -> None:
+        if len(self.log) < _MAX_LOG_LINES:
+            self.log.append(text.rstrip("\n"))
+        elif len(self.log) == _MAX_LOG_LINES:
+            self.log.append("… log truncated; the full console is in the run's .log file")
+
+    def as_json(self) -> Dict[str, Any]:
+        ref = self.started_at or self.queued_at
+        return {
+            "run_id": self.run_id, "status": self.status, "error": self.error,
+            "client": self.client, "drawing_number": self.drawing_number,
+            "units": self.units, "quantity_breaks": list(self.quantity_breaks),
+            "output_path": self.output_path,
+            "job_folder": self.job_folder, "runner": self.runner,
+            "pdf_path": self.pdf_path, "batch_id": self.batch_id,
+            "llm_price_gbp": self.llm_price_gbp, "llm": self.llm,
+            "engine_price_gbp": self.engine_price_gbp,
+            "log": self.log, "deliverables": self.deliverables,
+            "email_to": list(self.email_to), "email_result": dict(self.email_result),
+            "requested_by": self.requested_by,
+            "queued_at": self.queued_at, "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "seconds": round((self.finished_at or time.time()) - ref, 1),
+        }
+
+
+@dataclass
+class Runner:
+    runner_id: str
+    hostname: str = ""
+    last_seen: float = field(default_factory=time.time)
+    run_id: str = ""                       # what it is working on, if anything
+    # EVERY PROCESS THAT HAS ANSWERED TO THIS ID, and when it last did.
+    #
+    # runner_id is deliberately stable per machine, so a restart does not leave a graveyard
+    # of dead runners — which means two processes on one desktop register as ONE runner and
+    # the page shows a single green tick. That is what happened on SDI-DESKTOP: 3668 on the
+    # venv interpreter and 14796 on a user-installed Python 3.10, same script, same engine
+    # root, same server, both polling and both claiming, for three days, with nothing
+    # anywhere able to say so. The single-runner lock exists to make that impossible and
+    # fails OPEN by design, so when it does not hold, nothing else was watching.
+    processes: Dict[str, float] = field(default_factory=dict)
+    build: str = ""
+    # BUSY FOR ANOTHER SERVICE. One runner serves every service on its list (the installed
+    # one on 8071 and a hand-started one on 8072); while it costs a job for one, the others
+    # hear from it through /runner/heartbeat and say so, instead of "No runner connected".
+    busy_elsewhere: bool = False
+
+    @property
+    def online(self) -> bool:
+        return (time.time() - self.last_seen) <= RUNNER_ONLINE_SECONDS
+
+    def live_processes(self, within: Optional[float] = None) -> List[str]:
+        """Those that have answered inside the window (the online one by default), newest
+        first."""
+        now = time.time()
+        window = RUNNER_ONLINE_SECONDS if within is None else within
+        return [p for p, seen in sorted(self.processes.items(), key=lambda kv: -kv[1])
+                if (now - seen) <= window]
+
+    def as_json(self) -> Dict[str, Any]:
+        # The processes STILL TALKING, where any are; a runner deep in a job does not claim,
+        # so it falls back to the online window rather than reading as nobody.
+        live = self.live_processes(RUNNER_CONFLICT_SECONDS) or self.live_processes()
+        return {"runner_id": self.runner_id, "hostname": self.hostname,
+                "online": self.online, "run_id": self.run_id,
+                "seconds_since_seen": round(time.time() - self.last_seen, 1),
+                "build": self.build,
+                "processes": live,
+                # NOT A COUNT WHEN NOBODY SAID. A runner too old to report its process
+                # leaves this empty, and empty means UNKNOWN — the page must not read it
+                # as "one", because "one" is exactly the reassurance that was wrong for
+                # three days. None says so; a number is only ever reported by runners
+                # that actually named themselves.
+                "process_count": len(live) or None,
+                "conflict": len(self.live_processes(RUNNER_CONFLICT_SECONDS)) > 1,
+                "busy_elsewhere": bool(self.busy_elsewhere and self.online)}
+
+
+_RUNS: Dict[str, Run] = {}
+_RUNNERS: Dict[str, Runner] = {}
+_LOCK = threading.Lock()
+
+
+def _expire_dead_claims() -> None:
+    """A GATE NOBODY ASKS REPORTS NOTHING, so this is called on every request that
+    reads or changes the queue rather than left to a timer that might not be
+    running. A claim whose lease has run out means the runner stopped talking —
+    lid closed, VPN dropped, process killed — and the run must be failed with a
+    reason rather than left looking busy for ever."""
+    now = time.time()
+    for run in _RUNS.values():
+        if run.status == "running" and run.lease_until and run.lease_until < now:
+            run.status = "error"
+            run.error = (f"The runner ({run.runner or 'unknown'}) stopped responding "
+                         f"{int(now - run.lease_until) + LEASE_SECONDS}s into the run. "
+                         f"Nothing was filed. If that machine went to sleep or lost the "
+                         f"network, start the runner again and re-run the job.")
+            run.line(run.error)
+            run.finished_at = now
+            r = _RUNNERS.get(run.runner)
+            if r is not None and r.run_id == run.run_id:
+                r.run_id = ""
+
+
+def _release_runs_orphaned_by_a_restart(runner_id: str, process: str) -> None:
+    """Fail any run this machine's runner claimed under a process that has since been replaced.
+
+    A RESTARTED RUNNER CANNOT FINISH THE JOB ITS PREDECESSOR STARTED (D-369). The M&S steel
+    run of 30 Sep claimed at 17:5x; the runner was restarted at 18:04; the engine finished on
+    the laptop and nothing filed it. The service kept the run "running" because the new
+    runner, under the same machine id, kept polling, and the next run of the job was refused
+    as a duplicate for 27 minutes until it was released by hand.
+
+    No timer decides this. A different process under the same runner id is proof the old one
+    is gone (the runner holds a lock so only one runs per machine), whatever the job's size."""
+    if not runner_id or not process:
+        return
+    now = time.time()
+    for run in _RUNS.values():
+        if (run.status == "running" and run.runner == runner_id
+                and run.claimed_by_process and run.claimed_by_process != process):
+            run.status = "error"
+            run.error = (f"The runner on {run.runner} was restarted while this job was running "
+                         f"({run.claimed_by_process} was replaced by {process}), so nothing can "
+                         f"finish or file it. If the engine completed, its book and report are "
+                         f"in the engine's output\\estimates folder on that machine; otherwise "
+                         f"run the job again. Restart a runner only between jobs.")
+            run.line(run.error)
+            run.finished_at = now
+            run.lease_until = 0.0
+            r = _RUNNERS.get(runner_id)
+            if r is not None and r.run_id == run.run_id:
+                r.run_id = ""
+
+
+def _online_runners() -> List[Runner]:
+    return [r for r in _RUNNERS.values() if r.online]
+
+
+def _to_unc(path: Optional[str]) -> Optional[str]:
+    """A mapped drive letter rewritten as the share it stands for, or the path untouched.
+
+    Applied only where a path arrives from ANOTHER MACHINE — today that is the Document
+    Manager's `outputDir`. Everything the portal produces itself is UNC already, and
+    translating those would be a rule applied where there is nothing to fix.
+
+    A letter is a per-logon-session mapping: it means nothing to a service, it can differ
+    between two machines, and it is not the form SDI_FILE_ROOTS is written in. So a folder
+    that is genuinely readable fails both the containment check and the open, which is how
+    staging failed with "cannot find the path specified: 'K:\\'".
+    """
+    p = str(path or "").strip()
+    if len(p) < 2 or p[1] != ":":
+        return p or None                       # already UNC, relative, or empty
+    unc = (getattr(config, "DRIVE_MAP", {}) or {}).get(p[0].upper())
+    if not unc:
+        return p                               # a letter we have no mapping for: say so, do not guess
+    rest = p[2:].lstrip("\\/")
+    return (unc + "\\" + rest) if rest else unc
+
+
+def _busy_runner() -> Optional[Run]:
+    """ONE ESTIMATE AT A TIME PER RUNNER. Two concurrent automations of one Excel
+    instance on one desktop is not a supported thing to do, whatever folders they
+    write to. Capacity comes from more runners, not from more parallel COM."""
+    for run in _RUNS.values():
+        if run.status == "running":
+            return run
+    return None
+
+
+def _active_run_for(client: str, drawing: str) -> Optional[Run]:
+    """A run of THIS job that has not finished — queued or running.
+
+    STAGING MADE A SECOND RUN OF THE SAME JOB DESTRUCTIVE, AND NOTHING SAID SO.
+
+    The staged folder is one per client and job, and it is CLEARED before it is filled so a
+    re-run cannot inherit a drawing that was taken off the list. That is right for a re-run
+    that happens after the first has finished, and it is the whole reason staging exists.
+
+    But staging happens the moment Run is pressed, not when the run is claimed. So pressing
+    Run again while the first is still working deletes the folder the ENGINE IS READING, and
+    fills it with a different set of drawings. The first estimate then prices some mixture of
+    the two packs, or fails on a file that vanished under it, and the sheet it produces looks
+    entirely ordinary. This is the only way in the service to corrupt a run that was going
+    perfectly well.
+
+    Queueing a DIFFERENT job behind this one is fine and stays fine -- a hundred-drawing
+    enquiry is a hundred different job folders. It is only the same client and the same
+    drawing that collide, because they are the same folder.
+
+    AND "THE SAME FOLDER" IS A FILESYSTEM QUESTION, NOT A STRING ONE.
+    #
+    This compared client and drawing exactly, and the folder these name is on Windows, where
+    paths are case-insensitive. So "Fanatics" and "fanatics" are ONE folder and were TWO jobs:
+    the guard saw a different client, let the second run through, and staging cleared the
+    folder the first run was reading. Every word of the paragraph above then applies, reached
+    by nothing more than typing the customer's name differently the second time -- which is
+    exactly what happens when a job is re-queued an hour later by somebody else.
+
+    Compared case-insensitively, and trimmed, because that is how the filesystem will read
+    them. Erring towards refusing a run is the safe direction: the cost of a false match is a
+    message telling you to wait, and the cost of a miss is a corrupted estimate that looks
+    entirely ordinary.
+    """
+    for run in _RUNS.values():
+        if run.status in {"queued", "running"} \
+                and _same_job_key(run.client, client) \
+                and _same_job_key(run.drawing_number, drawing):
+            return run
+    return None
+
+
+def _same_job_key(a: Any, b: Any) -> bool:
+    """Whether two client or drawing names would land in the same staged folder."""
+    return str(a or "").strip().casefold() == str(b or "").strip().casefold()
+
+
+# ── request models ───────────────────────────────────────────────────────────
+class EstimateRequest(BaseModel):
+    client: str
+    drawing_number: str
+    units: int
+    # THE QUANTITIES THE ESTIMATE IS ALSO WANTED AT. The estimate is RUN at `units`; these
+    # are recalculated from the finished workbook, which is what an estimator does by hand.
+    # Empty means one sheet, exactly as before.
+    quantity_breaks: List[int] = []
+    job_folder: Optional[str] = None
+    files: List[str] = []
+    output_root: Optional[str] = None
+    deliverables: bool = True
+    # THE MANUAL ESTIMATE, ATTACHED UP FRONT. Optional, and a path on the share rather than an
+    # upload, because the runner executes on a different machine from this service and a temp
+    # file here would not exist there. Given, the runner passes it to main.py as
+    # --parity-workbook and the parity bundle lands with the rest of the deliverables — which is
+    # the only way the comparison gets made at the moment somebody is actually looking at
+    # the job, rather than never.
+    manual_workbook: Optional[str] = None
+    # THE SAME THREE WORDS THE BATCH ENDPOINT ALREADY VALIDATES. "both" and "engine" are the
+    # normal run and behave identically here -- this endpoint has always produced a full
+    # estimate and still does. "llm" is the new one: read the pack with the vision model
+    # alone, which is a MEASUREMENT of the model and not an estimate.
+    #
+    # A pack of one PDF is a pack, so this covers a single drawing and a whole folder with
+    # no branching. That is why it belongs here rather than on the batch endpoint, which has
+    # to keep treating every file as a separate enquiry.
+    method: str = "both"
+    # ASK THE MODEL AGAIN, rather than replaying what it said about this pack last time.
+    # Only meaningful alongside an LLM read; harmless and ignored on an ordinary estimate,
+    # which has three other readers and does not want its one reproducible source moving.
+    fresh_read: bool = False
+    # THE ENQUIRY BRIEF (D-360). Free text typed for an LLM-only run — "600 x 600 x 1200mm
+    # bump bin with lid, 1800mm back panel, plywood with print, 350 off" — filed into the job
+    # folder as ENQUIRY_BRIEF.txt and read by the concept read as stated facts. Ignored on
+    # any other method: a drawing pack's drawings are its facts.
+    enquiry_brief: Optional[str] = None
+    concept_document: bool = False
+    # REFERENCE / STANDARDS DOCUMENTS (D-474). File names among the submitted files that the
+    # estimator declares to be the customer's standards or requirements manual, not the
+    # product — Boots' 101-page in-store equipment manual illustrates example fixtures and
+    # test rigs that must never become BOM parts. Filed as REFERENCE_DOCUMENTS.json beside
+    # the pack; the concept read sends their words under the standards section and renders
+    # none of their pages as the product.
+    reference_documents: Optional[List[str]] = None
+    # WHO TO SEND THE FINISHED ESTIMATE TO. One or more addresses, however they were typed —
+    # commas, semicolons, newlines. Absent or empty means send to nobody, which is what a
+    # test run wants and what an API caller that has never heard of this field gets.
+    email_to: Optional[str] = None
+    # The customer quote is the one deliverable written to be read by a customer, and on a
+    # provisional estimate it looks exactly like a quotation for a figure nobody has stood
+    # behind. Withheld unless asked for.
+    email_quote: bool = False
+    # THE ESTIMATOR'S MATERIAL CONFIRMATION, from the pre-run step (D-313). None means the
+    # step was not used and the run is exactly as it was before it existed. The answers are
+    # checked against the pack BEFORE staging and written into the staged folder as the job's
+    # answers file — src/material_confirmation.build_answers, never a price.
+    material_answers: Optional[Dict[str, Any]] = None
+    # THE CUSTOMER'S CHANGES SINCE THE DRAWINGS (D-507), ticked on the page. None means the box
+    # was not used. Checked before staging and written into the staged folder as
+    # `<drawing>_customer_changes.json` — src/customer_changes.build_changes_file, never a price.
+    customer_changes: Optional[Dict[str, Any]] = None
+
+
+class RecipientsRequest(BaseModel):
+    recipients: str = ""
+
+
+class ReleaseRequest(BaseModel):
+    """What an estimator records when they release a quotation.
+
+    `folder` and `stem` identify the estimate on the share; `unit_gbp` is the figure being
+    authorised, which the record keeps so a later re-run at a different price cannot go out
+    on this signature.
+    """
+    folder: str
+    stem: str
+    authorised_by: str = ""
+    unit_gbp: Optional[float] = None
+    unit_cell: str = ""
+    commercial_inputs: Dict[str, Any] = {}
+
+
+class SendRequest(BaseModel):
+    recipients: str = ""
+    # Which of the run's OWN deliverables to attach. Empty means all of them except the
+    # customer quote, which is the same rule the automatic send follows.
+    files: List[str] = []
+
+
+class BatchRequest(BaseModel):
+    """A hundred drawings that are a hundred enquiries, not one pack."""
+    client: str
+    units: int
+    quantity_breaks: List[int] = []
+    files: List[str] = []
+    output_root: Optional[str] = None
+    # "both" runs the fast LLM read AND queues the full estimate. "llm" scans only, which is
+    # the only method that finishes a hundred drawings the same day. "engine" is the full
+    # estimate alone. Default both, because the point of two methods is the comparison.
+    method: str = "both"
+
+
+class ClaimRequest(BaseModel):
+    runner_id: str
+    hostname: str = ""
+    # WHICH PROCESS IS ASKING, AND ON WHICH BUILD. Both default to "" because a runner
+    # that predates this says neither, and the service must then report that it does not
+    # know rather than inventing a confident answer about a machine it cannot see.
+    process: str = ""
+    build: str = ""
+
+
+class ProgressRequest(BaseModel):
+    runner_id: str
+    lines: List[str] = []
+
+
+class CompleteRequest(BaseModel):
+    runner_id: str
+    status: str                              # done | error
+    error: str = ""
+    lines: List[str] = []
+    deliverables: List[Dict[str, str]] = []
+    # THE ENGINE'S OWN ANSWER, so the page can put it beside the LLM's. Reported by the
+    # runner because the runner is the machine that has the summary JSON; this service has
+    # never read an estimate and is not about to start.
+    unit_cost_gbp: Optional[float] = None
+
+
+# ══ THE RUNNER'S ENDPOINTS ═══════════════════════════════════════════════════
+# DECLARED BEFORE /{run_id}. FastAPI matches in declaration order, and a path
+# parameter will happily swallow "runner" as a run id if given the chance.
+
+# THE OTHER PORTAL ON THIS MACHINE (D-369). 30 Sep 2026: the laptop had services on 8071 and
+# 8072 at once, each with its own queue and its own idea of which runner was connected. A job
+# started on one was invisible to the other; the page on each looked healthy. The ports asked
+# are the house convention, overridable by SDI_LOCAL_SERVICE_PORTS, and the answer is cached
+# so the page's 15-second poll does not probe on every call.
+_LOCAL_PROBE: Dict[str, Any] = {"at": 0.0, "for": None, "found": []}
+
+
+def _other_local_services(own_port: Optional[int]) -> List[Dict[str, Any]]:
+    import urllib.request
+    now = time.time()
+    if _LOCAL_PROBE["for"] == own_port and now - _LOCAL_PROBE["at"] < 60:
+        return list(_LOCAL_PROBE["found"])
+    ports = [p.strip() for p in os.getenv("SDI_LOCAL_SERVICE_PORTS", "8071,8072").split(",")]
+    found: List[Dict[str, Any]] = []
+    for port in ports:
+        if not port.isdigit() or int(port) == (own_port or -1):
+            continue
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/estimating", timeout=1) as resp:
+                found.append({"port": int(port),
+                              "commit": resp.headers.get("X-SDI-Commit") or ""})
+        except Exception:                                            # noqa: BLE001
+            continue
+    _LOCAL_PROBE.update({"at": now, "for": own_port, "found": found})
+    return list(found)
+
+
+@router.get("/runners")
+def runners(request: Request = None, x_sdi_key: Optional[str] = Header(default=None)):
+    """Who is checked in. The page asks this so it can say "no runner is
+    connected" instead of queueing work that nobody will ever pick up."""
+    _check_key(x_sdi_key)
+    with _LOCK:
+        _expire_dead_claims()
+        listed = [r.as_json() for r in sorted(_RUNNERS.values(),
+                                              key=lambda r: r.last_seen, reverse=True)]
+        # WHAT IT IS BUSY WITH, not merely that it holds a run id. The page has to be able
+        # to say "busy — 11650-00 for Boots, 67s in" in the same words the 409 uses when it
+        # refuses a second estimate, or the two disagree about one fact and the operator is
+        # left to guess which is right.
+        for entry in listed:
+            run = _RUNS.get(entry.get("run_id") or "")
+            entry["running"] = None if run is None or run.status != "running" else {
+                "drawing_number": run.drawing_number, "client": run.client,
+                "seconds": round(time.time() - (run.started_at or time.time())),
+            }
+        online = [r for r in listed if r["online"]]
+        queued = sum(1 for run in _RUNS.values() if run.status == "queued")
+    # NAMED AT THE TOP LEVEL, so the page does not have to walk the list to find out that
+    # its one green tick is two processes fighting over one SOLIDWORKS seat.
+    try:
+        _own = int(request.url.port) if request is not None and request.url.port else None
+    except Exception:                                                # noqa: BLE001
+        _own = None
+    return {"other_local_services": _other_local_services(_own),
+            "runners": listed, "online": len(online), "queued": queued,
+            "busy": sum(1 for r in online if r.get("running")),
+            "conflicts": [r["runner_id"] for r in online if r.get("conflict")]}
+
+
+@router.post("/runner/heartbeat")
+def heartbeat(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """A runner saying it is alive while it works a job for ANOTHER service.
+
+    Never hands out work — that is the whole difference from /runner/claim, and the reason
+    it exists: a claim sent mid-job would give the runner a second job while SOLIDWORKS and
+    Excel are busy with the first."""
+    _check_key(x_sdi_key)
+    now = time.time()
+    with _LOCK:
+        _release_runs_orphaned_by_a_restart(req.runner_id, req.process)
+        runner = _RUNNERS.setdefault(req.runner_id, Runner(runner_id=req.runner_id))
+        runner.hostname = req.hostname or runner.hostname
+        runner.last_seen = now
+        if req.process:
+            runner.processes[req.process] = now
+        if req.build:
+            runner.build = req.build
+        runner.busy_elsewhere = True
+    return {"ok": True}
+
+
+@router.post("/runner/claim")
+def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """A runner asking for work. Returns a run to execute, or nothing."""
+    _check_key(x_sdi_key)
+    now = time.time()
+    with _LOCK:
+        _expire_dead_claims()
+        _release_runs_orphaned_by_a_restart(req.runner_id, req.process)
+        runner = _RUNNERS.setdefault(req.runner_id, Runner(runner_id=req.runner_id))
+        runner.hostname = req.hostname or runner.hostname
+        runner.last_seen = now
+        if req.process:
+            runner.processes[req.process] = now
+        if req.build:
+            runner.build = req.build
+        runner.busy_elsewhere = False
+
+        if _busy_runner() is not None:
+            return {"run": None, "reason": "another run is in progress"}
+
+        queued = sorted((r for r in _RUNS.values()
+                         if r.status == "queued" and r.wants_engine),
+                        key=lambda r: r.queued_at)
+        if not queued:
+            return {"run": None, "reason": "nothing queued"}
+
+        run = queued[0]
+        run.status = "running"
+        run.runner = req.runner_id
+        run.started_at = now
+        run.lease_until = now + LEASE_SECONDS
+        run.claimed_by_process = req.process or ""
+        runner.run_id = run.run_id
+        run.line(f"Claimed by runner {req.hostname or req.runner_id}")
+
+    return {"run": {
+        "run_id": run.run_id, "client": run.client, "units": run.units,
+        "drawing_number": run.drawing_number, "job_folder": run.job_folder,
+        "output_path": run.output_path,
+        # WHICH QUESTION WAS ASKED OF THESE FILES. Empty means the job folder is the job
+        # and every drawing in it pools into one estimate; set means this one drawing is
+        # the job. The runner cannot infer it -- both arrive as paths under the same share.
+        "pdf_path": run.pdf_path,
+        # THE PARITY PARTNER, IF ONE WAS ATTACHED. Empty means no comparison was asked for.
+        # The runner passes it to main.py as --parity-workbook; it is a share path, readable
+        # from the runner's machine, never a temp file from this service's disk.
+        "manual_workbook": run.manual_workbook,
+        # THE OTHER QUANTITIES THIS RUN WAS ASKED FOR. Everything else on the path carried
+        # these — the page sends them, the request models accept them, Run stores them, the
+        # runner passes them to main.py as --quantity-breaks — and THIS dictionary did not,
+        # so the runner read None every time and the flag never once reached the engine.
+        # 11908-21 was asked for 1, 50, 100, 250 and 500 and produced one workbook at 1 off,
+        # with nothing in any log to say why: an absent flag leaves no trace, which is why it
+        # took reading the runner's command echo to find.
+        "quantity_breaks": [int(q) for q in (run.quantity_breaks or [])],
+        "llm_only": bool(run.llm_only),
+        "fresh_read": bool(run.fresh_read),
+    }}
+
+
+
+_BRIEF_FILENAME = "ENQUIRY_BRIEF.txt"
+_BRIEF_MAX_CHARS = 4000
+
+
+def _file_enquiry_brief(run: "Run", job: Any, brief: Optional[str]) -> str:
+    """Write this run's brief into the job folder, or remove a stale one (D-360).
+
+    THE BRIEF IS THIS RUN'S. A job folder is reused run after run, so a brief left from the
+    last one would silently shape an LLM read nobody typed a brief for. Typed: written.
+    Blank: any earlier file is removed, and the log says which happened.
+
+    RETURNS WHAT HAPPENED, and the route hands it back to the page (D-362): "filed",
+    "removed", "none" or "failed". A page that sent a brief and does not hear "filed" is
+    talking to a service older than itself — the 13:34 M&S run was, and read the render
+    alone while the log said nothing about the brief either way."""
+    text = str(brief or "").strip()[:_BRIEF_MAX_CHARS]
+    path = Path(str(job)) / _BRIEF_FILENAME
+    try:
+        if text:
+            path.write_text(text + "\n", encoding="utf-8")
+            run.line(f"ENQUIRY BRIEF filed with the pack ({len(text)} chars) — the model "
+                     f"reads it as stated facts that outrank what the render suggests:")
+            for ln in text.splitlines()[:8]:
+                if ln.strip():
+                    run.line("  | " + ln.strip()[:160])
+            return "filed"
+        if path.exists():
+            path.unlink()
+            run.line("No enquiry brief this run — the one filed by an earlier run was removed.")
+            return "removed"
+        run.line("No enquiry brief with this run — the model reads the pack alone.")
+        return "none"
+    except OSError as exc:
+        run.line(f"WARNING — the enquiry brief could not be filed ({exc}); this run reads the "
+                 f"render alone.")
+        return "failed"
+
+def _check_the_engine_was_told(run: "Run", text: str) -> None:
+    """THE RUNNER IS A LONG-LIVED PROCESS AND `git pull` DOES NOT RELOAD IT.
+
+    This cost a live run on 10575-02. The service was current: it set llm_only, put it in the
+    claim and printed its LLM-ONLY banner on the run's own log. The runner had been up since
+    before --llm-only existed, so it built the command from the module it loaded at start —
+    without the flag — and the engine did the ordinary thing: eleven DXF flat patterns, the
+    SolidWorks extract applied, the hierarchy applied, Path A and Path B both reading.
+
+    A full four-reader estimate came back wearing an LLM-only label, into a folder named for
+    an LLM-only run, with the page saying UNVERIFIED over the top of it. That is the precise
+    file this whole feature exists to stop existing, and NOTHING caught it. It was found by
+    reading a command echo in a log by eye.
+
+    So the service checks that the instruction it gave was carried out. It cannot inspect the
+    runner's code, but the runner echoes the command it is about to run, and that echo is the
+    ground truth about what the engine was told. Wrong reader means STOP — cancelled on the
+    next heartbeat, before Excel writes anything, rather than fifteen minutes later.
+
+    ONLY THE COMMAND ECHO, and only for a run that asked. `startswith("$ ")` is the runner's
+    own convention for it; the LLM-ONLY banner and this guard's own words are prose on the
+    same log and must not be mistaken for it."""
+    line = text.strip()
+    if not line.startswith("$ ") or "main.py" not in line:
+        return
+
+    # SAID, NOT STOPPED. Missing quantity breaks do not make the estimate wrong — they make
+    # it incomplete, and killing a good hour of work over four variant workbooks would be a
+    # worse outcome than the one being reported. But it must not pass in silence either: the
+    # only symptom is files that are not there, and nobody counts files they did not get.
+    # ── AND THE QUANTITY ITSELF, WHICH IS THE WHOLE ESTIMATE ─────────────────────────
+    #
+    # The breaks are variant workbooks; the ORDER QUANTITY is the estimate. Set-up is
+    # amortised over it, batch economics turn on it, and every labour line is divided by
+    # it — a job priced at 1 off when 50 were asked for is not incomplete, it is wrong,
+    # and it is wrong in a way that looks entirely normal on the page.
+    #
+    # 11908-21 was asked for 50 and produced FOUR consecutive books at D6 = 1. Nobody
+    # could see why, because an absent flag leaves no trace: the page said 50, the claim
+    # said 50, and the only evidence was a cell in a workbook that reads 1 whether it was
+    # told nothing or told one. That is the same shape as the missing --quantity-breaks
+    # recorded above, on the number that matters most.
+    #
+    # The echo is the ground truth about what the engine was told, so it is asked. Said,
+    # not stopped: the run may still be wanted, and killing it would lose the hour.
+    if int(run.units or 0) > 1 and not run.qty_warned:
+        _want = f"--order-qty {int(run.units)}"
+        if "--order-qty" not in line:
+            run.qty_warned = True
+            run.line(f"WARNING — this run asked for {int(run.units)} off and the engine "
+                     f"was NOT told the quantity. It will cost at the quantity it infers, "
+                     f"usually 1, and every set-up will be amortised over that instead of "
+                     f"{int(run.units)}. The estimate will look ordinary and be wrong. The "
+                     f"usual cause is a runner started before this flag existed — it holds "
+                     f"the module it loaded at start, and git pull does not reload it.")
+        elif _want not in line:
+            run.qty_warned = True
+            run.line(f"WARNING — this run asked for {int(run.units)} off and the engine "
+                     f"was told a DIFFERENT quantity (the command echo does not contain "
+                     f"'{_want}'). Check the runner before reading the unit cost: the two "
+                     f"numbers are amortising the same set-ups over different batches.")
+
+    if run.quantity_breaks and "--quantity-breaks" not in line and not run.breaks_warned:
+        run.breaks_warned = True
+        run.line("WARNING — this run asked for "
+                 + ", ".join(str(q) for q in run.quantity_breaks)
+                 + " off as well, and the engine was NOT told to price them. The estimate "
+                   "itself is unaffected; the variant workbooks will simply not be written. "
+                   "The usual cause is a runner started before that flag existed — it holds "
+                   "the module it loaded at start, and git pull does not reload it.")
+
+    wanted = [f for f, asked in (("--llm-only", run.llm_only),
+                                 ("--fresh-read", run.fresh_read)) if asked]
+    if not wanted or run.instruction_refused:
+        return
+    missing = [f for f in wanted if f not in line]
+    if not missing:
+        return
+    run.instruction_refused = True
+    run.cancel_requested = True
+    # WHAT EACH MISSING FLAG ACTUALLY COSTS, rather than one message covering both. They fail
+    # differently and an estimator reading the log has to know which happened.
+    _why = {
+        "--llm-only": "the deterministic BOM reader, the DXF flat patterns and the SolidWorks "
+                      "extract all ran, so what this produces is a NORMAL estimate that would "
+                      "be filed and labelled as an LLM read",
+        "--fresh-read": "the LLM caches were used, so the model was never asked — the run "
+                        "replays the answer held for this pack and would be reported as a "
+                        "fresh reading of it",
+    }
+    run.refusal_reason = ("This run asked for " + " and ".join(missing) + " and the engine was "
+                          "NOT told to do it. Stopped rather than filed.")
+    run.error = run.refusal_reason
+    run.line("STOPPED — THE ENGINE WAS NOT TOLD TO DO WHAT THIS RUN ASKED FOR.")
+    for _flag in missing:
+        run.line(f"The command above has no {_flag}, so " + _why.get(_flag, "the run would not "
+                 "have been the one that was asked for") + ".")
+    run.line("The usual cause is a runner process started before that flag existed: it holds "
+             "the module it loaded at start, and git pull does not reload it. Restart the "
+             "runner on that machine and run this again.")
+
+
+@router.post("/runner/{run_id}/progress")
+def progress(run_id: str, req: ProgressRequest,
+             x_sdi_key: Optional[str] = Header(default=None)):
+    """Log lines from the engine, and the heartbeat that renews the lease."""
+    _check_key(x_sdi_key)
+    now = time.time()
+    with _LOCK:
+        run = _RUNS.get(run_id)
+        if run is None:
+            raise HTTPException(404, "No such run.")
+        if run.runner != req.runner_id:
+            raise HTTPException(409, "That run is claimed by a different runner.")
+        if run.status != "running":
+            raise HTTPException(409, f"That run is {run.status}, not running.")
+        for text in req.lines:
+            run.line(text)
+            _check_the_engine_was_told(run, text)
+        run.lease_until = now + LEASE_SECONDS
+        r = _RUNNERS.get(req.runner_id)
+        if r is not None:
+            r.last_seen = now
+        _cancel = run.cancel_requested
+    # THE ANSWER TO A HEARTBEAT IS WHERE A CANCELLATION FITS. The runner is a separate
+    # process on another machine and cannot be reached; it can only be told something the
+    # next time it speaks, and it already speaks every few seconds to renew the lease.
+    return {"ok": True, "lease_seconds": LEASE_SECONDS, "cancel": _cancel}
+
+
+@router.post("/runner/{run_id}/complete")
+def complete(run_id: str, req: CompleteRequest,
+             x_sdi_key: Optional[str] = Header(default=None)):
+    """The runner reporting the outcome. The runner files the deliverables — it
+    is the machine that has them — and tells us what it wrote."""
+    _check_key(x_sdi_key)
+    now = time.time()
+    with _LOCK:
+        run = _RUNS.get(run_id)
+        if run is None:
+            raise HTTPException(404, "No such run.")
+        if run.runner != req.runner_id:
+            raise HTTPException(409, "That run is claimed by a different runner.")
+        for text in req.lines:
+            run.line(text)
+            _check_the_engine_was_told(run, text)
+        run.status = "done" if req.status == "done" else "error"
+        run.error = req.error
+        # A RUN THAT PRODUCED THE WRONG KIND OF WORKBOOK DID NOT SUCCEED, whatever the runner
+        # thinks. The engine exits 0 either way — it was never told there was a second kind of
+        # run — so the runner reports "done" in perfect good faith, and "done" on this page is
+        # what makes an estimator open the file and believe it. Overridden last, so nothing
+        # after this can put the reassuring word back.
+        if run.instruction_refused:
+            run.status = "error"
+            run.error = run.refusal_reason + (
+                f" Restart the runner on {run.runner or 'that machine'} and run it again. "
+                "Anything already written to the output folder is the ORDINARY kind of run: "
+                "it is not what was asked for and must not be filed as though it were.")
+        if req.unit_cost_gbp is not None:
+            try:
+                run.engine_price_gbp = round(float(req.unit_cost_gbp), 2)
+            except (TypeError, ValueError):
+                pass
+        run.deliverables = list(req.deliverables)
+        run.finished_at = now
+        run.lease_until = 0.0
+        r = _RUNNERS.get(req.runner_id)
+        if r is not None:
+            r.last_seen, r.run_id = now, ""
+        _send_to = list(run.email_to)
+        _snapshot = run.as_json()
+        _quote = run.email_quote
+        _provisional = run.status != "done" or _looks_provisional(run)
+        _deliverables = list(run.deliverables)
+
+    # OUTSIDE THE LOCK. Talking to a mail server takes seconds and can hang; holding the
+    # registry lock while it does would stall every other run, the page's polling and the
+    # runner's next heartbeat. The runner is told the job is filed either way — a mail that
+    # will not send is not a reason to lose the estimate.
+    if _send_to:
+        _result = _email_finished_run(_snapshot, _deliverables, _send_to, _quote,
+                                      _provisional)
+        with _LOCK:
+            _live = _RUNS.get(run_id)
+            if _live is not None:
+                _live.email_result = _result
+                _live.line(
+                    f"Emailed to {', '.join(_send_to)}"
+                    + (f" — {', '.join(_result.get('attached') or []) or 'no attachments'}"
+                       if _result.get("sent") else
+                       f" — NOT SENT: {_result.get('reason')}"))
+    return {"ok": True}
+
+
+def _looks_provisional(run: "Run") -> bool:
+    """Whether the customer quote should be withheld.
+
+    THIS SERVICE HAS NEVER READ AN ESTIMATE and is not about to start, so it asks the only
+    record it has: the run's own console. The engine prints PROVISIONAL when the pack did not
+    support a credible cost, and every estimate produced so far has been provisional. Erring
+    towards withholding is the safe direction — the cost of holding a quote back is an email
+    asking for it, and the cost of sending one early is a customer reading a number nobody
+    has stood behind.
+    """
+    for line in run.log:
+        if "PROVISIONAL" in str(line).upper():
+            return True
+    return True
+
+
+def _email_finished_run(snapshot: Dict[str, Any], deliverables: List[Dict[str, str]],
+                        recipients: List[str], include_quote: bool,
+                        provisional: bool) -> Dict[str, Any]:
+    """Compose and send. Any failure is recorded on the run, never raised at the runner."""
+    try:
+        paths, held = estimate_email.choose_attachments(
+            deliverables, provisional=provisional, include_quote=include_quote)
+        note = estimate_email.compose(snapshot, deliverables, provisional=provisional)
+        result = estimate_email.send(recipients, note["subject"], note["html"],
+                                     note["text"], paths)
+        if held:
+            result.setdefault("held_back", held)
+        return result
+    except Exception as exc:                                     # noqa: BLE001
+        return {"sent": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+
+# ══ THE PAGE'S ENDPOINTS ═════════════════════════════════════════════════════
+@router.post("/release")
+def release(req: ReleaseRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Record that the commercial inputs are complete and a named estimator has released it.
+
+    THE KEY TO THE GATE. D-145 built the release model and nothing could open it: the engine
+    read `commercial_inputs.complete` and `quote_release.authorised_by` and nothing anywhere
+    wrote either, so every estimate produced a portal copy — correct, and permanently correct.
+
+    The record goes BESIDE THE DELIVERABLES, not into the summary. The summary is a run
+    artefact the engine rewrites whole on every estimate; this is a person's decision, made
+    once, outliving the run it was made about. `release_record` is the engine's half.
+
+    IT IS NOT AN OVERRIDE. Everything else `quote_state` asks — a traceable price, nothing
+    open on the costed record, money that can be evidenced, the right batch — is still asked
+    when the quote is built. This endpoint records the two facts only a person can supply.
+    """
+    _check_key(x_sdi_key)
+    folder = _within_a_root(req.folder)
+    if folder is None:
+        raise HTTPException(
+            403, "That folder is outside the shares this service may write to.")
+    if not folder.is_dir():
+        raise HTTPException(404, "No such folder.")
+    who = (req.authorised_by or "").strip()
+    if not who:
+        raise HTTPException(
+            400, "An authorisation needs the name of the person making it.")
+    if req.unit_gbp is None:
+        raise HTTPException(
+            400, "An authorisation must name the unit figure it authorises, so a later "
+                 "re-run at a different price cannot go out on this signature.")
+    try:
+        record = quote_release.write_release_record(
+            folder, req.stem, authorised_by=who, unit_gbp=req.unit_gbp,
+            unit_cell=req.unit_cell, commercial_inputs=req.commercial_inputs)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "record": record,
+            "path": str(quote_release.record_path(folder, req.stem)),
+            "note": "The next quote generated for this job is the customer document."}
+
+
+class RegenerateQuoteRequest(BaseModel):
+    """The run's summary JSON, and where the quote should land."""
+    json_path: str
+    folder: str = ""
+
+
+@router.post("/quote/regenerate")
+def quote_regenerate(req: RegenerateQuoteRequest,
+                     x_sdi_key: Optional[str] = Header(default=None)):
+    """Rebuild this job's quotation from its summary, picking up the release record.
+
+    WITHOUT THIS THE FORM APPEARS TO DO NOTHING. Releasing writes a record the ENGINE reads
+    when it builds a quote — so until a quote is built again, the file on the share is still
+    the portal copy, and every delivery route goes on holding it. Correct, and invisible: an
+    estimator who has just authorised a job would be looking at a page that says PORTAL VIEW
+    and a send button that refuses.
+
+    It runs the engine's own generator rather than reproducing any of it, so the audience, the
+    filename and the declaration in the document are decided in exactly one place.
+    """
+    _check_key(x_sdi_key)
+    summary = _within_a_root(req.json_path)
+    if summary is None or not summary.is_file():
+        raise HTTPException(403, "That summary is outside the shares this service may read.")
+    out_dir = _within_a_root(req.folder) if req.folder else summary.parent
+    if out_dir is None or not out_dir.is_dir():
+        raise HTTPException(403, "That folder is outside the shares this service may write.")
+    cmd = [sys.executable, str(_REPO_ROOT / "src" / "client_quote_html.py"),
+           "--json", str(summary), "--out-dir", str(out_dir)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    except Exception as exc:                                     # noqa: BLE001
+        raise HTTPException(502, f"The quote generator could not be run: {exc}")
+    if proc.returncode != 0:
+        raise HTTPException(
+            502, (proc.stderr or proc.stdout or "The quote generator failed.").strip()[-800:])
+    written = ""
+    for line in (proc.stdout or "").splitlines():
+        if line.startswith("Wrote quote:"):
+            written = line.split(":", 1)[1].strip()
+    return {"ok": True, "path": written,
+            "released": bool(written) and quote_release.may_go_to_a_customer(written)}
+
+
+class SplitScansRequest(BaseModel):
+    """One run of the delivery-note splitter."""
+    source: str = ""
+    out: str = ""
+    dry_run: bool = False
+    since_days: int = 0
+    recurse: bool = False
+
+
+@router.post("/logistics/split-scans")
+def logistics_split_scans(req: SplitScansRequest,
+                          x_sdi_key: Optional[str] = Header(default=None)):
+    """Split the day's scanned delivery notes into one PDF per note.
+
+    James Gray, 21 September 2026: "to start with I can run manually, then we add it to the
+    SDI Intelligence suite of apps for a user to run."
+
+    THE SAME SCRIPT THE SCHEDULED TASK RUNS, not a second implementation of it. A button and
+    a nightly task that read a document differently is two answers to one question, and the
+    one nobody is watching is the one that goes wrong.
+
+    RUNNING IT TWICE IS THE ORDINARY CASE, so it is safe: a note whose file is already on the
+    share is recognised by its number and not written again. That is asked of the folder
+    rather than of a record about the folder, which is why a button somebody leans on does
+    not produce eleven copies of Tuesday.
+    """
+    _check_key(x_sdi_key)
+    source = _within_a_root(req.source) if req.source else None
+    if source is None or not source.is_dir():
+        raise HTTPException(
+            403, "That scan folder is outside the shares this service may read.")
+    out = _within_a_root(req.out) if req.out else None
+    if req.out and out is None:
+        raise HTTPException(
+            403, "That output folder is outside the shares this service may write.")
+
+    cmd = [sys.executable,
+           str(_REPO_ROOT / "tools" / "logistics" / "split_delivery_notes.py"),
+           "--source", str(source)]
+    if out is not None:
+        cmd += ["--out", str(out)]
+    if req.dry_run:
+        cmd.append("--dry-run")
+    if req.since_days and req.since_days > 0:
+        cmd += ["--since", str(int(req.since_days))]
+    if req.recurse:
+        cmd.append("--recurse")
+    try:
+        # OCR IS SLOW AND THAT IS NORMAL. A forty-page batch is a few minutes; the limit is
+        # here so a wedged tesseract cannot hold a worker open all afternoon.
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "The splitter took longer than 30 minutes and was stopped.")
+    except Exception as exc:                                     # noqa: BLE001
+        raise HTTPException(502, f"The splitter could not be run: {exc}")
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "The splitter failed.").strip()
+        if "tesseract" in detail.lower():
+            detail += ("  The scans have no text layer, so nothing can be read without "
+                       "Tesseract on this machine's PATH.")
+        raise HTTPException(502, detail[-1200:])
+    lines = [l for l in (proc.stdout or "").splitlines() if l.strip()]
+    return {"ok": True, "summary": lines[-1] if lines else "", "lines": lines}
+
+
+@router.post("/release/withdraw")
+def release_withdraw(req: ReleaseRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Take an authorisation back. The next quote for this job is the portal copy again."""
+    _check_key(x_sdi_key)
+    folder = _within_a_root(req.folder)
+    if folder is None:
+        raise HTTPException(403, "That folder is outside the shares this service may write.")
+    return {"ok": True, "withdrawn": quote_release.clear_release_record(folder, req.stem)}
+
+
+@router.get("/recipients")
+def recipients_get(x_sdi_key: Optional[str] = Header(default=None)):
+    """The list the estimating page pre-fills its box with."""
+    _check_key(x_sdi_key)
+    out = estimate_email.saved_recipients()
+    out["smtp_configured"] = estimate_email.smtp_configured()
+    return out
+
+
+@router.post("/recipients")
+def recipients_set(req: RecipientsRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Change the saved default. Reports anything that was not an address rather than
+    dropping it, because a saved list that is quietly one short is worse than a refusal."""
+    _check_key(x_sdi_key)
+    out = estimate_email.save_recipients(req.recipients)
+    out["smtp_configured"] = estimate_email.smtp_configured()
+    return out
+
+
+class ProductCheckRequest(BaseModel):
+    drawing_number: str = ""
+    files: List[str] = []
+
+
+def _product_identity():
+    """The ENGINE's resolver, loaded by path. The service has its own `config`, so the
+    engine's src folder is appended (never prepended) to the search path — nothing here can
+    shadow a module the service already imports."""
+    import importlib.util
+    src = Path(__file__).resolve().parents[1] / "src"
+    if str(src) not in sys.path:
+        sys.path.append(str(src))
+    spec = importlib.util.spec_from_file_location("sdi_product_identity",
+                                                  src / "product_identity.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)                                     # type: ignore[union-attr]
+    return mod
+
+
+def _names_in(paths: List[str], limit: int = 2000) -> List[str]:
+    """File names from what the page added: files as themselves, a folder as its contents
+    (top level and one below — where a pack's drawings actually sit). Only inside the shares
+    this service may read."""
+    out: List[str] = []
+    for raw in paths or []:
+        p = _within_a_root(str(raw or ""))
+        if p is None:
+            # Outside the shares: the NAME is still what the estimator added, and the name is
+            # all this check reads.
+            out.append(str(raw or ""))
+            continue
+        try:
+            if p.is_dir():
+                for child in sorted(p.iterdir()):
+                    if child.is_file():
+                        out.append(child.name)
+                    elif child.is_dir():
+                        out.extend(g.name for g in sorted(child.iterdir()) if g.is_file())
+                    if len(out) >= limit:
+                        break
+            else:
+                out.append(p.name)
+        except OSError:
+            out.append(p.name)
+    return out[:limit]
+
+
+def _drawing_texts(paths: List[str]) -> Dict[str, str]:
+    """Each drawing PDF's words, read out of process with the ENGINE's python (PyMuPDF), as
+    the material step reads title blocks. Empty when it cannot be read here — never a guess."""
+    import json as _json
+    import subprocess
+    resolved = [str(p) for p in (_within_a_root(str(r or "").strip()) for r in paths or [])
+                if p is not None]
+    if not resolved or not Path(_ENGINE_PYTHON).exists():
+        return {}
+    try:
+        proc = subprocess.run([_ENGINE_PYTHON, _PRODUCT_CLI, "--texts", *resolved, "--json"],
+                              capture_output=True, text=True, timeout=60)
+        data = _json.loads(proc.stdout.strip().splitlines()[-1]) if proc.returncode == 0 else {}
+    except (subprocess.TimeoutExpired, OSError, ValueError, IndexError):
+        return {}
+    texts = data.get("texts") if isinstance(data, dict) else None
+    return texts if isinstance(texts, dict) else {}
+
+
+@router.post("/product-check")
+def product_check(req: ProductCheckRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """WHICH DRAWING WILL THIS RUN PRICE — answered before Run, with the engine's own resolver.
+
+    James Gray, 23 Sep 2026: "we need to centre the job estimate around the drawing number
+    entered into the estimating portal." The 11650-02 run priced the cabinet top because that
+    is what 11650-02 names, set Tim's kit aside, and nobody could see it for forty minutes.
+    None or several matches: the page asks the estimator to correct the number; it never
+    picks one. One match beside other assemblies: the page names them, and guesses nothing."""
+    _check_key(x_sdi_key)
+    try:
+        pi = _product_identity()
+        names = _names_in(req.files)
+        out = pi.resolve_product(req.drawing_number, names)
+        # THE JOB NUMBER ALONE (D-337): which of the job's GAs is on top is in the drawings'
+        # parts lists, not their names, so the drawings are read — by the engine's python,
+        # which has the PDF reader. Where there is none, the name-only answer stands and the
+        # run settles it from the same tables.
+        if out.get("status") == "job" and not out.get("match"):
+            texts = _drawing_texts(req.files)
+            if texts:
+                out = pi.resolve_product(req.drawing_number, names, texts=texts)
+        return out
+    except Exception as exc:                                         # noqa: BLE001
+        return {"status": "unchecked", "declared": req.drawing_number, "match": None,
+                "matches": [], "others": [],
+                "message": f"The Drawing Number could not be checked ({type(exc).__name__})."}
+
+
+# ── THE PRE-RUN MATERIAL STEP (D-313) ──────────────────────────────────────────────────
+#
+# "PDF/PNG-only jobs often state materials the engine cannot resolve or that estimating wants
+# costed differently." The page shows what each part's sheet states — material, thickness,
+# finish, and where each came from — and the questions the wording raises ("The drawings say
+# 'PLAIN CARBON STEEL'. Cost it as Mild Steel?"). The estimator answers from controlled lists;
+# the answers become the job's answers file, which the engine already reads at its own ranks.
+def _material_module():
+    """src/material_confirmation, loaded by path like the product resolver. Pure python: the
+    checking and writing need no PDF library, so this runs on the service anywhere."""
+    import importlib.util
+    src = Path(__file__).resolve().parents[1] / "src"
+    if str(src) not in sys.path:
+        sys.path.append(str(src))
+    spec = importlib.util.spec_from_file_location("sdi_material_confirmation",
+                                                  src / "material_confirmation.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)                                     # type: ignore[union-attr]
+    return mod
+
+
+def _read_materials(paths: List[str]) -> Dict[str, Any]:
+    """What the pack states, read out of process with the ENGINE's python — the one with
+    PyMuPDF — exactly as printing does. A machine without the engine says so; it never
+    guesses a reading."""
+    import json as _json
+    import subprocess
+    resolved = []
+    for raw in paths or []:
+        ok = _within_a_root(str(raw).strip())
+        if ok is None:
+            raise HTTPException(
+                403, f"That drawing is outside the shares this service may read: {raw}")
+        resolved.append(str(ok))
+    if not resolved:
+        return {"status": "empty", "message": "Add the drawings first."}
+    if not Path(_ENGINE_PYTHON).exists():
+        return {"status": "unavailable",
+                "message": "the drawings can only be read on the machine that runs "
+                           "estimates (no engine python here)"}
+    try:
+        proc = subprocess.run([_ENGINE_PYTHON, _MATERIAL_CLI, "--read", *resolved, "--json"],
+                              capture_output=True, text=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        return {"status": "unavailable", "message": "reading the drawings took too long"}
+    if proc.returncode != 0:
+        return {"status": "unavailable",
+                "message": f"the reader failed: {(proc.stderr or proc.stdout)[-300:]}"}
+    try:
+        data = _json.loads(proc.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return {"status": "unavailable", "message": "the reader returned nothing usable"}
+    return {"status": "ok", "reading": data.get("reading") or {},
+            "vocabulary": data.get("vocabulary") or {}}
+
+
+class MaterialReadRequest(BaseModel):
+    files: List[str] = []
+
+
+@router.post("/materials/read")
+def materials_read(req: MaterialReadRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Per part: what the sheets and DXF names state, the questions it raises, and the
+    dropdowns. Nothing is written."""
+    _check_key(x_sdi_key)
+    out = _read_materials(req.files)
+    if out.get("status") != "ok":
+        out["vocabulary"] = _material_module().vocabulary(None)
+    return out
+
+
+class MaterialCheckRequest(BaseModel):
+    drawing_number: str = ""
+    reading: Dict[str, Any] = {}
+    answers: Dict[str, Any] = {}
+
+
+@router.post("/materials/check")
+def materials_check(req: MaterialCheckRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """The answers as the run would take them, or the reasons they would be refused — so the
+    page can show a missing reason before Run. The Run itself checks again, against the pack."""
+    _check_key(x_sdi_key)
+    data, errors = _material_module().build_answers(req.reading or {}, req.answers or {},
+                                                    req.drawing_number or "")
+    return {"ok": not errors, "errors": errors, "parts": (data or {}).get("parts") or {}}
+
+
+# ── CUSTOMER CHANGES SINCE THE DRAWINGS (D-507) ────────────────────────────────────────
+#
+# "It happens sometimes and we don't have time to change the drawing pack." The estimator
+# pastes the customer's e-mail; the engine reads it against the pack's own part list and
+# proposes changes — part, field, what the drawing states, what is asked, the e-mail's words.
+# Nothing is applied without a tick and a name, a change typed by hand needs a reason, and
+# whatever this cannot change becomes a question on the book. Never a price.
+_CHANGES_CLI = str(_REPO_ROOT / "src" / "customer_changes.py")
+
+
+def _changes_module():
+    """src/customer_changes, loaded by path like the material step. The checking and writing
+    are pure python; only the e-mail read needs the engine (out of process)."""
+    import importlib.util
+    src = Path(__file__).resolve().parents[1] / "src"
+    if str(src) not in sys.path:
+        sys.path.append(str(src))
+    spec = importlib.util.spec_from_file_location("sdi_customer_changes",
+                                                  src / "customer_changes.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)                                     # type: ignore[union-attr]
+    return mod
+
+
+class ChangesReadRequest(BaseModel):
+    files: List[str] = []
+    email: str = ""
+
+
+@router.post("/changes/read")
+def changes_read(req: ChangesReadRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """The e-mail read against the drawings: proposed changes and open questions. Nothing is
+    written. A machine without the engine says so, and the page still takes changes by hand."""
+    import json as _json
+    import subprocess
+    _check_key(x_sdi_key)
+    vocab = _changes_module().vocabulary()
+    if not str(req.email or "").strip():
+        return {"status": "empty", "message": "Paste the customer's e-mail first.",
+                "changes": [], "questions": [], "vocabulary": vocab}
+    resolved = []
+    for raw in req.files or []:
+        ok = _within_a_root(str(raw).strip())
+        if ok is None:
+            raise HTTPException(
+                403, f"That drawing is outside the shares this service may read: {raw}")
+        resolved.append(str(ok))
+    if not Path(_ENGINE_PYTHON).exists():
+        return {"status": "unavailable", "changes": [], "questions": [], "vocabulary": vocab,
+                "message": "the e-mail can only be read on the machine that runs estimates "
+                           "(no engine python here) — add the changes by hand"}
+    try:
+        proc = subprocess.run([_ENGINE_PYTHON, _CHANGES_CLI, "--read", *resolved],
+                              input=str(req.email), capture_output=True, text=True,
+                              encoding="utf-8", timeout=300)
+    except subprocess.TimeoutExpired:
+        return {"status": "unavailable", "changes": [], "questions": [], "vocabulary": vocab,
+                "message": "reading the e-mail took too long — add the changes by hand"}
+    if proc.returncode != 0:
+        return {"status": "unavailable", "changes": [], "questions": [], "vocabulary": vocab,
+                "message": f"the reader failed: {(proc.stderr or proc.stdout)[-300:]}"}
+    try:
+        data = _json.loads(proc.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return {"status": "unavailable", "changes": [], "questions": [], "vocabulary": vocab,
+                "message": "the reader returned nothing usable — add the changes by hand"}
+    data.setdefault("vocabulary", vocab)
+    return data
+
+
+class ChangesCheckRequest(BaseModel):
+    drawing_number: str = ""
+    customer_changes: Dict[str, Any] = {}
+
+
+@router.post("/changes/check")
+def changes_check(req: ChangesCheckRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """The ticked changes as the run would take them, or why they would be refused — so the
+    page shows a missing name or reason before Run. The Run checks again."""
+    _check_key(x_sdi_key)
+    data, errors = _changes_module().build_changes_file(req.customer_changes or {},
+                                                        req.drawing_number or "")
+    return {"ok": not errors, "errors": errors,
+            "accepted": len((data or {}).get("changes") or []),
+            "questions": len((data or {}).get("questions") or [])}
+
+
+class BriefRequest(BaseModel):
+    """A run queued from a typed brief with no drawings (D-401) — the shape another site
+    posts. `reference` is the enquiry or drawing number the job is filed under."""
+    client: str
+    reference: str
+    units: int
+    brief: str
+    quantity_breaks: List[int] = []
+    email_to: Optional[str] = None
+    fresh_read: bool = False
+
+
+@router.post("/brief")
+def start_from_brief(req: BriefRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Queue an LLM-only run from a brief alone. The same run as the page's LLM-only
+    method with the brief box filled and nothing attached; the book reaches the estimators
+    named in `email_to` and is fetched by run id from /{run_id}/deliverables/{name}."""
+    if not str(req.brief or "").strip():
+        raise HTTPException(400, "The brief is empty. Describe the product: what it is, its "
+                                 "sizes, materials, finish and how many.")
+    return start(EstimateRequest(client=req.client, drawing_number=req.reference,
+                                 units=req.units, quantity_breaks=list(req.quantity_breaks),
+                                 method="llm", enquiry_brief=req.brief, email_to=req.email_to,
+                                 fresh_read=bool(req.fresh_read)),
+                 x_sdi_key=x_sdi_key)
+
+
+@router.post("")
+def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    _caller = _check_key(x_sdi_key)
+
+    client = safe_segment(req.client)
+    drawing = safe_segment(req.drawing_number)
+    if not client or not drawing:
+        raise HTTPException(400, "A client and a drawing number are both required.")
+    if not isinstance(req.units, int) or req.units < 1:
+        raise HTTPException(400, "Number of units must be a whole number of 1 or more.")
+    # REFUSED HERE, BEFORE STAGING. A quantity list with a typo in it would otherwise reach
+    # the runner and fail an hour in, on a folder that has already been rewritten.
+    _breaks: List[int] = []
+    for _q in (req.quantity_breaks or []):
+        try:
+            _n = int(_q)
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"'{_q}' is not a number of units.")
+        if _n < 1:
+            raise HTTPException(400, "Every quantity must be 1 or more.")
+        if _n != req.units and _n not in _breaks:
+            _breaks.append(_n)
+    if len(_breaks) > 12:
+        raise HTTPException(400, "Twelve quantities is the most a run will file; each one "
+                                 "is a workbook an estimator has to look at.")
+
+    # CHECKED BEFORE ANYTHING IS STAGED. Staging clears and refills a folder on the share;
+    # doing that and then refusing the run over a typo in one word leaves the estimator's
+    # job folder rewritten for nothing.
+    method = str(req.method or "both").strip().lower()
+    if method not in {"both", "llm", "engine"}:
+        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm or "
+                                 f"engine.")
+    if req.concept_document and method != "llm":
+        raise HTTPException(400, "Client-document costing requires the LLM read method.")
+    _ref_docs = [Path(str(f)).name for f in (req.reference_documents or [])
+                 if str(f or "").strip()]
+    if _ref_docs and method != "llm":
+        raise HTTPException(400, "Reference/standards documents ride on the LLM read method.")
+    if _ref_docs and req.files:
+        _file_names = {Path(str(f)).name for f in req.files if str(f or "").strip()}
+        _unknown = sorted(set(_ref_docs) - _file_names)
+        if _unknown:
+            raise HTTPException(400, f"These reference documents are not among the submitted "
+                                     f"files: {', '.join(_unknown)}.")
+        if _file_names and set(_ref_docs) >= _file_names:
+            raise HTTPException(400, "Every submitted document is declared reference/standards "
+                                     "— there is no product to cost. A standards manual states "
+                                     "requirements; stage the product's pack or brief beside "
+                                     "it, or untick one.")
+
+    # CHECKED BEFORE ANYTHING IS STAGED, for the same reason `method` is: a typo in an
+    # address should not cost the estimator a rewritten job folder. Reported rather than
+    # dropped — an estimate going to three people when four were asked for is exactly the
+    # kind of failure nobody notices.
+    _email_to, _email_bad = estimate_email.parse_recipients(req.email_to)
+    if _email_bad:
+        raise HTTPException(
+            400, f"These are not email addresses: {', '.join(_email_bad)}. Correct them, or "
+                 f"clear the box to send the estimate to nobody.")
+
+    # THE DRAWINGS ARE STAGED, AND THE STAGED FOLDER IS THE JOB.
+    #
+    # Selection used to mean almost nothing. The picks were used to derive a common parent and
+    # then discarded; the runner got the FOLDER and priced everything in it. Three drawings
+    # chosen out of twelve produced an estimate built from twelve, and no line said so. It also
+    # made two sources impossible to combine: a Document Manager extract and the estimating
+    # share are different parents, so the run was refused outright.
+    #
+    # So every selected drawing is copied into one folder per client and job, and THAT is what
+    # the engine reads. Selection means selection, two sources merge, and the folder is a
+    # durable record of exactly which drawings produced a number.
+    _sources: List[str] = []
+    if req.job_folder and str(req.job_folder).strip():
+        _sources.append(str(req.job_folder).strip())
+    _sources += [str(f).strip() for f in (req.files or []) if str(f).strip()]
+    # A BRIEF ALONE IS A PACK (D-401) — on the LLM method only, because the drawing readers
+    # have nothing to read and the concept read is the one reader a brief can feed.
+    _brief_only = (not _sources and method == "llm"
+                   and bool(str(req.enquiry_brief or "").strip()))
+    if not _sources and not _brief_only:
+        raise HTTPException(400, "Add a job folder, or the drawings for this job — or, for "
+                                 "an LLM-only read, an enquiry brief with no drawings.")
+
+    # Everything the page offers has already come from a listing this service produced, but it
+    # arrives back over HTTP and is checked again — the page can be bypassed.
+    for _src in _sources:
+        if _within_a_root(_src) is None:
+            raise HTTPException(
+                403, f"That drawing is outside the shares this service may read: {_src}")
+
+    # BEFORE ANYTHING IS DELETED. Staging clears this job's folder, and clearing it under a
+    # run that is reading it is the one way to quietly corrupt an estimate that was going
+    # perfectly well. So the same job twice is refused while the first is still live, and the
+    # refusal names the run holding it in the form the page knows how to offer a release for.
+    with _LOCK:
+        _expire_dead_claims()
+        dup = _active_run_for(client, drawing)
+    if dup is not None:
+        _for = int(time.time() - (dup.started_at or dup.queued_at or time.time()))
+        raise HTTPException(
+            409,
+            f"{drawing} for {client} is already {dup.status} ({_for}s). Running it again now "
+            f"would replace the drawings that run is reading, so it is refused. Wait for it "
+            f"to finish, or release it: POST /api/estimate/{dup.run_id}/abandon")
+
+    # THE MATERIAL CONFIRMATION IS CHECKED BEFORE STAGING, against the pack itself, read
+    # again here rather than taken back from the page: the reading decides which answers
+    # override a drawing and need a reason, and a reading that came back over HTTP could say
+    # anything. A refused answer costs the estimator nothing, because nothing has moved yet.
+    _material_file: Optional[Dict[str, Any]] = None
+    if req.material_answers:
+        _mread = _read_materials([str(s) for s in _sources])
+        if _mread.get("status") != "ok":
+            raise HTTPException(
+                503, "The material confirmation could not be checked against the drawings: "
+                     + str(_mread.get("message") or "the pack could not be read")
+                     + ". Run without it, or try again on the machine with the engine.")
+        _mfile, _merrs = _material_module().build_answers(
+            _mread["reading"], req.material_answers, drawing)
+        if _merrs:
+            raise HTTPException(400, "Material confirmation not accepted: " + "; ".join(_merrs))
+        _material_file = _mfile
+
+    # THE CUSTOMER'S CHANGES, CHECKED BEFORE STAGING for the same reason: a missing name or
+    # reason is refused while nothing has moved. Part codes are not checked against the pack
+    # here — the engine reports any code that matches no part, on the book.
+    _changes_file: Optional[Dict[str, Any]] = None
+    if req.customer_changes:
+        _cfile, _cerrs = _changes_module().build_changes_file(req.customer_changes, drawing)
+        if _cerrs:
+            raise HTTPException(400, "Customer changes not accepted: " + "; ".join(_cerrs))
+        _changes_file = _cfile or None
+
+    try:
+        if _brief_only:
+            staged = staging.stage_brief_only(client=client, drawing=drawing,
+                                              brief=str(req.enquiry_brief or ""))
+        else:
+            staged = staging.stage(_sources, client=client, drawing=drawing)
+    except staging.StagingInUse as exc:
+        raise HTTPException(409, str(exc))
+    except staging.StagingError as exc:
+        raise HTTPException(400, str(exc))
+    except OSError as exc:
+        # A share that has gone away, or an account without write rights on it. Say which,
+        # because the two have completely different fixes.
+        raise HTTPException(
+            502, f"The drawings could not be staged to {staging.staging_root()} "
+                 f"({type(exc).__name__}: {exc}). Check the share is reachable and writable.")
+    folder = staged["folder"]
+    # An explicit input, reset for every submission. Never infer this mode from a job code.
+    _document_marker = Path(folder) / "CONCEPT_DOCUMENT.json"
+    try:
+        if req.concept_document:
+            _document_marker.write_text('{"mode": "client_document"}\n', encoding="utf-8")
+        elif _document_marker.exists():
+            _document_marker.unlink()
+    except OSError as exc:
+        raise HTTPException(502, f"Could not file the client-document mode: {exc}. Nothing queued.")
+    # The reference-document declaration, beside it and under the same reset-every-run rule.
+    _reference_marker = Path(folder) / "REFERENCE_DOCUMENTS.json"
+    try:
+        if _ref_docs:
+            _reference_marker.write_text(
+                json.dumps({"files": _ref_docs}) + "\n", encoding="utf-8")
+        elif _reference_marker.exists():
+            _reference_marker.unlink()
+    except OSError as exc:
+        raise HTTPException(502, f"Could not file the reference-document declaration: {exc}. "
+                                 f"Nothing queued.")
+    # Written AFTER staging, because staging clears the folder. With no confirmation this run,
+    # a file the portal wrote on an earlier run is removed, so an old answer cannot govern
+    # a new job; a file somebody wrote by hand is left alone.
+    try:
+        _material_module().write_answers(folder, drawing, _material_file)
+    except OSError as exc:
+        if _material_file:
+            raise HTTPException(
+                502, f"The drawings were staged but the material confirmation could not be "
+                     f"written beside them ({type(exc).__name__}: {exc}). Nothing was queued.")
+    # The customer's changes, under the same rule: written after staging, and a file the
+    # portal wrote on an earlier run is removed when this run carries none.
+    try:
+        _changes_module().write_changes(folder, drawing, _changes_file)
+    except OSError as exc:
+        if _changes_file:
+            raise HTTPException(
+                502, f"The drawings were staged but the customer changes could not be "
+                     f"written beside them ({type(exc).__name__}: {exc}). Nothing was queued.")
+
+    job = _within_a_root(folder)
+    if job is None:
+        raise HTTPException(
+            403, f"The staging folder {folder} is outside the shares this service may read. "
+                 f"Add SDI_STAGING_ROOT to SDI_FILE_ROOTS.")
+    # NOTE: existence is NOT checked here. This service may not be able to see the
+    # share at all — that is rather the point of a runner — so the runner checks,
+    # and reports a missing folder as a failed run with a reason.
+
+    # THE OPTIONAL PARITY PARTNER. Checked HERE, at the moment it is offered, rather than at the
+    # far end of a forty-minute run: a path typo that surfaces after the estimate has finished
+    # costs the whole run to correct, and the estimator has by then moved on.
+    manual_wb = ""
+    if req.manual_workbook and req.manual_workbook.strip():
+        _mw = _within_a_root(req.manual_workbook.strip())
+        if _mw is None:
+            raise HTTPException(
+                403, "That manual estimate is outside the shares this service may read.")
+        if _mw.suffix.lower() not in (".xlsx", ".xlsm", ".xls"):
+            raise HTTPException(
+                400, f"The manual estimate must be a workbook (.xlsx, .xlsm, .xls) — "
+                     f"got '{_mw.suffix}'.")
+        manual_wb = str(_mw)
+
+    root = Path(req.output_root) if req.output_root else OUTPUT_ROOT
+    queued_at = time.time()
+    drawing_folder = root / client / drawing
+    out = drawing_folder / run_folder_name(queued_at, req.units)
+
+    with _LOCK:
+        _expire_dead_claims()
+        if not _online_runners():
+            raise HTTPException(
+                503, "No estimating runner is connected, so there is nothing to run "
+                     "this job. Start the runner on a machine with SOLIDWORKS and "
+                     "Excel, then try again.")
+        # A QUEUE THAT REFUSES WORK WHILE IT IS WORKING IS NOT A QUEUE.
+        #
+        # This raised 409 whenever anything was RUNNING, which made a hundred-drawing M&S
+        # enquiry impossible to submit: the first drawing would be claimed within five
+        # seconds and the other ninety-nine would all be refused. It also refused a second
+        # ordinary job that could perfectly well have waited.
+        #
+        # The one-at-a-time rule is real -- two concurrent COM automations against one
+        # desktop is not a supported thing to do -- but it is a rule about EXECUTION, and
+        # claim() is where it is enforced: a runner is handed nothing while another run is
+        # in progress. Queueing is not executing. The guard was in the wrong place, and the
+        # cost of it being there was that the queue could only ever hold one thing.
+        busy = _busy_runner()
+        run = Run(run_id=uuid.uuid4().hex[:12], client=client, drawing_number=drawing,
+                  units=int(req.units), quantity_breaks=list(_breaks),
+                  job_folder=str(job), output_path=str(out),
+                  manual_workbook=manual_wb, queued_at=queued_at,
+                  llm_only=(method == "llm"),
+                  fresh_read=bool(req.fresh_read),
+                  email_to=_email_to, email_quote=bool(req.email_quote),
+                  requested_by=_caller)
+        _RUNS[run.run_id] = run
+
+    run.line(f"{drawing} · {client} · {run.units} off")
+    if _caller:
+        run.line(f"Queued by the {_caller} site under its own key.")
+    if _brief_only:
+        run.line("BRIEF ONLY: no drawings were given. The brief is staged as its own page and "
+                 "read by the concept read as stated facts; every size and count on this book "
+                 "comes from the brief or is an assumption the sheet names for confirmation.")
+    if _email_to:
+        run.line(f"On completion: emailed to {', '.join(_email_to)}"
+                 + ("" if req.email_quote else " — the customer quote is not attached"))
+    else:
+        run.line("No recipients — the finished estimate will be filed, not sent.")
+    if run.llm_only:
+        # ON THE RUN'S OWN LOG, not only in the engine's console. The estimator watching this
+        # page sees the log; the banner main.py prints scrolls past in a window nobody has
+        # open. A workbook produced this way is indistinguishable from a real estimate once
+        # it is sitting on the share.
+        run.line("LLM-ONLY: read by the vision model alone — the deterministic BOM reader, "
+                 "the DXF flat patterns and the SolidWorks extract are all OFF. This is a "
+                 "MEASUREMENT of the model, not an estimate, and its total must not be "
+                 "quoted or compared with a normal run's.")
+    _brief_status = (_file_enquiry_brief(run, job, req.enquiry_brief)
+                     if run.llm_only else "not_an_llm_read")
+    if req.concept_document:
+        run.line("CLIENT DOCUMENT: read extracted PDF text, all page images and the enquiry "
+                 "brief together; infer a provisional BOM and route for ordinary costing.")
+    if _ref_docs:
+        run.line("REFERENCE DOCUMENTS: " + ", ".join(_ref_docs) + " — read as the customer's "
+                 "standards: applicable requirements become named allowances, and the "
+                 "objects they illustrate never become parts.")
+    if run.fresh_read:
+        # SAID, BECAUSE IT CHANGES WHAT THE ANSWER MEANS. A cached run repeats the last
+        # answer exactly; this one may not, and "the number moved and nothing changed" is
+        # otherwise the most alarming thing this page can show an estimator.
+        run.line("FRESH READ: both LLM caches bypassed — every page goes to the model again. "
+                 "The answer may differ from the last run on the same pack; that difference "
+                 "is the measurement.")
+    run.line(f"Staged    {staged['copied_count']} drawing(s) into {job}"
+             + (f" (replaced {staged['replaced_count']} from a previous run)"
+                if staged["replaced_count"] else ""))
+    if staged.get("job_data_kept"):
+        # THE JOB'S OWN DATA SURVIVED THE RE-STAGE, AND THE LOG SAYS WHICH (review of D-492).
+        run.line(f"  kept      {', '.join(staged['job_data_kept'])} — the job's own data "
+                 f"(estimator answers, the previous read's bill), carried across the re-stage")
+    # SAY WHEN THE SOLIDWORKS EXTRACT CAME WITH IT, and say when it did not. Layer 0 applying
+    # or not is the single biggest difference between two runs of the same pack, and it used to
+    # be invisible either way.
+    if staged.get("sidecars"):
+        run.line(f"  carried   {', '.join(staged['sidecars'])} — the SOLIDWORKS extract "
+                 f"applies to this run")
+    elif staged.get("extract_carried_forward"):
+        run.line("  kept      the extract the last run of this pack generated — the engine "
+                 "re-checks it against the models and regenerates it if any have moved on")
+    elif staged.get("native_staged"):
+        # THIS LINE IS PRINTED WHEN THE JOB IS QUEUED, WHICH IS BEFORE THE ENGINE HAS HAD A
+        # CHANCE TO DO ANYTHING. It used to say "no SOLIDWORKS extract found beside these
+        # drawings — the job is costed from the drawings", and with the models sitting in the
+        # pack that was simply wrong: the engine generates the extract itself, and the half
+        # hour of silence that follows IS that read. Read at the top of a log it looks like a
+        # verdict on the finished estimate, and a perfectly good SolidWorks-backed run was
+        # written off as drawings-only on the strength of it.
+        run.line(f"  {len(staged['native_staged'])} SOLIDWORKS model(s) came with the drawings "
+                 f"and no extract yet — the runner reads them itself before costing anything. "
+                 f"That read is the long silent stretch at the start of the run.")
+    elif staged.get("native_unselected_count"):
+        # THE ONE THAT IS WORTH A SENTENCE. The models are there; they were not on the list, so
+        # the pack arrived without them and Layer 0 is off for a reason nobody chose.
+        _where = ", ".join(staged.get("native_unselected_folders") or []) or "the same folder"
+        run.line(f"  no SOLIDWORKS extract — but {staged['native_unselected_count']} model "
+                 f"file(s) sit beside these drawings in {_where} and were not selected. "
+                 f"The job is costed from the drawings alone: add the models to the selection "
+                 f"(or select the folder) and the runner reads them itself.")
+    else:
+        run.line("  no SOLIDWORKS extract and no models beside these drawings — the job is "
+                 "costed from the drawings")
+    for _sk in staged["skipped"][:6]:
+        run.line(f"  not staged: {Path(_sk['path']).name} — {_sk['reason']}")
+    run.line(f"Reading   {job}")
+    run.line(f"Filing to {out}")
+    if manual_wb:
+        run.line(f"Parity against {Path(manual_wb).name} — the bundle files with the "
+                 f"deliverables")
+    if busy is not None:
+        run.line(f"Queued behind {busy.drawing_number} for {busy.client}, which has been "
+                 f"running {int(time.time() - (busy.started_at or 0))}s. SOLIDWORKS and "
+                 f"Excel are driven on one desktop, so estimates run one after another.")
+    else:
+        run.line("Queued — waiting for a runner to pick it up.")
+    return {"run_id": run.run_id, "output_path": str(out),
+            "drawing_folder": str(drawing_folder),
+            "waiting_behind": busy.run_id if busy is not None else None,
+            "enquiry_brief": _brief_status,
+            "reference_documents": list(_ref_docs),
+            "concept_document": bool(req.concept_document)}
+
+
+@router.post("/override")
+async def estimate_override(
+    units: int = Form(...),
+    drawing: str = Form(...),
+    client: str = Form(...),
+    file: Optional[UploadFile] = File(default=None),
+    # THE SHEET IS USUALLY ALREADY ON THE SHARE, WHICH IS WHERE WE PUT IT.
+    #
+    # This accepted an upload and nothing else, so regenerating a quote from a run's own
+    # workbook meant finding it on disk in Explorer first -- for a file this service had
+    # written, to a folder this service can browse, and had just listed on the same page.
+    # The parity card sitting directly above offers "Choose from share" on both of its
+    # sides, so the panel read as though it had lost a capability it never had.
+    #
+    # A share path also skips the round trip entirely: the CLI takes a path, so there is no
+    # upload, no temp file and no copy of an estimate sitting in the box's temp folder.
+    share_path: Optional[str] = Form(default=None),
+    x_sdi_key: Optional[str] = Header(default=None),
+):
+    """Regenerate a CLIENT QUOTE from an estimator's amended workbook — the manual-override path.
+
+    The estimator uploads the sheet they edited (hours or days after the run) and re-enters the
+    three facts a saved sheet cannot be trusted to carry: units, drawing number, client. This
+    reads the estimator's own figure off that sheet and re-renders ONLY the client quote to the
+    AISheets share, from where the portal serves it. No engine re-run, no drawing read, no change
+    to the job report or provenance tab. Runs the regenerator out of process (config isolation).
+    """
+    _check_key(x_sdi_key)
+
+    _shared = (share_path or "").strip()
+    if bool(_shared) == bool(file is not None and (file.filename or "").strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Choose the amended workbook either from the share or as an upload — "
+                   "one of the two, not both and not neither.")
+
+    import json as _json
+    import subprocess
+    import tempfile
+    from urllib.parse import quote as _urlquote
+
+    tf = None
+    if _shared:
+        # NEVER A BARE PATH FROM THE PAGE. Same gate as every other share read here: it must
+        # resolve inside a configured root, or this becomes a way to hand the engine any file
+        # on the server that the service account can open.
+        _ok = _within_a_root(_shared)
+        if _ok is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"That workbook is outside the folders this service is allowed to "
+                       f"read: {_shared}")
+        if _ok.suffix.lower() != ".xlsx":
+            raise HTTPException(status_code=415, detail="Only .xlsx workbooks are accepted")
+        if not _ok.is_file():
+            raise HTTPException(status_code=404, detail=f"No workbook at {_shared}")
+        _workbook = str(_ok)
+    else:
+        name = (file.filename or "").strip()
+        if not name.lower().endswith(".xlsx"):
+            raise HTTPException(status_code=415, detail="Only .xlsx workbooks are accepted")
+        # Read with a hard cap so a huge upload cannot exhaust the box's memory or disk.
+        data = await file.read(_MAX_OVERRIDE_UPLOAD_BYTES + 1)
+        if len(data) > _MAX_OVERRIDE_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Workbook exceeds {_MAX_OVERRIDE_UPLOAD_BYTES // (1024 * 1024)} MB")
+        if not data:
+            raise HTTPException(status_code=400, detail="The uploaded workbook is empty")
+        tf = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+        tf.write(data)
+        tf.close()
+        _workbook = tf.name
+
+    try:
+        # Write BOTH deliverables to the same share this service serves files from, so the
+        # portal can display the quote straight away and the paths never leave the allowed root.
+        cmd = [_ENGINE_PYTHON, _OVERRIDE_CLI, "--workbook", _workbook,
+               "--units", str(units), "--drawing", drawing, "--client", client,
+               "--quote-dir", str(OUTPUT_ROOT), "--override-xlsx-dir", str(OUTPUT_ROOT),
+               "--json"]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=504, detail="Quote regeneration timed out")
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Engine python not found at {_ENGINE_PYTHON} — set SDI_ENGINE_PYTHON")
+        if proc.returncode != 0:
+            # The CLI surfaces a plain ValueError for a bad/uncalculated sheet or a missing
+            # field — hand its last line to the estimator as a 400, not a 500.
+            msg = (proc.stderr or proc.stdout or "override failed").strip()
+            last = msg.splitlines()[-1][:300] if msg else "override failed"
+            raise HTTPException(status_code=400, detail=last)
+        line = next((ln for ln in reversed(proc.stdout.splitlines())
+                     if ln.strip().startswith("{")), "")
+        result = _json.loads(line) if line else {}
+    finally:
+        # ONLY OUR OWN TEMP FILE. tf is None when the workbook came off the share, and
+        # unlinking there would DELETE THE ESTIMATOR'S SHEET off the AISheets folder as a
+        # side effect of reading it.
+        if tf is not None:
+            try:
+                os.unlink(tf.name)
+            except OSError:
+                pass
+
+    quote_html = result.get("quote_html")
+    return {
+        "manual_override": True,
+        "quote_html": quote_html,
+        # A ready-to-open link the portal can drop straight into its viewable list.
+        "quote_url": (f"/api/file?path={_urlquote(quote_html)}" if quote_html else None),
+        "override_xlsx": result.get("override_xlsx"),
+        "units": units, "drawing": drawing, "client": client,
+        "price": result.get("price"), "price_source": result.get("price_source"),
+        "sell_price": result.get("sell_price"), "unit_cost": result.get("unit_cost"),
+        # IS THIS THE WHOLE QUOTE? False means the job's own summary was not found, so the
+        # quotation carries the estimator's price but none of the engine's reading of the
+        # drawings -- no GA image, "Material: As drawing", two generic operations. It looks
+        # like a finished document and it is a thin one, so the page has to be able to say so.
+        "source_summary_found": bool(result.get("source_summary_found")),
+        "source_summary_stem": result.get("source_summary_stem"),
+    }
+
+
+# ── Parity: the AI estimate against the manual one ───────────────────────────
+#
+# TWO WAYS IN, BECAUSE THERE ARE TWO MOMENTS WHEN THE COMPARISON IS WANTED.
+#
+#   1. AFTER THE FACT — a job already run, and the manual estimate that exists for it. Both
+#      sides come from the share, picked in the file browser. This is how the back catalogue
+#      gets compared, and it is the only way to build parity evidence for jobs already issued.
+#   2. AT RUN TIME — the estimator attaches their manual sheet to a fresh run, and the bundle
+#      lands with the other deliverables. See EstimateRequest.manual_workbook.
+#
+# This endpoint serves (1). Either side may be a path on the share OR an upload, because a
+# manual estimate is very often sitting in somebody's mail rather than filed yet, and telling an
+# estimator to save it to the share first is how a feature goes unused.
+#
+# It runs on THIS box, not on a runner: parity reads two files and does arithmetic. It needs no
+# SOLIDWORKS seat and no drawing read, so it must not queue behind a forty-minute estimate.
+_MAX_PARITY_UPLOAD_BYTES = int(os.getenv("SDI_MAX_PARITY_UPLOAD_MB", "20")) * 1024 * 1024
+_AI_SUFFIXES = (".json", ".xlsx", ".xlsm")
+_MANUAL_SUFFIXES = (".xlsx", ".xlsm", ".xls")
+
+
+async def _side_to_path(upload: Optional[UploadFile], path: Optional[str],
+                        *, label: str, suffixes: tuple, stack: list) -> str:
+    """One side of the comparison as a path on disk, from either an upload or the share.
+
+    Uploads are spooled into a temp DIRECTORY, under the name the estimator's file actually had.
+    That directory is registered on `stack` for the caller to remove; share paths are checked
+    against the allowed roots exactly as every other file endpoint is, so this cannot become a
+    way to read C:\Windows.
+
+    THE NAME IS NOT COSMETIC. The AI side of a parity report is the engine's SUMMARY, and when an
+    estimator hands us the workbook instead - which is what they were sent, so it is what they
+    reach for - the summary is resolved from the workbook's filename: '1057502_20260824_162345.xlsx'
+    means '1057502.json'. Spooling to tempfile's own random name threw that away, so every uploaded
+    AI workbook resolved to 'tmpq7x3k1a9.json', which exists nowhere. The upload route could not
+    do the one thing the resolver was written to make possible, and it failed with a message
+    quoting a temp path the estimator has never seen.
+    """
+    if upload is not None and (upload.filename or "").strip():
+        name = (upload.filename or "").strip()
+        if not name.lower().endswith(suffixes):
+            raise HTTPException(
+                status_code=415,
+                detail=f"The {label} must be one of {', '.join(suffixes)} — got '{name}'")
+        data = await upload.read(_MAX_PARITY_UPLOAD_BYTES + 1)
+        if len(data) > _MAX_PARITY_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"The {label} exceeds {_MAX_PARITY_UPLOAD_BYTES // (1024 * 1024)} MB")
+        if not data:
+            raise HTTPException(status_code=400, detail=f"The uploaded {label} is empty")
+        import tempfile
+        # Take the basename only, and only from the parts of it we control: a browser is not
+        # obliged to send a clean name, and this one is used to build a path.
+        safe = re.sub(r"[^A-Za-z0-9._ +-]", "_", Path(name.replace("\\", "/")).name).lstrip(".")
+        if not safe.lower().endswith(suffixes):        # sanitising must not smuggle past the gate
+            raise HTTPException(
+                status_code=415,
+                detail=f"The {label} must be one of {', '.join(suffixes)} — got '{name}'")
+        tmpdir = tempfile.mkdtemp(prefix="sdi_parity_")
+        stack.append(tmpdir)
+        dest = Path(tmpdir) / safe
+        dest.write_bytes(data)
+        return str(dest)
+
+    if path and path.strip():
+        resolved = _within_a_root(path.strip())
+        if resolved is None:
+            raise HTTPException(
+                status_code=403,
+                detail=f"That {label} is outside the shares this service may read.")
+        if not resolved.is_file():
+            raise HTTPException(status_code=404, detail=f"The {label} was not found: {path}")
+        return str(resolved)
+
+    raise HTTPException(status_code=400, detail=f"No {label} was given.")
+
+
+@router.post("/parity")
+async def estimate_parity(
+    ai_file: Optional[UploadFile] = File(default=None),
+    manual_file: Optional[UploadFile] = File(default=None),
+    ai_path: Optional[str] = Form(default=None),
+    manual_path: Optional[str] = Form(default=None),
+    read_via_excel: bool = Form(default=False),
+    x_sdi_key: Optional[str] = Header(default=None),
+):
+    """Compare one AI estimate against one manual estimate and return the bundle.
+
+    The AI side may be the engine's summary JSON or its own workbook — the workbook's summary is
+    resolved from its filename, because an estimator reaches for the spreadsheet they were sent,
+    not for a JSON they have never seen.
+    """
+    _check_key(x_sdi_key)
+
+    import json as _json
+    import subprocess
+    from urllib.parse import quote as _urlquote
+
+    temps: list = []
+    try:
+        ai = await _side_to_path(ai_file, ai_path, label="AI estimate",
+                                 suffixes=_AI_SUFFIXES, stack=temps)
+        manual = await _side_to_path(manual_file, manual_path, label="manual estimate",
+                                     suffixes=_MANUAL_SUFFIXES, stack=temps)
+
+        cmd = [_ENGINE_PYTHON, _PARITY_CLI, "--ai", ai, "--manual", manual,
+               "--out-dir", str(OUTPUT_ROOT), "--json"]
+        if read_via_excel:
+            cmd.append("--read-via-excel")
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=504, detail="The parity report timed out")
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Engine python not found at {_ENGINE_PYTHON} — set SDI_ENGINE_PYTHON")
+        if proc.returncode != 0:
+            # parity_run exits 2 with a single explanatory line for anything the estimator can
+            # fix — a missing summary, the wrong file type. Hand that back verbatim as a 400;
+            # anything else is ours and is a 500.
+            msg = (proc.stderr or proc.stdout or "parity failed").strip()
+            last = msg.splitlines()[-1][:400] if msg else "parity failed"
+            raise HTTPException(status_code=400 if proc.returncode == 2 else 500, detail=last)
+
+        line = next((ln for ln in reversed(proc.stdout.splitlines())
+                     if ln.strip().startswith("{")), "")
+        result = _json.loads(line) if line else {}
+    finally:
+        import shutil
+        for t in temps:                    # directories now, one per uploaded side
+            shutil.rmtree(t, ignore_errors=True)
+
+    bundle_json = result.get("bundle_json")
+    bundle_csv = result.get("bundle_csv")
+    bundle_html = result.get("bundle_html")
+    return {
+        "parity": True,
+        "job_stem": result.get("job_stem"),
+        "ai_summary": result.get("ai_summary"),
+        "manual_workbook": result.get("manual_workbook"),
+        "bundle_json": bundle_json,
+        "bundle_csv": bundle_csv,
+        "bundle_html": bundle_html,
+        "bundle_json_url": (f"/api/file?path={_urlquote(bundle_json)}" if bundle_json else None),
+        "bundle_csv_url": (f"/api/file?path={_urlquote(bundle_csv)}" if bundle_csv else None),
+        "bundle_html_url": (f"/api/file?path={_urlquote(bundle_html)}" if bundle_html else None),
+        "headline": result.get("headline") or {},
+    }
+
+
+# ── Print the drawings behind an estimate ────────────────────────────────────
+#
+# An estimate is checked against the drawings, and printing them meant opening the job folder
+# on the share and printing twelve files one at a time. Reviewing is what the parallel run
+# depends on; every step that makes it more tedious shows up as a job that never came back.
+#
+# Returns ONE PDF, bookmarked per drawing, served inline so it opens in the browser's viewer
+# where Ctrl+P does the rest. Merged out of process with the engine's python, which is where
+# PyMuPDF lives — the same isolation the override and parity paths use.
+class PrintRequest(BaseModel):
+    """Files and/or job folders. Folders are walked, because the Drawings panel holds a job
+    folder as often as it holds files and "print the drawings" means the pack either way."""
+    paths: List[str] = []
+    job: Optional[str] = None
+
+
+@router.post("/drawings/print")
+def drawings_print(req: PrintRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    _check_key(x_sdi_key)
+    if not req.paths:
+        raise HTTPException(400, "No drawings were given to print.")
+
+    # Every path checked against the allowed roots, exactly as every other file endpoint is.
+    # Printing must not become a way to read anything on the box.
+    resolved: List[str] = []
+    for raw in req.paths:
+        if not str(raw).strip():
+            continue
+        ok = _within_a_root(str(raw).strip())
+        if ok is None:
+            raise HTTPException(
+                403, f"That drawing is outside the shares this service may read: {raw}")
+        resolved.append(str(ok))
+    if not resolved:
+        raise HTTPException(400, "No drawings were given to print.")
+
+    import json as _json
+    import subprocess
+    import tempfile
+
+    out = Path(tempfile.gettempdir()) / f"sdi_drawings_{uuid.uuid4().hex[:10]}.pdf"
+    cmd = [_ENGINE_PYTHON, _PRINT_CLI, *resolved, "--out", str(out), "--json"]
+    if req.job:
+        cmd += ["--job", req.job]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "Merging the drawings timed out — is this a very large pack?")
+    except FileNotFoundError:
+        raise HTTPException(
+            500, f"Engine python not found at {_ENGINE_PYTHON} — set SDI_ENGINE_PYTHON")
+    if proc.returncode != 0:
+        msg = (proc.stderr or proc.stdout or "could not build the print").strip()
+        last = msg.splitlines()[-1][:400] if msg else "could not build the print"
+        raise HTTPException(400 if proc.returncode == 2 else 500, detail=last)
+
+    line = next((ln for ln in reversed(proc.stdout.splitlines())
+                 if ln.strip().startswith("{")), "")
+    result = _json.loads(line) if line else {}
+    if not out.is_file():
+        raise HTTPException(500, "The merged PDF was not written.")
+
+    # WHAT WAS LEFT OUT TRAVELS WITH THE FILE. The cover page says it on paper; these headers
+    # say it to the page, so the estimator is told before they walk to the printer as well as
+    # after. A PDF body cannot carry JSON, so the counts ride on the response.
+    headers = {
+        "Content-Disposition": f'inline; filename="{_safe_pdf_name(req.job)}"',
+        "X-SDI-Printed": str(result.get("printed_count", 0)),
+        "X-SDI-Skipped": str(result.get("skipped_count", 0)),
+        "X-SDI-Pages": str(result.get("pages") or 0),
+    }
+    return FileResponse(str(out), media_type="application/pdf", headers=headers,
+                        background=BackgroundTask(_unlink_quietly, out))
+
+
+def _safe_pdf_name(job: Optional[str]) -> str:
+    stem = safe_segment(job) if job else ""
+    return f"{stem or 'drawings'}-drawings.pdf"
+
+
+def _unlink_quietly(path: Path) -> None:
+    """The merged PDF is a temp file; delete it once it has been sent, not before.
+
+    Deleting it before the response is written truncates the download, and leaving it deletes
+    nothing at all — a box printing packs all day would fill its temp folder.
+    """
+    try:
+        Path(path).unlink()
+    except OSError:
+        pass
+
+
+# ── Document Manager extract — importing what it produced ────────────────────
+#
+# FIRST PASS, AND THE LINE IS DRAWN DELIBERATELY. Yogesh's DM API tool pulls a job's CAD files
+# out of Document Manager and writes them to an output share. This portal does not run that
+# extraction and does not need to: it imports the pack the extraction left behind, which means
+# the two services can be deployed and upgraded independently, and a DM outage costs an import
+# rather than an estimate.
+#
+# Asking the tool to RUN an extract is the next step and needs its API contract — the base URL
+# and the request/response shapes. Until those are known this reports that it is not configured
+# rather than guessing at somebody else's endpoint and failing in a way nobody can diagnose.
+@router.get("/dm/status")
+def dm_status(x_sdi_key: Optional[str] = Header(default=None)):
+    """Whether a DM extract can be imported, and if not, exactly what is missing.
+
+    The page asks this before showing the button as usable, so an estimator is told "not
+    configured yet" instead of pressing something that quietly does nothing.
+    """
+    _check_key(x_sdi_key)
+    root = (getattr(config, "DM_OUTPUT_ROOT", "") or "").strip()
+    if not root:
+        return {"configured": False,
+                "reason": "SDI_DM_OUTPUT_ROOT is not set — point it at the folder the "
+                          "Document Manager tool writes its extracts to.",
+                "root": None, "reachable": False, "within_roots": False}
+
+    # It has to be inside SDI_FILE_ROOTS as well, or the browser will list it and then be
+    # refused when it tries to read it — which looks like a broken button, not a setting.
+    within = _within_a_root(root) is not None
+    reachable = os.path.isdir(root)
+    reason = ""
+    if not within:
+        reason = (f"{root} is not inside SDI_FILE_ROOTS, so this service may not read it. "
+                  f"Add it to SDI_FILE_ROOTS.")
+    elif not reachable:
+        reason = f"{root} is not reachable from this machine."
+    return {"configured": bool(within and reachable), "reason": reason,
+            "root": root, "reachable": reachable, "within_roots": within,
+            "api_base": docmgr.base_url() or None,
+            "api_configured": docmgr.configured()}
+
+
+@router.get("/dm/health")
+def dm_health(x_sdi_key: Optional[str] = Header(default=None)):
+    """Is the Document Manager up, and can it drive SOLIDWORKS right now?
+
+    Asked before the button is offered rather than after it is pressed. DM accepts an extract
+    whether or not its COM is working and fails it minutes later, so "comAvailable" is the
+    difference between a sentence now and a wasted wait.
+    """
+    _check_key(x_sdi_key)
+    if not docmgr.configured():
+        return {"configured": False, "reachable": False, "com_available": None,
+                "reason": "The Document Manager API is not configured. Set DOCMGR_BASE_URL "
+                          "and DOCMGR_ACCESS_SECRET in the service's .env — those are the "
+                          "names the Document Manager's own guide gives to callers.",
+                "api_base": docmgr.base_url() or None}
+    try:
+        hp = docmgr.health()
+    except docmgr.DocMgrError as exc:
+        return {"configured": True, "reachable": False, "com_available": None,
+                "reason": str(exc), "api_base": docmgr.base_url()}
+    return {
+        "configured": True, "reachable": True,
+        "com_available": hp.get("comAvailable"),
+        "queue_depth": hp.get("queueDepth"),
+        "reason": ("" if hp.get("comAvailable") is not False else
+                   "The host is up but cannot drive SOLIDWORKS, so an extract would fail."),
+        "api_base": docmgr.base_url(),
+    }
+
+
+class DmExtractRequest(BaseModel):
+    project_number: str
+    customer: str = ""
+    assembly_folder: str = ""
+
+
+@router.post("/dm/extract")
+def dm_extract(req: DmExtractRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Ask the Document Manager for a file pack. Returns its job id; the page polls below.
+
+    NOT BLOCKING, DELIBERATELY. An extract is minutes of COM work. A request held open for
+    minutes is one dropped connection away from reporting a failure on work that is going
+    perfectly well — and the estimator would then run it again, on a host that does one heavy
+    extract at a time.
+    """
+    _check_key(x_sdi_key)
+    try:
+        started = docmgr.start_extract(req.project_number, customer=req.customer,
+                                       assembly_folder=req.assembly_folder)
+    except docmgr.DocMgrError as exc:
+        raise HTTPException(400, str(exc))
+    return {"job_id": started.get("jobId"), "status": started.get("status") or "queued",
+            "requested": started.get("requested"), "source_path": started.get("sourcePath")}
+
+
+@router.get("/dm/extract/{job_id}")
+def dm_extract_status(job_id: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """Where that extract has got to, and — when it is done — whether WE can read the pack.
+
+    THE PART THAT WILL BITE, AND IT IS NOT AN API PROBLEM. DM returns `outputDir` as a path on
+    ITS OWN HOST. Unless that folder is a share this machine can also read, the extract
+    genuinely succeeded and the drawings are still unreachable from here — and every symptom
+    of that appears at our end, in a file browser that lists nothing, long after the API call
+    that "worked". So the answer says plainly whether the pack is readable from this machine
+    and inside SDI_FILE_ROOTS, and does not describe a job as usable when it is not.
+    """
+    _check_key(x_sdi_key)
+    try:
+        info = docmgr.job(job_id)
+    except docmgr.DocMgrError as exc:
+        raise HTTPException(400, str(exc))
+
+    # A PATH FROM ANOTHER MACHINE, IN WHATEVER FORM THAT MACHINE USES.
+    #
+    # The share is one both machines reach, so this is not expected to bite — but the form the
+    # path arrives in is not something we get to choose. SDI_FILE_ROOTS is written in UNC, so a
+    # drive-letter path fails the containment check and the open even when the folder is right
+    # there and readable; staging already failed that way once. Translating a mapped letter to
+    # its UNC form costs nothing when the path is already UNC, because nothing matches.
+    out_dir = _to_unc(info.get("output_dir"))
+    readable = bool(out_dir) and os.path.isdir(out_dir)
+    within = bool(out_dir) and _within_a_root(out_dir) is not None
+    note = ""
+    if info.get("ok") and out_dir:
+        if not within:
+            note = (f"The extract succeeded and wrote to {out_dir}, but that folder is not "
+                    f"inside SDI_FILE_ROOTS, so this service may not read it. Add it to "
+                    f"SDI_FILE_ROOTS, or have the Document Manager write to a shared folder.")
+        elif not readable:
+            note = (f"The extract succeeded and wrote to {out_dir}, but that folder is not "
+                    f"reachable from this machine — it is a path on the Document Manager's "
+                    f"own host. It has to be a share both machines can see.")
+    elif info.get("ok") and not out_dir:
+        note = "The extract completed but reported no output folder, so there is nothing to import."
+
+    return {
+        "job_id": job_id,
+        "status": info.get("status"),
+        "finished": info.get("finished"),
+        "ok": info.get("ok"),
+        "progress": info.get("progress"),
+        "error": info.get("error"),
+        "output_dir": out_dir,
+        "file_count": info.get("file_count"),
+        "readable_here": readable and within,
+        "note": note,
+    }
+
+
+@router.post("/batch")
+def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """An enquiry that is many drawings, each wanting its own estimate.
+
+    THE M&S SHAPE. A customer sends a hundred PDFs and asks what each one costs. That is a
+    hundred estimates, not one: the drawings are unrelated, they do not share a BOM, and
+    pooling them would produce a single meaningless total. It is the opposite of the 11650
+    shape, where four drawings ARE one cabinet and pooling them is the whole point.
+
+    Both shapes already exist in the engine -- main.py --pdf reads one drawing as one job,
+    main.py --job pools a folder -- and both already exist in this queue. So this adds no
+    execution path and no new way for an estimate to be produced. It queues one ordinary
+    run per drawing and lets the queue do what a queue does: one at a time, in order,
+    each filing into its own folder under the client.
+
+    Filed as  <root>/<client>/<drawing>/<dated run>  which is the existing convention with
+    the drawing taken from the PDF's own filename. The filename is used deliberately: it is
+    knowable BEFORE the run, so a drawing that fails still has a named folder and the
+    estimator can match it to the file they were sent. The title-block number is read
+    during the run and appears in the outputs.
+    """
+    _check_key(x_sdi_key)
+    client = safe_segment(req.client)
+    if not client:
+        raise HTTPException(400, "A client is required — it names the folder every one of "
+                                 "these estimates is filed under.")
+    if not isinstance(req.units, int) or req.units < 1:
+        raise HTTPException(400, "Number of units must be a whole number of 1 or more.")
+
+    # CHECKED BEFORE ANYTHING IS STAGED. Staging clears and refills a folder on the share;
+    # doing that and then refusing the run over a typo in one word leaves the estimator's
+    # job folder rewritten for nothing.
+    method = str(req.method or "both").strip().lower()
+    if method not in {"both", "llm", "engine"}:
+        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm or "
+                                 f"engine.")
+    if not req.files:
+        raise HTTPException(400, "Add the drawings to estimate.")
+
+    method = str(req.method or "both").strip().lower()
+    if method not in {"both", "llm", "engine"}:
+        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm or "
+                                 f"engine.")
+    root = Path(req.output_root) if req.output_root else OUTPUT_ROOT
+    batch_id = uuid.uuid4().hex[:12]
+    queued_at = time.time()
+    accepted, refused = [], []
+
+    with _LOCK:
+        _expire_dead_claims()
+        # ONLY THE METHODS THAT CANNOT START WITHOUT A RUNNER ARE REFUSED WITHOUT ONE. An
+        # LLM-only enquiry now produces workbooks too, so it does queue runner work — but
+        # its fast figures arrive from this service in minutes either way, which is the one
+        # method that can answer a hundred drawings today. So it is accepted runner-less:
+        # the scans run now, the workbook runs sit queued, and each run's own log says so
+        # rather than leaving somebody watching a progress bar that cannot move.
+        if method != "llm" and not _online_runners():
+            raise HTTPException(
+                503, "No estimating runner is connected, so there is nothing to run these "
+                     "jobs. Start the runner on a machine with SOLIDWORKS and Excel, then "
+                     "try again — or run this enquiry as an LLM scan, whose fast figures "
+                     "need no runner (its workbooks queue until one connects).")
+        _runnerless_llm = (method == "llm" and not _online_runners())
+        # ORDER IS THE ORDER THEY WERE GIVEN IN. An estimator working down a customer's
+        # list wants the answers to arrive in that list's order, not in whatever order a
+        # file dialog happened to hand them over.
+        for raw in req.files:
+            path = _within_a_root(raw)
+            if path is None:
+                refused.append({"file": raw, "why": "outside the shares this service may read"})
+                continue
+            drawing = safe_segment(Path(raw).stem)
+            if not drawing:
+                refused.append({"file": raw, "why": "its name leaves nothing to call a folder"})
+                continue
+            out = root / client / drawing / run_folder_name(queued_at, req.units)
+            # ── "LLM scan only" NOW POPULATES THE PRICING SHEET ─────────────────────
+            #
+            # James Gray, 22 Sep 2026: "we need to build in the pipeline to populate the
+            # pricing s/sheet from the LLM only model."
+            #
+            # This route used to set wants_engine=False for method="llm": the fast text
+            # read ran on this service and the run was marked done — no runner, no
+            # workbook, nothing an estimator could open in Excel. That was built when
+            # "llm" meant a comparison figure. It now means AN ESTIMATE READ BY ONE
+            # READER: the run queues for the runner with llm_only=True, main.py --llm-only
+            # reads the pack with the vision model alone (a render pack gets the concept
+            # read), and the ordinary waterfall fills the workbook. Lighter than a full
+            # run — no SolidWorks seat, no DXF pass — but a real run, filed like one, and
+            # wearing its LLM-ONLY label on every deliverable.
+            run = Run(run_id=uuid.uuid4().hex[:12], client=client, drawing_number=drawing,
+                      units=int(req.units), job_folder=str(Path(raw).parent),
+                      output_path=str(out), queued_at=queued_at,
+                      pdf_path=str(path), batch_id=batch_id,
+                      llm_only=(method == "llm"))
+            _RUNS[run.run_id] = run
+            accepted.append(run)
+            queued_at += 0.001          # keeps the queue order stable and the sort total
+
+    for i, run in enumerate(accepted, start=1):
+        run.line(f"{run.drawing_number} · {client} · {run.units} off")
+        run.line(f"Reading   {run.pdf_path}")
+        run.line(f"Filing to {run.output_path}")
+        run.line(f"Queued — drawing {i} of {len(accepted)} in this enquiry.")
+        if run.llm_only:
+            run.line("LLM-ONLY: the fast figure arrives from the scan below; the estimate "
+                     "workbook is a runner job that reads the pack with the vision model "
+                     "alone and prices it through the ordinary waterfall."
+                     + (" No runner is connected — the workbook run starts when one is."
+                        if _runnerless_llm else ""))
+
+    # THE SCAN RUNS IN THE BACKGROUND AND THE REQUEST RETURNS NOW. A hundred drawings at a
+    # few seconds each is minutes; holding the HTTP request open for that would time out in
+    # the browser and leave the estimator with no batch id for work that is running anyway.
+    if method in {"both", "llm"}:
+        threading.Thread(target=_scan_batch, args=(list(accepted),),
+                         name=f"llm-scan-{batch_id}", daemon=True).start()
+
+    if not accepted:
+        # AN ENQUIRY THAT QUEUED NOTHING IS NOT AN ENQUIRY THAT WAS ACCEPTED. Returning 200
+        # with an empty list would read on the page as "submitted", and the estimator would
+        # wait for a hundred answers that nobody is producing.
+        raise HTTPException(400, "None of those drawings could be queued: "
+                            + "; ".join(f"{Path(r['file']).name} — {r['why']}"
+                                        for r in refused[:6]))
+    return {"batch_id": batch_id, "client": client, "units": int(req.units),
+            "method": method, "client_folder": str(root / client),
+            "queued": [r.run_id for r in accepted], "refused": refused}
+
+
+def _scan_one(run: "Run") -> None:
+    """The fast read, on the service, for one drawing.
+
+    NOT ON THE RUNNER, DELIBERATELY. The runner exists because SOLIDWORKS and Excel need an
+    interactive desktop and can only do one thing at a time; an LLM read needs neither. Put
+    it in that queue and a hundred scans would file in behind a forty-minute estimate and
+    arrive tomorrow, which is the exact problem this method exists to solve.
+
+    Never raises. A hundred-drawing enquiry runs this a hundred times and drawing seven
+    failing must not cost the other ninety-three -- the failure goes on the row.
+    """
+    try:
+        import sys
+        _src = str(Path(__file__).resolve().parents[1] / "src")
+        if _src not in sys.path:
+            sys.path.insert(0, _src)
+        from llm_scan_price import scan_price
+        out = scan_price(run.pdf_path, run.units)
+    except Exception as exc:                                 # noqa: BLE001
+        out = {"found": False,
+               "why": f"the scan could not run ({type(exc).__name__}: {str(exc)[:160]})"}
+    with _LOCK:
+        run.llm = out
+        run.llm_price_gbp = out.get("price_gbp") if out.get("found") else None
+        # A DRAWING IS NO LONGER FINISHED WHEN THE SCAN IS. This branch closed llm-only
+        # runs here, back when "llm" ended at the fast figure; an llm-only run now owes a
+        # workbook, so it stays queued for the runner like everything else and is finished
+        # by the run that fills the book. The guard stays for the day a method that truly
+        # ends at the scan returns.
+        if not run.wants_engine and run.status == "queued":
+            run.status = "done"
+            run.finished_at = time.time()
+    run.line("LLM scan: " + (
+        f"£{out['price_gbp']:.2f} — {out.get('basis') or 'no basis given'}"
+        if out.get("found") else f"no figure — {out.get('why') or 'no reason given'}"))
+
+
+def _scan_batch(runs: List["Run"]) -> None:
+    """One at a time, in the enquiry's order.
+
+    SEQUENTIAL ON PURPOSE. Firing a hundred concurrent requests at an account is how a key
+    gets rate-limited, and this project has already watched SerpAPI answer 429 seven times
+    in one run. Seconds each, in order, is fast enough to be useful and slow enough to be
+    allowed.
+    """
+    for run in runs:
+        if run.status in {"done", "error"}:
+            continue                     # released or already finished while we worked
+        _scan_one(run)
+
+
+@router.get("/batch/{batch_id}")
+def batch_status(batch_id: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """Every drawing in one enquiry, in the order it was queued.
+
+    ONE REQUEST, NOT A HUNDRED. The page polls this every couple of seconds; asking after
+    each run separately would be a hundred requests per tick, and the log lines that make a
+    single run readable are noise when what you want is a list of a hundred answers.
+    """
+    _check_key(x_sdi_key)
+    with _LOCK:
+        _expire_dead_claims()
+        runs = sorted((r for r in _RUNS.values() if r.batch_id == batch_id),
+                      key=lambda r: r.queued_at)
+    if not runs:
+        raise HTTPException(404, "No such enquiry. The service may have restarted.")
+    done = [r for r in runs if r.status in {"done", "error"}]
+    return {
+        "batch_id": batch_id, "client": runs[0].client, "units": runs[0].units,
+        "total": len(runs), "finished": len(done),
+        "failed": sum(1 for r in done if r.status == "error"),
+        "runs": [{"run_id": r.run_id, "drawing_number": r.drawing_number,
+                  "status": r.status, "error": r.error,
+                  "llm_price_gbp": r.llm_price_gbp,
+                  "engine_price_gbp": r.engine_price_gbp,
+                  "llm_basis": (r.llm or {}).get("basis") or (r.llm or {}).get("why") or "",
+                  "llm_confidence": (r.llm or {}).get("confidence"),
+                  "seconds": round((r.finished_at or time.time())
+                                   - (r.started_at or r.queued_at), 1),
+                  "output_path": r.output_path,
+                  "deliverables": r.deliverables} for r in runs],
+    }
+
+
+@router.post("/batch/{batch_id}/abandon")
+def batch_abandon(batch_id: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """Stop the rest of an enquiry. Finished drawings keep their estimates.
+
+    A hundred queued drawings is the one case where changing your mind is expensive to act
+    on one row at a time, and an estimator who has spotted that the wrong folder was picked
+    should not have to click ninety-nine times to say so.
+    """
+    _check_key(x_sdi_key)
+    released = 0
+    with _LOCK:
+        runs = [r for r in _RUNS.values() if r.batch_id == batch_id]
+        if not runs:
+            raise HTTPException(404, "No such enquiry. The service may have restarted.")
+        for run in runs:
+            if run.status not in {"queued", "running"}:
+                continue
+            was = run.status
+            # STOPPING A HUNDRED DRAWINGS MEANS THE SAME AS STOPPING ONE. A batch was the
+            # one place where "stop" still only freed the queue: the drawing being worked on
+            # carried on driving SOLIDWORKS and Excel for the fifteen minutes it had left,
+            # on an enquiry the estimator had already given up on. The single-run stop
+            # learned to end the engine; this is the same act, ninety-nine times over, and
+            # it had no reason to mean less.
+            run.cancel_requested = True
+            run.status = "error"
+            run.error = ("Released with the rest of this enquiry. "
+                         + ("It had not started." if was == "queued" else
+                            "It was running; the runner ends the engine on its next "
+                            "heartbeat."))
+            run.line(run.error)
+            run.finished_at = time.time()
+            run.lease_until = 0.0
+            r = _RUNNERS.get(run.runner)
+            if r is not None and r.run_id == run.run_id:
+                r.run_id = ""
+            released += 1
+    return {"ok": True, "released": released}
+
+
+@router.post("/{run_id}/abandon")
+def abandon(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """Release a claim a HUMAN knows is dead, without waiting out the lease.
+
+    WHY THIS EXISTS AT ALL. The lease was three minutes because there was no other way to
+    unstick a queue, and three minutes is far too short for a job whose expensive phase
+    prints nothing — so it killed four healthy runs of 11650 in one morning. The lease is
+    now generous, which it can be precisely because this exists: the operator standing in
+    front of the machine knows whether it is working, and the service does not.
+
+    It does NOT stop the engine. The runner is a separate process on another machine and
+    may still be working; if it finishes it will try to report and be told the run is no
+    longer its own. That is why this says so plainly rather than pretending to cancel.
+    """
+    _check_key(x_sdi_key)
+    with _LOCK:
+        run = _RUNS.get(run_id)
+        if run is None:
+            raise HTTPException(404, "No such run. The service may have restarted.")
+        if run.status not in {"queued", "running"}:
+            raise HTTPException(409, f"That run is already {run.status}.")
+        was = run.status
+        # SET BEFORE THE STATUS CHANGES. Once the run is no longer "running", the heartbeat
+        # endpoint refuses it with a 409 and the runner never gets to read this flag -- so the
+        # 409 is what actually carries the message, and this records the INTENT for anything
+        # that reads the run afterwards. Both halves matter: the 409 says "not yours any more",
+        # which is also true of a run this runner genuinely lost, and only this says a person
+        # asked for it to stop.
+        run.cancel_requested = True
+        run.status = "error"
+        run.error = ("Released by hand from the page. The queue is free; if the runner was "
+                     "in fact still working, its result will be refused when it reports.")
+        run.line(run.error)
+        run.finished_at = time.time()
+        run.lease_until = 0.0
+        r = _RUNNERS.get(run.runner)
+        if r is not None and r.run_id == run.run_id:
+            r.run_id = ""
+    return {"ok": True, "was": was, "run_id": run_id}
+
+
+@router.post("/{run_id}/email")
+def email_run(run_id: str, req: SendRequest,
+              x_sdi_key: Optional[str] = Header(default=None)):
+    """Send a finished run to somebody, now, from the page.
+
+    THE AUTOMATIC SEND ONLY EVER FIRES ONCE, at the moment the runner reports the job done —
+    so an estimate finished before the recipients box existed, or one whose recipients were
+    left empty, or one somebody now wants a second person to see, could not be mailed at all
+    without going to the folder and doing it by hand. That is the job this closes.
+
+    ONLY THIS RUN'S OWN FILES. The paths come back from a page, and this service can read
+    whole shares; accepting an arbitrary path would turn a send button into a way to mail any
+    file the service account can see. Anything not among the run's deliverables is refused by
+    name rather than silently dropped, because a missing attachment nobody was told about is
+    how somebody quotes off a report they never received.
+    """
+    _check_key(x_sdi_key)
+    with _LOCK:
+        run = _RUNS.get(run_id)
+        if run is None:
+            raise HTTPException(404, "No such run.")
+        _snapshot = run.as_json()
+        _deliverables = list(run.deliverables)
+        _provisional = _looks_provisional(run)
+
+    people, bad = estimate_email.parse_recipients(req.recipients)
+    if bad:
+        raise HTTPException(400, f"These are not email addresses: {', '.join(bad)}.")
+    if not people:
+        raise HTTPException(400, "Nobody to send it to. Add at least one address.")
+    if not _deliverables:
+        raise HTTPException(409, "That run produced no deliverables to send.")
+
+    _own = {str(d.get("path")) for d in _deliverables if isinstance(d, dict) and d.get("path")}
+    chosen = [str(f) for f in (req.files or [])]
+    _foreign = [f for f in chosen if f not in _own]
+    if _foreign:
+        raise HTTPException(
+            400, f"These are not files this run produced: {', '.join(_foreign)}")
+
+    if chosen:
+        # ── AN EXPLICIT CHOICE IS A DECISION. IT IS NOT A PERMISSION. ───────────────
+        #
+        # This read "An explicit choice is a decision, quote included" and sent the list
+        # untouched, so a tick-box on the page put an unreleased quotation in front of a
+        # customer past the only gate there was. The gate it went past is a keyword scan of
+        # the run's console that returns True unconditionally, so nothing has leaked — but
+        # the moment that became honest there would have been no check left at all.
+        #
+        # What a person may choose is WHICH of this run's files to send. Whether the
+        # quotation may go to a customer is not theirs to tick: it needs the commercial
+        # inputs completed and a named estimator's authorisation, and those are recorded on
+        # the estimate, not in a request. The file says which it is and this asks it.
+        paths = [f for f in chosen if quote_release.may_go_to_a_customer(f)]
+        held = [{"path": f, "why": quote_release.why_held(f)}
+                for f in chosen if f not in paths]
+    else:
+        paths, held = estimate_email.choose_attachments(
+            _deliverables, provisional=_provisional, include_quote=False)
+    if held and not paths:
+        raise HTTPException(
+            409, "Nothing in that selection may be sent: "
+                 + "; ".join(f"{Path(h['path']).name} — {h['why']}" for h in held))
+
+    note = estimate_email.compose(_snapshot, _deliverables, provisional=_provisional)
+    result = estimate_email.send(people, note["subject"], note["html"], note["text"], paths)
+    if held:
+        result["held_back"] = held
+    with _LOCK:
+        _live = _RUNS.get(run_id)
+        if _live is not None:
+            _live.email_result = result
+            _live.line(f"Sent to {', '.join(people)}"
+                       + (f" — {', '.join(result.get('attached') or []) or 'no attachments'}"
+                          if result.get("sent") else f" — NOT SENT: {result.get('reason')}"))
+    if not result.get("sent"):
+        raise HTTPException(502, str(result.get("reason") or "The mail could not be sent."))
+    return result
+
+
+@router.get("/{run_id}")
+def status(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
+    _check_key(x_sdi_key)
+    with _LOCK:
+        _expire_dead_claims()
+        run = _RUNS.get(run_id)
+    if run is None:
+        raise HTTPException(404, "No such run. The service may have restarted.")
+    return run.as_json()
+
+
+@router.get("/{run_id}/deliverables/{name}")
+def deliverable(run_id: str, name: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """One of a finished run's own deliverables, by the file name the run reported (D-401).
+
+    A site that queued a run fetches the book here, by run id and name, and nothing else:
+    the path served is the one the runner filed for THIS run, never a path the caller typed,
+    so the shared file API and the shares behind it stay closed to a partner key."""
+    _check_key(x_sdi_key)
+    with _LOCK:
+        run = _RUNS.get(run_id)
+        items = list(run.deliverables) if run is not None else []
+    if run is None:
+        raise HTTPException(404, "No such run. The service may have restarted.")
+    if run.status != "done":
+        raise HTTPException(409, f"The run is {run.status}; its deliverables are filed when "
+                                 f"it finishes.")
+    want = str(name or "").strip()
+    hit = next((d for d in items if str(d.get("name") or "") == want), None)
+    if hit is None or "/" in want or "\\" in want:
+        raise HTTPException(404, f"{want!r} is not one of this run's deliverables: "
+                                 + ", ".join(str(d.get("name")) for d in items))
+    path = Path(str(hit.get("path") or ""))
+    if not path.is_file():
+        raise HTTPException(404, f"{want} was filed at {path} and is not there now.")
+    # THE RELEASE GATE, AS ON /api/file. A quotation is a deliverable too, and a site that
+    # queued a provisional run must not be able to hand the customer quote out as a download;
+    # it is released by an estimator on the estimating page and nowhere else.
+    if quote_release.looks_like_a_quote(path) and not quote_release.may_go_to_a_customer(path):
+        raise HTTPException(403, "That is the customer quotation and it has not been released: "
+                                 + (quote_release.why_held(path) or "an estimator releases it on "
+                                    "the estimating page."))
+    media, _ = mimetypes.guess_type(path.name)
+    return FileResponse(str(path), media_type=media or "application/octet-stream",
+                        filename=path.name)
+
+
+@router.get("")
+def recent(x_sdi_key: Optional[str] = Header(default=None), limit: int = 25):
+    """Every run this service has queued, newest first. In memory only — a
+    restart forgets them, and the estimates themselves are on the share."""
+    _check_key(x_sdi_key)
+    with _LOCK:
+        _expire_dead_claims()
+        runs = sorted(_RUNS.values(), key=lambda r: r.queued_at, reverse=True)[:limit]
+        out = [{k: v for k, v in r.as_json().items() if k != "log"} for r in runs]
+    return {"runs": out}
+
+
+# ══ EXTRACTS ════════════════════════════════════════════════════════════════════════════
+#
+# THE TWO QUESTIONS THAT COME BEFORE A PRICE: what parts are in this pack, and what work did
+# the engine decide each one needs. Both were only reachable by opening a costed workbook,
+# which is the wrong artefact for the question — and the route half was not reachable at all:
+# the extraction audit read `canonical_route` while every real run writes
+# `canonical_route_shadow`, so its Operations sheet was empty on every job.
+#
+# NO RUNNER, NO QUEUE, NO EXCEL. The answer is already in the saved record of the job's last
+# run: BOM rows from the readers, decisions from the compiled route. Rebuilding two files from
+# a record takes a moment and needs no SOLIDWORKS seat, so this endpoint answers directly
+# rather than queueing work on a machine that might be busy costing something. An extract that
+# cannot be taken because the estimating runner is mid-job would be useless precisely when
+# somebody wants to look at a pack before committing to costing it.
+#
+# WHAT IT WILL NOT DO is read drawings. If the job has never been run there is nothing to
+# extract, and this says so and names the button that produces it, rather than silently
+# returning empty sheets that read as "this pack contains nothing".
+
+class ExtractRequest(BaseModel):
+    """`kind` is which of the three buttons was pressed. The rest mirrors an estimate request
+    so the page can send what it already has, and nothing here is required except the files or
+    folder that identify the job."""
+    kind: str = "both"
+    job_folder: Optional[str] = None
+    files: List[str] = []
+    output_root: Optional[str] = None
+    client: Optional[str] = None
+    drawing_number: Optional[str] = None
+
+
+def _extract_job_label(req: "ExtractRequest") -> str:
+    """The job's own name, from whatever the page sent. A pack is identified by its folder
+    before it is identified by anything a person typed — the folder is what the drawings came
+    out of, and it is right even when the client box is empty."""
+    if req.job_folder:
+        name = Path(str(req.job_folder)).name.strip()
+        if name:
+            return name
+    for raw in (req.files or []):
+        parent = Path(str(raw)).parent.name.strip()
+        if parent:
+            return parent
+    return (req.drawing_number or "").strip() or "job"
+
+
+@router.post("/extract")
+def estimate_extract(req: ExtractRequest,
+                     x_sdi_key: Optional[str] = Header(default=None)):
+    _check_key(x_sdi_key)
+    kind = str(req.kind or "both").strip().lower()
+    if kind not in ("boms", "routes", "both"):
+        raise HTTPException(400, f"kind must be boms, routes or both — not {req.kind!r}")
+    if not (req.files or req.job_folder):
+        raise HTTPException(400, "No drawings were given. Add the pack in the Drawings panel "
+                                 "first — the extract is taken from that job's saved record.")
+
+    label = _extract_job_label(req)
+    lines: List[str] = [f"Job read as {label}."]
+
+    # THE RECORD OF THAT JOB'S LAST RUN. Searched under the roots this service is already
+    # allowed to read, so this cannot become a way to open any file on the box.
+    record: Optional[dict] = None
+    found_at = ""
+    candidates: List[Path] = []
+    for root in (config.OUTPUT_ROOT, getattr(config, "ENGINE_ROOT", None)):
+        if not root:
+            continue
+        base = Path(str(root))
+        for rel in (Path("json") / f"{label}.json", Path("output") / "json" / f"{label}.json",
+                    Path(f"{label}.json")):
+            candidates.append(base / rel)
+    for path in candidates:
+        try:
+            if path.is_file():
+                record = json.loads(path.read_text(encoding="utf-8"))
+                found_at = str(path)
+                break
+        except Exception as err:                                         # noqa: BLE001
+            lines.append(f"{path} could not be read: {type(err).__name__}: {err}")
+    if record is None:
+        # NAMED, NOT EMPTY SHEETS. Returning blank tables here would read as "this pack
+        # contains nothing", which is the one answer this feature must never give by accident.
+        raise HTTPException(
+            404,
+            f"No saved record found for {label}, so there is nothing to extract yet. The BOMs "
+            f"and the routes are produced by a run: press SDI (UK) Intelligence Estimator "
+            f"once for this pack and the extracts are written with it — then this button "
+            f"rebuilds them instantly, as often as you like.")
+    lines.append(f"Read from {found_at}.")
+
+    out_dir = Path(str(req.output_root or config.OUTPUT_ROOT)) / "estimates"
+    try:
+        sys.path.insert(0, str(Path(getattr(config, "ENGINE_ROOT", ".")) / "src"))
+        import bom_and_route_extract as _bre
+        result = _bre.write_both(record, out_dir, job=label, want=kind)
+    except Exception as err:                                             # noqa: BLE001
+        raise HTTPException(500, f"The extract could not be built: "
+                                 f"{type(err).__name__}: {err}")
+
+    # WHAT THE RECORD CAN AND CANNOT SUPPORT, said here rather than left to be inferred from
+    # an empty sheet. A record that never reached the workbook stage has no route rows, and
+    # that is a fact about the record — not about the pack.
+    if kind in ("routes", "both") and not result.get("routes"):
+        lines.append(
+            "This record carries NO route decisions. That is a "
+            "fact about the record, not about the pack"
+            " — a run whose workbook stage did not complete has none. See money_provenance "
+            "on the estimate, which says why.")
+    if kind in ("boms", "both") and not result.get("boms"):
+        lines.append("This record carries NO BOM rows.")
+    lines.append("Prices nothing: no figure in either file is a cost.")
+    return {"ok": True, "kind": kind, "job": label, "record": found_at,
+            "xlsx": result.get("xlsx"), "html": result.get("html"),
+            "boms": result.get("boms"), "routes": result.get("routes"),
+            "lines": lines}

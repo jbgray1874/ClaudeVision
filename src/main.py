@@ -1,27 +1,18 @@
 import argparse
 import json
+import os
+import re
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-# Load environment variables from .env file (project root: C:\ClaudeVision\.env)
-# This makes XAI_API_KEY, OPENAI_API_KEY, etc. available without having to set
-# them manually in each shell session. Must happen BEFORE any module that reads
-# os.environ (note_scan, web_ai_price_lookup, etc.).
-try:
-    from dotenv import load_dotenv as _load_dotenv
-    _env_path = Path(__file__).resolve().parent.parent / ".env"
-    if _env_path.exists():
-        _load_dotenv(_env_path)
-        print(f"[env] Loaded {_env_path}", flush=True)
-    else:
-        # Also try same directory as main.py (src/.env)
-        _env_src = Path(__file__).resolve().parent / ".env"
-        if _env_src.exists():
-            _load_dotenv(_env_src)
-            print(f"[env] Loaded {_env_src}", flush=True)
-except ImportError:
-    pass  # python-dotenv not installed — env vars must be set manually
+# .env IS NOT LOADED HERE. config.load_dot_env() does it, at config import, and this file
+# used to carry a second copy of that loader. Two loaders with slightly different search
+# orders is a defect waiting to happen, and the asymmetry was worse than the duplication:
+# a RUN through main.py got .env, while why_this_price.py, the supplier profiler, the
+# runner and every test imported config directly and got whatever the shell held. The
+# import of config below is therefore load-bearing -- it must stay the FIRST engine import
+# so nothing reads os.environ before the file has been read.
 
 # Windows consoles default to cp1252, which cannot encode characters like the
 # warning sign (U+26A0). Any such print would raise UnicodeEncodeError and abort
@@ -51,53 +42,32 @@ from rag_transformer import transform_scan_summary_to_historical_job_record
 from sql_export import export_json_files_to_sqlserver_sql, export_single_json_file_to_sqlserver_sql
 
 
-def _find_manual_workbook(scan_label: str, summary: dict):
-    """Locate a manual estimate workbook for this job via the UNC share convention.
-    <share>\\<year>\\<customer>\\<jobfolder>\\*.xls  — returns the first .xls found, else None.
-    Instrumented: prints [manual-lookup] diagnostics so a skip is explainable. Never raises."""
+def _time_stage(name: str, opening: bool) -> None:
+    """Bracket one top-level stage for the run-timing table, and never break the run doing it.
+
+    THE HOUR HAD TO BE MEASURED BEFORE IT COULD BE ARGUED ABOUT. 0359342 ran 3,775s and
+    reported 3,002s of it "outside any timed phase" — file_scan brackets its own steps, but
+    everything main() does after the scan (the workbook, the read-back, the checks, the
+    deliverables) was unbracketed, so the only evidence of where fifty minutes went was the
+    runner printing "no output for 126s". run_timing says it plainly: when the unmeasured row
+    is the biggest one, bracket more rather than optimise anything.
+    """
     try:
-        import os, glob
-        share_root = r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Manual Estimates"
-        if not os.path.isdir(share_root):
-            print(f"   [manual-lookup] share not reachable at run time: {share_root}", flush=True)
-            return None
-        # derive job number from BOTH scan_label and the job_folder in summary (more robust)
-        cands_labels = [str(scan_label)]
-        _jf = summary.get("job_folder") or summary.get("job_output_stem")
-        if _jf:
-            cands_labels.append(os.path.basename(str(_jf)))
-        job_nums = []
-        for lab in cands_labels:
-            jn = str(lab).split("-")[0].strip()
-            # keep only a leading numeric token (job numbers are numeric); strip any trailing words
-            jn = jn.split()[0] if jn else jn
-            if jn and jn not in job_nums:
-                job_nums.append(jn)
-        print(f"   [manual-lookup] scan_label={scan_label!r} job_nums={job_nums}", flush=True)
-        candidates = []
-        for year_dir in sorted(glob.glob(os.path.join(share_root, "20*")), reverse=True):
-            for jn in job_nums:
-                candidates += glob.glob(os.path.join(year_dir, "*", "*" + jn + "*", "*.xls"))
-                candidates += glob.glob(os.path.join(year_dir, "*" + jn + "*", "*.xls"))
-        print(f"   [manual-lookup] raw glob hits: {len(candidates)}", flush=True)
-        seen = []
-        for c in candidates:
-            if os.path.basename(c).startswith("~$"):
-                continue
-            if c not in seen:
-                seen.append(c)
-        print(f"   [manual-lookup] after temp-filter: {len(seen)}"
-              + (f" -> using {seen[0]}" if seen else " -> none"), flush=True)
-        return seen[0] if seen else None
-    except Exception as _mexc:
-        print(f"   [manual-lookup] error ({type(_mexc).__name__}: {_mexc}) -> None", flush=True)
-        return None
+        import run_timing as _rt
+        _rt.mark(("start " if opening else "done ") + name)
+    except Exception:                                        # noqa: BLE001
+        pass
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Scan drawings and build manufacturing and estimate inputs.")
     parser.add_argument("--pdf", type=str, help="Process a single drawing file (PDF or DXF).")
     parser.add_argument("--drawing", type=str, help="Alias for --pdf (PDF or DXF).")
+    parser.add_argument(
+        "--product", type=str, default=None,
+        help="The drawing number of the product being estimated (the portal's Drawing "
+             "Number). It is the only root the quantity roll-up starts from; any other "
+             "general arrangement in the pack counts only where the product reaches it.")
     parser.add_argument(
         "--dxf",
         nargs="*",
@@ -108,6 +78,24 @@ def parse_args() -> argparse.Namespace:
             "(omit --pdf for DXF-only). Same role as --attach-dxf but accepts multiple paths in one flag."
         ),
     )
+    parser.add_argument(
+        "--job", type=str, default=None, metavar="FOLDER",
+        help="Scan ONE job folder as a single pooled job: every drawing in it contributes to "
+             "one BOM, one route and one estimate. Equivalent to --search-root FOLDER "
+             "--folder-as-job, and preferred over that pair because omitting either half "
+             "silently produces a different estimate rather than an error.",
+    )
+    parser.add_argument(
+        "--enquiry", type=str, default=None, metavar="FOLDER",
+        help="Read an ENQUIRY folder — each immediate sub-folder is one job — and print the run "
+             "plan the batch runner executes, or the reasons the drop is refused (a loose "
+             "drawing, an empty pack). Reads the tree and prices nothing; run-enquiry.ps1 runs "
+             "the plan through the same per-job engine as --job.")
+    parser.add_argument(
+        "--enquiry-qty", type=str, default=None, metavar="NAME=QTY,...",
+        help="Per-job order quantities for --enquiry, by job folder name, e.g. "
+             "'11650-00-GA=45,11650-04-SA01=5'. A job not named here falls back to --order-qty, "
+             "and one with neither is costed at the inferred quantity.")
     parser.add_argument("--search-root", type=str, default=str(DRAWINGS_DIR), help="Folder to search for drawings.")
     parser.add_argument("--drawing-pattern", type=str, default="*", help="Glob pattern for drawings (e.g. *.pdf, *.dxf).")
     parser.add_argument(
@@ -121,6 +109,32 @@ def parse_args() -> argparse.Namespace:
         "--no-dxf-augment",
         action="store_true",
         help="Do not auto-discover flat DXFs beside the PDF / input/drawings/DXF when scanning a GA PDF.",
+    )
+    parser.add_argument(
+        "--llm-only",
+        action="store_true",
+        help="MEASUREMENT, NOT ESTIMATING. THE BILL OF MATERIALS COMES FROM THE VISION MODEL "
+             "AND NOTHING ELSE: the deterministic BOM reader, the DXF flat patterns and the "
+             "SolidWorks extract are all switched off, and every page is sent to the model. "
+             "The drawing's TEXT LAYER IS STILL READ -- pdfplumber supplies the title-block "
+             "material, thickness and finish exactly as on a normal run, because --llm-only "
+             "disables Path A of the BOM merge and nothing else. So this answers 'what does "
+             "Grok make of this pack's BOM by itself', which is a narrower question than 'what "
+             "does Grok make of this pack' and the only one the flag actually asks. The result "
+             "is not a quote and not reproducible; the source waterfall ranks an LLM read LAST "
+             "for exactly this reason. Works on one drawing or a whole folder.",
+    )
+    parser.add_argument(
+        "--fresh-read",
+        action="store_true",
+        help="ASK THE MODEL AGAIN. Both LLM caches are bypassed: every page goes to the "
+             "vision model and the whole-pack read is re-driven, instead of replaying the "
+             "answers held for this pack. The caches exist because 2085 returned a route with "
+             "welding on one run and without it on the next and the unit cost halved -- so a "
+             "normal estimate should NOT use this. It is for the one question the cache makes "
+             "unanswerable: what does the model say about this pack TODAY. Note this does not "
+             "make a cached run slow or a fresh one slow: the page rendering and the pack text "
+             "extraction happen either way, because the cache KEY is computed from them.",
     )
     parser.add_argument(
         "--folder-as-job",
@@ -218,6 +232,23 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="After populate, generate client quote (always) + parity report (if a manual estimate is found).",
     )
+    parser.add_argument(
+        "--quantity-breaks", type=int, nargs="+", default=None,
+        help="Also file a workbook at each of these quantities, generated from the finished "
+             "estimate. The estimate itself is run at --order-qty; these are recalculated "
+             "from it, which is what an estimator does by hand.",
+    )
+    parser.add_argument(
+        "--order-qty", type=int, default=None,
+        help="Order/demand quantity for this job (drives batch economics + the WB order qty). "
+             "Each tender product prices at its own demand qty. If omitted, the engine's "
+             "inferred/assumed quantity is used.",
+    )
+    parser.add_argument(
+        "--customer", type=str, default=None,
+        help="Customer name for the quote/report header (e.g. \"M&S\"). Authoritative — "
+             "overrides the folder/path heuristic. Also the logo key (assets/customer_logos/<name>).",
+    )
     return parser.parse_args()
 
 
@@ -235,9 +266,176 @@ def _apply_web_ai_pricing_fallback_from_args(args: argparse.Namespace) -> None:
     config.PRICE_SOURCE_CONFIG = price_cfg
 
 
+def _parse_enquiry_qty(spec: Optional[str]) -> Dict[str, int]:
+    """'NAME=QTY,NAME=QTY' -> {name: qty}. A malformed pair is skipped with a note, not a crash:
+    a fat-fingered quantity should not stop the whole enquiry being read."""
+    out: Dict[str, int] = {}
+    for chunk in (spec or "").split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        name, _, qty = chunk.rpartition("=")
+        try:
+            out[name.strip()] = int(qty)
+        except (TypeError, ValueError):
+            print(f"   [enquiry] ignoring '{chunk}' — not NAME=QTY")
+    return out
+
+
+def _print_enquiry_plan(folder: str, qty_spec: Optional[str],
+                        default_qty: Optional[int]) -> None:
+    """Read an enquiry folder and print the run plan, or the reasons it is refused.
+
+    This reads the tree and prices nothing. It is the gate a person sees before a batch runs —
+    which jobs, at what quantity — and the machine-readable plan run-enquiry.ps1 feeds to the
+    same per-job engine as --job. A refused drop prints its reasons and NO plan, so a malformed
+    enquiry cannot be half-run.
+    """
+    import enquiry as _enq
+    manifest = _enq.read_enquiry(folder, order_qty_by_job=_parse_enquiry_qty(qty_spec),
+                                 default_order_qty=default_qty)
+    print(_enq.one_line(manifest))
+    for card in manifest.get("jobs") or []:
+        print(f"   • {card['identity']}: {card['drawing_count']} drawing(s), {card['priced_at']}")
+        for warn in card.get("warnings") or []:
+            print(f"       - {warn}")
+    for refusal in manifest.get("refusals") or []:
+        print(f"   ✗ {refusal}")
+    plan = _enq.run_plan(manifest)
+    # A STABLE, PARSEABLE BLOCK for run-enquiry.ps1: everything between the markers is one
+    # run-packs.ps1 argument per line, and nothing else prints there. An empty block is a
+    # refused enquiry, and the wrapper runs nothing.
+    print("--- ENQUIRY RUN PLAN ---")
+    for token in plan:
+        print(token)
+    print("--- END ENQUIRY RUN PLAN ---")
+
+
+
+def _rewrite_estimate_banner(xlsx_path, summary) -> None:
+    """Write the shared tally into every PROVISIONAL banner cell of the Estimate sheet.
+
+    Called ONCE, after the read-back and BEFORE the consistency checks run (D-361 removed
+    D-359's second call: an openpyxl save after Excel calculated the book stripped its
+    cached values). So the record it reads has no check results, and the tally says so in
+    its own words rather than reading as complete (12173-02: the book said "25 to settle"
+    and the report, built after the checks, added eleven failing ones).
+
+    AND IT POINTS AT THE LIST THAT CARRIES THE SAME COUNT. It said "see OUTSTANDING
+    ESTIMATOR INPUTS below" — a block of 60 drawing questions, a different set from the 25.
+    The AI Explanation tab lists every one of the 25; the inputs block keeps its own count
+    and now says what it is."""
+    try:
+        from costed_facts import outstanding_summary as _osum_b
+        _o_b = _osum_b(summary) or {}
+        _phrase_b = str(_o_b.get("phrase") or "").strip()
+        if not _phrase_b:
+            return
+        _total_b = int(_o_b.get("total") or 0)
+        import openpyxl as _b_opxl
+        _bwb = _b_opxl.load_workbook(str(xlsx_path))
+        try:
+            _bws = _bwb["Estimate"] if "Estimate" in _bwb.sheetnames else _bwb.active
+            _bhits = 0
+            for _brow in _bws.iter_rows():
+                for _bcell in _brow:
+                    if isinstance(_bcell.value, str) and _bcell.value.startswith(
+                            ("PROVISIONAL —", "DRAFT —")):
+                        _bcell.value = (f"DRAFT — {_total_b} item(s) to confirm: {_phrase_b} "
+                                        f"(each is listed on the AI Explanation tab)")
+                        _bhits += 1
+                    elif (isinstance(_bcell.value, str)
+                          and _bcell.value.startswith("OUTSTANDING ESTIMATOR INPUTS (")
+                          and "questions from the drawings" not in _bcell.value):
+                        _head_b = _bcell.value.split(")", 1)[0] + ")"
+                        _bcell.value = (f"{_head_b} — questions from the drawings, read with "
+                                        f"the {_total_b} item(s) to confirm on the AI "
+                                        f"Explanation tab; the sheet firms as they are answered")
+                        _bhits += 1
+            if _bhits:
+                _bwb.save(str(xlsx_path))
+                print(f"   [banner] {_bhits} banner cell(s) now carry the shared tally: "
+                      f"{_phrase_b}", flush=True)
+        finally:
+            try:
+                _bwb.close()
+            except Exception:                                        # noqa: BLE001
+                pass
+    except Exception as _b_exc:                                      # noqa: BLE001
+        print(f"   [banner] shared tally not applied ({_b_exc}) — the banner keeps its "
+              f"own count.", flush=True)
+
 def main() -> None:
     args = parse_args()
     ensure_directories()
+
+    # WHICH BUILD IS ABOUT TO RUN, said before it runs anything.
+    #
+    # The runner spawns this file fresh per job, so the source on disk at THIS moment is
+    # the source that costs the job — and when a book comes back carrying a number a
+    # committed fix was supposed to have changed, the only two explanations are a stale
+    # checkout and a defect. They need opposite responses and nothing in the deliverables
+    # could tell them apart. Now the log opens with the answer and the workbook carries the
+    # same string, so the question is settled by comparison rather than by inference.
+    try:
+        from build_stamp import print_build_stamp as _print_build_stamp
+        _print_build_stamp()
+    except Exception:                                        # noqa: BLE001
+        pass
+
+    # ── CAN THIS MACHINE RUN THE ENGINE? ASKED FIRST, NOT DISCOVERED MID-SCAN ───────
+    # A box whose environment had lost two packages produced, in this order: a four-line
+    # warning that every catalogue price was missing, a timing table saying the first phase
+    # "STARTED AND NEVER FINISHED", and a traceback from inside page extraction reading
+    # "RuntimeError: pdfplumber is not installed." Three symptoms of one fact, none of them
+    # naming the command that fixes it, all of them after sixteen files had been found and one
+    # had started. requirements.txt had listed both packages as core-required all along: the
+    # file declared the contract and nothing enforced it.
+    #
+    # A fatal absence stops the run here. A degrading one lets it continue and is recorded on
+    # the estimate, because a run without pyodbc is a legitimate diagnostic and must never be
+    # mistaken for one priced from the catalogue.
+    try:
+        import dependency_preflight as _dp
+        _dp_result = _dp.check()
+        if not _dp.report(_dp_result):
+            raise SystemExit(2)
+        _ENV_DESCRIPTION = _dp.describe_environment(_dp_result)
+    except SystemExit:
+        raise
+    except Exception as _dp_exc:                                         # noqa: BLE001
+        print(f"   [preflight] could not run ({type(_dp_exc).__name__}: {_dp_exc}) — "
+              f"continuing, but nothing has verified this machine's packages", flush=True)
+        _ENV_DESCRIPTION = {"schema": "environment.v1", "complete": False,
+                            "missing": [], "unverified": ["preflight did not run"],
+                            "why_it_matters": "the preflight itself failed, so the "
+                                              "completeness of this environment is unknown"}
+    os.environ["SDI_ENVIRONMENT_DESCRIPTION"] = json.dumps(_ENV_DESCRIPTION)
+
+    # THE ORDER QUANTITY HAS TO ARRIVE BEFORE THE COSTING, NOT AFTER IT.
+    #
+    # --order-qty was stamped onto the summary once scan_file had already returned, and by
+    # then estimate_document had costed every part with `assumed_job_quantity`, which
+    # file_scan defaults to DEFAULT_JOB_QUANTITY when the enquiry does not state one. Setup
+    # is amortised as (rate/60 x setup_mins) / qty, so a 10-off job was priced with its
+    # setup spread over 180 units and then labelled "10" on the header — the flag whose own
+    # help text says it "drives batch economics" reached everything except the economics.
+    #
+    # Published as an environment variable rather than threaded through a parameter because
+    # three scan entry points share one finalizer, and because the intranet integration
+    # calls file_scan directly without going through this CLI at all. One place decides the
+    # quantity; everything downstream reads what it decided.
+    if getattr(args, "order_qty", None):
+        os.environ["SDI_ORDER_QTY"] = str(int(args.order_qty))
+    # THE PRODUCT, THE SAME WAY AND FOR THE SAME REASON. The portal's Drawing Number names
+    # the one assembly that ships; route_compiler.declared_product_of reads it, and the scan
+    # stamps it on the summary so a saved summary replays the same roots.
+    if str(getattr(args, "product", None) or "").strip():
+        os.environ["SDI_PRODUCT"] = str(args.product).strip()
+
+    if getattr(args, "enquiry", None):
+        _print_enquiry_plan(args.enquiry, args.enquiry_qty, args.order_qty)
+        return
 
     if args.merge_dxf_into:
         json_path = Path(args.merge_dxf_into)
@@ -427,6 +625,55 @@ def main() -> None:
         print(f"Parity rows: {len(rows)}")
         return
 
+    # ── ONE FLAG FOR THE THING PEOPLE ACTUALLY RUN ───────────────────────────────────
+    # A drawing pack is a job. Expressing that took --search-root AND --folder-as-job, and
+    # supplying only the first is not an error: it scans each PDF as its own job, producing
+    # several partial estimates instead of one pooled one, with nothing on screen to say the
+    # pack was never assembled. A wrong answer that looks like an answer, from a flag left
+    # out. --job cannot be half-specified.
+    if getattr(args, "job", None):
+        _job_root = Path(args.job)
+        if not _job_root.is_dir():
+            # "NOT A DIRECTORY" NAMES THE SYMPTOM AND NOT THE CAUSE, and the causes need
+            # different actions: a file passed where a folder belongs, a renamed folder, or
+            # a network drive that is not mapped in this shell. Walking up to the deepest
+            # ancestor that DOES exist says exactly where the path stops being true, which
+            # is the one fact that distinguishes them — and it costs a few stat calls.
+            if _job_root.is_file():
+                print(f"--job expects a job FOLDER, and {_job_root} is a file. "
+                      f"Use --pdf for a single drawing, or pass its parent folder.")
+                return
+            # `.` is where a RELATIVE path bottoms out, and it is not evidence about the
+            # path — listing the working directory for a job on an unmapped drive is noise
+            # dressed as a diagnosis.
+            _deepest = next((a for a in [_job_root, *_job_root.parents]
+                             if a != Path(".") and a.exists()), None)
+            print(f"--job cannot read {_job_root} — no such folder.")
+            if _deepest is None:
+                print(f"   Nothing on this path exists, not even its drive. If "
+                      f"{_job_root.anchor or 'the drive'} is a mapped network drive, it may "
+                      f"not be mapped in this shell.")
+            else:
+                print(f"   The path exists as far as: {_deepest}")
+                try:
+                    _kids = sorted(p.name for p in _deepest.iterdir() if p.is_dir())
+                except OSError as _e_ls:
+                    _kids, _e = [], _e_ls
+                    print(f"   ...and could not be listed ({_e}).")
+                if _kids:
+                    _want = _job_root.name.lower()[:8]
+                    _near = [k for k in _kids if k.lower()[:8] == _want] or _kids
+                    print(f"   Folders in it ({len(_kids)}): "
+                          f"{', '.join(_near[:10])}{' ...' if len(_near) > 10 else ''}")
+            return
+        if args.pdf or args.drawing:
+            print("--job scans a whole folder as one job; --pdf/--drawing scans a single "
+                  "file. Pass one or the other, not both.")
+            return
+        args.search_root = str(_job_root)
+        args.folder_as_job = True
+        args.no_folder_as_job = False
+
     drawing_arg = args.pdf or args.drawing
     dxf_from_cli = [Path(d) for d in (args.dxf or [])] + [Path(p) for p in (args.attach_dxf or [])]
 
@@ -444,9 +691,82 @@ def main() -> None:
 
     print(f"Found {len(files)} drawing file(s).\n")
 
+    # ── ASK THE PRICE SOURCE NOW, NOT AT THE FIRST PART THAT NEEDS IT ──────────────
+    # PricingService is built lazily, so an unreachable SDILive was discovered somewhere
+    # in the middle of costing -- after every drawing had been parsed, which on a pack of
+    # this size is twenty minutes. Worse, it was discovered only if something asked for a
+    # price at all, so a job could finish having never established whether the source it
+    # was meant to price from was there.
+    #
+    # It also settles a question no banner can. run-job.ps1 warns that an elevated console
+    # affects SOLIDWORKS and not Excel; it said nothing about the database, and 11650 was
+    # run all week from an elevated console where TCP to the SQL server timed out while the
+    # same test from a normal console succeeded immediately. A predicted list of what
+    # elevation affects is a guess. This is the question itself, asked from the console
+    # that is actually going to do the costing, in the first seconds of the run.
+    try:
+        from estimator import _get_pricing_service as _probe_price_source
+        if _probe_price_source() is not None:
+            print("   [pricing] price source reached.\n", flush=True)
+    except Exception as _probe_exc:
+        # _get_pricing_service does not raise -- it reports and returns None. Anything
+        # arriving here is a defect in the probe, and must not take the run with it.
+        print(f"   [pricing] the price source could not be tested ({_probe_exc}) — this job "
+              f"is UNVERIFIED on pricing.\n", flush=True)
+
     _apply_web_ai_pricing_fallback_from_args(args)
 
     auto_discover_dxf = not args.no_dxf_augment
+
+    # ── --llm-only: EVERY OTHER READER OFF ──────────────────────────────────────────
+    #
+    # Composed from switches that already exist rather than a new code path, so the normal
+    # run is untouched: this changes nothing unless the flag is passed.
+    #
+    #   deterministic BOM reader  SDI_LLM_ONLY -> merge_boms skips Path A
+    #   DXF flat patterns         auto_discover_dxf = False
+    #   SolidWorks native extract SDI_APPLY_SOLIDWORKS = 0
+    #
+    # SAID OUT LOUD, EVERY TIME. A run that reads a pack with one source and prices it is
+    # indistinguishable in the output from a run that had all four and agreed -- the flags
+    # look the same, the workbook looks the same. The one thing that must never happen is
+    # somebody finding this spreadsheet in six months and taking it for an estimate.
+    if getattr(args, "llm_only", False):
+        os.environ["SDI_LLM_ONLY"] = "1"
+        # SDI_APPLY_SOLIDWORKS=0 is the documented force-off; SDI_SW_RUN_ANALYSER=0
+        # stops it invoking COM to build one, so an LLM-only run neither reads an
+        # existing extract nor spends four minutes and a seat making a new one.
+        os.environ["SDI_APPLY_SOLIDWORKS"] = "0"
+        os.environ["SDI_SW_RUN_ANALYSER"] = "0"
+        auto_discover_dxf = False
+        print("")
+        print("   " + "=" * 68)
+        print("   LLM-ONLY RUN. The BILL OF MATERIALS comes from the vision model alone.")
+        print("   Deterministic BOM reader: OFF.  DXF flat patterns: OFF.")
+        print("   SolidWorks native extract: OFF.  Every page is sent to the model.")
+        print("   STILL READING THE DRAWING'S TEXT: pdfplumber supplies the title-block")
+        print("   material, thickness and finish exactly as on a normal run. This flag")
+        print("   turns off Path A of the BOM merge, not the text layer.")
+        print("")
+        print("   So no BOM LINE is corroborated. This is a MEASUREMENT of what the")
+        print("   model makes of the bill of materials -- it is not an estimate, and the")
+        print("   numbers it produces must not be quoted or compared with a normal run.")
+        print("   " + "=" * 68)
+        print("")
+
+    # ── --fresh-read: ASK THE MODEL AGAIN ───────────────────────────────────────────
+    # SET AS ENVIRONMENT, like SDI_LLM_ONLY, because the two caches sit at opposite ends of
+    # the pipeline -- one inside the per-page vision reader, one inside the whole-pack
+    # extract -- and threading a flag through file_scan's signature and bom_pipeline's
+    # **opts to reach both is how the argument gets dropped on one path and nobody notices
+    # for a month.
+    if getattr(args, "fresh_read", False):
+        os.environ["SDI_VISION_REFRESH"] = "1"
+        os.environ["SDI_LLM_EXTRACT_REFRESH"] = "1"
+        print("   [fresh-read] both LLM caches bypassed — every page goes to the model and "
+              "the whole-pack read is re-driven. The answer may differ from the last run: "
+              "that is what is being measured, and it is why a normal estimate does not do "
+              "this.", flush=True)
     dxf_only_primary = bool(dxf_from_cli and not drawing_arg)
     job_cfg = getattr(config, "DRAWING_JOB_DISCOVERY", {}) or {}
     folder_as_job = bool(job_cfg.get("folder_as_job", False))
@@ -460,19 +780,149 @@ def main() -> None:
         groups = group_input_files_by_folder(files)
         scan_jobs = [(folder, pdfs) for folder, pdfs in sorted(groups.items()) if pdfs]
         print(f"Folder-as-job: {len(scan_jobs)} job folder(s) from {len(files)} file(s).\n")
+        # ── FILES FOUND AND NONE OF THEM GROUPED IS A REFUSAL, NOT A STATISTIC ──────
+        #
+        # The first live render run printed "Found 1 drawing file(s)" and then
+        # "Folder-as-job: 0 job folder(s) from 1 file(s)", carried on, and filed a summary
+        # with no workbook. The pack became empty BETWEEN two functions — discovery knew
+        # the file, grouping did not — and the only thing that noticed was the collector,
+        # at the very end, by which time the run had reported success.
+        #
+        # Discovery and grouping disagreeing is always a bug in this engine, never a fact
+        # about the pack: `list_input_files` has already applied the extension rule. So it
+        # stops here, names the files it could not place, and exits — the same rule the
+        # delivery-note splitter learned when it reported a missing share as a quiet day.
+        if files and not scan_jobs:
+            print("   !! NOTHING WILL BE ESTIMATED. These file(s) were found and then could")
+            print("      not be placed in a job folder, so the pack is empty from here on:")
+            for _f in files[:10]:
+                print(f"        {_f}")
+            if len(files) > 10:
+                print(f"        ... and {len(files) - 10} more")
+            print("      Discovery and grouping disagree, which is a defect in this engine")
+            print("      rather than a fact about the pack. Refusing rather than filing an")
+            print("      estimate of nothing.", flush=True)
+            # SystemExit, NOT `return`. main() is annotated -> None and `main()` is called
+            # for its side effects, so a returned code is discarded and the process exits 0
+            # — a refusal that reports success, which is the very thing being fixed here.
+            raise SystemExit(2)
     else:
         scan_jobs = [(None, [path]) for path in files]
+        # SAID, BECAUSE THE SHAPE OF THE ANSWER DEPENDS ON IT. --job exists because
+        # --search-root without --folder-as-job scans each PDF as its own job and says
+        # nothing about it (see the comment on --job above). A bare `python src\main.py`
+        # does exactly the same thing whenever config leaves folder_as_job off, and that
+        # path was still silent: a pack of sixteen drawings produced sixteen partial
+        # estimates, no GA, no pooled BOM, and sixteen [SCAN] lines that look like progress.
+        # It happened on a run that was meant to be a re-run of one job.
+        #
+        # One file is not ambiguous and says nothing. More than one is the question this
+        # has to ask out loud, and it reads correctly BOTH ways: an enquiry of a hundred
+        # unrelated drawings genuinely wants one estimate each, and this confirms that is
+        # what it is doing rather than warning against it.
+        if len(files) > 1:
+            print(f"Each drawing as its own job: {len(files)} separate estimate(s), nothing "
+                  f"pooled into a pack.")
+            print(f"   No GA is assembled and no BOM is shared between them. If these "
+                  f"drawings are ONE job, stop now and pass the folder instead:")
+            # THE INTERPRETER THAT IS ACTUALLY RUNNING, for the same reason the dependency
+            # preflight names it: a suggested command line spelled `python` is a different
+            # Python from the venv this was launched with, and handing somebody a command
+            # that fails the preflight is worse than handing them none.
+            print(f"       \"{sys.executable}\" src/main.py "
+                  f"--job \"{Path(args.search_root)}\"")
+            print(f"   (--job sets the search root and folder pooling together, so it "
+                  f"cannot be half-specified.)")
+            print("")
 
     for job_folder, job_files in scan_jobs:
         reset_connectors()
         if job_folder is not None:
             print(f"[JOB] {job_folder.name} ({len(job_files)} PDF(s))")
+            # BEFORE ANYTHING READS THE FOLDER, MAKE WHAT WE CAN READABLE. A DWG is a DXF in
+            # a different container — the same measured outline — and it was being ignored,
+            # so those parts were sized from drawing text while their geometry sat unopened.
+            # Converting first means the DXFs it produces are discovered by the ordinary
+            # scan, with no special path for them afterwards.
+            #
+            # Never allowed to stop a job: a folder with no DWGs, no converter installed, or
+            # a converter that fails, all end the same way — the estimate runs exactly as it
+            # does today and the report says what was not used.
+            _cad_conv, _cad_inv = {}, {}
+            try:
+                import cad_inputs
+                _cad_conv = cad_inputs.convert_dwgs(job_folder)
+                # PER FILE, BECAUSE "converted 2 DWG(s)" IS NOT SOMETHING TO CHECK. It does
+                # not say which two, nor whether the two that converted were then used for
+                # anything — and a DWG that contributes nothing looks exactly like one that
+                # was never in the folder.
+                for _f in (_cad_conv.get("files") or []):
+                    if _f.get("converted"):
+                        print(f"   [cad] {_f['dwg']} -> {_f['dxf']}  ({_f.get('backend')})")
+                    else:
+                        print(f"   [cad] {_f['dwg']} NOT CONVERTED — "
+                              f"{_f.get('reason') or 'no reason recorded'}")
+                if _cad_conv.get("reason"):
+                    print(f"   [cad] {_cad_conv['reason']}")
+                _cad_inv = cad_inputs.inventory(
+                    job_folder, converted=_cad_conv.get("converted_paths") or [])
+                if _cad_inv.get("unread"):
+                    print(f"   [cad] {len(_cad_inv['unread'])} file(s) present and not read: "
+                          f"{', '.join(_cad_inv['unread'][:6])}")
+            except Exception as _exc:
+                print(f"   [cad] input inventory skipped ({_exc})")
+
+            # Handed over explicitly rather than left to be discovered. Folder discovery
+            # globs the job folder and a "DXF" subfolder only — it does not recurse — so a
+            # converted file written anywhere else would be produced and then never read,
+            # which looks exactly like the feature working.
+            #
+            # HELD TO THE SAME STANDARD AS A SUPPLIED FILE. attach_dxf_paths deliberately
+            # skips the flat-part filter, because a human naming a file has already made that
+            # judgement. Nobody made it here: a job folder's DWGs are whatever the customer
+            # sent, and a converted GA sheet handed over unfiltered would be read as a part's
+            # flat pattern. Discovery's own predicate decides, so a converted file is judged
+            # exactly as the same file would be if it had arrived as a DXF.
+            _converted_dxf = [Path(p) for p in (_cad_conv.get("converted_paths") or [])]
+            try:
+                from drawing_job_merge import is_flat_part_dxf
+                _rejected = [p for p in _converted_dxf if not is_flat_part_dxf(p)]
+                _converted_dxf = [p for p in _converted_dxf if is_flat_part_dxf(p)]
+                # AND WHAT BECAME OF EACH ONE. Converting a DWG and then refusing the DXF
+                # as a drawing rather than a flat pattern is the CORRECT outcome for a GA
+                # sheet — and reported only as a count it reads as a failure, or worse, the
+                # conversion reads as a success that fed the estimate when it fed nothing.
+                _rej_names = {p.name for p in _rejected}
+                for _f in (_cad_conv.get("files") or []):
+                    if not _f.get("converted"):
+                        continue
+                    if _f.get("dxf") in _rej_names:
+                        _f["used_for_geometry"] = False
+                        _f["outcome"] = ("converted, then not used as geometry: it is a "
+                                         "drawing sheet, not a part flat pattern")
+                    else:
+                        _f["used_for_geometry"] = True
+                        _f["outcome"] = "converted and offered to the geometry reader"
+                    print(f"   [cad] {_f['dwg']}: {_f['outcome']}")
+                if _rejected:
+                    print(f"   [cad] {len(_rejected)} converted DXF(s) are not part flat "
+                          f"patterns (GA sheets or no part number in the name) and were not "
+                          f"used for geometry: {', '.join(p.name for p in _rejected[:4])}")
+            except ImportError:
+                pass
             summary, output_paths = scan_folder_job(
                 job_folder,
                 job_files,
-                attach_dxf_paths=None,
+                attach_dxf_paths=_converted_dxf or None,
                 auto_discover_dxf=auto_discover_dxf,
             )
+            # Stamped onto the job so the report, the quote gate and the re-check CLI all
+            # read the same record of what was supplied and what was done with it.
+            if isinstance(summary, dict):
+                if _cad_inv:
+                    summary["cad_inputs"] = _cad_inv
+                if _cad_conv.get("found"):
+                    summary["dwg_conversion"] = _cad_conv
             scan_label = job_folder.name
         else:
             drawing_path = job_files[0]
@@ -494,17 +944,106 @@ def main() -> None:
             )
             scan_label = drawing_path.name
 
+        # Everything main() does between the scan returning and the workbook opening —
+        # readers-that-ran, the learning engine, drawing-facts enrichment, the dual-path
+        # push into part_estimates, the manual-sheet parity — was unbracketed (D-279).
+        _time_stage("post_scan_enrichment", True)
+
+        # ── WHICH READERS RAN, ON THE RECORD, BEFORE ANYTHING DESCRIBES THE JOB ─────────
+        #
+        # THE DEFECT THIS FIXES, in James's words: "why does it state SolidWorks model was
+        # used on some drawing files when it couldn't have been as it was an llm run?"
+        #
+        # It was stated because nothing had told the report otherwise. --llm-only set three
+        # environment variables and the summary carried no trace of it, so the workbook
+        # sheets and the HTML report — both built from this in-memory dict — described the
+        # run in the vocabulary of a full one. Section 4.1 listed eighteen SLDPRT files under
+        # a heading that reads "What it contributed"; section 4.2, two paragraphs later, said
+        # "No DXFs or SolidWorks models are matched on this job". Both sentences came out of
+        # the same run because one was reporting the folder and the other the readings.
+        #
+        # THE STAMP WAS THERE AND IT WAS TOO LATE. main.py already wrote `llm_only` onto the
+        # saved JSON, but under --deliverables, hundreds of lines below this point and after
+        # the sheets had been written from `summary`. A flag that reaches the file and not
+        # the object is a flag every generator in this process runs without.
+        #
+        # Stamped here, immediately after the scan, so there is no window in which a
+        # deliverable can be built by something that does not know what kind of run it is.
+        summary["llm_only"] = bool(getattr(args, "llm_only", False))
+        summary["fresh_read"] = bool(getattr(args, "fresh_read", False))
+        try:
+            from run_readers import readers_that_ran as _readers
+            summary["readers_that_ran"] = _readers(
+                llm_only=bool(getattr(args, "llm_only", False)),
+                dxf_enabled=bool(auto_discover_dxf))
+        except Exception as _rr_exc:
+            # SAID, NOT SWALLOWED. The report falls back to deriving this from the flag, which
+            # is correct but coarser; a silent failure here would look like a full run.
+            print(f"   [run] could not record which readers ran ({_rr_exc}) — section 4.1 of "
+                  f"the job report will describe the run from the flag alone.", flush=True)
+
         # SDI Intelligence — Learning Engine
+        _time_stage("learning_engine", True)
         try:
             from learning_engine import get_engine
             summary = get_engine().post_scan(summary)
         except Exception:
             pass
+        _time_stage("learning_engine", False)
+
+        # Explicit order quantity (--order-qty), onto the fields the JOB-LEVEL additions read.
+        #
+        # The costing itself has already happened at this quantity — SDI_ORDER_QTY is set
+        # before the scan and file_scan decides the number once, before estimate_document.
+        # What remains here is stamping the same value on the estimate_summary node that
+        # wb_populate reads for the order-qty cell, and on summary["quantity"] which the
+        # assembly-labour calc below reads. It agrees with the costing rather than replacing
+        # it; check_the_quantity_costed_is_the_quantity_ordered blocks the job if it ever
+        # does not, so this can no longer paper over a batch the parts were not priced for.
+        if getattr(args, "order_qty", None):
+            try:
+                _oq = int(args.order_qty)
+                summary["quantity"] = _oq
+                summary["assumed_job_quantity"] = _oq
+                _esd = summary.get("estimate_summary")
+                if isinstance(_esd, dict):
+                    _esd["assumed_job_quantity"] = _oq
+                print(f"  Order quantity set to {_oq} (from --order-qty)")
+            except Exception:
+                pass
+
+        # Deterministic drawing-facts enrichment (Layer 2) — GATED (SDI_APPLY_DRAWING_FACTS) and
+        # non-destructive: fills material/finish only where the engine has none, and surfaces the
+        # printed weights + tube stock as review flags. Safe on DXF/native jobs (those layers
+        # already fill these, so nothing is overwritten). For no-DXF customer tender drawings it
+        # is the trustworthy backbone. Off by default so proven jobs (12120/1282) are untouched.
+        import os as _os_df
+        if _os_df.getenv("SDI_APPLY_DRAWING_FACTS", "").lower() in {"1", "true", "yes"}:
+            try:
+                from drawing_facts import extract_drawing_facts
+                from source_connectors.drawing_facts_conn import apply_drawing_facts_to_part_estimates
+                _dp = job_files[0] if job_files else None
+                _dps = str(_dp) if _dp else ""
+                if _dps.lower().endswith(".pdf"):
+                    _facts = extract_drawing_facts(_dps)
+                    _sb = _facts.get("spec_block") or {}
+                    _cnt = apply_drawing_facts_to_part_estimates(summary, _facts)
+                    summary.setdefault("drawing_facts", {})["spec_block"] = _sb
+                    print(f"  [drawing-facts] material+{_cnt['material_set']} finish+{_cnt['finish_set']} "
+                          f"weight+{_cnt['weight_flagged']} tube+{_cnt['tube_flagged']} "
+                          f"weld-flag+{_cnt.get('weld_flagged', 0)} | "
+                          f"powder={_sb.get('powder_micron')}um weld={_sb.get('weld_spec')}")
+            except Exception as _exc:
+                print(f"  [drawing-facts] skipped ({_exc})")
 
         # ── Job-level additions: assembly labour (history) + bought-in materials (Tim BOM) ──
         # Computed AFTER the scan, then folded into BOTH the bay estimate AND the canonical
         # estimate_summary (workbook_equivalent_pricing / cost_breakdown / document total). The
         # saved JSON is then RE-WRITTEN, so the spreadsheet, JSON and parity report all agree.
+        # The 15:33 12567 run put 32.6 minutes in post_scan_enrichment and the bracket could
+        # not say where inside. These name the steps that can each hold a database, a share
+        # or a re-serialisation of the whole job (D-299).
+        _time_stage("job_level_pricing_and_rewrite", True)
         _assembly_cost = 0.0
         _bought_in_total = 0.0
         _es = summary.get("estimate_summary", {}) or {}
@@ -629,6 +1168,7 @@ def main() -> None:
             except Exception as _exc_rc:
                 print(f"  (totals reconciliation skipped: {_exc_rc})")
 
+        _time_stage("job_level_pricing_and_rewrite", False)
         print(f"Page count: {summary['page_count']}")
         print("Detected labels:", ", ".join(summary["detected_labels"]) or "None")
         print("Part numbers:", ", ".join(summary["pattern_summary"]["part_numbers"]) or "None")
@@ -703,6 +1243,7 @@ def main() -> None:
             print(f"\nEstimated document total: {total}")
 
         if getattr(args, "generate_ai_spreadsheet", False):
+            _time_stage("ai_spreadsheet", True)
             try:
                 tpl = Path(args.ai_spreadsheet_template) if args.ai_spreadsheet_template else None
                 out_xlsx = Path(args.ai_spreadsheet_out) if args.ai_spreadsheet_out else None
@@ -710,6 +1251,7 @@ def main() -> None:
                 print(f"\nAI estimating spreadsheet: {ai_path.resolve()}")
             except Exception as exc:
                 print(f"\nAI estimating spreadsheet failed: {exc}", flush=True)
+            _time_stage("ai_spreadsheet", False)
 
         # Auto-generate clean BOM/Routes/Summary xlsx on every scan
         # ── AI Estimate Sheet (wb_populate — primary output) ──────────────
@@ -719,42 +1261,204 @@ def main() -> None:
         # unreachable (e.g. share unavailable), so a network blip doesn't
         # stop the run.
         xlsx_path = None
+        _time_stage("post_scan_enrichment", False)
+        _time_stage("populate_workbook", True)
         try:
             from wb_populate import populate_workbook
+            # ONE RUN, ONE NAME. Every deliverable carries this identity so "which engine
+            # produced this file" is checkable instead of guessed from timestamps — the
+            # release rule's "same run ID, quantity and pricing snapshot on every
+            # deliverable". Minted before the workbook so the saved JSON, the tabs, the
+            # HTML pages and the variants all inherit one value.
+            try:
+                import subprocess as _sp_rev
+                _git_rev = _sp_rev.run(
+                    ["git", "rev-parse", "--short", "HEAD"], capture_output=True,
+                    text=True, timeout=5,
+                    cwd=str(Path(__file__).resolve().parent)).stdout.strip()
+            except Exception:                                    # noqa: BLE001
+                _git_rev = ""
+            summary["run_id"] = (
+                f"{scan_label}-"
+                f"{__import__('datetime').datetime.now():%Y%m%d-%H%M%S}"
+                + (f"-{_git_rev}" if _git_rev else ""))
+            # THE CUSTOMER THE RUN WAS GIVEN IS THE CUSTOMER (D-364). --customer is documented
+            # as authoritative, but only the deliverables read it: the workbook guessed from the
+            # job folder's path, which a portal run stages under the client and a run on a
+            # local folder does not — the 14:12 M&S plywood book was headed with its own
+            # drawing number as the customer. The name also selects the customer's commercial
+            # terms (config.CUSTOMER_COMMERCIAL_TERMS), so that book also lost M&S's 1.8%
+            # rebate and /0.92 absorption and went out at the template's 0 and /0.93, about
+            # 2.9% light. Every portal run of the same pack had them.
+            if getattr(args, "customer", None) and str(args.customer).strip():
+                summary["customer"] = str(args.customer).strip()
             xlsx_path = populate_workbook(summary, str(scan_label))
             if xlsx_path:
                 print(f"\nAI Estimate Sheet: {Path(xlsx_path).resolve()}")
+                # Stamp the workbook's ACCEPTED labour rows into the canonical JSON.
+                # The JSON is written earlier in the run, before the workbook exists, so
+                # without this the route record populate_workbook builds never reaches the
+                # deliverables — which read the saved file, not this in-memory summary. They
+                # would fall back to the engine-side costed fields, which are PRE-filter and
+                # still carry powder on timber and weld on artefact records. Same principle
+                # as the wep-readback below: the workbook is the authority, so what it
+                # accepted has to come back.
+                try:
+                    from costed_facts import reconcile_risk_flags as _rrf
+                    _wl = summary.get("workbook_labour")
+                    _canon_wl = (summary.get("saved_output_paths") or {}).get("json")
+                    # Reconcile the IN-MEMORY summary first: the Decision Report and AI
+                    # Provenance sheets are written from it a few lines below.
+                    _rc_mem = _rrf(summary)
+                    if _wl and _canon_wl and Path(_canon_wl).exists():
+                        with open(_canon_wl, encoding="utf-8") as _fh_r:
+                            _doc = json.load(_fh_r)
+                        _doc["workbook_labour"] = _wl
+                        # THE CANONICAL PART LIST HAS TO REACH THE FILE, NOT JUST THIS RUN.
+                        #
+                        # populate_workbook stamps it onto the in-memory summary, and the
+                        # two workbook tabs are written from that — so they were right. The
+                        # quote and job report are generated from the SAVED JSON
+                        # (_gen_job_report takes a path, not an object), which was written
+                        # before the workbook existed and never received it. Both fell back
+                        # to raw part_estimates, which is the exact divergence the shared
+                        # list exists to close: merged duplicates back, rolled quantities
+                        # gone, and the bought-in BOM lines the sheet charges missing again.
+                        _canon_pes = ((summary.get("estimate_summary") or {})
+                                      .get("canonical_part_estimates"))
+                        if isinstance(_canon_pes, list) and _canon_pes:
+                            ((_doc.setdefault("estimate_summary", {}))
+                             ["canonical_part_estimates"]) = _canon_pes
+                        if _wl.get("mode") == "canonical":
+                            ((_doc.setdefault("estimate_summary", {}))
+                             .setdefault("canonical_route_shadow", {}))["mode"] = "cutover"
+                        # WHICH WORKBOOK THIS RUN PRODUCED. The run JSON recorded the json,
+                        # text, log, csv and sql it wrote and not the estimate itself — so
+                        # anything reading the saved run back, the report generator above
+                        # all, could not find the spreadsheet the whole run exists to make.
+                        # Without it the report cannot show a figure that only lives on the
+                        # sheet, and a report regenerated a week later has no way to ask.
+                        ((_doc.setdefault("saved_output_paths", {}))
+                         ["estimate_xlsx"]) = str(xlsx_path)
+                        ((summary.setdefault("saved_output_paths", {}))
+                         ["estimate_xlsx"]) = str(xlsx_path)
+                        # ...and the on-disk copy, which is what the HTML deliverables read.
+                        # Both must agree or the .xlsx tabs and the HTML diverge again.
+                        _rc_doc = _rrf(_doc)
+                        with open(_canon_wl, "w", encoding="utf-8") as _fh_w:
+                            json.dump(_doc, _fh_w, indent=2, ensure_ascii=False, default=str)
+                        if _rc_doc.get("superseded") or _rc_mem.get("superseded"):
+                            print(f"   [risk-flags] {max(_rc_doc.get('superseded', 0), _rc_mem.get('superseded', 0))} "
+                                  f"flag(s) superseded — the drawing cue was read but the "
+                                  f"priced route has no such operation; recorded on the part "
+                                  f"as superseded_risk_flags, not dropped", flush=True)
+                        print(f"   [workbook-route] {len(_wl.get('rows') or [])} accepted "
+                              f"labour row(s) stamped into the JSON — quote, report and "
+                              f"Decision Report now describe the priced route", flush=True)
+                except Exception as _wl_exc:
+                    print(f"   [workbook-route] not stamped ({_wl_exc}) — deliverables will "
+                          f"fall back to PRE-FILTER engine ops and may name operations the "
+                          f"sheet does not charge", flush=True)
             else:
                 raise RuntimeError("populate_workbook returned None")
         except Exception as _wb_exc:
-            print(f"\n[wb_populate] failed ({_wb_exc}) — falling back to xlsx_output", flush=True)
+            print(f"\n[wb_populate] failed ({_wb_exc})", flush=True)
+            # Full traceback so the failing line is visible, not just the message.
+            # A bare exception message (e.g. a KeyError with only a key name) hides
+            # where in populate_workbook's 400+ lines it died; the fallback to the
+            # old builder is otherwise silent about the real cause.
+            import traceback as _tb
+            print("   [wb_populate] traceback:", flush=True)
+            _tb.print_exc()
             try:
-                from xlsx_output import write_estimate_xlsx
-                _fallback = write_estimate_xlsx(summary, out_dir=OUTPUT_DIR / "estimates")
-                xlsx_path = str(_fallback)
-                print(f"   -> Fallback estimate xlsx: {_fallback.resolve()}")
-            except Exception as _fb_exc:
-                print(f"   -> Fallback also failed: {_fb_exc}", flush=True)
+                from config import CANONICAL_ROUTE_WORKBOOK_CUTOVER as _canonical_cutover
+            except Exception:
+                _canonical_cutover = False
+            if _canonical_cutover:
+                print("   -> NO fallback workbook written: canonical route cutover is "
+                      "enabled, and the legacy builder can resurrect or multiply rejected "
+                      "operations. Fix the canonical failure and re-run.", flush=True)
+            else:
+                try:
+                    from xlsx_output import write_estimate_xlsx
+                    _fallback = write_estimate_xlsx(
+                        summary, out_dir=OUTPUT_DIR / "estimates")
+                    xlsx_path = str(_fallback)
+                    print(f"   -> Fallback estimate xlsx: {_fallback.resolve()}")
+                except Exception as _fb_exc:
+                    print(f"   -> Fallback also failed: {_fb_exc}", flush=True)
 
-        # SDI Intelligence — Decision Report + Provenance sheets
-        # Added to whichever output was produced (wb_populate or fallback).
-        if xlsx_path:
+        # ── The extraction audit: what every file held, and what we did with it ──────
+        # Written every run, beside the estimate, because the question it answers cannot be
+        # answered from the estimate itself: three different failures look identical from
+        # outside — the file did not have it, we did not read it, or we read it and dropped
+        # it on the way to the price. The last is the worst and the most fixable.
+        try:
+            from source_drawing_data import write_source_drawing_data
+            # The job's own DXFs, opened by the audit ITSELF rather than taken from the
+            # pipeline — that independence is the whole point: a reader cannot be checked
+            # against its own output. Every SDI pack tends to carry them, because the CNC
+            # machines need them; a pack without any simply produces no comparison rows.
+            _sdd_dxfs = []
             try:
-                import openpyxl as _opxl
-                from job_decision_report import add_decision_report_sheet
-                from estimation_report import add_provenance_sheet
-                _wb = _opxl.load_workbook(str(xlsx_path))
-                _scan_meta = {
-                    "pdf_name":    str(scan_label),
-                    "job_number":  str(scan_label).split("-")[0][:6],
-                    "scan_date":   __import__("datetime").datetime.now().strftime("%d/%m/%Y %H:%M"),
-                }
-                add_decision_report_sheet(_wb, summary, _scan_meta)
-                add_provenance_sheet(_wb, summary, _scan_meta)
-                _wb.save(str(xlsx_path))
-                print(f"   -> Decision Report + AI Provenance sheets added")
-            except Exception as _rep_exc:
-                print(f"   -> Report sheets skipped: {_rep_exc}", flush=True)
+                if job_folder is not None:
+                    # The job folder's own DXFs — never a sub-folder's.
+                    _sdd_dxfs = [p for p in sorted(Path(job_folder).iterdir())
+                                 if p.is_file() and p.suffix.lower() == ".dxf"]
+                    # And the DXFs the engine itself converted from the job's DWGs — its own
+                    # output folder, named, not a sub-folder of the customer's.
+                    _conv = Path(job_folder) / "_dxf_from_dwg"
+                    if _conv.is_dir():
+                        _sdd_dxfs += [p for p in sorted(_conv.iterdir())
+                                      if p.is_file() and p.suffix.lower() == ".dxf"]
+            except Exception:
+                _sdd_dxfs = []
+            # ONE SNAPSHOT, TWO OUTPUTS. The spreadsheet estimating works from and the page
+            # management reads have to describe the same pack. Letting each writer build its
+            # own tables called build_tables() twice, which re-read every DXF and re-walked
+            # the summary: the same function, not the same data, and nothing held the two
+            # answers together. Built once here and handed to both.
+            from source_drawing_data import build_tables, write_source_drawing_html
+            _sdd_tables = build_tables(summary, _sdd_dxfs)
+            _sdd = write_source_drawing_data(
+                summary, OUTPUT_DIR / "estimates", job=str(scan_label or ""),
+                dxf_paths=_sdd_dxfs, tables=_sdd_tables)
+            if _sdd:
+                print(f"   -> Source drawing data: {_sdd.resolve()}")
+                (summary.setdefault("saved_output_paths", {}))["source_drawing_data"] = str(_sdd)
+            _sdd_html = write_source_drawing_html(
+                summary, OUTPUT_DIR / "estimates", job=str(scan_label or ""),
+                dxf_paths=_sdd_dxfs, tables=_sdd_tables)
+            if _sdd_html:
+                print(f"   -> Source drawing data (HTML): {_sdd_html.resolve()}")
+                (summary.setdefault("saved_output_paths", {}))[
+                    "source_drawing_data_html"] = str(_sdd_html)
+        except Exception as _sdd_err:
+            print(f"   -> Source drawing data not written: "
+                  f"{type(_sdd_err).__name__}: {_sdd_err}", flush=True)
+        # INDEPENDENT OF THE AUDIT ABOVE. This sat inside the source-drawing-data try, so any
+        # failure there (a DXF the audit could not re-read) skipped the extract too, and the log
+        # named only the audit: 11650-06's 25 Sep run filed no BOMs and Routes (D-253).
+        # ── THE TWO QUESTIONS THAT COME BEFORE A PRICE ─────────────────────────
+        # What parts did you find, and what work did you decide each one needs. Written
+        # every run beside the audit, because they were only reachable by opening a costed
+        # workbook — the wrong artefact for the question — and the route half was not
+        # reachable at all: the audit read `canonical_route` while every real run writes
+        # `canonical_route_shadow`, so its Operations sheet was empty on every job.
+        try:
+            from bom_and_route_extract import write_both as _write_extracts
+            _ex = _write_extracts(summary, OUTPUT_DIR / "estimates",
+                                  job=str(scan_label or ""), want="both")
+            for _k in ("xlsx", "html"):
+                if _ex.get(_k):
+                    print(f"   -> BOMs and routes ({_k}): {Path(_ex[_k]).resolve()}")
+                    (summary.setdefault("saved_output_paths", {}))[
+                        f"boms_and_routes_{_k}"] = _ex[_k]
+            print(f"   -> {_ex.get('boms', 0)} BOM row(s), "
+                  f"{_ex.get('routes', 0)} route decision(s)")
+        except Exception as _ex_err:
+            print(f"   -> BOMs and routes not written: "
+                  f"{type(_ex_err).__name__}: {_ex_err}", flush=True)
 
         # ── Price read-back: stamp the REAL Excel-computed totals into the JSON ──
         # wb_populate writes Excel FORMULAS; the true unit cost is computed by Excel on load,
@@ -762,49 +1466,974 @@ def main() -> None:
         # drift from the spreadsheet. Open the populated .xlsx via Excel COM, read the real
         # Material/Labour/Unit totals, and write them into the JSON so every consumer agrees.
         # Failure-isolated: any error leaves the JSON unchanged and never breaks the run.
+        #
+        # AND WHATEVER HAPPENS, THE RECORD SAYS WHICH. _mp_skip collects the reason the workbook
+        # stage did not complete, and it is stamped onto the saved JSON below as
+        # money_provenance. Twenty-three archived 7332-01 records were searched for the run
+        # behind an accepted £80.09 workbook and every one looked like a candidate — right job,
+        # right quantity, right part count — while not one carried final_estimate.totals, and
+        # nothing in any of them said so. The absence was discoverable only by running the
+        # costing code and noticing the totals came back None. That silence is the defect being
+        # closed here; the skip itself is deliberate and stays.
+        # Every workbook this stage writes, refreshed through Excel once at the end so the
+        # saved files carry their own calculated totals — see THE CALCULATED VALUES ARE
+        # WRITTEN LAST. The baseline is always in the list; the sweep appends its variants.
+        _recache_books: List[str] = [str(xlsx_path)] if xlsx_path else []
+
+        _mp_skip = ""
+        # THE REASON AS A CODE TOO (D-366), so the covering note can name the repair: a busy
+        # Excel is re-run, a #DIV/0! is traced. One sentence for both sent the estimator
+        # hunting a labour row on the 14:12 M&S run, when Excel had simply been busy.
+        _mp_cause = ""
+        # Whether the last pass through Excel (the formula-cache refresh) managed to calculate
+        # and save the workbook. None = never attempted. The note uses it to tell a passing
+        # hold-up from an Excel that is unreachable.
+        _recached_n: Optional[int] = None
+        if not xlsx_path:
+            _mp_skip = ("populate_workbook returned no path, so no workbook was written and "
+                        "nothing could be read back")
+            _mp_cause = "no_workbook"
         if xlsx_path:
             try:
                 from wep_readback_from_xlsx import stamp_real_totals_into_json as _stamp_wep
+                from wep_readback_from_xlsx import last_failure as _wep_last_failure
                 _canon_json = (summary.get("saved_output_paths") or {}).get("json")
                 if _canon_json and Path(_canon_json).exists():
-                    _stamp_wep(str(xlsx_path), str(_canon_json))
+                    if _stamp_wep(str(xlsx_path), str(_canon_json)) is None:
+                        _wep_fail = _wep_last_failure()
+                        _mp_skip = (_wep_fail.get("detail") or
+                                    "the read-back could not obtain the calculated totals from "
+                                    "the workbook (see the [wep-readback] line above)")
+                        _mp_cause = str(_wep_fail.get("cause") or "")
                 else:
+                    _mp_skip = "the canonical JSON path was not found when the read-back ran"
+                    _mp_cause = "record_unreadable"
                     print("   [wep-readback] canonical JSON path not found — readback skipped.", flush=True)
             except Exception as _wep_exc:
+                _mp_skip = f"the read-back raised {type(_wep_exc).__name__}: {_wep_exc}"
+                _mp_cause = "readback_raised"
                 print(f"   [wep-readback] skipped ({_wep_exc}) — JSON unchanged, run continues.", flush=True)
+
+        # ── THE ACCEPTED ROWS REACH THE FILE EVEN WHEN EXCEL NEVER RAN ─────────────
+        # build_workbook_labour already emits each accepted row with its part_numbers and its
+        # decision_ids, and it needs no Excel: wb_populate writes formulas, Excel only computes
+        # them. But the stamp that carried those rows to the JSON sat inside `if xlsx_path:`,
+        # and populate_workbook returning None raises straight past it — so on every run where
+        # the workbook stage failed late, the rows were built and thrown away.
+        #
+        # That is the difference between a record nobody can attribute anything to and one where
+        # parts and operations ARE attributable and only money is missing — money_provenance's
+        # `accepted_rows_only`, a state nothing could previously produce. It is also the half of
+        # the read-back that can be fixed without a spreadsheet, so it is fixed here rather than
+        # waiting on one.
+        try:
+            _wl_rescue = summary.get("workbook_labour")
+            _wl_json = (summary.get("saved_output_paths") or {}).get("json")
+            if _wl_rescue and _wl_json and Path(_wl_json).exists():
+                with open(_wl_json, encoding="utf-8") as _fh_wlr:
+                    _wl_doc = json.load(_fh_wlr)
+                if not (_wl_doc.get("workbook_labour") or {}).get("rows"):
+                    _wl_doc["workbook_labour"] = _wl_rescue
+                    with open(_wl_json, "w", encoding="utf-8") as _fh_wlw:
+                        json.dump(_wl_doc, _fh_wlw, indent=2, ensure_ascii=False, default=str)
+                    _wl_rows = _wl_rescue.get("rows") or []
+                    _wl_with_ids = sum(1 for _r in _wl_rows if _r.get("decision_ids"))
+                    print(f"   [workbook-route] rescued {len(_wl_rows)} accepted labour row(s) "
+                          f"onto the JSON ({_wl_with_ids} carrying decision ids) — the workbook "
+                          f"stage did not complete, so money is still missing, but parts and "
+                          f"operations are now attributable", flush=True)
+        except Exception as _wlr_exc:
+            print(f"   [workbook-route] accepted rows not rescued "
+                  f"({type(_wlr_exc).__name__}: {_wlr_exc}) — this record will read as "
+                  f"pre-workbook", flush=True)
+
+        # ── THE RECORD DECLARES WHETHER IT CARRIES THE MONEY ───────────────────────
+        # UNCONDITIONAL, and that is the whole point: the case worth stamping is the one where
+        # the workbook stage did NOT complete. A record that cannot evidence a price has to say
+        # so on its own face, because the alternative is what happened with 7332 — an archive of
+        # plausible candidates, none of which could, and no way to tell without running the
+        # costing code over each one.
+        try:
+            import money_provenance as _mp
+            _mp_json = (summary.get("saved_output_paths") or {}).get("json")
+            if _mp_json and Path(_mp_json).exists():
+                with open(_mp_json, encoding="utf-8") as _fh_mp:
+                    _mp_doc = json.load(_fh_mp)
+                _mp_verdict = _mp.stamp(_mp_doc, skip_reason=_mp_skip, cause=_mp_cause)
+                # WHAT THIS MACHINE COULD NOT DO, ON THE RECORD. Same principle: a console
+                # warning nobody kept is not a record. An estimate produced without pyodbc is
+                # costed from fallbacks, and a reader months later has no other way to know.
+                try:
+                    _mp_doc["environment"] = json.loads(
+                        os.environ.get("SDI_ENVIRONMENT_DESCRIPTION") or "{}")
+                except Exception:                                        # noqa: BLE001
+                    pass
+                with open(_mp_json, "w", encoding="utf-8") as _fh_mpw:
+                    json.dump(_mp_doc, _fh_mpw, indent=2, ensure_ascii=False, default=str)
+                summary["money_provenance"] = _mp_verdict
+                if _mp_verdict["can_evidence_a_price"]:
+                    print(f"   [money] this record evidences its price: "
+                          f"{_mp_verdict['evidence']['final_estimate.totals']}", flush=True)
+                else:
+                    print(f"   [money] THIS RECORD CANNOT EVIDENCE A PRICE "
+                          f"({_mp_verdict['state']}). {_mp_verdict['why']}", flush=True)
+                    print(f"   [money] it is stamped money_provenance so nothing downstream, "
+                          f"and nobody reading it later, has to work that out again", flush=True)
+        except Exception as _mp_exc:
+            print(f"   [money] provenance not stamped ({type(_mp_exc).__name__}: {_mp_exc}) — "
+                  f"a record with no money_provenance must be treated as unable to evidence "
+                  f"a price", flush=True)
+
+        # THE READ-BACK STAMPS THE FILE ON DISK, NOT THIS SUMMARY.
+        #
+        # Everything after this point describes the job from the in-memory summary, and
+        # without pulling the stamped blocks back into it the two provenance tabs are
+        # written from a job that has no final_estimate at all. On 2085 that showed exactly
+        # as you would expect: the Ext GBP column summed the engine's per-part figures to
+        # GBP 44.75 against a Sell Price of GBP 6.33, with the money columns unlabelled and
+        # no reconciliation line, because the code that writes both asks whether Excel has
+        # calculated yet and the honest answer at that moment was no.
+        if xlsx_path:
+            try:
+                _canon_json = (summary.get("saved_output_paths") or {}).get("json")
+                if _canon_json and Path(_canon_json).exists():
+                    with open(_canon_json, encoding="utf-8") as _fh_fe:
+                        _stamped = json.load(_fh_fe)
+                    if isinstance(_stamped.get("final_estimate"), dict):
+                        summary["final_estimate"] = _stamped["final_estimate"]
+                    _s_es = _stamped.get("estimate_summary")
+                    if isinstance(_s_es, dict):
+                        _m_es = summary.setdefault("estimate_summary", {})
+                        for _k in ("workbook_equivalent_pricing", "cost_breakdown",
+                                   "final_estimate"):
+                            if isinstance(_s_es.get(_k), dict):
+                                _m_es[_k] = _s_es[_k]
+                    print(f"   [wep-readback] calculated totals merged into the run — the "
+                          f"report sheets can now reconcile against them", flush=True)
+                    # THE ONE RECORD, BUILT HERE AND STAMPED ON THE JSON. costed_job is
+                    # pure and every writer calls it for itself; the persisted copy is the
+                    # audit trail of what the deliverables were built from. Written back to
+                    # the canonical file, because the quote and the report are generated
+                    # from that file, not from this summary.
+                    try:
+                        from costed_facts import costed_job as _costed_job
+                        summary["costed_job"] = _costed_job(summary)
+                        _stamped["costed_job"] = summary["costed_job"]
+                        with open(_canon_json, "w", encoding="utf-8") as _fh_cj:
+                            json.dump(_stamped, _fh_cj, indent=2, ensure_ascii=False,
+                                      default=str)
+                        _cj_gaps = summary["costed_job"].get("gaps") or {}
+                        print(f"   [costed-job] one record from the calculated rows: "
+                              f"{len(summary['costed_job'].get('lines') or [])} lines, "
+                              f"unpriced {_cj_gaps.get('unpriced') or []}, house-indicative "
+                              f"£{_cj_gaps.get('indicative_house_gbp') or 0:.2f}, market "
+                              f"£{_cj_gaps.get('indicative_market_gbp') or 0:.2f} — every "
+                              f"deliverable reads it", flush=True)
+                    except Exception as _cj_exc:
+                        print(f"   [costed-job] record not stamped ({_cj_exc}) — the "
+                              f"deliverables build it in memory", flush=True)
+            except Exception as _fe_exc:
+                print(f"   [wep-readback] totals not merged ({_fe_exc}) — the report sheets "
+                      f"will show engine figures and say so", flush=True)
+
+        # THE EXPLANATION, INSIDE THE WORKBOOK THAT NEEDS EXPLAINING.
+        #
+        # Every row of the estimate, where its figure came from and which drawing page owns
+        # it — the document that has been produced by hand for the last week, written as a
+        # tab so it arrives with the file rather than beside it. It has to run HERE: it prints
+        # Estimate!M63:M77 and the sheet's own totals, and none of those exist until Excel has
+        # calculated the populated template and the read-back has recorded what it found.
+        #
+        # Failure-isolated by the writer itself — a workbook without this tab is still a
+        # complete estimate, and nothing here may cost a run that has already taken an hour.
+        # ONE PHRASE, THE BANNER INCLUDED. The Estimate banner counted workbook input
+        # CELLS ("4 ESTIMATOR INPUTS REQUIRED") while the e-mail, report and quote all
+        # carried the shared tally ("3 prices missing + 1 market figure + 2 manufacturing
+        # decisions") — two counts of one job on the reader's first glance. The banner is
+        # rewritten after the read-back, when the costed record exists, with the same
+        # phrase every other surface prints. The sweep runs later, so the variants
+        # inherit it.
+        if xlsx_path:
+            _rewrite_estimate_banner(xlsx_path, summary)
+
+        if xlsx_path:
+            try:
+                from estimate_explanation_tab import write_tab as _write_explanation_tab
+                _write_explanation_tab(
+                    xlsx_path, (summary.get("saved_output_paths") or {}).get("json"))
+            except Exception as _tab_exc:
+                print(f"   [explanation-tab] skipped ({_tab_exc}) — the workbook is "
+                      f"unchanged.", flush=True)
+
+        # SDI Intelligence — AI Provenance sheet
+        # Added to whichever output was produced (wb_populate or fallback).
+        #
+        # AFTER the read-back, deliberately. This sheet states what Excel calculated and
+        # reconciles the engine's per-part figures against it; written before the read-back
+        # it had nothing to reconcile against and silently fell back to engine-only.
+        #
+        # ONE TAB, NOT TWO. The Decision Report used to be written here as well, and the two
+        # sheets each carried a row per part with its material, its gauge and where they came
+        # from — the same twenty-five rows twice, and not identically: they derived geometry
+        # source independently and disagreed about it. James: "let's get rid of one and just
+        # keep the other one then. we don't want clutter." Its four unique blocks — powder
+        # authority, the material breakdown that adds back to the sheet's total, and the two
+        # contest tables — moved into AI Provenance first. job_decision_report still holds the
+        # code and the computation; nothing calls it to make a sheet.
+        if xlsx_path:
+            try:
+                import openpyxl as _opxl
+                from estimation_report import add_provenance_sheet
+                _wb = _opxl.load_workbook(str(xlsx_path))
+                _scan_meta = {
+                    "pdf_name":    str(scan_label),
+                    "job_number":  str(scan_label).split("-")[0][:6],
+                    "scan_date":   __import__("datetime").datetime.now().strftime("%d/%m/%Y %H:%M"),
+                }
+                add_provenance_sheet(_wb, summary, _scan_meta)
+                _wb.save(str(xlsx_path))
+                print(f"   -> AI Provenance sheet added")
+            except Exception as _rep_exc:
+                print(f"   -> Report sheets skipped: {_rep_exc}", flush=True)
+
+            # WRITTEN BEFORE THE VARIANTS ARE SAVED. The sweep does SaveAs on this
+            # workbook, so anything added after it lands on the baseline and on none of the
+            # four quantity variants: the estimator opening _qty500 found the AI Explanation
+            # tab there and no AI Provenance sheet at all, which reads as a sheet that failed
+            # rather than one written a minute too late.
+            # THE OTHER QUANTITIES, FILED WITH THE FIRST.
+            #
+            # "we need to price sheets for multiple units.. so 1, 50, 100, 250 and 500 in
+            # this case. this seems to be the norm now." The estimator's own method is to
+            # price one properly and recalculate the rest from it, and quantity_sweep has
+            # done exactly that for a while — as a command nobody was going to remember,
+            # which is the same reason parity ran once.
+            #
+            # Recalculated from THIS estimate rather than re-run: a re-run per quantity is
+            # five hours for arithmetic Excel does in a second, and it would re-ask the
+            # vision model five times for readings that cannot change with the order size.
+            #
+            # The order-level packaging and delivery go down with them so each variant
+            # divides freight by its OWN quantity. Without that a 1-off estimate puts the
+            # whole pallet on every one of 500 units — the biggest single error in a variant,
+            # and it swamps the saving the variant exists to show.
+            _breaks = [q for q in (getattr(args, "quantity_breaks", None) or [])
+                       if int(q) >= 1]
+            # THE QUANTITY THE JOB WAS COSTED AT IS ALWAYS A BREAK.
+            #
+            # James Gray, 18 Sep 2026, on 401912-02: "Make Quantity Breaks show both requested
+            # quantities, 1 and 3, rather than only the last 3-off result."
+            #
+            # The run was `--order-qty 1 --quantity-breaks 3`, and the tab came back with a
+            # single column headed 3. Both numbers were asked for -- one as the quantity to
+            # cost, one as the break -- and the tab is the only place they can be read side by
+            # side. Without the order quantity the reader has the 3-off unit cost on this tab
+            # and the 1-off unit cost on the Estimate sheet, in different books, with nothing
+            # saying they are the same estimate at two quantities. On 401912-02 that is GBP
+            # 150.32 against GBP 56.31: the whole story of the job is the difference between
+            # those two, and the tab showed one of them.
+            #
+            # Deduplicated and sorted, so `--order-qty 3 --quantity-breaks 3` is one column and
+            # not two identical ones, and the columns read left to right.
+            _order_break = None
+            try:
+                _order_break = int(getattr(args, "order_qty", None) or 0)
+            except (TypeError, ValueError):
+                _order_break = 0
+            if _breaks and _order_break and _order_break >= 1:
+                _breaks = sorted({int(q) for q in _breaks} | {_order_break})
+            if _breaks and xlsx_path:
+                try:
+                    from quantity_sweep import sweep as _sweep
+                    from quantity_sweep import file_a_workbook_per_quantity as _per_qty
+                    # ONE SHEET, EVERY QUANTITY — where the sheet can carry them.
+                    #
+                    # "Still generating multiple s/sheets" — James, 15 Sep, on a run that
+                    # produced the estimate AND a _qty10 beside it. The break tab was doing
+                    # its job in the first workbook; the second was the old mechanism still
+                    # running underneath it. The sweep still runs — its figures are what the
+                    # Quantity Breaks tab and the report read — it just stops filing copies.
+                    _save = _per_qty()
+                    if not _save:
+                        print("   [qty-sweep] one workbook: the Material Price Break tab "
+                              "carries every quantity, so no per-quantity copies are filed.",
+                              flush=True)
+                    _order_freight: Dict[str, float] = {}
+                    try:
+                        from commercial_lines import collect_lines as _collect_cl
+                        summary["commercial_lines"] = _collect_cl(summary)
+                    except Exception:                               # noqa: BLE001
+                        pass
+                    for _cl in (summary.get("commercial_lines") or []):
+                        if isinstance(_cl, dict) and _cl.get("order_gbp"):
+                            _order_freight[str(_cl.get("code") or "").upper()] = float(
+                                _cl["order_gbp"])
+                    # THE BREAK TABLE IS FILLED BEFORE THE SWEEP RECALCULATES. The
+                    # 19:02 book had the sheet perfectly right and the Quantity Breaks
+                    # comparison flat at £4.09 material: the sweep set D6 to each
+                    # quantity while break row 8 was still empty, so J14's guard fell
+                    # to the 1-off literal and every quantity carried the whole £1.92.
+                    # The table is the thing the sweep measures; it goes in first.
+                    try:
+                        _mpb = dict(getattr(config, "MATERIAL_PRICE_BREAK", {}) or {})
+                        if _mpb.get("enabled") and xlsx_path:
+                            import openpyxl as _oxl
+                            from material_price_break import (lines_from_record,
+                                                              write_price_breaks)
+                            _bk = _oxl.load_workbook(str(xlsx_path))
+                            _mpb_lines = lines_from_record(summary)
+                            if not _mpb_lines:
+                                # SAY WHY AN EMPTY TABLE IS EMPTY. Every line's row
+                                # comes from the workbook READ-BACK — a price cannot be
+                                # placed on a row nobody has read — so no read-back
+                                # means no table, and that must not look like "this job
+                                # has nothing that moves with quantity".
+                                print("   [price-break] no read-back rows on this run, "
+                                      "so no line can be placed against a sheet row.",
+                                      flush=True)
+                            _res = write_price_breaks(
+                                _bk, _mpb_lines, _breaks, _mpb)
+                            if _res.get("rows"):
+                                _bk.save(str(xlsx_path))
+                            summary["material_price_break"] = _res
+                            print(f"   [price-break] {_res.get('rows', 0)} line(s) at "
+                                  f"{len(_res.get('quantities') or [])} quantities"
+                                  + (f" — refused: {'; '.join(_res['refused'])}"
+                                     if _res.get("refused") else ""), flush=True)
+                            if _res.get("repaired_lookups") or \
+                                    _res.get("cleared_broken_refs"):
+                                # SAID ON EVERY RUN, because the repair is only in this
+                                # book. The blank template is the estimators' document
+                                # and it is still damaged until somebody fixes it there.
+                                print("   [price-break] TEMPLATE DAMAGE repaired in "
+                                      "this workbook only — the blank template still "
+                                      "needs fixing: "
+                                      + "; ".join((_res.get("repaired_lookups") or [])
+                                                  + [f"{c} was #REF! (cleared)" for c in
+                                                     (_res.get("cleared_broken_refs")
+                                                      or [])]), flush=True)
+                            if _res.get("outside_table"):
+                                # SAID ON THE RUN, not left to be noticed. The break
+                                # table is shorter than the BOM block; a material past
+                                # its last row is absent from the table, and an absent
+                                # row reads as one that does not move with quantity.
+                                print("   [price-break] BELOW THE TABLE, so not priced "
+                                      "across the breaks — the Material Price Break tab "
+                                      "stops at Estimate row "
+                                      f"{_mpb.get('last_bom_row')}: "
+                                      + ", ".join(_res["outside_table"]), flush=True)
+                    except Exception as _exc:                       # noqa: BLE001
+                        print(f"   [price-break] {type(_exc).__name__}: {_exc} — the "
+                              f"estimate is unchanged.", flush=True)
+                    # THE SWEEP MUST NOT MEASURE AN EMPTY TABLE IN SILENCE. Filling first
+                    # (above) fixed the 19:02 ordering; this is the OTHER way the same book
+                    # happens — the fill raises, or writes nothing, and the sweep then
+                    # measures a sheet whose per-order lines all fall to their 1-off
+                    # literals: four confidently flat columns, wrong at exactly the
+                    # quantities the table exists to answer. The comparison still runs (its
+                    # figures are honest reads of the sheet as it stands) but it carries the
+                    # caution on its face and in the run log.
+                    _mpb_warning = None
+                    if dict(getattr(config, "MATERIAL_PRICE_BREAK", {}) or {}).get(
+                            "enabled") and xlsx_path and not (
+                            (summary.get("material_price_break") or {}).get("rows")):
+                        _mpb_warning = (
+                            "The Material Price Break table did NOT fill on this run, so "
+                            "every column below was measured with each line at its 1-off "
+                            "figure — per-order costs (packing, boxes, minimum charges) "
+                            "are not spread across the quantity, and the differences "
+                            "between columns understate the volume effect. Do not quote "
+                            "quantity pricing from this sheet; the run log names the "
+                            "cause, fix it and re-run.")
+                        print("   [price-break] WARNING — the break table is EMPTY going "
+                              "into the quantity sweep: the Quantity Breaks comparison "
+                              "will read flatter than the truth. The tab says so on its "
+                              "face.", flush=True)
+                    _swept = _sweep(xlsx_path, _breaks, save_variants=_save,
+                                    order_freight=_order_freight or None)
+                    if _swept:
+                        (summary.setdefault("saved_output_paths", {}))["quantity_variants"] = \
+                            list(_swept.get("variants") or [])
+                        summary["quantity_sweep"] = _swept
+                        # AND ALL OF THEM ON ONE SHEET, BESIDE THE ESTIMATE.
+                        #
+                        # "For ease of process / check can all quantity breaks be on one
+                        # sheet / show formulas selected" — Howard Thurley, 0355255, 9 Sep.
+                        # The sweep saves a workbook per quantity, which is right for sending
+                        # one out and wrong for the job he is doing: comparing four breaks
+                        # meant four files open and reading the unit cost out of each by eye.
+                        try:
+                            from quantity_breaks_tab import (write_quantity_breaks_tab,
+                                                             select_show_formulas)
+                            _tab = write_quantity_breaks_tab(
+                                xlsx_path, _swept, requested=_breaks,
+                                warning=_mpb_warning,
+                                # Project costs (D-476): one-off obligations of the order,
+                                # shown beside the order values, never in the unit price.
+                                project_costs=(summary.get("project_costs")
+                                               if isinstance(summary.get("project_costs"),
+                                                             dict) else None),
+                                # Lines researched at this order's volume (D-501).
+                                volume_priced=[
+                                    f"{_pe.get('part_number')} "
+                                    f"({str(_f).split(':', 1)[1].split(';')[0].strip()})"
+                                    for _pe in ((summary.get("estimate_summary") or {})
+                                                .get("part_estimates") or [])
+                                    if isinstance(_pe, dict)
+                                    for _f in (_pe.get("review_flags") or [])
+                                    if str(_f).startswith("PRICED AT VOLUME:")])
+                            if _tab:
+                                summary["quantity_breaks_tab"] = _tab
+                            # The same request's other half. A view, not a change to a cell:
+                            # Ctrl+` puts the numbers back for whoever wants them.
+                            if getattr(config, "SHOW_FORMULAS_ON_ESTIMATE", False):
+                                _shown = select_show_formulas(
+                                    xlsx_path,
+                                    getattr(config, "SHOW_FORMULAS_SHEETS", ("Estimate",)))
+                                if _shown:
+                                    summary["show_formulas_selected"] = _shown
+                        except Exception as _exc:                       # noqa: BLE001
+                            print(f"   [qty-breaks] {type(_exc).__name__}: {_exc}",
+                                  flush=True)
+                        # EACH VARIANT EXPLAINS ITS OWN QUANTITY. The AI Explanation tab
+                        # reads the workbook's calculated cells, so rewriting it on each
+                        # saved variant makes the tab's totals the variant's totals — the
+                        # 10-off sheet said £34.34 while its tabs still recited the 1-off
+                        # £185.92, and a tab that contradicts its own Estimate sheet reads
+                        # as a broken run, not a recalculated one.
+                        # WITH THAT VARIANT'S OWN TOTALS. The variant file was saved by
+                        # openpyxl inside the sweep, which strips Excel's cached formula
+                        # results — so the tab's label scan finds nothing and its JSON
+                        # fallback recites the BASELINE quantity's headline. The 50-off
+                        # Explanation printed the 1-off £68.74 beside the variant's own
+                        # £3.92 labour. The sweep read each variant's totals out of a live
+                        # Excel session before the cache was lost: hand that row to the tab.
+                        _sweep_rows = {int(r.get("quantity") or 0):
+                                       dict(r, baseline_quantity=_swept.get(
+                                           "baseline_quantity"))
+                                       for r in (_swept.get("rows") or [])
+                                       if isinstance(r, dict)}
+                        for _vp in (_swept.get("variants") or []):
+                            try:
+                                from estimate_explanation_tab import write_tab as _vtab
+                                _qm = re.search(r"_qty(\d+)", str(_vp))
+                                _row = _sweep_rows.get(int(_qm.group(1))) if _qm else None
+                                _vtab(_vp, (summary.get("saved_output_paths") or {}).get("json"),
+                                      totals_override=_row)
+                            except Exception as _vt_exc:         # noqa: BLE001
+                                print(f"   [qty-sweep] variant explanation not refreshed "
+                                      f"for {_vp} ({_vt_exc}) — the variant sheet itself "
+                                      f"is correct.", flush=True)
+                            # AI PROVENANCE, WITH THIS VARIANT'S OWN MONEY. The variants
+                            # inherit the baseline's Provenance sheet from the SaveAs, so
+                            # the 50-off file audited itself against the 1-off £68.74.
+                            # Sources, decisions and per-part provenance do not change
+                            # with order size; the three headline figures do, and the
+                            # sweep's Excel-calculated row is what this file's own
+                            # Estimate sheet holds.
+                            try:
+                                import openpyxl as _v_opxl
+                                from estimation_report import add_provenance_sheet as _vprov
+                                from quantity_sweep import variant_summary_with_totals
+                                _vwb = _v_opxl.load_workbook(str(_vp))
+                                try:
+                                    _vprov(_vwb, variant_summary_with_totals(summary, _row),
+                                           {"pdf_name": str(scan_label),
+                                            "job_number": str(scan_label).split("-")[0][:6],
+                                            "scan_date": __import__("datetime").datetime.now()
+                                            .strftime("%d/%m/%Y %H:%M")})
+                                    _vwb.save(str(_vp))
+                                finally:
+                                    try:
+                                        _vwb.close()
+                                    except Exception:            # noqa: BLE001
+                                        pass
+                            except Exception as _vpr_exc:        # noqa: BLE001
+                                print(f"   [qty-sweep] variant provenance not refreshed "
+                                      f"for {_vp} ({_vpr_exc}) — the sheet keeps the "
+                                      f"baseline audit.", flush=True)
+                        # RE-CACHE THROUGH EXCEL. The openpyxl saves above (this tab, and
+                        # the baseline's tab + AI Provenance) leave every formula cell with
+                        # no cached value, so the saved files cannot independently confirm
+                        # their own totals — reading one back with data_only=True yields
+                        # nothing. One open/save round trip per file makes Excel calculate
+                        # and store the results. Windows-only, and a nicety: failure leaves
+                        # the workbooks exactly as written.
+                        # The variants are filed here; the refresh itself runs once for
+                        # every workbook at the end of this stage — see THE CALCULATED
+                        # VALUES ARE WRITTEN LAST below. Doing it here as well refreshed
+                        # the baseline before the sweep's own openpyxl saves had finished
+                        # with it, and left the baseline unrefreshed entirely on the far
+                        # more common run where no sweep happens at all.
+                        _recache_books.extend(
+                            str(_v) for _v in (_swept.get("variants") or []))
+                        print(f"   [qty-sweep] {len(_swept.get('variants') or [])} variant "
+                              f"workbook(s) filed at {', '.join(str(q) for q in _breaks)} off"
+                              + ("" if _order_freight else
+                                 " — freight NOT re-priced (no order-level figures on this "
+                                 "run), so each variant says so on its banner"), flush=True)
+                except Exception as _sw_exc:                     # noqa: BLE001
+                    print(f"   [qty-sweep] variants not written ({_sw_exc}) — the estimate "
+                          f"itself is unaffected.", flush=True)
+
+            # ── THE CALCULATED VALUES ARE WRITTEN LAST ────────────────────────────────
+            # EVERY openpyxl SAVE STRIPS EXCEL'S STORED RESULTS, and three of them run after
+            # the read-back: the shared-tally banner, the explanation tab and AI Provenance.
+            # So this has to be the last thing that touches the workbook, and it was not —
+            # the only caller sat inside the quantity-sweep branch, which most runs never
+            # enter, and ran mid-stage when it did.
+            #
+            # What that costs is on 12349-02's 13 Sep pack: 823 formula cells, not one
+            # carrying a value. The sheet is correct the moment Excel opens it and blank to
+            # everything else — the preview pane, a data_only read, the pre-flight's own
+            # error-cell scan — including G6, the unit cost the covering email quotes.
+            #
+            # Windows-only and failure-isolated: a workbook that cannot be refreshed is left
+            # exactly as written and still calculates on open.
+            if _recache_books:
+                try:
+                    from quantity_sweep import recache_workbooks as _recache
+                    _recached_n = _recache(_recache_books)
+                except Exception as _rc_exc:                     # noqa: BLE001
+                    print(f"   [workbook] formula caches not refreshed ({_rc_exc}) — the "
+                          f"totals compute when opened in Excel, but the saved files read "
+                          f"as blank to anything else.", flush=True)
+
+            # The covering note is written at the END of the run — after the checks and after
+            # the quote and the report exist — see THE COVERING NOTE, WRITTEN LAST below.
+
+        # ── Invariants: does this job hold together? ─────────────────────────────────
+        # Everything above has finished writing. The workbook has calculated, the read-back
+        # has stamped, and this is the last point at which the engine is looking at its own
+        # output before anything describes it to a person. Every defect this engine has
+        # shipped was visible here: rows that did not sum to their own total, costs joined to
+        # the wrong parts, a quote naming an operation the sheet never charged. Nothing
+        # compared them, so nothing objected.
+        #
+        # This never edits a price — silently correcting an unverified number is the failure
+        # mode, not the fix. It marks the job, so a consumer can say "provisional" instead of
+        # quoting a figure nobody stands behind.
+        _canon_json3 = (summary.get("saved_output_paths") or {}).get("json")
+
+        # WHETHER THE PRICE SOURCE WAS EVER REACHED IS A FACT ABOUT THIS ESTIMATE.
+        # Stamped HERE because PricingService is constructed lazily during costing, so the
+        # answer does not exist until the estimating is finished; and stamped BEFORE the
+        # invariants because a job costed with no price source has to fail a check rather
+        # than merely have failed quietly. Written to the summary AND to the saved JSON,
+        # since the checks below read the stamped document.
+        try:
+            from estimator import stamp_price_source_status as _stamp_price_status
+            _stamp_price_status(summary, _canon_json3)
+        except Exception as _pexc:
+            print(f"   [pricing] could not determine whether the price source was reached "
+                  f"({_pexc}) — treat this job as unverified.", flush=True)
+
+        _time_stage("populate_workbook", False)
+        _time_stage("invariants", True)
+        try:
+            from invariants import check_job as _check_job, format_report as _fmt_inv
+            # CHECK THE DOCUMENT THAT HAS EVERYTHING, ONCE.
+            #
+            # The read-back writes final_estimate to the JSON ON DISK, not to this in-memory
+            # summary. Checking `summary` therefore ran six checks against a job with no
+            # final_estimate at all, and they correctly reported themselves UNVERIFIED —
+            # then the JSON was checked separately and found a third blocking violation the
+            # console had never mentioned. One run, two verdicts: the console said 2 blocking
+            # and 6 unverified while the quote said 3 failed.
+            #
+            # Fail-closed did its job — nothing claimed a pass it had not earned — but two
+            # views of one job that disagree is the exact defect this layer exists to stop.
+            # Load the stamped JSON first, check that, print that, store that.
+            _doc = None
+            if _canon_json3 and Path(_canon_json3).exists():
+                try:
+                    _doc = json.loads(Path(_canon_json3).read_text(encoding="utf-8"))
+                except Exception as _rd:
+                    print(f"   [invariants] could not read the stamped JSON ({_rd}) — "
+                          f"checking the in-memory summary instead, which has no "
+                          f"final_estimate and will report those checks as unverified.",
+                          flush=True)
+            _target = _doc if isinstance(_doc, dict) else summary
+            # WHAT THE RUN KNOWS THAT THE STAMPED FILE PREDATES. Checking the file rather
+            # than memory is right — two views of one job that disagree is the defect this
+            # layer exists to stop — but the file is a snapshot, and populate_workbook
+            # declares which lines it REFUSED to price after that snapshot was taken. On
+            # 12392 the AI estimate for the header graphic was withheld and written as GBP 0,
+            # and price_not_reproducible blocked the job for it anyway, because the
+            # declaration existed only in memory. Carried across explicitly rather than left
+            # to whichever pass happens to serialise last.
+            # The quantity sweep and the project costs ride across too (D-504): the quotation's
+            # cost-by-quantity page is generated from this file, and so is every regeneration
+            # after an estimator has amended the sheet.
+            if _target is not summary:
+                for _carry in ("withheld_price_lines", "quantity_sweep", "project_costs"):
+                    _val = summary.get(_carry)
+                    if _val and not _target.get(_carry):
+                        _target[_carry] = list(_val) if isinstance(_val, list) else _val
+            _inv = _check_job(_target)
+            summary["invariants"] = _inv          # so anything reading `summary` agrees
+            # NOT REWRITTEN HERE (D-361). D-359 wrote the banner again at this point, after
+            # Excel had calculated the book — and an openpyxl save strips every cached value,
+            # so the 13:07 M&S book opened with a blank Unit Cost. The failing checks are
+            # named on the report and the outstanding list; the book keeps Excel's figures.
+            print(_fmt_inv(_inv), flush=True)
+            if not _inv.get("may_quote_firm"):
+                # Said once, plainly, at the point a person is watching. The deliverables
+                # below read the same record and mark themselves provisional; this is so the
+                # console does not look like a clean run.
+                # Findings in their own units, a ruling apart from a check that did not run
+                # (12173-02: twenty rulings were announced as "could not be run").
+                print("   [invariants] THIS ESTIMATE IS NOT A FIRM PRICE — "
+                      f"{_inv.get('blocking', 0)} finding(s) failed, "
+                      f"{_inv.get('rulings', 0)} need a ruling, "
+                      f"{_inv.get('not_run', _inv.get('unverified', 0))} could not be run. "
+                      "Deliverables will be marked provisional; do not release to a customer "
+                      "or an ERP export until resolved.", flush=True)
+            if isinstance(_doc, dict) and _canon_json3:
+                try:
+                    # The record's release block reads the verdict just stamped; refresh
+                    # the persisted copy so the file does not say the checks never ran.
+                    try:
+                        from costed_facts import costed_job as _costed_job2
+                        _doc["costed_job"] = _costed_job2(_doc)
+                        summary["costed_job"] = _doc["costed_job"]
+                    except Exception:                                # noqa: BLE001
+                        pass
+                    Path(_canon_json3).write_text(
+                        json.dumps(_doc, indent=2, ensure_ascii=False), encoding="utf-8")
+                except Exception as _iw:
+                    print(f"   [invariants] could not stamp the JSON ({_iw}) — "
+                          f"the console report above still stands.", flush=True)
+        except Exception as _inv_exc:
+            # A failed checker has verified NOTHING. Saying so is the point: a silent skip
+            # here reads exactly like a clean pass.
+            print(f"   [invariants] DID NOT RUN ({_inv_exc}) — this job is UNVERIFIED.",
+                  flush=True)
 
         # ── Deliverables: client quote (always) + parity report (if a manual exists) ──
         # Opt-in via --deliverables. Each generator is failure-isolated: a report error logs and
         # the run continues — it never breaks the estimate. Manual lookup uses the UNC share root
         # (the K: mapping is session-dependent and fails) and skips gracefully when absent.
+        _time_stage("invariants", False)
+        _time_stage("deliverables", True)
         if getattr(args, "deliverables", False) and xlsx_path:
             _canon_json2 = (summary.get("saved_output_paths") or {}).get("json")
             _out_dir = str(Path(str(xlsx_path)).parent)
 
-            # 1) Client quote — always (needs only the summary JSON)
+            # WHAT KIND OF RUN THIS WAS, ON THE RECORD ITSELF. The JSON outlives the process
+            # that wrote it: the quote generator is also a CLI entry point, the parity and
+            # report builders read it days later, and an environment variable answers for
+            # none of that. A file that cannot say how it was produced will eventually be
+            # read as an ordinary estimate, which for an LLM-only run is the one outcome
+            # every warning in this engine exists to prevent.
+            if getattr(args, "llm_only", False) and _canon_json2:
+                try:
+                    _p = Path(_canon_json2)
+                    _d = json.loads(_p.read_text(encoding="utf-8"))
+                    _d["llm_only"] = True
+                    _d["read_by"] = ("BOM from the vision model alone (--llm-only); "
+                                     "title-block text still read by pdfplumber; DXF flat "
+                                     "patterns and the SolidWorks extract off — a MEASUREMENT "
+                                     "of the model's BOM reading, not an estimate; its total "
+                                     "must not be quoted")
+                    _p.write_text(json.dumps(_d, indent=2, ensure_ascii=False),
+                                  encoding="utf-8")
+                except Exception as _se:
+                    # SAID, NOT SWALLOWED. Downstream readers decide what to suppress from
+                    # this flag; if it did not land they are deciding without it.
+                    print(f"   [deliverables] WARNING could not stamp llm_only on the JSON "
+                          f"({_se}) — anything reading it later cannot tell this was a "
+                          f"measurement run.", flush=True)
+
+            # Resolve the pinned manual estimate ONCE (explicit-only, no discovery) so
+            # both the client quote (customer name from the ...\<CUSTOMER>\... path) and
+            # the parity section below compare against the exact same spreadsheet. One job
+            # folder can hold several manual .xls (cut&fold variant, revisions, outsource
+            # copy), so we never guess — a wrong/absent path just means no parity, never a
+            # silent fallback to a discovered file.
+            _manual = None
+            _explicit = getattr(args, "parity_workbook", None)
+            if _explicit:
+                _ep = Path(_explicit)
+                if _ep.exists():
+                    _manual = str(_ep)
+                    print(f"   [deliverables] parity: using --parity-workbook {_manual}", flush=True)
+                else:
+                    print(f"   [deliverables] ERROR parity: --parity-workbook not found: {_ep}\n"
+                          f"                  parity section SKIPPED — no auto-discovery. "
+                          f"Fix the path and re-run.", flush=True)
+
+            # 1) Client quote — always (needs only the summary JSON). The pinned manual
+            #    workbook (when given) supplies the customer name from its folder path.
             if _canon_json2 and Path(_canon_json2).exists():
                 try:
                     from client_quote_html import generate_quote_files as _gen_quote
-                    _qpath = _gen_quote(str(_canon_json2), out_dir=_out_dir, job_stem=str(scan_label))
-                    print(f"   [deliverables] client quote -> {_qpath}", flush=True)
+                    _qpath = _gen_quote(str(_canon_json2), out_dir=_out_dir, job_stem=str(scan_label),
+                                        manual_workbook=_manual, customer=getattr(args, "customer", None))
+                    # None = deliberately suppressed by the credibility gate, which has
+                    # already said why. Do not print a path that does not exist.
+                    if _qpath:
+                        (summary.setdefault("saved_output_paths", {}))["quote"] = str(_qpath)
+                        print(f"   [deliverables] client quote -> {_qpath}", flush=True)
                 except Exception as _q_exc:
                     print(f"   [deliverables] client quote skipped ({_q_exc}) — run continues.", flush=True)
 
-                # 2) Parity report — only if a manual estimate workbook is found
+                # 2) Unified job report — ALWAYS generated. The rich new-job report (7 sections:
+                #    at-a-glance, what the engine got right, review items, drawing analysis,
+                #    what to check, design recommendations, verdict). When a manual estimate is
+                #    found (or pinned via --parity-workbook), a parity bundle is built and passed
+                #    in, which ADDS the "1a Parity vs manual estimate" section. In production —
+                #    a new enquiry with no manual — the SAME report renders without that section.
+                #    (Replaces the old lean 5-section parity_report_html so parity and new-job
+                #    runs share one report; parity_report_html remains available standalone.)
                 try:
-                    _manual = _find_manual_workbook(str(scan_label), summary)
+                    # Parity uses the SAME explicit-only manual workbook resolved above
+                    # (_manual / _explicit). No auto-discovery here either.
+                    _bundle_json = None
                     if _manual:
                         from estimate_full_parity_report import generate_and_write as _gen_bundle
-                        from parity_report_html import generate_report_files as _gen_parity_html
                         _bundle_json = Path(_out_dir) / (re.sub(r"[^\w\- ]", "", str(scan_label)).strip() + "_parity_bundle.json")
                         _bundle_csv = _bundle_json.with_suffix(".csv")
-                        _gen_bundle(Path(_canon_json2), Path(_manual), _bundle_json, _bundle_csv, read_via_excel=False)
-                        _phtml = _gen_parity_html(str(_bundle_json), out_dir=_out_dir, job_stem=str(scan_label))
-                        print(f"   [deliverables] parity report -> {_phtml}", flush=True)
-                    else:
-                        print("   [deliverables] no manual estimate found — parity skipped (new job).", flush=True)
+                        # .xls reads via xlrd (computed values); an .xlsx manual may need Excel COM
+                        # to resolve formulas — honour --full-parity-read-via-excel when set.
+                        _gen_bundle(Path(_canon_json2), Path(_manual), _bundle_json, _bundle_csv,
+                                    read_via_excel=bool(getattr(args, "full_parity_read_via_excel", False)))
+                        print(f"   [deliverables] parity bundle built (manual: {_manual})", flush=True)
+
+                        # THE HARNESS THAT ASKS WHETHER EACH SIDE ADDS UP TO ITSELF.
+                        #
+                        # The bundle above compares the workbook against the scan. This is the
+                        # other question, and the one an estimator asks: how does the engine's
+                        # answer differ from the one a person wrote, block by block and line by
+                        # line, with the inputs behind each difference and the reader that
+                        # supplied them. It was a command somebody had to remember to run, so
+                        # it ran once in July; a comparison nobody performs is not a check.
+                        #
+                        # It refuses to stand behind a parse that does not reconcile, which is
+                        # the whole reason it is safe to file automatically: a bad read says so
+                        # in its own first section rather than producing a confident lane
+                        # analysis of its own omissions.
+                        #
+                        # Failure-isolated like every other deliverable. A parity that cannot
+                        # be built must never cost a run that has already taken an hour.
+                        try:
+                            import parity_check as _pc
+                            _p_manual = _pc.read_house_workbook(Path(_manual))
+                            _p_engine = _pc.read_engine_json(Path(_canon_json2))
+                            _p_text, _p_detail = _pc.build_report(
+                                _p_manual, _p_engine, str(scan_label), Path(_canon_json2))
+                            _p_path = Path(_out_dir) / (
+                                re.sub(r"[^\w\- ]", "", str(scan_label)).strip() + "_parity.txt")
+                            _p_path.write_text(_p_text, encoding="utf-8")
+                            _pc.append_ledger(
+                                str(Path(_out_dir) / "parity_ledger.csv"),
+                                _pc.ledger_row(str(scan_label), _p_manual, _p_engine, _p_detail))
+                            (summary.setdefault("saved_output_paths", {}))["parity"] = str(_p_path)
+                            print(f"   [deliverables] parity -> {_p_path.name} "
+                                  f"(manual reconciles: {_p_detail['manual_reconciles']}, "
+                                  f"engine reconciles: {_p_detail['engine_reconciles']})",
+                                  flush=True)
+                        except Exception as _p_exc:              # noqa: BLE001
+                            print(f"   [deliverables] parity report skipped ({_p_exc}) — the "
+                                  f"bundle above is unaffected.", flush=True)
+                    elif not _explicit:
+                        print("   [deliverables] no --parity-workbook passed — new-job report only "
+                              "(no parity section). Pass --parity-workbook <path> to compare against a "
+                              "specific manual estimate.", flush=True)
+
+                    from job_report_html import generate_report as _gen_job_report
+                    _report_out = str(Path(_out_dir) / (re.sub(r"[^\w\- ]", "", str(scan_label)).strip() + "_report.html"))
+                    _rhtml = _gen_job_report(
+                        str(_canon_json2),
+                        out_path=_report_out,
+                        bundle_path=(str(_bundle_json) if _bundle_json else None),
+                        job_stem=str(scan_label),
+                    )
+                    (summary.setdefault("saved_output_paths", {}))["report"] = str(_rhtml)
+                    print(f"   [deliverables] job report -> {_rhtml}", flush=True)
+
+                    # Retrievable LLM extract sidecar — the transcribed source data (BOM
+                    # hierarchy, tube cut lengths, weights, material/finish, weld spec) written
+                    # as a plain JSON next to the spreadsheet/quote/report so it can be OPENED
+                    # and audited. This is what the estimate is built from; surfacing it proves
+                    # what was captured vs what the costed output used. Written on every run.
+                    _lfe = summary.get("llm_full_extract")
+                    if isinstance(_lfe, dict) and (_lfe.get("bom") or _lfe.get("parts")):
+                        _lfe_out = Path(_out_dir) / (re.sub(r"[^\w\- ]", "", str(scan_label)).strip()
+                                                     + "_llm_extract.json")
+                        with open(_lfe_out, "w", encoding="utf-8") as _fh_lfe:
+                            json.dump(_lfe, _fh_lfe, indent=2, ensure_ascii=False)
+                        _np = len(_lfe.get("parts") or [])
+                        _nb = len(_lfe.get("bom") or [])
+                        print(f"   [deliverables] LLM extract -> {_lfe_out} "
+                              f"({_nb} BOM lines, {_np} parts) — open this to audit the source data",
+                              flush=True)
                 except Exception as _p_exc:
-                    print(f"   [deliverables] parity report skipped ({_p_exc}) — run continues.", flush=True)
+                    print(f"   [deliverables] job report skipped ({_p_exc}) — run continues.", flush=True)
+
+        # THE COVERING NOTE, WRITTEN LAST, WHERE THE NUMBERS ARE.
+        #
+        # The mail service composed this, and by design has never read an estimate — so it
+        # could say nothing about the job beyond the one figure it was handed, and when that
+        # figure did not arrive, 12349-02's note went out headed "not reported/unit at 7 off"
+        # over a list of filenames. James: "the write up is very poor."
+        #
+        # It is written here instead, from the same _gather() the full document uses, so the
+        # note and the document are one reading rendered twice and cannot disagree. Filed as
+        # a deliverable; the service attaches and sends it as the message, and composes
+        # nothing.
+        #
+        # LAST, NOT BEFORE THE CHECKS. It used to be written before the invariants ran and
+        # before the quote and the report existed, so it said PROVISIONAL whatever the job
+        # was, and its "Attached:" line named the files that happened to exist at that moment
+        # — the JSON, and not the report. Now it reads the record's release status and the
+        # checks' verdict for its provisional flag, and lists what the service will actually
+        # attach: not the JSON, not itself, and not the quote while the estimate is held.
+        if xlsx_path:
+            _sop = summary.setdefault("saved_output_paths", {})
+            _inv_rec = summary.get("invariants") if isinstance(summary.get("invariants"), dict) else None
+            try:
+                from costed_facts import costed_job as _costed_job3
+                _rel3 = (_costed_job3(summary).get("release") or {})
+            except Exception:                                        # noqa: BLE001
+                _rel3 = {}
+            _provisional = bool(_rel3.get("draft")) or not (_inv_rec and _inv_rec.get("may_quote_firm"))
+            # WHETHER A QUOTE MAY GO TO A CUSTOMER IS ONE FACT, ASKED HERE ONCE. It is not
+            # `_provisional`: that says the ESTIMATE is unsettled, which is about the covering
+            # note's wording, and it is silent on the commercial inputs and on authorisation.
+            try:
+                from quote_state import quote_state as _quote_state
+                _q_state = _quote_state(summary)
+            except Exception as _exc_qs:                             # noqa: BLE001
+                # Fail closed on the AUDIENCE. A release gate that cannot run has not said yes.
+                _q_state = {"customer_releasable": False,
+                            "blocking": [{"gate": "state_unreadable",
+                                          "what": f"the release state could not be read "
+                                                  f"({_exc_qs})"}]}
+            _releasable = bool(_q_state.get("customer_releasable"))
+            if not _releasable:
+                print("   [quote] held from the customer email — "
+                      + "; ".join(b.get("what", "") for b in (_q_state.get("blocking") or [])),
+                      flush=True)
+
+            # ── THE REFUSAL. DETECTION WITHOUT REFUSAL IS A COMMENT ────────────────
+            # A pack shipped whose quantities were finally right and whose money was gone —
+            # #DIV/0! through the labour SUM, "not readable from the sheet" — and the
+            # record already SAID so (money_provenance, stamped above): the system knew and
+            # sent it anyway, under a covering email that summarised it like any other job.
+            # A record that cannot evidence a price gets a DO NOT SEND note in the email's
+            # place and no quote; the workbook still goes to the estimator, because
+            # repairing it needs the file. Deliberately narrow: only when the stamp exists
+            # and says no. A run where the stamp itself failed keeps today's behaviour —
+            # this gate must never be the thing that breaks a healthy run.
+            _mp_block = summary.get("money_provenance")
+            _money_refused = bool(isinstance(_mp_block, dict) and _mp_block
+                                  and not _mp_block.get("can_evidence_a_price"))
+            # THE QUANTITY ASKED FOR IS PART OF THE RUN CONTRACT, and a book costed at a
+            # different one is wrong in every setup amortisation and per-order division
+            # it contains. Two 11908-21 runs shipped 1-off books against a 50-off request
+            # with nothing but a cell to find it in. A recorded request the record does
+            # not match gets the same treatment as unreadable money: refusal note, quote
+            # held, workbook still delivered because fixing it needs the file.
+            _req_oq = summary.get("requested_order_quantity")
+            _used_oq = summary.get("quantity") or summary.get("assumed_job_quantity")
+            _qty_refused = False
+            _qty_why = ""
+            try:
+                _qty_refused = bool(_req_oq) and bool(_used_oq) \
+                    and int(_req_oq) != int(_used_oq)
+            except (TypeError, ValueError):
+                _qty_refused = False
+            if _qty_refused:
+                _qty_why = (f"the run was asked for {_req_oq} off "
+                            f"({summary.get('requested_order_quantity_source')}) and the "
+                            f"record was costed at {_used_oq} off — every setup "
+                            f"amortisation and per-order division on the sheet is for "
+                            f"the wrong batch")
+                _provisional = True
+                print(f"   [covering-note] DO NOT SEND — {_qty_why}; the covering email "
+                      f"is replaced by a refusal and the quote is held", flush=True)
+            if _money_refused:
+                _provisional = True
+                print(f"   [covering-note] DO NOT SEND — this record cannot evidence a "
+                      f"price ({(_mp_block or {}).get('state')}); the covering email is "
+                      f"replaced by a refusal and the quote is held", flush=True)
+            # THE CAUSE, NOT JUST THE STATE (D-366). The refusal used to be handed the record's
+            # one technical sentence, and it gave the #DIV/0! repair for every cause. It now
+            # gets the cause and the plain reason, and whether Excel calculated the book later
+            # in the run, so it can say what to do.
+            _mp_ev = (_mp_block or {}).get("evidence") or {}
+            _dns_args = {
+                "why": str((_mp_block or {}).get("why") or "") if _money_refused else "",
+                "cause": str((_mp_block or {}).get("cause") or "") if _money_refused else "",
+                "detail": (str(_mp_ev.get("workbook_stage_skipped_because") or "")
+                           if _money_refused else ""),
+                "quantity_why": _qty_why,
+                "recalculated_later": None if _recached_n is None else bool(_recached_n),
+                "money_refused": _money_refused,
+            }
+
+            # ── WHAT A PERSON IS ACTUALLY SENT ───────────────────────────────────────
+            #
+            # James Gray, 18 Sep 2026, on the 401912-02 note: "It lists internal files such as
+            # logs, SQL, CSV exports and diagnostic workbooks as 'Attached'."
+            #
+            # THIS WAS A BLACKLIST, so every output path the engine has ever learned to write
+            # became an attachment the moment somebody added it -- source drawing data, the
+            # BOMs-and-routes exports, parity bundles, the variant workbooks. None of those is
+            # a thing you send an estimator, and naming a log file as an attachment on a note
+            # to the head of estimating is the kind of error that costs the whole document its
+            # credibility.
+            #
+            # A WHITELIST, so a new deliverable has to be added here deliberately before it can
+            # appear on somebody's email. Three things are sendable: the estimate workbook, the
+            # review report, and the customer quote once it is issued.
+            _SENDABLE = ("estimate_xlsx", "report", "quote")
+            _attach = []
+            for _k in _SENDABLE:
+                _v = _sop.get(_k)
+                if not _v or isinstance(_v, (list, dict)):
+                    continue
+                if _k == "quote" and not _releasable:
+                    # THE ATTACHMENT HALF OF THE RELEASE RULE. "A customer email may attach a
+                    # quote only when the estimator has completed the commercial inputs and
+                    # authorised release." This asked `_provisional`, which is a different and
+                    # looser question — it knows nothing about commercial inputs or about
+                    # anybody authorising anything — so a quote could be attached to a note
+                    # going out while both were still open. One fact answers it now, and the
+                    # same fact named the file and decided what the page says.
+                    continue
+                _attach.append(str(_v))
+            try:
+                from estimate_explained import covering_email as _covering_email
+                if _money_refused or _qty_refused:
+                    from estimate_explained import do_not_send_note as _dns_note
+                    _note = _dns_note(Path(xlsx_path).stem, **_dns_args)
+                else:
+                    _note = _covering_email(
+                        Path(xlsx_path),
+                        Path(_sop.get("json") or "") if _sop.get("json") else None,
+                        client=str(summary.get("client") or ""),
+                        deliverables=_attach,
+                        provisional=_provisional,
+                        quantity_sweep=summary.get("quantity_sweep"),
+                    )
+                _note_path = Path(xlsx_path).with_name(
+                    f"{Path(xlsx_path).stem}_covering_email.html")
+                _note_path.write_text(
+                    f"<!-- subject: {_note['subject']} -->\n{_note['html']}",
+                    encoding="utf-8")
+                # The plain-text alternative, for the mail service to send alongside the
+                # HTML — its own tag-strip ran table cells together.
+                _note_path.with_suffix(".txt").write_text(_note["text"], encoding="utf-8")
+                _sop["covering_email"] = str(_note_path)
+                print(f"   [covering-note] {_note_path.name} — {_note['subject']}",
+                      flush=True)
+            except Exception as _note_exc:
+                print(f"   [covering-note] not written ({_note_exc}) — the mail service will "
+                      f"fall back to its own short note.", flush=True)
+
+        _time_stage("deliverables", False)
 
         print("\nPage text preview:\n")
         for page in summary["pages"]:
@@ -813,4 +2442,19 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        # PRINTED EVEN WHEN THE RUN DIES, WHICH IS WHEN IT MATTERS MOST. A job that hangs or
+        # throws is exactly the one whose phase times nobody has ever seen — the last run to
+        # do it sat for ninety minutes on seventy-eight seconds of CPU and left nothing to
+        # say which step it was in. In `finally`, an abandoned phase still reports as
+        # STARTED AND NEVER FINISHED, which names the hang.
+        try:
+            import run_timing as _rt
+            _report = _rt.report()
+            if _report:
+                print("\n" + _report, flush=True)
+        except Exception:                                        # noqa: BLE001
+            # Never let instrumentation take down a run that otherwise finished.
+            pass

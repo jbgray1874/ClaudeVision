@@ -43,7 +43,7 @@ The engine now produces clean output on job 1282 — main WB Sell Price ~£195.6
   ```
 - **Template UNC:** `\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\AISheets\Blank Estimate Sheet  WB 2026.xlsx` (double-space). Worksheet inside = "Estimate". Sell Price value cell = **M143**.
 - **Output:** `C:\ClaudeVision\output\estimates\1282 - Milwaukee Wall Bay_<timestamp>.xlsx`; JSON at `C:\ClaudeVision\output\json\1282 - Milwaukee Wall Bay.json`.
-- **DB:** SQL Server SDILive @ 10.0.0.200, pyodbc, ODBC Driver 18, UID AIBot / PWD AIAgentPW2026. Engine reads `dbo.*` (NOT `AIEstimating.*`).
+- **DB:** SQL Server SDILive @ 10.0.0.200, pyodbc, ODBC Driver 18, UID AIBot / password from SDI_DB_PASSWORD in src/.env (never in source). Engine reads `dbo.*` (NOT `AIEstimating.*`).
 - **LLM:** xAI / Grok, config `xai_model = "grok-4.3"`. Determinism overrides (temperature/seed/reasoning_effort) applied.
 - **`/mnt/project/` snapshot is STALE** — trust RUN OUTPUT and DUMP real src files before editing. Files confirmed real this session via probes: `job_decision_report.py`, `estimation_report.py`, `bom_tree.py`, `drawing_job_merge.py`. Still not fully seen: the estimator's P.Coat/labour costing section, the credibility-gate function.
 - **JG cannot reach the K: drive from Claude** — Tim's manual estimates live on K: and must be pasted by JG.

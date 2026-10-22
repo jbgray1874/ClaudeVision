@@ -20,31 +20,221 @@ Security
 """
 
 import os
+import logging
 import mimetypes
+import re
+from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Header, Query
+from fastapi import Depends, FastAPI, HTTPException, Header, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 import config
+import auth
+import quote_release
 
 config.validate()
+
+
+def _commit_from_git_dir(root: Path) -> str:
+    """The commit, read straight out of .git. No git executable, no PATH, no subprocess.
+
+    WHY THIS IS FIRST AND NOT A FALLBACK. The service reported "unknown" on a box that has git,
+    has a clone, and had just been pulled — because it runs as NT AUTHORITY\\SYSTEM, and a git
+    installed per-user lives under that user's AppData where SYSTEM cannot see it. Widening the
+    list of paths to guess at is a losing game: winget, scoop, a portable copy and an MSI all put
+    it somewhere different, and the next machine finds a new place.
+
+    But `git rev-parse HEAD` reads .git/HEAD and then one ref file. That is two file reads, and
+    this does them directly. It cannot be defeated by PATH, by the account the service runs
+    under, or by git not being installed at all, and on a clone it is the same truth the
+    subprocess would have returned.
+
+    Returns "" when there is nothing to read — a deployed copy with no .git — which is what the
+    stamp file below is for. Never raises: a version header must not be able to stop the service.
+    """
+    try:
+        git_dir = root / ".git"
+        # A worktree or submodule has a FILE here containing "gitdir: <path>", not a directory.
+        if git_dir.is_file():
+            pointer = git_dir.read_text(encoding="utf-8").strip()
+            if pointer.startswith("gitdir:"):
+                git_dir = (root / pointer.split(":", 1)[1].strip()).resolve()
+        if not git_dir.is_dir():
+            return ""
+        head_file = git_dir / "HEAD"
+        if not head_file.is_file():
+            return ""
+        head = head_file.read_text(encoding="utf-8").strip()
+        if not head.startswith("ref:"):
+            return head[:7]                  # a detached HEAD holds the hash itself
+        ref = head.split(":", 1)[1].strip()
+        loose = git_dir / ref
+        if loose.is_file():
+            return loose.read_text(encoding="utf-8").strip()[:7]
+        # A branch that has not moved since the last `git gc` lives in packed-refs, not in
+        # refs/heads — so a freshly cloned repo has no loose ref at all and this is the only
+        # place the hash exists.
+        packed = git_dir / "packed-refs"
+        if packed.is_file():
+            for line in packed.read_text(encoding="utf-8").splitlines():
+                if not line.strip() or line.startswith(("#", "^")):
+                    continue
+                parts = line.split()
+                if len(parts) >= 2 and parts[1] == ref:
+                    return parts[0][:7]
+    except Exception:                                            # noqa: BLE001
+        return ""
+    return ""
+
+
+def _resolve_commit() -> str:
+    """The git commit this service is running, resolved ONCE at startup and stamped onto every
+    response as X-SDI-Commit. It is the answer to 'which version is the box on?' without an SSH
+    and a git log — hit any endpoint (or read /api/health) and the commit is there. This session
+    hit that question repeatedly (a stale extract, a box behind the tip); a version the running
+    service reports about itself ends the guessing. Env SDI_COMMIT wins for deploys with no
+    working tree; else the short hash from git; else 'unknown' — never an exception at import."""
+    import shutil
+    import subprocess
+    env = os.getenv("SDI_COMMIT", "").strip()
+    if env:
+        return env[:40]
+    # .git READ DIRECTLY, BEFORE ASKING AN EXECUTABLE WE MAY NOT BE ABLE TO SEE. Same truth the
+    # subprocess returns on a clone, and the one route that does not depend on PATH or on which
+    # account the service runs under. The repo root first, because the engine and the service
+    # share one clone and the root is the clone.
+    for _where in (Path(__file__).resolve().parent.parent, Path(__file__).resolve().parent):
+        _read = _commit_from_git_dir(_where)
+        if _read:
+            return _read
+    # RUN AS A WINDOWS SERVICE, git IS NOT ON THE PATH. The service starts uvicorn from its own
+    # virtualenv under NT AUTHORITY\\SYSTEM, whose PATH has no git, so a bare "git" was never
+    # found and the header reported "unknown" on a perfectly current service — the one question
+    # it exists to answer. Resolve the executable explicitly, and ask about the REPO ROOT rather
+    # than this folder, so the answer does not depend on where the service was launched from.
+    _git = shutil.which("git") or r"C:\Program Files\Git\cmd\git.exe"
+    for _where in (Path(__file__).resolve().parent.parent, Path(__file__).resolve().parent):
+        try:
+            out = subprocess.run([_git, "-C", str(_where), "rev-parse", "--short", "HEAD"],
+                                 capture_output=True, text=True, timeout=3)
+            if out.returncode == 0 and out.stdout.strip():
+                return out.stdout.strip()
+        except Exception:                                        # noqa: BLE001
+            continue
+    # A DEPLOYED COPY IS NOT A WORKING TREE. SDI-APP01 has no git AND no .git directory -- it
+    # is not a clone, it is files copied onto it -- so neither branch above can ever answer
+    # there, and /api/health reported "unknown" on a server that was perfectly current.
+    #
+    # push-to-server.ps1 runs on the laptop, which has both, and leaves the short hash in
+    # .sdi-commit beside the code it copied. Read here rather than only in the start script,
+    # because a service that can name its build ONLY when launched one particular way loses
+    # it the moment anything else starts it -- which is exactly what happened: the stamp was
+    # in place, correct, and the answer was still "unknown".
+    #
+    # AFTER git, deliberately. On a real checkout HEAD is the truth and a stale stamp beside
+    # it is not; this is the fallback for machines where there is nothing to ask.
+    for _where in (Path(__file__).resolve().parent.parent, Path(__file__).resolve().parent):
+        try:
+            stamp = _where / ".sdi-commit"
+            if stamp.is_file():
+                written = stamp.read_text(encoding="utf-8").strip().splitlines()
+                if written and written[0].strip():
+                    return written[0].strip()[:40]
+        except Exception:                                        # noqa: BLE001
+            continue
+    return "unknown"
+
+
+SDI_COMMIT = _resolve_commit()
+
+# Must match wb_populate.CELL_MAP["template_path"] and the runner's WB_TEMPLATE_DEFAULT.
+# A health check reporting a different file than the engine opens would say ok on a machine
+# that cannot run an estimate, which is worse than not checking. A test pins all three.
+# The double space in the filename is real.
+_WB_TEMPLATE_DEFAULT = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed"
+                        r"\AI Estimating\AISheets\Blank Estimate Sheet  WB 2026.xlsx")
 
 app = FastAPI(title="SDI Intelligence — Backend", version="0.1")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.ALLOWED_ORIGINS,
-    allow_methods=["GET"],
+    # POST is required by /api/estimate. With GET only, the browser's preflight
+    # fails and the run is refused before any handler sees it — which reads as
+    # "the button does nothing" rather than as a permissions error.
+    allow_methods=["GET", "POST"],
     allow_headers=["X-SDI-Key", "Content-Type"],
+    # So browser JS on the portal can READ the version header, not just devtools/curl.
+    expose_headers=["X-SDI-Commit"],
 )
 
 
+@app.middleware("http")
+async def _stamp_version(request, call_next):
+    """Every response carries the running commit, errors included — so a 500 or a 415 still
+    tells you which version produced it."""
+    response = await call_next(request)
+    response.headers["X-SDI-Commit"] = SDI_COMMIT
+    return response
+
+# ── Public-surface guard ─────────────────────────────────────────────────────
+# When the portal is reached over the internet (via the tunnel / App Proxy),
+# ONLY the app portal and its own APIs are allowed. The file browser, the
+# database, the estimating pages and the architecture/server pages never leave
+# the network, whatever the edge is configured to forward. Internal access
+# (10.0.0.5, sdi-intelligence.sdi.local, localhost) is unaffected.
+#
+# Set SDI_PUBLIC_HOSTS in .env to the public hostname(s), comma separated, e.g.
+#   SDI_PUBLIC_HOSTS=apps.wearesdi.com
+# Empty (the default) means nothing is treated as public and the guard is off.
+_PUBLIC_HOSTS = {h.strip().lower() for h in os.getenv("SDI_PUBLIC_HOSTS", "").split(",") if h.strip()}
+
+# What the app portal itself needs to function, and nothing else.
+_PUBLIC_ALLOW = (
+    "/app",                    # the portal page, its assets, and the app screens
+    "/auth",                   # sign-in / callback / logout
+    "/api/services",           # the catalogue
+    "/api/me",                 # who am I
+    "/api/voicecrm",           # Nick's app
+    "/api/hr/app",             # HRInventry Anywhere only - never the rest of /api/hr
+    "/favicon.ico",
+)
+
+
+@app.middleware("http")
+async def _public_surface_guard(request, call_next):
+    if _PUBLIC_HOSTS:
+        # Host header, minus any :port, lowered.
+        host = (request.headers.get("host", "").split(":")[0]).lower()
+        if host in _PUBLIC_HOSTS:
+            path = request.url.path
+            if not any(path == a or path.startswith(a + "/") or path == a for a in _PUBLIC_ALLOW):
+                # Indistinguishable from a route that does not exist — the public
+                # surface simply has no file browser, DB or intranet pages.
+                return JSONResponse(status_code=404, content={"detail": "Not Found"})
+    return await call_next(request)
+
+
+
 # ── Access gate ─────────────────────────────────────────────────────────────
-def check_key(x_sdi_key: str | None) -> None:
-    if config.API_KEY and x_sdi_key != config.API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-SDI-Key")
+def check_key(x_sdi_key: str | None, request: Request | None = None) -> None:
+    """Allow a signed-in person, or a machine still using the shared key.
+
+    Once every scheduled script has its own identity, SDI_ALLOW_API_KEY=no
+    retires the key and every request becomes attributable to a person.
+    """
+    if request is not None and auth.ENABLED and auth.current_user(request) is not None:
+        return
+    if config.API_KEY and x_sdi_key == config.API_KEY:
+        return
+    # A partner site's key (config.PARTNER_KEYS, D-401) opens the estimating endpoints and
+    # the catalogue; it is checked here only so /api/services answers that site's app page.
+    if x_sdi_key and x_sdi_key in set((getattr(config, "PARTNER_KEYS", None) or {}).values()):
+        return
+    if config.API_KEY:
+        raise HTTPException(status_code=401, detail="Sign in, or present a valid X-SDI-Key")
 
 
 # ── Path safety: only ever serve from inside an allowed root ─────────────────
@@ -62,39 +252,129 @@ def _allowed_ext(p: Path) -> bool:
     return p.suffix.lower() in config.ALLOWED_EXTENSIONS
 
 
+# WHAT WE WILL SERVE AND WHAT WE WILL STAGE ARE DIFFERENT QUESTIONS.
+#
+# ALLOWED_EXTENSIONS is a DOCUMENT list — .pdf, .xlsx, .html, .json, images — and it answers
+# "may this file be sent to a browser". The folder listing below reused it to decide what to
+# DISPLAY, and that listing is also the drawing picker on the estimating page. The two lists
+# overlap on exactly one drawing type:
+#
+#   staging.DRAWING_SUFFIXES   .pdf .dxf .dwg .sldprt .sldasm .slddrw .step .stp
+#   config.ALLOWED_EXTENSIONS  .doc .docx .htm .html .jpeg .jpg .json .log .md .pdf .png ...
+#
+# So a job folder holding 19 SLDPRT, 7 SLDASM, a SLDDRW, a DWG, a PDF and the SolidWorks
+# sidecar listed as TWO files, offered "Add all 2", and read as though the pack had been
+# lost off the share. It had not: "Use this folder" stages by DRAWING_SUFFIXES and had been
+# taking all 29 the whole time. The picker was asking the wrong question and answering it
+# accurately.
+#
+# DXF is the one that would have cost real money. The picker is invisible to it, and a DXF
+# drop is exactly what this pack is waiting on — an estimator adding files one at a time
+# would have seen nothing arrive and had no reason to doubt the screen.
+#
+# Widening the LISTING does not widen what can be downloaded: /api/file re-checks
+# _allowed_ext itself and returns 415, so a model appears in the browser and still cannot be
+# fetched through the service. `servable` is reported per item so the page can show that
+# distinction rather than the browser having to infer it from the extension.
+try:
+    from staging import DRAWING_SUFFIXES as _DRAWING_SUFFIXES
+except Exception:                                                # noqa: BLE001
+    # The listing must not fall over if staging moves; it simply narrows to documents,
+    # which is exactly the behaviour that was there before this.
+    _DRAWING_SUFFIXES = ()
+
+
+def _listable_ext(p: Path) -> bool:
+    return _allowed_ext(p) or p.suffix.lower() in _DRAWING_SUFFIXES
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
 @app.get("/api/health")
-def health(x_sdi_key: str | None = Header(default=None)):
-    check_key(x_sdi_key)
+def health(request: Request, x_sdi_key: str | None = Header(default=None)):
+    check_key(x_sdi_key, request)
     roots_ok = []
     for root in config.FILE_ROOTS:
         roots_ok.append({"root": root, "reachable": os.path.isdir(root)})
     db = db_status()
-    overall = all(r["reachable"] for r in roots_ok) and db["status"] in ("ok", "not_configured")
-    return {"status": "ok" if overall else "degraded", "file_roots": roots_ok, "database": db}
+
+    # WHERE THE DRAWINGS GET STAGED, AND WHETHER THAT WILL ACTUALLY WORK.
+    #
+    # Every run now copies its drawings into this folder before the engine reads them, so a
+    # staging root that is unset, unreachable, or outside the readable roots stops every
+    # estimate. The first failure in the field was a mapped drive in the default — "cannot find
+    # the path specified: 'K:\'" — and the only way to tell whether the service had picked up
+    # a corrected .env was to try another run and read the error. Reporting it here answers that
+    # in one request, the same reason the commit is reported.
+    _staging = (getattr(config, "STAGING_ROOT", "") or "").strip()
+    staging = {
+        "root": _staging or None,
+        "configured": bool(_staging),
+        "reachable": bool(_staging) and os.path.isdir(_staging),
+        "within_file_roots": bool(_staging) and _within_a_root(_staging) is not None,
+        "mapped_drive": bool(re.match(r"^[A-Za-z]:", _staging)),
+    }
+    if staging["mapped_drive"]:
+        staging["note"] = ("This is a mapped drive letter. Drive letters belong to a login "
+                           "session, so a service running as a service account will not have "
+                           "it. Use the \\\\server\\share form.")
+    elif not staging["within_file_roots"] and staging["configured"]:
+        staging["note"] = "Not inside SDI_FILE_ROOTS — add it, or runs will be refused."
+
+    # THE TEMPLATE THE WORKBOOK IS BUILT FROM, FOR THE SAME REASON STAGING IS ABOVE.
+    #
+    # 10575-02 ran for 971 seconds and produced a summary and no estimate, because this file
+    # was not on the share. Every deliverable hangs off the workbook -- the client quote, the
+    # job report, the Decision Report and AI Provenance tabs are all gated on it -- so one
+    # missing file takes out all five, and the run still reported itself complete.
+    #
+    # The runner now refuses such a run up front. This answers the same question without
+    # starting one at all, which is what "is the tool ready?" should cost.
+    _tpl = (os.environ.get("SDI_WB_TEMPLATE") or "").strip().strip('"') or _WB_TEMPLATE_DEFAULT
+    template = {
+        "path": _tpl,
+        "from_env": bool((os.environ.get("SDI_WB_TEMPLATE") or "").strip()),
+        "reachable": os.path.isfile(_tpl),
+    }
+    if not template["reachable"]:
+        template["note"] = ("No workbook can be built without it, so a run would produce a "
+                            "summary and no estimate. Restore it on the share under that exact "
+                            "name -- the double space is real -- or set SDI_WB_TEMPLATE to a "
+                            "copy this machine can read.")
+
+    overall = (all(r["reachable"] for r in roots_ok)
+               and db["status"] in ("ok", "not_configured")
+               and staging["reachable"] and staging["within_file_roots"]
+               and template["reachable"])
+    return {"status": "ok" if overall else "degraded", "commit": SDI_COMMIT,
+            "file_roots": roots_ok, "database": db, "staging": staging,
+            "workbook_template": template}
 
 
 @app.get("/api/roots")
-def roots(x_sdi_key: str | None = Header(default=None)):
-    check_key(x_sdi_key)
+def roots(request: Request, x_sdi_key: str | None = Header(default=None)):
+    check_key(x_sdi_key, request)
     return {"roots": [{"name": Path(r).name or r, "path": r} for r in config.FILE_ROOTS]}
 
 
 @app.get("/api/files")
-def list_files(path: str = Query(...), x_sdi_key: str | None = Header(default=None)):
-    check_key(x_sdi_key)
+def list_files(request: Request, path: str = Query(...), x_sdi_key: str | None = Header(default=None)):
+    check_key(x_sdi_key, request)
     folder = _within_a_root(path)
     if folder is None:
         raise HTTPException(status_code=403, detail="Path is outside the allowed roots")
     if not folder.is_dir():
-        raise HTTPException(status_code=404, detail="Folder not found")
+        # SAY WHICH THING IS MISSING. "Folder not found" was the whole message when the VPN
+        # was down and the share root itself could not be reached; the folder was there.
+        from share_reach import folder_missing_detail
+        raise HTTPException(status_code=404,
+                            detail=folder_missing_detail(str(folder), config.FILE_ROOTS))
     items = []
     try:
         for entry in sorted(os.scandir(folder), key=lambda e: (not e.is_dir(), e.name.lower())):
             p = Path(entry.path)
             is_dir = entry.is_dir()
-            if not is_dir and not _allowed_ext(p):
-                continue  # hide file types we won't serve
+            if not is_dir and not _listable_ext(p):
+                continue  # hide what we can neither serve nor stage
             stat = entry.stat()
             items.append({
                 "name": entry.name,
@@ -103,15 +383,27 @@ def list_files(path: str = Query(...), x_sdi_key: str | None = Header(default=No
                 "ext": p.suffix.lower(),
                 "size_bytes": None if is_dir else stat.st_size,
                 "modified": int(stat.st_mtime),
+                # False for a model or a DXF: it can be added to a job, and /api/file will
+                # still refuse to hand it to a browser. Said here so the page does not have
+                # to keep its own copy of either list.
+                "servable": is_dir or _allowed_ext(p),
             })
     except PermissionError:
         raise HTTPException(status_code=403, detail="Service account lacks rights to this share")
     return {"path": str(folder), "items": items}
 
 
+# What a browser can usefully SHOW rather than save. A quote or a decision report
+# is meant to be read; landing it in Downloads and making someone find it again is
+# the difference between a report and a file. Everything else — the workbook above
+# all — belongs in Excel, so it downloads.
+_VIEWABLE = {".html", ".htm", ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+             ".txt", ".log", ".md", ".json", ".mp4", ".webm"}
+
+
 @app.get("/api/file")
-def get_file(path: str = Query(...), x_sdi_key: str | None = Header(default=None)):
-    check_key(x_sdi_key)
+def get_file(request: Request, path: str = Query(...), x_sdi_key: str | None = Header(default=None)):
+    check_key(x_sdi_key, request)
     target = _within_a_root(path)
     if target is None:
         raise HTTPException(status_code=403, detail="Path is outside the allowed roots")
@@ -119,9 +411,40 @@ def get_file(path: str = Query(...), x_sdi_key: str | None = Header(default=None
         raise HTTPException(status_code=404, detail="File not found")
     if not _allowed_ext(target):
         raise HTTPException(status_code=415, detail=f"Extension {target.suffix} is not served")
+
     media_type, _ = mimetypes.guess_type(str(target))
+    inline = target.suffix.lower() in _VIEWABLE
+    headers = {}
+
+    # ── AN UNRELEASED QUOTATION IS NOT A DOWNLOAD ───────────────────────────────
+    #
+    # "download/share/export routes must enforce `customer_releasable`." This is that route:
+    # it takes a path and hands back a file, and a quotation is just another path to it.
+    #
+    # WHAT IS ENFORCED, AND WHAT HONESTLY CANNOT BE. The estimator must keep their page —
+    # `portal_editable` is a promise and refusing outright would break it — so an unreleased
+    # quotation is still SERVED, and still rendered, for the person whose job is to close the
+    # items on it. What it may not do is arrive as a saved file: no attachment disposition, no
+    # download filename. A viewer can still use Save As, and this does not pretend otherwise;
+    # the boundary that matters is that the SYSTEM never hands one over as a document, and
+    # that is held here and on both email routes.
+    #
+    # The verdict comes out of the file's own head, not its name and not a record elsewhere.
+    if quote_release.looks_like_a_quote(target) and \
+            not quote_release.may_go_to_a_customer(target):
+        inline = True
+        headers["X-SDI-Quote-Release"] = "portal"
+        headers["X-SDI-Quote-Held"] = quote_release.why_held(target)
+    if inline:
+        # SANDBOXED, because these roots are shares. An .html served from this
+        # origin can script the page that served it and reach every endpoint with
+        # the caller's rights — and anybody who can write to the Estimating share
+        # can put an .html on it. The sandbox keeps it rendering and takes away
+        # the origin, which costs a report nothing: ours is one static document.
+        headers["Content-Security-Policy"] = "sandbox allow-downloads allow-popups"
     return FileResponse(str(target), media_type=media_type or "application/octet-stream",
-                        filename=target.name)
+                        filename=target.name, headers=headers,
+                        content_disposition_type="inline" if inline else "attachment")
 
 
 # ── Database ─────────────────────────────────────────────────────────────────
@@ -134,12 +457,36 @@ def db_status() -> dict:
             conn.cursor().execute("SELECT 1").fetchone()
         return {"status": "ok", "server": config.DB_SERVER, "database": config.DB_NAME}
     except Exception as exc:  # noqa: BLE001 — surface the reason, but never the secrets
-        return {"status": "error", "detail": str(exc)[:300]}
+        out = {"status": "error", "detail": str(exc)[:300],
+               "user": config.DB_USER, "server": config.DB_SERVER}
+        # WHICH FILE SUPPLIED THE PASSWORD, because "Login failed for user 'AIBot'" does not
+        # say and that is the entire question.
+        #
+        # This service reads sdi-intelligence-backend\.env FIRST and the repo-root .env
+        # second, with override=False — so the value beside the service SHADOWS the shared
+        # one. The engine reads them the other way round and stops at the first. So after a
+        # rotation applied to the root .env only, the ENGINE connects and the SERVICE does
+        # not, on the same machine, as the same user, against the same server — and the
+        # header says DEGRADED with no way to tell why from the message.
+        #
+        # Never the value: the layer list is filenames, which is exactly what is needed and
+        # nothing that is a secret.
+        layers = getattr(config, "ENV_LAYERS", None)
+        if layers:
+            out["credential_from"] = layers
+            if "Login failed" in out["detail"]:
+                out["note"] = (
+                    "The password came from the FIRST of these files that set it. This "
+                    "service reads its own .env before the repo-root one, so a rotation "
+                    "applied only at the root is shadowed here. Update the first file that "
+                    "sets SDI_DB_PASSWORD, then RESTART the service — .env is read once at "
+                    "start.")
+        return out
 
 
 @app.get("/api/db/ping")
-def db_ping(x_sdi_key: str | None = Header(default=None)):
-    check_key(x_sdi_key)
+def db_ping(request: Request, x_sdi_key: str | None = Header(default=None)):
+    check_key(x_sdi_key, request)
     result = db_status()
     code = 200 if result["status"] in ("ok", "not_configured") else 503
     return JSONResponse(status_code=code, content=result)
@@ -149,19 +496,283 @@ def db_ping(x_sdi_key: str | None = Header(default=None)):
 _PORTAL = Path(__file__).with_name("sdi-intelligence-portal.html")
 
 
+_ESTIMATOR = Path(__file__).with_name("sdi-estimating-intelligence.html")
+_GUIDE = Path(__file__).with_name("sdi-estimating-guide.html")
+
+
+# NEVER CACHED, AND THIS COST A SESSION. These two documents are the user interface of a system
+# that changes several times a day. FileResponse re-reads the file from disk on every request, so
+# a deploy reaches the service the moment the pull lands and no restart is needed — but neither
+# route set any cache header, so a browser applied its own heuristic and kept serving the copy it
+# already had. Three new buttons were pulled, present in the file the service was reading, and
+# invisible on the page in front of the person who had just deployed them. "It is not deployed"
+# and "your browser is showing you yesterday" are indistinguishable from the page, and the second
+# one wastes the time of everybody who has the page open rather than just the deployer.
+#
+# no-store rather than a short max-age, because there is no version in these URLs to bust and the
+# documents are small. The logo beside them keeps its max-age: that genuinely does not change.
+_PAGE_HEADERS = {"Cache-Control": "no-store, must-revalidate"}
+
+
+@app.get("/estimating")
+def estimating_page(request: Request):
+    """The estimator's page, same-origin with the API it calls."""
+    if auth.current_user(request) is None:
+        return auth.login_redirect(request)
+    if _ESTIMATOR.exists():
+        return FileResponse(str(_ESTIMATOR), headers=_PAGE_HEADERS)
+    return JSONResponse(status_code=404,
+                        content={"detail": "sdi-estimating-intelligence.html "
+                                           "is not next to app.py"})
+
+
+# THE TECHNICAL DESIGN WORKFLOW MAPS. Two standalone pages from Technical Design (full and
+# compact), served from workflows/ beside this file so they travel with the portal to every
+# box it runs on. A fixed list, not a path parameter read from disk: nothing a URL names can
+# reach a file that is not one of these.
+_WORKFLOW_DIR = Path(__file__).with_name("workflows")
+_WORKFLOWS = {
+    "technical-design": "technical-design-workflow.html",
+    "technical-design-compact": "technical-design-workflow-compact.html",
+}
+
+
+@app.get("/workflow/{name}")
+def workflow_page(name: str, request: Request):
+    """A Technical Design workflow map, opened from the portal's left-hand menu."""
+    if auth.current_user(request) is None:
+        return auth.login_redirect(request)
+    filename = _WORKFLOWS.get(name)
+    if filename is None or not (_WORKFLOW_DIR / filename).is_file():
+        raise HTTPException(status_code=404, detail="No such workflow page")
+    return FileResponse(str(_WORKFLOW_DIR / filename), headers=_PAGE_HEADERS)
+
+
+@app.get("/guide")
+def estimating_guide(request: Request):
+    """What each deliverable means and what it is asking the estimator to decide.
+
+    Served from the same origin as the page it explains, so it is one click from the run
+    button rather than a document somebody has to be sent and then find again."""
+    if auth.current_user(request) is None:
+        return auth.login_redirect(request)
+    if _GUIDE.exists():
+        return FileResponse(str(_GUIDE), headers=_PAGE_HEADERS)
+    return JSONResponse(status_code=404,
+                        content={"detail": "sdi-estimating-guide.html is not next to app.py"})
+
+
+# The repo documents the portal may render. A WHITELIST, not a path parameter — the file
+# API already exists for browsing; this serves exactly the documents the architecture page
+# embeds, and nothing else becomes servable by being added to docs/.
+_REPO_DOCS = {
+    "knowledge-map": "KNOWLEDGE_SOURCES.md",
+    "change-register": "CHANGE_REGISTER.md",
+}
+
+
+def _serve_repo_doc(name: str):
+    fname = _REPO_DOCS[name]
+    for _where in (Path(__file__).resolve().parent.parent, Path(__file__).resolve().parent):
+        _p = _where / "docs" / fname
+        if _p.is_file():
+            try:
+                # The LOGICAL path, not the server's filesystem — a browser page has no
+                # business learning where the checkout lives on disk.
+                return {"exists": True, "path": f"docs/{fname}",
+                        "modified": datetime.fromtimestamp(_p.stat().st_mtime)
+                        .strftime("%d %b %Y %H:%M"),
+                        "markdown": _p.read_text(encoding="utf-8")}
+            except OSError as exc:
+                raise HTTPException(status_code=500,
+                                    detail=f"docs/{fname} exists and could not be read: "
+                                           f"{type(exc).__name__}")
+    raise HTTPException(status_code=404,
+                        detail=f"docs/{fname} is not in the repo this backend runs from — "
+                               f"git pull, or the document was moved without this endpoint "
+                               f"learning it")
+
+
+@app.get("/api/change-register")
+def change_register(request: Request, x_sdi_key: str | None = Header(default=None)):
+    """docs/CHANGE_REGISTER.md — every estimator finding and rule change, with who
+    decided it, where it is implemented, the commit and the proof. Rendered on the
+    architecture page beside the knowledge map, per James's review: a register the
+    estimators cannot see is a register only the repo knows about."""
+    check_key(x_sdi_key, request)
+    return _serve_repo_doc("change-register")
+
+
+@app.get("/api/knowledge-map")
+def knowledge_map(request: Request, x_sdi_key: str | None = Header(default=None)):
+    """docs/KNOWLEDGE_SOURCES.md, served from the repo so the architecture page cannot
+    drift from the code.
+
+    "these files need to be in the SDI Estimating Intelligence architecture page so that
+    data / knowledge is not lost" — James, 15 Sep 2026. The page renders this on the
+    laptop and the server alike, and both update on git pull rather than by hand-editing
+    two HTML files. The repo side is held honest by test_the_knowledge_map_is_not_stale:
+    a register that leaves the code fails the suite until the map says where it went.
+    """
+    check_key(x_sdi_key, request)
+    return _serve_repo_doc("knowledge-map")
+
+
+_LOGO_EXTS = (".svg", ".png", ".jpg", ".jpeg", ".webp")
+_LOGO_FALLBACK = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">'
+    '<circle cx="50" cy="50" r="50" fill="#e8a33d"/>'
+    '<text x="50" y="66" text-anchor="middle" font-family="Inter,Arial,sans-serif" '
+    'font-weight="800" font-size="54" fill="#000">S</text></svg>'
+)
+
+
+@app.get("/api/brand/logo")
+def brand_logo():
+    """The we.are.sdi logo, read from the SAME folder the client quote reads.
+
+    One file, two consumers. A logo copied into the portal would drift from the one on the
+    customer's quotation, and the quotation is the copy that must never be wrong.
+
+    This endpoint never 404s. If the file is missing it returns a plain mark rather than a
+    broken image, because a header with a hole in it looks like a broken site, while a plain
+    mark looks like a plain mark — the same reasoning the quote generator already applies.
+    """
+    folder = Path(config.BRAND_ASSETS_DIR)
+    key = config.BRAND_SDI_LOGO_KEY.lower()
+    try:
+        if folder.is_dir():
+            for ext in _LOGO_EXTS:                       # .svg first — it scales
+                for entry in folder.iterdir():
+                    if entry.suffix.lower() != ext:
+                        continue
+                    stem = "".join(c for c in entry.stem.lower() if c.isalnum())
+                    if stem == key:
+                        media = mimetypes.guess_type(entry.name)[0] or "application/octet-stream"
+                        return FileResponse(str(entry), media_type=media,
+                                            headers={"Cache-Control": "public, max-age=300"})
+    except OSError as exc:
+        logging.getLogger("sdi").warning(
+            "brand logo unreadable in %s (%s) — serving the fallback mark", folder, exc)
+
+    return Response(content=_LOGO_FALLBACK, media_type="image/svg+xml",
+                    headers={"Cache-Control": "no-store"})
+
+
 @app.get("/")
-def home():
+def home(request: Request):
+    if auth.current_user(request) is None:
+        return auth.login_redirect(request)
     if _PORTAL.exists():
-        return FileResponse(str(_PORTAL))
+        # Same as /estimating and /guide: the portal is a document that changes with every
+        # deploy, and a browser left to its own heuristic will serve the one it already has.
+        return FileResponse(str(_PORTAL), headers=_PAGE_HEADERS)
     return JSONResponse({"status": "backend up",
                          "note": "place sdi-intelligence-portal.html next to app.py to serve it here"})
+
+
+# ── App catalogue + mobile app portal ────────────────────────────────────────
+# services.json is the single source of truth for the intranet portal and the
+# mobile app portal alike. See APP_PORTAL_RUNBOOK.md.
+_SERVICES = Path(__file__).with_name("services.json")
+_APP_DIR = Path(__file__).parent / "appportal"
+
+# A browser fetches these before any session exists and they carry nothing
+# sensitive. Everything else under /app/ — including app screens — needs a user.
+_OPEN_ASSETS = {"manifest.webmanifest", "sw.js",
+                "icon-192.png", "icon-512.png", "icon-maskable-512.png"}
+
+
+@app.get("/services.json")
+def services_json(request: Request, x_sdi_key: str | None = Header(default=None)):
+    check_key(x_sdi_key, request)
+    if not _SERVICES.exists():
+        raise HTTPException(status_code=404, detail="services.json not found")
+    return FileResponse(str(_SERVICES), media_type="application/json", headers=_PAGE_HEADERS)
+
+
+@app.get("/api/services")
+def api_services(request: Request,
+                 surface: str | None = Query(default=None, pattern="^(intranet|app|both)$"),
+                 x_sdi_key: str | None = Header(default=None)):
+    """The catalogue, optionally filtered to one surface.
+
+    `surface=app` excludes anything marked `intranet` — the apps whose controls
+    need the shares or SDILive.
+    """
+    check_key(x_sdi_key, request)
+    if not _SERVICES.exists():
+        raise HTTPException(status_code=404, detail="services.json not found")
+    import json as _json
+    data = _json.loads(_SERVICES.read_text(encoding="utf-8"))
+    items = data.get("services", [])
+    if surface:
+        items = [x for x in items if x.get("surface") in (surface, "both")]
+    return {"version": data.get("version"), "count": len(items), "services": items}
+
+
+@app.get("/app")
+def app_portal_redirect():
+    # The trailing slash matters: without it every relative URL in the page
+    # (manifest, icons, sw.js) resolves against "/" instead of "/app/".
+    return RedirectResponse(url="/app/", status_code=308)
+
+
+@app.get("/app/")
+def app_portal(request: Request):
+    if auth.current_user(request) is None:
+        return auth.login_redirect(request)
+    index = _APP_DIR / "index.html"
+    if not index.exists():
+        raise HTTPException(status_code=404, detail="app portal not installed")
+    return FileResponse(str(index), headers=_PAGE_HEADERS)
+
+
+@app.get("/app/{filename}")
+def app_portal_asset(filename: str, request: Request):
+    if "/" in filename or "\\" in filename or filename.startswith("."):
+        raise HTTPException(status_code=400, detail="Bad asset name")
+    if filename not in _OPEN_ASSETS and auth.current_user(request) is None:
+        return auth.login_redirect(request)
+    target = _APP_DIR / filename
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    media_type, _ = mimetypes.guess_type(str(target))
+    if filename.endswith(".webmanifest"):
+        media_type = "application/manifest+json"
+    resp = FileResponse(str(target), media_type=media_type or "application/octet-stream")
+    if filename.endswith(".html") or filename == "sw.js":
+        # Revalidate on every load: a browser re-using a stored page kept
+        # running the previous version for hours after a deploy.
+        resp.headers["Cache-Control"] = "private, no-cache"
+    return resp
 
 
 # ── HR pipeline (BrightHR -> InVentry) ──
 from hr_routes import router as hr_router
 app.include_router(hr_router)
 
+# ── Estimating (the SDI Estimating Intelligence page) ──
+from estimate_routes import router as estimate_router
+app.include_router(estimate_router)
+
+# ── Identity, and the apps that need it ──
+app.include_router(auth.router)
+
+from voicecrm import router as voicecrm_router
+app.include_router(voicecrm_router)
+
+if not auth.ENABLED:
+    print("[WARN] Entra SSO is NOT configured — every visitor is anonymous. "
+          "Do not expose this service outside the network until it is.")
+
 
 if __name__ == "__main__":
     import uvicorn
+
+    if os.getenv("SDI_LOG_POLLING", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        from log_filters import QuietPolling
+        logging.getLogger("uvicorn.access").addFilter(QuietPolling())
+        print("[log] runner polling is not logged. SDI_LOG_POLLING=1 to see it.")
+
     uvicorn.run(app, host=config.HOST, port=config.PORT)

@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDM Questions Checklist</title>
+<style>
+/* Layout: one reading column; the meeting agenda first, then the full question list grouped by subject, each question with space to write the answer. */
+:root{
+  --bg:#f7f8f6; --surface:#ffffff; --fg:#1d2320; --muted:#5b655f; --line:#dde2de;
+  --accent:#2f6b8a; --accent-soft:#e8f0f4; --ans:#fbfbf9;
+  --display:"IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#141816; --surface:#1b201d; --fg:#e4e9e5; --muted:#9aa59e; --line:#2c3430;
+  --accent:#7fb6d3; --accent-soft:#1c2a31; --ans:#181c1a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#141816; --surface:#1b201d; --fg:#e4e9e5; --muted:#9aa59e; --line:#2c3430;
+  --accent:#7fb6d3; --accent-soft:#1c2a31; --ans:#181c1a; color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 var(--body)}
+.wrap{max-width:880px;margin:0 auto;padding-inline:20px;padding-block:28px 56px}
+h1{font:600 30px/1.15 var(--display);margin:0 0 6px;text-wrap:balance}
+.lede{color:var(--muted);max-width:68ch;margin:0 0 10px}
+.meta{font:13px/1.5 var(--mono);color:var(--muted);border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding-block:10px;margin:14px 0 26px}
+h2{font:600 21px/1.2 var(--display);color:var(--accent);margin:32px 0 6px;text-wrap:balance}
+.why{color:var(--muted);margin:0 0 12px;max-width:70ch}
+.agenda{background:var(--accent-soft);border:1px solid var(--accent);border-radius:6px;padding:14px 18px}
+.agenda h2{margin-top:0}
+.agenda ol{margin:6px 0 0;padding-left:1.4em;display:grid;gap:4px}
+.q{display:grid;grid-template-columns:1.3em 1fr;gap:4px 8px;padding-block:10px;border-bottom:1px solid var(--line)}
+.q:last-of-type{border-bottom:none}
+.box{font-size:16px;line-height:1.4;color:var(--muted)}
+.q .text{min-width:0}
+.q b{font-weight:600}
+.q .note{display:block;color:var(--muted);font-size:13.5px;margin-top:2px}
+.q .ask{display:block;font:600 11px/1 var(--body);letter-spacing:.07em;text-transform:uppercase;color:var(--accent);margin-top:6px}
+.answer{grid-column:2;border:1px dashed var(--line);background:var(--ans);border-radius:4px;min-height:2.4em;margin-top:6px;padding:4px 8px;color:var(--muted);font-size:12.5px}
+.foot{color:var(--muted);font-size:13.5px;margin-top:28px;max-width:70ch}
+code{font:13px var(--mono)}
+@media print{h2,.why{break-after:avoid;page-break-after:avoid}body{font-size:12.5px}.wrap{padding-block:6px 0}h2{margin-top:20px}.q{break-inside:avoid;padding-block:6px}.answer{min-height:2em}.agenda{break-inside:avoid}}
+</style></head><body>
+<div id="sdi-dlbar" style="font:500 13px/1.4 ui-sans-serif,-apple-system,'Segoe UI',sans-serif;
+     display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+     max-width:940px;margin:0 auto;padding:10px 22px 0;color:inherit">
+  <a id="sdi-dlbar-pdf" href="" target="_blank" rel="noopener"
+     style="text-decoration:none;color:inherit;border:1px solid currentColor;border-radius:5px;
+            padding:5px 11px;opacity:.75">PDF version</a>
+  <button type="button" id="sdi-dlbar-save"
+     style="font:inherit;color:inherit;background:transparent;border:1px solid currentColor;
+            border-radius:5px;padding:5px 11px;opacity:.75;cursor:pointer">Save this page</button>
+  <span id="sdi-dlbar-note" style="opacity:.6"></span>
+</div>
+<script>
+(function () {
+  var bar = document.getElementById("sdi-dlbar");
+  if (!bar) return;
+  var link = document.getElementById("sdi-dlbar-pdf");
+  var save = document.getElementById("sdi-dlbar-save");
+  var note = document.getElementById("sdi-dlbar-note");
+
+  // WHERE THE PDF IS, WHICH DEPENDS ENTIRELY ON HOW THIS PAGE WAS OPENED.
+  var here = String(location.href).split("#")[0];
+  var name = (here.split("/").pop() || "").split("?")[0];
+  if (/[?&]path=/.test(here)) {
+    // The portal: /api/file?path=<dir>/<name>.html -> swap the extension inside the query.
+    link.href = here.replace(/(\.html?)(?=($|&))/i, ".pdf");
+  } else if (/\.html?$/i.test(name)) {
+    link.href = name.replace(/\.html?$/i, ".pdf");   // sibling file, on disk or on K:
+  } else {
+    link.hidden = true;                              // cannot work it out: offer nothing broken
+  }
+
+  save.addEventListener("click", function () {
+    try {
+      bar.hidden = true;                             // the saved copy carries the report, not the bar
+      var html = "<!doctype html>\n" + document.documentElement.outerHTML;
+      bar.hidden = false;
+      var url = URL.createObjectURL(new Blob([html], {type: "text/html;charset=utf-8"}));
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = (name && /\.html?$/i.test(name)) ? name : "sdi-status-report.html";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    } catch (e) {
+      note.textContent = "Saving is blocked here — use the browser's own Save Page As.";
+    }
+  });
+})();
+</script>
+<style>@media print { #sdi-dlbar { display:none !important; } }</style>
+
+<div class="wrap">
+  <h1>SOLIDWORKS PDM: questions for the install</h1>
+  <p class="lede">What SDI Intelligence needs to know about PDM before the software side is built on it: reaching the database, the vault and its local cache, versions and revisions, and how our tools follow a file. Take it to the reseller and Ian, and write the answers in the boxes.</p>
+  <p class="lede">These answers are also the evidence for the <b>end-of-October go/no-go between PDM Standard and the SDI Design Vault</b>. That decision turns on whether the estimating tools, Drawing Search, Sage, QC and the AI can reach the design data through PDM.</p>
+  <div class="meta">Prepared by James Gray · SDI Intelligence · 30 September 2026 · for the reseller, Ian, Jack and Yogesh</div>
+
+  <section class="agenda">
+    <h2>First meeting: the six to settle</h2>
+    <ol>
+      <li>PDM Standard or Professional, and what an outside program may do with it, in writing.</li>
+      <li>A read-only database login for SDI Intelligence.</li>
+      <li>A PDM licence and a local vault view for the runner account on the new server.</li>
+      <li>Which workflow state counts as "released" for estimating.</li>
+      <li>The list of data-card variables.</li>
+      <li>The migration plan and date for the K: drive.</li>
+    </ol>
+  </section>
+
+  <h2>1 · Product and version</h2>
+  <p class="why">Standard and Professional differ most in what other software can reach, and everything below depends on which one this is.</p>
+  <div class="q"><span class="box">☐</span><div class="text"><b>Is it PDM Standard or PDM Professional, and which year's release?</b><span class="ask">Ask: reseller</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>What can an outside program do with it?</b> Read file properties, get a file and its references, list versions, be told when a file is checked in.<span class="note">Ask for this in writing for the exact product. PDM Standard's automation interface is more limited than Professional's.</span><span class="ask">Ask: reseller</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>Is there a route from Standard to Professional later, and what would it cost?</b><span class="ask">Ask: reseller</span></div><div class="answer"></div></div>
+
+  <h2>2 · The database</h2>
+  <p class="why">Search and reporting tools usually read the PDM database directly. That is common practice, but Dassault does not support it and the table layout can change between versions.</p>
+  <div class="q"><span class="box">☐</span><div class="text"><b>Which SQL Server edition and version, on which machine?</b><span class="note">PDM Standard runs on SQL Server Express, which caps a database at 10 GB.</span><span class="ask">Ask: reseller / Jack</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>What are the vault and database names?</b><span class="ask">Ask: reseller</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>Can SDI Intelligence have a read-only SQL login?</b><span class="ask">Ask: reseller / Jack</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>Will we be told before an upgrade that changes the database layout?</b><span class="ask">Ask: reseller</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>How large is the database expected to grow, and what happens near the 10 GB cap?</b><span class="ask">Ask: reseller</span></div><div class="answer"></div></div>
+
+  <h2>3 · Where the files live: vault, archive and local cache</h2>
+  <p class="why">The vault keeps files in an archive under internal numbered names. People and programs work on copies in a local vault view. Our tools must never read or write the archive directly.</p>
+  <div class="q"><span class="box">☐</span><div class="text"><b>Where do the archive server and its storage sit?</b><span class="ask">Ask: reseller / Jack</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>Can the runner account on the new server have its own vault login and local view?</b><span class="note">The estimating runner and Drawing Search read files through a view like any user.</span><span class="ask">Ask: reseller / Jack</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>How big does the local cache get, where does it live, and how is it cleared?</b><span class="ask">Ask: reseller</span></div><div class="answer"></div></div>
+
+  <h2>4 · Versions and revisions</h2>
+  <p class="why">Every check-in makes a new version; a revision (A, B …) is a label the workflow sets. Our quotes name a revision, so estimating needs to know which one it is reading.</p>
+  <div class="q"><span class="box">☐</span><div class="text"><b>What are the workflow states, and who moves a file between them?</b><span class="note">For example Work in progress → Approved → Released.</span><span class="ask">Ask: Ian</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>Which should estimating and Drawing Search read: the latest version, or the latest released revision?</b><span class="ask">Decide: James, Ian</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>What is the revision scheme, and when is a revision stamped on the file?</b><span class="ask">Ask: Ian / reseller</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>Can an older version be fetched?</b><span class="note">A re-quote may need the exact revision that was quoted.</span><span class="ask">Ask: reseller</span></div><div class="answer"></div></div>
+
+  <h2>5 · Data cards</h2>
+  <p class="why">The variables on PDM's data cards map onto fields the engine currently reads off the drawings. Filled in reliably, they become a stronger source than the PDF text.</p>
+  <div class="q"><span class="box">☐</span><div class="text"><b>What variables are on the file and folder cards?</b> Drawing Number, Revision, Description, Material, Finish, Customer, Job, Drawn by …<span class="ask">Ask: reseller / Ian</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>Are the card variables kept in step with the SOLIDWORKS custom properties, and in which direction?</b><span class="ask">Ask: reseller</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>Which variables are mandatory at check-in?</b><span class="ask">Ask: Ian</span></div><div class="answer"></div></div>
+
+  <h2>6 · References and "Get latest"</h2>
+  <p class="why">An assembly needs its referenced parts. Getting one file does not guarantee its references are local and current.</p>
+  <div class="q"><span class="box">☐</span><div class="text"><b>How should a program fetch a whole assembly with all its references at the right versions?</b><span class="ask">Ask: reseller</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>How do cross-project and library parts behave?</b><span class="note">Yogesh has pinned this down with Ian; the Design Vault must match it.</span><span class="ask">Confirm: Yogesh, Ian</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>Where do drawings, DXFs and PDFs sit relative to their model?</b> Same folder, same name?<span class="ask">Ask: Ian</span></div><div class="answer"></div></div>
+
+  <h2>7 · Knowing when something changes</h2>
+  <p class="why">Drawing Search and the estimating tools need to stay current without re-reading every file.</p>
+  <div class="q"><span class="box">☐</span><div class="text"><b>How can another program learn that a file was checked in or a revision released?</b><span class="note">The options are PDM's own event hooks (more limited in Standard), reading recent changes from the database, or a scheduled export.</span><span class="ask">Ask: reseller</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>Is there an audit log of check-ins and state changes we can read?</b><span class="ask">Ask: reseller</span></div><div class="answer"></div></div>
+
+  <h2>8 · File identity and fingerprints</h2>
+  <p class="why">Drawing Search tracks files by path and a file fingerprint (hash) today. In a vault the lasting identity is PDM's own document ID and version, and the path depends on each person's local view.</p>
+  <div class="q"><span class="box">☐</span><div class="text"><b>Does a file keep its document ID through rename, move and copy-tree?</b><span class="ask">Ask: reseller</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>Can the document ID and version be read with each file?</b> Our indexes should key on these, not on the path.<span class="ask">Ask: reseller</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>How does PDM treat two identical files in different projects?</b><span class="ask">Ask: reseller</span></div><div class="answer"></div></div>
+
+  <h2>9 · Migration from the K: drive</h2>
+  <p class="why">Our estimates read their packs from K: today, so the cut-over date matters to every tool.</p>
+  <div class="q"><span class="box">☐</span><div class="text"><b>What goes into the vault, and in what folder layout?</b><span class="ask">Ask: Ian / reseller</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>What happens to the existing K: files: frozen, read-only, or kept in step?</b><span class="ask">Ask: Ian / Jack</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>How are duplicates handled on import, and does history come across or does version 1 start at import?</b><span class="ask">Ask: reseller</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>What is the cut-over date?</b><span class="ask">Ask: Ian</span></div><div class="answer"></div></div>
+
+  <h2>10 · Licences and accounts</h2>
+  <div class="q"><span class="box">☐</span><div class="text"><b>Does the runner or service account need its own PDM licence?</b><span class="ask">Ask: reseller</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>Can that account be given read-only permissions across the vault?</b><span class="ask">Ask: reseller / Jack</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>What happens to automated access when a user leaves or a password changes?</b><span class="ask">Ask: Jack</span></div><div class="answer"></div></div>
+
+  <h2>11 · Operations</h2>
+  <div class="q"><span class="box">☐</span><div class="text"><b>How are the database and archive backed up, and are they backed up together?</b><span class="ask">Ask: Jack / reseller</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>Where do the PDM servers run in relation to the new SDI Intelligence server?</b><span class="ask">Ask: Jack</span></div><div class="answer"></div></div>
+  <div class="q"><span class="box">☐</span><div class="text"><b>How are PDM upgrades scheduled, and who tells SDI Intelligence first?</b><span class="ask">Ask: reseller / Jack</span></div><div class="answer"></div></div>
+
+  <p class="foot">What the answers decide: whether SDI Intelligence reads PDM through its database, its automation interface or a scheduled export; how Drawing Search and the estimating runner key their records; and whether PDM Standard can do what the SDI Design Vault was built to do by the end-of-October go/no-go.</p>
+</div>
+</body></html>

@@ -33,14 +33,7 @@ except ImportError:
     sys.exit(1)
 
 # ── Connection ─────────────────────────────────────────────────────────────────
-CONN_STR = (
-    "DRIVER={ODBC Driver 18 for SQL Server};"
-    "SERVER=10.0.0.200;"
-    "DATABASE=SDILive;"
-    "UID=AIBot;"
-    "PWD=AIAgentPW2026;"
-    "Encrypt=yes;TrustServerCertificate=yes;"
-)
+import config
 
 # ── Canonical SKU map ──────────────────────────────────────────────────────────
 # Maps all known aliases → one canonical SKU.
@@ -200,7 +193,7 @@ def run(write: bool) -> None:
     print(f"  migrate_bought_in_catalogue.py  [{mode}]")
     print(f"{'='*60}\n")
 
-    conn = pyodbc.connect(CONN_STR, timeout=15)
+    conn = config.get_connection(timeout=15)
     cur = conn.cursor()
 
     # ── 1. Fetch dbo.bought_in_parts ──────────────────────────────────────────

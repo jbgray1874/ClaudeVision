@@ -1,0 +1,161 @@
+"""When the traceability check itself breaks, the price goes and the document stays.
+
+James Gray, 18 September 2026:
+
+    "Draft quote may always be generated in the portal."
+    "That is fail-closed for price, but it violates your rule that a draft quote must still be
+     generated in the portal for estimator editing."
+
+THREE SHAPES WERE TRIED AND TWO OF THEM WERE WRONG.
+
+    except Exception: pass          leaves the old unit price LIVE when the guard breaks —
+                                    the one failure mode a guard exists for, on the page a
+                                    customer keeps.
+    no handling at all              a raising check takes the whole quotation down, so an
+                                    estimator has no draft to work from and no way to see
+                                    what the pack priced.
+    refuse the figure, keep the     the price disappears, the specification, the included
+    page, and say so                operations and the scope stay, and the box says which
+                                    state it is in.
+
+So this test breaks `publishable_total` on purpose and asserts all three of the things the
+third shape has to do at once: the HTML still comes out, no money reaches it, and the page
+says it is pending rather than leaving a blank somebody fills in from memory.
+
+It renders the DOCUMENT. Source-grepping `client_quote_html.py` for a try/except would pass
+against a file whose handler assigns a variable nothing prints — which is precisely the state
+this file was written to catch.
+"""
+from __future__ import annotations
+
+import os
+import re
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+import client_quote_html  # noqa: E402
+import displayed_charge  # noqa: E402
+from client_quote_html import build_quote_html  # noqa: E402
+
+_UNIT = 149.87
+_QTY = 20
+
+
+def _summary():
+    """A job whose total IS traceable — so a broken check is the only thing that can stop it."""
+    return {
+        "manufacturing_writeup": {"parts": [{"part_number": "401912-02-001", "quantity": 1}]},
+        "final_estimate": {"totals": {"unit_cell": "Estimate!M105",
+                                      "unit_cell_value": _UNIT}},
+        "estimate_summary": {
+            "workbook_equivalent_pricing": {"m105_total_unit_cost_gbp": _UNIT},
+            "estimate_workbook_inputs": {"assumed_job_quantity": _QTY},
+            "part_estimates": [{"part_number": "401912-02-001", "quantity": 1,
+                                "material": "Mild steel", "finish": "Powder coated"}],
+        },
+    }
+
+
+def _money_in(html: str):
+    """Every currency figure on the page, as floats, so nothing is missed by wording."""
+    return [float(m.replace(",", ""))
+            for m in re.findall(r"£\s*([0-9][0-9,]*\.?[0-9]*)", html)]
+
+
+class _Exploded(RuntimeError):
+    pass
+
+
+def _raise(*_a, **_k):
+    raise _Exploded("the traceability check exploded")
+
+
+# ── the baseline: with the check working, this job DOES carry a price ────────────────
+def test_the_same_job_prices_normally_when_the_check_works():
+    html = build_quote_html(_summary(), job_stem="401912-02")
+    figures = _money_in(html)
+    assert figures, "the fixture must price, or the failure case proves nothing"
+    assert max(figures) >= _UNIT, figures
+
+
+# ── and when the check itself raises ────────────────────────────────────────────────
+def _broken_quote(monkeypatch):
+    # PATCHED AT THE SOURCE, because the check moved. `client_quote_html` called
+    # `publishable_total` itself when this was written; the page and the release decision
+    # were answering the same question in two places, so it moved into `quote_state`, which
+    # imports it from `displayed_charge` at the point of use. Patching the name the quote
+    # used to hold would now patch nothing and the test would pass against a broken guard.
+    monkeypatch.setattr(displayed_charge, "publishable_total", _raise)
+    return build_quote_html(_summary(), job_stem="401912-02")
+
+
+def test_the_broken_check_does_not_release_it_to_a_customer(monkeypatch):
+    """Fail closed on the AUDIENCE. A check that cannot run has not said the price is sound,
+    so there is no customer document — and asking for one says so rather than producing a
+    page that has to explain itself."""
+    from quote_state import CUSTOMER, NotReleasable, quote_state
+    monkeypatch.setattr(displayed_charge, "publishable_total", _raise)
+    state = quote_state(_summary())
+    assert state["customer_releasable"] is False
+    assert state["portal_editable"] is True
+    with pytest.raises(NotReleasable):
+        build_quote_html(_summary(), job_stem="401912-02", audience=CUSTOMER)
+
+
+def test_the_quote_is_still_generated(monkeypatch):
+    html = _broken_quote(monkeypatch)
+    assert html and "<html" in html.lower()
+    # A usable portal document, not a stub: the job is still identified and the working
+    # an estimator edits around is still on the page.
+    assert "401912-02" in html
+    assert "What's included" in html
+
+
+def test_no_unit_or_customer_price_reaches_the_page(monkeypatch):
+    html = _broken_quote(monkeypatch)
+    figures = _money_in(html)
+    assert not figures, f"a broken check must not leave money on the quote: {figures}"
+    # And specifically neither the cost nor anything marked up from it.
+    assert "149.87" not in html
+    assert "%.2f" % (_UNIT * client_quote_html.MARKUP_FACTOR) not in html
+    assert "%.2f" % (_UNIT * client_quote_html.MARKUP_FACTOR * _QTY) not in html
+
+
+def test_the_page_names_one_action_and_does_not_warn(monkeypatch):
+    """James Gray, 18 Sep 2026: "surface ONE CONCISE INTERNAL ESTIMATOR ACTION — not a long
+    warning block... Customer output should simply be unavailable until the estimate is
+    complete; it should not contain 'do not issue', pricing caveats, or a catalogue of gaps."
+
+    THIS PAGE HAS GROWN A WARNING BLOCK SIX TIMES. The red LLM-only band, the invariant
+    banner, "DRAFT — not for issue", the undrawn-parts list, PRICE PENDING, and a PORTAL VIEW
+    panel with a bulleted catalogue of everything outstanding. Every one was accurate and
+    every one was the same mistake. The safety is the file not being written, served or
+    attached — none of which needs a sentence on the page.
+    """
+    html = _broken_quote(monkeypatch)
+    assert "Enter the unit cost on the Estimate sheet" in html
+    for gone in ("PRICE PENDING", "PORTAL VIEW", "NOT FOR ISSUE", "do not issue",
+                 "not released", "outstanding"):
+        assert gone.lower() not in html.lower(), f"the warning block is back: {gone!r}"
+
+
+def test_the_engines_own_reason_stays_off_the_customers_page(monkeypatch):
+    """The reason is the estimator's, not the customer's.
+
+    The first cut printed `publishable_total`'s `why` verbatim in the pending note — which in
+    the disagreement case reads "the proposed total (£149.87) does not match what
+    Estimate!M105 holds (£321.88)". Two figures neither of which may be published, a cell
+    reference into our own spreadsheet, and the workings of an internal disagreement, on the
+    one document that leaves the building.
+    """
+    html = _broken_quote(monkeypatch)
+    for leak in ("Estimate!M", "publishable_total", "_Exploded", "exploded", "Traceback"):
+        assert leak not in html, f"the quotation carries an engine internal: {leak}"
+    # It does not describe itself with the internal word for an unfinished document, and
+    # it carries no part numbers or check results — internal is not a licence to print the
+    # engine's reasoning, only to say plainly what is outstanding.
+    assert "draft" not in html.lower()
+    assert "consistency check" not in html.lower()

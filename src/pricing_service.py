@@ -10,11 +10,443 @@ from typing import Any, Callable, Dict, List, Optional
 import config
 from estimator import estimate_document, generate_client_quote_pack
 from json_normaliser import normalise_json
+import supplier_reference
 
 try:
     import pyodbc  # type: ignore
 except ImportError:  # pragma: no cover
     pyodbc = None
+
+
+# WHICH ROWS IN THE BOUGHT-IN CATALOGUE ARE A PRICE WE ACTUALLY PAY.
+#
+# The table holds more than supplier prices. A live inspection before rung 3 was repointed at
+# it found real net rows sitting beside web guesses, figures lifted from a single historical
+# workbook, SDI's own estimates, and one row at GBP 0.0000 marked PRICE UNCONFIRMED.
+#
+# Rung 3 answers at 0.93 for an exact code and 0.80 otherwise -- above historical comparables
+# and far above the 0.68 the web/LLM rung is deliberately capped at. Letting an indication in
+# here would relabel it as firm and rank it above real evidence, which is the opposite of what
+# the ceiling exists to do.
+#
+# AN ALLOWLIST, BECAUSE IT FAILS CLOSED. A denylist would silently admit the next indicative
+# source somebody adds. A missing entry here shows up as a rung that answers nothing, which
+# somebody notices; a wrongly admitted one shows up as a confident price on a quote, which
+# nobody does.
+_FIRM_CATALOGUE_SOURCES = (
+    "migrated:",        # carried over from dbo.bought_in_parts, the old real catalogue
+    "supplier_file:",   # written by supplier_price_list.py from a supplier's own price list
+)
+
+
+def _ai_indicative_supplier(result: Dict[str, Any]) -> str:
+    """A supplier NAME for an AI/LLM market estimate, so the sheet names a source rather than
+    'an AI'. The web-SEARCH path already carries the real scraped supplier; this is for the
+    LLM-ESTIMATE path, which returns no supplier but does return `verify_against` — the UK
+    suppliers it says to check the figure against. Name the first (the company the estimate
+    points at), tagged indicative, and fall back to the provider only when it named none."""
+    _va = [str(v).strip() for v in (result.get("verify_against") or []) if str(v).strip()]
+    if _va:
+        _extra = f" +{len(_va) - 1} more" if len(_va) > 1 else ""
+        return f"{_va[0]}{_extra} (AI-indicative — verify)"
+    _prov = str(result.get("llm_provider") or "").strip()
+    return f"AI market estimate ({_prov})" if _prov else "AI market estimate"
+
+
+# Who an answer says to BUY from, when it has priced a MADE part. A supplier TYPE, matched
+# only in the "buy it from" fields — never in the item's description, where a PEM stud is
+# rightly "a self-clinching fastener for sheet metal" and a knob may be "CNC machined".
+# Config-extendable.
+_FABRICATION_SUPPLIERS = ("FABRICATOR", "FABRICATION", "MACHINE SHOP", "MACHINIST",
+                          "LASER CUTTING SERVICE", "CNC SERVICE", "SUBCONTRACT")
+
+
+def answers_a_purchase(result: Dict[str, Any]) -> bool:
+    """Did a researched price for a BOUGHT-IN line price something you can buy?
+
+    11650-06: the Yiree key (DWG888000) was asked as a purchased catalogue component and came
+    back at £65 each, to be verified against "local sheet metal fabricator quotes" — the model
+    priced having a key MADE. An answer whose OWN SUPPLIERS are makers is refused for a
+    bought-in line: it falls to the next rung, or to the estimator.
+
+    NARROW ON PURPOSE (D-216). The first cut searched the whole answer for SHEET METAL, CNC,
+    MACHINING…, and on the 05:40 run the M4 knob and the M4 PEM stud — both genuinely bought —
+    came back unpriced beside the key. The supplier a price is checked against says whether
+    it is a purchase; the words describing the item do not."""
+    terms = tuple(getattr(config, "RESEARCH_FABRICATION_SUPPLIER_TERMS", None)
+                  or _FABRICATION_SUPPLIERS)
+    blob = " ".join([str(v) for v in (result.get("verify_against") or [])]
+                    + [str(result.get("supplier_name") or "")]).upper()
+    return not any(t.upper() in blob for t in terms)
+
+
+_ARTICLE_NOISE = {"THE", "AND", "FOR", "WITH", "PER", "EACH", "SET", "PACK", "UNIT", "ONE",
+                  "PRICE", "PRICED", "LISTING", "ALSO", "LISTED", "PART", "ITEM", "FROM",
+                  "INTO", "THAT", "THIS", "CODE", "TYPE", "ASSY", "ASSEMBLY", "STD", "P/P"}
+
+
+def _article_words(text: str) -> set:
+    """The words that say WHAT a thing is: letters, three or more, not a joining word."""
+    out = set()
+    for tok in re.split(r"[^A-Z0-9]+", str(text or "").upper()):
+        if len(tok) >= 3 and any(c.isalpha() for c in tok) and tok not in _ARTICLE_NOISE:
+            out.add(tok)
+    return out
+
+
+# Words that say what a purchased thing is MADE OF, not what it is. Dropped from a purchase's
+# search of the category table (config.PURCHASE_SEARCH_MATERIAL_ADJECTIVES overrides).
+_PURCHASE_SEARCH_MATERIAL_ADJECTIVES = (
+    "STEEL", "MILD", "STAINLESS", "ALUMINIUM", "ALUMINUM", "PLASTIC", "ACRYLIC", "TIMBER",
+    "METAL", "NYLON", "BRASS", "ZINTEC", "GALV", "GALVANISED", "GALVANIZED", "MDF", "PLY",
+    "PLYWOOD", "PVC", "POLYCARBONATE", "PERSPEX", "RUBBER",
+)
+
+# Category words that name a STOCK FORM — a material bought by the sheet, board or length —
+# and so can never be the price of a component (config.STOCK_FORM_CATEGORY_WORDS overrides).
+_STOCK_FORM_CATEGORY_WORDS = (
+    "SHEET", "SHEETS", "PLATE", "BOARD", "BOARDS", "SECTION", "SECTIONS", "BAR", "TUBE",
+    "ROD", "MDF", "PLY", "PLYWOOD", "EXTRUSION", "EXTRUSIONS", "ANGLE", "CHANNEL", "MESH",
+)
+
+
+def _names_stock_form(category: Any) -> bool:
+    """Does this catalogue category name a material bought as stock rather than a component?"""
+    _words = {str(w).upper() for w in (getattr(config, "STOCK_FORM_CATEGORY_WORDS", None)
+                                       or _STOCK_FORM_CATEGORY_WORDS)}
+    return any(tok in _words for tok in re.split(r"[^A-Z0-9]+", str(category or "").upper()))
+
+
+def prices_this_article(description: str, result: Dict[str, Any]) -> bool:
+    """Does a researched answer price the article the line describes?
+
+    12567-01, 27 Sep 2026: the LED driver's £0.80 came from a MILD STEEL SHEET listing — the
+    search matched on the pack's material and the figure would have priced a driver as a piece
+    of sheet, tagged indicative and on the sheet. The answer says what it priced (a scraped
+    listing's title, or the model's own item_priced) and the line says what it is; where the
+    two share no word that names a thing, the answer is about something else (D-287).
+
+    Judged only where the answer NAMES what it priced. An answer that names nothing cannot be
+    checked here and is not refused on that account — the item_priced field exists so that a
+    wrong match is at least visible; this rule acts where it is readable.
+    """
+    _named = " ".join(str(result.get(k) or "") for k in ("item_priced", "supplier_name"))
+    _answer = _article_words(_named)
+    _asked = _article_words(description)
+    if not _answer or not _asked:
+        return True
+    if _answer & _asked:
+        return True
+    # A word of one inside a word of the other ("DRIVER" in "DRIVERS", "SCREW" in "SCREWS").
+    return any(a in b or b in a for a in _asked for b in _answer if len(a) >= 4 and len(b) >= 4)
+
+
+def standard_commodity_price(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A stable, reproducible provisional for a generically-named standard bought-in — a
+    PALLET, a perforated-panel clip — from config.STANDARD_COMMODITY_PRICE_GBP, keyed on the
+    DESCRIPTION, or None.
+
+    DB-FREE ON PURPOSE, AND MODULE-LEVEL SO THE ENGINE CAN REACH IT WITHOUT A PRICINGSERVICE.
+    A fixed config number needs no database and no network, yet the only route to it used to
+    run inside PricingService._get_web_ai_fallback — reachable only with a live DB connection
+    AND only after _web_ai_fallback_allowed let the part through. So a known commodity on a box
+    whose DB rung was unavailable, or whose class-word code ('STD PART') steered the lookup, got
+    £0 despite a deterministic price sitting in config. The estimator now consults THIS function
+    directly as a last resort (see estimator._resolve_part_system_cost), so the provisional is
+    reached wherever a real catalogue/UDEF rate was not — the reproducible figure the whole
+    'commodity before the market guess' idea was for.
+
+    Reproducible (a fixed config number, same every run), so it prices the line AND clears
+    price_not_reproducible — unlike the market guess it stands in front of. Flagged for review:
+    it is a provisional, not a quote."""
+    table = getattr(config, "STANDARD_COMMODITY_PRICE_GBP", {}) or {}
+    if not table:
+        return None
+    _desc_u = " ".join(str(v) for v in (
+        part.get("description"), part.get("part_number")) if v).upper()
+    if not _desc_u.strip():
+        return None
+    for _tok, _c in table.items():
+        # A key may name ONE token ("PALLET") or several joined by "+" ("PERFO+CLIP"), in which
+        # case EVERY token must appear in the description. This keeps a generically-named
+        # commodity from over-matching: "PERFO+CLIP" prices the perforated-panel locking clip
+        # without also capturing a fabricated clip or a plain cable clip that happens to carry
+        # the word "CLIP". A single-token key is the len==1 case, so existing entries behave
+        # exactly as before.
+        _needed = [t.strip() for t in str(_tok).upper().split("+") if t.strip()]
+        if _needed and all(t in _desc_u for t in _needed):
+            try:
+                _price = float(_c.get("price_gbp") or 0)
+            except (TypeError, ValueError):
+                continue
+            if _price <= 0:
+                continue
+            # WHOSE NUMBER IS IT. The label says what the item is; it never said where the
+            # figure came from, so a rate an estimator gave us and a rate somebody guessed
+            # reached the sheet looking identical — and the only honest thing to do with a
+            # figure of unknown origin is delete it. Printed with the price, so the question
+            # "where did 3p come from" is answered on the sheet rather than in this file.
+            _src = str(_c.get("source") or "").strip()
+            _prov = f"Standard commodity provisional: {_c.get('label', _tok)}"
+            if _src:
+                _prov += f" — source: {_src}"
+            return {
+                "source": "standard_commodity_provisional",
+                "source_type": "standard_commodity_provisional",
+                "price_is_reproducible": True,      # a fixed config number, same every run
+                "unit_price_gbp": round(_price, 2),
+                "confidence": 0.5,
+                "provenance": _prov,
+                "price_source_note": _src,
+                "review_flag": True,
+                "review_reason": ("Provisional standard-commodity price"
+                                  + (f" ({_src})" if _src else "")
+                                  + " — confirm against a supplier quote or add the item to "
+                                    "the purchasing catalogue."),
+                "supplier_name": "SDI standard commodity (provisional)",
+            }
+    return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Matching a class-word line to UDEF by its DESCRIPTION.
+#
+# "FIXING", "STD PART", "P/P" and "PACKAGING" are drawers, not keys — the code arms above
+# these functions already refuse them. What was left afterwards was one query: the whole
+# drawing description as a verbatim LIKE substring of UDEF's description. One space killed
+# it: the drawing says "M4x10mm FLANGE BUTTON HEAD SCREW, BLACK", Tim's catalogue row says
+# "M4 x 10mm FLANGE BUTTON HEAD SCREW,BLACK", and a screw he has at 2.48p reached him as
+# "MATERIAL UNPRICED: enter a unit rate".
+#
+# So the description match is done the way the price book already does it (the same
+# normaliser, imported not restated): fetch a BOUNDED candidate set on the description's
+# most distinctive words — words survive re-spacing where whole sentences do not — then
+# decide in Python where spelling can be normalised. The decision rules each exist for a
+# reason:
+#
+#   * Every SIZE the drawing states must appear on the catalogue row. An M4x10 and an
+#     M4x16 share every word; the size is the identity, so it is checked as a fact, not
+#     scored as a token.
+#   * Most of the drawing's significant words must appear on the row (the row may say
+#     MORE — catalogues are verbose — but not other things).
+#   * Class words carry no signal and are excluded from scoring, by the same predicate the
+#     code arms use: "FIXING" scoring against a fixings catalogue rewards rows for being
+#     fixings.
+#   * Survivors that disagree on price are REFUSED. Picking one is a coin toss dressed up
+#     as an answer; the line falls through to the labelled-indication path instead.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# A stated size, read from the RAW text so decimals survive: "M4 x 10mm" / "M4x10" / "M4",
+# and "3.5 X 19" / "3.5×19". The M-form is tried first so "M4 x 10" is one size, not "4x10".
+_SIZE_TOKEN_RE = re.compile(
+    r"(?:M\s*\d+(?:\.\d+)?(?:\s*[xX×✕]\s*\d+(?:\.\d+)?)?)"
+    r"|(?:\d+(?:\.\d+)?\s*[xX×✕]\s*\d+(?:\.\d+)?)")
+
+# Tokens that say nothing about WHICH part a line is.
+_DESC_STOP_TOKENS = frozenset({"THE", "AND", "FOR", "PER", "WITH", "DIA", "MM", "OFF", "REF"})
+
+
+def size_signature(text: Any) -> frozenset:
+    """The sizes a description states, spelled one way: {'M4X10', '3.5X19'}."""
+    out = set()
+    for m in _SIZE_TOKEN_RE.finditer(str(text or "").upper()):
+        out.add(re.sub(r"\s+", "", m.group(0)).replace("×", "X").replace("✕", "X"))
+    return frozenset(out)
+
+
+def _looks_like_size(token: str) -> bool:
+    """After normalisation: M4X10MM is a size, 2120 (a supplier reference) is not."""
+    return bool(re.fullmatch(r"M\d+(?:\.\d+)?(?:X[\d.]+)?(?:MM)?", token)
+                or re.fullmatch(r"[\d.]+X[\d.]+(?:MM)?", token)
+                or re.fullmatch(r"\d+(?:\.\d+)?MM", token))
+
+
+def significant_desc_tokens(text: Any) -> frozenset:
+    """The words of a description that identify the part: normalised the same way the price
+    book normalises (one shared spelling of every dimension), minus sizes (checked as facts
+    elsewhere), stop words, and class words."""
+    from bought_in_pricing import _normalise_desc                       # noqa: PLC0415
+    try:
+        from part_code_conventions import is_category_not_a_code        # noqa: PLC0415
+    except ImportError:                                                  # pragma: no cover
+        def is_category_not_a_code(_t):                                  # type: ignore
+            return False
+    out = set()
+    for tok in _normalise_desc(text).split():
+        if len(tok) < 3 and not tok.isdigit():
+            continue
+        if len(tok) < 4 and tok.isdigit():
+            continue
+        if tok in _DESC_STOP_TOKENS or _looks_like_size(tok) or is_category_not_a_code(tok):
+            continue
+        out.add(tok)
+    return frozenset(out)
+
+
+def udef_anchor_tokens(desc: Any) -> List[str]:
+    """Up to two tokens worth asking SQL about — WORDS first, because words survive the
+    re-spacing that breaks whole-sentence LIKE; reference digits ('2120' from PD.2120) only
+    when the line has no words at all."""
+    raw = re.findall(r"[A-Za-z0-9]+", str(desc or "").upper())
+    seen: set = set()
+    alpha = [t for t in raw if t.isalpha() and len(t) >= 4 and t not in _DESC_STOP_TOKENS
+             and not (t in seen or seen.add(t))]
+    if alpha:
+        return sorted(alpha, key=lambda t: (-len(t), raw.index(t)))[:2]
+    digitful = [t for t in raw if any(c.isdigit() for c in t) and len(t) >= 4
+                and not _looks_like_size(t)]
+    return digitful[:2]
+
+
+def code_column_words(part: Dict[str, Any], tokenize) -> set:
+    """The words a line's code column adds when that column holds a NAME, not a code.
+
+    A code carries a digit (file_scan's part-number rule; supplier_reference hunts codes the
+    same way). A class word (FIXING, P/P) names a drawer, a minted BI- key or synthesised
+    key names nothing, and a placeholder is not an identity — none of those contribute. Words
+    already in the description add nothing new. Empty on every line with a real code."""
+    code = str(part.get("part_number") or "").strip()
+    if not code or any(c.isdigit() for c in code):
+        return set()
+    try:
+        from part_code_conventions import is_category_not_a_code      # noqa: PLC0415
+        from part_identity import is_engine_minted_record, is_placeholder_identity  # noqa: PLC0415
+        if (is_category_not_a_code(code) or is_engine_minted_record(part)
+                or supplier_reference.is_synthesised_key(code) or is_placeholder_identity(code)):
+            return set()
+    except ImportError:                                               # pragma: no cover
+        return set()
+    # WHAT THE CODE ADDS, READ WITHOUT ITS SPACES. The record often carries the code squashed
+    # ("ROLLERSHUTTER", "PIANOHINGE"), so its words cannot be split back out. Take the code's
+    # letters, remove every description word from them, and what is left is the qualifier:
+    # "PIANO" for the hinge, nothing for "Roller Shutter / Roller Shutter Door". The first
+    # version compared whole tokens, required "ROLLERSHUTTER" of the history line, and refused
+    # 'ALLUMINIUM ROLLER SHUTTER DOOR' for 12645's shutters (D-323).
+    rest = re.sub(r"[^A-Z]", "", code.upper())
+    for w in sorted(tokenize(str(part.get("description") or "")), key=len, reverse=True):
+        rest = rest.replace(re.sub(r"[^A-Z]", "", str(w).upper()), " ")
+    return {w for w in rest.split() if len(w) >= 3}
+
+
+def choose_udef_description_row(desc: Any, rows: List[Any]):
+    """(the one UDEF row this description is, or None; why not, when None).
+
+    Rows are UDEF-query tuples: [0]=Part code, [1]=Description, [3]=System cost per."""
+    q_sizes = size_signature(desc)
+    q_toks = significant_desc_tokens(desc)
+    if not q_toks and not q_sizes:
+        return None, "the description carries nothing distinctive to match on"
+
+    survivors = []
+    for row in rows or []:
+        try:
+            if float(row[3] or 0.0) <= 0:
+                continue
+        except (TypeError, ValueError):
+            continue
+        cand_text = str(row[1] or "")
+        if q_sizes and not q_sizes <= size_signature(cand_text):
+            continue                      # an M4x10 is not an M4x16, whatever the words say
+        if q_toks:
+            cand_toks = significant_desc_tokens(cand_text)
+            hit = len(q_toks & cand_toks)
+            if hit == 0 or hit / len(q_toks) < 0.6:
+                continue
+            survivors.append((hit / len(q_toks), row))
+        else:
+            # No words at all (a bare reference like PD.2120 yields only sizes/none) — the
+            # size check above is then the whole test, and it must have had sizes to pass.
+            survivors.append((1.0, row))
+
+    if not survivors:
+        return None, "no priced catalogue row carries this line's words and stated sizes"
+    prices = {round(float(r[3]), 4) for _, r in survivors}
+    if len(prices) > 1:
+        codes = sorted({str(r[0] or "").strip() for _, r in survivors})[:4]
+        return None, (f"{len(survivors)} catalogue rows fit and disagree on price "
+                      f"({', '.join(codes)}) — refused rather than guessed")
+    survivors.sort(key=lambda s: (-s[0], len(str(s[1][1] or ""))))
+    return survivors[0][1], ""
+
+
+def is_something_you_can_buy(part: Dict[str, Any], skip_rollup_parents: bool = True,
+                              structure_decides: bool = True) -> bool:
+    """May a market price be asked for this line at all? False for anything we make or build.
+
+    ONE TEST FOR EVERY MARKET RUNG. It lived inside the web/AI fallback gate only, and the
+    researched-price rung after it (estimator rung 4) asked no such question: 11650-06's
+    "MIRROR11650-03-GA", the SolidWorks mirror of an arm assembly, went to market research and
+    came back "£85.00, one complete mirror unit" (D-252), as 12633-00-GA did as a "Bottle
+    Support". Both rungs now ask this.
+    """
+    # A MARKET PRICE ONLY MEANS ANYTHING FOR SOMETHING YOU CAN BUY. The question here is
+    # not "does this look like a parent" but "do we make this part?" — because if we make
+    # it, there is no market price to find, and asking produces a confident number for a
+    # code no supplier has ever listed. 12120-01-101 and -103 are ours; an LLM priced
+    # them anyway, and those figures reached the total.
+    #
+    # Fabrication evidence is the general test — geometry we could actually cut from, or
+    # an operation a purchased component can never incur. It keys on what the part IS, so
+    # a drawing nobody has seen yet is judged the same way. The parent heuristics below
+    # stay as a second net for records that arrive without either.
+    try:
+        from bought_in_policy import FABRICATION_OPS, has_fabrication_evidence, is_bought_in
+        # THE COSTED RECORD KEEPS ITS ROUTE UNDER route_context (D-485). The last-resort rescue
+        # asks this of the costed line, not the raw part, so the top-level fields were empty and
+        # the K-Wellness trays, posts and spine — laser, fold, weld and powder on every one —
+        # read as things to buy: £6,163 of finished-item market figures with our own labour
+        # charged on top. Both places are read.
+        _rc = part.get("route_context") if isinstance(part.get("route_context"), dict) else {}
+        _ops = {str(o).strip().lower() for o in
+                ((part.get("textual_operations") or []) + (part.get("inferred_operations") or [])
+                 + (_rc.get("textual_operations") or []) + (_rc.get("inferred_operations") or []))}
+        if has_fabrication_evidence(part):
+            return False
+        # AN OPERATION READ ONTO A PURCHASED ITEM IS A MIS-READ, NOT A MAKE. MAGNET21 sat on
+        # the side header's GA sheet and took its "POWDER COATED" and a fold from the page
+        # text; the P/P LED driver was inferred a coat the same way. Both are bought by their
+        # codes (bought_in_policy), the estimator strips those operations at costing — but
+        # pricing runs first, and this test read the not-yet-stripped operations and refused
+        # the market rung, so two purchased lines reached the book at £0 with "nothing holds a
+        # rate" (D-271). Identity decides: where the policy says we buy it, an operation the
+        # page lent it is not evidence that we make it.
+        if (_ops & FABRICATION_OPS) and not is_bought_in(part):
+            return False
+    except ImportError:
+        pass
+    # STRUCTURE IS NOT ALWAYS AN ANSWER. A purchased item can be an assembly in the model:
+    # 12312-01-08X, "SILICONE LED DIFFUSER, L: 3.944m", is the parent of the lighting parts in
+    # the SolidWorks tree and still a length SDI buys. The researched-price rung asks with
+    # structure_decides=False, so its figure reaches the "carries its own price" question
+    # rather than vanishing (D-254); a -GA code, an assembly word or fabrication still refuses.
+    _structural = bool(part.get("bom_children") or part.get("children")
+                       or part.get("assembly_children"))
+    if structure_decides and _structural:
+        return False       # it has parts under it, so its cost comes from them
+
+    if skip_rollup_parents:
+        _pn = str(part.get("part_number") or "").upper()
+        _desc = str(part.get("description") or "").upper()
+        # A "-GA" CODE THAT IS A LINE WE BUY IS NOT A ROLL-UP PARENT (D-505). 12665-01-GA
+        # lists "9370-66-GA 200mm Euro Hook" x9 — another job's drawing, no members in this
+        # pack, carried as a bought line — and the market was never asked because of the
+        # code's last two letters: nine hooks at £0. The code still refuses where the line has
+        # structure or an assembly flag; it no longer refuses a purchase on its spelling alone.
+        _roles = {str(r).strip().lower() for r in (part.get("page_roles") or [])}
+        _bought_line = (("bought_in" in _roles or bool(part.get("is_bought_in")))
+                        and not _structural
+                        and not (part.get("is_assembly_parent") or part.get("is_sub_assembly")))
+        _is_parent = (
+            (structure_decides
+             and (bool(part.get("is_assembly_parent")) or bool(part.get("is_sub_assembly"))))
+            or "weldment_parent_material_suppressed" in [str(f).lower() for f in (part.get("reliability_flags") or [])]
+            or str(part.get("cost_method") or "").lower().startswith("weldment_parent")
+            or ((_pn.endswith("-GA") or "-GA-" in _pn) and not _bought_line)
+            or any(t in _desc for t in ("WELDMENT", "ASSEMBLY", "SUB ASSEMBLY", "SUB-ASSEMBLY"))
+        )
+        if _is_parent:
+            return False
+    return True
 
 
 class PricingService:
@@ -23,6 +455,11 @@ class PricingService:
     def __init__(self, conn: Any = None, connection_factory: Optional[Callable[[], Any]] = None) -> None:
         self._connection_factory = connection_factory or self._get_db_connection
         self.conn = conn or self._connection_factory()
+        self._web_ai_calls = 0        # per-job budget counter for the web/LLM price fallback
+        # CATALOGUE ROWS REFUSED FOR A BAD UNIT, so the refusal is visible rather than
+        # merely correct. Falling through silently looks exactly like an empty catalogue,
+        # and would send somebody chasing price files that are already loaded.
+        self.catalogue_quarantine: List[str] = []
 
     def __enter__(self) -> "PricingService":
         return self
@@ -39,7 +476,11 @@ class PricingService:
 
     def _get_db_connection(self):
         if pyodbc is None:
-            raise RuntimeError("pyodbc is required for PricingService")
+            raise RuntimeError(
+                "pyodbc is required for PricingService, so SDILive/UDEF cannot be reached "
+                "and every catalogue and history price is MISSING, not zero. It is listed in "
+                "requirements.txt as core-required. Fix with: pip install pyodbc   (the "
+                "ODBC Driver 18 for SQL Server must also be installed on the machine)")
         c = config.PRICE_SOURCE_CONFIG.get("sqlserver", {})
         conn_str = (
             f"DRIVER={{{c.get('driver', 'ODBC Driver 18 for SQL Server')}}};"
@@ -47,12 +488,27 @@ class PricingService:
             f"UID={c.get('username')};PWD={c.get('password')};"
             "Encrypt=yes;TrustServerCertificate=yes;"
         )
-        return pyodbc.connect(conn_str, timeout=30)
+        _conn = pyodbc.connect(conn_str, timeout=30)   # login/connect timeout
+        # QUERY-execution timeout — the connect timeout above does NOT bound a running query, so a
+        # slow/locked query on SDILive blocks the whole estimate forever (0 CPU). Bound it: a query
+        # that overruns raises instead of hanging, and _fetch_*_with_retry degrades to no-price for
+        # that part (flagged) while the run finishes. Config lever, default 30s.
+        try:
+            _pol = getattr(config, "FALLBACK_PRICING_POLICY", {}) or {}
+            _conn.timeout = int(_pol.get("sql_query_timeout_s", 30))
+        except Exception:
+            pass
+        return _conn
 
     def _is_connection_error(self, exc: Exception) -> bool:
         message = str(exc).lower()
         tokens = ("connection", "closed", "08s01", "08003", "communication link failure")
         return any(token in message for token in tokens)
+
+    def _is_query_timeout(self, exc: Exception) -> bool:
+        """A pyodbc query-execution timeout (conn.timeout). SQLSTATE HYT00 / 'timeout expired'."""
+        message = str(exc).lower()
+        return "hyt00" in message or "timeout expired" in message or "query timeout" in message
 
     def _rounding_mode(self) -> str:
         policy = getattr(config, "ROUNDING_POLICY", {}) or {}
@@ -80,6 +536,15 @@ class PricingService:
                 if attempt == 0 and self._is_connection_error(exc):
                     self.conn = self._connection_factory()
                     continue
+                if self._is_query_timeout(exc):
+                    # slow/locked query — abandon this lookup (part flags 'no price'), reconnect so
+                    # subsequent parts still price, and never block the whole run on one query.
+                    print(f"   [pricing] SQL query timed out — skipping this lookup, run continues", flush=True)
+                    try:
+                        self.conn = self._connection_factory()
+                    except Exception:
+                        pass
+                    return None
                 raise
             finally:
                 if cursor is not None:
@@ -100,6 +565,13 @@ class PricingService:
                 if attempt == 0 and self._is_connection_error(exc):
                     self.conn = self._connection_factory()
                     continue
+                if self._is_query_timeout(exc):
+                    print(f"   [pricing] SQL query timed out — skipping this lookup, run continues", flush=True)
+                    try:
+                        self.conn = self._connection_factory()
+                    except Exception:
+                        pass
+                    return []
                 raise
             finally:
                 if cursor is not None:
@@ -140,6 +612,44 @@ class PricingService:
         "CASTOR", "WHEEL", "BEARING", "SPRING",
     )
 
+    # ── A SIGHTED WORD IS NOT A SPECIFICATION ───────────────────────────────────────────
+    #
+    # James Gray, 22 Sep 2026, on the first full concept book: "Prevent a render-invented
+    # material/description from matching a catalogue item without matching specification and
+    # unit basis."
+    #
+    # The line was `HEADER GRAPHIC SET`, material `PRINTED_VINYL` — a word this engine does
+    # not use anywhere and the vision model made up — with NO size, because a graphic is
+    # never nested. It matched a UDEF row by description tokens and took £115.56 EACH, a
+    # quarter of a £459.56 unit. The pack then stated the source two ways, "catalogue — Udef
+    # parts table for estimating" on one page and "the line records no source" on another.
+    #
+    # THE DESCRIPTION ARMS ARE SAFE FOR A DRAWING AND UNSAFE FOR A RENDER, and the reason is
+    # not the arms: it is what they are matching. A drawing's description was typed by a
+    # draughtsman describing a real part with a real size beside it, and the token-overlap
+    # and sole-match rules weigh it fairly. A sighted description is the model's impression
+    # of a picture: it carries no size to check the row against, no unit basis to compare,
+    # and words nobody in this building chose. Matching it to a priced row is not evidence,
+    # it is coincidence wearing a citation — and a wrong citation is worse than no figure.
+    #
+    # SO A SIGHTED LINE MAY MATCH ON A REFERENCE AND NOTHING ELSE: its own exact part code,
+    # or a manufacturer reference it actually carries. Both are things somebody WROTE DOWN.
+    # Where neither exists the line falls to the researched rung, which has to name a real
+    # listing, a date and a unit basis before it can produce a figure at all.
+    @staticmethod
+    def _is_sighted_line(part: Dict[str, Any]) -> bool:
+        """True when this record's words came from a render rather than from a drawing."""
+        if not isinstance(part, dict):
+            return False
+        if part.get("concept") or part.get("concept_kind"):
+            return True
+        try:
+            from source_precedence import source_of                    # noqa: WPS433
+        except Exception:                                              # noqa: BLE001
+            return False
+        return any(source_of(part, f) == "vision_concept"
+                   for f in ("normalized_material", "blank_length_mm", "quantity"))
+
     @staticmethod
     def _is_bought_in_heuristic(part: Dict[str, Any]) -> bool:
         pn = str(part.get("part_number") or "").strip().upper()
@@ -163,7 +673,112 @@ class PricingService:
         """
         part_code = str(part.get("part_number") or "").strip()
         desc = str(part.get("description") or "").strip()
+        # See _is_sighted_line above: a render's words reach the reference arms and no other.
+        _sighted = self._is_sighted_line(part)
+
+        # A CATEGORY WORD IS NOT A CODE, AND THE GUARD IN lookup_keys DID NOT REACH HERE.
+        # Refusing FIXING as a supplier-reference key stopped the two reference arms below
+        # asking about it. It did nothing about the query at the bottom of this method, which
+        # takes part["part_number"] raw — so `[Part code] = 'FIXING'` was still being asked.
+        #
+        # THAT DID NOT MISPRICE ANYTHING, AND IT DID SOMETHING ELSE INSTEAD. The catch-all
+        # FIXING row in UDEF is priced GBP 0.00, so the price check below returns None and no
+        # figure escapes. But the query is TOP 1 ordered exact-code-first, so the £0.00 row is
+        # the ONE row that comes back and the description arm of the same query never gets to
+        # answer. A generic fixing line therefore left UDEF empty-handed whether or not its
+        # description matched something — blinded rather than mispriced. The ~900 MISC rows,
+        # all £0.00, do exactly the same to every line coded MISC.
+        #
+        # Dropping the code here restores the description arm and costs nothing: a category
+        # word could never have matched a real part by equality anyway.
+        if part_code and self._is_category_word(part_code):
+            part_code = ""
+        code_param = part_code or None
+
         if not part_code and len(desc) < 8:
+            return None
+
+        # ── THE MANUFACTURER'S OWN NUMBER IS TRIED FIRST ────────────────────────────
+        # The exact arm below can only ever match a code somebody typed into UDEF. When the
+        # part number is one this engine minted — BI-BINDINGSCREW — that arm misses by
+        # construction on every run, and the line falls to the description LIKE arm or to
+        # nothing. 11650's feet, knobs and catches came out at GBP 0.00 that way while their
+        # real references (466122, 246.41.745) sat unread in the descriptions they were
+        # printed in.
+        #
+        # EXACT ONLY, AND THAT IS WHAT MAKES IT SAFE. A reference recovered from a description
+        # is a guess about which characters are the key; matched loosely it could attach a
+        # hinge's price to a foot. Matched exactly it either finds the row that carries that
+        # article number or finds nothing, so a wrong guess costs one query and never a price.
+        for key in supplier_reference.lookup_keys(part):
+            if key == part_code:
+                continue                      # the query below already tries the part's own code
+            hit = self._fetch_one_with_retry(
+                """
+                SELECT TOP 1
+                    u.[Part code], u.[Description], u.[Supplier name],
+                    CAST(u.[System cost per] AS decimal(18,4)), u.[UOM],
+                    u.[WO Est lab cost], u.[WO Est mat cost],
+                    u.[WO Actual lab cost], u.[WO Actual mat cost]
+                FROM dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING u
+                WHERE u.[Part code] = LTRIM(RTRIM(?)) AND u.[System cost per] > 0
+                ORDER BY u.[Part code] ASC
+                """,
+                [key],
+            )
+            if hit:
+                anchor = self._udef_row_to_anchor(hit, exact=True)
+                if anchor:
+                    anchor["matched_on"] = key
+                    anchor["provenance"] += f" | matched on manufacturer reference {key}"
+                    return anchor
+
+        # ── AND UDEF IS NOT KEYED ON THE MANUFACTURER'S NUMBER ──────────────────────
+        # [Part code] holds SDI's own code — FIXING1081, VINYL76 — so the exact arm above can
+        # only fire once somebody loads a supplier price file on their article numbers. That
+        # is the point of it. But the reference is already IN this table, in the description:
+        # FIXING1081 reads "Essentra Ref. 466122 - Levelling Foot", and 466122 is exactly what
+        # 11650's unpriced "ESSENTRA FOOT-466122" line carries. GBP 0.22 a foot, sitting in
+        # the catalogue, unreachable because nobody looked in the text.
+        #
+        # LIKE, AND SAFE, FOR ONE REASON ONLY: EXACTLY ONE ROW MAY MATCH. A six-digit article
+        # number inside a description is specific — but "specific" is a judgement and
+        # "unique" is a fact, so the fact is what decides. Two matches is an ambiguity nobody
+        # here can resolve, and this engine's existing rule for that (see the vinyl SKU
+        # lookup) is to price nothing and say so rather than pick the dearer. Short keys are
+        # refused outright: a three-character string appears inside a thousand descriptions.
+        for key in supplier_reference.lookup_keys(part):
+            if len(key) < 5 or supplier_reference.is_synthesised_key(key):
+                continue
+            rows = self._fetch_all_with_retry(
+                """
+                SELECT TOP 2
+                    u.[Part code], u.[Description], u.[Supplier name],
+                    CAST(u.[System cost per] AS decimal(18,4)), u.[UOM],
+                    u.[WO Est lab cost], u.[WO Est mat cost],
+                    u.[WO Actual lab cost], u.[WO Actual mat cost]
+                FROM dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING u
+                WHERE u.[Description] LIKE '%' + LTRIM(RTRIM(?)) + '%'
+                  AND u.[System cost per] > 0
+                ORDER BY u.[Part code] ASC
+                """,
+                [key],
+            ) or []
+            if len(rows) != 1:
+                continue
+            anchor = self._udef_row_to_anchor(rows[0], exact=True)
+            if anchor:
+                anchor["matched_on"] = key
+                anchor["provenance"] += (
+                    f" | matched on manufacturer reference {key} found in the catalogue "
+                    f"description (sole match)")
+                return anchor
+
+        # THE LOOSE ARMS STOP HERE FOR A SIGHTED LINE. Below this point every match is made
+        # on the DESCRIPTION — the part-code-or-description query, its token-overlap rescue,
+        # and the description recall. A drawing's description earns those; a render's
+        # impression of one does not. The reference arms above have already run.
+        if _sighted:
             return None
 
         row = self._fetch_one_with_retry(
@@ -191,32 +806,110 @@ class PricingService:
                 u.[Part code] ASC,
                 u.[Supplier name] ASC
             """,
-            [part_code, desc, desc, part_code],
+            [code_param, desc, desc, code_param],
         )
-        if not row:
+        anchor = None
+        if row and float(row[3] or 0.0) > 0:
+            matched_code = str(row[0] or "").strip()
+            is_exact_code = bool(part_code) and part_code.upper() == matched_code.upper()
+
+            # Fix A: UDEF's loose arms (part-code prefix LIKE, or description LIKE) can match a
+            # generic stem to an unrelated expensive row, and the price-DESC tiebreaker then picks
+            # the dearest (e.g. token "ELECTRICS" -> "ELECTRICS001" TTi LED panels £539.42;
+            # "Foam Tape" -> "3M 5952F VHB roll" £131.50). For NON-exact matches, require genuine
+            # token overlap between the query and the matched description, exactly as RAG does, so
+            # a loose mismatch is rejected (-> falls through to RAG / LLM estimate) rather than
+            # returning a wrong, expensive price. Exact part-code matches bypass the guard.
+            if is_exact_code:
+                anchor = self._udef_row_to_anchor(row, exact=True)
+            else:
+                _query_tokens = self._tokenize(f"{desc} {str(part.get('normalized_material') or '')}")
+                _match_score = self._token_overlap_score(_query_tokens, str(row[1] or ""))
+                if _match_score >= 0.45:
+                    anchor = self._udef_row_to_anchor(row, exact=False)
+        if anchor:
+            return anchor
+
+        # Everything keyed has now missed. The description is what is left, and it is enough
+        # for the class-word lines (FIXING / STD PART / P/P / PACKAGING) whose code was
+        # dropped at the top of this method — see the module-level notes above
+        # choose_udef_description_row for what may match and what is refused.
+        #
+        # SCOPED TO LINES THAT ARE BOUGHT, because this method runs for every part on the
+        # job: a fabricated bracket with a distinctive name must not borrow a catalogue
+        # row's price just because one row fits. A line qualifies when its code column held
+        # a class word or nothing (part_code is empty by here in both cases), or when the
+        # record itself reads as bought-in.
+        if not part_code or self._is_bought_in_heuristic(part):
+            return self._udef_description_recall(desc)
+        return None
+
+    def _udef_description_recall(self, desc: str) -> Dict[str, Any] | None:
+        """A bounded candidate fetch on the description's distinctive words, decided in
+        Python where spelling can be normalised — SQL LIKE cannot see that 'M4x10mm' and
+        'M4 x 10mm' are the same screw."""
+        if len(str(desc or "").strip()) < 8:
+            return None
+        toks = udef_anchor_tokens(desc)
+        if not toks:
             return None
 
+        _select = """
+            SELECT TOP 40
+                u.[Part code], u.[Description], u.[Supplier name],
+                CAST(u.[System cost per] AS decimal(18,4)), u.[UOM],
+                u.[WO Est lab cost], u.[WO Est mat cost],
+                u.[WO Actual lab cost], u.[WO Actual mat cost]
+            FROM dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING u
+            WHERE u.[System cost per] > 0 AND {where}
+            ORDER BY u.[Part code] ASC
+        """
+        # UPPER on both sides: the table's collation is binary, so a bare LIKE is
+        # case-sensitive and 'flange' would never find 'FLANGE'.
+        _like = "UPPER(u.[Description]) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%'"
+        rows: List[Any] = []
+        if len(toks) >= 2:
+            rows = self._fetch_all_with_retry(
+                _select.format(where=f"{_like} AND {_like}"), list(toks[:2])) or []
+        if not rows:
+            # The drawing may carry a word the catalogue does not ("TRANSPARENT" where the
+            # row says "CLEAR") — ask about each word alone before giving up.
+            seen: set = set()
+            for t in toks[:2]:
+                for r in self._fetch_all_with_retry(_select.format(where=_like), [t]) or []:
+                    key = (str(r[0]), str(r[1]))
+                    if key not in seen:
+                        seen.add(key)
+                        rows.append(r)
+
+        chosen, why = choose_udef_description_row(desc, rows)
+        if chosen is None:
+            if rows and why:
+                print(f"   [pricing] UDEF description match refused for "
+                      f"{str(desc)[:60]!r}: {why}", flush=True)
+            return None
+        anchor = self._udef_row_to_anchor(chosen, exact=False)
+        if not anchor:
+            return None
+        sku = str(chosen[0] or "").strip()
+        anchor["matched_on"] = "description"
+        anchor["matched_part_code"] = sku
+        if sku:
+            # THE SKU GOES WHERE THE ESTIMATOR CAN SEE IT. On these lines the sheet's code
+            # cell holds a class word, so the supplier cell is the only place the catalogue
+            # row can be named — and a price with no row behind it cannot be checked.
+            anchor["supplier_name"] = f"{sku} — {anchor['supplier_name']}"
+        anchor["provenance"] += (" | matched on the line's own description (stated sizes "
+                                 "checked; the code column held a class word or missed)")
+        return anchor
+
+    def _udef_row_to_anchor(self, row: Any, *, exact: bool) -> Dict[str, Any] | None:
+        """One UDEF row, as a priced anchor. Shared so the reference arm and the code arm
+        cannot describe the same table differently."""
         price = float(row[3] or 0.0)
         if price <= 0:
             return None
-
-        matched_code = str(row[0] or "").strip()
-        is_exact_code = bool(part_code) and part_code.upper() == matched_code.upper()
-
-        # Fix A: UDEF's loose arms (part-code prefix LIKE, or description LIKE) can match a
-        # generic stem to an unrelated expensive row, and the price-DESC tiebreaker then picks
-        # the dearest (e.g. token "ELECTRICS" -> "ELECTRICS001" TTi LED panels £539.42;
-        # "Foam Tape" -> "3M 5952F VHB roll" £131.50). For NON-exact matches, require genuine
-        # token overlap between the query and the matched description, exactly as RAG does, so
-        # a loose mismatch is rejected (-> falls through to RAG / LLM estimate) rather than
-        # returning a wrong, expensive price. Exact part-code matches bypass the guard.
-        if not is_exact_code:
-            _query_tokens = self._tokenize(f"{desc} {str(part.get('normalized_material') or '')}")
-            _match_score = self._token_overlap_score(_query_tokens, str(row[1] or ""))
-            if _match_score < 0.45:
-                return None
-
-        base_confidence = 0.95 if is_exact_code else 0.82
+        base_confidence = 0.95 if exact else 0.82
         freshness = self._freshness_adjustment(None)  # UDEF has no effective_date column
 
         wo_parity: Dict[str, Any] = {}
@@ -245,6 +938,21 @@ class PricingService:
             "freshness": freshness,
             "wo_parity": wo_parity,
         }
+
+    @staticmethod
+    def _is_category_word(code: str) -> bool:
+        """FIXING names a drawer; FIXING41 names a screw. Only one of them is a key.
+
+        One predicate, imported rather than restated, so the code arms of this file and
+        supplier_reference.lookup_keys cannot come to disagree about what a code is. Imported
+        inside the function because part_code_conventions is an engine-side module and this
+        file is imported by the backend service too.
+        """
+        try:
+            from part_code_conventions import is_category_not_a_code   # noqa: PLC0415
+        except ImportError:                                            # pragma: no cover
+            return False
+        return is_category_not_a_code(code)
 
     # ── TOKEN OVERLAP SCORING HELPERS ────────────────────────────────────────
     @staticmethod
@@ -292,6 +1000,22 @@ class PricingService:
         """
         part_code = (part.get("part_number") or "").strip()
         description = (part.get("description") or "").strip()
+
+        # THE ARM THAT COULD ACTUALLY RETURN A WRONG FIGURE. Unlike UDEF above, this query
+        # filters PMA_COST_MAT > 0 in SQL, so a catch-all row here is not saved by being
+        # priced zero — it is EXCLUDED from being zero. If Access Supply Chain holds any row
+        # whose PMA_PART_ONLY is literally FIXING or MISC and carries a cost, the loop below
+        # takes it on the exact-code branch at score 1.0 and returns it at confidence 0.88.
+        # A socket cap screw, a button head and an aluminium rivet would all cost the same,
+        # with the strongest confidence the chain can express, because an exact code match is
+        # never ambiguous. It is just wrong.
+        #
+        # Dropping the code also takes the class word out of query_tokens below, which is
+        # right: "FIXING" scoring against PMA_DESC_3 rewards rows for being fixings.
+        if part_code and self._is_category_word(part_code):
+            part_code = ""
+        code_param = part_code or None
+
         if not part_code and not description:
             return None
 
@@ -315,7 +1039,7 @@ class PricingService:
         """
         desc_keyword = description[:60] if description else part_code
         try:
-            rows = self._fetch_all_with_retry(query, [part_code, desc_keyword, part_code])
+            rows = self._fetch_all_with_retry(query, [code_param, desc_keyword, code_param])
         except Exception:
             return None
         if not rows:
@@ -387,7 +1111,12 @@ class PricingService:
         if not desc and not material:
             return None
 
-        query_tokens = self._tokenize(f"{desc} {material}")
+        # THE CODE COLUMN'S WORDS ARE PART OF WHAT THE LINE IS, AND THE MATCH MUST CARRY THEM.
+        # 12645-03GA's parts list reads `piano hinge | HINGE | 1`: the qualifier is in the code
+        # column and the description is the family noun. Asked as {HINGE}, the least specific
+        # hinge in history scored 100% and the door's piano hinge was charged £0.26 (D-323).
+        _named = code_column_words(part, self._tokenize)
+        query_tokens = self._tokenize(f"{desc} {material}") | _named
         if not query_tokens:
             return None
 
@@ -424,7 +1153,13 @@ class PricingService:
                 ORDER BY
                     CASE WHEN hh.quote_date IS NOT NULL THEN 0 ELSE 1 END,
                     hh.quote_date DESC,
-                    COALESCE(hml.line_total_gbp, 0) DESC
+                    -- NOT line_total_gbp. That column is unit_price multiplied by something
+                    -- that is not a quantity: 1.8568 x 259,061,659,935, and the multiplier
+                    -- 7,350,844 is a PART NUMBER -- 7350845 is a lens cover in our own
+                    -- catalogue. Ordering by it resolves a same-date tie in favour of
+                    -- whichever line has the bigger part code, which is a coin toss wearing
+                    -- a suit. The unit price is at least a real number about this part.
+                    COALESCE(hml.unit_price_gbp, 0) DESC
                 """,
                 [_CANDIDATES] + like_tokens,
             )
@@ -435,10 +1170,22 @@ class PricingService:
             return None
 
         scored: List[tuple] = []
+        refused: List[tuple] = []
         for row in rows:
             score = self._token_overlap_score(query_tokens, str(row[0] or ""))
             if score >= _MIN_OVERLAP and row[1] is not None and float(row[1] or 0) > 0:
+                _row_letters = re.sub(r"[^A-Z]", "", str(row[0] or "").upper())
+                _missing = {w for w in _named if w not in _row_letters}
+                if _missing:
+                    refused.append((score, row, _missing))
+                    continue
                 scored.append((score, row))
+        if refused and not scored:
+            _s, _r, _m = max(refused, key=lambda x: x[0])
+            print(f"   [pricing] historical line {str(_r[0])[:50]!r} (GBP {float(_r[1]):.2f}) "
+                  f"does not contain {', '.join(sorted(_m))}; not used for "
+                  f"{(str(part.get('part_number') or '') + ' ' + desc).strip()[:60]!r}",
+                  flush=True)
 
         # No "take the first priced row anyway" fallback: with the broad per-token fetch,
         # the first fetched row is often unrelated. If nothing clears _MIN_OVERLAP, return
@@ -504,7 +1251,13 @@ class PricingService:
                 ORDER BY
                     CASE WHEN hh.quote_date IS NOT NULL THEN 0 ELSE 1 END,
                     hh.quote_date DESC,
-                    COALESCE(hml.line_total_gbp, 0) DESC
+                    -- NOT line_total_gbp. That column is unit_price multiplied by something
+                    -- that is not a quantity: 1.8568 x 259,061,659,935, and the multiplier
+                    -- 7,350,844 is a PART NUMBER -- 7350845 is a lens cover in our own
+                    -- catalogue. Ordering by it resolves a same-date tie in favour of
+                    -- whichever line has the bigger part code, which is a coin toss wearing
+                    -- a suit. The unit price is at least a real number about this part.
+                    COALESCE(hml.unit_price_gbp, 0) DESC
                 """,
                 [fetch_n, search_term],
             )
@@ -512,13 +1265,29 @@ class PricingService:
             try:
                 rows = self._fetch_all_with_retry(
                     """
+                    -- THE HEADER IS JOINED HERE TOO, AND IT WAS NOT BEFORE.
+                    --
+                    -- This fallback took TOP (n) ordered by line_total_gbp, which is the only
+                    -- sort key -- so it did not merely break a tie, it decided which rows were
+                    -- CONSIDERED AT ALL before any token scoring happened. And that column is
+                    -- unit_price multiplied by a part number, so the candidate pool was ranked
+                    -- by part-code magnitude. A comparable that never gets fetched cannot be
+                    -- scored, and nothing downstream could tell it had been passed over.
+                    --
+                    -- Recency is what the primary query already sorts by, and what
+                    -- _freshness_adjustment already values. Same rule in both places.
                     SELECT TOP (?)
-                        line_description, unit_price_gbp, line_total_gbp,
-                        part_code, NULL, NULL, NULL, qty_per_unit, supplier_name
-                    FROM dbo.historical_quote_material_line
-                    WHERE unit_price_gbp IS NOT NULL AND unit_price_gbp > 0
-                      AND UPPER(line_description) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%'
-                    ORDER BY COALESCE(line_total_gbp, 0) DESC
+                        hml.line_description, hml.unit_price_gbp, hml.line_total_gbp,
+                        hml.part_code, NULL, hh.quote_date, NULL, hml.qty_per_unit,
+                        hml.supplier_name
+                    FROM dbo.historical_quote_material_line hml
+                    LEFT JOIN dbo.historical_quote_header hh ON hml.quote_id = hh.quote_id
+                    WHERE hml.unit_price_gbp IS NOT NULL AND hml.unit_price_gbp > 0
+                      AND UPPER(hml.line_description) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%'
+                    ORDER BY
+                        CASE WHEN hh.quote_date IS NOT NULL THEN 0 ELSE 1 END,
+                        hh.quote_date DESC,
+                        COALESCE(hml.unit_price_gbp, 0) DESC
                     """,
                     [fetch_n, search_term],
                 )
@@ -558,47 +1327,146 @@ class PricingService:
         desc = str(part.get("description") or "").strip()
         if not part_code and len(desc) < 5:
             return None
+        # THE TABLE THE INGESTER ACTUALLY WRITES TO.
+        #
+        # This read dbo.bought_in_parts, which a migration emptied by setting every row
+        # is_active = 0. The successor is AIEstimating.BoughtInCatalogue, and that is where
+        # supplier_price_list.py -> catalogue_loader.upsert_catalogue puts every price file.
+        # So the rung was reading one table while the only thing that fills it wrote to
+        # another: load Elite, Eagle and Thermaset perfectly and rung 3 still returns
+        # nothing, silently, with the work feeling done.
+        #
+        # WHY THE SOURCE FILTER IS NOT OPTIONAL. Inspecting the successor's live rows before
+        # repointing found four kinds of price sitting side by side:
+        #
+        #     migrated:dbo.bip                 real net, carried over from the old table
+        #     supplier_file:<name>             a supplier's own price list
+        #     web_indicative:<date>            A WEB GUESS
+        #     rag_fallback:workbook:<job>      a figure lifted from one historical workbook
+        #     sdi_estimate:<date>              our own estimate of what something costs
+        #     parallel-run:<job> ? UNCONFIRMED and one of these at GBP 0.0000
+        #
+        # Rung 3 answers at 0.93 / 0.80 -- above historical comparables, and far above the
+        # 0.68 ceiling the web/LLM rung is deliberately capped at. Serving those last four
+        # here would launder an indication into a firm price and rank it above real evidence.
+        # This table is supposed to mean WHAT WE PAY.
+        #
+        # An ALLOWLIST, which fails closed. A denylist would admit the next indicative source
+        # somebody adds, and admit it silently; a missing allowlist entry shows up as a rung
+        # that answers nothing, which is visible. _FIRM_CATALOGUE_SOURCES is the one place.
+        firm = "(" + " OR ".join(["c.source LIKE ?"] * len(_FIRM_CATALOGUE_SOURCES)) + ")"
         row = self._fetch_one_with_retry(
-            """
-            SELECT TOP 1 part_code, description, unit_price_gbp, supplier_name
-            FROM dbo.bought_in_parts
-            WHERE is_active = 1
+            f"""
+            SELECT TOP 1 c.supplier_sku, c.description, c.unit_price_gbp, s.name, c.uom
+            FROM AIEstimating.BoughtInCatalogue c
+            LEFT JOIN AIEstimating.Supplier s ON s.supplier_id = c.supplier_id
+            WHERE c.effective_to IS NULL
+              AND c.unit_price_gbp > 0
+              AND {firm}
               AND (
-                  UPPER(LTRIM(RTRIM(part_code))) = UPPER(LTRIM(RTRIM(?)))
-                  OR (LEN(LTRIM(RTRIM(?))) >= 5 AND UPPER(description) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%')
+                  UPPER(LTRIM(RTRIM(c.supplier_sku))) = UPPER(LTRIM(RTRIM(?)))
+                  OR (LEN(LTRIM(RTRIM(?))) >= 5 AND UPPER(c.description) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%')
               )
             ORDER BY
-                CASE WHEN UPPER(LTRIM(RTRIM(part_code))) = UPPER(LTRIM(RTRIM(?))) THEN 0 ELSE 1 END,
-                effective_date DESC,
-                unit_price_gbp ASC,
-                bought_in_id ASC
+                CASE WHEN UPPER(LTRIM(RTRIM(c.supplier_sku))) = UPPER(LTRIM(RTRIM(?))) THEN 0 ELSE 1 END,
+                c.effective_from DESC,
+                c.unit_price_gbp ASC,
+                c.item_id ASC
             """,
-            [part_code, desc, desc, part_code],
+            [*(f"{s}%" for s in _FIRM_CATALOGUE_SOURCES), part_code, desc, desc, part_code],
         )
         if not row or row[2] is None:
             return None
         price = float(row[2] or 0.0)
         if price <= 0:
             return None
+
+        # QUARANTINE A ROW WHOSE UNIT ARGUES WITH ITS OWN DESCRIPTION.
+        #
+        # FIXING1784 is in this table now: "Edging Seal Strip 10m Roll (Rubusec)", uom
+        # "metre", GBP 29.80. That figure is the ROLL. Per metre it is GBP 2.98, so two
+        # metres of edging cost GBP 59.60 instead of GBP 5.96 -- and nothing downstream
+        # questions it, because the price and the unit are each plausible and only wrong
+        # together. It is a migrated: row, so the allowlist admits it.
+        #
+        # DONE HERE AND NOT ONLY IN THE LOADER. The loader guards what it writes; these
+        # twenty-two rows were written by a migration long before it existed. A check only
+        # the importer runs cannot protect a table that was filled before the importer was.
+        #
+        # It FALLS THROUGH rather than raising. The next rung is historical comparables --
+        # where this line went yesterday and where it goes again. A worse answer than a good
+        # catalogue row, and a far better one than a tenfold overcharge.
+        try:
+            from unit_parsing import unit_conflicts
+            why = unit_conflicts(str(row[1] or ""), str(row[4] or ""))
+        except Exception:                                        # noqa: BLE001
+            why = ""                                             # never fail a price over this
+        if why:
+            note = (f"{row[0]}: {why}. Priced from the next source instead -- correct the "
+                    f"uom or the price in AIEstimating.BoughtInCatalogue.")
+            if note not in self.catalogue_quarantine:
+                self.catalogue_quarantine.append(note)
+            return None
+
         matched = str(row[0] or "").strip().upper()
         base_confidence = 0.93 if part_code.strip().upper() == matched else 0.80
         return {
+            # The KEY stays "bought_in_parts" -- it names the RUNG, and the parity report,
+            # the audit and the provenance icons all key off it. The human-readable line
+            # names the table actually read, so nobody hunts for this row in the empty one.
             "source": "bought_in_parts",
             "unit_price_gbp": price,
-            "provenance": f"Bought-in: {row[0]} ({row[1]}) supplier={row[3]}",
+            "provenance": (f"Bought-in catalogue: {row[0]} ({row[1]}) "
+                           f"supplier={row[3] or 'unrecorded'} per {row[4] or 'each'} "
+                           f"[AIEstimating.BoughtInCatalogue]"),
             "confidence": base_confidence,
             "supplier_name": row[3] or "Unknown",
+            "uom": row[4] or "each",
         }
 
     def _get_supplier_catalog(self, part: Dict[str, Any]) -> Dict[str, Any] | None:
+        # A PURCHASED COMPONENT IS LOOKED UP BY WHAT IT IS, NEVER BY WHAT IT IS MADE OF. This
+        # table is keyed by category — sheet materials beside HARDWARE, CASTORS, LOCKS,
+        # FIXINGS — and it was asked with the part's MATERIAL first. 12567's LED driver
+        # carried MILD STEEL inherited from the title block, so this rung answered £0.80 from
+        # a mild-steel-sheet listing, selected before the researched rung where the article
+        # check runs, so nothing compared a driver with a sheet (D-288). A line we buy is now
+        # asked for by the words of its own description, longest first, so a castor can still
+        # find CASTORS and a driver finds nothing here and moves on. A made part's material is
+        # the right key for it and is unchanged.
+        try:
+            from bought_in_policy import has_fabrication_evidence as _measured
+            from bought_in_policy import is_bought_in as _bought
+            from bought_in_policy import read_states_a_made_part as _read_made
+            _is_purchase = bool(_bought(part))
+            # The service's own word heuristic (NUT, PIN, SPRING, WHEEL...) must not turn a
+            # made part with a measured flat into a purchase and lose it its material row —
+            # nor one the concept read states it makes, with evidence (D-489).
+            if (not _is_purchase and self._is_bought_in_heuristic(part)
+                    and not _measured(part) and not _read_made(part)):
+                _is_purchase = True
+        except Exception:                                        # noqa: BLE001
+            _is_purchase = bool(self._is_bought_in_heuristic(part))
         material_hint = str(part.get("normalized_material") or "").strip()
         desc = str(part.get("description") or "").strip()
-        search = material_hint or desc
-        if not search:
+        if _is_purchase:
+            # THE WORDS THAT NAME THE THING, NOT THE STUFF IT IS MADE OF. Asked by every word,
+            # "PLASTIC END CAP" found PLASTIC SHEET and "STEEL BACKED MAGNET" found MILD STEEL
+            # SHEET through the material adjective — the very match this rung was reworked to
+            # stop, one word further along (review of D-288). Material adjectives are dropped
+            # from a purchase's search, and a row it does hit is refused below where the
+            # category names stock. Longest word first, ties alphabetical, so the order is the
+            # same on every run.
+            _adjectives = {str(w).upper() for w in (
+                getattr(config, "PURCHASE_SEARCH_MATERIAL_ADJECTIVES", None)
+                or _PURCHASE_SEARCH_MATERIAL_ADJECTIVES)}
+            searches = sorted((w for w in _article_words(desc) if w not in _adjectives),
+                              key=lambda w: (-len(w), w))
+        else:
+            searches = [s for s in (material_hint or desc,) if s]
+        if not searches:
             return None
-        try:
-            row = self._fetch_one_with_retry(
-                """
+        _sql = """
                 SELECT TOP 1
                     catalog_url,
                     material_hint,
@@ -607,11 +1475,21 @@ class PricingService:
                 FROM dbo.estimating_supplier_catalog_url
                 WHERE UPPER(material_hint) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%'
                 ORDER BY sort_order ASC, unit_price_gbp ASC, catalog_url_id ASC
-                """,
-                [search],
-            )
-        except Exception:
-            return None
+                """
+        row = None
+        for search in searches:
+            try:
+                row = self._fetch_one_with_retry(_sql, [search])
+            except Exception:
+                return None
+            if row and row[2] is not None:
+                # A PURCHASED COMPONENT IS NEVER PRICED FROM STOCK. The table keeps sheet and
+                # board categories beside component ones; a row whose category names a stock
+                # form is a material's price, whatever word led to it. Keep looking.
+                if _is_purchase and _names_stock_form(row[1]):
+                    row = None
+                    continue
+                break
         if not row or row[2] is None:
             return None
         price = float(row[2] or 0.0)
@@ -633,6 +1511,38 @@ class PricingService:
         udef = self._get_udef_anchor(part)
         if udef:
             return udef
+        # ── EVERY WORD-MATCHED ARM IS CLOSED TO A SIGHTED LINE ──────────────────────
+        #
+        # The four below all fall back to the DESCRIPTION when the code misses — PMA by
+        # description, the bought-in catalogue by description, the historical-quote RAG by
+        # token overlap, the supplier catalogue by material hint. Guarding only UDEF would
+        # have moved the £115.56 graphic one arm down the chain rather than stopping it.
+        #
+        # Nothing real is lost. A sighted line's code is one this engine minted from a
+        # render, so the code arms of all four can never match anyway; only the word arms
+        # could, and a render's words are the model's impression, not a specification. The
+        # researched rung below still runs, and it must name a real listing, a date and a
+        # unit basis before it can produce a figure — which is the whole difference.
+        #
+        # It returns the no-source answer rather than reaching for the web/AI arm here,
+        # because the caller's NEXT rung is the researched one that enforces the evidence
+        # contract in full. One researched figure, produced by the rung that has to show
+        # its working, beats two market arms disagreeing about the same castor.
+        if self._is_sighted_line(part):
+            return {
+                "source": "fallback",
+                "unit_price_gbp": 0.0,
+                "confidence": 0.0,
+                "provenance": ("sighted on a render — matched against no catalogue, because "
+                               "a sighted description carries no specification and no unit "
+                               "basis to match one on"),
+                "review_required": True,
+                "review_reason": (
+                    "This line was sighted on a render, so nothing here names WHICH item it "
+                    "is — no code, no manufacturer reference, no size a catalogue row could "
+                    "be checked against. Name the item (or give its code) and the ordinary "
+                    "price chain answers it."),
+            }
         pma = self._get_pma_purchased(part)
         if pma:
             return pma
@@ -646,7 +1556,8 @@ class PricingService:
         if catalog:
             return catalog
         fallback_policy = getattr(config, "FALLBACK_PRICING_POLICY", {}) or {}
-        if fallback_policy.get("enable_web_ai_fallback"):
+        if fallback_policy.get("enable_web_ai_fallback") and self._web_ai_fallback_allowed(part, fallback_policy):
+            self._web_ai_calls += 1
             web_result = self._get_web_ai_fallback(part)
             if web_result:
                 return web_result
@@ -665,40 +1576,225 @@ class PricingService:
             ),
         }
 
+    def _web_ai_fallback_allowed(self, part: Dict[str, Any], fallback_policy: Dict[str, Any]) -> bool:
+        """Gate the web/LLM fallback so it prices without ever hanging the run:
+          - skip rollup/assembly parents (no own price; searching them is wasted time), and
+          - stop once the per-job budget is spent (the rest flag 'estimator to confirm').
+        """
+        if not is_something_you_can_buy(part, fallback_policy.get("skip_rollup_parents", True)):
+            return False
+        try:
+            _budget = int(fallback_policy.get("max_web_ai_lookups_per_job", 25))
+        except (TypeError, ValueError):
+            _budget = 25
+        if _budget >= 0 and self._web_ai_calls >= _budget:
+            if self._web_ai_calls == _budget:
+                # log once when the cap is first hit
+                try:
+                    print(f"   [pricing] web/AI fallback budget reached ({_budget}) — remaining "
+                          f"unpriced parts flagged 'estimator to confirm' (config "
+                          f"FALLBACK_PRICING_POLICY.max_web_ai_lookups_per_job)", flush=True)
+                except Exception:
+                    pass
+                self._web_ai_calls += 1  # advance so the message prints only once
+            return False
+        return True
+
+    def _standard_commodity_price(self, part: Dict[str, Any]) -> Dict[str, Any] | None:
+        """A stable, reproducible provisional for a generically-named standard bought-in (a
+        pallet) from config.STANDARD_COMMODITY_PRICE_GBP, or None. Reproducible (a fixed config
+        number), so it prices the line AND clears price_not_reproducible — unlike the market
+        guess it stands in front of. Flagged for review: it is a provisional, not a quote.
+
+        The matching itself is DB-free config, so it lives in the module-level
+        standard_commodity_price() below and the engine can reach the SAME table without a
+        PricingService instance (see estimator._resolve_part_system_cost)."""
+        return standard_commodity_price(part)
+
     def _get_web_ai_fallback(self, part: Dict[str, Any]) -> Dict[str, Any] | None:
+        # STANDARD COMMODITY BEFORE THE MARKET GUESS. A generically-named bought-in the purchasing
+        # DB cannot match — "PALLET", "STD PART" — reached this fallback and got a per-run LLM
+        # number that changes every run (the castor moved £4.54 -> £8.54) or a £0. A config
+        # provisional for a known standard commodity holds the line still at a sensible, REPRODUCIBLE
+        # figure. Consulted only here, on the fallback path, so a real DB catalogue rate still wins.
+        _commodity = self._standard_commodity_price(part)
+        if _commodity is not None:
+            return _commodity
         try:
             from web_ai_price_lookup import lookup_web_ai_price
         except ImportError:
             return None
         fallback_policy = getattr(config, "FALLBACK_PRICING_POLICY", {}) or {}
+        # ── CIRCUIT BREAKER: a provider that is down is down for the whole run ──────
+        # Each miss costs a full wall-clock timeout, SERIALLY. On 0359342 the fresh
+        # material keys made ~30 parts pay 25 seconds each against a provider that was
+        # answering nothing — ten minutes of waiting to learn the same fact thirty
+        # times. After N consecutive timeouts the remaining lookups are skipped, each
+        # line falls through to the same 'estimator to confirm' flag it would have
+        # carried anyway, and one console line says what was skipped and why. Any
+        # lookup that completes — hit or miss — resets the count, so a blip never
+        # writes the provider off.
+        try:
+            _breaker_limit = int(fallback_policy.get(
+                "web_ai_consecutive_timeout_limit", 3) or 3)
+        except (TypeError, ValueError):
+            _breaker_limit = 3
+        if getattr(self, "_web_ai_consec_timeouts", 0) >= _breaker_limit:
+            if not getattr(self, "_web_ai_breaker_announced", False):
+                self._web_ai_breaker_announced = True
+                print(f"   [pricing] web/AI provider unresponsive — {_breaker_limit} "
+                      f"consecutive timeouts; the remaining web/AI lookups this run "
+                      f"are skipped, their lines flagged 'estimator to confirm' as "
+                      f"they would have been after the wait", flush=True)
+            return None
         conf_cap = float(fallback_policy.get("fallback_confidence_cap", 0.68))
         geom = part.get("normalized_geometry") or {}
         ops = list(dict.fromkeys(
             (part.get("textual_operations") or []) + (part.get("inferred_operations") or [])
         ))
-        result = lookup_web_ai_price(
-            {
-                "material": part.get("normalized_material") or part.get("material"),
-                "description": part.get("description"),
-                "thickness_mm": part.get("thickness_mm"),
-                "part_code": part.get("part_number"),
-                "finish": next(iter(part.get("surface_finishes") or []), None),
-                "colour": next(iter(part.get("colours") or []), None),
-                "quantity": part.get("quantity"),
-                "length_mm": geom.get("blank_length_mm") or part.get("length_mm"),
-                "width_mm": geom.get("blank_width_mm") or part.get("width_mm"),
-                "weight_kg": geom.get("weight_kg"),
-                "operations": ops[:6],
-            },
-            enable_web_search=True,
-            enable_llm_estimate=True,
-        )
-        if not result.get("found") or not result.get("price_gbp"):
+        _spec = {
+            "material": part.get("normalized_material") or part.get("material"),
+            "description": part.get("description"),
+            "thickness_mm": part.get("thickness_mm"),
+            "part_code": part.get("part_number"),
+            "finish": next(iter(part.get("surface_finishes") or []), None),
+            "colour": next(iter(part.get("colours") or []), None),
+            "quantity": part.get("quantity"),
+            "length_mm": geom.get("blank_length_mm") or part.get("length_mm"),
+            "width_mm": geom.get("blank_width_mm") or part.get("width_mm"),
+            "weight_kg": geom.get("weight_kg"),
+            "operations": ops[:6],
+        }
+        # ── THE SAME QUESTION AS THE LATER RUNG, OR THIS ONE ANSWERS FIRST WITH A WORSE ONE ──
+        #
+        # 11650-06, 23 Sep 2026: D-204 told the researched rung what a bought-in line IS (its
+        # other names in the pack, its parent assembly), that it is BOUGHT, and gave it the
+        # brief's own request — and the Yiree binding screw still came back at £126.04,
+        # because THIS fallback answers first, with its own spec: a bare code, under a prompt
+        # written for made parts. Same inputs here, from the same places, so the two paths
+        # cannot ask different questions about one line. research_brief supplies the request
+        # wording, so it is written once.
+        _ctx = str(part.get("research_context") or "").strip()
+        if _ctx:
+            _spec["description"] = " — ".join(
+                x for x in (str(part.get("description") or "").strip(), _ctx) if x)
+        try:
+            from research_context import _is_bought_in as _bi
+            from indicative_price import research_brief as _rb, BOUGHT_IN_COMPONENT as _BIC
+            if _bi(part) or _ctx:
+                _brief = _rb({"description": _spec["description"],
+                              "part_number": part.get("part_number"),
+                              "unit_of_measure": part.get("unit_of_measure"),
+                              "quantity": part.get("quantity"),
+                              "is_bought_in": True})
+                _spec["supply"] = "bought_in"
+                # A new key for the purchase brief, so an answer cached before
+                # answers_a_purchase existed (the key's £65 "fabricator" figure) is asked again.
+                _spec["purchase_check"] = 1
+                if _brief.get("kind") == _BIC and _brief.get("ask"):
+                    _spec["ask"] = _brief["ask"]
+                    _spec["wanted_unit"] = _brief.get("wanted_unit")
+        except Exception:                                        # noqa: BLE001
+            pass
+        # HARD wall-clock timeout: run the (multi-call, network+LLM) lookup on a worker thread and
+        # abandon it if it exceeds the budget. Even if an inner call has no timeout of its own, the
+        # run never blocks — a slow part just falls through to 'no price, estimator to confirm'.
+        try:
+            _timeout_s = float(fallback_policy.get("web_ai_call_timeout_s", 25))
+        except (TypeError, ValueError):
+            _timeout_s = 25.0
+        import concurrent.futures as _futures
+
+        _live = {"ran": False, "timed_out": False}
+
+        def _compute() -> Dict[str, Any]:
+            # The lookup is multi-call (network + LLM) and can hang; run it on a worker thread
+            # and abandon it past the budget so the run never blocks. A miss returns {} — never
+            # stored, so tomorrow asks again rather than inheriting today's network problem.
+            _live["ran"] = True
+            try:
+                with _futures.ThreadPoolExecutor(max_workers=1) as _ex:
+                    _fut = _ex.submit(lookup_web_ai_price, _spec,
+                                      enable_web_search=True, enable_llm_estimate=True)
+                    return _fut.result(timeout=_timeout_s) or {}
+            except _futures.TimeoutError:
+                # A SLOW SEARCH IS NOT "NO PRICE" (D-333). 12645's roller shutters: a new,
+                # harder search than any fastener, past the budget, so the line went to £0 and
+                # — a miss is never stored — did so every run. The model's own market estimate
+                # answers the same brief without the web round-trips; it is tagged indicative
+                # and cached like any other, so the estimator has a figure to replace.
+                print(f"   [pricing] web/AI fallback timed out ({_timeout_s:.0f}s) on "
+                      f"{part.get('part_number') or _spec.get('description')} — asking the "
+                      f"model's market estimate for the same brief", flush=True)
+                try:
+                    with _futures.ThreadPoolExecutor(max_workers=1) as _ex2:
+                        _fut2 = _ex2.submit(lookup_web_ai_price, _spec,
+                                            enable_web_search=False, enable_llm_estimate=True)
+                        return _fut2.result(timeout=_timeout_s) or {}
+                except _futures.TimeoutError:
+                    _live["timed_out"] = True
+                    print(f"   [pricing] market estimate also timed out on "
+                          f"{part.get('part_number') or _spec.get('description')} — flagged "
+                          f"'estimator to confirm', run continues", flush=True)
+                    return {}
+                except Exception:                                # noqa: BLE001
+                    _live["timed_out"] = True
+                    return {}
+            except Exception:                                    # noqa: BLE001
+                return {}
+
+        # ASK ONCE PER SPECIFICATION AND STORE IT. A generated price that comes back GBP 4.54 one
+        # run and GBP 8.54 the next is not a price the workbook will put in the column — it gets
+        # withheld as a hint beside a zero, which on a pack of everyday bought-ins is most of the
+        # BOM reading as free. The same content-addressed cache the sheet rates use makes this
+        # per-piece figure hold still, so it is reproducible from the first run and PRICES the
+        # line (tagged indicative), which is the whole point of asking the market at all.
+        try:
+            import generated_price_cache as _gpc
+            _model = str(fallback_policy.get("llm_model") or "auto")
+            result = _gpc.cached_estimate(_spec, "web_ai_price_lookup", _model, _compute)
+        except Exception:                                        # noqa: BLE001
+            result = _compute()          # the cache is a bonus, never a dependency
+        # The breaker counts only LIVE calls: a cache hit says nothing about the
+        # provider's health, a completed live call — hit or miss — proves it answers.
+        if _live["ran"]:
+            if _live["timed_out"]:
+                self._web_ai_consec_timeouts = \
+                    getattr(self, "_web_ai_consec_timeouts", 0) + 1
+            else:
+                self._web_ai_consec_timeouts = 0
+        if not result or not result.get("found") or not result.get("price_gbp"):
+            return None
+        if _spec.get("supply") == "bought_in" and not answers_a_purchase(result):
+            print(f"   [pricing] researched price for "
+                  f"{part.get('part_number') or _spec.get('description')} refused: asked as a "
+                  f"purchase, answered as a made part ({_ai_indicative_supplier(result)}, "
+                  f"£{float(result['price_gbp']):.2f}) — estimator to price", flush=True)
+            return None
+        if not prices_this_article(str(_spec.get("description") or part.get("description") or ""),
+                                   result):
+            _named = str(result.get("item_priced") or result.get("supplier_name") or "")[:80]
+            print(f"   [pricing] researched price for "
+                  f"{part.get('part_number') or _spec.get('description')} refused: the answer "
+                  f"priced '{_named}' (£{float(result['price_gbp']):.2f}), which is not this "
+                  f"article — estimator to price", flush=True)
+            part.setdefault("review_flags", []).append(
+                f"NOT PRICED — a researched figure of £{float(result['price_gbp']):.2f} was for "
+                f"'{_named}', not for {part.get('description') or part.get('part_number')}; "
+                f"refused rather than put on the sheet. Enter a catalogue or supplier rate.")
             return None
         capped_conf = min(float(result.get("confidence") or 0.45), conf_cap)
         return {
             "source": result.get("source_type", "web_ai_fallback"),
             "source_type": "web_ai_fallback",
+            # Reproducible once cached: the same spec returns the same number next run, so the
+            # column prices it instead of withholding it as an unrepeatable guess.
+            "price_is_reproducible": bool(result.get("price_is_reproducible")),
+            # WHICH ENGINE ANSWERED. The lookup records it and nothing carried it forward, so
+            # the estimating sheet could only say "an AI" — true, but an estimator asking
+            # where a price came from deserves the actual name, and if the provider is ever
+            # switched the sheet says so without anybody editing a label.
+            "llm_provider": result.get("llm_provider"),
             "unit_price_gbp": float(result["price_gbp"]),
             "confidence": capped_conf,
             "provenance": (
@@ -708,11 +1804,17 @@ class PricingService:
             "review_flag": True,
             "review_reason": result.get("review_reason", "Indicative web/AI price — verify before quoting."),
             "web_query": result.get("web_query"),
-            "supplier_name": result.get("supplier_name", "web/AI estimate"),
+            # NAME THE SUPPLIER, NOT "AN AI". The web-search path carries the scraped supplier;
+            # the LLM-estimate path carries none, so name the company its verify_against points
+            # at (tagged AI-indicative) instead of the generic "web/AI estimate".
+            "supplier_name": result.get("supplier_name") or _ai_indicative_supplier(result),
             "price_date": result.get("price_date"),
             "low_estimate_gbp": result.get("low_estimate_gbp"),
             "high_estimate_gbp": result.get("high_estimate_gbp"),
             "verify_against": result.get("verify_against", []),
+            # What the model says it priced, and per what — onto the line, so a wrong match
+            # (£126.04 for "a screw") is visible before anyone reaches the total.
+            "item_priced": result.get("item_priced") or "",
         }
 
     def _get_labour_rate_from_db(self, operation_code: str) -> Dict[str, Any] | None:

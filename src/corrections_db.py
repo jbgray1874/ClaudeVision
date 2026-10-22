@@ -24,11 +24,13 @@ try:
 except ImportError:
     _PYODBC_OK = False
 
-# ── Connection settings — edit these ──────────────────────────────────────────
-_SERVER   = "10.0.0.200"
-_DATABASE = "SDILive"
-_UID      = "AIBot"
-_PWD      = "AIAgentPW2026"
+# ── Connection settings — from the environment, never edited here ─────────────
+import config
+
+_SERVER   = config.DB_SERVER
+_DATABASE = config.DB_NAME
+_UID      = config.DB_USER
+_PWD      = config.DB_PASSWORD
 
 # Auto-detect best available ODBC driver
 def _best_driver() -> str:
