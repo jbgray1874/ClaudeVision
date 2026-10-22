@@ -281,6 +281,69 @@ class ACutLengthIsADimensionNotTheNextNumberOnThePage(unittest.TestCase):
         self.assertIn('"detail_sheet_figure"', text[guard:guard + 4000])
 
 
+class APartsListMaySitAboveItsHeader(unittest.TestCase):
+    """The reviewer on the rerun: "two agreed rows and 18 recovered by vision — the words
+    reader parsing no rows on page 9". On the real GA the header was found and every row
+    parsed, but the reader walked only the band BELOW the header, and this template prints
+    the list above it, numbered upward. The band above is read bottom-up where the band
+    below is empty; the dimension column is its own cell; PART NO and DRAWING printing the
+    same number are one code."""
+
+    def _page(self):
+        import fitz
+        doc = fitz.open()
+        page = doc.new_page(width=842, height=595)
+        cols = {"pos": 40, "qty": 65, "desc": 100, "mat": 290, "dim": 480, "part": 580, "dwg": 700}
+        rows = [(8, 2, "BASE SUPPORT", "SEE DWGS - EPC GRAPHITE", "", "ROL2021-2468"),
+                (7, 1, "BASE", "SEE DWGS - EPC GRAPHITE", "", "ROL2021-2467"),
+                (6, 1, "RAIL", "SEE DWGS - EPC GRAPHITE", "", "ROL2021-2466"),
+                (5, 1, "ANTI SCRATCH STRIP", "STAINLESS - BRUSHED", "3 mm", "ROL2021-2406"),
+                (4, 6, "ADJUSTING SCREW HAFELE", "STEEL", "", "651.02.909"),
+                (3, 2, "UPRIGHT", "MS SQ TUBE - RAW", "30X30X2MM", "ROL2021-2402")]
+        y = 300
+        for pos, qty, desc, mat, dim, code in rows:
+            for key, text in (("pos", str(pos)), ("qty", str(qty)), ("desc", desc), ("mat", mat),
+                              ("dim", dim), ("part", code), ("dwg", code)):
+                if text:
+                    page.insert_text((cols[key], y), text, fontsize=8)
+            y += 14
+        for key, text in (("pos", "POS"), ("qty", "QTY"), ("desc", "DESCRIPTION"), ("mat", "MATERIAL"),
+                          ("dim", "DIMENSION"), ("part", "PART NO"), ("dwg", "DRAWING")):
+            page.insert_text((cols[key], y), text, fontsize=8)
+        page.insert_text((580, 560), "DRAWING No", fontsize=8)
+        page.insert_text((580, 575), "ROL2021-2465-00", fontsize=9)
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        doc.save(path)
+        doc.close()
+        return path
+
+    def test_the_rows_above_the_header_are_read_bottom_up(self):
+        import pdfplumber
+        import _bom_words_reader as wr
+        path = self._page()
+        try:
+            with pdfplumber.open(path) as doc:
+                out = wr.read_bom_from_page(doc.pages[0])
+        finally:
+            os.unlink(path)
+        self.assertIsNotNone(out)
+        self.assertEqual(out["parent"], "ROL2021-2465-00")
+        got = {(r["item_number"], r.get("part_number") or r.get("part_ref"), r["quantity"], r.get("dimension"))
+               for r in out["rows"]}
+        self.assertIn(("8", "ROL2021-2468", 2, None), got)
+        self.assertIn(("3", "ROL2021-2402", 2, "30X30X2MM"), got)
+        self.assertIn(("5", "ROL2021-2406", 1, "3 mm"), got)
+        self.assertEqual(len(out["rows"]), 6)
+
+    def test_the_general_arrangement_is_the_sheet_no_other_sheet_lists(self):
+        rows = [dict(part_number=c, quantity=q, source_pdf=BASE, bom_parent=BASE)
+                for c, q in [("ROL2021-2400", 1), ("ROL2021-2410", 2)]]
+        rows += [r for r in rows_like_the_rail() if r["source_pdf"] == GA]
+        out = bt.resolve_effective_quantities(rows)
+        self.assertEqual(out["main_ga"], GA)      # not the base, whose rows were read first
+
+
 class TheRunResolvesWhatThePageAccepted(unittest.TestCase):
     def test_the_packs_reference_names_the_root_before_not_resolved(self):
         text = (ROOT / "src" / "route_compiler.py").read_text(encoding="utf-8")

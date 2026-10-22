@@ -2136,7 +2136,8 @@ def _compiled_parent_map(parts: Any, summary: Any) -> Dict[str, set]:
             [p for p in (parts or []) if isinstance(p, dict)],
             (summary or {}).get("llm_full_extract") or {} if isinstance(summary, dict) else {},
             declared_product=_rc.declared_product_of(summary if isinstance(summary, dict)
-                                                     else {}))
+                                                     else {}),
+            source_names=_rc.source_names_of(summary if isinstance(summary, dict) else {}))
         return {str(k).strip().upper(): {str(v).strip().upper() for v in (vs or set())}
                 for k, vs in (_g.get("parents") or {}).items()}
     except Exception as exc:                                         # noqa: BLE001
@@ -14392,7 +14393,7 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
     # 2085 and 12120 projections agree and the cutover is explicitly enabled.
     try:
         from route_compiler import (compile_job_route, declared_product_of,
-                                    project_priced_route)
+                                    project_priced_route, source_names_of)
         # The writeup's finish text rides along: it is the population that actually
         # carries "SEE ASSEMBLY DRAWING" when the estimate records do not (11350-02's
         # bar), and the coat pass must read the field the report already prints.
@@ -14413,6 +14414,7 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             finish_text_by_pn=_finish_by_pn,
             declared_product=declared_product_of(
                 summary if isinstance(summary, dict) else {}),
+            source_names=source_names_of(summary if isinstance(summary, dict) else {}),
         )
         canonical_route_shadow = project_priced_route(
             _route_graph, part_estimates)

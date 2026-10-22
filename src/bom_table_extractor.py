@@ -31,6 +31,10 @@ HDR_DESC = {"DESCRIPTION", "DESC", "TITLE", "NAME", "PART DESCRIPTION"}
 HDR_QTY = {"QTY", "QTY.", "QUANTITY", "QUANT", "QTY REQD", "QTY REQ", "REQD",
            "NO OFF", "NOOFF", "OFF", "NO. OFF", "QTY OFF", "REQUIRED"}
 HDR_MATERIAL = {"MATERIAL", "MATL", "MAT", "MATERIAL SPEC", "SPEC"}
+# The stock column a customer prints beside the material ("30X30X2MM", "3 mm"): read as
+# its own cell so a profile is never folded into the part number (D-584).
+HDR_DIMENSION = {"DIMENSION", "DIMENSIONS", "DIM", "DIMS", "SIZE", "STOCK SIZE", "SECTION",
+                 "THICKNESS", "THK", "GAUGE"}
 # No bare "KG": as a lone word it appears in title blocks beside a printed weight, and
 # a family this weak could anchor a phantom weight column onto an SDI header row. A
 # header CELL printing "MASS (KG)" reaches "MASS KG" through bracket-stripping.

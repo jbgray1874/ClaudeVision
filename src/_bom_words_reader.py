@@ -91,6 +91,7 @@ try:
     from bom_table_extractor import (HDR_CODE as _HDR_CODE, HDR_DESC as _HDR_DESC,
                                      HDR_ITEM as _HDR_ITEM,
                                      HDR_MATERIAL as _HDR_MATERIAL,
+                                     HDR_DIMENSION as _HDR_DIMENSION,
                                      HDR_QTY as _HDR_QTY, HDR_WEIGHT as _HDR_WEIGHT)
 except Exception:                                                # pragma: no cover
     _HDR_ITEM = {"ITEM", "ITEMNO", "ITEM NO", "NO", "POS", "POSITION", "PART ITEM"}
@@ -100,6 +101,8 @@ except Exception:                                                # pragma: no co
     _HDR_QTY = {"QTY", "QTY.", "QUANTITY", "QUANT", "QTY REQD", "QTY REQ", "REQD",
                 "NO OFF", "NOOFF", "OFF", "NO. OFF", "QTY OFF", "REQUIRED"}
     _HDR_MATERIAL = {"MATERIAL", "MATL", "MAT", "MATERIAL SPEC", "SPEC"}
+    _HDR_DIMENSION = {"DIMENSION", "DIMENSIONS", "DIM", "DIMS", "SIZE", "STOCK SIZE", "SECTION",
+                      "THICKNESS", "THK", "GAUGE"}
     _HDR_WEIGHT = {"WEIGHT", "WT", "MASS", "UNIT WEIGHT", "WEIGHT KG", "MASS KG"}
 
 
@@ -151,6 +154,8 @@ def _header_from_row(ri: int, row: List[dict]) -> Optional[Dict[str, Any]]:
             anchors["material"] = x
         elif "weight" not in anchors and (norm in _HDR_WEIGHT):
             anchors["weight"] = x
+        elif "dimension" not in anchors and (norm in _HDR_DIMENSION):
+            anchors["dimension"] = x
 
     # item, desc, qty required; code (DWG/PartNo) may be absent — synthesise midway.
     if not all(k in anchors for k in ("item", "desc", "qty")):
@@ -304,7 +309,7 @@ def _parse_row_by_regions(row: List[dict], anchors: Dict[str, float]) -> Optiona
     # region and they vanished without a word. A word that is not a number does not
     # belong to a numeric column: it is reassigned to the nearest text column, and
     # the row is flagged so nobody treats the segmentation as certain.
-    _text_cols = [n for n in ("code", "desc", "material", "weight") if n in anchors]
+    _text_cols = [n for n in ("code", "desc", "material", "weight", "dimension") if n in anchors]
     _displaced = False
     for _num_col, _chosen in (("item", item_word), ("qty", qty_word)):
         for x, t in list(cells.get(_num_col) or []):
@@ -324,9 +329,13 @@ def _parse_row_by_regions(row: List[dict], anchors: Dict[str, float]) -> Optiona
         "desc": _cell_text("desc"),
         "qty": qty_word[1],
     }
-    for name in ("material", "weight"):
+    for name in ("material", "weight", "dimension"):
         if name in anchors:
             out[name] = _cell_text(name)
+    # PART NO and DRAWING both print the same number on a customer's table; one code.
+    _ct = out["code"].split()
+    if len(_ct) > 1 and len(set(_ct)) == 1:
+        out["code"] = _ct[0]
     # DESCRIPTION SPILL INSIDE THE CODE CELL. Page 25's small table never grid-maps,
     # so its words read stood — and 'Backplate MBY434' priced £3,203 as its own
     # bought-in because the wrapped description's last word crossed into the code
@@ -588,69 +597,84 @@ def read_bom_from_page(page) -> Optional[Dict[str, Any]]:
         header_top = header["header_top"]
         next_top = headers[hi + 1]["header_top"] if hi + 1 < len(headers) else float("inf")
         _max_item_seen = 0
-        for row in rows:
-            top = row[0]["top"]
-            if top <= header_top or top >= next_top:
-                continue  # outside this table's vertical band
-            # A permuted header parses by region; so does an ordered one that anchored a
-            # material or weight column, because the ordered carve would fold those
-            # cells into the description.
-            if header.get("layout") == "by_regions" or "material" in anchors \
-                    or "weight" in anchors:
-                cols = _parse_row_by_regions(row, anchors)
-            else:
-                cols = _parse_row(row, anchors)
-            if cols is None:
-                continue  # not a BOM data row (no valid item+qty in the table extent)
-            item, code, desc, qty = cols["item"], cols["code"], cols["desc"], cols["qty"]
+        # A PARTS LIST MAY SIT ABOVE ITS HEADER (D-584). An ISO-style title block puts the
+        # header at the bottom of the table and numbers the rows upward from it — POS 1
+        # just above the header, POS 8 at the top — and a reader that walked only the band
+        # below the header found a header and no rows, page after page. The band below is
+        # read first, as before; where it yields nothing, the band above is read bottom-up,
+        # so the item sequence still rises and the contiguity guard still holds.
+        prev_top = headers[hi - 1]["header_top"] if hi > 0 else float("-inf")
+        below = [r for r in rows if header_top < r[0]["top"] < next_top]
+        above = [r for r in reversed(rows) if prev_top < r[0]["top"] < header_top]
+        _n_before = len(data_rows)
+        for _band in (below, above):
+            if _band is above:
+                if len(data_rows) > _n_before:
+                    break
+                _max_item_seen = 0
+            for row in _band:
+                top = row[0]["top"]
+                # A permuted header parses by region; so does an ordered one that anchored a
+                # material or weight column, because the ordered carve would fold those
+                # cells into the description.
+                if header.get("layout") == "by_regions" or "material" in anchors \
+                        or "weight" in anchors or "dimension" in anchors:
+                    cols = _parse_row_by_regions(row, anchors)
+                else:
+                    cols = _parse_row(row, anchors)
+                if cols is None:
+                    continue  # not a BOM data row (no valid item+qty in the table extent)
+                item, code, desc, qty = cols["item"], cols["code"], cols["desc"], cols["qty"]
 
-            # GUARD 1 — item contiguity: real BOM items are a monotonic 1..N sequence.
-            # A row whose item number is <= one already accepted is a duplicate/backwards
-            # value — almost always sheet-edge grid NUMBERS (2..8) that survived the x-extent
-            # filter because they look like integers. Reject it.
-            if int(item) <= _max_item_seen:
-                continue
+                # GUARD 1 — item contiguity: real BOM items are a monotonic 1..N sequence.
+                # A row whose item number is <= one already accepted is a duplicate/backwards
+                # value — almost always sheet-edge grid NUMBERS (2..8) that survived the x-extent
+                # filter because they look like integers. Reject it.
+                if int(item) <= _max_item_seen:
+                    continue
 
-            # GUARD 2 — numeric-noise desc: grid-number noise builds a row like
-            # code='' desc='6 7' (bare integers). A genuine sparse/thin row has an EMPTY
-            # desc, never a numbers-only one. Reject empty-code rows whose desc is purely
-            # numeric/punctuation (no alphabetic run).
-            _has_alpha = bool(re.search(r"[A-Za-z]{2,}", desc))
-            _numeric_noise = bool(desc) and not _has_alpha and bool(re.match(r"^[\d\s.\-]+$", desc))
-            if not code.strip() and _numeric_noise:
-                continue
+                # GUARD 2 — numeric-noise desc: grid-number noise builds a row like
+                # code='' desc='6 7' (bare integers). A genuine sparse/thin row has an EMPTY
+                # desc, never a numbers-only one. Reject empty-code rows whose desc is purely
+                # numeric/punctuation (no alphabetic run).
+                _has_alpha = bool(re.search(r"[A-Za-z]{2,}", desc))
+                _numeric_noise = bool(desc) and not _has_alpha and bool(re.match(r"^[\d\s.\-]+$", desc))
+                if not code.strip() and _numeric_noise:
+                    continue
 
-            _max_item_seen = int(item)
-            part_ref = code
-            # keep sparse rows (item+qty present) even if code/desc thin — flag them
-            thin = not (re.search(r"[A-Za-z]{2,}", desc) or re.search(r"[A-Za-z0-9]{2,}", part_ref))
+                _max_item_seen = int(item)
+                part_ref = code
+                # keep sparse rows (item+qty present) even if code/desc thin — flag them
+                thin = not (re.search(r"[A-Za-z]{2,}", desc) or re.search(r"[A-Za-z0-9]{2,}", part_ref))
 
-            kind, code_or_spec = _classify_part_ref(part_ref) if part_ref else ("bought_in", "")
-            key = (item, _clean(part_ref), qty)
-            if key in seen:
-                continue
-            seen.add(key)
+                kind, code_or_spec = _classify_part_ref(part_ref) if part_ref else ("bought_in", "")
+                key = (item, _clean(part_ref), qty)
+                if key in seen:
+                    continue
+                seen.add(key)
 
-            _out_row = {
-                "item_number": item,
-                "part_ref": _clean(part_ref),
-                "part_number": code_or_spec if kind == "drawing_ref" else "",
-                "description": desc,
-                "quantity": int(qty),
-                "kind": kind,
-                "thin": thin,
-            }
-            # The row's own material and weight cells, where the table printed them —
-            # the fields the schema used to discard (0359342: "MDF, 18mm" beside every
-            # panel while costing ran on a document-default 6mm).
-            _out_row.update(_row_material_fields(cols.get("material"),
-                                                 cols.get("weight")))
-            if cols.get("segmentation_uncertain"):
-                # Words drifted across a region midpoint and were reassigned rather
-                # than lost — true, but not certain. The flag travels with the row so
-                # a reconciler or reviewer treats the split cells as approximate.
-                _out_row["segmentation_uncertain"] = True
-            data_rows.append(_out_row)
+                _out_row = {
+                    "item_number": item,
+                    "part_ref": _clean(part_ref),
+                    "part_number": code_or_spec if kind == "drawing_ref" else "",
+                    "description": desc,
+                    "quantity": int(qty),
+                    "kind": kind,
+                    "thin": thin,
+                }
+                # The row's own material and weight cells, where the table printed them —
+                # the fields the schema used to discard (0359342: "MDF, 18mm" beside every
+                # panel while costing ran on a document-default 6mm).
+                _out_row.update(_row_material_fields(cols.get("material"),
+                                                     cols.get("weight")))
+                if cols.get("dimension"):
+                    _out_row["dimension"] = cols["dimension"]
+                if cols.get("segmentation_uncertain"):
+                    # Words drifted across a region midpoint and were reassigned rather
+                    # than lost — true, but not certain. The flag travels with the row so
+                    # a reconciler or reviewer treats the split cells as approximate.
+                    _out_row["segmentation_uncertain"] = True
+                data_rows.append(_out_row)
 
     if not data_rows:
         return None
