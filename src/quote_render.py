@@ -97,14 +97,27 @@ def product_words(summary: Any, parts: Any, product: Any = None) -> str:
             finishes.append(f.title())
     colour = ""
     for p in parts or []:
-        if isinstance(p, dict) and p.get("colour"):
-            colour = str(p["colour"]).strip().title()
+        if isinstance(p, dict) and (p.get("colour") or p.get("colours")):
+            colour = str(p.get("colour") or ", ".join(str(c) for c in (p.get("colours") or []) if c)).strip().title()
             break
     bits = [name]
     if mats:
         bits.append("made in " + ", ".join(mats[:3]))
-    if finishes:
+    # THE FINISH BELONGS TO A MATERIAL, NOT TO THE WHOLE UNIT (D-585). The first picture of a
+    # powder-coated rail with a brushed stainless strip came back brushed gunmetal all over:
+    # "powder coated, brushed" read as one finish. Each material is named with its own finish
+    # and colour, so a painted frame is painted and a brushed strip is brushed.
+    by_material = _finish_by_material(parts)
+    if len(by_material) > 1:
+        bits.append("; ".join(by_material))
+    elif finishes:
         bits.append(", ".join(finishes[:2]).lower() + (f" in {colour}" if colour else ""))
+    # AND THE CONSTRUCTION IS THE DRAWING'S, SAID IN WORDS (D-585): the members the record
+    # holds — tube by profile, sheet by gauge — so the picture draws tube-and-angle supports
+    # where the drawing has them, not the plate feet the model prefers.
+    built = _construction_words(parts)
+    if built:
+        bits.append("built from " + built)
     try:
         from commercial_lines import product_envelope
         env = product_envelope(s, parts)
@@ -113,6 +126,63 @@ def product_words(summary: Any, parts: Any, product: Any = None) -> str:
     except Exception:                                                # noqa: BLE001
         pass
     return ", ".join(bits)
+
+
+def _finish_text(p: Dict[str, Any]) -> str:
+    """The finish a record states, with its colour or specification words where the sheet
+    printed them ("POWDER COAT - GRAPHITE RAL7024 SATIN"), else the normalised word."""
+    for k in ("finish_text_as_printed", "stated_finish", "finish", "surface_finish"):
+        v = str(p.get(k) or "").strip()
+        if v and v.upper() not in ("WELDED", "RAW", "NONE"):
+            return v
+    f = str(p.get("normalized_finish") or "").strip()
+    if not f or f.upper() in ("WELDED", "RAW", "NONE"):
+        return ""
+    colour = str(p.get("colour") or ", ".join(str(c) for c in (p.get("colours") or []) if c)).strip()
+    return f"{f} {colour}".strip()
+
+
+def _finish_by_material(parts: Any) -> List[str]:
+    """One phrase per material that carries a finish: "mild steel powder coated graphite
+    RAL7024 satin", "stainless steel brushed". Empty where no record states a finish."""
+    seen: Dict[str, str] = {}
+    for p in parts or []:
+        if not isinstance(p, dict):
+            continue
+        m = str(p.get("normalized_material") or "").replace("_", " ").strip().lower()
+        f = _finish_text(p)
+        if m and f and m not in seen:
+            seen[m] = " ".join(f.replace("_", " ").split()).lower()
+    return [f"the {m} {f}" for m, f in seen.items()]
+
+
+def _construction_words(parts: Any, limit: int = 6) -> str:
+    """The made members as the record holds them — tube by profile, sheet by gauge — in a
+    short list the picture can be held to."""
+    members: List[str] = []
+    for p in parts or []:
+        if not isinstance(p, dict) or p.get("is_bought_in") or p.get("commercial_line"):
+            continue
+        desc = " ".join(str(p.get("description") or p.get("part_number") or "").split()).lower()
+        if not desc:
+            continue
+        try:
+            qty = int(round(float(p.get("quantity") or 1)))
+        except (TypeError, ValueError):
+            qty = 1
+        sec = p.get("section_stock") if isinstance(p.get("section_stock"), dict) else {}
+        me = p.get("material_estimate") if isinstance(p.get("material_estimate"), dict) else {}
+        t = p.get("normalized_thickness_mm") or me.get("thickness_mm")
+        if sec and sec.get("a") and sec.get("b"):
+            a, b = sorted((float(sec["a"]), float(sec["b"])), reverse=True)
+            form = "square" if abs(a - b) < 1e-6 else "rectangular"
+            members.append(f"{qty} x {desc} in {a:g} x {b:g} {form} tube")
+        elif t:
+            folded = any("fold" in str(o).lower() for o in (p.get("textual_operations") or []))
+            members.append(f"{qty} x {desc} in {float(t):g} mm sheet" + (", folded" if folded else ""))
+        if len(members) >= limit:
+            break
+    return "; ".join(members)
 
 
 def render_prompt(words: str, scene: str, cfg: Optional[Dict[str, Any]] = None,
@@ -137,7 +207,12 @@ def render_prompt(words: str, scene: str, cfg: Optional[Dict[str, Any]] = None,
                 f"scale figure. Do not invent features, shelves, wheels or merchandise the drawing "
                 f"does not show; do not add a top, panel, surface or infill the drawing does not "
                 f"show — where the drawing shows an open frame, a bar or a rail, it stays open, "
-                f"the same slender section as drawn. No people, no drawing annotations, no text, "
+                f"the same slender section as drawn. Keep each material's stated finish: a "
+                f"powder-coated part is painted in its stated colour, not bare or brushed metal, "
+                f"and a brushed stainless part reads as brushed stainless, distinct from the "
+                f"painted parts. Do not add brackets, pins, plates, feet, castors or fixings the "
+                f"drawing does not show; the base and its supports are the members the drawing "
+                f"draws, at the section sizes drawn. No people, no drawing annotations, no text, "
                 f"no prices, no captions, no watermarks.")
     return (f"Photorealistic product visualisation of {words}, placed {scene}. The unit is the "
             f"subject, centred, seen from a slight three-quarter angle at eye level, with generous "
