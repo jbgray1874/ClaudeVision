@@ -1625,6 +1625,20 @@ def extract_bom_rows(text: str, *, source: str = "bom_table",
         return deduped_rows
 
 
+_CALLOUT_BEFORE = re.compile(r"(?:Ø|⌀|∅|⌵|⌴|↧|\bDIA\.?|\bR|\bM)\s*$", re.IGNORECASE)
+_CALLOUT_AFTER = re.compile(r"^\s*(?:°|º|DEG\b|\(\s*x\s*\d|x\s*\d+\s*\)|\bDEEP\b|\bTHRU\b|\bTHK\b)",
+                            re.IGNORECASE)
+
+
+def _is_a_feature_callout(text: str, start: int, end: int) -> bool:
+    """Is the "L x W" pair at text[start:end] a hole, thread, radius or angle callout rather
+    than a size? Led by a diameter, depth or radius mark ("Ø7 X 90°", "R12 x 2"), a thread
+    ("M8 x 16"), or followed by a degree sign or a count ("(x6)")."""
+    before = text[max(0, start - 6):start]
+    after = text[end:end + 8]
+    return bool(_CALLOUT_BEFORE.search(before) or _CALLOUT_AFTER.match(after))
+
+
 def classify_dimensions(text: str) -> Dict[str, Any]:
     text = normalize_text(text)
     if "GENERAL TOLERANCES" in text.upper():
@@ -1633,8 +1647,19 @@ def classify_dimensions(text: str) -> Dict[str, Any]:
         tolerance_noise_values = set()
     # A SIZE THAT NAMES A SECTION IS THE STOCK'S PROFILE, NOT A BLANK (D-406): "40 x 20mm
     # STAINLESS STEEL FLAT SIDED OVAL TUBE" gave 12675-01-02 a 40 x 20 blank.
+    # A DECIMAL COMMA IS A DECIMAL (D-584). European CAD prints 7,4 and 1435,2; read as "7"
+    # and "4" the top blank was 1290 x 2 and the downstand's stated flat never existed. One
+    # or two digits after a comma between digits is a decimal; "1,000" is left alone.
+    text = re.sub(r"(?<=\d),(?=\d{1,2}(?!\d))", ".", text)
+    # A SIZE THAT NAMES A SECTION IS THE STOCK'S PROFILE, NOT A BLANK (D-406): "40 x 20mm
+    # STAINLESS STEEL FLAT SIDED OVAL TUBE" gave 12675-01-02 a 40 x 20 blank.
+    # AND A HOLE CALLOUT IS NOT A SIZE (D-584): "Ø3,5 ⌵ Ø7 X 90° (x6)" is a countersink and
+    # "Ø9 ⌵3 (x3)" a counterbore; read as "L x W" they sized a 1293 mm strip at 90 x 7 and a
+    # 250 mm angle at 9 x 3. A pair led by a diameter or radius mark, or followed by a
+    # degree sign or a count, is a feature, and the part's size is elsewhere on the sheet.
     overall_sizes_raw = [m.groups() for m in re.finditer(LENGTH_BY_WIDTH_PATTERN, text, flags=re.IGNORECASE)
-                         if not names_a_section(text, m.start(), m.end())]
+                         if not names_a_section(text, m.start(), m.end())
+                         and not _is_a_feature_callout(text, m.start(), m.end())]
     overall_sizes = [f"{left} x {right}" for left, right in overall_sizes_raw]
     slot_sizes = [f"{left} x {right}" for left, right in re.findall(SLOT_SIZE_PATTERN, text, flags=re.IGNORECASE)]
 

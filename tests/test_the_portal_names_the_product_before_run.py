@@ -32,7 +32,9 @@ def test_the_kit_is_named_with_its_title_and_revision_and_the_others_are_listed(
     r = pi.resolve_product("11650-06-GA", PACK)
     assert r["status"] == "ok" and r["match"]["number"] == "11650-06-GA"
     assert r["match"]["revision"] == "B" and "COFFRET" in r["match"]["title"]
-    assert {o["number"] for o in r["others"]} == {"11650-02-GA", "11650-03-GA"}
+    # The Boots sheet AC0706-03 reads as a drawing since D-584 admitted a letter prefix, so it
+    # is listed among the others — detail to the kit, never a guess at the product.
+    assert {o["number"] for o in r["others"]} == {"11650-02-GA", "11650-03-GA", "AC0706-03"}
 
 
 def test_the_cabinet_top_is_named_and_the_kit_is_shown_beside_it_without_a_guess():
@@ -43,9 +45,17 @@ def test_the_cabinet_top_is_named_and_the_kit_is_shown_beside_it_without_a_guess
 
 
 def test_a_number_that_names_nothing_is_a_correction_not_a_choice():
-    r = pi.resolve_product("AC0706-03", PACK)     # the Boots code: rule 5, never keyed off
+    r = pi.resolve_product("AC0706-09", PACK)     # a Boots-shaped code no sheet carries
     assert r["status"] == "none" and r["match"] is None
     assert "Type the one that is the product" in r["message"]
+
+
+def test_the_customers_own_numbering_names_its_sheet():
+    """AC0706-03 was "rule 5, never keyed off" while the shape test wanted leading digits;
+    a customer's numbering with a letter prefix is a drawing number (D-584)."""
+    r = pi.resolve_product("AC0706-03", PACK)
+    assert r["status"] == "ok" and r["match"]["number"] == "AC0706-03"
+    assert "11650-06-GA" in r["message"]
 
 
 def test_two_spellings_of_one_drawing_are_one_drawing_not_a_choice():

@@ -36,6 +36,41 @@ _SECTION_PROFILE_RE = re.compile(
 _PI = 3.141592653589793
 
 
+_NOT_A_FIGURE = (
+    # a drawing number or an article code, with or without a letter prefix
+    re.compile(r"\b[A-Z]{0,4}\d{3,}[0-9A-Z]*(?:-[0-9A-Z]+)+\b"),
+    # a dotted article number (651.02.909) and a date (27/09/2021, 2021-09-27)
+    re.compile(r"\b\d+(?:\.\d+){2,}\b"),
+    re.compile(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b"),
+    # a tolerance phrase and a tolerance value
+    re.compile(r"\b(?:OVER|UP\s*TO|FROM|BETWEEN)\s*\d+(?:\.\d+)?\s*(?:MM)?"),
+    re.compile(r"[±\+\-]\s*\d+(?:\.\d+)?\s*(?:MM|°)"),
+    # a copyright or title-block year
+    re.compile(r"\b(?:PLC|©|COPYRIGHT|\(C\))\s*\d{4}\b"),
+    # a standard's designation (BS 6323-4, EN 10219-2, DIN 7991)
+    re.compile(r"\b(?:BS|EN|ISO|DIN|ASTM|ANSI|JIS)\s*\d+(?:[-/]\d+)*\b"),
+)
+
+
+def _figures_in(up: str) -> list:
+    """The numbers in this text that stand as figures: not the number in a name ("1200
+    RAIL", "2.4 KG"), which a word follows. A figure is followed by another number, a unit,
+    a symbol or the end — "1395 30", "@ 1395mm", "TUBE 1125"."""
+    return [mm.group(1) for mm in re.finditer(
+        r"(?<![\d.])(\d+(?:\.\d+)?)(?![\d.])"
+        r"(?!\s*(?!MM\b|LONG\b|LENGTH\b|LG\b)[A-Z])"
+        r"(?!\s*MM\b\s*(?!LONG\b|LENGTH\b|LG\b|CUT\b)[A-Z])", up)]
+
+
+def _prose_free(up: str) -> str:
+    """The text with everything that is a number but not a figure blanked to spaces, same
+    length as the input so match offsets still apply."""
+    out = up
+    for rx in _NOT_A_FIGURE:
+        out = rx.sub(lambda mm: " " * (mm.end() - mm.start()), out)
+    return out
+
+
 def detect_section_stock(text: str) -> Optional[Dict[str, Any]]:
     """Pull a hollow-section profile + cut length from page / cutting-list text.
 
@@ -68,10 +103,17 @@ def detect_section_stock(text: str) -> Optional[Dict[str, Any]]:
             dims = sorted(float(m.group(i)) for i in (1, 2, 3))
             wall, side_a, side_b = dims[0], dims[1], dims[2]
             if not (wall <= 0 or wall > 12 or side_a <= wall * 2 or side_b <= wall * 2):
-                tail_nums = [float(n) for n in re.findall(r"\d+(?:\.\d+)?", up[m.end():])]
+                # A CUT LENGTH IS A DIMENSION, NOT THE NEXT NUMBER ON THE PAGE (D-584). After
+                # "30X20X2MM" on a parts-list row comes the drawing number, ROL2021-2405, and
+                # 2021 was taken for the length; on a sheet come the tolerance note "OVER
+                # 120mm UP TO 1000mm", the date and the copyright year, and 120 was. Codes,
+                # dates, tolerance phrases and the title-block years are blanked before any
+                # number is read; what is left is the sheet's own figures.
+                _clean = _prose_free(up)
+                tail_nums = [float(n) for n in _figures_in(_clean[m.end():])]
                 length = next((n for n in tail_nums if n >= max(side_a, side_b) * 2), None)
                 if length is None:
-                    all_nums = [float(n) for n in re.findall(r"\d+(?:\.\d+)?", up)]
+                    all_nums = [float(n) for n in _figures_in(_clean)]
                     cand = [n for n in all_nums if n >= max(side_a, side_b) * 3]
                     length = max(cand) if cand else None
                 return {

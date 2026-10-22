@@ -2080,6 +2080,18 @@ JUNK_PART_TOKENS = [
 # role or an index (GA, 01M, 02); a decor colour, a finish participle or a layout word in
 # the tail says the token is prose that happens to carry a hyphen. Vocabulary, not logic —
 # extend it as the packs teach new ones.
+# ── A LETTER PREFIX THAT IS A STANDARD, A FINISH OR A THREAD IS NOT A DRAWING (D-584) ─────
+# A customer's drawing number may open with letters (ROL2021-2465-00), so the shape test
+# admits a short prefix. These prefixes name something else — a fastener standard with its
+# size, a paint shade, a thread form — and a code opening with one is a bought article or a
+# note, kept on the bill as such and never read as structure. Words only; the digits after
+# them are the designation.
+CODE_PREFIXES_THAT_ARE_NOT_DRAWINGS = {
+    "DIN", "ISO", "EN", "BS", "BSI", "ANSI", "ASTM", "ASME", "JIS", "GB", "UNI", "NF",
+    "SAE", "AS", "NZS", "RAL", "NCS", "UNC", "UNF", "BSP", "BSPT", "NPT", "BSW", "BA",
+    "PG", "AWG", "DN", "NB", "IP", "M",
+}
+
 CODE_TAIL_NOISE_WORDS = {
     "PLATINUM", "CENTRES", "CENTERS", "CTRS", "GLOSS", "MATT", "MATTE", "SATIN",
     "WHITE", "BLACK", "GREY", "GRAY", "CLEAR", "CHROME", "ZINC", "NICKEL", "SILVER",

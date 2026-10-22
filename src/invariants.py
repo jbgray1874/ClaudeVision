@@ -2295,6 +2295,44 @@ def check_a_section_schedule_reaches_the_sheet(summary: Any) -> List[Dict[str, A
         issues=issues[:10], count=len(issues))]
 
 
+def check_a_printed_quantity_is_not_divided_without_evidence(summary: Any) -> List[Dict[str, Any]]:
+    """A parts-list row's quantity is what the sheet printed, unless a recognised arrangement
+    of the product's own numbering says why it is less (D-584).
+
+    The arrangement rule took a Hafele article shown six times on a GA for six arrangements
+    and divided every fastener on that sheet by six: feet 6 -> 1, washers 12 -> 2. The rule
+    now needs positive evidence, and this check holds the rows to it after the fact: a row
+    whose `quantity` differs from its `quantity_as_printed` must carry the evidence the rule
+    stamped and the record must say the arrangement was recognised. BLOCKING, as a quantity
+    the sheet contradicts is not a firm price."""
+    if not isinstance(summary, dict):
+        return []
+    rows = [r for r in (((summary.get("document_analysis") or {}).get("bom_rows")) or [])
+            if isinstance(r, dict)]
+    ctx = summary.get("install_context") if isinstance(summary.get("install_context"), dict) else {}
+    bad = []
+    for r in rows:
+        try:
+            q, qp = float(r.get("quantity")), float(r.get("quantity_as_printed"))
+        except (TypeError, ValueError):
+            continue
+        if abs(q - qp) < 1e-9:
+            continue
+        ev = r.get("quantity_evidence") if isinstance(r.get("quantity_evidence"), dict) else {}
+        if ctx.get("recognised") and ev.get("divided_by"):
+            continue
+        bad.append(f"{r.get('part_number')}: the sheet prints {qp:g}, the record carries {q:g}")
+    if not bad:
+        return []
+    return [_violation(
+        "printed_quantity_divided_without_evidence", BLOCKING,
+        f"{len(bad)} parts-list row(s) carry less than the sheet prints and no recognised "
+        f"arrangement of the product's own numbering says why: " + "; ".join(bad[:6])
+        + ". A printed quantity stands until the drawing's own structure says it is an "
+          "arrangement.",
+        rows=bad, count=len(bad))]
+
+
 def check_a_sheet_blank_and_a_bought_item_reach_the_charged_cells(summary: Any) -> List[Dict[str, Any]]:
     """Every canonical blank and bought item is on the calculated sheet at its quantity, in
     its block, charged, with the arithmetic holding and the saved cells agreeing — and every
@@ -5019,6 +5057,7 @@ CHECKS = (
     check_an_assembly_is_not_charged_as_a_blank,
     check_a_memberless_assembly_carries_nothing,
     check_a_section_schedule_reaches_the_sheet,
+    check_a_printed_quantity_is_not_divided_without_evidence,
     check_a_sheet_blank_and_a_bought_item_reach_the_charged_cells,
     check_a_blank_and_its_cut_path_can_both_be_true,
     check_prices_are_firm,

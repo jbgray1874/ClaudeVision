@@ -61,10 +61,12 @@ def test_another_reference_names_nothing_and_the_page_says_what_is_here():
     assert "ROL2021-2465-00" in r["message"]
 
 
-def test_the_shape_is_widened_only_in_the_file_name():
-    """ROL's numbering is accepted after a reference and a title; the engine's own shape test,
-    which every BOM reader relies on, is not changed here."""
-    assert not pi.looks_like_a_drawing_number("ROL2021-2465-00")
+def test_the_filing_reads_the_customers_number_whatever_the_shape_test_says():
+    """ROL's numbering is accepted after a reference and a title by the filing reader's own
+    pattern. (D-583 kept the engine's shape test unchanged; D-584 then widened it for every
+    reader once the run showed the readers failing on the same numbering.)"""
+    assert pi.looks_like_a_drawing_number("ROL2021-2465-00")
+    assert pi._CUSTOMER_DRAWING_NUMBER.match("ROL2021-2465-00")
     assert pi.customer_filing("0351292-UNIVERSAL MIDFLOOR 1200 RAIL-ROL2021-2465-00")["number"] == "ROL2021-2465-00"
     assert pi.customer_filing("12645-01GA_V2_REVA") == {}
     assert pi.customer_filing("12345-ASSY") == {}            # a role token is not a title

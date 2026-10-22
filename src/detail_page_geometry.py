@@ -97,6 +97,30 @@ def has_measured_flat(part: Mapping[str, Any]) -> bool:
     return bool(_num(length) and _num(width))
 
 
+_SECTION_FORMS = {"tube", "section", "bar", "wire", "angle_section", "channel"}
+
+
+def _is_section_stock(part: Mapping[str, Any]) -> bool:
+    """Does this record's own evidence say it is a length of section — a stock form already
+    costed as one, a section reading on the record, or a BOM row whose dimension and material
+    words name a profile ("MILD STEEL RECT TUBE - RAW 50X20X2MM")?"""
+    me = part.get("material_estimate") if isinstance(part.get("material_estimate"), Mapping) else {}
+    if str(me.get("stock_form") or "").lower() in _SECTION_FORMS:
+        return True
+    if isinstance(part.get("section_stock"), Mapping) and part["section_stock"]:
+        return True
+    words = " ".join(str(part.get(k) or "") for k in
+                     ("description", "material", "normalized_material", "dimension",
+                      "stock_size", "size", "bom_dimension", "profile"))
+    if not re.search(r"\d", words):
+        return False
+    try:
+        from section_profile import detect_section_stock
+        return bool(detect_section_stock(words))
+    except Exception:                                                # noqa: BLE001
+        return False
+
+
 def not_cut_from_a_blank(part: Mapping[str, Any]) -> bool:
     """An assembly (sized through its members) or a line SDI does not make (bought in, or
     supplied by another party) uses no blank of its own, so no envelope stands in for one.
@@ -110,6 +134,12 @@ def not_cut_from_a_blank(part: Mapping[str, Any]) -> bool:
             or part.get("spot_weld_count") or part.get("_powder_members_coated_m2")
             or part.get("supplied_by_third_party")
             or str(part.get("costing_basis") or "") == "supplied_by_third_party"):
+        return True
+    # A SECTION IS CUT TO LENGTH, NOT FROM A BLANK (D-584). A cross rail of 50 x 20 x 2 tube,
+    # 703 long, was handed a 2 x 1.5 "blank" off its own sheet and then had it rejected, so
+    # it reached costing with no material at all. The row's own dimension column names the
+    # profile; the sheet's figures are its cut length, which the section readers own.
+    if _is_section_stock(part):
         return True
     # A CODE NAMING AN ASSEMBLY DRAWING IS EVIDENCE THE RECORD IS ONE (D-451) — not proof. The
     # product root 8188-08_GA carried no assembly flag and was checked as a 53 x 20 sheet
@@ -167,7 +197,8 @@ def withdraw_stale_envelope_flags(parts: Any) -> int:
 # that knows nothing about the part, and never ranked above a printed overall, a flat or a
 # model.
 PROVISIONAL_SOURCE = "printed_extents_provisional"
-_NUMBER_WORD = re.compile(r"\d{2,4}(?:\.\d+)?")
+# A DECIMAL COMMA IS A DECIMAL (D-584): European CAD prints 1435,2 and 208,9.
+_NUMBER_WORD = re.compile(r"\d{2,4}(?:[.,]\d+)?")
 
 
 def _local_page_number(page: Mapping[str, Any]) -> Optional[int]:
@@ -240,10 +271,16 @@ def read_sheet_figures(page: Mapping[str, Any]) -> Dict[str, Any]:
             if any(x1 >= b[0] and x0 <= b[2] and y1 >= b[1] and y0 <= b[3] for b in skip):
                 continue
             text = "".join(str(sp.get("text") or "") for sp in line.get("spans") or [])
+            # A DIMENSION LEADS ITS LINE (D-584). "400 GRIT FINAL POLISH", "BETWEEN 80 - 120
+            # MICRON", "304 - STAINLESS STEEL" and a postcode in the consultant's address put
+            # 400, 304, 120, 93 and 80 on every sheet of a pack, and a 250 mm angle read as
+            # 400 x 50. A printed dimension is a figure first — "1192 TUBE LENGTH", "1154
+            # INT", "258 259 259" — so figures are taken from the front of a line up to its
+            # first word, and a line that opens with a word, a bullet or a symbol gives none.
             for token in text.split():
                 if not _NUMBER_WORD.fullmatch(token.strip()):
-                    continue
-                value = float(token)
+                    break
+                value = float(token.replace(",", "."))
                 if 10.0 <= value <= 4000.0:
                     out["figures"].append((value, axis))
     return out
@@ -468,6 +505,18 @@ def provisional_blank_from_sheets(part: Mapping[str, Any],
                         f"{ratio:.2f}x the stated {weight:g} kg — LESS than the finished part "
                         f"cut from it, which a blank cannot, so the figures read are not its "
                         f"size")
+                return None
+            if ratio is not None and ratio > hi and developed:
+                # A FLAT PATTERN IS THE NET BLANK (D-584): nothing is cut out of it after
+                # development, so a developed size that weighs several times the stated part
+                # is not the flat the sheet states — a figure from another view was taken for
+                # one of its sides. Refused, and the sheet's own flat is asked for.
+                if isinstance(part, dict):
+                    part["_provisional_blank_refused"] = (
+                        f"{length:g} x {width:g} mm at {t:g} mm would weigh {ratio:.2f}x the "
+                        f"stated {weight:g} kg, and the sheet shows a flat pattern — a developed "
+                        f"blank has nothing cut from it, so these figures are not its flat; "
+                        f"read the flat pattern's own two sizes from the sheet")
                 return None
             if ratio is not None and ratio > hi:
                 weight_note = (f"; it weighs {ratio:.2f}x the stated finished {weight:g} kg — "
