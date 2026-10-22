@@ -1964,8 +1964,10 @@ def _line_kind(part: Mapping[str, Any], node: Optional[Mapping[str, Any]]) -> st
     # from a service line). A -PLATE line is a service whatever path minted it.
     if part.get("_plating_placeholder") or "plating" in method or pn.endswith("-PLATE"):
         return "service"
-    if part.get("_commercial_placeholder") or str(part.get("source") or "") == \
-            "commercial_placeholder" or pn in ("PACKAGING", "DELIVERY"):
+    # The marks the mints leave are read by their owner (commercial_lines.is_commercial_line,
+    # D-582); the two code words stay as the fallback they always were.
+    from commercial_lines import is_commercial_line as _is_cl                # noqa: PLC0415
+    if _is_cl(part) or pn in ("PACKAGING", "DELIVERY"):
         return "commercial"
     if isinstance(node, Mapping) and node.get("kind"):
         return str(node["kind"])

@@ -187,9 +187,13 @@ def _kind_from_part(part: Mapping[str, Any]) -> str:
                     or part.get("cost_source") or part.get("source")).lower()
     if part.get("_plating_placeholder") or "plating" in method or pn.endswith("-PLATE"):
         return "service"
-    if (part.get("_commercial_placeholder")
-            or _clean(part.get("source")) == "commercial_placeholder"
-            or pn in ("PACKAGING", "DELIVERY")):
+    try:
+        from commercial_lines import is_commercial_line as _is_cl            # noqa: PLC0415
+        _marked = _is_cl(part)
+    except Exception:                                                     # noqa: BLE001
+        _marked = bool(part.get("_commercial_placeholder")
+                       or _clean(part.get("source")) == "commercial_placeholder")
+    if _marked or pn in ("PACKAGING", "DELIVERY"):
         return "commercial"
     if _clean(part.get("canonical_kind")):
         return _clean(part.get("canonical_kind")).lower()

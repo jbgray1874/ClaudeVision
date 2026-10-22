@@ -128,15 +128,72 @@ class AQuantityIsMultipliedOnceAlongItsOwnEdges(unittest.TestCase):
         self.assertIn("canonical_price_record_missing", {i["code"] for i in quantity_audit(d)["issues"]})
 
     def test_a_commercial_line_is_not_an_occurrence_in_the_product(self):
-        """The engine's flag is `commercial_line` on the record (commercial_lines.collect_lines
-        reads it); a packaging stub outside the graph is not a record outside the graph."""
+        """A packaging stub outside the graph is not a record outside the graph."""
         d, s = fixture()
         d["estimate_summary"]["canonical_part_estimates"].append(
             dict(part_number="PACKAGING", quantity=1, commercial_line={"code": "PACKAGING"}))
         self.assertTrue(quantity_audit(d)["passed"], quantity_audit(d)["issues"])
         self.assertTrue(audit(d, s)["passed"], audit(d, s))
-        self.assertNotIn("_commercial_line", Path(mcc.__file__).read_text(encoding="utf-8"))
-        self.assertNotIn("_commercial_line", Path(qfc.__file__).read_text(encoding="utf-8"))
+
+
+class ACommercialLineIsReadByItsOwnerWhateverMarkItsMintLeft(unittest.TestCase):
+    """The stub is minted on more than one path and each leaves its own mark: the component
+    guard's `_commercial_line = True`, the priced `commercial_line` dict, the placeholder marks.
+    One reader in commercial_lines knows them all; the contracts and the two line classifiers
+    ask it rather than testing one key each."""
+
+    PACKAGING_GUARD = dict(part_number="PACKAGING", quantity=1, _commercial_line=True,
+                           description="Packaging (box / pallet — per-unit share)")
+    PACKAGING_PRICED = dict(part_number="PACKAGING", quantity=1,
+                            commercial_line={"code": "PACKAGING", "unit_gbp": 2.1})
+    DELIVERY_EXCLUDED = dict(part_number="DELIVERY", quantity=1, unit_cost_gbp=0.0,
+                             commercial_line={"code": "DELIVERY", "state": "excluded", "unit_gbp": 0.0})
+    PLACEHOLDER = dict(part_number="DELIVERY", quantity=1, source="commercial_placeholder")
+    PLACEHOLDER_MARK = dict(part_number="DELIVERY", quantity=1, _commercial_placeholder=True)
+    BOUGHT = dict(part_number="FIXING1", quantity=6, is_bought_in=True,
+                  description="M8 bolt, supplied on a pallet of 500")
+
+    def test_every_mark_is_commercial_and_a_bought_item_is_not(self):
+        from commercial_lines import is_commercial_line
+        for rec in (self.PACKAGING_GUARD, self.PACKAGING_PRICED, self.DELIVERY_EXCLUDED,
+                    self.PLACEHOLDER, self.PLACEHOLDER_MARK):
+            with self.subTest(rec=rec):
+                self.assertTrue(is_commercial_line(rec))
+                self.assertTrue(qfc.is_commercial(rec))
+        self.assertFalse(is_commercial_line(self.BOUGHT))       # the word "pallet" is not the test
+        self.assertFalse(is_commercial_line({"commercial_line": {}}))
+        self.assertFalse(is_commercial_line({"_commercial_line": "yes"}))
+        self.assertFalse(is_commercial_line(None))
+
+    def test_the_contracts_exclude_each_shape_and_still_audit_the_bought_item(self):
+        for stub in (self.PACKAGING_GUARD, self.PACKAGING_PRICED, self.DELIVERY_EXCLUDED, self.PLACEHOLDER):
+            with self.subTest(stub=stub["part_number"], marks=sorted(k for k in stub if "commercial" in k or k == "source")):
+                d, s = fixture()
+                parts = d["estimate_summary"]["canonical_part_estimates"]
+                nodes = d["estimate_summary"]["canonical_route_shadow"]["nodes"]
+                parts.append(copy.deepcopy(stub))
+                # Hung on the graph as a bought-in by a reader that did not know better: the
+                # contract still must not demand a charged row for it or an edge to the root.
+                nodes.append(dict(part_number=stub["part_number"], kind="bought_in", qty_per_unit=1,
+                                  qty_by_parent={}, parents=[]))
+                result = audit(d, s)
+                self.assertTrue(result["passed"], result["issues"] + result["unverified"])
+                self.assertNotIn(stub["part_number"], {t["part"] for t in result["trace"]})
+                self.assertIn("BOLT", {t["part"] for t in result["trace"]})
+        # And the ordinary bought item IS audited: take its row away and the contract says so.
+        d, s = fixture()
+        d["final_estimate"]["material_rows"].pop(1)
+        self.assertIn(("material_row_missing_or_duplicate", "BOLT"),
+                      {(i["code"], i["part"]) for i in audit(d, s)["issues"]})
+
+    def test_the_line_classifiers_ask_the_same_reader(self):
+        from costed_facts import _line_kind
+        from display_material import _kind_from_part as _kind_of
+        for rec in (self.PACKAGING_GUARD, self.DELIVERY_EXCLUDED, self.PLACEHOLDER):
+            with self.subTest(rec=rec["part_number"], marks=[k for k in rec if "commercial" in k or k == "source"]):
+                self.assertEqual(_line_kind(dict(rec, part_number="X-LINE"), None), "commercial")
+                self.assertEqual(_kind_of(dict(rec, part_number="X-LINE")), "commercial")
+        self.assertNotEqual(_line_kind(self.BOUGHT, None), "commercial")
 
 
 class ASheetBlankAndABoughtItemReachTheChargedCells(unittest.TestCase):

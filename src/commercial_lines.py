@@ -225,7 +225,7 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any,
                                              or part.get("is_sub_assembly"))})
 
     for part in parts or ():
-        if not isinstance(part, dict) or part.get("_commercial_placeholder"):
+        if not isinstance(part, dict) or is_commercial_line(part):
             continue
         # AN ASSEMBLY IS NOT A THING YOU PUT IN A BOX. Its material is already counted on its
         # children, so weighing it too counts the same steel twice — and its "blank" is not a
@@ -1669,12 +1669,34 @@ def nothing_to_ship(summary: Any, parts: Any) -> Optional[str]:
         return (f"the run produced nothing to cost "
                 f"({stop.get('short') or stop.get('kind') or 'the run stopped'})")
     shippable = [p for p in (parts or ()) if isinstance(p, dict)
-                 and not p.get("_commercial_placeholder")
-                 and not p.get("_plating_placeholder")
-                 and str(p.get("source") or "") != "commercial_placeholder"]
+                 and not is_commercial_line(p)
+                 and not p.get("_plating_placeholder")]
     if not shippable:
         return "no part on this book to pack or deliver"
     return None
+
+
+def is_commercial_line(record: Any) -> bool:
+    """Is this part record a commercial line — packaging, delivery, carriage — rather than a
+    thing in the fabricated product? ONE READER OF EVERY MARK THE MINTS LEAVE (D-582).
+
+    The stub is minted on more than one path and each leaves its own mark: the component
+    guard sets `_commercial_line = True` so no commodity table answers for it; the priced
+    line is hung on the record as the `commercial_line` dict (what collect_lines harvests,
+    and an EXCLUDED delivery — "customer collects", £0 by decision — is still that dict);
+    the placeholder path marks `_commercial_placeholder` or `source = commercial_placeholder`.
+    A reader that tested one mark classified a stub minted on another path as a bought-in
+    component, and the material contract would then have demanded a charged row for the
+    packaging. The words PACKAGING and DELIVERY are deliberately not the test here: a
+    bought item whose description mentions a pallet is not a commercial line.
+    """
+    if not isinstance(record, dict):
+        return False
+    if record.get("_commercial_line") is True or record.get("_commercial_placeholder"):
+        return True
+    if isinstance(record.get("commercial_line"), dict) and record["commercial_line"]:
+        return True
+    return str(record.get("source") or "") == "commercial_placeholder"
 
 
 def collect_lines(summary: Dict[str, Any]) -> List[Dict[str, Any]]:

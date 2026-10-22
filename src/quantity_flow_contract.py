@@ -60,9 +60,16 @@ def unit(value: Any) -> Optional[str]:
 
 def is_commercial(record: Any) -> bool:
     """A packaging, delivery or similar line is not an occurrence in the fabricated product.
-    The engine's flag is `commercial_line` on the part record (commercial_lines.collect_lines
-    reads the same key); the word on the description is not the test."""
-    return isinstance(record, dict) and bool(record.get("commercial_line"))
+    The owning module reads every mark the mints leave (`_commercial_line`, the
+    `commercial_line` dict, the placeholder marks); this is that one reader, not a second."""
+    try:
+        from commercial_lines import is_commercial_line
+        return is_commercial_line(record)
+    except Exception:                                                # noqa: BLE001
+        return isinstance(record, dict) and bool(
+            record.get("_commercial_line") is True or record.get("commercial_line")
+            or record.get("_commercial_placeholder")
+            or str(record.get("source") or "") == "commercial_placeholder")
 
 
 def convert(quantity: Any, source_unit: Any, target_unit: Any,
