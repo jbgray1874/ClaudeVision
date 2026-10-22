@@ -64,6 +64,34 @@ def _load_active_employees() -> list:
     return json.loads(p.read_text(encoding="utf-8")).get("records") or []
 
 
+def _current_staff(token: str) -> tuple:
+    """Everyone BrightHR lists as employed, read fresh on every run.
+
+    Only these people are asked about, so anyone missing here is missing from
+    the on-site list however long they have been clocked in. The saved list
+    (latest.json) was the source and failed twice over: only hr_pull.py writes
+    it and nothing runs that on a schedule, so a new starter was never asked
+    about; and it keeps only staff with an email address, which leaves out
+    warehouse staff who have none. The clockings lookup needs only the
+    BrightHR id, so that is all this requires.
+
+    Returns (staff, warning). If BrightHR's staff list cannot be read, the saved
+    list is used and the warning says so, rather than the run failing.
+    """
+    try:
+        import hr_brighthr as bh
+        staff = [e for e in (bh.normalise_employee(r) for r in bh.fetch_employees(token))
+                 if e["id"] and not e["terminated"]]
+        if staff:
+            return staff, None
+        reason = "BrightHR returned an empty staff list"
+    except Exception as exc:              # fall back, and say so
+        reason = f"BrightHR's staff list could not be read ({exc})"
+    saved = _load_active_employees()
+    return saved, (f"{reason}; checked the saved list of {len(saved)} instead, which can "
+                   f"miss new starters and staff without an email address.")
+
+
 class _Throttle:
     """One rate-limit pause shared by every worker.
 
@@ -263,7 +291,9 @@ def _run_blip() -> dict:
     _log("BLIP start — querying current clockings (concurrent)")
 
     token = _get_token()
-    employees = _load_active_employees()
+    employees, staff_warning = _current_staff(token)
+    if staff_warning:
+        _log(f"  {staff_warning}")
     emp_index = {e["id"]: e for e in employees if e.get("id")}
     _log(f"  {len(employees)} active employees to check")
 
@@ -324,7 +354,7 @@ def _run_blip() -> dict:
         "query_failures": failures,
         "fail_pct": round(fail_pct, 2),
         "status": "ok",
-        "warnings": [],
+        "warnings": [staff_warning] if staff_warning else [],
     }
 
     # A snapshot built from failed queries under-reports who is in the building.

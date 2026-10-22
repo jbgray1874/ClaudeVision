@@ -106,10 +106,10 @@ def test_the_snapshot_names_whose_lookup_failed(dirs, monkeypatch):
     """The push needs WHO, not just how many, to tell unknown from absent."""
     monkeypatch.setattr(cfg, "HR_OUTPUT_DIR", "")
     monkeypatch.setattr(hr_blip, "_get_token", lambda: "t")
-    monkeypatch.setattr(hr_blip, "_load_active_employees", lambda: [
+    monkeypatch.setattr(hr_blip, "_current_staff", lambda token: ([
         {"id": "BH-1", "first_name": "John", "surname": "Smith", "email": "j@wearesdi.com"},
         {"id": "BH-2", "first_name": "Pat", "surname": "Example", "email": "p@wearesdi.com"},
-    ])
+    ], None))
 
     def query(token, employee_id, from_dt, throttle=None):
         if employee_id == "BH-1":
@@ -122,3 +122,70 @@ def test_the_snapshot_names_whose_lookup_failed(dirs, monkeypatch):
     snap = json.loads((dirs / "blip_latest.json").read_text(encoding="utf-8"))
     assert [p["id"] for p in snap["on_site"]] == ["BH-1"]
     assert [p["id"] for p in snap["query_failed"]] == ["BH-2"]
+
+
+# ── who gets asked about ──────────────────────────────────────────────────────
+# A person clocked in on Blip but missing from the staff list is never asked
+# about, so never appears on site. The list used to be a saved file that only a
+# manual pull refreshed, and it dropped anyone without an email address.
+
+def _brighthr(monkeypatch, raw=None, error=None):
+    import hr_brighthr as bh
+    def fetch(token):
+        if error:
+            raise bh.BrightHRError(error)
+        return raw
+    monkeypatch.setattr(bh, "fetch_employees", fetch)
+
+
+def test_staff_without_an_email_are_still_asked_about(monkeypatch):
+    _brighthr(monkeypatch, raw=[
+        {"id": "BH-1", "firstName": "Jo", "lastName": "Office", "email": "jo@wearesdi.com"},
+        {"id": "BH-2", "firstName": "Sam", "lastName": "Warehouse"},           # no email
+        {"id": "BH-3", "firstName": "Lee", "lastName": "Leaver", "isTerminated": True},
+    ])
+
+    staff, warning = hr_blip._current_staff("t")
+
+    assert [e["id"] for e in staff] == ["BH-1", "BH-2"]                        # not the leaver
+    assert warning is None
+
+
+def test_a_new_starter_is_asked_about_without_a_manual_pull(dirs, monkeypatch):
+    # The saved list predates them; BrightHR's own list does not.
+    (dirs / "latest.json").write_text(json.dumps({"records": [
+        {"id": "BH-1", "first_name": "Jo", "surname": "Office", "email": "jo@wearesdi.com"}]}),
+        encoding="utf-8")
+    _brighthr(monkeypatch, raw=[
+        {"id": "BH-1", "firstName": "Jo", "lastName": "Office", "email": "jo@wearesdi.com"},
+        {"id": "BH-9", "firstName": "New", "lastName": "Starter", "email": "new@wearesdi.com"},
+    ])
+
+    staff, _ = hr_blip._current_staff("t")
+
+    assert "BH-9" in [e["id"] for e in staff]
+
+
+def test_if_brighthr_s_staff_list_fails_the_saved_list_is_used_and_said(dirs, monkeypatch):
+    (dirs / "latest.json").write_text(json.dumps({"records": [
+        {"id": "BH-1", "first_name": "Jo", "surname": "Office", "email": "jo@wearesdi.com"}]}),
+        encoding="utf-8")
+    _brighthr(monkeypatch, error="429 Too Many Requests")
+
+    staff, warning = hr_blip._current_staff("t")
+
+    assert [e["id"] for e in staff] == ["BH-1"]
+    assert "saved list" in warning and "429" in warning
+
+
+def test_the_fallback_warning_reaches_the_run_summary(dirs, monkeypatch):
+    monkeypatch.setattr(cfg, "HR_OUTPUT_DIR", "")
+    monkeypatch.setattr(hr_blip, "_get_token", lambda: "t")
+    monkeypatch.setattr(hr_blip, "_current_staff", lambda token: (
+        [{"id": "BH-1", "first_name": "Jo", "surname": "Office", "email": ""}],
+        "BrightHR's staff list could not be read (x); checked the saved list of 1 instead"))
+    monkeypatch.setattr(hr_blip, "_query_one", lambda *a, **k: ([], True))
+
+    summary = hr_blip.run_blip()
+
+    assert any("saved list" in w for w in summary["warnings"])
