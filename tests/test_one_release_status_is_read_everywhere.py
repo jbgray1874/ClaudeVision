@@ -106,7 +106,29 @@ def test_open_items_are_the_records_not_a_count_of_our_own():
     assert quote_story.open_items(_job(draft=True)) >= 1
     src = (ROOT / "src" / "quote_story.py").read_text(encoding="utf-8")
     assert 'facts["open_items"] = open_items(summary)' in src
-    assert 'rel = costed_job(summary).get("release") or {}' in src
+    assert "outstanding_summary(costed_job(summary))" in src
+
+
+def test_the_quote_counts_what_the_report_counts_including_an_indicative_rate():
+    """The 22/10 10:34 book: the report said six decisions, the release record five — the
+    sixth was the packaging allowance on an INDICATIVE house rate, which the report lists to
+    verify and the release record's `outstanding` leaves out because it does not make the
+    quotation a draft. The record now carries both numbers, and the quotation counts as the
+    report does."""
+    # On a built record (as the saved release record is): the one tally adds the advisory item.
+    rec = {"schema": cf.COSTED_JOB_SCHEMA, "lines": [], "gaps": {},
+           "decisions_required": [{"part": "UNIT-01", "kind": "manufacturing_decision", "issue": "weld length not stated"},
+                                  {"part": "PACKAGING", "kind": "indicative_rate",
+                                   "issue": "PACKAGING is priced on an SDI house rate marked INDICATIVE"}],
+           "release": {"draft": True, "outstanding": 1, "reasons": ["1 manufacturing decision(s) open"],
+                       "status": "provisional", "checks_ran": True}}
+    assert cf.outstanding_summary(rec)["total"] == 2 and rec["release"]["outstanding"] == 1
+    # On a record the engine builds: to_confirm IS the one tally, and the quotation prints it.
+    s = _plain()
+    built = cf.costed_job(s)
+    assert built["release"]["to_confirm"] == cf.outstanding_summary(built)["total"]
+    assert built["release"]["to_confirm"] >= built["release"]["outstanding"]
+    assert quote_story.open_items(s) == built["release"]["to_confirm"]
 
 
 def test_a_finding_raised_after_the_workbook_reaches_report_and_quote_alike():

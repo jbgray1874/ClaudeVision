@@ -3790,7 +3790,7 @@ def costed_job(source: Any) -> Dict[str, Any]:
     if _stop:
         status = "provisional"
 
-    return {
+    _job = {
         "schema": COSTED_JOB_SCHEMA,
         # The stop travels on the record, so a reader given the record alone (the HTML
         # regeneration path, the quote's blocking list) still knows the book is empty by mode.
@@ -3821,6 +3821,14 @@ def costed_job(source: Any) -> Dict[str, Any]:
                     "prices_outstanding": len(unpriced) + len(market),
                     "decisions_open": len(manufacturing)},
     }
+    # THE ONE TALLY, ON THE RECORD ITSELF (D-580). `outstanding` is the rows that make the
+    # quotation a draft; the report's headline also lists the advisory items — an SDI house
+    # rate marked INDICATIVE to verify — so on the 22/10 10:34 book of 401918-01-GA the
+    # report said six and the saved release record five, and a reader could not tell why.
+    # The record now carries both numbers, and every surface that says "items to confirm"
+    # prints this one.
+    _job["release"]["to_confirm"] = int(outstanding_summary(_job).get("total") or 0)
+    return _job
 
 
 def costed_line(source: Any, part_number: Any) -> Optional[Dict[str, Any]]:

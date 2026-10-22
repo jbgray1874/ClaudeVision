@@ -950,15 +950,14 @@ def _head(sdi_logo: str, cust_header: str, middle: str) -> str:
 
 
 def open_items(summary: Dict[str, Any]) -> int:
-    """How many items the costed record still holds open — its own `release.outstanding`,
-    the count of rows a person owes before the quotation is more than a draft, which is the
-    report's headline count and the release gate's reason (D-580). Nothing is counted here."""
+    """How many items the costed record says still need a person — the ONE TALLY the report's
+    headline prints (costed_facts.outstanding_summary), never a count of this page's own
+    (D-580). It is the record's `release.outstanding` (the rows that make the quotation a
+    draft) plus the advisory items the report also lists — an SDI house rate marked
+    INDICATIVE to verify — so the quotation and the report say the same number."""
     try:
-        from costed_facts import costed_job
-        rel = costed_job(summary).get("release") or {}
-        if not rel.get("draft"):
-            return 0
-        return max(1, int(_num(rel.get("outstanding")) or 0))
+        from costed_facts import costed_job, outstanding_summary
+        return max(0, int(_num(outstanding_summary(costed_job(summary)).get("total")) or 0))
     except Exception:                                                # noqa: BLE001
         return 0
 
