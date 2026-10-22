@@ -1004,6 +1004,7 @@ def main() -> None:
         # Stamped here, immediately after the scan, so there is no window in which a
         # deliverable can be built by something that does not know what kind of run it is.
         summary["llm_only"] = bool(getattr(args, "llm_only", False))
+        _time_stage("enrichment_reader_provenance", True)
         summary["fresh_read"] = bool(getattr(args, "fresh_read", False))
         try:
             from run_readers import readers_that_ran as _readers
@@ -1017,6 +1018,7 @@ def main() -> None:
                   f"the job report will describe the run from the flag alone.", flush=True)
 
         # SDI Intelligence — Learning Engine
+        _time_stage("enrichment_reader_provenance", False)
         _time_stage("learning_engine", True)
         try:
             from learning_engine import get_engine
@@ -1052,6 +1054,7 @@ def main() -> None:
         # already fill these, so nothing is overwritten). For no-DXF customer tender drawings it
         # is the trustworthy backbone. Off by default so proven jobs (12120/1282) are untouched.
         import os as _os_df
+        _time_stage("enrichment_drawing_facts", True)
         if _os_df.getenv("SDI_APPLY_DRAWING_FACTS", "").lower() in {"1", "true", "yes"}:
             try:
                 from drawing_facts import extract_drawing_facts
@@ -1071,6 +1074,7 @@ def main() -> None:
                 print(f"  [drawing-facts] skipped ({_exc})")
 
         # ── Job-level additions: assembly labour (history) + bought-in materials (Tim BOM) ──
+        _time_stage("enrichment_drawing_facts", False)
         # Computed AFTER the scan, then folded into BOTH the bay estimate AND the canonical
         # estimate_summary (workbook_equivalent_pricing / cost_breakdown / document total). The
         # saved JSON is then RE-WRITTEN, so the spreadsheet, JSON and parity report all agree.
@@ -1216,6 +1220,9 @@ def main() -> None:
                 print(f"  (totals reconciliation skipped: {_exc_rc})")
 
         _time_stage("job_level_pricing_and_rewrite", False)
+        # Printing includes formatting potentially large geometry dictionaries and pipe
+        # back-pressure from the runner. Measure it; do not assume all enrichment is AI.
+        _time_stage("enrichment_console_summary", True)
         print(f"Page count: {summary['page_count']}")
         print("Detected labels:", ", ".join(summary["detected_labels"]) or "None")
         print("Part numbers:", ", ".join(summary["pattern_summary"]["part_numbers"]) or "None")
@@ -1233,6 +1240,8 @@ def main() -> None:
             print(f"  - {output}")
 
         print("\nPart summaries:\n")
+        _time_stage("enrichment_console_summary", False)
+        _time_stage("enrichment_console_parts", True)
         estimate_lookup = {
             item["part_number"]: item for item in summary.get("estimate_summary", {}).get("part_estimates", [])
         }
@@ -1260,6 +1269,8 @@ def main() -> None:
             print()
 
         print("Manufacturing observations:")
+        _time_stage("enrichment_console_parts", False)
+        _time_stage("enrichment_console_observations", True)
         for observation in summary["manufacturing_writeup"]["manufacturing_observations"]:
             print(f"  - {observation}")
 
@@ -1290,6 +1301,7 @@ def main() -> None:
             print(f"\nEstimated document total: {total}")
 
         if getattr(args, "generate_ai_spreadsheet", False):
+            _time_stage("enrichment_console_observations", False)
             _time_stage("ai_spreadsheet", True)
             try:
                 tpl = Path(args.ai_spreadsheet_template) if args.ai_spreadsheet_template else None
@@ -1308,6 +1320,8 @@ def main() -> None:
         # unreachable (e.g. share unavailable), so a network blip doesn't
         # stop the run.
         xlsx_path = None
+        if not getattr(args, "generate_ai_spreadsheet", False):
+            _time_stage("enrichment_console_observations", False)
         _time_stage("post_scan_enrichment", False)
         _time_stage("populate_workbook", True)
         try:
