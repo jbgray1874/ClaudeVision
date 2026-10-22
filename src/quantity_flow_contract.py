@@ -209,4 +209,85 @@ def audit(summary: Dict[str, Any]) -> Dict[str, Any]:
     for pn, p in ps.items():
         if pn not in ns and not p.get("set_aside") and not is_commercial(p):
             fail("canonical_record_outside_graph", pn)
-    return {"schema": SCHEMA, "issues": issues, "trace": trace, "passed": not issues}
+    printed = printed_rows_audit(summary, ps)
+    issues.extend(printed["issues"])
+    return {"schema": SCHEMA, "issues": issues, "trace": trace, "passed": not issues,
+            "printed_trace": printed["trace"]}
+
+
+def printed_rows_audit(summary: Dict[str, Any], ps: Optional[Dict[str, Dict[str, Any]]] = None
+                       ) -> Dict[str, Any]:
+    """THE DRAWING'S OWN ROWS, BEFORE ANY NORMALISATION, HELD AGAINST THE GRAPH (D-584).
+
+    An audit that compares the graph with the price records compares two downstream copies,
+    and agrees with a graph that was corrupted before either was made. The parts-list rows
+    the readers kept (document_analysis.bom_rows) carry what each sheet PRINTED: parent,
+    child, the local quantity, and — where the arrangement rule divided it — the printed
+    figure and the evidence. Per (parent, child) the printed local quantity is summed over
+    the distinct item numbers that list it (a code at two item numbers is two lines, D-335),
+    never over the same row read twice, and the same child under two parents is two edges,
+    not a duplicate. Findings:
+
+      printed_quantity_divided_without_evidence  a row's quantity differs from what the sheet
+                                                 printed and no recognised arrangement says why
+      local_edge_disagrees_with_printed_row      the canonical edge (bom_parents[].qty) is not
+                                                 the sheet's local quantity for that edge
+    """
+    rows = [r for r in (((summary.get("document_analysis") or {}).get("bom_rows")) or [])
+            if isinstance(r, dict)]
+    ctx = summary.get("install_context") if isinstance(summary.get("install_context"), dict) else {}
+    recognised = bool(ctx.get("recognised"))
+    if ps is None:
+        parts = _canonical_parts(summary)
+        counts = Counter(identity(p.get("part_number")) for p in parts)
+        ps = {identity(p.get("part_number")): p for p in parts
+              if counts[identity(p.get("part_number"))] == 1}
+
+    # A READER RE-SPACES A CODE ("ISO 7380-1 - M8 x 16" on the row, "ISO 7380-1-M8 X 16" on the
+    # record): compared with the spaces out, as bom_tree compares them.
+    def _flat(value: Any) -> str:
+        return "".join(str(value or "").split()).upper()
+
+    ps_flat = {_flat(k): v for k, v in ps.items()}
+    issues: List[Dict[str, Any]] = []
+    trace: List[Dict[str, Any]] = []
+    edges: Dict[tuple, Dict[str, Any]] = {}
+    for r in rows:
+        child, parent = _flat(r.get("part_number")), _flat(r.get("bom_parent"))
+        if not child or not parent or child == parent:
+            continue
+        q, q_printed = numeric(r.get("quantity")), numeric(r.get("quantity_as_printed"))
+        if q is None:
+            continue
+        if q_printed is not None and not isclose(q, q_printed, abs_tol=1e-8, rel_tol=0):
+            ev = r.get("quantity_evidence") if isinstance(r.get("quantity_evidence"), dict) else {}
+            if not (recognised and ev.get("divided_by")):
+                issues.append({"code": "printed_quantity_divided_without_evidence", "part": child,
+                               "parent": parent, "printed": q_printed, "used": q,
+                               "source_pdf": r.get("source_pdf")})
+        key = (parent, child)
+        e = edges.setdefault(key, {"parent": parent, "child": child, "local": 0.0,
+                                   "printed": 0.0, "items": set(), "sources": set()})
+        item = str(r.get("item_number") or r.get("item") or "")
+        stamp = (str(r.get("source_pdf") or ""), item)
+        if item and stamp in e["items"]:
+            continue                          # the same row, read again
+        e["items"].add(stamp)
+        e["sources"].add(str(r.get("source_pdf") or ""))
+        e["local"] += q
+        e["printed"] += q_printed if q_printed is not None else q
+    for (parent, child), e in sorted(edges.items()):
+        rec = ps_flat.get(child)
+        local_edge = None
+        if isinstance(rec, dict):
+            for bp in (rec.get("bom_parents") or []):
+                if isinstance(bp, dict) and _flat(bp.get("parent")) == parent:
+                    local_edge = numeric(bp.get("qty"))
+        trace.append({"parent": parent, "child": child, "printed_local": e["printed"],
+                      "used_local": e["local"], "canonical_edge": local_edge,
+                      "sources": sorted(s for s in e["sources"] if s)})
+        if local_edge is not None and not isclose(local_edge, e["local"], abs_tol=1e-8, rel_tol=0):
+            issues.append({"code": "local_edge_disagrees_with_printed_row", "part": child,
+                           "parent": parent, "printed": e["printed"], "used": e["local"],
+                           "canonical_edge": local_edge})
+    return {"issues": issues, "trace": trace}

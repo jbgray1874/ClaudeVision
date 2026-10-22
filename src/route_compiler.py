@@ -1609,6 +1609,7 @@ def build_part_graph(
     page_owner: Optional[Mapping[int, str]] = None,
     pack_mode: Optional[str] = None,
     declared_product: Optional[str] = None,
+    source_names: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     """Build canonical nodes and hierarchy edges from the whole job.
 
@@ -2746,8 +2747,41 @@ def build_part_graph(
             if len(_job_roots) == 1:
                 _job_top = _job_roots[0]
             _candidates = _job_roots
+        _ref_top = ""
+        if not _candidates:
+            # THE PACK'S OWN REFERENCE NAMES THE PRODUCT (D-584). An enquiry filed as
+            # "<reference>-<title>-<customer drawing number>" is the product the reference
+            # was raised for: the UPC typed on the Run and the ROL number on the sheet are two
+            # names for one thing, and the file name is where the pack states the alias. The
+            # same resolver the portal used before Run (product_identity) says it here, so the
+            # run resolves what the page accepted rather than printing NOT RESOLVED over the
+            # right root. Only a ROOT may be named this way; a reference naming a detail sheet
+            # is still refused as everywhere else.
+            try:
+                from product_identity import product_sheets as _pi_sheets, _key as _pi_key
+                _names = [str(n) for n in (source_names or []) if n]
+                _ref_numbers = {_pi_key(d.get("number")) for d in _pi_sheets(_declared, _names)
+                                if d.get("reference")}
+                _ref_roots = sorted(t for t in top_ids if t and _pi_key(t) in _ref_numbers)
+            except Exception:                                        # noqa: BLE001
+                _ref_roots = []
+            if len(_ref_roots) == 1:
+                _ref_top = _ref_roots[0]
+                _candidates = _ref_roots
         if len(_candidates) == 1:
             product_root = _candidates[0]
+            if _ref_top:
+                _product_issues.append({
+                    "code": "product_is_the_packs_reference",
+                    "declared": _declared,
+                    "product": product_root,
+                    "detail": (f"The Drawing Number {_declared!r} is the reference this pack is "
+                               f"filed under, and the pack names {product_root} as the drawing "
+                               f"it was raised for. The two are one product: {product_root} is "
+                               f"costed, and the book carries both names."),
+                })
+                print(f"   [graph] {_declared!r} is the reference the pack is filed under — "
+                      f"the product is {product_root}", flush=True)
             if _job_top:
                 _product_issues.append({
                     "code": "product_is_the_jobs_top_assembly",
@@ -3657,7 +3691,8 @@ def apply_canonical_evidence_to_parts(
     # cascade lost. One classification per job, consulted by every compile.
     graph = build_part_graph(parts, llm_extract, bom_rows, known_assemblies, page_owner,
                              pack_mode=_detect_pack_mode(summary or {}),
-                             declared_product=declared_product_of(summary or {}))
+                             declared_product=declared_product_of(summary or {}),
+                             source_names=source_names_of(summary or {}))
     # THE EVIDENCE, FILED AT THE FIRST DROP. The refresh recompile may never re-mint the
     # chimera's identity (its record is already gone from the parts), so if this call
     # does not file the quarantine on the summary, the pack-completeness invariant still
@@ -3874,6 +3909,18 @@ def declared_product_of(summary: Optional[Mapping[str, Any]]) -> str:
         if _v:
             return _v
     return str(os.environ.get("SDI_PRODUCT") or "").strip()
+
+
+def source_names_of(summary: Optional[Mapping[str, Any]]) -> List[str]:
+    """The names of the drawing files this job was given, as the scan recorded them — what
+    the product resolver reads a pack's filing from (D-584). Empty when nothing was recorded."""
+    out: List[str] = []
+    if isinstance(summary, Mapping):
+        for e in (summary.get("job_source_pdfs") or []):
+            n = e.get("name") if isinstance(e, Mapping) else e
+            if n:
+                out.append(str(n).replace("\\", "/").rsplit("/", 1)[-1])
+    return out
 
 
 def outside_product_identities(issues: Any) -> Dict[str, str]:
@@ -4374,7 +4421,8 @@ def compile_route_without_pricing(summary: Dict[str, Any]) -> Dict[str, Any]:
         job_drawing_numbers(summary),
         _assembly_page_owners(summary),
         pack_mode=_detect_pack_mode(summary),
-        declared_product=declared_product_of(summary))
+        declared_product=declared_product_of(summary),
+        source_names=source_names_of(summary))
     payload = {
         "schema": compiled.get("schema"),
         # NOT "shadow". A costed run publishes mode "shadow", meaning "compiled beside the
@@ -4447,7 +4495,8 @@ def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dic
                                  job_drawing_numbers(summary),
                                  _assembly_page_owners(summary),
                                  pack_mode=_pack_mode,
-                                 declared_product=declared_product_of(summary))
+                                 declared_product=declared_product_of(summary),
+                                 source_names=source_names_of(summary))
     # THE DROP, AFTER THE LAST READER AS WELL AS BEFORE THE FIRST. The pre-cost pass
     # quarantines the zipped-BOM-row chimera, and the dual-path reconciler then re-adds
     # its row from the raw table read — which is how a part the log twice said was
@@ -4485,7 +4534,8 @@ def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dic
                                      job_drawing_numbers(summary),
                                      _assembly_page_owners(summary),
                                      pack_mode=_pack_mode,
-                                 declared_product=declared_product_of(summary))
+                                     declared_product=declared_product_of(summary),
+                                     source_names=source_names_of(summary))
     payload = project_priced_route(compiled, final_estimates)
     estimate_summary["canonical_route_shadow"] = payload
     summary["estimate_summary"] = estimate_summary
@@ -5113,11 +5163,13 @@ def compile_job_route(
     finish_text_by_pn: Optional[Mapping[str, str]] = None,
     pack_mode: Optional[str] = None,
     declared_product: Optional[str] = None,
+    source_names: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     """Compile every route source into one job-level decision graph."""
     llm_extract = llm_extract or {}
     graph = build_part_graph(parts, llm_extract, bom_rows, known_assemblies, page_owner,
-                             pack_mode=pack_mode, declared_product=declared_product)
+                             pack_mode=pack_mode, declared_product=declared_product,
+                             source_names=source_names)
     raw: Dict[str, Mapping[str, Any]] = graph["raw"]
     kinds = {node.part_number: node.kind for node in graph["nodes"]}
     graph_quantities = graph["quantities"]

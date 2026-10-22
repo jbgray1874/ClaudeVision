@@ -135,6 +135,9 @@ _OURS = {
     # quantity, or a quantity multiplied twice along its edges (D-582): the engine held the
     # fact and lost it or doubled it on the way to the sheet — ours.
     "material_quantity_charge_unverified",
+    # A parts-list row carrying less than its sheet prints with no recognised arrangement to
+    # say why (D-584): the engine's own rule divided it — ours.
+    "printed_quantity_divided_without_evidence",
     "removed_identity_on_the_sheet",
     "priced_identity_outside_published_graph",
     "two_roots_price_the_same_members",

@@ -3905,9 +3905,19 @@ def _finalize_scan_summary(
         if _bt.get("install_context_decision"):
             print(f"   [bom_tree] {_bt['install_context_decision']}", flush=True)
         for _f in (_bt.get("flags") or []):
-            if _f.get("severity") == "info" and "install context" in str(_f.get("detail")):
+            if _f.get("severity") in ("info", "warning") and "install context" in str(_f.get("detail")):
                 print(f"   [bom_tree] {_f['detail']}", flush=True)
                 summary.setdefault("review_flags", []).append(_f)
+        # THE DECISION IS ON THE RECORD, NOT ONLY ON THE CONSOLE (D-584): a divided row must
+        # be able to point at the evidence that divided it.
+        summary["install_context"] = {
+            "recognised": bool(_bt.get("install_context")),
+            "codes": sorted(_bt.get("install_context") or {}),
+            "n": (next(iter(set((_bt.get("install_context") or {}).values())), 1)
+                  if _bt.get("install_context") else 1),
+            "general_arrangement": _bt.get("main_ga") or "",
+            "decision": _bt.get("install_context_decision") or "",
+        }
         if _effmap:
             _parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
             # THE CODES THE TREE AGREED WITH, NAMED. Agreement printed nothing, so once the tree
@@ -4000,6 +4010,15 @@ def _finalize_scan_summary(
                             _row["quantity_note"] = (
                                 f"the general arrangement prints {_q}; it shows {_n} "
                                 f"arrangements, so one arrangement takes {_q // _n}")
+                            # THE EVIDENCE TRAVELS WITH THE ROW (D-584): which drawing was
+                            # taken as the arrangement, which codes of its own numbering it
+                            # showed N times, and the rule's own sentence. A divided row that
+                            # cannot point at this is a divided row with no reason, and the
+                            # invariant says so.
+                            _row["quantity_evidence"] = {
+                                "general_arrangement": _main, "divided_by": _n,
+                                "arrangement_codes": sorted(_ctx),
+                                "decision": _bt.get("install_context_decision") or ""}
                             # A BOM ROW IS A READING, NOT AN ARBITRATED PART RECORD.
                             # apply_field ranks competing CLAIMS about a part; this is
                             # arithmetic on the drawing's own row, correcting the child edge

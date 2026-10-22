@@ -885,6 +885,7 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         page_lookup[pnum] = {
             "text": merged,
             "role": (page.get("page_role") or {}).get("primary_role", ""),
+            "page": page,          # the sheet itself, for its figures (D-584)
         }
         if os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"} and "PETG" in merged.upper():
             bom = (page.get("region_text") or {}).get("bom") or ""
@@ -1052,6 +1053,25 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                                                 "SECTION", "BAR", "ROD", "UPRIGHT", "LEG",
                                                 "RAIL", "POST"))
                 )
+                # THE PART'S OWN PRINTED ROW SAYS WHAT STOCK IT IS (D-584). A canonical
+                # "30X20X2MM … TUBE" anywhere on a SHARED sheet was offered to every part on
+                # it, and four 2 mm top blanks became 20 x 30 x 2 tube. The row the parts list
+                # prints for THIS part is the authority on its stock: a row stating a section
+                # takes the profile; a row stating a plain gauge ("2 mm", "MILD STEEL - RAW")
+                # with no section word is sheet, and the callout is another part's. A sheet
+                # bound to this part alone (its own detail page) still speaks for it.
+                _own_row = " ".join(str(part.get(k) or "") for k in
+                                    ("material_text_as_printed", "dimension", "stock_size",
+                                     "bom_dimension")).upper()
+                _row_says_section = any(w in _own_row for w in
+                                        ("TUBE", "RHS", "SHS", "CHS", "BOX", "SECTION", "BAR",
+                                         "ROD", "ANGLE", "CHANNEL"))
+                _row_says_sheet = bool(_own_row) and not _row_says_section and bool(
+                    re.search(r"\b\d+(?:\.\d+)?\s*MM\b", _own_row)) and not re.search(
+                    r"\d\s*X\s*\d+(?:\.\d+)?\s*X\s*\d", _own_row)
+                _detail_pages = [pn for pn in page_nums if pn in page_lookup
+                                 and str(page_lookup[pn].get("role") or "") == "detail"]
+                _shared = len(page_nums) != 1 or len(_detail_pages) != 1
                 if _measured_flat:
                     part.setdefault("review_flags", []).append(
                         f"section '{_path}' read from this part's page text was NOT applied — "
@@ -1062,7 +1082,31 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                         f"section '{_path}' read from this part's page text was NOT applied — "
                         f"nothing about this part says it is section stock, and the callout is "
                         f"shared page text that describes a different part on the drawing")
+                elif _shared and _row_says_sheet and not _looks_like_section:
+                    part.setdefault("review_flags", []).append(
+                        f"section '{_path}' read from a shared page was NOT applied — this "
+                        f"part's own parts-list row states a sheet gauge ({_own_row.strip()}) "
+                        f"and no section, so the callout is another part's on the same drawing")
                 else:
+                    # THE CUT LENGTH IS THE SHEET'S FIGURE, NOT A NUMBER IN ITS PROSE (D-584):
+                    # on a part's own detail page the largest leading figure printed along an
+                    # axis is its length — 703 for the cross rail, 1395 for the upright —
+                    # where the text read gave the date, the drawing number or nothing.
+                    if len(_detail_pages) == 1 and len(page_nums) == 1:
+                        try:
+                            from detail_page_geometry import read_sheet_figures as _figs
+                            _fig = _figs(page_lookup[_detail_pages[0]].get("page") or {})
+                            _vals = [v for v, _a in (_fig.get("figures") or [])]
+                            _long = max(_vals) if _vals else None
+                            _side = max(float(_sec.get("a") or 0), float(_sec.get("b") or 0))
+                            if _long and _long >= _side * 2:
+                                _text_len = _sec.get("length_mm")
+                                if _text_len is None or abs(float(_text_len) - _long) > 1.0:
+                                    _sec = dict(_sec, length_mm=_long,
+                                                length_source="detail_sheet_figure",
+                                                length_from_text=_text_len)
+                        except Exception:                            # noqa: BLE001
+                            pass
                     part["section_stock"] = _sec
 
         geo_reliability = float(

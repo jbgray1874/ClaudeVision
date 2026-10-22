@@ -92,9 +92,15 @@ def customer_filing(stem: Any) -> Dict[str, str]:
     hyphen inside a drawing number (ROL2021-2465-00) never splits it."""
     text = str(stem or "").strip()
     ref = _job_number_with_title(text)
+    rest = text[len(ref):].strip(" -_") if ref else ""
     if not ref:
-        return {}
-    rest = text[len(ref):].strip(" -_")
+        # The reference with a role token glued on, "0351292-GA-UNIVERSAL …": the estimator's
+        # own filing of the same pack. The role says assembly; the title follows it.
+        m = re.match(r"^(\d{4,7})[\s_\-]+([A-Za-z]{2,10})(?=[\s_\-])(.*)$", text)
+        if not (m and m.group(2).upper() in ASSEMBLY_ROLE_TOKENS
+                and _TITLE_AFTER_NUMBER.match(m.group(3) or "")):
+            return {}
+        ref, rest = m.group(1), m.group(3).strip(" -_")
     tokens = [t for t in re.split(r"(?<=[A-Za-z])[\s_\-]+|[\s_]+", rest) if t]
     last = tokens[-1] if tokens else ""
     if (len(tokens) >= 2 and _CUSTOMER_DRAWING_NUMBER.match(last)
@@ -248,7 +254,9 @@ def drawing_of_file(name: Any) -> Dict[str, Any]:
     # drawing number after the title it is the job's top sheet, "<job number> - <title>".
     reference = ""
     filing = customer_filing(stem) if not top_sheet else {}
-    if filing and (not looks_like_a_drawing_number(number) or _job_number_with_title(number)):
+    _opens_with_ref = bool(filing) and bool(
+        re.match(rf"^{re.escape(filing['reference'])}(?:[\s_\-]|$)", number))
+    if filing and (not looks_like_a_drawing_number(number) or _opens_with_ref):
         number, parts, top_sheet = filing["number"], [filing["number"], filing["title"]], True
         reference = filing["reference"] if filing["number"] != filing["reference"] else ""
     elif not looks_like_a_drawing_number(number):
@@ -406,9 +414,10 @@ def resolve_product(declared: Any, file_names: Sequence[Any],
                            "Number cannot be checked before the run."}
     # The customer's reference names the pack filed under it (D-583): "0351292" and
     # "ROL2021-2465-00" both name the Midfloor rail.
+    # "0351292-GA" typed is the reference with a role: the same pack.
     matches = [d for k, d in drawings.items()
                if names_the_product(declared_s, d["number"])
-               or (job_number_only(declared_s) and d.get("reference") == declared_s)]
+               or (d.get("reference") and _key(declared_s) == _key(d["reference"]))]
     assemblies = sorted((d for d in drawings.values() if d["is_assembly"]),
                         key=lambda d: d["number"])
 

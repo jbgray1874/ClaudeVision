@@ -1177,7 +1177,12 @@ def _catalogue_row_is_a_made_part(code: Any, desc: Any,
     code_s = str(code or "").strip()
     if own and _pcc.bare_code(code_s) == own:
         return ""
-    if code_s and _pcc.looks_like_a_drawing_number(code_s):
+    # A JOB'S NUMBERING OPENS WITH DIGITS; A SUPPLIER'S STOCK CODE OPENS WITH ITS NOUN. The
+    # shape test admits a letter prefix now (D-584: ROL2021-2466 is a drawing), and a stock
+    # code written SHS30302-75 or BOX30302-6 fits that wider shape too. It is the digit-led
+    # shape — somebody's job number and its segments — that marks another drawing's made
+    # part; a letter-led code on a catalogue row is the catalogue's own article.
+    if code_s and code_s[0].isdigit() and _pcc.looks_like_a_drawing_number(code_s):
         return f"its code {code_s} is a drawing number"
     du = str(desc or "").upper()
     try:
