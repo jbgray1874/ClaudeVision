@@ -4136,8 +4136,11 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
     # AI Explanation tab are written before the checks run, and printed "25 to settle" with
     # no word of the eleven failing checks the report then added. Said, not counted: the
     # headline stays the sum of the phrase.
-    _unseen = ("; the consistency checks had not run when this was counted — the report's "
-               "total adds any check they raise" if _rel.get("checks_ran") is False and bits else "")
+    # AND IT NAMES ITSELF (D-580): a provisional count at workbook population, never a
+    # verdict — the report, built after the checks, carries the final release status.
+    _unseen = ("; a provisional count at workbook population — the consistency checks had not "
+               "run when this was counted; the report carries the final release status and "
+               "adds any check they raise" if _rel.get("checks_ran") is False and bits else "")
     # AND WHAT THEY ARE, NOT ONLY HOW MANY. "4 prices missing + 1 market figure to replace +
     # 2 manufacturing decisions" is a number an estimator cannot act on: he has to open the
     # workbook and hunt for which four. Every one of those rows already knows its own part,
