@@ -153,7 +153,13 @@ def audit(summary: Dict[str, Any], snapshot: Optional[Dict[str, Any]] = None) ->
     if final.get("adapter_problems"):
         fail("workbook_readback_incomplete", problems=final["adapter_problems"])
     es = summary.get("estimate_summary") or {}
-    estimates = es.get("canonical_part_estimates") or es.get("part_estimates") or []
+    # An empty canonical population is evidence of loss, not permission to revive
+    # a pre-canonical population. Duplicate identities must never overwrite silently.
+    estimates = (es.get("canonical_part_estimates") if "canonical_part_estimates" in es
+                 else es.get("part_estimates")) or []
+    for pn, count in Counter(key(p.get("part_number")) for p in estimates if isinstance(p, dict)).items():
+        if not pn or count != 1:
+            fail("canonical_part_identity_missing_or_duplicate", pn, count=count)
     costs = {key(p.get("part_number")): p for p in estimates if isinstance(p, dict)}
     raw = {key(p.get("part_number")): p for p in
            (summary.get("manufacturing_writeup") or {}).get("parts", []) if isinstance(p, dict)}
@@ -168,8 +174,8 @@ def audit(summary: Dict[str, Any], snapshot: Optional[Dict[str, Any]] = None) ->
         for address, count in Counter(addresses).items():
             if not address or count != 1:
                 fail("charged_cell_missing_or_repeated", cell=address, block=label)
-        amounts = [number(r.get("total_value_gbp")) for r in rows]
-        total = number((final.get("totals") or {}).get(total_key))
+        amounts = [cached_number(r.get("total_value_gbp")) for r in rows]
+        total = cached_number((final.get("totals") or {}).get(total_key))
         if any(a is None for a in amounts) or total is None:
             fail("calculated_value_missing", block=label)
         elif not math.isclose(sum(amounts), total, rel_tol=0, abs_tol=0.02):
@@ -178,7 +184,7 @@ def audit(summary: Dict[str, Any], snapshot: Optional[Dict[str, Any]] = None) ->
             for row in rows:
                 cell = row.get("charged_cell")
                 actual = cached_number(snapshot["cells"].get(cell))
-                recorded = number(row.get("total_value_gbp"))
+                recorded = cached_number(row.get("total_value_gbp"))
                 if actual is None or recorded is None or not math.isclose(actual, recorded, rel_tol=0, abs_tol=0.0001):
                     fail("saved_cell_differs_from_readback", cell=cell, actual=actual, recorded=recorded)
             total_label = "TOTAL MATERIAL COST" if label == "material" else "TOTAL LABOUR COST"
@@ -221,8 +227,8 @@ def audit(summary: Dict[str, Any], snapshot: Optional[Dict[str, Any]] = None) ->
                 fail("section_material_row_missing_or_duplicate", pn, matches=len(hits), source=req.get("source"))
             else:
                 row = hits[0]
-                count = number(row.get("qty_per_unit"))
-                money = number(row.get("total_value_gbp"))
+                count = cached_number(row.get("qty_per_unit"))
+                money = cached_number(row.get("total_value_gbp"))
                 trace.update(charged_quantity=count, charged_gbp=money)
                 if snapshot is not None:
                     cells = snapshot["cells"]
@@ -244,8 +250,8 @@ def audit(summary: Dict[str, Any], snapshot: Optional[Dict[str, Any]] = None) ->
                 if money is None or money <= 0:
                     fail("section_material_not_charged", pn, cell=row.get("charged_cell"))
                 # The sheet's own rate at this quantity, not another break's engine rate.
-                rate = number(row.get("unit_price_gbp"))
-                scrap = 0 if row.get("scrap_pct") is None else number(row.get("scrap_pct"))
+                rate = cached_number(row.get("unit_price_gbp"))
+                scrap = 0 if row.get("scrap_pct") is None else cached_number(row.get("scrap_pct"))
                 if rate is None or count is None or scrap is None or rate <= 0 or scrap < 0:
                     fail("section_rate_basis_missing", pn)
                 elif money is None or not math.isclose(rate * count * (1 + scrap), money, rel_tol=0, abs_tol=0.02):
@@ -259,8 +265,8 @@ def audit(summary: Dict[str, Any], snapshot: Optional[Dict[str, Any]] = None) ->
             saws = [r for r in labour if pn in tokens(r.get("part_numbers"))
                     and r.get("workbook_row") in cut_row_numbers]
             trace["cut_cells"] = [r.get("charged_cell") for r in saws]
-            if not saws or not any((number(r.get("total_value_gbp")) or 0) > 0 and
-                                   (number(r.get("batch_hours")) or 0) > 0 for r in saws):
+            if not saws or not any((cached_number(r.get("total_value_gbp")) or 0) > 0 and
+                                   (cached_number(r.get("batch_hours")) or 0) > 0 for r in saws):
                 fail("section_cut_not_charged", pn, source=req.get("source"))
             elif snapshot is not None:
                 for cut in saws:
