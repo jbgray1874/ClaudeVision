@@ -106,10 +106,10 @@ def test_the_snapshot_names_whose_lookup_failed(dirs, monkeypatch):
     """The push needs WHO, not just how many, to tell unknown from absent."""
     monkeypatch.setattr(cfg, "HR_OUTPUT_DIR", "")
     monkeypatch.setattr(hr_blip, "_get_token", lambda: "t")
-    monkeypatch.setattr(hr_blip, "_current_staff", lambda token: ([
+    monkeypatch.setattr(hr_blip, "_current_staff", lambda token: [
         {"id": "BH-1", "first_name": "John", "surname": "Smith", "email": "j@wearesdi.com"},
         {"id": "BH-2", "first_name": "Pat", "surname": "Example", "email": "p@wearesdi.com"},
-    ], None))
+    ])
 
     def query(token, employee_id, from_dt, throttle=None):
         if employee_id == "BH-1":
@@ -126,16 +126,22 @@ def test_the_snapshot_names_whose_lookup_failed(dirs, monkeypatch):
 
 # ── who gets asked about ──────────────────────────────────────────────────────
 # A person clocked in on Blip but missing from the staff list is never asked
-# about, so never appears on site. The list used to be a saved file that only a
-# manual pull refreshed, and it dropped anyone without an email address.
+# about, so never appears on site. The list used to be a saved file, months old,
+# that dropped anyone without an email address. Now it is BrightHR's own list,
+# read every run, and there is no saved list to fall back on.
 
 def _brighthr(monkeypatch, raw=None, error=None):
     import hr_brighthr as bh
+    calls = []
+
     def fetch(token):
+        calls.append(token)
         if error:
             raise bh.BrightHRError(error)
         return raw
     monkeypatch.setattr(bh, "fetch_employees", fetch)
+    monkeypatch.setattr(hr_blip, "STAFF_LIST_PAUSE", 0)
+    return calls
 
 
 def test_staff_without_an_email_are_still_asked_about(monkeypatch):
@@ -145,14 +151,12 @@ def test_staff_without_an_email_are_still_asked_about(monkeypatch):
         {"id": "BH-3", "firstName": "Lee", "lastName": "Leaver", "isTerminated": True},
     ])
 
-    staff, warning = hr_blip._current_staff("t")
+    staff = hr_blip._current_staff("t")
 
     assert [e["id"] for e in staff] == ["BH-1", "BH-2"]                        # not the leaver
-    assert warning is None
 
 
-def test_a_new_starter_is_asked_about_without_a_manual_pull(dirs, monkeypatch):
-    # The saved list predates them; BrightHR's own list does not.
+def test_a_new_starter_is_asked_about_and_an_old_saved_list_is_ignored(dirs, monkeypatch):
     (dirs / "latest.json").write_text(json.dumps({"records": [
         {"id": "BH-1", "first_name": "Jo", "surname": "Office", "email": "jo@wearesdi.com"}]}),
         encoding="utf-8")
@@ -161,31 +165,38 @@ def test_a_new_starter_is_asked_about_without_a_manual_pull(dirs, monkeypatch):
         {"id": "BH-9", "firstName": "New", "lastName": "Starter", "email": "new@wearesdi.com"},
     ])
 
-    staff, _ = hr_blip._current_staff("t")
+    staff = hr_blip._current_staff("t")
 
-    assert "BH-9" in [e["id"] for e in staff]
+    assert [e["id"] for e in staff] == ["BH-1", "BH-9"]
 
 
-def test_if_brighthr_s_staff_list_fails_the_saved_list_is_used_and_said(dirs, monkeypatch):
+def test_if_brighthr_s_staff_list_cannot_be_read_the_check_fails_after_retrying(dirs, monkeypatch):
+    # A saved list on disk is not used, however tempting.
     (dirs / "latest.json").write_text(json.dumps({"records": [
         {"id": "BH-1", "first_name": "Jo", "surname": "Office", "email": "jo@wearesdi.com"}]}),
         encoding="utf-8")
-    _brighthr(monkeypatch, error="429 Too Many Requests")
+    calls = _brighthr(monkeypatch, error="429 Too Many Requests")
 
-    staff, warning = hr_blip._current_staff("t")
+    with pytest.raises(RuntimeError) as exc:
+        hr_blip._current_staff("t")
 
-    assert [e["id"] for e in staff] == ["BH-1"]
-    assert "saved list" in warning and "429" in warning
+    assert len(calls) == hr_blip.STAFF_LIST_ATTEMPTS
+    assert "429" in str(exc.value) and "nothing was changed" in str(exc.value)
 
 
-def test_the_fallback_warning_reaches_the_run_summary(dirs, monkeypatch):
-    monkeypatch.setattr(cfg, "HR_OUTPUT_DIR", "")
+def test_an_empty_staff_list_fails_rather_than_reporting_an_empty_building(monkeypatch):
+    _brighthr(monkeypatch, raw=[])
+
+    with pytest.raises(RuntimeError, match="came back empty"):
+        hr_blip._current_staff("t")
+
+
+def test_a_failed_staff_list_leaves_the_last_on_site_snapshot_alone(dirs, monkeypatch):
+    (dirs / "blip_latest.json").write_text('{"previous": true}', encoding="utf-8")
     monkeypatch.setattr(hr_blip, "_get_token", lambda: "t")
-    monkeypatch.setattr(hr_blip, "_current_staff", lambda token: (
-        [{"id": "BH-1", "first_name": "Jo", "surname": "Office", "email": ""}],
-        "BrightHR's staff list could not be read (x); checked the saved list of 1 instead"))
-    monkeypatch.setattr(hr_blip, "_query_one", lambda *a, **k: ([], True))
+    _brighthr(monkeypatch, error="503 Service Unavailable")
 
-    summary = hr_blip.run_blip()
+    with pytest.raises(RuntimeError):
+        hr_blip.run_blip()
 
-    assert any("saved list" in w for w in summary["warnings"])
+    assert json.loads((dirs / "blip_latest.json").read_text(encoding="utf-8")) == {"previous": True}
