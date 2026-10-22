@@ -334,6 +334,12 @@ class PartNode:
     # frames 202 and 203, 8 + 8 = 16; the ticket strip under the pocket ×8 and the rack ×1).
     # Empty for a root, and on a summary compiled before it existed.
     qty_by_parent: Dict[str, float] = field(default_factory=dict)
+    # WHAT THOSE TWO FIGURES ARE, said on the record (D-582): qty_per_unit is per finished
+    # product, and qty_by_parent is ALREADY the rolled contribution through that parent — not
+    # the local edge multiplier. A consumer that multiplied it by the parent's quantity again
+    # would double every sub-assembly; quantity_flow_contract checks against these labels.
+    qty_per_unit_basis: str = "per_finished_product"
+    qty_by_parent_basis: str = "rolled_contribution_per_finished_product"
     parents: List[str] = field(default_factory=list)
     children: List[ChildEdge] = field(default_factory=list)
     evidence: Dict[str, Any] = field(default_factory=dict)

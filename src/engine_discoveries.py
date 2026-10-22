@@ -131,6 +131,10 @@ _OURS = {
     # A cut list the sheet prints that the bill does not price in full (D-576): the sheet
     # said it, the engine lost it on the way to the workbook — ours.
     "section_schedule_not_priced",
+    # A measured blank or a bought item the calculated book does not carry at the graph's
+    # quantity, or a quantity multiplied twice along its edges (D-582): the engine held the
+    # fact and lost it or doubled it on the way to the sheet — ours.
+    "material_quantity_charge_unverified",
     "removed_identity_on_the_sheet",
     "priced_identity_outside_published_graph",
     "two_roots_price_the_same_members",
