@@ -954,12 +954,19 @@ def open_items(summary: Dict[str, Any]) -> int:
     headline prints (costed_facts.outstanding_summary), never a count of this page's own
     (D-580). It is the record's `release.outstanding` (the rows that make the quotation a
     draft) plus the advisory items the report also lists — an SDI house rate marked
-    INDICATIVE to verify — so the quotation and the report say the same number."""
+    INDICATIVE to verify — so the quotation and the report say the same number.
+
+    -1 MEANS UNKNOWN, NOT NOUGHT (D-581): a reporting failure cannot assert that nothing is
+    open, and a count that is not a whole number is not a count. The page then says the
+    number could not be read rather than claiming a settled estimate."""
     try:
-        from costed_facts import costed_job, outstanding_summary
-        return max(0, int(_num(outstanding_summary(costed_job(summary)).get("total")) or 0))
+        from costed_facts import outstanding_summary
+        count = outstanding_summary(summary)["total"]
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            return -1
+        return count
     except Exception:                                                # noqa: BLE001
-        return 0
+        return -1
 
 
 def _sourced_words(facts: Dict[str, Any]) -> str:
@@ -969,6 +976,9 @@ def _sourced_words(facts: Dict[str, Any]) -> str:
     estimate — the sources and assumptions are recorded in it — and, on a draft, how many
     items are being confirmed, in a customer's words."""
     n = int(facts.get("open_items") or 0)
+    if n < 0:
+        return ("Nested sheets and departmental rates; sources and assumptions recorded in the "
+                "estimate. The number of items still being confirmed could not be read.")
     if n <= 0:
         return "Nested sheets and departmental rates; sources and assumptions recorded in the estimate."
     return (f"Nested sheets and departmental rates; {_g(n)} item{'s' if n != 1 else ''} "
@@ -977,6 +987,9 @@ def _sourced_words(facts: Dict[str, Any]) -> str:
 
 def _traced_words(facts: Dict[str, Any]) -> str:
     n = int(facts.get("open_items") or 0)
+    if n < 0:
+        return ("kept its working, with its sources and assumptions recorded in the estimate; the "
+                "number of items still being confirmed could not be read.")
     if n <= 0:
         return "kept its working, with its sources and assumptions recorded in the estimate."
     return (f"kept its working, with its sources and assumptions recorded in the estimate; "

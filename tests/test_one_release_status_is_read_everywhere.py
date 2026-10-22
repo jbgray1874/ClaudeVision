@@ -106,7 +106,7 @@ def test_open_items_are_the_records_not_a_count_of_our_own():
     assert quote_story.open_items(_job(draft=True)) >= 1
     src = (ROOT / "src" / "quote_story.py").read_text(encoding="utf-8")
     assert 'facts["open_items"] = open_items(summary)' in src
-    assert "outstanding_summary(costed_job(summary))" in src
+    assert 'count = outstanding_summary(summary)["total"]' in src
 
 
 def test_the_quote_counts_what_the_report_counts_including_an_indicative_rate():
