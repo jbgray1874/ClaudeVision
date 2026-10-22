@@ -138,6 +138,9 @@ _OURS = {
     # A parts-list row carrying less than its sheet prints with no recognised arrangement to
     # say why (D-584): the engine's own rule divided it — ours.
     "printed_quantity_divided_without_evidence",
+    # A charged line under a bare standard prefix, or one article charged under two names
+    # (D-584): the engine's reader cut the identity — ours.
+    "charged_identity_collision",
     "removed_identity_on_the_sheet",
     "priced_identity_outside_published_graph",
     "two_roots_price_the_same_members",

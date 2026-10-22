@@ -276,9 +276,21 @@ class ACutLengthIsADimensionNotTheNextNumberOnThePage(unittest.TestCase):
     def test_a_shared_pages_profile_needs_the_parts_own_row_and_the_length_is_the_sheets_figure(self):
         text = (ROOT / "src" / "document_builder.py").read_text(encoding="utf-8")
         guard = text.index("_row_says_sheet")
-        self.assertIn("NOT applied", text[guard:guard + 2500])
-        self.assertIn("read_sheet_figures", text[guard:guard + 4000])
-        self.assertIn('"detail_sheet_figure"', text[guard:guard + 4000])
+        self.assertIn("NOT applied", text[guard:guard + 3500])
+        self.assertIn("read_sheet_figures", text[guard:guard + 5000])
+        self.assertIn('"detail_sheet_figure"', text[guard:guard + 5000])
+        # Fourth tranche: the part's own detail sheet refuses a shared profile without a
+        # row, and one detail sheet is enough for the figure path.
+        self.assertIn("_own_detail_silent", text[guard:guard + 3500])
+        self.assertIn("if len(_detail_pages) == 1:", text[guard:guard + 5000])
+        self.assertNotIn("if len(_detail_pages) == 1 and len(page_nums) == 1:", text)
+
+    def test_a_designation_a_range_and_a_decimal_comma_are_read_as_they_are(self):
+        import section_profile as sp
+        self.assertEqual(sp.detect_section_stock("• 304 - STAINLESS STEEL 30X30X2MM TUBE 1395")["length_mm"], 1395.0)
+        self.assertEqual(sp.detect_section_stock("30X30X2MM TUBE BETWEEN 80 - 120 MICRON 1395")["length_mm"], 1395.0)
+        self.assertEqual(sp.detect_section_stock("MILD STEEL RECT TUBE - RAW 50X20X2MM 154,5 50")["length_mm"], 154.5)
+        self.assertEqual(sp.detect_section_stock("30X30X2MM TUBE 1125 - 2 OFF")["length_mm"], 1125.0)
 
 
 class APartsListMaySitAboveItsHeader(unittest.TestCase):
@@ -335,6 +347,22 @@ class APartsListMaySitAboveItsHeader(unittest.TestCase):
         self.assertIn(("3", "ROL2021-2402", 2, "30X30X2MM"), got)
         self.assertIn(("5", "ROL2021-2406", 1, "3 mm"), got)
         self.assertEqual(len(out["rows"]), 6)
+        # The customer's numbering is a drawing reference here as everywhere (the reader's
+        # private digit-led regex had called the rail and the supports bought-in), and a
+        # supplier article keeps its whole designation — never a bare "DIN".
+        kinds = {r.get("part_number") or r.get("part_ref"): r["kind"] for r in out["rows"]}
+        self.assertEqual(kinds["ROL2021-2468"], "drawing_ref")
+        self.assertEqual(kinds["651.02.909"], "bought_in")
+
+    def test_a_designation_is_read_whole_and_a_bare_prefix_is_no_code(self):
+        from bom_table_extractor import _classify_part_ref
+        self.assertEqual(_classify_part_ref("ROL2021-2466"), ("drawing_ref", "ROL2021-2466"))
+        self.assertEqual(_classify_part_ref("12349-02-69-100")[0], "drawing_ref")
+        self.assertEqual(_classify_part_ref("DIN 7991 - M3 x 10"), ("bought_in", "DIN 7991 - M3 x 10"))
+        self.assertEqual(_classify_part_ref("DIN"), ("bought_in", ""))
+        self.assertEqual(_classify_part_ref("ISO"), ("bought_in", ""))
+        self.assertEqual(_classify_part_ref("Clinch Nut"), ("bought_in", "Clinch Nut"))
+        self.assertEqual(_classify_part_ref("FIXING49"), ("bought_in", "FIXING49"))
 
     def test_the_general_arrangement_is_the_sheet_no_other_sheet_lists(self):
         rows = [dict(part_number=c, quantity=q, source_pdf=BASE, bom_parent=BASE)
@@ -342,6 +370,30 @@ class APartsListMaySitAboveItsHeader(unittest.TestCase):
         rows += [r for r in rows_like_the_rail() if r["source_pdf"] == GA]
         out = bt.resolve_effective_quantities(rows)
         self.assertEqual(out["main_ga"], GA)      # not the base, whose rows were read first
+
+
+class AChargedIdentityIsWholeAndChargedOnce(unittest.TestCase):
+    def test_a_bare_prefix_and_a_double_charge_block_and_distinct_standards_do_not(self):
+        from invariants import BLOCKING, CHECKS, check_a_charged_identity_is_whole_and_charged_once as check
+        from engine_discoveries import _OURS
+        bad = {"final_estimate": {"material_rows": [
+            {"part_code": "ISO", "description": "Hexagon Socket Button Head Screw", "total_value_gbp": 124.8},
+            {"part_code": "ISO7380-1-M8X16", "description": "Hexagon Socket Button Head Screw", "total_value_gbp": 1.87},
+            {"part_code": "DIN", "description": "Hex Nut", "total_value_gbp": 3.09}]}}
+        out = check(bad)
+        self.assertEqual(out[0]["code"], "charged_identity_collision")
+        self.assertEqual(out[0]["severity"], BLOCKING)
+        self.assertIn("'ISO'", out[0]["message"])
+        self.assertIn("'DIN'", out[0]["message"])
+        good = {"final_estimate": {"material_rows": [
+            {"part_code": "DIN7980-8", "description": "Spring Washer", "total_value_gbp": 1.12},
+            {"part_code": "DIN7991-M3 X 10", "description": "Countersunk Screw", "total_value_gbp": 0.56},
+            {"part_code": "DIN934-M10", "description": "Hex Nut", "total_value_gbp": 0.56},
+            {"part_code": "ISO7380-1-M8X16", "description": "Button Head Screw", "total_value_gbp": 1.87},
+            {"part_code": "ROL2021-2402", "description": "UPRIGHT", "total_value_gbp": 37.2}]}}
+        self.assertEqual(check(good), [])
+        self.assertIn(check, CHECKS)
+        self.assertIn("charged_identity_collision", _OURS)
 
 
 class TheRunResolvesWhatThePageAccepted(unittest.TestCase):

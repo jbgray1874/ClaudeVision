@@ -50,6 +50,13 @@ except Exception:
     def _classify_part_ref(raw: str):
         s = _clean(raw)
         joined = re.sub(r"\s*-\s*", "-", s).strip("-")
+        try:
+            if " " not in joined and part_code_conventions.looks_like_a_drawing_number(joined):
+                return "drawing_ref", _normalize_bom_code(s)
+            if s.isalpha() and part_code_conventions.is_supplier_article(s + "1"):
+                return "bought_in", ""
+        except Exception:                                            # noqa: BLE001
+            pass
         if " " not in joined and re.match(r"^\d{3,}(?:-[A-Z0-9]+)+$", joined, re.I):
             return "drawing_ref", _normalize_bom_code(s)
         return "bought_in", s
@@ -269,7 +276,12 @@ def _parse_row_by_regions(row: List[dict], anchors: Dict[str, float]) -> Optiona
     """
     order = sorted(anchors.items(), key=lambda kv: kv[1])
     lo_bound = order[0][1] - 25.0
-    hi_bound = order[-1][1] + 60.0
+    # THE LAST COLUMN IS AS WIDE AS ITS CELLS (D-584). Sixty points past the last anchor cut
+    # "DIN 7991 - M3 x 10" to "DIN" on a table whose DRAWING column is the rightmost, and
+    # the bare prefix became a chargeable line beside the full designation the other reader
+    # read. The last region runs to the table's edge; a lone letter or digit out there is a
+    # grid label and is left where it is.
+    hi_bound = order[-1][1] + 240.0
     regions: Dict[str, Tuple[float, float]] = {}
     for i, (name, x) in enumerate(order):
         lo = lo_bound if i == 0 else (x + order[i - 1][1]) / 2.0
@@ -280,6 +292,8 @@ def _parse_row_by_regions(row: List[dict], anchors: Dict[str, float]) -> Optiona
         x = w["x0"]
         if not (lo_bound <= x <= hi_bound):
             continue                      # grid labels / edge notes outside the table
+        if x > order[-1][1] + 120.0 and re.fullmatch(r"[A-Z]", str(w.get("text") or "")):
+            continue                      # a sheet-edge grid letter beyond the last column
         for name, (lo, hi) in regions.items():
             if lo <= x < hi:
                 cells[name].append((x, w["text"]))
