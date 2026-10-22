@@ -111,7 +111,10 @@ def _is_section_stock(part: Mapping[str, Any]) -> bool:
         return True
     words = " ".join(str(part.get(k) or "") for k in
                      ("description", "material", "normalized_material", "dimension",
-                      "stock_size", "size", "bom_dimension", "profile"))
+                      "stock_size", "size", "bom_dimension", "profile",
+                      "material_text_as_printed", "bom_material", "size_text"))
+    words += " " + " ".join(str(m) for m in (part.get("materials") or []) if m)
+    words += " " + " ".join(str(c) for c in (part.get("material_text_as_printed_candidates") or []) if c)
     if not re.search(r"\d", words):
         return False
     try:

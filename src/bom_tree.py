@@ -467,7 +467,22 @@ def resolve_effective_quantities(
         # drawing, and on 12349-02 that put the GA's own row into `effective` as a part.
         def _fam_count(s: str) -> int:
             return len({f for f in (_family(r.get("part_number")) for r in groups[s]) if f})
-        main_ga = max(groups, key=_fam_count) if groups else ""
+        # THE GENERAL ARRANGEMENT IS THE SHEET NO OTHER SHEET LISTS (D-584). On a pack of one
+        # numbering every sheet references one family, the count ties, and the first sheet
+        # read won — the base sub-assembly, on the day. A sub-assembly's number appears as a
+        # row on its parent's table; the arrangement's never does. Then the most families,
+        # and on a tie the first sheet read, as before.
+        _listed = {_norm(r.get("part_number")) for rows_ in groups.values() for r in rows_}
+
+        def _ga_key(s: str) -> tuple:
+            own = _norm(s)
+            try:
+                from product_identity import drawing_of_file
+                own = _norm((drawing_of_file(s) or {}).get("number") or s)
+            except Exception:                                        # noqa: BLE001
+                pass
+            return (0 if own and own in _listed else 1, _fam_count(s))
+        main_ga = max(groups, key=_ga_key) if groups else ""
 
     sub_families = {
         _family(r.get("part_number"))

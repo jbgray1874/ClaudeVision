@@ -60,7 +60,10 @@ def test_the_words_come_from_the_record_and_the_prompt_keeps_the_drawing_and_ask
                              parts, product="1200 Rail - Chalk White")
     assert words.startswith("1200 Rail - Chalk White")
     assert "Mild Steel" in words and "Stainless Steel" in words
-    assert "powder coated" in words and "Chalk White" in words
+    # Each material carries its own finish (D-585): the painted frame and the brushed strip
+    # are not one finish.
+    assert "the mild steel powder coated chalk white" in words
+    assert "the stainless steel brushed" in words
     assert "about 1438 x 1298 x 450 mm" in words
     prompt = qr.render_prompt(words, "inside a Tesco store, on the shop floor", {}, from_drawing=True)
     assert "inside a Tesco store" in prompt and "generous clear space around it" in prompt
@@ -70,6 +73,62 @@ def test_the_words_come_from_the_record_and_the_prompt_keeps_the_drawing_and_ask
     # The first live picture drew a solid top on an open rail: an open frame stays open.
     assert "do not add a top, panel, surface or infill the drawing does not show" in prompt
     assert "a bar or a rail, it stays open" in prompt
+    # The picture is held to the stated finishes and the drawn members (D-585).
+    assert "a powder-coated part is painted in its stated colour" in prompt
+    assert "Do not add brackets, pins, plates, feet, castors or fixings" in prompt
+
+
+def test_the_construction_is_said_in_the_records_own_members():
+    """The first picture of a tube-and-angle base drew broad plate feet, and brushed gunmetal
+    over a painted rail with one brushed strip (D-585): the words name the members by profile
+    and gauge, and the finish by material."""
+    parts = [{"part_number": "R-2402", "description": "RAIL UPRIGHT", "quantity": 2,
+              "normalized_material": "MILD STEEL", "section_stock": {"a": 30, "b": 30, "t": 2},
+              "finish_text_as_printed": "POWDER COAT - GRAPHITE RAL7024 SATIN"},
+             {"part_number": "R-2424", "description": "BASE CROSS RAIL", "quantity": 2,
+              "normalized_material": "MILD STEEL", "section_stock": {"a": 50, "b": 20, "t": 2}},
+             {"part_number": "R-2408", "description": "BASE ANGLE", "quantity": 4,
+              "normalized_material": "MILD STEEL", "normalized_thickness_mm": 3,
+              "textual_operations": ["folding"]},
+             {"part_number": "R-2406", "description": "ANTI SCRATCH STRIP", "quantity": 1,
+              "normalized_material": "STAINLESS STEEL", "normalized_thickness_mm": 3,
+              "normalized_finish": "BRUSHED"},
+             {"part_number": "FIX1", "description": "HEX NUT", "quantity": 6, "is_bought_in": True}]
+    words = qr.product_words({}, parts, product="Midfloor Rail")
+    assert "the mild steel powder coat - graphite ral7024 satin" in words
+    assert "the stainless steel brushed" in words
+    assert "2 x rail upright in 30 x 30 square tube" in words
+    assert "2 x base cross rail in 50 x 20 rectangular tube" in words
+    assert "4 x base angle in 3 mm sheet, folded" in words
+    assert "1 x anti scratch strip in 3 mm sheet" in words
+    assert "hex nut" not in words
+
+
+def test_visible_hardware_stays_and_a_guessed_member_is_left_out():
+    """Four safeguards from the reviewer, 22 Oct: feet and castors the drawing lists stay in
+    the brief, fasteners do not; a member whose profile or gauge was inferred is left out
+    rather than drawn confidently wrong; the prompt version and the record it was made from
+    travel with the picture, and a changed prompt is a new picture."""
+    parts = [{"part_number": "H1", "description": "ADJUSTING FOOT M10", "quantity": 6, "is_bought_in": True},
+             {"part_number": "H2", "description": "SWIVEL CASTOR 50MM", "quantity": 4, "page_roles": ["bought_in"]},
+             {"part_number": "H3", "description": "M8 X 16 BUTTON HEAD SCREW", "quantity": 12, "is_bought_in": True},
+             {"part_number": "G1", "description": "GUESSED PANEL", "quantity": 1, "normalized_material": "MILD STEEL",
+              "normalized_thickness_mm": 2, "blank_is_inferred": True},
+             {"part_number": "G2", "description": "WALL-READ LEG", "quantity": 2, "normalized_material": "MILD STEEL",
+              "section_stock": {"a": 30, "b": 30, "t": 2, "review_section_profile": True}},
+             {"part_number": "R1", "description": "TOP RAIL", "quantity": 1, "normalized_material": "MILD STEEL",
+              "section_stock": {"a": 30, "b": 15, "t": 2, "detection_path": "canonical_profile"}}]
+    words = qr.product_words({}, parts, product="Rail")
+    assert "6 x adjusting foot m10 (bought in, as the parts list shows)" in words
+    assert "4 x swivel castor 50mm (bought in" in words
+    assert "button head screw" not in words
+    assert "guessed panel" not in words and "wall-read leg" not in words
+    assert "1 x top rail in 30 x 15 rectangular tube" in words
+    assert qr.PROMPT_VERSION == "r3"
+    src = Path(qr.__file__).read_text(encoding="utf-8")
+    assert 'fingerprint=read_store.fingerprint_code(render_prompt) + ":" + PROMPT_VERSION' in src
+    assert '"prompt_version": PROMPT_VERSION, "source_record": _record_identity(summary)' in src
+    assert qr._record_identity({"declared_product": "ROL-1", "generated_at": "2026-10-22T19:02"}) == "ROL-1 · 2026-10-22T19:02"
     plain = qr.render_prompt(words, "inside a Tesco store, on the shop floor", {}, from_drawing=False)
     assert "drawing" not in plain and "No text, no captions, no price tags, no people." in plain
 
