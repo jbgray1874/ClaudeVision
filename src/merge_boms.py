@@ -288,6 +288,28 @@ def reconcile_page(a_bom: Optional[Dict[str, Any]], b_bom: Optional[Dict[str, An
             # below arbitrates stay arbitrated by it; every other field is merged under
             # precedence, so gaps fill and genuine conflicts are recorded.
             _decided = ("part_ref", "quantity")
+            # A WORD IS NOT A CODE, AND AN EMPTY CELL IS NOT A DISAGREEMENT (D-586). The
+            # deterministic reader now refuses to mint a code from a bare standard prefix
+            # ("DIN" cut from "DIN 7980 - 8", D-584 fifth tranche), so a fastener row
+            # arrives from Path A with its description and NO code. Vision's full
+            # designation FILLS that cell; reading the fill as an override flagged every
+            # fastener "possible drawing inconsistency" when the two readers in fact agree
+            # on the article. The row keeps A's columns, takes B's designation, and says so.
+            if a_code == "" and b_code and qty_agree and _same_article(a, b):
+                row = dict(a); row["part_ref"] = b.get("part_ref", "")
+                row["source"] = "BOTH"; row["confidence"] = "HIGH"
+                row["flag"] = ""
+                _notes = _merge_records(row, b, winner_source=PATH_B_SOURCE,
+                                        loser_source=PATH_A_SOURCE, decided=_decided,
+                                        label=f"[{parent_label}] item {item}")
+                findings.extend(_notes)
+                _carry_section_length(row, b)
+                merged.append(row)
+                findings.append(f"[{parent_label}] item {item}: the deterministic reader "
+                                f"kept this commodity row by its description and vision "
+                                f"supplied the designation '{b.get('part_ref','')}' — the "
+                                f"readers agree on the article")
+                continue
             if code_agree and qty_agree and not two_lines:
                 row = dict(a); row["source"] = "BOTH"; row["confidence"] = "HIGH"; row["flag"] = ""
                 _notes = _merge_records(row, b, winner_source=PATH_A_SOURCE,

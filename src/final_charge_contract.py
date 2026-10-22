@@ -143,7 +143,15 @@ def audit(summary: Dict[str, Any], snapshot: Optional[Dict[str, Any]] = None) ->
         issues.append({"code": code, "part": part, **detail})
 
     if not requirements:
-        result.update(passed=True, scope="no captured section requirements")
+        # NOT A VERDICT (D-586). "passed: true" on a job whose capture recorded no section
+        # requirement read as acceptance — 0351292's tube material and cutting were never
+        # checked, and the file said passed. No requirements means NOTHING WAS VERIFIED,
+        # and the result must say coverage, not approval.
+        result.update(passed=None, verified=False,
+                      scope=("no captured section requirements — nothing verified: the "
+                             "sections' material and cutting were not checked, because the "
+                             "capture feeding this contract recorded no requirement. This "
+                             "is incomplete coverage, not acceptance."))
         return result
     final = summary.get("final_estimate") or {}
     if final.get("source") != "excel_calculated":

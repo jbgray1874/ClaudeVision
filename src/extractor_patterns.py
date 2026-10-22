@@ -2035,6 +2035,49 @@ def infer_operations_from_text(
     return list(dict.fromkeys(operations))
 
 
+# The words that make infer_operations_from_text (and json_normaliser's keyword map) name
+# each operation. operation_evidence_in_text re-reads them to QUOTE the sheet, so a decision
+# built from an inferred operation can carry the words it was read from.
+_OPERATION_CUE_WORDS: Dict[str, tuple] = {
+    "laser_cutting": ("FLAT PATTERN", "LASER", "PROFILE CUT"),
+    "hole_machining": ("DRILL", "PUNCH", "HOLE"),
+    "folding": ("FOLD", "BEND"),
+    "powder_coating": ("POWDER COAT", "P/C", "EPC"),
+    "welding": ("WELD", "TIG", "MIG"),
+    "dress_welds": ("DRESS",),
+    "wet_spray": ("WET SPRAY", "SPRAY PAINT", "LACQUER", "PAINT"),
+    "tapping": ("TAPPED", "TAP ", "M TAP"),
+    "countersinking": ("COUNTERSINK", "CSK", "C'SINK"),
+    "deburring": ("DEBURR", "SHARP CORNER", "SHARP EDGE", "REMOVE ANY SHARP"),
+    "diamond_polish": ("DIAMOND POLISH", "MATT POLISH", "MIRROR POLISH", "FLAME POLISH",
+                       "EDGE POLISH", "POLISH"),
+    "glue": ("GLUE", "BONDING", "BONDED"),
+    "cnc": ("CNC",),
+    "saw": ("SAW", "CUT TO LENGTH"),
+    "tube_cut": ("SAW", "CUT TO LENGTH"),
+}
+
+
+def operation_evidence_in_text(text: Any, operations: Any) -> Dict[str, str]:
+    """{operation: the sheet's own words it was read from} for each operation whose cue the
+    text (legend removed) actually prints. An operation with no cue in the text gets no
+    entry — REPEATING AN OPERATION IS NOT EVIDENCE OF IT (D-586): an op name that merely
+    sits on a record must not be re-quoted as a drawing instruction."""
+    cleaned = normalize_text(strip_specification_legend(str(text or ""))).upper()
+    out: Dict[str, str] = {}
+    if not cleaned.strip():
+        return out
+    for op in operations or []:
+        key = str(op or "").strip().lower()
+        for cue in _OPERATION_CUE_WORDS.get(key, ()):
+            idx = cleaned.find(cue)
+            if idx >= 0:
+                lo, hi = max(0, idx - 45), min(len(cleaned), idx + len(cue) + 45)
+                out[key] = re.sub(r"\s+", " ", cleaned[lo:hi]).strip()
+                break
+    return out
+
+
 def build_review_flags(
     title_block: Dict[str, Any],
     dimensions: Dict[str, Any],

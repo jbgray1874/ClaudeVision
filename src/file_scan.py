@@ -3121,6 +3121,18 @@ def _finalize_scan_summary(
             # (e.g. "Weld and Dress" callouts) are legitimate and must be kept.
             _clean_text = _strip_spec_boilerplate(" ".join(_clean_notes))
             _clean_ops = set(infer_operations(_clean_text))
+            # The note words each op was read from travel with it (D-586) — an op the notes
+            # genuinely state is a drawing note WITH its quote; one merely carried over from
+            # an earlier pass stays unsourced and is never promoted to one.
+            if _clean_ops:
+                try:
+                    from extractor_patterns import operation_evidence_in_text
+                    _op_ev = operation_evidence_in_text(_clean_text, sorted(_clean_ops))
+                except Exception:                                    # noqa: BLE001
+                    _op_ev = {}
+                for _op, _snip in _op_ev.items():
+                    _part.setdefault("operation_evidence", {}).setdefault(_op, _snip)
+                    _part.setdefault("operation_sources", {}).setdefault(_op, "drawing_notes")
             _existing_ops = list(_part.get("textual_operations") or [])
             # Merge: start from clean inference, add any upstream ops not in result
             _merged = list(_clean_ops)

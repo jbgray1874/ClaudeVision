@@ -32,6 +32,7 @@ __all__ = [
     "stated_finish",
     "finish_is_powder",
     "finish_contradiction",
+    "holds_drawing_text",
     "process_statements",
     "states_only_a_process",
     "names_one_face",
@@ -43,6 +44,10 @@ __all__ = [
 # the GA.
 POWDER_POINTER_HINTS = (
     "SEE ASSEMBLY", "SEE GA", "AS ASSEMBLY", "PER ASSEMBLY", "REFER TO ASSEMBLY",
+    # "SEE DWGS - EPC GRAPHITE RAL7024" (0351292): the row defers to the detail sheets. The
+    # words after the pointer still name their families — a pointer that also states a coat
+    # is read for the coat and never as a contradiction of one.
+    "SEE DWG", "SEE DRAWING",
 )
 
 # A FINISH FAMILY IS NOT A KEYWORD MATCH ON THE OPERATION NAME.
@@ -58,7 +63,10 @@ POWDER_POINTER_HINTS = (
 # that resolves to nothing decides nothing — an unrecognised finish is not a contradiction,
 # it is an unread one, and removing work on that basis is how a gate becomes a delete.
 FINISH_FAMILIES = {
-    "powder": ("POWDER",),
+    # EPC is the signage trade's shorthand for an epoxy powder coat — "EPC GRAPHITE RAL7024
+    # SATIN FINISH" (0351292's supports) is a powder statement, and unrecognised it left the
+    # supports' coat neither costed nor questioned while a garbled census ruled it out.
+    "powder": ("POWDER", "EPC"),
     # Lacquer, paint and varnish all go through the spray booth.
     "wet_spray": ("LACQUER", "PAINT", "WET SPRAY", "SPRAY", "ENAMEL", "VARNISH"),
     "polish": ("DIAMOND POLISH", "FLAME POLISH", "POLISH"),
@@ -202,8 +210,55 @@ def states_only_a_process(finish_text: Any) -> bool:
         r"\b(?:FINISH|FINISHED|AS|ONLY|MATT|MATTE|GLOSS|SATIN)\b", " ", _rest))
 
 
+# A finish field holding these words alone states nothing — it is the legend's heading,
+# scraped where the title block printed no finish ("SPECIFICATIONS:" on 0351292's details).
+_HEADING_WORDS = {"SPECIFICATION", "SPECIFICATIONS", "FINISH", "FINISHES", "SEE", "NOTES"}
+
+# The patterns are the finish census's (they moved here from invariants so both ask ONE
+# reader): a hole callout / diameter / radius, and a margin's run of view labels.
+_DIM_CALLOUT = re.compile(r"\d+\s*[Xx]\s*\d|\bTHRU\b|\bR\d|\bDIA\b|ø")
+_VIEW_LABEL = re.compile(r"(?:\b[A-E]\b[\s]+){4,}")
+
+
+def holds_drawing_text(finish_text: Any) -> bool:
+    """True when a finish field holds scraped drawing text rather than one part's finish.
+
+    EVIDENCE BELONGS TO THE ROW THAT PRINTED IT (D-586). 0351292-2468's census field held
+    SEVERAL parts-list rows stapled together — its own EPC coat, the strip's
+    STAINLESS-BRUSHED, the fasteners' codes — and \\bBRUSHED in another part's row read as
+    this part's stated finish, which ruled the support's powder coat NOT APPLICABLE over the
+    model's positive read of the title block. A field that quotes other part numbers, view
+    labels, hole callouts or a run of bare numbers is a misread of the page, not a
+    statement about this part, and it decides nothing. One reader: the invariants' census
+    (check_a_finish_field_holds_drawing_text) asks this same function."""
+    t = str(finish_text or "").upper()
+    if not t.strip():
+        return False
+    if _DIM_CALLOUT.search(t):
+        return True
+    if _VIEW_LABEL.search(t):
+        return True
+    # Three or more bare numbers in a finish field is a dimension list, not a finish.
+    if len(re.findall(r"\b\d{2,4}\b", t)) >= 3:
+        return True
+    # Two or more drawing-number-shaped tokens is the parts list itself, not a finish.
+    try:
+        from part_code_conventions import looks_like_a_drawing_number
+        codes = {w for w in re.findall(r"[A-Z0-9][A-Z0-9.\-]{4,}", t)
+                 if looks_like_a_drawing_number(w)}
+        if len(codes) >= 2:
+            return True
+    except Exception:                                                # noqa: BLE001
+        pass
+    return False
+
+
 def stated_finish(record: Mapping[str, Any]) -> str:
-    """The finish this part's own drawing states, uppercased, or "" when it states none."""
+    """The finish this part's own drawing states, uppercased, or "" when it states none.
+
+    A field that holds scraped drawing text (holds_drawing_text) or only a legend heading
+    ("SPECIFICATIONS:") states nothing: the finish was never read, and every gate that asks
+    this function must weigh an unread finish as absent, not as whatever leaked in."""
     if not isinstance(record, Mapping):
         return ""
     value = record.get("normalized_finish")
@@ -213,7 +268,13 @@ def stated_finish(record: Mapping[str, Any]) -> str:
         if isinstance(parts, str):
             parts = [parts]
         text = " ".join(str(p) for p in parts if p).strip()
-    return re.sub(r"\s+", " ", text).upper()
+    out = re.sub(r"\s+", " ", text).upper()
+    if holds_drawing_text(out):
+        return ""
+    words = set(re.findall(r"[A-Z]{2,}", out))
+    if words and words <= _HEADING_WORDS:
+        return ""
+    return out
 
 
 def finish_is_powder(finish_text: str) -> bool:
@@ -238,6 +299,10 @@ def finish_contradiction(operation: str, finish_text: str) -> Optional[str]:
     finish = str(finish_text or "").strip().upper()
     if not finish or _is_pointer(finish):
         # Nothing stated, or stated somewhere else. Absence is not evidence.
+        return None
+    if holds_drawing_text(finish):
+        # Scraped page text, not this part's statement (D-586) — another row's BRUSHED in
+        # the blob is not a reading of THIS part, and work is never removed on its strength.
         return None
 
     named = finish_families(finish)

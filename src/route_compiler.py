@@ -5503,6 +5503,9 @@ def compile_job_route(
         # words. That is a reading of the drawing. Falling back to "unknown" made it
         # indistinguishable from a claim nobody could account for, and section 12 printed forty
         # of them: "an unrecorded source", rank 0, for operations the drawing states.
+        # (D-586 narrows this: the field has grown other writers, so the drawing_notes label
+        # is kept only where the op carries its quote — operation_evidence — or a recorded
+        # source; see the gate below.)
         #
         # `operations` keeps "unknown" because it is written by several passes with different
         # provenance and this adapter cannot tell which wrote a given entry. Naming it would be
@@ -5524,6 +5527,64 @@ def compile_job_route(
                 if _spelled(operation) in _ruled_keys:
                     continue          # ruled off this record: the ruling event decides it
                 source = str(operation_sources.get(operation) or fallback_source)
+                # A NOTE IS QUOTED OR IT IS NOT A NOTE (D-586). textual_operations now has
+                # many writers — the note inferrer, the LLM route fold, the wire route, the
+                # assembly phrase scan — and only the first is a reading of the drawing.
+                # 0351292's strip reached the book welded and folded, each decision saying
+                # "a note on the drawing" with nothing quoted and nowhere named, because any
+                # unsourced op name in this field borrowed that authority. An op whose words
+                # were recorded (operation_evidence) keeps drawing_notes and carries the
+                # quote; an op with no recorded source and no words is an honest unknown —
+                # still priced, as every rank-0 claim is, never dressed as an instruction.
+                _op_evidence = str(
+                    (part.get("operation_evidence") or {}).get(operation) or "")
+                _op_evidence_where = ("the sheet's own note text, legend removed"
+                                      if _op_evidence else "")
+                _demoted = False
+                if (field_name == "textual_operations"
+                        and operation not in operation_sources and not _op_evidence):
+                    # THE RECORD'S OWN STATED FINISH IS EVIDENCE TOO. A weldment whose title
+                    # block says POWDER COATED carries its coat as a textual op with no
+                    # recorded source — demoting that read 12645's door to unverified. A
+                    # stated finish naming this operation's family, or a process statement
+                    # naming the operation, is the sheet's own word and keeps the note.
+                    try:
+                        from finish_rules import (finish_families as _ff,
+                                                  process_statements as _pst,
+                                                  stated_finish as _sf)
+                        _stated = _sf(part)
+                        if _stated:
+                            _fam = {"powder_coating": "powder", "wet_spray": "wet_spray",
+                                    "diamond_polish": "polish", "anodising": "anodise",
+                                    "plating": "plate"}.get(operation)
+                            _hits, _ = _pst(_stated)
+                            if (_fam and _fam in _ff(_stated)) or any(
+                                    operation in ops for ops in _hits.values()):
+                                _op_evidence = _stated
+                                _op_evidence_where = "the part's own stated finish"
+                    except Exception:                                # noqa: BLE001
+                        pass
+                    # A WELD SYMBOL COUNTED ON THE SHEET IS THE SHEET'S OWN WORD, and so is
+                    # a finish field that states the weld — the 90001 frame-in-a-frame's own
+                    # joints are claimed from exactly these, and demoting them unmade D-566.
+                    if not _op_evidence and operation in ("welding", "dress_welds"):
+                        _ws = part.get("weld_symbols")
+                        if isinstance(_ws, dict) and any(
+                                isinstance(v, (int, float)) and v > 0 for v in _ws.values()):
+                            _op_evidence = "weld symbols counted on its own sheet: " + \
+                                ", ".join(f"{k} x {v:g}" for k, v in _ws.items()
+                                          if isinstance(v, (int, float)) and v > 0)
+                            _op_evidence_where = "the sheet's weld symbols"
+                        elif part.get("weld_stated_by_finish"):
+                            _op_evidence = "the part's own finish field states the weld"
+                            _op_evidence_where = "the part's own stated finish"
+                    if not _op_evidence:
+                        # "unrecorded", not "unknown": the same rank (0) and the same English
+                        # ("an unrecorded source"), but the stranded-assembly status rule
+                        # keys on "unknown", and this demotion is a labelling correction,
+                        # not a licence to flip statuses across the fleet.
+                        source = "unrecorded"
+                        _demoted = True
                 event_ids = sorted(
                     explicit_memberships.get((operation, part_number)) or [])
                 compatibility_target = part_number
@@ -5707,8 +5768,13 @@ def compile_job_route(
                             else graph["quantities"].get(target_id, 1.0)
                         ),
                         sequence=sequences.get(operation),
-                        reason=f"{field_name} on existing part record",
+                        reason=(f"{field_name} on existing part record"
+                                + (" — no reader recorded a source or the drawing's words "
+                                   "for it; priced, not promoted to a note" if _demoted
+                                   else "")),
                         route_id=route_id,
+                        evidence=_op_evidence,
+                        evidence_where=_op_evidence_where,
                     ))
 
         for raw_operation, raw_reason in _rulings.items():

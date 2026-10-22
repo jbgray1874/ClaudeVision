@@ -1474,6 +1474,19 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 inferred = []
             if inferred:
                 part["textual_operations"] = list(inferred)
+                # THE WORDS TRAVEL WITH THE OPERATION (D-586). An op inferred here reached
+                # the route as "a note on the drawing" with nothing quoted, so a repeated op
+                # name and a genuine callout read identically. Each inferred op carries the
+                # sheet's own words; an op whose cue the text does not print carries none,
+                # and the route compiler will not call it a note.
+                try:
+                    from extractor_patterns import operation_evidence_in_text
+                    _op_ev = operation_evidence_in_text(cue_text, inferred)
+                except Exception:                                    # noqa: BLE001
+                    _op_ev = {}
+                for _op, _snippet in _op_ev.items():
+                    part.setdefault("operation_evidence", {}).setdefault(_op, _snippet)
+                    part.setdefault("operation_sources", {}).setdefault(_op, "drawing_notes")
                 _interpret_part(part)
 
         is_assembly_part = (
@@ -1496,16 +1509,27 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             ops_set = set(part.get("textual_operations", []))
             changed = False
 
-            if any(phrase in cue_upper for phrase in _ASSEMBLY_WELD_PHRASES):
+            _weld_phrase = next(
+                (p for p in _ASSEMBLY_WELD_PHRASES if p in cue_upper), None)
+            if _weld_phrase:
                 for op in ("welding", "dress_welds"):
                     if op not in ops_set:
                         ops_set.add(op)
                         changed = True
+                    # The phrase that put the weld here is the weld's evidence (D-586).
+                    part.setdefault("operation_evidence", {}).setdefault(op, _weld_phrase)
+                    part.setdefault("operation_sources", {}).setdefault(op, "drawing_notes")
 
-            if any(phrase in cue_upper for phrase in _ASSEMBLY_PC_PHRASES):
+            _pc_phrase = next(
+                (p for p in _ASSEMBLY_PC_PHRASES if p in cue_upper), None)
+            if _pc_phrase:
                 if "powder_coating" not in ops_set:
                     ops_set.add("powder_coating")
                     changed = True
+                part.setdefault("operation_evidence", {}).setdefault(
+                    "powder_coating", _pc_phrase)
+                part.setdefault("operation_sources", {}).setdefault(
+                    "powder_coating", "drawing_notes")
 
             if changed:
                 part["textual_operations"] = list(ops_set)

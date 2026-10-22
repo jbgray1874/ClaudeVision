@@ -563,6 +563,11 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     # inference is a real question and it needs a parity run, not a commit message.
     "drawing_notes":          "a note on the drawing",
     "unknown":                "an unrecorded source",
+    # A textual op with no recorded source and no quoted words (D-586): rank 0 like unknown
+    # (absent from SOURCE_RANK), but a distinct key so the demotion is a LABELLING change —
+    # the stranded-assembly status rule keys on "unknown" and must not start firing on every
+    # op this demotes; whether it should is a parity-run question, not a side effect.
+    "unrecorded":             "an unrecorded source",
 }
 
 # Sources that MEASURED the part rather than reasoned about it. Reports mark these
