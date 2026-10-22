@@ -276,9 +276,21 @@ class ACutLengthIsADimensionNotTheNextNumberOnThePage(unittest.TestCase):
     def test_a_shared_pages_profile_needs_the_parts_own_row_and_the_length_is_the_sheets_figure(self):
         text = (ROOT / "src" / "document_builder.py").read_text(encoding="utf-8")
         guard = text.index("_row_says_sheet")
-        self.assertIn("NOT applied", text[guard:guard + 2500])
-        self.assertIn("read_sheet_figures", text[guard:guard + 4000])
-        self.assertIn('"detail_sheet_figure"', text[guard:guard + 4000])
+        self.assertIn("NOT applied", text[guard:guard + 3500])
+        self.assertIn("read_sheet_figures", text[guard:guard + 5000])
+        self.assertIn('"detail_sheet_figure"', text[guard:guard + 5000])
+        # Fourth tranche: the part's own detail sheet refuses a shared profile without a
+        # row, and one detail sheet is enough for the figure path.
+        self.assertIn("_own_detail_silent", text[guard:guard + 3500])
+        self.assertIn("if len(_detail_pages) == 1:", text[guard:guard + 5000])
+        self.assertNotIn("if len(_detail_pages) == 1 and len(page_nums) == 1:", text)
+
+    def test_a_designation_a_range_and_a_decimal_comma_are_read_as_they_are(self):
+        import section_profile as sp
+        self.assertEqual(sp.detect_section_stock("• 304 - STAINLESS STEEL 30X30X2MM TUBE 1395")["length_mm"], 1395.0)
+        self.assertEqual(sp.detect_section_stock("30X30X2MM TUBE BETWEEN 80 - 120 MICRON 1395")["length_mm"], 1395.0)
+        self.assertEqual(sp.detect_section_stock("MILD STEEL RECT TUBE - RAW 50X20X2MM 154,5 50")["length_mm"], 154.5)
+        self.assertEqual(sp.detect_section_stock("30X30X2MM TUBE 1125 - 2 OFF")["length_mm"], 1125.0)
 
 
 class APartsListMaySitAboveItsHeader(unittest.TestCase):

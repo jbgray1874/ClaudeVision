@@ -56,8 +56,11 @@ def _figures_in(up: str) -> list:
     """The numbers in this text that stand as figures: not the number in a name ("1200
     RAIL", "2.4 KG"), which a word follows. A figure is followed by another number, a unit,
     a symbol or the end — "1395 30", "@ 1395mm", "TUBE 1125"."""
+    # A dash and a word is a designation ("304 - STAINLESS STEEL", "6063 - T6"); a dash and a
+    # number is a range ("80 - 120 MICRON"), on either side of the dash. Neither is a figure.
     return [mm.group(1) for mm in re.finditer(
-        r"(?<![\d.])(\d+(?:\.\d+)?)(?![\d.])"
+        r"(?<![\d.])(?<![-–] )(?<![-–])(\d+(?:\.\d+)?)(?![\d.])"
+        r"(?!\s*[-–]\s*(?!\d+\s*OFF\b)[A-Z0-9])"
         r"(?!\s*(?!MM\b|LONG\b|LENGTH\b|LG\b)[A-Z])"
         r"(?!\s*MM\b\s*(?!LONG\b|LENGTH\b|LG\b|CUT\b)[A-Z])", up)]
 
@@ -65,7 +68,8 @@ def _figures_in(up: str) -> list:
 def _prose_free(up: str) -> str:
     """The text with everything that is a number but not a figure blanked to spaces, same
     length as the input so match offsets still apply."""
-    out = up
+    # A decimal comma is a decimal (154,5 is 154.5, not 154 and 5).
+    out = re.sub(r"(?<=\d),(?=\d{1,2}(?!\d))", ".", up)
     for rx in _NOT_A_FIGURE:
         out = rx.sub(lambda mm: " " * (mm.end() - mm.start()), out)
     return out

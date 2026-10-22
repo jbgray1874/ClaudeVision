@@ -1072,6 +1072,20 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 _detail_pages = [pn for pn in page_nums if pn in page_lookup
                                  and str(page_lookup[pn].get("role") or "") == "detail"]
                 _shared = len(page_nums) != 1 or len(_detail_pages) != 1
+                # THE PART'S OWN DETAIL SHEET SPEAKS FOR IT WITHOUT A ROW (D-584, fourth
+                # tranche). The top blank is bound to the rail sheet that lists it AND to its
+                # own sheet; with no printed row the guard above was inert and the rail's
+                # "30X20X2MM TUBE" became the blank's stock. A part with exactly one detail
+                # sheet whose text names no section is sheet, whatever a shared page says.
+                _own_detail_text = (str(page_lookup[_detail_pages[0]].get("text") or "").upper()
+                                    if len(_detail_pages) == 1 else "")
+                try:
+                    from section_profile import _SECTION_HOLLOW_KW as _hollow_kw
+                except Exception:                                    # noqa: BLE001
+                    _hollow_kw = ("TUBE", "RHS", "SHS", "BOX SECTION")
+                _own_detail_silent = bool(_own_detail_text) and not any(
+                    kw in _own_detail_text for kw in _hollow_kw) and not re.search(
+                    r"\d\s*X\s*\d+(?:\.\d+)?\s*X\s*\d", _own_detail_text)
                 if _measured_flat:
                     part.setdefault("review_flags", []).append(
                         f"section '{_path}' read from this part's page text was NOT applied — "
@@ -1087,12 +1101,20 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                         f"section '{_path}' read from a shared page was NOT applied — this "
                         f"part's own parts-list row states a sheet gauge ({_own_row.strip()}) "
                         f"and no section, so the callout is another part's on the same drawing")
+                elif _shared and _own_detail_silent and not _looks_like_section and not _row_says_section:
+                    part.setdefault("review_flags", []).append(
+                        f"section '{_path}' read from a shared page was NOT applied — this "
+                        f"part's own detail sheet (page {_detail_pages[0]}) names no section, "
+                        f"so the callout is another part's on the drawing that lists them both")
                 else:
                     # THE CUT LENGTH IS THE SHEET'S FIGURE, NOT A NUMBER IN ITS PROSE (D-584):
                     # on a part's own detail page the largest leading figure printed along an
                     # axis is its length — 703 for the cross rail, 1395 for the upright —
                     # where the text read gave the date, the drawing number or nothing.
-                    if len(_detail_pages) == 1 and len(page_nums) == 1:
+                    # One detail sheet is enough, whatever else the part is bound to: the
+                    # cross rail is listed on the support sheet and drawn on its own, and the
+                    # text path across both read 120 and then 304 from the notes block.
+                    if len(_detail_pages) == 1:
                         try:
                             from detail_page_geometry import read_sheet_figures as _figs
                             _fig = _figs(page_lookup[_detail_pages[0]].get("page") or {})
