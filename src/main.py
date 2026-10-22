@@ -2156,6 +2156,22 @@ def main() -> None:
                     "schema": "final_charge_contract.v1", "applicable": True, "passed": False,
                     "trace": [], "issues": [{"code": "final_charge_audit_failed", "part": "",
                                              "text": f"{type(_fc_exc).__name__}: {_fc_exc}"}]}
+            # THE SHEET BLANKS AND THE BOUGHT ITEMS (D-582), at the same calculated-book
+            # boundary: one row each at the graph's quantity, in its block, charged, the
+            # arithmetic holding, the saved cells agreeing, and every quantity multiplied along
+            # its edges once. Shadow by default (config.ACCURACY_CONTRACT): the result is on
+            # the record and the console, and the release is untouched until enforcement is
+            # switched on. A failure of the checker is a finding, never a pass.
+            try:
+                from material_charge_contract import record as _record_material_charges
+                _record_material_charges(_target, xlsx_path)
+                summary["material_charge_result"] = _target.get("material_charge_result")
+            except Exception as _mc_exc:                                 # noqa: BLE001
+                _target["material_charge_result"] = summary["material_charge_result"] = {
+                    "schema": "material_charge_contract.v1", "passed": False, "mode": "enforce",
+                    "unverified": [], "trace": [],
+                    "issues": [{"code": "material_contract_failed", "part": "",
+                                "detail": f"{type(_mc_exc).__name__}: {_mc_exc}"}]}
             _inv = _check_job(_target)
             summary["invariants"] = _inv          # so anything reading `summary` agrees
             # NOT REWRITTEN HERE (D-361). D-359 wrote the banner again at this point, after

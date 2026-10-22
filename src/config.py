@@ -645,6 +645,19 @@ CUSTOMER_QUOTE_SCENES = {
     "DYSON": "in a Dyson demo store, among the brand's machines",
 }
 
+# ── THE SHEET-BLANK AND BOUGHT-ITEM CONTRACT IS WATCHED BEFORE IT IS ENFORCED (D-582) ────
+# material_charge_contract audits every canonical blank and bought item against the charged
+# cells of the calculated book after each run. "shadow" records the result and counts it on
+# the console; the release is untouched. "enforce" sends mismatches AND unverified evidence
+# through the BLOCKING invariant and the existing release gate. The engine's own records do
+# not yet carry the sheet-price basis or a bought item's purchase basis forward, so enforce
+# would hold every release today; it is promoted class by class after replay review.
+# SDI_ACCURACY_CONTRACT_MODE overrides this on one machine. Any other word is enforce, with
+# a finding — a misspelling never switches the check off.
+ACCURACY_CONTRACT = {
+    "mode": "shadow",
+}
+
 MATERIAL_PRICE_BREAK = {
     "enabled": True,
     "sheet": "Material Price Break",

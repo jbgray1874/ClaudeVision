@@ -2295,6 +2295,67 @@ def check_a_section_schedule_reaches_the_sheet(summary: Any) -> List[Dict[str, A
         issues=issues[:10], count=len(issues))]
 
 
+def check_a_sheet_blank_and_a_bought_item_reach_the_charged_cells(summary: Any) -> List[Dict[str, Any]]:
+    """Every canonical blank and bought item is on the calculated sheet at its quantity, in
+    its block, charged, with the arithmetic holding and the saved cells agreeing — and every
+    quantity was multiplied along its own edges once (D-582).
+
+    The contract (material_charge_contract, with quantity_flow_contract inside it) runs in
+    main after Excel has calculated the book, beside the final-charge check. Its findings are
+    raised here, BLOCKING, as the section check's are — but only in `enforce` mode. In
+    `shadow` (the shipped default) the result is on the record and the console and this
+    returns nothing, because the engine's records do not yet carry the sheet-price and
+    purchase bases the contract asks for and the gaps would hold every release. In enforce,
+    a missing result is itself a finding: a check that did not run is never a pass."""
+    if not isinstance(summary, dict):
+        return []
+    try:
+        import material_charge_contract as mcc
+        requested = mcc.mode()
+    except Exception:                                                # noqa: BLE001
+        requested = "shadow"
+    result = summary.get("material_charge_result")
+    if requested == "shadow" and (not isinstance(result, dict) or result.get("mode", "shadow") == "shadow"):
+        return []
+    if not isinstance(result, dict):
+        return [_violation("material_quantity_charge_unverified", BLOCKING,
+                           "The sheet-blank and bought-item contract did not run on this book, and "
+                           "enforcement is on: a check that did not run is not a pass.", count=0)]
+    findings = ([i for i in (result.get("issues") or []) if isinstance(i, dict)]
+                + [i for i in (result.get("unverified") or []) if isinstance(i, dict)])
+    if not findings and result.get("passed") is True:
+        return []
+    said = []
+    for i in findings[:6]:
+        part = i.get("part") or "the book"
+        code = i.get("code") or ""
+        if code == "material_row_missing_or_duplicate":
+            said.append(f"{part}: {i.get('count', 0)} material row(s) on the calculated sheet "
+                        f"where one {i.get('category') or 'material'} row is required")
+        elif code == "material_quantity_mismatch":
+            said.append(f"{part}: the sheet charges {i.get('actual')} against "
+                        f"{i.get('expected')} a product on the record")
+        elif code == "quantity_rollup_mismatch":
+            said.append(f"{part}: the {i.get('stage')} quantity is {i.get('actual')} where the "
+                        f"edges multiply to {i.get('expected')}")
+        elif code == "parent_contribution_mismatch":
+            said.append(f"{part}: under {i.get('parent')} the compiler holds "
+                        f"{i.get('actual')} where the edge gives {i.get('expected')}")
+        elif code in ("sheet_price_basis_missing", "purchase_unit_basis_missing",
+                      "sheet_stock_dimensions_missing", "sheet_charge_policy_missing"):
+            said.append(f"{part}: {code.replace('_', ' ')} — the record does not carry it")
+        elif code == "saved_workbook_not_verified":
+            said.append("no saved workbook was read, so the cells could not be checked")
+        else:
+            said.append(f"{part}: {code}" + (f" — {i['detail']}" if i.get("detail") else ""))
+    return [_violation(
+        "material_quantity_charge_unverified", BLOCKING,
+        f"{len(findings)} sheet-blank/bought-item finding(s): " + "; ".join(said)
+        + ". A blank the engine measured and an item it buys are each one charged row at the "
+          "quantity the graph reaches, or this says why not.",
+        issues=findings[:20], count=len(findings))]
+
+
 def check_prices_are_firm(summary: Any) -> List[Dict[str, Any]]:
     """Is every applied price one we have actually committed to honour?
 
@@ -4958,6 +5019,7 @@ CHECKS = (
     check_an_assembly_is_not_charged_as_a_blank,
     check_a_memberless_assembly_carries_nothing,
     check_a_section_schedule_reaches_the_sheet,
+    check_a_sheet_blank_and_a_bought_item_reach_the_charged_cells,
     check_a_blank_and_its_cut_path_can_both_be_true,
     check_prices_are_firm,
     check_an_unresolved_reading_blocks_the_quote,
