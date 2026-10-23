@@ -4447,6 +4447,14 @@ def _finalize_scan_summary(
         if _n_iso:
             print(f"   [detail-geometry] {_n_iso} part(s) had dimension text dropped that was "
                   f"read off pages they are not bound to", flush=True)
+        # WHAT DEPENDS ON THE SHEET IS READ FROM THE PART'S OWN SHEET FIRST (D-591, D-592), so the
+        # blank, its flanges and its folds are developed from the part's own figures, weight and
+        # angles — not from the assembly sheet that also lists it.
+        from detail_page_geometry import revalidate_from_own_sheets
+        _reval = revalidate_from_own_sheets(_parts_dg, summary)
+        if _reval:
+            print(f"   [detail-geometry] {', '.join(_reval)} re-read from their own sheet — "
+                  f"weight, features and page geometry from the page that is theirs", flush=True)
         run_timing.mark("start detail_page_geometry")
         _n_dg = apply_detail_page_geometry(_parts_dg, summary)
         run_timing.mark("done detail_page_geometry")
@@ -4466,13 +4474,13 @@ def _finalize_scan_summary(
             print(f"   [detail-geometry] {', '.join(_capped)} read larger than the assembly "
                   f"each sits in — costed on that assembly's developed outline and asked",
                   flush=True)
-        # WHAT DEPENDS ON THE SHEET IS READ FROM THE PART'S OWN SHEET, and cutting the blank
-        # cannot hold is not the part's (D-591) — before anything is costed from either.
-        from detail_page_geometry import bound_unmeasured_cut_path, revalidate_from_own_sheets
-        _reval = revalidate_from_own_sheets(_parts_dg, summary)
-        if _reval:
-            print(f"   [detail-geometry] {', '.join(_reval)} re-read from their own sheet — "
-                  f"weight, features and page geometry from the page that is theirs", flush=True)
+        # A FOLD THE COUNTER CHARGES FROM THE DRAWING CARRIES THAT EVIDENCE (D-592), and cutting
+        # the blank cannot hold is not the part's (D-591) — before anything is costed from either.
+        from detail_page_geometry import bound_unmeasured_cut_path, settle_fold_evidence
+        _settled = settle_fold_evidence(_parts_dg)
+        if _settled:
+            print(f"   [detail-geometry] {', '.join(_settled)}: the fold the drawing states is "
+                  f"the fold the route charges — one verdict", flush=True)
         _bounded = bound_unmeasured_cut_path(_parts_dg)
         if _bounded:
             print(f"   [detail-geometry] {', '.join(_bounded)}: cutting held to what the blank "

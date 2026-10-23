@@ -744,6 +744,36 @@ def _pack_words_for(description: str, pages: List[Dict[str, Any]]) -> Optional[D
     return best
 
 
+def _line_is_supported(summary: Dict[str, Any], facts: Dict[str, Any], code: str) -> bool:
+    """Size, price and route evidence enough to show this line as the worked example (D-592)."""
+    rec = next((p for p in facts.get("made") or []
+                if str(p.get("part_number") or "").strip().upper() == code), None)
+    if not isinstance(rec, dict):
+        return False
+    try:
+        from blank_credibility import blank_is_measured
+        sized = bool(blank_is_measured(rec)) or bool(
+            (rec.get("_blank_provisional") or {}).get("weight_agrees"))
+    except Exception:                                                # noqa: BLE001
+        sized = False
+    if not sized:
+        return False
+    try:
+        from costed_facts import FIRM, record_lines
+        line = (record_lines(summary) or {}).get(code) or {}
+        if str((line.get("price_origin") or {}).get("firmness") or "") != FIRM:
+            return False
+    except Exception:                                                # noqa: BLE001
+        return False
+    shadow = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow") or {})
+    for d in (shadow.get("decisions") or []) if isinstance(shadow, dict) else []:
+        if (isinstance(d, dict) and d.get("status") == "required"
+                and str(d.get("target_id") or "").strip().upper() == code
+                and str(d.get("source") or "").strip().lower() in ("", "unrecorded", "unknown")):
+            return False
+    return True
+
+
 def trace_part(summary: Dict[str, Any], facts: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The nested made part that travels through most departments (then the largest material
     line), followed from the pack to its priced line, in the workbook's own figures."""
@@ -770,8 +800,17 @@ def trace_part(summary: Dict[str, Any], facts: Dict[str, Any]) -> Optional[Dict[
                  if isinstance(d, dict)}
     except Exception:                                                # noqa: BLE001
         _open = set()
-    row = max(rows, key=lambda r: (_code_in(r.get("description")).upper() not in _open,
-                                   _route_len(r), _num(r.get("total_value_gbp")) or 0))
+    # AND IT MUST BE SUPPORTED, NOT ONLY UNQUESTIONED (D-592). A line nobody has asked about yet
+    # can still rest on a guess. The example is shown only for a line whose size is measured or
+    # read from its own sheet with the weight agreeing, whose price is firm, and whose charged
+    # operations each have a recorded source. With none such, no example is shown — the page
+    # says what was costed without walking through a figure it cannot stand behind.
+    _supported = {c for c in (_code_in(r.get("description")).upper() for r in rows)
+                  if c and c not in _open and _line_is_supported(summary, facts, c)}
+    rows = [r for r in rows if _code_in(r.get("description")).upper() in _supported]
+    if not rows:
+        return None
+    row = max(rows, key=lambda r: (_route_len(r), _num(r.get("total_value_gbp")) or 0))
     code = _code_in(row.get("description"))
     rec = next((p for p in facts["made"] if str(p.get("part_number") or "") == code), {})
     q = _num(row.get("qty_per_unit")) or _qty(rec)

@@ -169,6 +169,13 @@ SOURCE_RANK: Dict[str, int] = {
     # page's boilerplate "304 - STAINLESS STEEL" was read in its place, so its weld and powder
     # rows said STAINLESS on a mild-steel weldment — below a person (72) and every measurement.
     "assembly_members": 71,
+    # THE PART'S OWN SHEET OVER A SHEET THAT LISTS IT (D-592). A title block read on an assembly
+    # sheet is the deterministic read of THAT sheet; its parts-list column put 0351292's top
+    # blank at 5 mm (the T arm's gauge) while the top blank's own sheet says 2 mm. Offered only by
+    # detail_page_geometry.revalidate_from_own_sheets, for a part bound to its own sheet and to
+    # others, when its own sheet states one value. Above the page reads (70), below a person
+    # (72) and every measurement.
+    "own_sheet_title_block": 71,
     # ── AN OPEN QUESTION, DELIBERATELY NOT SETTLED HERE (raised 11 Sep 2026) ──────────
     #
     # The order below is MODEL FIRST: solidworks_api 90, dxf 80. The review position is the
@@ -550,6 +557,7 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "model_extents_board_gauge": "the model's smallest extent — a flat board's gauge (provisional)",
     "assembly_envelope_allowance": "the outline of the assembly it sits in (provisional — the part read larger)",
     "assembly_members": "its members' material — the parts the compiled hierarchy gives it",
+    "own_sheet_title_block": "its own sheet's title block",
     "mirror_of_provisional":  "its other hand's provisional reading",
     "compiler_default":       "an engine default",
     # A NAME FOR THE THING THAT WAS CALLED NOTHING.
