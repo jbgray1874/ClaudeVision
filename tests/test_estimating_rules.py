@@ -4213,6 +4213,11 @@ def test_round_tube_is_a_section_too():
        "no wall callout, no section — an honest gap, not a guessed tube")
 
 
+def _sp_form_is_profile_form() -> bool:
+    import section_profile as _sp
+    return all(_sp.section_form({"profile_form": f}) == f for f in ("CHS", "RHS", "SHS", "OVAL", ""))
+
+
 def test_a_round_tube_does_not_weigh_what_a_square_one_weighs():
     """The section mass formula was A = outer - inner on the sides of a RECTANGLE, and it was
     the only formula. Round tube carries its outside diameter in a and b, so 12.7 x 1.2 CHS
@@ -4240,9 +4245,13 @@ def test_a_round_tube_does_not_weigh_what_a_square_one_weighs():
     # and the estimator weigh a section the same way; the estimator passes the form to it.
     _src = open(__import__("estimator").__file__, encoding="utf-8").read()
     _sec = open(__import__("section_profile").__file__, encoding="utf-8").read()
+    # D-594: the form now reaches the formula through section_form(stock), which is the stock's
+    # profile_form for every section except a flat-sided oval (weighed as a stadium).
     ok('form = str(profile_form or "").upper()' in _sec and 'form == "CHS"' in _sec
-       and '_ss.get("profile_form"), density)' in _src,
+       and ('_ss.get("profile_form"), density)' in _src
+            or '_section_form(_ss), density)' in _src),
        "the estimator actually branches on it — a formula nothing selects is not a fix")
+    ok(_sp_form_is_profile_form(), "section_form passes a non-oval stock's own profile_form")
     import section_profile as _sp_mod
     ok(abs(_sp_mod.section_kg_per_m(D, D, t, "CHS", 7850.0) * 1e6 / 7850.0 - round_) < 1e-6,
        "and the shared formula is the circular one for CHS")

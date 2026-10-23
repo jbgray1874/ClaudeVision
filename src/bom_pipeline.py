@@ -389,7 +389,7 @@ def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
     import config
     import source_precedence as sp
     from part_code_conventions import bare_code
-    from section_profile import detect_section_stock, section_kg_per_m
+    from section_profile import detect_section_stock, section_kg_per_m, section_form
 
     pieces: Dict[str, Dict[tuple, List[float]]] = {}
     rows_of: Dict[str, List[Dict[str, Any]]] = {}
@@ -415,8 +415,10 @@ def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
                     break
             if _col_len > 0:
                 s = dict(s, length_mm=_col_len)
+        # The form key is the formula's (D-594): a flat-sided oval keys apart from a plain
+        # oval of the same numbers, and is written back below as OVAL, flat-sided.
         key = (min(float(s["a"]), float(s["b"])), max(float(s["a"]), float(s["b"])),
-               float(s["t"]), str(s.get("profile_form") or ""))
+               float(s["t"]), section_form(s))
         if not s.get("length_mm"):
             no_len.setdefault(par, []).append((key, r))
             continue
@@ -556,11 +558,15 @@ def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
                  if isinstance(x, (int, float)) or str(x).replace(".", "", 1).isdigit()]
         _held_by = sp.display_name(sp.source_of(p, "section_stock.cut_lengths_mm")
                                    or _ss_now.get("source") or "an earlier reading")
-        for field, value in (("a", lo), ("b", hi), ("t", t), ("profile_form", form or None),
+        _fso = form == section_form({"profile_form": "OVAL", "oval_shape": "flat_sided"})
+        for field, value in (("a", lo), ("b", hi), ("t", t),
+                             ("profile_form", ("OVAL" if _fso else form) or None),
                              ("cut_lengths_mm", list(pcs)), ("length_mm", max(pcs))):
             if value is not None:
                 sp.apply_field(p, f"section_stock.{field}", value, "drawing_deterministic")
         ss = p["section_stock"]
+        if _fso:
+            ss["oval_shape"] = "flat_sided"
         ss.setdefault("detection_path", "canonical_profile")
         if sp.source_of(p, "section_stock.cut_lengths_mm") != "drawing_deterministic":
             # A stronger reader (the model's own cut list) holds the section; apply_field has

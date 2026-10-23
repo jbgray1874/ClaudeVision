@@ -2330,9 +2330,20 @@ def resolve_stock(p: Mapping[str, Any]) -> Dict[str, Any]:
             assumed = True
             notes.append(f"wall {wall:g} mm ASSUMED — the pack states none")
         length = _num(st.get("length_mm")) or L
-        return {"form": form, "section_mm": sec, "wall_mm": wall, "wall_assumed": assumed,
-                "length_mm": length, "profile_form": _PROFILE_FORM.get(form, ""),
-                "notes": notes}
+        out = {"form": form, "section_mm": sec, "wall_mm": wall, "wall_assumed": assumed,
+               "length_mm": length, "profile_form": _PROFILE_FORM.get(form, ""),
+               "notes": notes}
+        # A FLAT-SIDED OVAL IS SAID ON THE STOCK (D-594), so it is weighed as a stadium. Read
+        # from the line's name and material words and from its note — the member-schedule
+        # panel's note lands in why_size — and never from the form alone: "oval tube" is an
+        # ellipse until something says flat-sided.
+        _oval_words = " ".join(str(x or "") for x in (words, p.get("why_size"), p.get("note"),
+                                                       st.get("note")))
+        if form == "oval_tube" and re.search(
+                r"(?<![A-Z0-9])(?:FLAT[\s-]*SIDED|F\.?\s?S\.?\s?O\.?)(?![A-Z0-9])",
+                _oval_words.upper()):
+            out["oval_shape"] = "flat_sided"
+        return out
     if form == "mesh":
         ap = _sizes(st.get("aperture_mm"))[:2]
         wire = _num(st.get("wire_mm"))
@@ -2441,7 +2452,8 @@ def _apply_stock(record: Dict[str, Any], s: Mapping[str, Any],
         record["section_stock"] = {
             "a": a, "b": b, "t": s["wall_mm"], "length_mm": s.get("length_mm") or 0,
             "profile_form": s.get("profile_form") or "", "form": s["form"],
-            "wall_assumed": bool(s.get("wall_assumed")), "source": SOURCE}
+            "wall_assumed": bool(s.get("wall_assumed")), "source": SOURCE,
+            **({"oval_shape": s["oval_shape"]} if s.get("oval_shape") else {})}
         record["stock_form"] = "tube"
         record["review_flags"].append(
             f"CONCEPT STOCK: {said} — costed by the metre, not nested as plate"
@@ -2474,7 +2486,8 @@ def stock_mass_kg(p: Mapping[str, Any], density: float = 7850.0,
     if s.get("form") in STOCK_SECTION_FORMS and s.get("length_mm"):
         from section_profile import section_kg_per_m                 # noqa: WPS433
         a, b = s["section_mm"][:2]
-        kg_m = section_kg_per_m(a, b, s["wall_mm"], s.get("profile_form"), rho)
+        from section_profile import section_form                     # noqa: WPS433
+        kg_m = section_kg_per_m(a, b, s["wall_mm"], section_form(s), rho)
         return kg_m * s["length_mm"] / 1000.0 if kg_m else None
     if s.get("form") == "mesh" and s.get("wire_length_mm"):
         return s["wire_length_mm"] / 1000.0 * 3.14159265 / 4.0 * (s["wire_mm"] ** 2) * rho / 1e6
