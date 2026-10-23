@@ -141,6 +141,17 @@ def test_the_page_offers_stop_beside_the_busy_runner_for_a_run_it_did_not_start(
     assert '"/abandon"' in handler
 
 
+def test_a_stopped_run_files_nothing_even_when_the_engine_finished_cleanly():
+    """A stop that lands as the engine exits 0 must not publish the book: the service is asked
+    once more after the engine ends, and a stop heard then files nothing."""
+    tail = RUNNER_SRC[RUNNER_SRC.index("code = proc.wait()"):]
+    ask, check, filing = (tail.index("flush(force=True)"), tail.index("if stop_asked:"),
+                          tail.index("collect("))
+    assert ask < check < filing
+    guard = tail[check:filing]
+    assert "return" in guard and "nothing was filed" in guard
+
+
 def test_the_runner_also_understands_an_explicit_cancel():
     assert '.get("cancel")' in RUNNER_SRC
 
