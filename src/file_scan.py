@@ -4466,6 +4466,17 @@ def _finalize_scan_summary(
             print(f"   [detail-geometry] {', '.join(_capped)} read larger than the assembly "
                   f"each sits in — costed on that assembly's developed outline and asked",
                   flush=True)
+        # WHAT DEPENDS ON THE SHEET IS READ FROM THE PART'S OWN SHEET, and cutting the blank
+        # cannot hold is not the part's (D-591) — before anything is costed from either.
+        from detail_page_geometry import bound_unmeasured_cut_path, revalidate_from_own_sheets
+        _reval = revalidate_from_own_sheets(_parts_dg, summary)
+        if _reval:
+            print(f"   [detail-geometry] {', '.join(_reval)} re-read from their own sheet — "
+                  f"weight, features and page geometry from the page that is theirs", flush=True)
+        _bounded = bound_unmeasured_cut_path(_parts_dg)
+        if _bounded:
+            print(f"   [detail-geometry] {', '.join(_bounded)}: cutting held to what the blank "
+                  f"can hold — the page's lines are not the part's", flush=True)
         # A RADIUS ITS FLAT CANNOT HOLD IS ROLLED (D-589), read once every blank is known.
         from detail_page_geometry import stamp_rolled_radii
         _rolled = stamp_rolled_radii(_parts_dg, summary)

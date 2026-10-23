@@ -3479,6 +3479,12 @@ def canonical_labour_groups(
             _costed_mm = _safe(_sub_rec.get("costed_thickness_mm"))
             if _costed_mm and _costed_mm > 0:
                 thickness = _costed_mm
+        # A SECTION'S GAUGE IS ITS WALL (D-591). 0351292's cross rail is 50 x 20 x 2 tube; a
+        # "3 mm" read off the support assembly's sheet put "Saw | 3mm MILD STEEL" on its row.
+        # Where the part is costed as a section, the row names the section's own wall.
+        _ss_row = pe.get("section_stock") or (raw_part or {}).get("section_stock")
+        if isinstance(_ss_row, dict) and _safe(_ss_row.get("t")):
+            thickness = _safe(_ss_row.get("t"))
         stock_form = str(
             (pe.get("material_estimate") or {}).get("stock_form") or ""
         ).lower()
