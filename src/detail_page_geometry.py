@@ -336,6 +336,36 @@ def _fold_count(part: Mapping[str, Any]) -> int:
         return 0
 
 
+_FOLD_EVIDENCE_SOURCES = frozenset({
+    "flat_pattern_bend_lines", "drawing_fold_note", "solidworks_bend_features",
+    "drawing_callouts_agreeing_with_model", "drawing_bend_callouts", "concept_read_fold_count",
+})
+
+
+def _evidenced_fold_count(part: Mapping[str, Any]) -> int:
+    """The folds a reading of the part counted — not the dashed-line proxy (D-591)."""
+    try:
+        from fold_count import press_brake_folds
+        res = press_brake_folds(dict(part))
+    except Exception:                                                # noqa: BLE001
+        return 0
+    if str(res.get("source") or "") in _FOLD_EVIDENCE_SOURCES:
+        return int(res.get("count") or 0)
+    return int(res.get("count") or 0) if _fold_op_has_evidence(part) else 0
+
+
+def _fold_op_has_evidence(part: Mapping[str, Any]) -> bool:
+    """True when the part's fold operation carries the drawing's words or a recorded reader —
+    not a bare operation name nobody can account for (the D-586/D-587 'unrecorded' case)."""
+    for op in ("folding", "fold", "bending"):
+        if str((part.get("operation_evidence") or {}).get(op) or "").strip():
+            return True
+        src = str((part.get("operation_sources") or {}).get(op) or "").strip().lower()
+        if src and src not in ("unknown", "unrecorded", "drawing_notes"):
+            return True
+    return False
+
+
 def _stated_flanges(part: Mapping[str, Any]) -> List[float]:
     out: List[float] = []
     for v in (part.get("fold_values_mm") or []):
@@ -515,8 +545,14 @@ def provisional_blank_from_sheets(part: Mapping[str, Any],
         return None
     formed_l, formed_w = max(hs[0], vs[0]), min(hs[0], vs[0])
     developed = bool(re.search(str(cfg.get("developed_words") or "$^"), text, re.I))
-    folds = _fold_count(part)
-    if _is_folded(part) and not folds:
+    # A FLANGE ONLY FOR A FOLD WITH EVIDENCE (D-591). 0351292's strip carried a fold no reader
+    # recorded a source for — an open question on the decisions list — and its blank was
+    # still developed for it: 1293 x 12 became 1293 x 37 and the unproven fold reached the
+    # material. A fold counted by a flat pattern, a drawing note or callouts, or the model
+    # develops the blank; the weakest proxies and a bare operation name do not, unless the
+    # operation itself carries the drawing's words.
+    folds = _evidenced_fold_count(part)
+    if _is_folded(part) and not folds and _fold_op_has_evidence(part):
         folds = 2
     if not folds:
         # A FORMED SHAPE HAS ITS FOLDS BEFORE ANYTHING ROUTES THEM (D-589): an angle cut from
@@ -869,15 +905,197 @@ def own_sheets(part: Mapping[str, Any], summary: Mapping[str, Any]) -> List[Mapp
     if not pn:
         return []
     pages = _page_index(summary)
+    # A PARTS LIST IS NOT THE PART'S OWN SHEET (D-591). A title block's drawing numbers on an
+    # assembly sheet include every row of its table, so 0351292's base assembly (page 9)
+    # read as the downstand's own sheet beside page 11. A page carrying a parts list counts
+    # only for the part whose table it is — the same exclusion apply_detail_page_geometry
+    # makes before it sizes a blank.
+    try:
+        from part_index import _bom_table_pages
+        bom_pages, owned = _bom_table_pages(summary)
+    except Exception:                                                # noqa: BLE001
+        bom_pages, owned = set(), {}
+    _raw_pn = str(part.get("part_number") or "").strip()
+    _owned_here = set(owned.get(_raw_pn) or owned.get(_raw_pn.upper()) or set())
     out = []
     for b in sorted(p for p in (part.get("pages") or []) if isinstance(p, int)):
         page = pages.get(b)
         if not page:
             continue
+        if b in bom_pages and b not in _owned_here:
+            continue
         tb = ((page.get("page_analysis") or {}).get("title_block") or {})
         dns = [_squash(d) for d in (tb.get("drawing_numbers") or [])] if isinstance(tb, Mapping) else []
+        dns += [_squash(page.get(k)) for k in ("drawing_number", "page_drawing_number")
+                if page.get(k)]
         if pn in dns:
             out.append(page)
+    return out
+
+
+def _sum_page_geometry(sheets: Sequence[Mapping[str, Any]]) -> Dict[str, float]:
+    """The numeric geometry the given sheets' own vector reads hold, summed (top level only)."""
+    out: Dict[str, float] = {}
+    for sheet in sheets:
+        geo = sheet.get("geometry_summary") if isinstance(sheet.get("geometry_summary"), Mapping) else {}
+        for k, v in geo.items():
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                out[k] = out.get(k, 0.0) + float(v)
+    return out
+
+
+_OWN_SHEET_CUES = ("hole_sizes_mm", "radii_mm", "angles_deg", "fold_values_mm", "slot_sizes_mm")
+
+
+def revalidate_from_own_sheets(parts: Any, summary: Mapping[str, Any]) -> List[str]:
+    """Every figure that depends on WHICH SHEET a part was read from is read again from its own
+    sheet, once the part's own sheet is known (D-591). Returns the part numbers changed.
+
+    0351292's top blank was sized correctly from its own sheet (30 x 7.4, page 8) while every
+    figure computed from the same pages stayed as it was: a 12,637 mm cut path and the holes
+    counted off the rail's assembly sheet (page 3) drove £24.13 of laser and a Punch share,
+    and its weight check compared it with the rail's 8.1 kg. The downstand (pages 9 and 11)
+    carried the base assembly's 8.6 kg and 8,631 mm of internal cutting the same way. Fixing
+    one field without its dependants leaves the book contradicting itself.
+
+    For a part bound to its own sheet AND to sheets that are someone else's (an assembly's,
+    a parts list), the figures read per page are taken from its own sheets only: the stated
+    weight, the feature cues (holes, radii, angles, fold values, slots) and the page-vector
+    geometry (cut length, hole and pierce counts). A measured flat — DXF or model — is never
+    touched: it was not read off a page. Each change is written on the part and flagged."""
+    if not isinstance(parts, Sequence) or not isinstance(summary, Mapping):
+        return []
+    try:
+        from blank_credibility import blank_is_measured
+    except Exception:                                                # noqa: BLE001
+        def blank_is_measured(_p: Any) -> bool:                      # type: ignore[misc]
+            return False
+    changed: List[str] = []
+    for part in parts:
+        if not isinstance(part, dict) or not_cut_from_a_blank(part):
+            continue
+        bound = sorted(p for p in (part.get("pages") or []) if isinstance(p, int))
+        own = own_sheets(part, summary)
+        own_pages = [s.get("page_number") for s in own]
+        foreign = [b for b in bound if b not in own_pages]
+        if not own or not foreign:
+            continue
+        pn = str(part.get("part_number") or "this part")
+        notes: List[str] = []
+        # THE WEIGHT ITS OWN SHEET STATES.
+        w = _weight_on_sheets(own)
+        cur = _stated_weight_kg(part)
+        if w and (cur is None or abs(cur - w) > 1e-9):
+            part["weights"] = [f"{w:g}KG"]
+            part["stated_weight_g"] = round(w * 1000.0, 3)
+            part["stated_weight_source"] = "own_sheet_title_block"
+            notes.append(f"weight {w:g} kg from its own sheet"
+                         + (f", not {cur:g} kg" if cur is not None else ""))
+        # THE FEATURES ITS OWN SHEET PRINTS.
+        for key in _OWN_SHEET_CUES:
+            vals: List[Any] = []
+            for s in own:
+                vals.extend(((s.get("page_analysis") or {}).get("feature_cues") or {}).get(key) or [])
+            if list(part.get(key) or []) != vals:
+                part[key] = vals
+                notes.append(f"{key.replace('_', ' ')} from its own sheet")
+        # THE GEOMETRY ITS OWN SHEET'S VECTORS HOLD — never over a measured flat.
+        if not blank_is_measured(part) and not part.get("dxf_augmented"):
+            geo = _sum_page_geometry(own)
+            roll = part.get("geometry_rollup") if isinstance(part.get("geometry_rollup"), dict) else None
+            if roll is not None and geo:
+                before = (roll.get("estimated_cut_length_mm"), roll.get("estimated_hole_count"))
+                for k, v in geo.items():
+                    if k in roll and isinstance(roll.get(k), (int, float)):
+                        roll[k] = v
+                after = (roll.get("estimated_cut_length_mm"), roll.get("estimated_hole_count"))
+                if before != after:
+                    notes.append(f"cut path {after[0]:,.0f} mm and {int(after[1] or 0)} hole(s) "
+                                 f"from its own sheet, not {float(before[0] or 0):,.0f} mm and "
+                                 f"{int(before[1] or 0)}")
+                for holder in (part.get("normalized_geometry"), part.get("manufacturing_features")):
+                    if not isinstance(holder, dict):
+                        continue
+                    for key, val in (("cut_length_mm", after[0]), ("raw_cut_length_mm", after[0]),
+                                     ("hole_count", after[1])):
+                        if key in holder and str(holder.get(f"{key}_source") or "") in ("", "pdf",
+                                                                                      "page_vectors"):
+                            holder[key] = val   # precedence: direct-write ok — re-derived from the part's own sheet
+        if notes:
+            part["_own_sheet_revalidation"] = {"own_pages": own_pages, "foreign_pages": foreign,
+                                               "changed": notes}
+            part.setdefault("review_flags", []).append(
+                f"READ FROM ITS OWN SHEET: {pn} is bound to page(s) "
+                f"{', '.join(str(b) for b in foreign)} as well as its own "
+                f"({', '.join(str(p) for p in own_pages)}); {'; '.join(notes)}. Figures on the "
+                f"other page(s) belong to the parts they draw")
+            changed.append(pn)
+    return changed
+
+
+_OUTLINES_A_PAGE_CUT_PATH_MAY_SPAN = 3.0
+_MIN_HOLE_PITCH_MM = 8.0
+
+
+def bound_unmeasured_cut_path(parts: Any) -> List[str]:
+    """A cut path or hole count a part's blank cannot hold is not the part's (D-591). Returns
+    the part numbers bounded.
+
+    A page's vector read sums every line on the sheet — views, borders, other parts — so on a
+    blank that was not measured it is a guess at the part's cutting at best. Where it exceeds
+    what the blank plausibly holds (the outline several times over) the cutting is taken as
+    the blank's own outline and the internal cut as unread; where the holes exceed what fits
+    at a minimum pitch, the count is taken as unread. Both said, so the DXF is asked for.
+    A measured flat is never bounded."""
+    if not isinstance(parts, Sequence):
+        return []
+    try:
+        from blank_credibility import blank_is_measured
+    except Exception:                                                # noqa: BLE001
+        return []
+    out: List[str] = []
+    for part in parts:
+        if not isinstance(part, dict) or not_cut_from_a_blank(part) or blank_is_measured(part):
+            continue
+        L, W = _blank_pair(part)
+        if not (L and W):
+            continue
+        outline = 2.0 * (L + W)
+        holders = [h for h in (part.get("normalized_geometry"), part.get("geometry_rollup"),
+                               part.get("manufacturing_features")) if isinstance(h, dict)]
+        notes: List[str] = []
+        cuts = [float(h.get(k) or 0) for h in holders
+                for k in ("cut_length_mm", "estimated_cut_length_mm", "raw_cut_length_mm")
+                if isinstance(h.get(k), (int, float))]
+        worst = max(cuts) if cuts else 0.0
+        if worst > outline * _OUTLINES_A_PAGE_CUT_PATH_MAY_SPAN:
+            for h in holders:
+                for k in ("cut_length_mm", "estimated_cut_length_mm", "raw_cut_length_mm"):
+                    if isinstance(h.get(k), (int, float)) and float(h.get(k) or 0) > outline:
+                        h[k] = round(outline, 1)   # precedence: direct-write ok — bounded by the part's own blank
+            notes.append(f"the {worst:,.0f} mm cut path is more than "
+                         f"{_OUTLINES_A_PAGE_CUT_PATH_MAY_SPAN:g}x the {L:g} x {W:g} blank's "
+                         f"outline, so it is a page's lines, not this part's: cut as the outline "
+                         f"({outline:,.0f} mm), internal cutting unread")
+        cap = max(1, int((L * W) // (_MIN_HOLE_PITCH_MM ** 2)))
+        holes = [int(h.get(k) or 0) for h in holders
+                 for k in ("hole_count", "estimated_hole_count", "estimated_pierce_count")
+                 if isinstance(h.get(k), (int, float))]
+        if holes and max(holes) > cap:
+            for h in holders:
+                for k in ("hole_count", "estimated_hole_count", "estimated_pierce_count"):
+                    if isinstance(h.get(k), (int, float)) and int(h.get(k) or 0) > cap:
+                        h[k] = 0   # precedence: direct-write ok — unread: more holes than the blank holds
+            notes.append(f"{max(holes)} holes cannot fit a {L:g} x {W:g} blank at a "
+                         f"{_MIN_HOLE_PITCH_MM:g} mm pitch (at most {cap}), so the count is "
+                         f"another drawing's: holes unread")
+        if notes:
+            pn = str(part.get("part_number") or "this part")
+            part["_cut_path_bounded"] = notes
+            part.setdefault("review_flags", []).append(
+                f"CUTTING FROM THE BLANK: {pn} — {'; '.join(notes)}. Give the DXF and the cutting "
+                f"is costed from it")
+            out.append(pn)
     return out
 
 

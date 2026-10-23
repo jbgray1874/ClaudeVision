@@ -12787,6 +12787,13 @@ def _member_carries_its_own_coat(member: Dict[str, Any]) -> bool:
         # case here; if the compiler resolves the pointer into a row of the member's own,
         # the POWDER sum leaves it out of the case's share (coated_sheet_area_m2).
         return False
+    try:
+        from finish_rules import coats_the_assembly as _coats_asm
+        if _fin and _coats_asm(_fin):
+            # "POWDER COAT ASSEMBLY": the assembly's coat, with this part in it (D-591).
+            return False
+    except Exception:                                                # noqa: BLE001
+        pass
     if _fin:
         return finish_is_powder(_fin)
     return "powder_coating" in [str(o) for o in (member.get("textual_operations") or [])]

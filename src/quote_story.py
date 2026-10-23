@@ -758,7 +758,20 @@ def trace_part(summary: Dict[str, Any], facts: Dict[str, Any]) -> Optional[Dict[
         c = _code_in(r.get("description"))
         return len({_dept_label(l.get("operation"))[1] for l in facts["labour"]
                     if c and c in _parts_on(l)})
-    row = max(rows, key=lambda r: (_route_len(r), _num(r.get("total_value_gbp")) or 0))
+
+    # THE WORKED EXAMPLE IS A SETTLED LINE (D-591). 0351292's quote walked the customer through
+    # the anti-scratch strip — a provisional blank and an unproven weld and fold, three open
+    # questions on the estimator's list. A line no open decision names comes first; only
+    # when every line has one is the best of them shown.
+    try:
+        from costed_facts import costed_job as _cj
+        _open = {str(d.get("part") or "").strip().upper()
+                 for d in (_cj(summary).get("decisions_required") or [])
+                 if isinstance(d, dict)}
+    except Exception:                                                # noqa: BLE001
+        _open = set()
+    row = max(rows, key=lambda r: (_code_in(r.get("description")).upper() not in _open,
+                                   _route_len(r), _num(r.get("total_value_gbp")) or 0))
     code = _code_in(row.get("description"))
     rec = next((p for p in facts["made"] if str(p.get("part_number") or "") == code), {})
     q = _num(row.get("qty_per_unit")) or _qty(rec)

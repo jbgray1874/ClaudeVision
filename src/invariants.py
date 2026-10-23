@@ -2138,6 +2138,29 @@ def check_an_assembly_is_not_charged_as_a_blank(summary: Any) -> List[Dict[str, 
         parts=offenders[:10], count=len(offenders), material_gbp=round(_money, 2))]
 
 
+def _compiled_children(summary: Any) -> Dict[str, set]:
+    """parent -> members, from the compiled hierarchy the BOM tab and the report print (D-591).
+
+    0351292's records carry the product root as owning_assembly on every part and no
+    assembly_children, so a check reading only those called the rail, base and supports
+    memberless while the report listed 6, 2 and 4 members under them. One hierarchy, read the
+    same way by the page and by the checks on it."""
+    out: Dict[str, set] = {}
+    if not isinstance(summary, dict):
+        return out
+    shadow = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow") or {}) \
+        if isinstance(summary.get("estimate_summary"), dict) else {}
+    for node in (shadow.get("nodes") or []) if isinstance(shadow, dict) else []:
+        if not isinstance(node, dict):
+            continue
+        kid = str(node.get("part_number") or "").strip().upper()
+        for par in (node.get("parents") or []):
+            par_u = str(par or "").strip().upper()
+            if kid and par_u and par_u != kid:
+                out.setdefault(par_u, set()).add(kid)
+    return out
+
+
 def check_a_memberless_assembly_carries_nothing(summary: Any) -> List[Dict[str, Any]]:
     """A record the hierarchy calls a parent, with no member to carry its material, and none
     of its own (D-560).
@@ -2172,12 +2195,14 @@ def check_a_memberless_assembly_carries_nothing(summary: Any) -> List[Dict[str, 
             owner = str(p.get(key) or "").strip().upper()
             if owner and owner != _pn(p):
                 owned.setdefault(owner, set()).add(_pn(p))
+    _compiled = _compiled_children(summary)
     offenders: List[Dict[str, Any]] = []
     for part in parts:
         if not isinstance(part, dict) or not bought_in_policy.is_assembly(part):
             continue
-        members = {str(c).strip().upper() for c in (part.get("assembly_children") or [])
-                   if str(c).strip()} | owned.get(_pn(part), set())
+        members = ({str(c).strip().upper() for c in (part.get("assembly_children") or [])
+                    if str(c).strip()} | owned.get(_pn(part), set())
+                   | _compiled.get(_pn(part), set()))
         members.discard(_pn(part))
         if members:
             continue
@@ -3153,6 +3178,12 @@ def check_the_pack_contains_the_drawings_its_bom_names(summary: Any) -> List[Dic
                 _quarantined.add(_bare(_f))
     _quarantined.discard("")
 
+    # AN ASSEMBLY WHOSE MEMBERS THIS PACK READ IS NOT AN UNREAD LINE (D-591). The check exists
+    # because a missing child is missing MONEY; 0351292's rail and base were called drawings
+    # "not in this pack" while the hierarchy hung six and two members under them, every one
+    # read and costed from its own sheet. Where the compiled hierarchy gives a line members
+    # that the pack contains, its money is on them and nothing is missing.
+    _compiled = _compiled_children(summary)
     missing = []
     for row in rows:
         if not isinstance(row, dict):
@@ -3163,6 +3194,8 @@ def check_the_pack_contains_the_drawings_its_bom_names(summary: Any) -> List[Dic
         if code.upper() in _quarantined or _bare(code) in _quarantined:
             continue
         if _bare(code) in present:
+            continue
+        if any(_bare(k) in present for k in _compiled.get(code.upper(), set())):
             continue
         # A MIRROR HAS NO DRAWING OF ITS OWN. "11350-01-02 MIR" and 11650's
         # "11650-04-01A-HANDED" are the other hand of a part detailed on ONE sheet; the

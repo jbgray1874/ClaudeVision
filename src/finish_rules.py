@@ -31,6 +31,7 @@ __all__ = [
     "POWDER_POINTER_HINTS",
     "stated_finish",
     "finish_is_powder",
+    "coats_the_assembly",
     "finish_contradiction",
     "holds_drawing_text",
     "holds_parts_list_rows",
@@ -304,6 +305,21 @@ def finish_is_powder(finish_text: str) -> bool:
 def _is_pointer(finish_text: str) -> bool:
     upper = str(finish_text or "").upper()
     return any(hint in upper for hint in POWDER_POINTER_HINTS)
+
+
+# A COAT STATED FOR THE ASSEMBLY IS THE ASSEMBLY'S (D-591). "POWDER COAT ASSEMBLY - GRAPHITE
+# RAL7024" is printed on 0351292's assembly sheets; the downstand and the cross rail, bound to
+# those sheets as well as their own, took it as their own finish, so each was "coated on its
+# own line" — and no line coated them. A finish that names the assembly, or coating after
+# welding or fabrication, says what is coated: the assembly, with this part in it.
+_ASSEMBLY_COAT_RE = re.compile(
+    r"\b(?:ASSEMBLY|ASSY|ASSEMBLIES|AFTER\s+(?:WELDING|FABRICATION|ASSEMBLY)|AS\s+A\s+UNIT)\b")
+
+
+def coats_the_assembly(finish_text: str) -> bool:
+    """True when a stated finish coats the ASSEMBLY (or the welded unit), not a loose part."""
+    upper = str(finish_text or "").upper()
+    return bool(_ASSEMBLY_COAT_RE.search(upper)) and "POWDER" in upper
 
 
 def finish_contradiction(operation: str, finish_text: str) -> Optional[str]:
