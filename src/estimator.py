@@ -8483,6 +8483,20 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     # Recognise on the geometry pierce/hole count (DXF truth, e.g. 386), not the
     # manufacturing "hole_count" field, which can collapse to distinct-size count.
     _punch_hole_signal = int(max(holes or 0, pierces or 0))
+    # WHERE THE COUNT CAME FROM, IN WORDS (D-592). The punch rule was built on DXF counts; on a
+    # part with no measured flat the count is circles read off the drawing's lines — views,
+    # title block and all — and calling it "measured" is how 0351292's downstand went to the
+    # punch on a page's 67 circles. Such a count is a candidate: it does not establish the
+    # punch unless the drawing names a punched family, and it is never called measured.
+    try:
+        from detail_page_geometry import machining_evidence as _mach_ev, UNVERIFIED_FEATURES
+        _mev = _mach_ev(part)
+    except Exception:                                                # noqa: BLE001
+        _mev, UNVERIFIED_FEATURES = {"measured": True, "basis": "measured"}, ""
+    _holes_word = ("measured hole(s)" if _mev.get("measured")
+                   else "hole(s) read off the drawing's lines (unverified, not measured)")
+    _punch_kw = any(k in _punch_blob for k in
+                    ((getattr(config, "PUNCH_RECOGNITION", {}) or {}).get("punch_keywords") or []))
     # A SIGHTED CUT-OUT DOES NOT ESTABLISH PUNCH TOOLING (D-493). The punch time charges each
     # hole as one hit, which assumes a tool of that size and shape; a measured flat or a
     # stated punch can say so, a slot sighted off a brief cannot. Sighted cut-outs stay on the
@@ -8496,6 +8510,13 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
             f"is not established — costed as laser profile cutting, each cut-out round its "
             f"perimeter with a pierce. If SDI punches these on standard tooling, say so and the "
             f"time follows")
+    elif ((_mat_u in _SHEET_METALS) and "punch" not in ops and not _mev.get("measured")
+          and not _punch_kw and _is_punch_part(part, _punch_hole_signal, _punch_blob)):
+        part.setdefault("review_flags", []).append(
+            f"PUNCH NOT ASSUMED: {_punch_hole_signal} {_holes_word}; the shop rule would send "
+            f"this part to the punch, but a count read off the drawing's lines does not establish holes or "
+            f"tooling — costed as laser on that count, and asked. Give the DXF or the hole count "
+            f"and the punch rule is asked of it")
     elif (_mat_u in _SHEET_METALS) and "punch" not in ops and _is_punch_part(part, _punch_hole_signal, _punch_blob):
         # MEASURED HOLES ESTABLISH THE HOLES, NOT THE TOOLING (D-494). The switch is the shop's
         # corpus rule; whether the punch has tools for these hole sizes at this gauge is a
@@ -8514,14 +8535,14 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                           f"({_max_t:g} mm)")
         if _not_punch:
             part.setdefault("review_flags", []).append(
-                f"PUNCH NOT USED: {_punch_hole_signal} measured hole(s) would send this part to "
+                f"PUNCH NOT USED: {_punch_hole_signal} {_holes_word}; the shop rule would send this part to "
                 f"the punch, but {_not_punch} (config PUNCH_RECOGNITION) — costed as laser")
         else:
             ops = [o for o in ops if o != "laser_cutting"] + ["punch"]
             record_operation(part, "punch", "inference")
             part.setdefault("review_flags", []).append(
-                f"PUNCH — A PROVISIONAL PROCESS ASSUMPTION: {_punch_hole_signal} measured "
-                f"hole(s) in {float(thickness_mm or 0):g} mm {_mat_u.lower() or 'sheet'} send this "
+                f"PUNCH — A PROVISIONAL PROCESS ASSUMPTION: {_punch_hole_signal} {_holes_word} "
+                f"in {float(thickness_mm or 0):g} mm {_mat_u.lower() or 'sheet'} send this "
                 f"part to the punch under the shop rule (config PUNCH_RECOGNITION, from the 2023 "
                 f"estimates), but tooling for "
                 + (f"these hole sizes ({', '.join(f'{h:g}' for h in sorted(set(_sizes))[:6])} mm)"
@@ -8583,6 +8604,32 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         if _punch_cycle is not None:
             run_times_min["punch"] = round(_punch_cycle[0], 2)
             part["punch_calibration"] = {"cycle_min": round(_punch_cycle[0], 2), "basis": _punch_cycle[1]}
+
+    # CUTTING READ OFF THE DRAWING'S LINES IS COSTED AS A CANDIDATE AND ASKED (D-592). Where no
+    # flat was measured, the holes and cutting the laser or punch time charges came from the
+    # page's vectors: priced, so nothing is left out, and on the decisions list, so nobody takes
+    # them for a measured profile.
+    try:
+        from detail_page_geometry import _made_here as _is_made_part
+        _made_part = bool(_is_made_part(part)) and not part.get("is_assembly_parent")
+    except Exception:                                                # noqa: BLE001
+        _made_part = not part.get("is_assembly_parent")
+    if (_made_part and ("laser_cutting" in ops or "punch" in ops)
+            and _mev.get("basis") == UNVERIFIED_FEATURES
+            and not part.get("_cut_path_not_bounded")   # already asked, with the reason kept
+            and UNVERIFIED_FEATURES and (int(pierces or 0) > 0 or int(holes or 0) > 0)):
+        try:
+            from source_precedence import raise_manufacturing_question as _ask_cut
+            _pn_cut = str(part.get("part_number") or "this part")
+            _ask_cut(part,
+                     f"Cutting of {_pn_cut}: {int(max(holes or 0, pierces or 0))} hole(s) and "
+                     f"{cut_length_mm:,.0f} mm of cutting read off the drawing's lines",
+                     "costed as candidates — the counts are the page's circles and lines, not a "
+                     "measured flat, so they may include views, notes and the title block",
+                     "give the DXF, or confirm the hole count and the internal cutting",
+                     "estimator.estimate_process_times")
+        except Exception:                                            # noqa: BLE001
+            pass
 
     if "hole_machining" in ops:
         rule = LABOUR_RULES["hole_machining"]
@@ -9599,6 +9646,42 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 f"{run_times_min['welding']:g} min per weldment — "
                 f"{_wm.get('allowance_source', 'shop figure')}. Supply a weld length or a "
                 f"joint count on the drawing and it is computed instead")
+        elif not _mev.get("measured") and (
+                part.get("_internal_features_unread")
+                or (pierces * 90.0 + cut_length_mm * 0.01) / 60.0
+                > float(_wm.get("weld_min_per_joint", 10.0))):
+            # A COUNT READ OFF THE PAGE TIMES NO MORE THAN ONE JOINT (D-592). The fallback below
+            # charges 90 s a hole, and on a part with no measured flat those holes are the
+            # page's circles — views, title block and all. 0351292's strip booked 157 minutes
+            # of welding off its page's 104 circles; its end plate and base angle 21 and 35
+            # minutes off 14 and 23 circles the blank showed were not theirs. A page-read count
+            # is a candidate, and a candidate does not become welding: the drawing states
+            # welding, so the least it is is one joint, at the welding department's per-joint
+            # time — said and asked. Below that the small geometry timer stands, as before
+            # (a bracket welded once keeps its minute); where the holes are unread there is no
+            # count to time it at all, so it is the one joint.
+            run_times_min["welding"] = round(
+                max(1.0, float(_wm.get("weld_min_per_joint", 10.0))), 2)
+            part["weld_time_is_per_joint"] = 1
+            _pn_w = str(part.get("part_number") or "this part")
+            _seen_w = int(pierces or 0)
+            _why_w = ("its holes are unread (its page's circles are not its own)"
+                      if part.get("_internal_features_unread") else
+                      f"the {_seen_w} hole(s) that would time it are read off the drawing's "
+                      f"lines, not measured" if _seen_w else "no measured hole times it")
+            part.setdefault("review_flags", []).append(
+                f"WELD TIME FOR ONE JOINT: {_pn_w} — {_why_w}, so the per-hole weld timing "
+                f"does not run; its drawing states welding, so it carries one joint at "
+                f"{run_times_min['welding']:g} min — {_wm.get('allowance_source', 'the shop')}. "
+                f"Give the weld length or the joint count and it is computed")
+            try:
+                from source_precedence import raise_manufacturing_question as _ask_weld
+                _ask_weld(part, f"Welding of {_pn_w}: timed as one joint",
+                          f"{_why_w}, so the weld is not timed from them",
+                          "give the weld length or the number of joints",
+                          "estimator.estimate_process_times")
+            except Exception:                                        # noqa: BLE001
+                pass
         else:
             run_times_min["welding"] = round(
                 max(1.0, (pierces * 90.0 + cut_length_mm * 0.01) / 60.0), 2)
@@ -10236,6 +10319,16 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     except Exception:                                                # noqa: BLE001
         pass
     material = _price_declared_material_layers(part, material)
+    # CUTTING HELD TO THE BLANK THE MATERIAL WAS COSTED ON (D-592). The scan bounds a part's
+    # page-read cutting only where its blank was known then; 0351292's top blank and 401918's
+    # weldment pieces reached here with no blank at scan time and 2.8 to 11 m of a page's lines
+    # as their cut path. The same rule, asked again on the blank that is now costed.
+    try:
+        from detail_page_geometry import bound_cutting_to_blank as _bound_cut
+        if part.get("_costed_blank_mm"):
+            _bound_cut(part, *part["_costed_blank_mm"])
+    except Exception:                                                # noqa: BLE001
+        pass
     if debug:
         print(f"[DEBUG] estimate_part material done {part_number}")
     # FIX 1: feed powder LABOUR area from the SAME reliable blank the powder MATERIAL

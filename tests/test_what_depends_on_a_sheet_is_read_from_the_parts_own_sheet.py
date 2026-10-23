@@ -113,7 +113,7 @@ def test_a_tab_does_not_carry_its_pages_lines_or_circles():
                  30.0, 7.4)
     assert g.bound_unmeasured_cut_path([tab]) == ["T-1"]
     assert tab["normalized_geometry"]["cut_length_mm"] == pytest.approx(74.8)
-    assert tab["geometry_rollup"]["estimated_hole_count"] == 0
+    assert tab["geometry_rollup"]["estimated_hole_count"] is None, "unread, not zero"
     assert any("CUTTING FROM THE BLANK" in f for f in tab["review_flags"])
 
 

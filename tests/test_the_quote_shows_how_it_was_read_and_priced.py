@@ -297,8 +297,17 @@ def test_dressing_is_not_welding_and_the_route_is_in_shop_order(tmp_path):
 
 
 def test_the_traced_part_is_the_sheets_own_sum(tmp_path):
+    # D-592: the worked example is a line with size, price and route evidence — a measured
+    # blank and a charged figure the read-back recorded. Without them there is no example.
     s = _summary(tmp_path)
-    s_facts = quote_story.job_facts(s, _PARTS, 50)
+    assert quote_story.trace_part(s, quote_story.job_facts(s, _PARTS, 50)) is None
+    s["final_estimate"]["totals"]["unit_gbp"] = UNIT
+    parts = [dict(p) for p in _PARTS]
+    for p in parts:
+        if p["part_number"] == "UNIT-01":
+            p.update(blank_length_mm=500.0, blank_width_mm=300.0,
+                     blank_length_mm_source="dxf_flat_pattern")
+    s_facts = quote_story.job_facts(s, parts, 50)
     tp = quote_story.trace_part(s, s_facts)
     assert tp["code"] == "UNIT-01", "the part with the longest route through the shop"
     assert tp["each"] * tp["qty"] * (1 + tp["scrap"]) == pytest.approx(tp["value"])
