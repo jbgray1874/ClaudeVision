@@ -608,26 +608,30 @@ def provisional_blank_from_sheets(part: Mapping[str, Any],
                         f"size")
                 return None
             if ratio is not None and ratio > hi and developed:
-                # THE WIDTH THE WEIGHT AGREES WITH (D-589). The largest upright figure on a
-                # flat-pattern sheet can belong to the formed view — 0351292's downstand
-                # prints 208.9 for its returns and 25 for its flat width. Among the figures
-                # the same sheets print below the width taken, the one whose blank the stated
-                # weight agrees with (within the window, nearest to it) is the flat's width;
-                # two equally near, or none, decide nothing and the refusal stands.
+                # THE DIMENSIONS SELECT, THE WEIGHT CORROBORATES (D-589, review). The largest
+                # upright figure on a flat-pattern sheet can belong to the formed view —
+                # 0351292's downstand prints 208.9 for its returns and 25 for its flat width.
+                # The width is looked for where a width is printed: across the length's axis,
+                # below the figure refused. The weight never chooses between figures: exactly
+                # ONE such figure must give a blank the stated weight agrees with. Two, or
+                # none, decide nothing and the refusal stands. A figure along the length's
+                # axis is never a width, however well it fits the weight (31.7 on the same
+                # sheet fits it too).
+                _len_axis = "h" if hs[0] >= vs[0] else "v"
                 _fits = sorted(
-                    ((abs((length * w / 1e6) / implied_m2 - 1.0), w,
-                      (length * w / 1e6) / implied_m2)
-                     for w in {round(v, 1) for v, _a in figures}
-                     if w < width and lo <= (length * w / 1e6) / implied_m2 <= hi),
-                    key=lambda c: c[0])
-                if _fits and (len(_fits) == 1 or _fits[1][0] - _fits[0][0] > 0.05):
-                    _w_was, width = width, _fits[0][1]
+                    (w, (length * w / 1e6) / implied_m2)
+                    for w in {round(v, 1) for v, a in figures if a != _len_axis}
+                    if w < width and lo <= (length * w / 1e6) / implied_m2 <= hi)
+                if len(_fits) == 1:
+                    _w_was, width = width, _fits[0][0]
                     weight_note = (f"; the width is {width:g} mm, not {_w_was:g}: the largest "
-                                   f"upright figure would weigh {ratio:.2f}x the stated "
-                                   f"{weight:g} kg on a flat pattern, and {width:g} mm is the "
-                                   f"printed figure that weight agrees with "
-                                   f"({_fits[0][2]:.2f}x) — confirm the flat width")
+                                   f"figure across the length would weigh {ratio:.2f}x the "
+                                   f"stated {weight:g} kg on a flat pattern, and {width:g} mm is "
+                                   f"the only other figure printed across it that the weight "
+                                   f"agrees with ({_fits[0][1]:.2f}x) — confirm the flat width")
                     ratio = None
+                elif len(_fits) > 1 and isinstance(part, dict):
+                    part["_provisional_blank_candidates"] = [w for w, _r in _fits]
             if ratio is not None and ratio > hi and developed:
                 # A FLAT PATTERN IS THE NET BLANK (D-584): nothing is cut out of it after
                 # development, so a developed size that weighs several times the stated part

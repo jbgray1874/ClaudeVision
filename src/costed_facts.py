@@ -1712,10 +1712,20 @@ def operation_coverage(source: Any) -> Dict[str, Any]:
         on = [r for r in rows if did in (r.get("decision_ids") or []) or r.get("decision_id") == did]
         if on:
             entry["rows"] = [r.get("workbook_row") for r in on]
-            by_dept: Dict[str, List[Dict[str, Any]]] = {}
+            # THE SAME WORK ON THE SAME PARTS TWICE, NOT TWO ROWS (D-589, review). One
+            # requirement on two rows of a department can be two stages or two groups of
+            # parts. It is a double charge only when the rows carry the same operations for
+            # the same parts.
+            by_work: Dict[Tuple[str, Tuple[str, ...], Tuple[str, ...]], List[Dict[str, Any]]] = {}
             for r in on:
-                by_dept.setdefault(str(r.get("wb_operation") or ""), []).append(r)
-            twice = next((rs for rs in by_dept.values() if len(rs) > 1), None)
+                by_work.setdefault(
+                    (str(r.get("wb_operation") or ""),
+                     tuple(sorted(str(o).lower() for o in _row_engine_ops(r))),
+                     tuple(sorted(str(x).strip().upper() for x in (r.get("part_numbers") or [])))),
+                    []).append(r)
+            twice = next((rs for rs in by_work.values() if len(rs) > 1), None)
+            if len(on) > 1 and not twice:
+                entry["stages"] = len(on)
             if twice:
                 entry.update(rows=[r.get("workbook_row") for r in twice],
                              gbp=round(sum(_num(r.get("total_value_gbp")) for r in twice), 2))
