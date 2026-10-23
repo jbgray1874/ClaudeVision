@@ -27,6 +27,16 @@ Two realities of a spreadsheet shape the design:
     sandbox pilot that window is accepted — and it is written down here so
     nobody mistakes it for a guarantee.
 
+  * A write is ONE CELL, and it is read back. `apply()` PATCHes
+    /workbook/worksheets('<sheet>')/range(address='<A1>') with that single
+    value, then reads the same address and checks it holds it. The file is
+    never replaced or re-uploaded, so nothing outside the named cell can
+    change and nobody else's edit can be overwritten wholesale. No workbook
+    session is opened: a range write with no session header is saved to the
+    file, where a NON-persistent session would accept the write and discard
+    it. Asked for by Nick Garrish, 23 October 2026, after ChatGPT's own
+    SharePoint connector offered him only a whole-file replace.
+
 Configuration (.env), alongside the voicecrm.py settings:
 
     SDI_VOICECRM_STORE=excel      selects this backend (default is "list")
@@ -231,12 +241,28 @@ class ExcelStore:
     def _headers(self, token: str) -> dict:
         return {"Authorization": f"Bearer {token}"}
 
+    @staticmethod
+    def request_id(response: httpx.Response) -> str:
+        """Graph's own id for this call, which Microsoft support asks for.
+
+        Nick Garrish, 23 October 2026, on a write that did not happen: "capture the
+        actual request result: success or failure, HTTP status, error code/message,
+        and correlation/request ID." Without it a failure can be described but not
+        traced, and the answer to "was it us or them" stays an opinion."""
+        for header in ("request-id", "client-request-id", "x-ms-request-id"):
+            value = response.headers.get(header)
+            if value:
+                return value
+        return ""
+
     def _graph_detail(self, response: httpx.Response) -> str:
         try:
             err = response.json().get("error", {})
-            return f"{err.get('code', '')}: {err.get('message', '')}"[:400]
+            detail = f"{err.get('code', '')}: {err.get('message', '')}"[:400]
         except Exception:  # noqa: BLE001 — a non-JSON error body is still worth showing
-            return response.text[:400]
+            detail = response.text[:400]
+        rid = self.request_id(response)
+        return f"{detail} [request-id {rid}]" if rid else detail
 
     def _err(self, response: httpx.Response) -> dict:
         return {"state": "graph_error", "status": response.status_code,
@@ -571,7 +597,53 @@ class ExcelStore:
         if res.status_code >= 300:
             err = {"state": "failed", "status": res.status_code, "detail": self._graph_detail(res)}
             return unavailable(err) if excel_refused({**err, "state": "graph_error"}) else err
-        return None
+        return self._verify(token, wb, addr, new_value, self.request_id(res))
+
+    def _verify(self, token: str, wb: dict, addr: str, expected: str,
+                wrote_id: str = "") -> Optional[dict]:
+        """Read the cell back. None when it holds what we wrote, an error otherwise.
+
+        ── A 200 IS NOT A SAVED CELL ───────────────────────────────────────────────
+        Nick Garrish, 23 October 2026: "If the test succeeds, read the changed cell
+        back and confirm it persisted." He is right to ask. Graph answers 200 to the
+        range PATCH, and the workbook API has a documented way of accepting a write
+        into a session that is then never saved - so "the request succeeded" and "the
+        value is in the file" are two different facts, and only the second one is what
+        anybody meant. We do not open a session (a write with no session header is
+        saved to the file), which makes this check cheap and the answer certain.
+
+        A read-back that DISAGREES is reported as a failure, because telling somebody
+        their change is saved when it is not is the one outcome this whole write path
+        exists to prevent. A read-back that cannot be done at all is NOT: the write
+        itself answered 200, and a second call failing on the network says nothing
+        about the first.
+        """
+        url = f"{wb['base']}/worksheets('{wb['sheet']}')/range(address='{addr}')"
+        try:
+            with httpx.Client(timeout=30) as client:
+                res = client.get(url, params={"$select": "text,values"},
+                                 headers=self._headers(token))
+        except httpx.HTTPError:
+            return None                                  # see the docstring
+        if res.status_code >= 300:
+            return None
+        try:
+            body = res.json()
+            shown = ((body.get("text") or [[""]])[0] or [""])[0]
+            raw = ((body.get("values") or [[""]])[0] or [""])[0]
+        except Exception:                                # noqa: BLE001
+            return None
+        want = str(expected).strip()
+        for got in (shown, raw):
+            # Excel reformats as it stores: a typed date becomes a serial and shows
+            # in the column's own format, a number loses its typed thousands comma.
+            # The cell is right if either face of it matches what was asked for.
+            if str(got).strip() == want:
+                return None
+        return {"state": "not_saved", "status": 200,
+                "detail": (f"Microsoft Graph accepted the change but {addr} reads "
+                           f"'{shown}', not '{want}'. Nothing was saved. "
+                           + (f"[write request-id {wrote_id}]" if wrote_id else "")).strip()}
 
     def download(self, token: str) -> tuple[Optional[bytes], Optional[dict]]:
         """The whole workbook file, for a reader with no signed-in user.
