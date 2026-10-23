@@ -34,9 +34,10 @@ def test_callouts_the_model_confirms_beat_a_note_that_counts_fewer():
     assert (got["count"], got["source"]) == (2, fc.CALLOUTS_AND_MODEL)
 
 
-def test_a_note_alone_still_stands_against_the_model_alone():
+def test_a_bare_angle_does_not_outrank_the_model():
+    """D-592a: an angle list is not a fold note, so it no longer stands against the model."""
     part = {"angles_deg": [90], "solidworks_bend_features": 4}
-    assert fc.press_brake_folds(part)["count"] == 1
+    assert fc.press_brake_folds(part)["count"] == 4
 
 
 def test_the_hand_is_charged_what_its_base_is_charged():

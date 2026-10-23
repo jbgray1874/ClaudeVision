@@ -35,6 +35,7 @@ being folded roughly twenty times for folds that are not there. So the proxy sit
 model, the two statements (flat pattern, drawing note) sit above it, and both of the jobs
 that taught us anything come out right.
 """
+import re
 from typing import Any, Dict, Optional
 
 # The rungs, strongest first. The label is what the sheet prints, so it says what was counted
@@ -97,17 +98,40 @@ def flat_pattern_bend_lines(part: Dict[str, Any]) -> Optional[int]:
     return _int(part.get("bend_count_dxf"))
 
 
-def drawing_fold_note(part: Dict[str, Any]) -> Optional[int]:
-    """What the drawing office STATED: fold callouts, fold dimensions, bend angles.
+_FOLD_WORDS = re.compile(r"\b(?:FOLD(?:ED|ING|S)?|BEND(?:ING|S)?|BENT|UP|DOWN)\b", re.I)
+_NATIVE_FOLD_SOURCES = frozenset({"dxf_bendlines_layer", "solidworks_api", "estimator_confirmed"})
 
-    A statement about the part, not an inference from how it was drawn.
+
+def has_fold_instruction(part: Dict[str, Any]) -> bool:
+    """A recorded fold INSTRUCTION on the part's fold operation (D-592a): the drawing's fold
+    words (FOLD, BEND, UP, DOWN) in its evidence, or a reader that measured the bends. Not a
+    source label such as "inference", and not a bare angle — "90 DEG COUNTERSINK" is no fold."""
+    if not isinstance(part, dict):
+        return False
+    for op in ("folding", "fold", "bending"):
+        if _FOLD_WORDS.search(str((part.get("operation_evidence") or {}).get(op) or "")):
+            return True
+        if str((part.get("operation_sources") or {}).get(op) or "").lower() in _NATIVE_FOLD_SOURCES:
+            return True
+    return False
+
+
+def drawing_fold_note(part: Dict[str, Any]) -> Optional[int]:
+    """What the drawing office STATED: a fold count, or fold dimensions.
+
+    A statement about the part, not an inference from how it was drawn. NOT A BARE ANGLE
+    (D-592a, review of D-592): an angle list is every angle printed on the sheet — a 90°
+    countersink, a mitre, a chamfer, a view's rotation — de-duplicated by value. 0351292's
+    1293 mm strip took one fold and a 25 mm flange from a lone 90° while its own 0.4 kg says a
+    flat 12 mm strip; 401918's bracket counted its 5° as a second fold beside the one its
+    sheet states. Counted folds, fold dimensions, UP/DOWN callouts, the flat pattern and the
+    model keep their own rungs.
     """
     if not isinstance(part, dict):
         return None
     stated = [
         _int(part.get("fold_count_textual")),
         len(part.get("fold_values_mm") or []) or None,
-        len(part.get("angles_deg") or []) or None,
     ]
     stated = [s for s in stated if s]
     return max(stated) if stated else None
@@ -193,7 +217,13 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
     # at least as many features beat a fold count the drawing office wrote down, was labelled
     # measured, and closed "no confirmation is needed". A stated count keeps the note rung; the
     # callouts and the model go into the disagreement, which asks.
-    if (_callouts and _model and _model >= _callouts and _callouts > count
+    if (_callouts and _model and _model >= _callouts and source == MODEL_FEATURES
+            and not _int(part.get("fold_count_textual")) and not part.get("fold_values_mm")):
+        # WITH THE ANGLE RUNG GONE (D-592a), the model would supply the number where its
+        # angle list once stood: 12173-04-02M's two callouts against four CAD features. The
+        # callouts the model confirms are still the count, as D-380 had it.
+        count, source = _callouts, CALLOUTS_AND_MODEL
+    elif (_callouts and _model and _model >= _callouts and _callouts > count
             and (source == FLAT_PATTERN
                  or (source == DRAWING_NOTE and _note_is_angle_list_only(part)))):
         count, source = _callouts, CALLOUTS_AND_MODEL
@@ -206,7 +236,8 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
     # NOT A COUNT OF REPEATED VIEWS (review of D-505): the same bend called out in two views
     # reads twice. Where the sheet's drawn bend lines were counted (the dashed-line reading),
     # the callouts may not exceed them; past that ceiling they stay a reading, not the charge.
-    elif (_callouts and not _model and _callouts > count and source == DRAWING_NOTE
+    elif (_callouts and not _model and _callouts > count
+          and source in (DRAWING_NOTE, DASHED_PROXY, NO_EVIDENCE)
           and not _int(part.get("fold_count_textual"))
           and (dashed_line_proxy(part) is None or _callouts <= dashed_line_proxy(part))):
         count, source = _callouts, CALLOUTS_ONLY

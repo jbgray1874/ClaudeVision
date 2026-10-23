@@ -296,12 +296,15 @@ def test_an_assembly_is_not_asked_about_cutting():
 
 # ── a fold the counter charges from the drawing carries that evidence ──────────────────────
 
-def test_a_fold_with_a_drawn_angle_carries_it_and_one_without_does_not():
-    drawn = {"part_number": "S-1", "textual_operations": ["folding"], "angles_deg": ["90"]}
-    bare = {"part_number": "S-2", "textual_operations": ["folding"]}
-    assert g.settle_fold_evidence([drawn, bare]) == ["S-1"]
-    assert "90" in drawn["operation_evidence"]["folding"]
-    assert not (bare.get("operation_evidence") or {}).get("folding")
+def test_a_stated_fold_carries_its_evidence_and_a_bare_angle_carries_none():
+    """D-592a: a lone 90° on the sheet is no fold — 0351292's strip, 0.4 kg, is a flat 12 mm."""
+    stated = {"part_number": "S-1", "textual_operations": ["folding"], "angles_deg": ["90"],
+              "fold_count_textual": 1}
+    angle_only = {"part_number": "S-2", "textual_operations": ["folding"], "angles_deg": ["90"]}
+    assert g.settle_fold_evidence([stated, angle_only]) == ["S-1"]
+    assert "1 fold(s)" in stated["operation_evidence"]["folding"]
+    assert "90" not in stated["operation_evidence"]["folding"], "the angle is not the evidence"
+    assert not (angle_only.get("operation_evidence") or {}).get("folding")
 
 
 # ── the quote's worked example needs size, price and route evidence ────────────────────────

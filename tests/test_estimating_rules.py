@@ -2859,8 +2859,9 @@ def test_a_measured_zero_bend_count_outvotes_a_drawing_callout():
 
     # A zero from something that cannot see bends must STILL fall through — this is the
     # fold-shadowing fix, and breaking it would drop real folds off PDF-only parts.
+    # A stated fold on the PDF, not a bare angle (D-592a: an angle alone is asked, not costed).
     pdf_only = {"part_number": "09M", "normalized_material": "MILD_STEEL",
-                "angles_deg": ["90"], "normalized_thickness_mm": 1.5,
+                "angles_deg": ["90"], "fold_count_textual": 1, "normalized_thickness_mm": 1.5,
                 "manufacturing_features": {"bend_count": 0},
                 "textual_operations": ["laser_cutting"]}
     eq(_model_measured_zero_bends(pdf_only), False,

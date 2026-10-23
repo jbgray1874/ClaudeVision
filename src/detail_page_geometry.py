@@ -355,15 +355,15 @@ def _evidenced_fold_count(part: Mapping[str, Any]) -> int:
 
 
 def _fold_op_has_evidence(part: Mapping[str, Any]) -> bool:
-    """True when the part's fold operation carries the drawing's words or a recorded reader —
-    not a bare operation name nobody can account for (the D-586/D-587 'unrecorded' case)."""
-    for op in ("folding", "fold", "bending"):
-        if str((part.get("operation_evidence") or {}).get(op) or "").strip():
-            return True
-        src = str((part.get("operation_sources") or {}).get(op) or "").strip().lower()
-        if src and src not in ("unknown", "unrecorded", "drawing_notes"):
-            return True
-    return False
+    """True when the part's fold operation carries a fold INSTRUCTION — the drawing's fold
+    words, or a reader that measured the bends (fold_count.has_fold_instruction). Not a bare
+    operation name nobody can account for (the D-586/D-587 'unrecorded' case), not a source
+    label such as "inference", and not an angle (D-592a: "90 DEG COUNTERSINK" is no fold)."""
+    try:
+        from fold_count import has_fold_instruction
+    except Exception:                                                # noqa: BLE001
+        return False
+    return has_fold_instruction(dict(part))
 
 
 def _stated_flanges(part: Mapping[str, Any]) -> List[float]:
@@ -920,7 +920,9 @@ def own_sheets(part: Mapping[str, Any], summary: Mapping[str, Any]) -> List[Mapp
         from part_index import _bom_table_pages
         bom_pages, owned = _bom_table_pages(summary)
     except Exception:                                                # noqa: BLE001
-        bom_pages, owned = set(), {}
+        # UNRESOLVED OWNERSHIP IS NOT PERMISSION (D-592a). Without the parts-list pages every
+        # assembly sheet that lists the part would read as its own again.
+        return []
     _raw_pn = str(part.get("part_number") or "").strip()
     _owned_here = set(owned.get(_raw_pn) or owned.get(_raw_pn.upper()) or set())
     out = []
@@ -971,11 +973,6 @@ def revalidate_from_own_sheets(parts: Any, summary: Mapping[str, Any]) -> List[s
     touched: it was not read off a page. Each change is written on the part and flagged."""
     if not isinstance(parts, Sequence) or not isinstance(summary, Mapping):
         return []
-    try:
-        from blank_credibility import blank_is_measured
-    except Exception:                                                # noqa: BLE001
-        def blank_is_measured(_p: Any) -> bool:                      # type: ignore[misc]
-            return False
     changed: List[str] = []
     for part in parts:
         if not isinstance(part, dict) or not _made_here(part):
@@ -1021,6 +1018,12 @@ def revalidate_from_own_sheets(parts: Any, summary: Mapping[str, Any]) -> List[s
                                  + (f", not {_cur_t:g} mm" if _cur_t else ""))
             except Exception:                                        # noqa: BLE001
                 pass
+        # A SECTION'S WALL IS THE SECTION ITS OWN SHEET NAMES (D-592a, review of D-592). The
+        # title block of a tube's sheet rarely prints a gauge; its text names the section.
+        # Exactly one section named on its own sheets gives the wall; two give a question,
+        # never a pick; a measurement or a person still wins through the resolver.
+        if _is_section_stock(part):
+            notes.extend(_section_wall_from_own_sheets(part, own, own_pages))
         # THE FEATURES AND PAGE GEOMETRY — only where another sheet's were collected with them.
         for key in (_OWN_SHEET_CUES if foreign else ()):
             vals: List[Any] = []
@@ -1030,7 +1033,7 @@ def revalidate_from_own_sheets(parts: Any, summary: Mapping[str, Any]) -> List[s
                 part[key] = vals
                 notes.append(f"{key.replace('_', ' ')} from its own sheet")
         # THE GEOMETRY ITS OWN SHEET'S VECTORS HOLD — never over a measured flat.
-        if foreign and not blank_is_measured(part) and not part.get("dxf_augmented"):
+        if foreign and not machining_is_measured(part):
             geo = _sum_page_geometry(own)
             roll = part.get("geometry_rollup") if isinstance(part.get("geometry_rollup"), dict) else None
             if roll is not None and geo:
@@ -1064,6 +1067,60 @@ def revalidate_from_own_sheets(parts: Any, summary: Mapping[str, Any]) -> List[s
     return changed
 
 
+def _section_wall_from_own_sheets(part: Dict[str, Any], own: Sequence[Mapping[str, Any]],
+                                  own_pages: Sequence[Any]) -> List[str]:
+    """The wall of the one section a section part's own sheets name, offered to the resolver
+    as `own_sheet_section`. Returns the sentences written. Two different sections on its own
+    sheets decide nothing and are asked."""
+    try:
+        from section_profile import detect_section_stock
+        import source_precedence as _sp
+    except Exception:                                                # noqa: BLE001
+        return []
+    stock = part.get("section_stock") if isinstance(part.get("section_stock"), dict) else {}
+    profiles: Dict[tuple, Dict[str, Any]] = {}
+    for sheet in own:
+        text = (sheet.get("pdfplumber_text") or sheet.get("normalized_text") or sheet.get("text")
+                or sheet.get("text_content") or "")
+        for line in str(text).splitlines():
+            try:
+                prof = detect_section_stock(line.replace(",", "."))
+            except Exception:                                        # noqa: BLE001
+                prof = None
+            t = _num((prof or {}).get("t"))
+            if prof and t:
+                key = tuple(sorted((_num(prof.get("a")) or 0, _num(prof.get("b")) or 0))) + (t,)
+                profiles[key] = prof
+    pn = str(part.get("part_number") or "this part")
+    if len(profiles) > 1:
+        names = sorted(f"{k[1]:g} x {k[0]:g} x {k[2]:g}" for k in profiles)
+        try:
+            _sp.raise_manufacturing_question(
+                part, f"Section of {pn}: its own sheet names {len(profiles)} sections",
+                f"{'; '.join(names)} — no wall is taken from it",
+                "confirm the section it is made from",
+                "detail_page_geometry.revalidate_from_own_sheets")
+        except Exception:                                            # noqa: BLE001
+            pass
+        return []
+    if len(profiles) != 1:
+        return []
+    (a, b, wall), prof = next(iter(profiles.items()))
+    notes: List[str] = []
+    cur = _num(part.get("normalized_thickness_mm"))
+    if cur is None or abs(cur - wall) > 1e-9:
+        if _sp.apply_field(part, "normalized_thickness_mm", wall, "own_sheet_section",
+                           note=f"the section its own sheet names (page "
+                                f"{', '.join(str(p) for p in own_pages)}): {b:g} x {a:g} x {wall:g}"):
+            part["thicknesses_mm"] = [f"{wall:g}"]
+            notes.append(f"wall {wall:g} mm from the {b:g} x {a:g} x {wall:g} section its own "
+                         f"sheet names" + (f", not {cur:g} mm" if cur else ""))
+    if stock and _num(stock.get("t")) != wall and not machining_is_measured(part):
+        stock["t"] = wall
+        stock["wall_source"] = "own_sheet_section"
+    return notes
+
+
 def _made_here(part: Mapping[str, Any]) -> bool:
     """A part SDI makes: not an assembly (sized through its members), not bought in, not supplied
     by another party. A section IS made here (D-592) — not_cut_from_a_blank says no blank stands
@@ -1085,6 +1142,31 @@ def _made_here(part: Mapping[str, Any]) -> bool:
         return not is_bought_in(dict(part))
     except Exception:                                                # noqa: BLE001
         return True
+
+
+def machining_is_measured(part: Mapping[str, Any]) -> bool:
+    """The part's holes and cutting were measured off the part itself — a DXF or the model —
+    not merely its blank (D-592a, review of D-592). A blank sized from the model's overall
+    flat is a measured SIZE; it says nothing about which circles on the PDF are holes. Only
+    the machining's own source certifies the inventory: the DXF marker, or a measuring source
+    stamped on the geometry or the cut path (blank_credibility.cut_path_is_measured)."""
+    if not isinstance(part, Mapping):
+        return False
+    if part.get("dxf_augmented"):
+        return True
+    try:
+        from blank_credibility import cut_path_is_measured
+    except Exception:                                                # noqa: BLE001
+        return False
+
+    def _h(key: str) -> Mapping[str, Any]:
+        v = part.get(key)
+        return v if isinstance(v, Mapping) else {}
+    ng, roll, mf = _h("normalized_geometry"), _h("geometry_rollup"), _h("manufacturing_features")
+    return any(cut_path_is_measured(src) for src in (
+        part.get("geometry_source"), ng.get("geometry_source"), ng.get("cut_length_mm_source"),
+        roll.get("estimated_cut_length_mm_source"), mf.get("cut_length_mm_source"),
+        mf.get("raw_cut_length_mm_source")))
 
 
 _OUTLINES_A_PAGE_CUT_PATH_MAY_SPAN = 3.0
@@ -1161,11 +1243,7 @@ def bound_cutting_to_blank(part: Dict[str, Any], length_mm: Any = None,
     to the same rule."""
     if not isinstance(part, dict) or not _made_here(part) or _is_section_stock(part):
         return []
-    try:
-        from blank_credibility import blank_is_measured
-    except Exception:                                                # noqa: BLE001
-        return []
-    if blank_is_measured(part) or part.get("dxf_augmented"):
+    if machining_is_measured(part):
         return []
     L, W = _num(length_mm), _num(width_mm)
     if not (L and W):
@@ -1291,11 +1369,7 @@ def machining_evidence(part: Mapping[str, Any]) -> Dict[str, Any]:
     UNVERIFIED_FEATURES (circles and
     lines read off the drawing's vectors — candidates, never measurements). A reader that
     charges punch hits or pierces from an unmeasured count says so in these words."""
-    try:
-        from blank_credibility import blank_is_measured
-        measured = bool(blank_is_measured(dict(part)) or part.get("dxf_augmented"))
-    except Exception:                                                # noqa: BLE001
-        measured = bool(part.get("dxf_augmented"))
+    measured = machining_is_measured(part)
     ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"), Mapping) else {}
     holes = ng.get("hole_count")
     if part.get("_internal_features_unread"):
@@ -1321,12 +1395,13 @@ def settle_fold_evidence(parts: Any) -> List[str]:
     """A fold the fold counter charges from the drawing carries that drawing evidence on its
     operation too (D-592). Returns the part numbers settled.
 
-    0351292's strip: its own sheet prints a 90° angle, the fold counter took it as a stated fold
-    and developed the blank for one flange (1293 x 37), while the route said "Folding has no
-    recorded source" and put the fold on the decisions list as unsupported. One fold, two
-    verdicts. Where the counter's evidence is the drawing's — a fold note, its callouts, the
-    flat pattern, the model — the operation is given that evidence in words, so the route and
-    the blank agree; where it is not, neither the flange nor the fold is claimed from it."""
+    One fold must not get two verdicts: the counter charging it from the drawing while the
+    route says "Folding has no recorded source". Where the counter's evidence is the drawing's
+    — a stated fold count or fold dimensions, its UP/DOWN callouts, the flat pattern, the
+    model — the operation is given that evidence in words, so the route and the blank agree;
+    where it is not, neither the flange nor the fold is claimed from it. A bare angle is not
+    such evidence (D-592a): 0351292's strip, whose only "fold" was a lone 90° on its sheet,
+    is settled by nothing and keeps its flat 12 mm."""
     out: List[str] = []
     if not isinstance(parts, Sequence):
         return out
@@ -1344,10 +1419,7 @@ def settle_fold_evidence(parts: Any) -> List[str]:
         res = press_brake_folds(dict(part))
         if str(res.get("source") or "") not in _FOLD_EVIDENCE_SOURCES or not res.get("count"):
             continue
-        _angles = [str(a) for a in (part.get("angles_deg") or [])][:4]
-        words = (f"{int(res['count'])} fold(s) — {res.get('source_label') or res.get('source')}"
-                 + (f" (angle{'s' if len(_angles) > 1 else ''} {', '.join(_angles)}° on its own sheet)"
-                    if _angles else ""))
+        words = f"{int(res['count'])} fold(s) — {res.get('source_label') or res.get('source')}"
         part.setdefault("operation_evidence", {})["folding"] = words
         out.append(str(part.get("part_number") or "this part"))
     return out
