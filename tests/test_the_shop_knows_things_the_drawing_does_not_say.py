@@ -61,7 +61,7 @@ def test_it_says_why_and_what_would_bring_it_back():
 
 
 def test_any_evidence_of_a_bend_keeps_the_op():
-    for ev in ({"manufacturing_features": {"bend_count": 2}},
+    for ev in ({"manufacturing_features": {"bend_count": 2, "bend_count_source": "solidworks_api"}},
                {"bend_count_dxf": 1},
                {"angles_deg": [90]},
                {"fold_count_textual": 3}):
@@ -94,7 +94,7 @@ def test_a_measured_bend_is_not_second_guessed():
     An angle callout is deliberately NOT in this list any more — on 7332-01-002 the 45s
     described the mitre saw cut, and Howard's answer was 'Not Required'."""
     for ev in ({"bend_count_dxf": 1},
-               {"manufacturing_features": {"bend_count": 2}},
+               {"manufacturing_features": {"bend_count": 2, "bend_count_source": "solidworks_api"}},
                {"bend_count_dxf": 2, "angles_deg": [45, 45]}):
         part = _tube(**ev)
         estimate_process_times(part)

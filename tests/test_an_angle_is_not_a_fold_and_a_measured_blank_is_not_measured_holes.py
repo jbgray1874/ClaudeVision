@@ -226,3 +226,39 @@ def test_an_unreadable_decisions_list_shows_no_example(monkeypatch):
         {"block": "steel", "description": "A-1 TAB", "qty_per_unit": 1, "qty_per_sheet": 10,
          "total_value_gbp": 5.0}])
     assert qs.trace_part({}, {"made": [{"part_number": "A-1"}], "labour": [], "pages": []}) is None
+
+
+# ── D-592b: the reviewer's two reproductions ──────────────────────────────────────────────
+
+def _stale_fold_part(**kw):
+    """A record made before D-592a: feature synthesis stored the angle as one fold."""
+    p = {"part_number": "F-1", "description": "BRACKET", "normalized_material": "MILD_STEEL",
+         "normalized_thickness_mm": 2.0, "quantity": 1, "angles_deg": [90],
+         "blank_length_mm": 200.0, "blank_width_mm": 100.0, "textual_operations": ["laser_cutting"],
+         "geometry_rollup": {"estimated_cut_length_mm": 600.0},
+         "manufacturing_features": {"bend_count": 1, "bend_count_source": "drawing_fold_note"}}
+    p.update(kw)
+    return p
+
+
+def test_a_fold_the_resolver_refused_does_not_return_through_a_stored_count():
+    part = _stale_fold_part()
+    assert fc.press_brake_folds(part)["count"] == 0
+    out = e.estimate_process_times(part)
+    assert out["bend_count"] == 0, "the resolver said 0; the stored count is not asked twice"
+    assert "folding" not in out["setup_times_min"]
+
+
+def test_a_stored_count_the_model_measured_still_stands():
+    part = _stale_fold_part(manufacturing_features={"bend_count": 2,
+                                                    "bend_count_source": "solidworks_api"})
+    assert e.estimate_process_times(part)["bend_count"] == 2
+
+
+def test_a_confirmed_gauge_keeps_the_section_profile_with_it():
+    part, summary = _rail("RECT TUBE 50X20X2MM")
+    sp.apply_field(part, "normalized_thickness_mm", 4.0, "estimator_confirmed")
+    g.revalidate_from_own_sheets([part], summary)
+    assert part["normalized_thickness_mm"] == 4.0
+    assert part["section_stock"]["t"] == 4.0, "one decision for the gauge and the section's wall"
+    assert part["section_stock"]["wall_source"] == "estimator_confirmed"
