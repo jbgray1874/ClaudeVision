@@ -3414,21 +3414,19 @@ assert not (set(_NO_FINISH_WORDS) & set(_FINISH_PROCESS_WORDS)), \
 # "FILM SIDE DENOTES WHICH HAND", which is about the protective film's orientation -- and a
 # check that cries wolf on garbled text is a check estimators learn to ignore. And the
 # numbers in it are the more interesting half: see check_a_finish_field_holds_drawing_text.
-_DIM_CALLOUT = re.compile(r"\d+\s*[Xx]\s*\d|\bTHRU\b|\bR\d|\bDIA\b|\u00f8")
-_VIEW_LABEL = re.compile(r"(?:\b[A-E]\b[\s]+){4,}")
-
-
 def _looks_like_raw_drawing_text(text: str) -> bool:
-    """True when a finish field holds scraped drawing text rather than a finish."""
-    t = str(text or "").upper()
-    if not t.strip():
-        return False
-    if _DIM_CALLOUT.search(t):
-        return True
-    if _VIEW_LABEL.search(t):
-        return True
-    # Three or more bare numbers in a finish field is a dimension list, not a finish.
-    return len(re.findall(r"\b\d{2,4}\b", t)) >= 3
+    """True when a finish field holds scraped drawing text rather than a finish.
+
+    THE DETECTOR LIVES WITH THE GATES NOW (D-586). The census here reported the misread
+    while finish_rules' gates kept READING the same blob \u2014 0351292-2468's field held several
+    parts-list rows and another part's BRUSHED ruled the support's powder coat off. One
+    reader: finish_rules.holds_drawing_text, asked by the gates and by this census alike."""
+    try:
+        from finish_rules import holds_drawing_text
+        return holds_drawing_text(text)
+    except Exception:                                                # noqa: BLE001
+        t = str(text or "").upper()
+        return bool(t.strip()) and len(re.findall(r"\b\d{2,4}\b", t)) >= 3
 
 
 def _laminate_is_in_the_board(part: Any, summary: Any) -> bool:

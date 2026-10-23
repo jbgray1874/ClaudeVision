@@ -747,8 +747,13 @@ def normalise_json(raw_json: Dict[str, Any]) -> Dict[str, Any]:
                 str(part.get("description") or "")[:80],
             )
 
+        # NOTES ONLY, NEVER THE OPERATION NAMES THEMSELVES (D-586). textual_operations was
+        # joined into this text, so "welding" the WORD re-matched the WELD keyword and every
+        # op corroborated itself forever — the self-trigger loop file_scan's merge comment
+        # forbids. An operation already on the record is kept by the merge below; it earns
+        # no second reading from its own name.
         process_notes_text = _strip_spec_boilerplate(" ".join(
-            str(n) for n in (part.get("process_notes") or []) + (part.get("textual_operations") or [])
+            str(n) for n in (part.get("process_notes") or [])
         ))
         inferred_ops = infer_operations(process_notes_text)
         existing_ops = part.get("textual_operations", []) or []

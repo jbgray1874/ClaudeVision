@@ -174,6 +174,9 @@ def audit(summary: Dict[str, Any], snapshot: Optional[Dict[str, Any]] = None) ->
     issues.extend(quantities["issues"])
     return {"schema": SCHEMA, "passed": not issues and not unknown,
             "issues": issues, "unverified": unknown, "trace": traces,
+            # An arrangement stated, not a defect and not a gap: the root priced as its
+            # members' roll-up (D-586). Shown so the probe says where the price lives.
+            "notes": quantities.get("notes") or [],
             "quantity_trace": quantities["trace"],
             "workbook_sha256": (snapshot or {}).get("sha256"),
             "scope": "canonical sheet blanks and bought items; not requirements no reader captured"}

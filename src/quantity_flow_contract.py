@@ -112,6 +112,7 @@ def audit(summary: Dict[str, Any]) -> Dict[str, Any]:
     parts = _canonical_parts(summary)
     issues: List[Dict[str, Any]] = []
     trace: List[Dict[str, Any]] = []
+    notes: List[Dict[str, Any]] = []
 
     def fail(code: str, part: str = "", **detail: Any) -> None:
         issues.append({"code": code, "part": part, **detail})
@@ -191,13 +192,28 @@ def audit(summary: Dict[str, Any]) -> Dict[str, Any]:
             continue
         expected = roll(pn)
         actual = numeric(n.get("qty_per_unit"))
+        # THE PRODUCT'S PRICE MAY BE ITS MEMBERS' (D-586). The root assembly often carries
+        # no price record of its own — "an assembly's material is its members'" — and the
+        # job's price is the roll-up of the lines below it. Reading that as TWO costing
+        # defects (no record, price-stage mismatch) told the estimator the product was
+        # uncharged while every member was. Where the root has no record and its members
+        # do, the audit says what the arrangement IS, as a note, and checks the members.
+        # A root with no record and no priced member is still the failure it always was.
+        root_rolls_up = (
+            pn == root and p is None
+            and any(c != root and ps.get(c) is not None for c in ns))
         if p is None:
-            fail("canonical_price_record_missing", pn)
+            if root_rolls_up:
+                notes.append({"code": "product_price_is_members_rollup", "part": pn})
+            else:
+                fail("canonical_price_record_missing", pn)
         charged_basis = numeric((p or {}).get("quantity"))
         trace.append({"part": pn, "rolled_per_product": expected,
                       "graph_per_product": actual, "price_per_product": charged_basis})
         if expected is not None:
             for stage, value in (("graph", actual), ("price", charged_basis)):
+                if stage == "price" and value is None and root_rolls_up:
+                    continue        # the note above already says where the price lives
                 if value is None or not isclose(value, expected, abs_tol=1e-8, rel_tol=0):
                     fail("quantity_rollup_mismatch", pn, stage=stage, expected=expected, actual=value)
         explicit_unit = (p or {}).get("unit_of_measure") or (p or {}).get("unit")
@@ -212,7 +228,7 @@ def audit(summary: Dict[str, Any]) -> Dict[str, Any]:
     printed = printed_rows_audit(summary, ps)
     issues.extend(printed["issues"])
     return {"schema": SCHEMA, "issues": issues, "trace": trace, "passed": not issues,
-            "printed_trace": printed["trace"]}
+            "notes": notes, "printed_trace": printed["trace"]}
 
 
 def printed_rows_audit(summary: Dict[str, Any], ps: Optional[Dict[str, Dict[str, Any]]] = None

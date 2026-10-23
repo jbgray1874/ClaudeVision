@@ -8103,11 +8103,19 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         # catalogue piece priced at its own length (catalogue_section_price) and of nothing
         # else: a section priced per metre from a stock bar, or by weight, is a bar the shop
         # saws. 0356453's uprights and rails — the read said saw — reached the sheet with no
-        # cutting row at all. One cut per piece, at the configured saw time — where the
-        # part's own evidence names the saw; with no cut list and no saw named, none is
-        # invented (D-455).
+        # cutting row at all.
+        #
+        # A MADE MEMBER CUT FROM STOCK IS CUT, NAMED OR NOT (D-586). D-531 charged the cut
+        # only where the part's own evidence named the saw, and that caution became an
+        # omission: 0351292's rails, arms and cross rails were priced from stock lengths and
+        # per-kg rates — bars the shop saws, the pricing itself says so — and the book
+        # carried the metres with no cutting labour, "no saw named" standing in for "no cut
+        # happens". A drawing not naming a saw is not evidence the bar arrives cut. One cut
+        # per piece is charged as an allowance wherever the material is priced as stock the
+        # shop cuts; the only no-charge case is the evidenced one — a catalogue piece bought
+        # at its own length (catalogue_section_price).
         _cut_here = str(part.get("_material_cost_method") or "") != "catalogue_section_price"
-        if not _cl_pieces and _cut_here and _saw_named:
+        if not _cl_pieces and _cut_here:
             _len_cut = _safe_float((part.get("section_stock") or {}).get("length_mm")) \
                 or _safe_float(part.get("blank_length_mm"))
             if _len_cut and _len_cut > 0:
@@ -8136,7 +8144,9 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 (f"sawn to its own cut list ({len(_cl_pieces)} piece(s): "
                  f"{' + '.join(f'{v:g}' for v in _cl_pieces)} mm)" if _from_list else
                  f"cut to length from stock ({_cl_pieces[0]:g} mm) — priced from a stock "
-                 f"length or by weight, so the shop saws it")
+                 f"length or by weight, so the shop saws it"
+                 + ("" if _saw_named else
+                    "; the drawing names no saw, so the cut is this engine's allowance"))
                 + f" at {float(getattr(config, 'SAW_SECONDS_PER_CUT', 90.0)):g} s a cut — "
                   f"config SAW_SECONDS_PER_CUT, an allowance; confirm with the saw")
         part["section_costing_adjustment"] = {
@@ -8146,7 +8156,8 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                      + (f"Sawn to size ({len(_cl_pieces)} piece(s)). "
                         if _cl_pieces else
                         ("Bought cut to its own length, so no saw charged. " if not _cut_here
-                         else "No cut list and no saw named, so no saw charged. "))
+                         else "No cut length on the record, so no saw could be charged — "
+                              "state the cut length and the cut prices itself. "))
                      + "SDI bends the tube, so the bend op is retained; the bend COUNT may "
                        "be under-read from the drawing -- verify bend count/time with the "
                        "tube-bend operator. Coated in-house (SDI sprays everything)."),
