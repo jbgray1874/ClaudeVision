@@ -177,7 +177,9 @@ def test_acrylic_bends_fall_back_when_the_flat_pattern_published_none():
             "normalized_material": "ACRYLIC", "quantity": 1,
             "overall_length_mm": 760.3, "overall_width_mm": 210.0,
             "material_thickness_mm": 2.0,
-            "manufacturing_features": {"bend_count": 2},
+            # the drawing's DOWN 90 / UP 180 callouts; a stored bend count with no source is
+            # not evidence since D-592b
+            "drawing_bend_callouts": 2,
             "native_flat_pattern": True}
     est = estimator.estimate_part(part, job_quantity=1)
     rt = (est.get("process_estimate") or {}).get("run_times_min_per_unit") or {}
@@ -214,7 +216,9 @@ def test_two_bends_book_twice_the_per_bend_minutes():
             "normalized_material": "ACRYLIC", "quantity": 1,
             "overall_length_mm": 760.3, "overall_width_mm": 210.0,
             "material_thickness_mm": 2.0,
-            "manufacturing_features": {"bend_count": 2},
+            # the drawing's DOWN 90 / UP 180 callouts; a stored bend count with no source is
+            # not evidence since D-592b
+            "drawing_bend_callouts": 2,
             "native_flat_pattern": True}
     est = estimator.estimate_part(part, job_quantity=1)
     rt = (est.get("process_estimate") or {}).get("run_times_min_per_unit") or {}

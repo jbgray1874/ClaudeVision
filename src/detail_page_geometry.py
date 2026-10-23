@@ -1115,9 +1115,18 @@ def _section_wall_from_own_sheets(part: Dict[str, Any], own: Sequence[Mapping[st
             part["thicknesses_mm"] = [f"{wall:g}"]
             notes.append(f"wall {wall:g} mm from the {b:g} x {a:g} x {wall:g} section its own "
                          f"sheet names" + (f", not {cur:g} mm" if cur else ""))
-    if stock and _num(stock.get("t")) != wall and not machining_is_measured(part):
-        stock["t"] = wall
-        stock["wall_source"] = "own_sheet_section"
+    # ONE DECISION FOR BOTH FIELDS (D-592b). The section's wall IS its gauge, so the stock
+    # profile carries whatever the resolver kept: the sheet's wall where it won, a person's or
+    # a measurement's where they did. Writing the sheet's 2 mm into the profile beside a
+    # confirmed 4 mm gauge made the saw row and the material disagree with the decision.
+    kept = _num(part.get("normalized_thickness_mm"))
+    if stock and kept and _num(stock.get("t")) != kept:
+        stock["t"] = kept
+        stock["wall_source"] = _sp.source_of(part, "normalized_thickness_mm") or "own_sheet_section"
+        if abs(kept - wall) > 1e-9:
+            notes.append(f"its sheet names a {wall:g} mm wall; the {kept:g} mm "
+                         f"{_sp.display_name(stock['wall_source']) or stock['wall_source']} "
+                         f"keeps both the gauge and the section")
     return notes
 
 

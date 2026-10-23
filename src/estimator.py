@@ -3961,6 +3961,21 @@ _MEASURED_BEND_SOURCES = {"solidworks_api", "solidworks", "native", "dxf_flat_pa
                           "flat_pattern_bend_lines", "solidworks_bend_features"}
 
 
+def _measured_bend_count(part: Dict[str, Any]) -> int:
+    """The manufacturing-feature bend count, ONLY where something that can see the part counted
+    it (D-592b). That field is written by feature synthesis from whatever answered at the time —
+    on a record made before D-592a, the angle list — so read as a fallback it brought back a
+    fold the resolver had refused: the resolver said 0 and costing charged 1. A count stamped
+    by the DXF bend lines or the model stands; any other is a reading the resolver has already
+    weighed, and is not asked twice."""
+    mf = part.get("manufacturing_features") if isinstance(part.get("manufacturing_features"), dict) else {}
+    n = _safe_int(mf.get("bend_count")) or 0
+    if n <= 0:
+        return 0
+    src = str(mf.get("bend_count_source") or part.get("bend_count_source") or "").strip().lower()
+    return n if src in _MEASURED_BEND_SOURCES else 0
+
+
 def _model_measured_zero_bends(part: Dict[str, Any]) -> bool:
     """Did something that can actually SEE the part count its bends, and find none?
 
@@ -8025,7 +8040,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         _fold_res = _press_folds(part)
         # ONE RESOLVER, NO SECOND OPINION (D-592a). This fell back to the angle list when the
         # resolver said none, so an angle the resolver had refused as a fold came back as one.
-        bends = _fold_res["count"] or (_safe_int(manufacturing_features.get("bend_count")) or 0)
+        bends = _fold_res["count"] or _measured_bend_count(part)
     bend_length_mm = sum([_safe_float(value) or 0.0 for value in part.get("fold_values_mm", [])])
     thickness_mm = _safe_thickness_mm(part)
 
@@ -8789,7 +8804,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         # DXF bend line or the model's own bend count is a measurement here.
         _measured_tb = (
             (_safe_int(part.get("bend_count_dxf")) or 0) > 0
-            or (_safe_int((part.get("manufacturing_features") or {}).get("bend_count")) or 0) > 0)
+            or _measured_bend_count(part) > 0)
         _radius_tb = len(part.get("radii_mm") or []) > 0
         _angles_tb = len(part.get("angles_deg") or []) > 0
         _worded_tb = (_safe_int(part.get("fold_count_textual")) or 0) > 0
@@ -8987,7 +9002,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         _fold_evidence = (
             (bends or 0) > 0
             or int(part.get("fold_count_textual") or 0) > 0
-            or int((part.get("manufacturing_features") or {}).get("bend_count") or 0) > 0
+            or _measured_bend_count(part) > 0
         )
         _shape = _formed_sheet_shape(part) if _mat_u in _SHEET_METALS else None
         if _fold_evidence:
@@ -9133,6 +9148,20 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 if not str(f).startswith("BEND COUNT DISAGREES")]
         _bsrc = str((part.get("manufacturing_features") or {}).get(
             "bend_count_source") or "").strip()
+        # WHY NOTHING MEASURED THE FOLDS, said wherever a fold is charged that nothing measured
+        # — on a count and on an allowance alike (D-592b: a stored count nobody can source is
+        # no longer a count, so the divider the diagnosis was written for is an allowance now).
+        _ng_fold = part.get("normalized_geometry") or {}
+        _layers_seen = bool(_ng_fold.get("layers") or part.get("dxf_layers"))
+        _dxf_why = ("THIS RUN DID NOT RECEIVE USABLE DXF LAYER DATA, so the fold rests on "
+                    "the drawing note or the model rather than on bend-line evidence. Two "
+                    "things cause that and they need opposite fixes: the flat may have been "
+                    "exported without bend lines, or the layers may not have reached the "
+                    "route reader. Check whether the staged flat carries a BENDLINES layer, "
+                    "and confirm the count meanwhile."
+                    if not _layers_seen else
+                    "Layers were read and none of them named bend lines. Confirm the count "
+                    "against the drawing.")
         if _fr.get("count") and _fr.get("measured"):
             part.setdefault("review_flags", []).append(
                 f"{bends:g} fold(s) charged, counted by {_fr.get('source_label')} — "
@@ -9153,27 +9182,18 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
             # AN ALLOWANCE IS NOT A COUNT (D-493): the sentence says what was charged and why.
             part.setdefault("review_flags", []).append(
                 f"{part['fold_count_assumed']} fold(s) charged as an ALLOWANCE, not a count — "
-                f"nothing that can see the part counted its bends")
+                f"nothing that can see the part counted its bends"
+                + (f". {_dxf_why}" if str(part.get("geometry_source") or "").startswith("dxf")
+                   else ""))
         elif str(_fr.get("source") or "") == "concept_read_fold_count":
             part.setdefault("review_flags", []).append(
                 f"{bends:g} fold(s) charged from the concept read's provisional count — sighted "
                 f"off the brief or pages, not measured; confirm against a drawing")
         else:
-            _ng_fold = part.get("normalized_geometry") or {}
-            _layers_seen = bool(_ng_fold.get("layers") or part.get("dxf_layers"))
             part.setdefault("review_flags", []).append(
                 f"{bends:g} fold(s) charged, and NOTHING THAT CAN SEE THE PART COUNTED "
                 f"THEM" + (f" — the count came from {_bsrc}" if _bsrc else "")
-                + ". "
-                + ("THIS RUN DID NOT RECEIVE USABLE DXF LAYER DATA, so the fold rests on "
-                   "the drawing note or the model rather than on bend-line evidence. Two "
-                   "things cause that and they need opposite fixes: the flat may have been "
-                   "exported without bend lines, or the layers may not have reached the "
-                   "route reader. Check whether the staged flat carries a BENDLINES layer, "
-                   "and confirm the count meanwhile."
-                   if not _layers_seen else
-                   "Layers were read and none of them named bend lines. Confirm the count "
-                   "against the drawing."))
+                + ". " + _dxf_why)
 
     # THE SHEET'S WEIGHT IS THE ONE CHECK ON A GAUGE NOBODY STATED (D-392).
     _wc = _blank_weight_check(part)
@@ -10555,9 +10575,9 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # callouts and the model's feature count still testify; only a model that MEASURED
         # zero bends says the part is flat.
         if not _bends and not _model_measured_zero_bends(part):
-            _bends = (_safe_int((part.get("manufacturing_features") or {}).get("bend_count"))
-                      or _safe_int(part.get("fold_count_textual"))
-                      or len(part.get("angles_deg") or []))
+            # A measured count or a stated one; never the angle list, and never a stored
+            # count the resolver below has already weighed (D-592b).
+            _bends = (_measured_bend_count(part) or _safe_int(part.get("fold_count_textual")) or 0)
         # THE ONE FOLD COUNT EVERY CONSUMER ASKS. 12633-01-01P, the wine lifter base: two
         # 105° bends counted in the SolidWorks feature tree, the brake fold correctly ruled
         # out for acrylic — and no Linebend, because this branch never asked fold_count, where

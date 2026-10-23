@@ -147,9 +147,11 @@ def test_a_measured_fold_says_what_measured_it():
 
 
 def test_a_fold_nothing_looked_at_says_that_plainly():
-    """Thirty minutes of press-brake set-up on a count nobody verified."""
+    """Thirty minutes of press-brake set-up on a count nobody verified. Since D-592b a stored
+    count nobody can source is not a count: the routed fold is an allowance, said as one."""
     said = _timed(_divider(manufacturing_features={"bend_count": 1}))
-    assert "NOTHING THAT CAN SEE THE PART COUNTED THEM" in said
+    assert "ALLOWANCE, not a count" in said
+    assert "nothing that can see the part counted" in said.lower()
 
 
 def test_it_says_only_what_is_known_and_names_both_causes():
