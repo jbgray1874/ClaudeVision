@@ -2173,7 +2173,16 @@ def labour_row_description(wb_op: Any, material: Any = "", thickness: Any = None
     # the work actually is.
     if (str(wb_op) == "Drill (Acrylic)" and _matx
             and "ACRYLIC" not in _matx.upper() and "PERSPEX" not in _matx.upper()):
-        _rd += " [metal drill/tap — DRIL is the rate-table row the shop books this to]"
+        # EACH DRIL ROW NAMES ITS OWN WORK (D-589). A flow-drilled and tapped M8 thread is
+        # two operations on one row title, and 0351292's base rail carried two identical
+        # "[metal drill/tap ...]" rows that nobody could tell apart or check for overlap.
+        # The row's own engine operations say which it is.
+        _DRIL_WORK = {"hole_machining": "drilling / flow drilling", "drilling": "drilling",
+                      "tapping": "tapping", "countersinking": "countersinking"}
+        _dril = sorted({_DRIL_WORK[str(o).lower()] for o in (work_ops or ())
+                        if str(o).lower() in _DRIL_WORK})
+        _rd += (f" [metal {' + '.join(_dril) if _dril else 'drill/tap'} — DRIL is the "
+                f"rate-table row the shop books this to]")
     if _spec:
         _rd += " — " + " ".join(_spec)
     _pl = list(parts or [])
@@ -2295,7 +2304,13 @@ def coated_sheet_area_m2(parts, says_coated) -> float:
         if _sq_pn and _sq_pn in _seen_squash:
             continue
         _sme = _sp.get("material_estimate") or {}
-        if str(_sme.get("stock_form") or "").lower() not in ("sheet", "plate", "stated_weight", "unknown", ""):  # stated_weight: coated steel routed by weight; unknown: 11350's mirror record — a coated flat with measured blank and sheet-metal material whose form field was simply never classified
+        # AN ASSEMBLY COATED OVER ITS MEMBERS IS COUNTED THAT WAY WHATEVER ITS OWN FORM SAYS
+        # (D-589). 0351292's rail took a shared sheet's tube callout as a stock form of its
+        # own, so the stock-form filter below dropped it before its members' area was read.
+        _members_sum = (isinstance(_sme.get("powder_consumable"), dict) and
+                        _sme["powder_consumable"].get("coated_area_source")
+                        == "sum_of_members_blanks")
+        if not _members_sum and str(_sme.get("stock_form") or "").lower() not in ("sheet", "plate", "stated_weight", "unknown", ""):  # stated_weight: coated steel routed by weight; unknown: 11350's mirror record — a coated flat with measured blank and sheet-metal material whose form field was simply never classified
             continue
         if part_cannot_be_powder_coated(_sp):
             continue   # acrylic is not powder coated — contributes zero coated area
@@ -5914,6 +5929,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     for _cp in _all_pes_pw:
         if not _route_says_coated(_cp):
             continue   # a section the route excluded is not on the booth line either
+        _cpc = (_cp.get("material_estimate") or {}).get("powder_consumable")
+        if isinstance(_cpc, dict) and _cpc.get("coated_area_source") == "sum_of_members_blanks":
+            continue   # coated over its members, counted in the sheet sum (D-589)
         _ca = section_coated_area_m2(_cp)
         if _ca > 0:
             _section_powder_area_m2 += _ca

@@ -4466,6 +4466,12 @@ def _finalize_scan_summary(
             print(f"   [detail-geometry] {', '.join(_capped)} read larger than the assembly "
                   f"each sits in — costed on that assembly's developed outline and asked",
                   flush=True)
+        # A RADIUS ITS FLAT CANNOT HOLD IS ROLLED (D-589), read once every blank is known.
+        from detail_page_geometry import stamp_rolled_radii
+        _rolled = stamp_rolled_radii(_parts_dg, summary)
+        if _rolled:
+            print(f"   [detail-geometry] {', '.join(_rolled)} rolled to a radius their own "
+                  f"sheet prints — charged on the Roll row and asked", flush=True)
     except Exception as _dg_err:
         print(f"   [detail-geometry] not applied: "
               f"{type(_dg_err).__name__}: {_dg_err}", flush=True)

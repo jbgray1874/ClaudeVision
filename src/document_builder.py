@@ -1503,9 +1503,21 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 or part.get("overall_length_mm")
                 or (part.get("dxf_raw_geometry") or {}).get("blank_area_mm2")
             )
+            # THE ENGINE'S SHAPE TEST, NOT A PRIVATE ONE (D-589, the D-584 class again). A
+            # digit-led regex here retagged 0351292's rail, base and supports — ROL2021-2466,
+            # -2467, -2468, sub-assemblies with sheets and members of their own — as bought
+            # commodities: the rail and base were then researched at market, £24.50 and
+            # £14.50, as if SDI bought them, and the provenance counted both beside their
+            # members' charged rows. A drawing number by the shared rule is never a commodity.
+            try:
+                from part_code_conventions import looks_like_a_drawing_number as _is_dwg_bi
+                _names_a_drawing_bi = (bool(_re_bi.match(r"^\d{3,6}-", _pn_bi))
+                                       or _is_dwg_bi(_pn_bi))
+            except Exception:                                        # noqa: BLE001
+                _names_a_drawing_bi = bool(_re_bi.match(r"^\d{3,6}-", _pn_bi))
             if (
                 _pn_bi
-                and not _re_bi.match(r"^\d{3,6}-", _pn_bi)
+                and not _names_a_drawing_bi
                 and not _has_geom_bi
                 and _is_good_description(part.get("description"))
                 and "bought_in" not in page_roles

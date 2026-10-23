@@ -1601,6 +1601,146 @@ INDICATIVE_MARKET = "indicative_market" # an AI / market lookup, moves between r
 UNPRICED = "unpriced"                   # carries no money and somebody owes a figure
 NIL = "nil"                             # correctly nothing — an assembly, a cross-reference
 
+# Charge status — whether a line's money is IN the price, and how far it can be leaned on
+# (D-589). Firmness says what a figure is; this says what the workbook did with it. Four
+# words, the same on every surface that lists lines.
+CHARGED = "charged"            # on the Estimate sheet, on a firm basis
+PROVISIONAL = "provisional"    # on the Estimate sheet, on a basis still to confirm
+EXCLUDED = "excluded"          # not in the money: nothing to charge, or a figure the sheet left out
+NOT_VERIFIED = "not verified"  # no charged figure and nobody has checked one
+
+
+def charge_status(line: Optional[Mapping[str, Any]], part: Optional[Mapping[str, Any]] = None,
+                  *, sheet_read_back: bool = True, engine_ext: float = 0.0) -> Dict[str, str]:
+    """{status, why} for one costed line — one of CHARGED, PROVISIONAL, EXCLUDED, NOT_VERIFIED.
+
+    0351292's 09:48 provenance column summed £386.24 against the sheet's £347.34: the rail and
+    base were researched at £24.50 and £14.50 as if bought, the sheet charged neither (their
+    members are charged), and the column printed both as money. A figure the sheet did not
+    charge is EXCLUDED and says so; a charged figure resting on a researched price, a house
+    rate or a blank read off printed figures is PROVISIONAL; a line with no charged figure and
+    no ruling is NOT VERIFIED."""
+    line = line if isinstance(line, Mapping) else {}
+    part = part if isinstance(part, Mapping) else {}
+    origin = line.get("price_origin") if isinstance(line.get("price_origin"), Mapping) else {}
+    firmness = str(origin.get("firmness") or "")
+    label = str(origin.get("label") or "")
+    charged = line.get("charged_ext_gbp")
+    if not sheet_read_back:
+        return {"status": NOT_VERIFIED,
+                "why": "no Estimate sheet was read back — the engine's figure, unchecked"}
+    if charged is not None and _num(charged) > 0:
+        if firmness in (INDICATIVE_HOUSE, INDICATIVE_MARKET):
+            return {"status": PROVISIONAL, "why": label or "a price still to confirm"}
+        _prov_blank = part.get("_blank_provisional")
+        if isinstance(_prov_blank, Mapping) and _prov_blank:
+            return {"status": PROVISIONAL,
+                    "why": "the blank is read from figures printed on its own sheet — confirm "
+                           "the flat blank"}
+        return {"status": CHARGED, "why": label or "on the Estimate sheet"}
+    if firmness == NIL:
+        return {"status": EXCLUDED, "why": label or "nothing to charge on this line"}
+    if _num(engine_ext) > 0:
+        return {"status": EXCLUDED,
+                "why": (f"the engine's £{_num(engine_ext):,.2f} is not on the Estimate sheet, so "
+                        f"it is not in the price"
+                        + (" — an assembly's material is its members'"
+                           if str(line.get("kind") or "") == "assembly" else
+                           " — if SDI buys or makes this line separately, it is missing"))}
+    return {"status": NOT_VERIFIED, "why": label or "no charged figure on the Estimate sheet"}
+
+
+def operation_coverage(source: Any) -> Dict[str, Any]:
+    """Every required route operation against the rows the calculated sheet charged (D-589).
+
+    {charged, covered, uncovered, charged_twice, no_department} — each a list of
+    {decision_id, operation, target, rows, basis, department}. CHARGED: the decision is on
+    exactly one charged row. COVERED: no row carries its id, but a row of the same department
+    charges the target or a participant, or every part it names has the operation ruled out.
+    UNCOVERED: required, a department exists for it, and nothing charges it — work the route
+    says is done and the price leaves out. CHARGED_TWICE: one decision on two rows of one
+    department. Read only after Excel: before the sheet is calculated nothing is charged yet.
+    {} when there is no calculated sheet or no compiled route."""
+    if not isinstance(source, Mapping):
+        return {}
+    rows = _workbook_rows(source)
+    if not rows or not any(r.get("_calculated") for r in rows):
+        return {}
+    # A read-back that lost its join to the accepted rows names no decision and no part: it
+    # cannot say what is charged, so it judges nothing rather than calling everything missing.
+    if not any((r.get("decision_ids") or r.get("decision_id") or r.get("part_numbers"))
+               for r in rows):
+        return {}
+    shadow = ((source.get("estimate_summary") or {}).get("canonical_route_shadow") or {}) \
+        if isinstance(source.get("estimate_summary"), Mapping) else {}
+    decisions = [d for d in (shadow.get("decisions") or [])
+                 if isinstance(d, Mapping) and d.get("status") == "required"]
+    if not decisions:
+        return {}
+    try:
+        import wb_populate as _wb                                    # noqa: PLC0415
+        op_map = dict(getattr(_wb, "OP_NAME_MAP", {}) or {})
+    except Exception:                                                # noqa: BLE001
+        op_map = {}
+    out_of_scope: Set[str] = set()
+    try:
+        from route_compiler import outside_product_identities as _outside   # noqa: PLC0415
+        out_of_scope = {str(k).upper() for k in _outside(shadow.get("issues"))}
+    except Exception:                                                # noqa: BLE001
+        pass
+    out_of_scope |= {str(e.get("part_number") or "").upper()
+                     for e in (source.get("set_aside_outside_product") or [])
+                     if isinstance(e, Mapping)}
+    ruled: Dict[str, Set[str]] = {}
+    for p in list(job_parts(source)) + list(
+            (source.get("manufacturing_writeup") or {}).get("parts") or []):
+        if isinstance(p, Mapping) and p.get("part_number"):
+            ruled.setdefault(str(p["part_number"]).upper(), set()).update(
+                str(k).strip().lower() for k in (p.get("operations_ruled_out") or {}))
+    result: Dict[str, List[Dict[str, Any]]] = {
+        "charged": [], "covered": [], "uncovered": [], "charged_twice": [], "no_department": []}
+    for d in decisions:
+        did = str(d.get("decision_id") or "")
+        op = str(d.get("operation") or "").strip().lower()
+        tgt = str(d.get("target_id") or "").strip().upper()
+        if not did or not op or not tgt or tgt in out_of_scope:
+            continue
+        ids = {tgt} | {str(x).strip().upper() for x in (d.get("participants") or []) if x}
+        dept = op_map.get(op)
+        entry = {"decision_id": did, "operation": op, "target": tgt, "department": dept,
+                 "basis": str(d.get("source") or "unrecorded")}
+        on = [r for r in rows if did in (r.get("decision_ids") or []) or r.get("decision_id") == did]
+        if on:
+            entry["rows"] = [r.get("workbook_row") for r in on]
+            by_dept: Dict[str, List[Dict[str, Any]]] = {}
+            for r in on:
+                by_dept.setdefault(str(r.get("wb_operation") or ""), []).append(r)
+            twice = next((rs for rs in by_dept.values() if len(rs) > 1), None)
+            if twice:
+                entry.update(rows=[r.get("workbook_row") for r in twice],
+                             gbp=round(sum(_num(r.get("total_value_gbp")) for r in twice), 2))
+                result["charged_twice"].append(entry)
+            else:
+                result["charged"].append(entry)
+            continue
+        same = [r for r in rows
+                if ids & {str(x).strip().upper() for x in (r.get("part_numbers") or [])}
+                and (op in {str(o).lower() for o in _row_engine_ops(r)}
+                     or (dept and str(r.get("wb_operation") or "") == dept))]
+        if same:
+            entry.update(rows=[r.get("workbook_row") for r in same],
+                         covered_by=f"Estimate row {', '.join(str(r.get('workbook_row')) for r in same)}")
+            result["covered"].append(entry)
+        elif ([i for i in ids if op in ruled.get(i, set())]
+              and all(op in ruled[i] for i in ids if i in ruled)):
+            entry["covered_by"] = "ruled out on the part"
+            result["covered"].append(entry)
+        elif not dept:
+            result["no_department"].append(entry)
+        else:
+            result["uncovered"].append(entry)
+    return result
+
 # ── ONE TABLE OF DECISION KINDS: its words, its tag, its place in the list ─────────────
 # 12173-02's report filed "1 stated row not carried" — money missing from the unit — under
 # the catch-all "Decision" and listed it after every manufacturing question, because the
@@ -3546,6 +3686,43 @@ def costed_job(source: Any) -> Dict[str, Any]:
                        f"{'folded' if _op_u == 'folding' else 'welded'}, confirm it; if not, "
                        f"strike the {'Fold row' if _op_u == 'folding' else 'Weld and Dress rows'}"),
             "owner": "estimator", "gbp_at_stake": _u_gbp or None})
+
+    # ── EVERY REQUIRED OPERATION IS CHARGED ONCE, COVERED BY A NAMED CHARGE, OR ASKED (D-589) ──
+    try:
+        _cov = operation_coverage(source)
+    except Exception:                                                # noqa: BLE001
+        _cov = {}
+    if isinstance(source, dict) and _cov:
+        source["operation_coverage"] = _cov
+    _asked_ops = {(str(d.get("part") or "").upper(), str(o))
+                  for d in decisions for o in (d.get("operations") or [d.get("operation")])}
+    for _u in (_cov.get("uncovered") or []):
+        _tgt_c, _op_c = str(_u.get("target") or ""), str(_u.get("operation") or "")
+        if (_tgt_c.upper(), _op_c) in _asked_ops:
+            continue
+        decisions.append({
+            "part": _tgt_c, "kind": "manufacturing_decision",
+            "operation": _op_c, "operations": [_op_c],
+            "issue": (f"{_op_c.replace('_', ' ').capitalize()} on {_tgt_c} is required by the "
+                      f"route and is on no charged row"),
+            "assumption": (f"not in the price — the route requires it ({_u.get('basis')}) "
+                           f"and no {_u.get('department') or 'workbook'} row charges it"),
+            "action": (f"price it on the {_u.get('department') or 'right'} row, or rule it out "
+                       f"on {_tgt_c} with the reason"),
+            "owner": "estimator", "gbp_at_stake": None})
+    for _t in (_cov.get("charged_twice") or []):
+        _tgt_c, _op_c = str(_t.get("target") or ""), str(_t.get("operation") or "")
+        if (_tgt_c.upper(), _op_c) in _asked_ops:
+            continue
+        decisions.append({
+            "part": _tgt_c, "kind": "manufacturing_decision",
+            "operation": _op_c, "operations": [_op_c],
+            "issue": (f"{_op_c.replace('_', ' ').capitalize()} on {_tgt_c} is charged on "
+                      f"{len(_t.get('rows') or [])} rows for one requirement"),
+            "assumption": (f"Estimate rows {', '.join(str(r) for r in _t.get('rows') or [])} "
+                           f"all carry decision {_t.get('decision_id')}"),
+            "action": "keep the row that does the work and strike the other",
+            "owner": "estimator", "gbp_at_stake": _t.get("gbp") or None})
 
     # ── A LINE COSTED AT A QUANTITY ITS OWN BOM ROW DOES NOT STATE ────────────────
     # 12312-01-GA: the driver, LED tape, power cord and Y-splitter each stated 1 and were

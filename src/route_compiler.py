@@ -36,7 +36,7 @@ NEGATIVE_STATUSES = frozenset({RULED_OUT, NOT_APPLICABLE})
 # operations on the parent. A stronger measured claim can still win through source ranking.
 LEAF_ONLY_OPERATIONS = frozenset({
     "laser_cutting", "folding", "punch", "hole_machining", "drilling",
-    "guillotine", "saw", "tube_cut", "tube_bending",
+    "guillotine", "saw", "tube_cut", "tube_bending", "roll",
 })
 
 # Older cached extracts predate the scope field. For these operations, several participants
@@ -76,6 +76,8 @@ OPERATION_ALIASES = {
     "insert_pem": "hardware_insertion",
     "pem_insertion": "hardware_insertion",
     "clinch_insertion": "hardware_insertion",
+    # The template's Roll row is the engine's "roll" (config.ESTIMATE_LABOUR_LABEL_TO_OP).
+    "rolling": "roll",
 }
 
 # Shop-order fallback for a required event whose evidence named the work but omitted its
@@ -92,6 +94,7 @@ DEFAULT_OPERATION_SEQUENCE = {
     "drilling": 20,
     "tapping": 20,
     "folding": 30,
+    "roll": 30,
     "tube_bending": 30,
     "welding": 40,
     "dress_welds": 41,

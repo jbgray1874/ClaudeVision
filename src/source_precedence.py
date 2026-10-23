@@ -163,6 +163,12 @@ SOURCE_RANK: Dict[str, int] = {
     # (title block 70, printed overall 65), below a person reading the sheet (72) and
     # everything measured — so the part's own blank, a DXF or a model displaces it at once.
     "assembly_envelope_allowance": 71,
+    # AN ASSEMBLY IS MADE OF ITS MEMBERS (D-589). Offered only for a record the compiled graph
+    # gives made members that all agree on one material. Above a title-block read of the
+    # assembly's own sheet (70) — 0351292's support assembly sheet says "SEE DWGS", and the
+    # page's boilerplate "304 - STAINLESS STEEL" was read in its place, so its weld and powder
+    # rows said STAINLESS on a mild-steel weldment — below a person (72) and every measurement.
+    "assembly_members": 71,
     # ── AN OPEN QUESTION, DELIBERATELY NOT SETTLED HERE (raised 11 Sep 2026) ──────────
     #
     # The order below is MODEL FIRST: solidworks_api 90, dxf 80. The review position is the
@@ -543,6 +549,7 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "printed_extents_provisional": "the largest dimensions printed on its own sheet (provisional)",
     "model_extents_board_gauge": "the model's smallest extent — a flat board's gauge (provisional)",
     "assembly_envelope_allowance": "the outline of the assembly it sits in (provisional — the part read larger)",
+    "assembly_members": "its members' material — the parts the compiled hierarchy gives it",
     "mirror_of_provisional":  "its other hand's provisional reading",
     "compiler_default":       "an engine default",
     # A NAME FOR THE THING THAT WAS CALLED NOTHING.
@@ -952,7 +959,11 @@ _DECISION_RANK = 100
 # Nor is a confirmed production rule: it does not dispute what was drawn, it states what is
 # bought. Named by kind, not by rank, so the exemption is a decision rather than a number.
 _NOT_A_READING = frozenset({"estimator_confirmed", "knowledge_base", "production_substitution",
-                            "customer_change"})
+                            "customer_change",
+                            # An assembly's material IS its members' (D-589): a derivation
+                            # from the parts, not a reading of its sheet, so readers of that
+                            # sheet's boilerplate do not outvote it. A person still outranks it.
+                            "assembly_members"})
 
 
 def corroboration_defends(part: Dict[str, Any], field: str, new_value: Any,

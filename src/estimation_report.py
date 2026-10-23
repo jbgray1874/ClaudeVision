@@ -449,14 +449,28 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
         if _line_kind in ("commercial", "service"):
             mat = str(_line.get("material_label") or mat)
         _engine_unit, _engine_ext = part_material_cost(part)
+        # AN ENGINE FIGURE THE SHEET DID NOT CHARGE IS NOT MONEY (D-589). Once the sheet is
+        # read back, a line it left out shows £0 in the charged column and its engine figure
+        # in the not-charged one — 0351292's rail and base were researched at £24.50 and
+        # £14.50, charged nowhere, and summed here as material all the same.
+        _excluded = bool(_canonical and _charged and _engine_ext > 0
+                         and (_line is None or _line.get("charged_ext_gbp") is None))
         if _canonical:
             unit, ext = _engine_unit, _engine_ext
             if _charged and _line is not None and _line.get("charged_ext_gbp") is not None:
                 unit = float(_line.get("charged_unit_gbp") or 0.0)
                 ext = float(_line.get("charged_ext_gbp") or 0.0)
+            elif _excluded:
+                unit, ext = 0.0, 0.0
         else:
             unit = float(_pe.get("unit_total_cost_gbp") or 0)
             ext  = float(_pe.get("extended_total_cost_gbp") or 0)
+        try:
+            from costed_facts import charge_status as _charge_status
+            _status_now = _charge_status(_line, part, sheet_read_back=bool(_canonical and _charged),
+                                         engine_ext=_engine_ext)
+        except Exception:                                            # noqa: BLE001
+            _status_now = {"status": "not verified", "why": ""}
         geo  = str(part.get("geometry_source") or "pdf")
         # Operations as the workbook ACCEPTED them, from the one shared post-costing source.
         # This tab sits inside the same .xlsx as the Estimate, so narrating the raw textual
@@ -762,6 +776,10 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
             "engine_figure_withheld": bool(_sheet_ruled),
             "charged":           bool(_charged and _line is not None
                                       and _line.get("charged_ext_gbp") is not None),
+            # charged / provisional / excluded / not verified, and why (D-589).
+            "charge_status":     _status_now.get("status") or "",
+            "charge_status_why": _status_now.get("why") or "",
+            "excluded_engine_gbp": round(_engine_ext, 2) if _excluded else 0.0,
             # What a person has to do about this line, from the record's decisions.
             "estimator_action":  _action_for(pn),
             "overall_status":    _status,
@@ -781,7 +799,7 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
             # needed it. A private second opinion here is also how two documents describing
             # one job come to disagree about which blanks are somebody's job.
             "unpriced_reason":   (_unpriced_reason_for(part)
-                                  if not (unit or ext) else None),
+                                  if not (unit or ext or _excluded) else None),
         })
     return provenance
 
@@ -856,11 +874,11 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
             c.border = Border(left=thin, right=thin, top=thin, bottom=thin)
         return c
     # ── Title block ────────────────────────────────────────────────────────────
-    ws.merge_cells("A1:O1")
+    ws.merge_cells("A1:P1")
     cell(1, 1, "SDI Intelligence — Estimate Provenance Report",
          bold=True, bg=C_HEADER_BG, fg=C_HEADER_FG, align="center", size=13)
     ws.row_dimensions[1].height = 28
-    ws.merge_cells("A2:O2")
+    ws.merge_cells("A2:P2")
     pdf_name = scan_meta.get("pdf_name") or summary.get("source_file") or "—"
     job_no   = scan_meta.get("job_number") or "—"
     scan_dt  = scan_meta.get("scan_date") or datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -901,7 +919,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
          bg="2F5496", fg=C_HEADER_FG, align="center", size=10)
     ws.row_dimensions[2].height = 18
     # ── Legend ─────────────────────────────────────────────────────────────────
-    ws.merge_cells("A3:O3")
+    ws.merge_cells("A3:P3")
     cell(3, 1,
          # WHOSE QUESTION THIS TAB ANSWERS, on the line the reader already looks at.
          #
@@ -939,7 +957,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     if not isinstance(_fe, dict):
         _fe = (summary.get("estimate_summary") or {}).get("final_estimate")
     if not isinstance(_fe, dict) or not _fe:
-        ws.merge_cells("A4:O4")
+        ws.merge_cells("A4:P4")
         cell(4, 1,
              "THE CALCULATED SHEET WAS NOT READ BACK — Excel did not return this workbook's "
              "computed totals (Excel busy or absent, or a workbook that would not open). "
@@ -962,6 +980,8 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
         ("Geometry / size — source", 34), ("Operations charged", 22),
         ("Charged £ unit" if _canonical else "Engine £ unit", 12),
         ("Charged £ ext" if _canonical else "Engine £ ext", 12),
+        # Charged / provisional / excluded / not verified, and why (D-589).
+        ("Charge status", 30),
         ("Engine £ ext — not charged", 14),
         ("Price source", 40), ("Priced by — sheet row / decision", 26),
         ("Evidence", 12), ("Estimator action", 44),
@@ -1012,10 +1032,17 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
              bold=True, border=True)
         cell(row, 9,  f"£{p['extended_cost']:.2f}", bg=bg,   align="right",
              bold=True, border=True)
+        _cs = str(p.get("charge_status") or "")
+        _cs_why = str(p.get("charge_status_why") or "")
+        cell(row, 10, (_cs.upper() + (f" — {_cs_why}" if _cs_why else "")) if _cs else "—",
+             bg=({"charged": bg, "provisional": "FFF2CC", "excluded": "EDEDED"}
+                 .get(_cs, C_LOW)),
+             bold=_cs in ("excluded", "not verified"), border=True, size=8, wrap=True)
         _eng = float(p.get("engine_extended_cost") or 0.0)
-        _differs = (p.get("charged") and not p.get("engine_figure_withheld")
-                    and abs(_eng - float(p["extended_cost"] or 0)) >= 0.01)
-        cell(row, 10, f"£{_eng:.2f}" if _differs else "—", bg=bg, align="right",
+        _differs = ((p.get("charged") and not p.get("engine_figure_withheld")
+                     and abs(_eng - float(p["extended_cost"] or 0)) >= 0.01)
+                    or float(p.get("excluded_engine_gbp") or 0.0) > 0)
+        cell(row, 11, f"£{_eng:.2f}" if _differs else "—", bg=bg, align="right",
              border=True, size=9, fg="666666")
         _rb = p.get("rate_basis") or "—"
         # The engine-figure note is its own column now; keep the source column to the source.
@@ -1030,17 +1057,17 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
                       "nobody": "nothing to charge here"}.get(_ur.get("owner"), "")
             _txt = f"{_ur.get('why')}" + (f" — {_ur['detail']}" if _ur.get("detail") else "")
             _rb = f"{_owner}: {_txt}" if _owner else _txt
-        cell(row, 11, _rb,
+        cell(row, 12, _rb,
              bg=(C_LOW if (_rb.startswith("⚠") or _ur.get("undercharging")) else bg),
              border=True, size=9, wrap=True)
-        cell(row, 12, p.get("priced_by") or "—", bg=bg, border=True, size=8, wrap=True)
-        cell(row, 13, _EVIDENCE.get(str(p.get("overall_status") or "").lower(),
+        cell(row, 13, p.get("priced_by") or "—", bg=bg, border=True, size=8, wrap=True)
+        cell(row, 14, _EVIDENCE.get(str(p.get("overall_status") or "").lower(),
                                     str(p.get("overall_status") or "—")),
              bg=conf_bg, align="center", border=True, size=9)
         _act = str(p.get("estimator_action") or "—")
-        cell(row, 14, _act, bg=(bg if _act.startswith("none") else "FFF2CC"),
+        cell(row, 15, _act, bg=(bg if _act.startswith("none") else "FFF2CC"),
              border=True, size=9, wrap=True)
-        cell(row, 15, p.get("drawing_files") or "—", bg=bg, border=True, size=8, wrap=True)
+        cell(row, 16, p.get("drawing_files") or "—", bg=bg, border=True, size=8, wrap=True)
         ws.row_dimensions[row].height = 28
         row += 1
         # ── Flags / warnings ───────────────────────────────────────────────────
@@ -1098,7 +1125,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     # purpose is to be checkable.
     if _totals["source"] == "excel_calculated":
         row += 1
-        ws.merge_cells(f"A{row}:O{row}")
+        ws.merge_cells(f"A{row}:{_LAST}{row}")
         # Same basis as the Decision Report: reconcile the MATERIAL column against the
         # sheet's material total, and state labour as what it is — a department-row charge
         # with no per-part figure. The engine part-sum is an obsolete labour-inclusive
@@ -1186,8 +1213,29 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
                 # sums the unrounded cells; a £0.01 gap is arithmetic, not a basis.
                 _gap_txt = (f"The £{abs(_gap):,.2f} difference is rounding across the rows; "
                             f"the column is the sheet's own charged figures. ")
+            if _gap <= -0.02:
+                # A COLUMN ABOVE THE SHEET IS NOT A RESIDUAL (D-589). Powder and scrap only
+                # ever ADD to the sheet; a column that exceeds it holds money the sheet does
+                # not, and naming that "powder" sent 0351292's reader looking for a coat.
+                _gap_txt = (f"The column is £{abs(_gap):,.2f} MORE than the sheet's material "
+                            f"total — a line in it is counted twice or carries a figure the "
+                            f"sheet does not hold. That is not a residual: check the 'Charge "
+                            f"status' column. ")
+            # WHAT IS NOT IN THE MONEY, BY NAME (D-589).
+            _excl = [p for p in provenance if float(p.get("excluded_engine_gbp") or 0) > 0]
+            _excl_txt = ""
+            if _excl:
+                _excl_txt = (f"Not in the money: {len(_excl)} engine figure"
+                             f"{'s' if len(_excl) != 1 else ''} totalling "
+                             f"£{sum(float(p['excluded_engine_gbp']) for p in _excl):,.2f} the "
+                             f"sheet did not charge ("
+                             + ", ".join(f"{p['part_number']} £{float(p['excluded_engine_gbp']):,.2f}"
+                                         for p in _excl[:6])
+                             + (f", and {len(_excl) - 6} more" if len(_excl) > 6 else "")
+                             + ") — EXCLUDED in the 'Charge status' column and left out of "
+                               "this sum. ")
             _mat_txt = (f"The material column above sums to £{_col_mat:,.2f} against the "
-                        f"sheet's £{float(_mat):,.2f}. {_gap_txt}")
+                        f"sheet's £{float(_mat):,.2f}. {_gap_txt}{_excl_txt}")
         _lab_txt = (f"Labour is £{float(_lab):,.2f}, charged per department row across "
                     f"every part in that setup — see 'Priced by' for the rows and "
                     f"decisions behind each part. " if _lab is not None else "")
