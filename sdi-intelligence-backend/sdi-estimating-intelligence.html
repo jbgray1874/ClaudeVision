@@ -2119,6 +2119,19 @@ async function checkRunners(){
         state = d.queued ? `  ·  ${d.queued} queued` : "  ·  ready";
       }
       runnerText.textContent = who + state;
+      /* A RUNNING ESTIMATE CAN BE STOPPED FROM ANY TAB (D-588b). The Stop button under Run
+         belongs to the tab that started the job; reload the page, open it on another PC, or
+         let self-running start the job, and there was nothing on screen to press while the
+         runner drove SOLIDWORKS and Excel. The service says which run the runner is busy
+         with, so the stop goes beside it. */
+      const busyRun = busy.length ? (busy[0].running || {}).run_id : "";
+      if(busyRun && busyRun !== runId){
+        const sb = document.createElement("button");
+        sb.className = "btn-stop"; sb.type = "button";
+        sb.dataset.stopRun = busyRun;
+        sb.textContent = "Stop this estimate — " + (busy[0].running.drawing_number || busyRun);
+        runnerText.appendChild(sb);
+      }
       /* TWO RUNNERS ON ONE DESKTOP READ AS ONE GREEN TICK, FOR THREE DAYS.
          3668 on the project venv and 14796 on a user-installed Python 3.10 — same script,
          same engine root, same server — both polling and both claiming. runner_id is
@@ -2165,6 +2178,28 @@ async function checkRunners(){
   }
   refresh();
 }
+/* One handler for the busy line's Stop, because the line is rewritten on every poll. Stop
+   means what it means under Run: abandoned in the service, and the runner told to end the
+   engine on its next heartbeat. */
+runnerBox.addEventListener("click", async (ev) => {
+  const b = ev.target.closest("[data-stop-run]");
+  if(!b || b.disabled) return;
+  if(!confirm("Stop this estimate?\n\nThe run is abandoned and the runner is told to end the "
+            + "engine. Nothing is filed. Anything already written to the output folder stays "
+            + "where it is.")) return;
+  b.disabled = true;
+  try{
+    const r = await api("/api/estimate/" + encodeURIComponent(b.dataset.stopRun) + "/abandon",
+                        {method:"POST"});
+    const j = await r.json().catch(() => ({}));
+    b.textContent = r.ok ? "Stop requested — the runner ends the engine on its next heartbeat"
+                         : "Could not stop it: " + detailText(j, r, "refused");
+    if(!r.ok) b.disabled = false;
+  }catch(e){
+    b.textContent = "Could not stop it — " + e.message;
+    b.disabled = false;
+  }
+});
 checkRunners();
 setInterval(checkRunners, 15000);
 

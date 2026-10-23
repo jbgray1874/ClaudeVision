@@ -4571,6 +4571,30 @@ def _finalize_scan_summary(
                         print(f"   [confirmed] operations_off names {_pc}, but NO part of "
                               f"this job carries that number — the line did nothing. Check "
                               f"the code", flush=True)
+                # A PERSON'S INSTRUCTION TO OVERCOAT WINS OVER A FINISH IN THE MATERIAL
+                # (D-589b). A brushed, polished or anodised member normally stays out of its
+                # assembly's powder; "coat_with_assembly": ["<part>"] puts it back in, recorded
+                # as that person's call. Unmatched codes are reported, as above.
+                _coat_in = {str(x).strip().upper() for x in
+                            (_dec.get("coat_with_assembly") or []) if str(x).strip()}
+                if _coat_in:
+                    _seen_coat = set()
+                    for _p in (summary["manufacturing_writeup"]["parts"] or []):
+                        if not isinstance(_p, dict):
+                            continue
+                        _pc = str(_p.get("part_number") or "").strip().upper()
+                        if _pc in _coat_in:
+                            _p["_coat_with_assembly"] = {
+                                "by": _ec_data.get("confirmed_by") or "an estimator",
+                                "in": str(_ec_src or "")}
+                            _seen_coat.add(_pc)
+                            print(f"   [confirmed] {_pc}: coated with its assembly by "
+                                  f"{_ec_data.get('confirmed_by') or 'the estimator'}'s "
+                                  f"instruction, whatever its material states", flush=True)
+                    for _pc in sorted(_coat_in - _seen_coat):
+                        print(f"   [confirmed] coat_with_assembly names {_pc}, but NO part of "
+                              f"this job carries that number — the line did nothing. Check "
+                              f"the code", flush=True)
                 # MAKE OR BUY, ANSWERED (D-384): stamped on the part, where bought_in_policy
                 # and the route compiler's family gate both read it.
                 _mob = _dec.get("make_or_buy") or {}

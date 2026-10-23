@@ -127,6 +127,20 @@ def test_the_runner_treats_a_forgotten_run_as_a_stop():
     assert 'resp.status_code == 404 and "No such run" in' in RUNNER_SRC
 
 
+def test_the_busy_runner_line_names_the_run_it_is_on(routes):
+    """So any tab can stop it, not only the one that started it."""
+    _running(routes)
+    seen = routes.runners()
+    assert seen["runners"][0]["running"]["run_id"] == "r1"
+
+
+def test_the_page_offers_stop_beside_the_busy_runner_for_a_run_it_did_not_start():
+    assert "sb.dataset.stopRun = busyRun" in PAGE and "busyRun !== runId" in PAGE
+    handler = PAGE[PAGE.index('runnerBox.addEventListener("click"'):]
+    handler = handler[:handler.index("checkRunners();")]
+    assert '"/abandon"' in handler
+
+
 def test_the_runner_also_understands_an_explicit_cancel():
     assert '.get("cancel")' in RUNNER_SRC
 

@@ -13022,8 +13022,14 @@ def stamp_members_coated_area(parts: Any, summary: Any = None) -> int:
                     + [str(x) for x in (_m.get("materials") or []) if x]).upper().strip()
                 if _mat_fin and (_fin_families(_mat_fin) & {"brushed", "polish", "anodise"}):
                     _own_fin = _mat_fin
-            _other = ((_fin_families(_own_fin) - {"powder", "bare"})
-                      if _own_fin and not _fin_pointer(_own_fin) else set())
+            # A FINISH THAT INCLUDES POWDER IS NOT ANOTHER FINISH (D-589b): "GALVANISED AND
+            # POWDER COATED" is coated; galvanised or zinc on its own neither requires powder
+            # nor forbids it. And a person's instruction to overcoat with the assembly
+            # (estimator_decisions.coat_with_assembly) outranks any finish it states.
+            _fams_m = _fin_families(_own_fin) if _own_fin and not _fin_pointer(_own_fin) else set()
+            _other = (_fams_m - {"powder", "bare"}) if "powder" not in _fams_m else set()
+            if _other and _m.get("_coat_with_assembly"):
+                _other = set()
             if _other:
                 _left_out.append(f"{_m.get('part_number')} (its own sheet states "
                                  f"{_own_fin.title()} — a {'/'.join(sorted(_other))} finish, "
