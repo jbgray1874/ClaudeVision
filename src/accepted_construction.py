@@ -51,7 +51,7 @@ FORMS = ("sheet", "board") + SECTION_FORMS + ("wire", "mesh")
 # into a priced department (a fixture compares the two so they cannot drift).
 OPERATIONS = ("saw", "cnc_routing", "edge_banding", "laminating", "glue", "wet_spray",
               "bench_work", "hole_machining", "assembly", "laser_cutting", "folding", "welding",
-              "powder_coating", "deburring")
+              "powder_coating", "deburring", "plating", "polishing")
 MONEY_KEYS = ("price", "cost", "rate", "gbp", "£")
 # What the engine takes from the file as the read; everything else is the file's own record.
 ANSWER_KEYS = ("product", "unit_operations", "parts", "not_visible", "sheet_facts")

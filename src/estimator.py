@@ -1622,6 +1622,10 @@ def plated_steel_member_pns(parts: Any, summary: Any, parents: Any = None) -> se
             continue
         if not _is_plate_metal(_part_material_text(part)):
             continue
+        # A BOUGHT PART IS NOT PLATED BY OUR PLATER (D-595): 0320730's chrome end caps arrive
+        # finished, and "CHROME PLATED METAL" made them members of the bar's plating.
+        if part.get("concept_kind") == "bought_in" or part.get("is_bought_in"):
+            continue
         _own = _part_finish_text(part)
         if _is_plate_finish(_own):
             members.add(pn)
@@ -1673,6 +1677,10 @@ def plated_members_deferred_to_their_own_finish(parts: Any, summary: Any,
         if not pn or pn in plated_weldments:
             continue
         if not _is_plate_metal(_part_material_text(part)):
+            continue
+        # A BOUGHT PART IS NOT PLATED BY OUR PLATER (D-595): 0320730's chrome end caps arrive
+        # finished, and "CHROME PLATED METAL" made them members of the bar's plating.
+        if part.get("concept_kind") == "bought_in" or part.get("is_bought_in"):
             continue
         own = _part_finish_text(part)
         if not own or _is_plate_finish(own):
@@ -2117,6 +2125,20 @@ def plating_unit_price(mass_kg: Any, order_qty: Any,
             if _amt:
                 _rows.append(f"{(_s.get('label') or _k)} £{_amt:.2f} per unit ({_where})")
         _cands = "; ".join(_rows)
+        # A PROCESS THE FINISH NAMES IS A STATED SPEC, NOT AN UNIDENTIFIED ONE (D-595). "Nickel
+        # 15-20 µm, chrome 0.3-0.5 µm" says exactly which plate; what is missing is its price,
+        # and the line must say that — not send the estimator back to the drawing.
+        _proc = [w for w in ("NICKEL", "CHROME", "COPPER", "BRASS", "GOLD", "SILVER", "TIN")
+                 if re.search(rf"\b{w}", _fin_u)]
+        if _proc:
+            return (None,
+                    f"PLATING SPEC STATED, NOT PRICED — the finish reads {_named!r} "
+                    f"({'/'.join(p.lower() for p in _proc)} plating). The £{float(rate):.2f}/kg "
+                    f"card is trade zinc/passivate and does not price it; its arithmetic "
+                    f"(£{unit:.2f} a unit) is NOT charged. MISSING: the plater's price for this "
+                    f"spec on this job. ASKED OF: the estimator — get the plater's quote and "
+                    f"enter it in this job's answers file",
+                    "subcontract_plating_quote_needed")
         return (None,
                 f"PLATING SPEC NOT IDENTIFIED — the drawing's finish reads {_named!r}, which "
                 f"names a plate but not which plate. The £{float(rate):.2f}/kg card is trade "
@@ -2239,10 +2261,17 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
             _found_on = ""
         else:
             _finish_src = [pe.get("_plating_weldment")] + sorted(members)
+            # THE FINISH IS ON THE PART RECORD, NOT ONLY THE COSTED ONE (D-595). A costed
+            # record carries no finish field, so a plate stated on the record alone — the
+            # enquiry brief's nickel-chrome on 0320730's unit — read as "not stated".
+            _rec_by_pn = {str(p.get("part_number") or "").strip().upper(): p
+                          for p in (parts or []) if isinstance(p, dict)}
             _finish_text = " ".join(
-                _part_finish_text(by_pn[str(m).strip().upper()])
-                for m in _finish_src
-                if m and str(m).strip().upper() in by_pn)
+                _t for _t in dict.fromkeys(
+                    _part_finish_text(_src[str(m).strip().upper()])
+                    for m in _finish_src if m
+                    for _src in (by_pn, _rec_by_pn) if str(m).strip().upper() in _src)
+                if _t)
             # AND IF NEITHER OF THEM NAMES A SPEC, ASK THE REST OF THE PACK.
             # A finish stated once for the whole job — on a GA title block, a general note,
             # the BOM's own finish column — is on no plated member's record, and reading only
@@ -8136,7 +8165,22 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         _mat_fields.append(str(_m or "").upper().replace(" ", "_"))
         _mat_fields.append(str(_m or "").upper())
     _is_metal_any = any(mf in _SHEET_METALS for mf in _mat_fields if mf)
-    if _is_metal_any:
+    # ONLY A CUT THAT REACHES THE HOLES SUPPRESSES THE DRILL (D-595). "Metal" is not that cut:
+    # a sheet blank's holes are profiled by the laser that cuts the blank, but a section sawn
+    # to length has nothing cutting its holes. 0320730's oval tube carried its 5 mm hole as
+    # hole_machining and lost it here, so the hole was charged nowhere. The strip stands where
+    # a profile cut covers the holes — a sheet part (lasered, stated or inferred below) or a
+    # section on the tube laser — and a sawn section keeps its drilling, said.
+    _sawn_section_early = bool(
+        _is_section_or_wire_candidate(part, part.get("normalized_material"))
+        and not _dxf_geometry_trusted(part, part.get("normalized_geometry", {}) or {})
+        and "tube_laser" not in ops)
+    if (_is_metal_any and _sawn_section_early
+            and any(o in ops for o in ("hole_machining", "drilling"))):
+        part.setdefault("review_flags", []).append(
+            "DRILLED: the holes on this section are drilled — it is sawn to length, so no "
+            "profile cut covers them")
+    if _is_metal_any and not _sawn_section_early:
         _metal_hole_ops = ("hole_machining", "drilling")
         ops = [o for o in ops if o not in _metal_hole_ops]
         if isinstance(part.get("textual_operations"), list):
@@ -14174,20 +14218,25 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 # ("the description rule only fills a hierarchy nobody expressed"), which 101
                 # is — so the edge was silently dropped and the plate came out parentless.
                 # The extract's own assemblies list IS honoured, so the edge goes there.
+                #
+                # BUT ONLY WHERE THE EXTRACT ALREADY STATES THIS WELDMENT'S CHILDREN (D-595).
+                # An extract entry naming the plate alone makes the extract the owner of the
+                # parent, and the graph then skips the parent's own list: 0320730's concept
+                # unit lost its tube, brackets, caps and label that way. With no extract entry,
+                # the parent's own list below carries the plate beside its members.
                 if _plated_weldments:
                     _wpn_up = str(_plated_weldments[0].get("part_number") or "").strip()
-                    _lex = (summary.setdefault("llm_full_extract", {})
+                    _lex = (summary.get("llm_full_extract")
                             if isinstance(summary, dict) else None)
                     if isinstance(_lex, dict):
-                        _asms = _lex.setdefault("assemblies", [])
+                        _asms = _lex.get("assemblies")
                         if isinstance(_asms, list):
                             _entry = next(
                                 (a for a in _asms if isinstance(a, dict)
-                                 and str(a.get("part_number") or "").strip() == _wpn_up), None)
-                            if _entry is None:
-                                _entry = {"part_number": _wpn_up, "children": []}
-                                _asms.append(_entry)
-                            _kids = _entry.setdefault("children", [])
+                                 and str(a.get("part_number") or "").strip() == _wpn_up
+                                 and a.get("children")), None)
+                            _kids = (_entry.setdefault("children", [])
+                                     if _entry is not None else None)
                             if isinstance(_kids, list) and not any(
                                     isinstance(k, dict) and str(k.get("part_number") or "")
                                     .strip() == _plate_code for k in _kids):

@@ -2511,10 +2511,23 @@ CONCEPT_SHEET_MATERIAL_WORDS = {
     "ACRYLIC": "ACRYLIC", "MDF": "MDF", "MFMDF": "MFMDF", "PLYWOOD": "PLYWOOD",
 }
 
+# WORK A READ NAMES THAT THE ENGINE CHARGES ANOTHER WAY (D-595). Outside the read's
+# vocabulary, so dropped from its operations, but never lost: handling and fitting are the
+# unit's bench rules, packing is the PACKAGING line, inspection sits in the pack time. Any
+# OTHER unknown operation is asked on the decisions list.
+CONCEPT_OPERATIONS_COVERED_ELSEWHERE = (
+    "handling", "handle", "packing", "pack", "packaging", "inspection", "inspect", "qc",
+    "quality_check", "cleaning", "clean", "fitting", "fit", "assemble", "film_removal",
+    "protective_film",
+)
+
 # A finish the sheet states, and the operation the bill must then carry somewhere (D-417).
 CONCEPT_FINISH_OPERATIONS = (
     (r"POWDER", "powder_coating"),
     (r"\bSPRAY|\bPAINT|LACQUER", "wet_spray"),
+    # A plate and a polish are stated finishes too (D-595).
+    (r"\bPLAT|\bCHROME|\bNICKEL|\bZINC\b|\bGALVAN", "plating"),
+    (r"\bPOLISH|\bGRIT\b|\bLINISH", "polishing"),
 )
 
 # The route operations that cut a part out of stock. A costed line whose route carries one of

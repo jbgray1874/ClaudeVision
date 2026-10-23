@@ -5292,6 +5292,14 @@ def _finalize_scan_summary(
                 print("   [concept] the bill is unchanged from the previous read", flush=True)
             if _read.get("baseline"):
                 print(f"   [concept] baseline: {_read['baseline']}", flush=True)
+            if _read.get("replayed_from"):
+                # A REPLAYED READ IS SAID (D-595): this book prices a saved answer, not a read
+                # of these pages today.
+                _rp_note = (f"CONCEPT READ REPLAYED from {Path(str(_read['replayed_from'])).name} "
+                            f"({concept_scan.CONCEPT_REPLAY_ENV}) — no model was asked; "
+                            f"this book prices the saved answer")
+                summary.setdefault("review_flags", []).append(_rp_note)
+                print(f"   [concept] {_rp_note}", flush=True)
             _bill_base_key = str((_sr.get("base_key") if _sheet_read else _read.get("base_key"))
                                  or "")
             if _ref_pack and not _read.get("standards_text_chars"):
@@ -5487,6 +5495,43 @@ def _finalize_scan_summary(
                 # channel the book's "to settle" count already reads.
                 concept_scan.raise_sheet_questions(([_unit] if _unit else []) + _sighted,
                                                    _sheet_check, _set_aside)
+            # FAITHFUL TRANSFER (D-595): what the read and the brief state reaches the records
+            # — the finish, the polish, the weld process — and what the engine cannot charge
+            # is asked. Every such change is listed on the record beside the raw answer.
+            _transfer: List[Dict[str, Any]] = []
+            try:
+                _transfer += concept_scan.carry_stated_finish(_unit, _sighted, _answer,
+                                                              _brief or "")
+                _transfer += concept_scan.carry_weld_process(_unit, _sighted, _answer,
+                                                             _brief or "")
+                for _sp_d in _sighted:
+                    if _sp_d.get("concept_dropped_operations"):
+                        _transfer.append({
+                            "kind": "dropped",
+                            "item": ", ".join(_sp_d["concept_dropped_operations"]),
+                            "to": [str(_sp_d.get("part_number") or "")],
+                            "why": "the rate card has no operation for it — asked, not priced"})
+                _du = concept_scan.dropped_unit_operations(_answer)
+                _du_host = _unit or (_sighted[0] if _sighted else None)
+                if _du and _du_host is not None:
+                    from source_precedence import raise_manufacturing_question as _ask_du
+                    _ask_du(_du_host,
+                            f"Work on {_du_host.get('part_number')} the engine cannot charge: "
+                            + ", ".join(_du),
+                            "the read named it for the unit and the rate card has no operation "
+                            "for it, so it is NOT in the price",
+                            "say which department does it and how long it takes, or confirm it "
+                            "is not needed", "file_scan.concept_read")
+                    _transfer.append({"kind": "dropped", "item": ", ".join(_du),
+                                      "to": [str(_du_host.get("part_number") or "")],
+                                      "why": "unit work the rate card has no operation for — "
+                                             "asked, not priced"})
+            except Exception as _tr_exc:                             # noqa: BLE001
+                print(f"   [transfer] the read's finish and weld process could not be carried "
+                      f"({type(_tr_exc).__name__}: {_tr_exc})", flush=True)
+            for _t in _transfer:
+                print(f"   [transfer] {_t['kind']}: {_t['item']} -> "
+                      f"{', '.join(_t.get('to') or []) or 'the job'} ({_t['why']})", flush=True)
             _assumed = concept_scan.assumption_register(_sighted)
             _answers_path = concept_scan.write_assumptions_file(
                 _sighted, folder=job_folder, job=_job_name)
@@ -5506,6 +5551,14 @@ def _finalize_scan_summary(
                                            document_text_chars=int(
                                                _read.get("document_text_chars") or 0),
                                            client_document=bool(_client_document))
+            # THE READ AS THE MODEL GAVE IT, AND WHAT THE ENGINE MADE OF IT (D-595): kept on the
+            # record so a book can be traced back to the answer without another model call.
+            summary["concept_read"].update(
+                raw_response=str(_read.get("raw_response") or "")[:60000],
+                read_key=str(_read.get("read_key") or ""),
+                read_changes=list(_transfer),
+                stated_finish=concept_scan.stated_finish(_answer, _brief or "").get("plate", ""),
+                replayed_from=str(_read.get("replayed_from") or ""))
             if _sheet_read:
                 summary["concept_read"].update(
                     sheet_read=True, sheet_check=_sheet_check, set_aside_undrawn=_set_aside,
@@ -5558,23 +5611,34 @@ def _finalize_scan_summary(
                 summary.setdefault("review_flags", []).append(
                     f"NOT VISIBLE — SHIPMENT SCOPE: {_s} — carried by the commercial "
                     f"PACKAGING/DELIVERY lines, not duplicated as a parts line")
-            _mech = concept_scan.mechanically_fitted(_sighted)
+            _unit_welded = bool(_unit and ("welding" in concept_scan._record_ops(_unit)
+                                           or _unit.get("weld_stated_by_note")))
+            _mech = concept_scan.mechanically_fitted(_sighted, unit_welded=_unit_welded)
             _nv_lines = concept_scan.consumable_lines(
                 _nv_cons, _job_name,
                 pieces_fitted=int((_unit or {}).get("pieces_fitted") or 0),
                 fixed_pieces=(_mech["pieces"] if _unit else None),
                 components=((_unit or {}).get("components_labelled") if _unit else None))
-            # THE FIXINGS THE READ DID NOT NAME (D-499): a unit with pieces fitted by hand gets
-            # a provisional fixings line counted per mechanically fitted piece — never a silent
-            # £0, and never a fixing for a welded or hung joint.
-            if _unit and not concept_scan.read_names_fixings(_nv_cons, _sighted):
-                _fx = concept_scan.fixings_allowance_line(_sighted, _job_name,
-                                                          len(_nv_lines) + 1)
-                if _fx:
-                    _nv_lines = list(_nv_lines) + [_fx]
-                    print(f"   [concept] the read named no fixings — a provisional allowance "
-                          f"of {_fx.get('quantity')} × the reference fixing for "
-                          f"{_mech['pieces']} mechanically fitted piece(s)", flush=True)
+            # THE FIXINGS THE READ DID NOT NAME ARE ASKED, NOT BOUGHT (D-595, replacing D-499's
+            # automatic allowance). Four M6 screws were bought for 0320730's welded bar on no
+            # evidence at all; a fixing the read or the brief names is still priced as named.
+            if (_unit and _mech.get("pieces")
+                    and not concept_scan.read_names_fixings(_nv_cons, _sighted)):
+                from source_precedence import raise_manufacturing_question as _ask_fx
+                _fx_pcs = ", ".join(sorted((_mech.get("counted") or {}).keys()))
+                _ask_fx(_unit,
+                        f"Fixings for {_unit.get('part_number')}: {_mech['pieces']} piece(s) "
+                        f"fitted by hand and the read names no fixings",
+                        f"no fixings are charged — an allowance is not added without evidence "
+                        f"({_fx_pcs})",
+                        "name the fixings and how many, or confirm the pieces need none",
+                        "file_scan.concept_read")
+                summary.setdefault("concept_read", {}).setdefault("read_changes", []).append(
+                    {"kind": "asked", "item": "fixings", "to": [str(_unit.get("part_number"))],
+                     "why": f"{_mech['pieces']} piece(s) fitted by hand, none named — asked, "
+                            f"not bought"})
+                print(f"   [concept] the read named no fixings for {_mech['pieces']} piece(s) "
+                      f"fitted by hand — asked, not bought", flush=True)
             # A BONDED JOINT IS PRICED TOO (D-501): its adhesive, not screws, by a method
             # suited to the joint (D-502).
             if _unit:
@@ -5598,10 +5662,23 @@ def _finalize_scan_summary(
                 print(f"   [concept] {len(_nv_lines)} provisional consumable line(s) minted "
                       f"from the read's not-visible list — priced by the ordinary bought-in "
                       f"chain, flagged for confirmation", flush=True)
+            _nv_host = _unit or (_sighted[0] if _sighted else None)
             for _u in _nv_unknown:
                 summary.setdefault("review_flags", []).append(
                     f"NOT VISIBLE ON THE RENDER — NOT PRICED: {_u} — a design unknown, not "
                     f"a consumable; name it as a part and it prices itself")
+                # AN UNRESOLVED REQUIREMENT IS A DECISION (D-595), not only a flag: a thing the
+                # product receives or is used with is asked whether SDI supplies it, never bought.
+                if _nv_host is not None:
+                    from source_precedence import raise_manufacturing_question as _ask_nv
+                    _ask_nv(_nv_host, f"Named by the read, not shown: {_u}",
+                            "not priced — nothing shows SDI supplies it",
+                            "say whether SDI supplies it; name it as a part and it is priced",
+                            "file_scan.concept_read")
+                summary.setdefault("concept_read", {}).setdefault("read_changes", []).append(
+                    {"kind": "asked", "item": str(_u), "to": [str((_nv_host or {}).get(
+                        "part_number") or "")], "why": "not visible and not a named consumable — "
+                                                       "asked, not bought"})
             if _design_intent_fallback and _fallback_pick and _fallback_pick.get("design"):
                 # THE BOOK SAYS WHAT IT IS, IN THE TAKE-OFF'S OWN WORDS (D-411, D-413): the
                 # report's callout, the sheet's banner and the quote's gate all read this.
