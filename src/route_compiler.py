@@ -2976,6 +2976,12 @@ def build_part_graph(
     for ident, sq in _sq_ids.items():
         if len(sq) < 12 or "^" in ident:
             continue
+        # A LINE THE ENGINE GENERATED NEVER CAME OFF A BOM TABLE (D-595), so it cannot be two
+        # rows zipped. 0320730's "0320730-CPT00-PLATE" scanned as its weldment's code plus
+        # PLATERFREIGHT — a seven-digit job number fails the drawing-number grammar below —
+        # and the plating line was dropped with the parts hung beside it.
+        if _is_generated_line(ident, raw.get(ident) or records.get(ident)):
+            continue
         # A code that scans as an SDI drawing number is a real part whatever else is true;
         # the chimera's ten-digit head cannot pass this.
         if re.match(r"^\d{4,6}-\d{2}\b", str(ident)):

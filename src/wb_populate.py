@@ -2141,7 +2141,11 @@ def weld_process_note(wb_op: Any, parts: Any, records_by_pn: Mapping[str, Any]) 
     if not found:
         return ""
     procs = "/".join(sorted(found))
-    how = ("the pack's weld specification" if any(found.values())
+    _srcs = {str(((records_by_pn.get(str(pn or "").strip().upper()) or {})
+                  .get("weld_process_stated") or {}).get("source") or "")
+             for pn in (parts or ())} if records_by_pn else set()
+    how = ("the enquiry brief" if "enquiry_brief" in _srcs
+           else "the pack's weld specification" if any(found.values())
            else "the sheet's weld specification")
     return (f" [{procs} per {how}; charged at the {arc_row} rate, the card's one arc-weld "
             f"row — confirm]")

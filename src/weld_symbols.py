@@ -730,7 +730,40 @@ def note_weld_process(part: Dict[str, Any], sheet_text: Any) -> str:
     flags = part.setdefault("review_flags", [])
     if isinstance(flags, list) and _flag not in flags:
         flags.append(_flag)
+    weld_rate_gap_question(part)
     return str(read["process"])
+
+
+# The processes the card's one arc-weld row is a rate for. Any other stated process is charged
+# there only as a placeholder, and that is a rate gap, not a rate.
+_ARC_ROW_PROCESSES = ("CO2", "MIG")
+
+
+def weld_rate_gap_question(part: Dict[str, Any]) -> bool:
+    """A stated weld process the rate card has no rate for is ASKED, not silently charged as
+    CO2 (D-595). The card's one arc-weld row is a CO2/MIG rate; a TIG weld is slower work at a
+    different rate, so charging it there is a placeholder. The question's wording names no
+    part, so the decisions list holds it ONCE per job however many welded parts state it —
+    a sheet's "ALL WELDS TO BE TIG" is one rate question, not one per part. Returns True
+    when the question was raised."""
+    stated = part.get("weld_process_stated") if isinstance(part, dict) else None
+    if not isinstance(stated, dict):
+        return False
+    proc = str(stated.get("process") or "").strip().upper()
+    if not proc or proc in _ARC_ROW_PROCESSES:
+        return False
+    row = _arc_weld_row_title()
+    try:
+        from source_precedence import raise_manufacturing_question as _ask
+    except Exception:                                                # noqa: BLE001
+        return False
+    return bool(_ask(
+        part, f"Weld rate: {proc} welding is stated, and the rate card has no {proc} rate",
+        f"charged at the {row} rate, the card's one arc-weld row, as a placeholder — {proc} "
+        f"is slower work at a different rate, so the weld minutes and the rate both need "
+        f"confirming",
+        f"give the {proc} rate, or the minutes at the {row} rate, and the weld is charged on it",
+        "weld_symbols.weld_rate_gap_question"))
 
 
 def sheet_weld_note(notes: Any) -> Dict[str, Any]:

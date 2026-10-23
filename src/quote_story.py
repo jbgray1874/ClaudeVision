@@ -602,6 +602,33 @@ def _rows_value(rows: List[Dict[str, Any]]) -> float:
     return sum(_num(r.get("total_value_gbp")) or 0.0 for r in rows)
 
 
+def _stated_finishes(summary: Dict[str, Any]) -> List[str]:
+    """The finishes the job's records state that put a finish ON the part — a coat, a plate,
+    a polish, an anodise, a brushed grain — never an explicit RAW / self colour. Read from
+    every record, assemblies included (a plated weldment carries the plate for its members),
+    and from what the concept read carried from the brief. Empty when nothing states one."""
+    try:
+        from finish_rules import finish_families
+    except Exception:                                                # noqa: BLE001
+        return []
+    texts: List[str] = []
+    _mw = summary.get("manufacturing_writeup") if isinstance(
+        summary.get("manufacturing_writeup"), dict) else {}
+    for p in (_mw.get("parts") or []):
+        if not isinstance(p, dict):
+            continue
+        for v in (p.get("normalized_finish"), p.get("finish"), *(p.get("surface_finishes") or [])):
+            texts.append(str(v or "").strip())
+    _cr = summary.get("concept_read") if isinstance(summary.get("concept_read"), dict) else {}
+    texts.append(str(_cr.get("stated_finish") or "").strip())
+    out: List[str] = []
+    for t in texts:
+        fams = finish_families(t) if t else set()
+        if fams and fams - {"bare"} and t.upper() not in {o.upper() for o in out}:
+            out.append(t)
+    return out[:3]
+
+
 def evidence_items(summary: Dict[str, Any], facts: Dict[str, Any]) -> List[Dict[str, Any]]:
     """The pack's own words → what was concluded → where it landed on the bill. A topic the pack
     says nothing about gets no quote box; its conclusion still stands, said as SDI's."""
@@ -714,8 +741,25 @@ def evidence_items(summary: Dict[str, Any], facts: Dict[str, Any]) -> List[Dict[
                        "Coating {} a unit", "Coating rows on the bill")
                 if coat else "Coating on the route")
     else:
-        concl = "No coating is charged — the parts are supplied as made."
-        bill = "No finish line"
+        # "SUPPLIED AS MADE" IS A SCOPE CLAIM, AND ONLY TRUE WHEN NOTHING STATES A FINISH (D-595).
+        # 0320730's quote said it of a bar its drawing specifies as polished nickel-chrome —
+        # the finish was not priced, and the page told the customer there was none. A stated
+        # finish with no charge on the bill is said as not yet priced, never as absent.
+        _stated = _stated_finishes(summary)
+        _plating = [r for r in mats if re.search(r"\bplating\b", str(r.get("description") or ""),
+                                                 re.I)]
+        _plating_value = sum(_num(r.get("total_value_gbp")) or 0 for r in _plating)
+        if _stated and _plating_value > 0:
+            concl = (f"Finish specified: {'; '.join(_stated)} — plated by a subcontract "
+                     f"plater and priced on the plating line.")
+            bill = _money(facts, _plating_value, "Plating {} a unit", "Plating line on the bill")
+        elif _stated:
+            concl = (f"Finish specified: {'; '.join(_stated)}. It is not yet priced and is not "
+                     f"in this figure — the finisher's price is awaited.")
+            bill = "Finish not yet priced"
+        else:
+            concl = "No coating is charged — the parts are supplied as made."
+            bill = "No finish line"
     out.append({"topic": "finish", "title": _TOPICS["finish"]["title"], "saw": q,
                 "concluded": concl, "bill": bill})
     n = int(_cfg().get("evidence_cards") or 4)

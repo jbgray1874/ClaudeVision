@@ -444,11 +444,14 @@ def test_a_read_that_names_fixings_gets_no_second_line_and_its_set_counts_fixed_
     assert fset["consumable_allowance"]["count"] == per * 22
 
 
-def test_file_scan_mints_the_fixings_line_and_counts_the_set_on_fixed_pieces():
+def test_file_scan_asks_for_unnamed_fixings_and_counts_the_set_on_fixed_pieces():
+    """D-595 replaced D-499's automatic fixings line: fixings the read does not name are
+    ASKED, never bought on no evidence; a set the read names still counts fixed pieces."""
     src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
-    at = src[src.index("_mech = concept_scan.mechanically_fitted(_sighted)"):][:1800]
+    at = src[src.index("_mech = concept_scan.mechanically_fitted(_sighted, unit_welded="):][:3200]
     assert "fixed_pieces=" in at and "read_names_fixings" in at
-    assert "fixings_allowance_line" in at
+    assert "fixings_allowance_line" not in at, "no allowance is bought without evidence"
+    assert "asked, not bought" in at
     assert "keep_approved_strip_lines(_sighted)" in src
 
 

@@ -642,6 +642,12 @@ SIGHTABLE_OPERATIONS = {
     "welding":          "welded joint",
     "powder_coating":   "powder coated finish",
     "deburring":        "deburr or fettle an edge",
+    # A PLATED OR POLISHED FINISH IS WORK TOO (D-595). Without these two words the read had
+    # no way to say chrome, and 0320730's polished nickel-chrome bar reached the book with no
+    # finish at all. Plating is not charged as labour: it puts the finish on the record and
+    # the subcontract plating line prices it (or asks for the plater's price).
+    "plating":          "electroplated finish — chrome, nickel or zinc, by a subcontract plater",
+    "polishing":        "polished or ground surface, by grit, before plating or as the finish",
 }
 
 _PROMPT = """You are looking at {n} image(s): customer-supplied renders or photos of ONE retail
@@ -1181,11 +1187,18 @@ def split_not_visible(items: List[Any]) -> tuple:
         low = said.lower()
         if any(w in low for w in ship_words):
             ship.append(said)
-        elif any(w in low for w in cons_words):
+        elif any(_names_noun(low, w) for w in cons_words):
             cons.append(said)
         else:
             unknown.append(said)
     return cons, ship, unknown
+
+
+def _names_noun(text: str, word: str) -> bool:
+    """`word` as a word of its own, singular or plural — not inside another (D-595). "ticket
+    holder inserted in central hole" read as a consumable because "insert" sits inside
+    "inserted", and a thing the product only RECEIVES was bought as a set of six."""
+    return bool(re.search(rf"(?<![a-z]){re.escape(word)}(?:s|es)?(?![a-z])", text))
 
 
 def consumable_lines(items: List[Any], stem: str,
@@ -1292,7 +1305,7 @@ def consumable_lines(items: List[Any], stem: str,
     return out
 
 
-def mechanically_fitted(parts: List[Any]) -> Dict[str, Any]:
+def mechanically_fitted(parts: List[Any], unit_welded: bool = False) -> Dict[str, Any]:
     """The made pieces a sighted unit fixes with fasteners, and why each other one is not (D-499).
 
     Counted: every made piece the unit fits. Not counted: a welded piece (its joint is its weld
@@ -1323,6 +1336,11 @@ def mechanically_fitted(parts: List[Any]) -> Dict[str, Any]:
             excluded[pn] = "welded to its host"
         elif "welding" in _ops_of(p) or p.get("weld_charged_on"):
             excluded[pn] = "welded — its joint is the weld"
+        elif unit_welded and _is_metal_record(p) and not _says_free(p) and not _says(p, bonded):
+            # A METAL PIECE OF A WELDED UNIT IS WELDED INTO IT (D-595). 0320730's tube carries
+            # the brackets welded to it; it was counted "mechanically fitted" because the weld
+            # sat on the unit, and four M6 screws were bought for a welded bar.
+            excluded[pn] = "a metal piece of a welded unit — welded into it"
         elif _says(p, bonded):
             # BONDED IS NOT SCREWED (D-500): its adhesive is a different consumable, said.
             excluded[pn] = "bonded — its adhesive is not in this fixings allowance"
@@ -1713,6 +1731,46 @@ def parse_concept_response(raw: str) -> Optional[Dict[str, Any]]:
     return data
 
 
+# ── a saved read, replayed (D-595) ─────────────────────────────────────────────────────
+#
+# A fix to what the engine DOES with a read is proved on the read that showed the fault, not
+# on a fresh one that may answer differently. SDI_CONCEPT_REPLAY names that read: a concept
+# cache entry (cache/vision_concept/<key>.json), its key alone, or a run record that kept the
+# read (output/json/<job>.json, concept_read.raw_response, D-595). The engine then prices that
+# answer with no model call, and the record says it was replayed and from where.
+CONCEPT_REPLAY_ENV = "SDI_CONCEPT_REPLAY"
+
+
+def replayed_read() -> Optional[Dict[str, Any]]:
+    """The saved read SDI_CONCEPT_REPLAY names, or None where it names none.
+
+    {"parsed", "raw_response", "read_key", "path"}. A name that is set and finds no readable
+    read raises ConceptUnavailable: a replay asked for and not done must never quietly become
+    a fresh model read."""
+    named = os.environ.get(CONCEPT_REPLAY_ENV, "").strip().strip('"')
+    if not named:
+        return None
+    path = Path(named)
+    if not path.is_file() and (_cache_dir() / (named + ".json")).is_file():
+        path = _cache_dir() / (named + ".json")
+    try:
+        entry = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ConceptUnavailable(
+            f"{CONCEPT_REPLAY_ENV} names {named!r}, which is no readable saved read "
+            f"({type(exc).__name__}) — nothing was replayed and no model was asked") from exc
+    entry = entry if isinstance(entry, dict) else {}
+    kept = entry.get("concept_read") if isinstance(entry.get("concept_read"), dict) else {}
+    raw = entry.get("raw_response") if "raw_response" in entry else kept.get("raw_response")
+    parsed = parse_concept_response(str(raw or ""))
+    if parsed is None:
+        raise ConceptUnavailable(
+            f"{CONCEPT_REPLAY_ENV} names {named!r}, which holds no concept answer the engine "
+            f"can parse — nothing was replayed and no model was asked")
+    return {"parsed": parsed, "raw_response": str(raw), "path": str(path),
+            "read_key": str(kept.get("read_key") or path.stem)}
+
+
 # ── cache: one call per (pack images + model + prompt), ever ────────────────────────
 
 def _cache_dir() -> Path:
@@ -1847,6 +1905,13 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
             # that on the book, not in a log.
             _extra = dict(_extra, standards_coverage=dict(_std_cov))
     _extra = dict(_extra, base_key=base_key)
+    # A SAVED READ, REPLAYED (D-595): the pages are still rendered and their words still go to
+    # the checks; the answer is the saved one, and no model is asked.
+    _replay = replayed_read()
+    if _replay is not None:
+        return dict({"parsed": _replay["parsed"], "raw_response": _replay["raw_response"],
+                     "cache_hit": True}, **dict(_extra, read_key=_replay["read_key"],
+                                                replayed_from=_replay["path"]))
     # ── AN UNCHANGED READ IS REUSED; A NEW BASELINE IS A NEW QUESTION (review of D-492) ──
     # The previous bill changes what the model is shown, so a cached answer must never
     # silently ignore it. Two cases, kept apart:
@@ -3177,7 +3242,9 @@ def read_sheet_concept(pdf_paths: List[str], *, refresh: bool = False,
     _stage("checking")
     check = sheet_check(answer, words, envelope=envelope, brief=brief)
     # A REPLAYED BILL WAS ALREADY THE BETTER OF TWO: the run that produced it took the re-ask.
-    if check.get("failures") and read.get("baseline") != "unchanged read reused":
+    # So was a saved read replayed by name (D-595): it is the answer that run priced.
+    if (check.get("failures") and read.get("baseline") != "unchanged read reused"
+            and not read.get("replayed_from")):
         _stage("re-reading — the first read did not agree with the sheet")
         first = list(check["failures"])
         again = read_concept(pdf_paths, model=model, refresh=refresh, brief=brief, sheet=True,
@@ -4078,6 +4145,26 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
             record["review_flags"].append(
                 "CONCEPT: operation(s) not on the rate card were sighted and dropped: "
                 + ", ".join(sorted(set(unknown))))
+        # A REQUIREMENT THE READ NAMED IS NOT DROPPED IN SILENCE (D-595): it is asked — unless
+        # the engine charges it another way (handling, packing, inspection: the unit's own
+        # rules), where a question would only be noise.
+        _covered = {str(w).lower() for w in
+                    (_vocab("CONCEPT_OPERATIONS_COVERED_ELSEWHERE", ()) or ())}
+        unknown = [u for u in unknown
+                   if str(u).strip().lower().replace(" ", "_") not in _covered]
+        if unknown:
+            _pn_u = str(record.get("part_number") or "this part")
+            try:
+                from source_precedence import raise_manufacturing_question as _ask_u
+                _ask_u(record, f"Work on {_pn_u} the engine cannot charge: "
+                               + ", ".join(sorted(set(unknown))),
+                       "the read named it and the rate card has no operation for it, so it is "
+                       "NOT in the price",
+                       "say which department does it and how long it takes, or confirm it is "
+                       "not needed", "concept_scan.parts_from_answer")
+            except Exception:                                        # noqa: BLE001
+                pass
+            record.setdefault("concept_dropped_operations", []).extend(sorted(set(unknown)))
 
         # THE ACTION RIDES ON THE PART. One line, in the estimator's imperative, because a
         # concept figure that nobody is told to confirm becomes a firm one by seniority.
@@ -5152,6 +5239,206 @@ def unit_operations(answer: Dict[str, Any]) -> List[str]:
     return out
 
 
+# ── FAITHFUL TRANSFER (D-595) ──────────────────────────────────────────────────────────
+#
+# What the read and the brief state reaches the record, and every drop, conversion or
+# question the engine makes of it is written down — a change list on the record, and the
+# material ones on the decisions list. 0320730's book reached the customer page saying its
+# parts were "supplied as made" while the brief stated polished nickel-chrome: the read had no
+# word for plating, the brief's finish line was read by nothing, and the TIG it stated became
+# CO2 without a sentence.
+
+_FINISH_LINE_SPLIT = re.compile(r"(?<!\d)\.(?!\d)|\n|;")
+_FINISH_WORD = re.compile(r"\bFINISH(?!ED)\b|\bPLAT|MICRON|µM|\bUM\b", re.IGNORECASE)
+_POLISH_WORD = re.compile(r"\bPOLISH|\bGRIT\b|\bLINISH", re.IGNORECASE)
+_WELD_PROCESS_WORD = re.compile(
+    r"\b(TIG|MIG|MAG|GTAW|GMAW|MMA)\b(?=[\s\-]*WELD)"
+    r"|\bWELD\w*\s+(?:BY\s+|USING\s+|WITH\s+)?(TIG|MIG|MAG|GTAW|GMAW|MMA)\b", re.IGNORECASE)
+_PLATE_METAL_WORDS = ("STEEL", "ALUMIN", "BRASS", "COPPER", "ZINTEC", "GALV", "IRON")
+
+
+def dropped_unit_operations(answer: Mapping[str, Any]) -> List[str]:
+    """The unit-level work the read named that the vocabulary has no word for — dropped from
+    the price by unit_operations, so it must be asked (D-595), never lost in silence. Work the
+    engine charges another way (config CONCEPT_OPERATIONS_COVERED_ELSEWHERE) is not asked."""
+    covered = {str(w).lower() for w in (_vocab("CONCEPT_OPERATIONS_COVERED_ELSEWHERE", ()) or ())}
+    out: List[str] = []
+    for raw in (answer.get("unit_operations") or []):
+        name = str(raw or "").strip().lower().replace(" ", "_")
+        if (name and name not in SIGHTABLE_OPERATIONS and name not in covered
+                and str(raw).strip() not in out):
+            out.append(str(raw).strip())
+    return out
+
+
+def stated_finish(answer: Mapping[str, Any], brief: str = "") -> Dict[str, str]:
+    """The plate and the polish the read's sheet facts or the enquiry brief STATE.
+
+    {"plate", "plate_source", "polish", "polish_source"}, each present only when stated. A brief
+    line counts as a plate statement only where it is about the finish ("Finish:", plating,
+    microns) — "2 chrome end caps" names a bought part's finish, not the product's."""
+    try:
+        from finish_rules import finish_families
+    except Exception:                                                # noqa: BLE001
+        return {}
+    facts = answer.get("sheet_facts") if isinstance(answer.get("sheet_facts"), Mapping) else {}
+    cands: List[tuple] = []
+    if str(facts.get("finish") or "").strip():
+        cands.append((" ".join(str(facts["finish"]).split()), "the sheet's finish note, as read",
+                      True))
+    for line in _FINISH_LINE_SPLIT.split(str(brief or "")):
+        text = " ".join(line.split())
+        if text:
+            cands.append((text, "the enquiry brief", False))
+    out: Dict[str, str] = {}
+    for text, src, is_finish_field in cands:
+        if ("plate" not in out and "plate" in finish_families(text)
+                and (is_finish_field or _FINISH_WORD.search(text))):
+            out["plate"], out["plate_source"] = text, src
+        if "polish" not in out and _POLISH_WORD.search(text):
+            out["polish"], out["polish_source"] = text, src
+    return out
+
+
+def _record_ops(rec: Mapping[str, Any]) -> List[str]:
+    return [str(o) for f in ("inferred_operations", "textual_operations", "operations")
+            for o in (rec.get(f) or []) if isinstance(rec.get(f), list)]
+
+
+def _strip_op(rec: Dict[str, Any], op: str) -> bool:
+    hit = False
+    for f in ("inferred_operations", "textual_operations", "operations"):
+        lst = rec.get(f)
+        if isinstance(lst, list) and op in lst:
+            rec[f] = [o for o in lst if o != op]   # precedence: direct-write ok — an op converted to the finish it names, recorded as a change
+            hit = True
+    return hit
+
+
+def _is_metal_record(rec: Mapping[str, Any]) -> bool:
+    text = " ".join(str(rec.get(k) or "") for k in ("normalized_material", "material_guess",
+                                                     "concept_material")).upper()
+    return any(w in text for w in _PLATE_METAL_WORDS)
+
+
+def carry_stated_finish(unit: Optional[Dict[str, Any]], parts: List[Any],
+                        answer: Mapping[str, Any], brief: str = "") -> List[Dict[str, Any]]:
+    """A stated or sighted plate and polish reach the records (D-595). Returns the changes made.
+
+    The plate goes onto the welded unit — the thing that goes in the tank — or, with no unit,
+    onto each made metal part, as the finish the subcontract plating line reads: that line then
+    prices it, or, for a spec the zinc card does not cover (nickel, chrome), carries it unpriced
+    and asks for the plater's price. A "plating" operation is the same requirement and becomes
+    the finish, never a labour row. Polishing is put on the plated unit as its surface
+    preparation — the shop's stated brushing-before-plating time charges it, flagged — and is
+    always asked, with the grits as stated."""
+    try:
+        from finish_rules import finish_families
+        from source_precedence import apply_field, raise_manufacturing_question
+    except Exception:                                                # noqa: BLE001
+        return []
+    changes: List[Dict[str, Any]] = []
+    made = [p for p in (parts or []) if isinstance(p, dict)
+            and p.get("concept_kind") == "fabricated"]
+    records = ([unit] if isinstance(unit, dict) else []) + [p for p in (parts or [])
+                                                            if isinstance(p, dict)]
+    sighted_plate = [r for r in records if "plating" in _record_ops(r)]
+    sighted_polish = [r for r in records if "polishing" in _record_ops(r)]
+    st = stated_finish(answer, brief)
+    plate = st.get("plate") or ("plated — the read names plating, the process is not stated"
+                                if sighted_plate else "")
+    hosts = ([unit] if isinstance(unit, dict) and unit.get("is_assembly_parent")
+             else [p for p in made if _is_metal_record(p)])
+    if plate and hosts:
+        src = st.get("plate_source") or "the read's operations"
+        for h in hosts:
+            _now = " ".join(str(h.get(k) or "") for k in ("normalized_finish", "finish"))
+            if "plate" in finish_families(_now):
+                continue
+            apply_field(h, "normalized_finish", plate,
+                        BRIEF_SOURCE if "brief" in src else SOURCE, note=f"stated by {src}")
+            _sf = [str(x) for x in (h.get("surface_finishes") or [])]
+            if plate not in _sf:
+                h["surface_finishes"] = _sf + [plate]
+            h["finish_stated_by"] = src
+        changes.append({"kind": "carried", "item": f"finish: {plate}",
+                        "to": [str(h.get("part_number") or "") for h in hosts],
+                        "why": f"stated by {src} — the subcontract plating line prices it, or "
+                               f"carries it unpriced and asks for the plater's price"})
+    for r in records:
+        if _strip_op(r, "plating"):
+            changes.append({"kind": "converted", "item": "plating operation",
+                            "to": [str(r.get("part_number") or "")],
+                            "why": "plating is a subcontract finish on the plating line, not a "
+                                   "labour row"})
+    polish = st.get("polish") or ("polished — the read names polishing, the grits are not "
+                                  "stated" if sighted_polish else "")
+    if polish:
+        for r in records:
+            _strip_op(r, "polishing")
+        host = (unit if isinstance(unit, dict) else
+                next((p for p in made if _is_metal_record(p)), None))
+        if host is not None:
+            host["surface_preparation"] = polish
+            pn = str(host.get("part_number") or "this part")
+            raise_manufacturing_question(
+                host, f"Polishing of {pn}: {polish}",
+                ("timed at the shop's stated brushing-before-plating minutes a unit on the plated "
+                 "weldment — an indicative figure calibrated on one stand, not on this part"
+                 if plate else
+                 "the rate card has no polishing time, so the polishing is NOT in the price"),
+                "confirm the polishing minutes a unit for this part, grit by grit",
+                "concept_scan.carry_stated_finish")
+            changes.append({"kind": "asked", "item": f"polishing: {polish}", "to": [pn],
+                            "why": st.get("polish_source") or "the read's operations"})
+    return changes
+
+
+def carry_weld_process(unit: Optional[Dict[str, Any]], parts: List[Any],
+                       answer: Mapping[str, Any], brief: str = "") -> List[Dict[str, Any]]:
+    """The weld PROCESS the brief or the read states reaches the welded records (D-595), so the
+    weld row names it and a process the rate card has no rate for is asked
+    (weld_symbols.weld_rate_gap_question) instead of being charged as CO2 in silence."""
+    try:
+        import config as _cfg                                       # noqa: WPS433
+        vocab = dict(getattr(_cfg, "WELD_PROCESS_VOCAB", None) or {})
+    except Exception:                                                # noqa: BLE001
+        vocab = {}
+    texts = [(str(brief or ""), "enquiry_brief")] + [
+        (f"{p.get('description') or ''} {p.get('concept_seen') or ''}", "concept_read")
+        for p in (parts or []) if isinstance(p, dict)]
+    found = None
+    for text, src in texts:
+        m = _WELD_PROCESS_WORD.search(text)
+        if m:
+            word = (m.group(1) or m.group(2) or "").upper()
+            found = (str(vocab.get(word) or word), word, src)
+            break
+    if not found:
+        return []
+    proc, word, src = found
+    records = ([unit] if isinstance(unit, dict) else []) + [p for p in (parts or [])
+                                                            if isinstance(p, dict)]
+    hosts = [r for r in records if "welding" in _record_ops(r) or r.get("weld_stated_by_note")]
+    if not hosts:
+        return []
+    try:
+        from weld_symbols import _arc_weld_row_title, weld_rate_gap_question
+        row = _arc_weld_row_title()
+    except Exception:                                                # noqa: BLE001
+        weld_rate_gap_question, row = None, "Weld (CO2)"
+    for h in hosts:
+        if not isinstance(h.get("weld_process_stated"), Mapping):
+            h["weld_process_stated"] = {"process": proc, "word": word, "default": False,
+                                        "charged_on": row, "source": src}
+        if weld_rate_gap_question is not None:
+            weld_rate_gap_question(h)
+    return [{"kind": "carried", "item": f"weld process: {proc}",
+             "to": [str(h.get("part_number") or "") for h in hosts],
+             "why": f"stated by the {'enquiry brief' if src == 'enquiry_brief' else 'read'} — "
+                    f"named on the weld row, charged at the {row} rate and asked"}]
+
+
 def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
                        stem: str) -> Optional[Dict[str, Any]]:
     """The product itself, as an assembly parent — or None where there is nothing to assemble.
@@ -5288,7 +5575,7 @@ def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
                   if _small else
                   ("" if _min_face else "; no too-small exception applied — the customer's "
                    "minimum size is not stated (config CONCEPT_LABEL_MIN_FACE_MM)"))
-    _mech = mechanically_fitted(parts)
+    _mech = mechanically_fitted(parts, unit_welded="welding" in (ops or []))
     record["fitting_counts"] = {
         "handled": {"count": record["pieces_fitted"],
                     "basis": "every piece fitted at the unit, a piece welded to its host "
