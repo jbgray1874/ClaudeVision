@@ -228,6 +228,38 @@ def test_the_page_is_told_which_job_is_running(share, monkeypatch):
     assert running and running[0]["current"]["drawing"] == "0360001"
 
 
+class _SlowPortal(FakePortal):
+    """Running on the first status call, done on the second."""
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    def status(self, run_id):
+        self.calls += 1
+        if self.calls == 1:
+            return {"status": "running"}
+        return super().status(run_id)
+
+
+def test_the_job_self_running_started_is_reported_with_its_run_id(share, monkeypatch):
+    """No browser tab started it, so no tab had its id; the page stops it by this one."""
+    monkeypatch.setattr(ler, "read_sheet", lambda path, sheet="": [_row(6, "0360001")])
+    monkeypatch.setattr(sr.time, "sleep", lambda s: None)
+    switch = FakeSwitch([])
+    sr.cycle(_settings(share), _SlowPortal(), switch, say=lambda s: None)
+    during = [b for b in switch.beats
+              if b.get("phase") == "running" and (b.get("current") or {}).get("run_id")]
+    assert during and during[0]["current"]["run_id"] == "r1"
+
+
+def test_the_card_stops_the_job_by_the_reported_run_id():
+    page = PAGE.read_text(encoding="utf-8")
+    assert 'id="selfJobStop"' in page
+    handler = page[page.index("selfJobBtn.onclick"):]
+    handler = handler[:handler.index("refreshSelf();")]
+    assert '"/abandon"' in handler and "dataset.runId" in handler
+
+
 # ── the four routes, served ──────────────────────────────────────────────────────────
 
 @pytest.fixture

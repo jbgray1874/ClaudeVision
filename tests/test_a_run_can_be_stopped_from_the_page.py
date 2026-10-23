@@ -112,6 +112,21 @@ def test_the_runner_treats_a_409_as_a_stop():
     assert "no longer ours" in RUNNER_SRC
 
 
+def test_a_service_restart_forgets_the_run_and_says_so_in_words_the_runner_reads(routes):
+    """Runs live in the service's memory. After a restart the heartbeat is answered 404."""
+    req = routes.ProgressRequest(runner_id="RUNNER-1", lines=[])
+    with pytest.raises(Exception) as exc:
+        routes.progress("gone", req)
+    assert getattr(exc.value, "status_code", None) == 404
+    assert "No such run" in str(getattr(exc.value, "detail", ""))
+
+
+def test_the_runner_treats_a_forgotten_run_as_a_stop():
+    """Otherwise the engine drives SOLIDWORKS and Excel to the end of a job whose result the
+    restarted service refuses, and the page's Stop answers "No such run"."""
+    assert 'resp.status_code == 404 and "No such run" in' in RUNNER_SRC
+
+
 def test_the_runner_also_understands_an_explicit_cancel():
     assert '.get("cancel")' in RUNNER_SRC
 
