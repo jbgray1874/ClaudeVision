@@ -1110,6 +1110,20 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
         flush()
     code = proc.wait()
 
+    # A STOPPED RUN FILES NOTHING, WHATEVER THE ENGINE'S EXIT CODE (D-588c). The beat ends the
+    # engine when a stop arrives, but a stop that lands as the engine finishes cleanly found
+    # the run at exit 0 and filed its book to the share — a job the person stopped, published.
+    # So the service is asked once more before anything is filed, and a stop heard at any
+    # point means nothing leaves the engine's own output folder. The runner then goes back to
+    # the queue, so the next job runs as normal.
+    flush(force=True)
+    if stop_asked:
+        say(f"STOPPED — {stop_asked}. Nothing was filed.")
+        _finish(requests, base, headers, run_id, runner_id, "error",
+                f"Stopped — {stop_asked}. The engine was ended and nothing was filed; anything "
+                f"it wrote stays in the engine's own output folder on this machine.", log)
+        return
+
     if code != 0:
         _finish(requests, base, headers, run_id, runner_id, "error",
                 f"The engine exited with code {code}. Nothing was filed.", log)
