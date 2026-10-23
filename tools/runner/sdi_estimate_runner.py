@@ -963,6 +963,15 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
                 # nobody will use, in front of a queue waiting for the desktop.
                 if resp.status_code == 409:
                     stop_asked = "the service says this run is no longer ours"
+                # AND SO IS A SERVICE THAT NO LONGER KNOWS THE RUN. Runs live in the
+                # service's memory; restarting it mid-job forgot this one, so its Stop
+                # button answered "No such run" and the engine drove SOLIDWORKS and Excel
+                # to the end of a job whose result the service would refuse. Matched on the
+                # route's own words, so a wrong address (FastAPI's bare "Not Found") is not
+                # taken for it.
+                elif resp.status_code == 404 and "No such run" in (resp.text or ""):
+                    stop_asked = ("the service no longer knows this run — it was restarted, "
+                                  "and the result would be refused")
                 elif resp.ok and (resp.json() or {}).get("cancel"):
                     stop_asked = "stopped from the page"
             except Exception:                          # noqa: BLE001

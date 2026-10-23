@@ -210,8 +210,19 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
         return out
 
     current: Dict[str, Any] = {}
+    current_key: Dict[str, str] = {}
 
     def _running() -> Dict[str, Any]:
+        # THE RUN ID GOES WITH THE JOB, so the page can stop it. A job this watcher queued
+        # was started by no browser tab, so no tab had its id or a Stop button for it; the
+        # one the ledger recorded when the portal accepted it is reported on every beat.
+        _job = (ledger.get("jobs") or {}).get(current_key.get("key", "")) or {}
+        _live = [a for a in (_job.get("attempts") or [])
+                 if a.get("status") in {"queued", "running"} and a.get("run_id")]
+        if _live:
+            current["run_id"] = _live[-1]["run_id"]
+        else:
+            current.pop("run_id", None)
         return report("running", f"{current.get('drawing')} ({current.get('customer')})",
                       counts=tally, current=dict(current), recent=recent_runs(ledger))
 
@@ -219,6 +230,7 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
         current.clear()
         current.update(customer=d.row.customer, drawing=d.row.drawing,
                        quantities=list(d.quantities), since=ler._now())
+        current_key["key"] = ler.job_key(d.row)
         return switch.beat(_running())
 
     # A JOB IS MINUTES TO HOURS, AND THE PAGE MUST STILL SEE THE WATCHER. The runner waits on

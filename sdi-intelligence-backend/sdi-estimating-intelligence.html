@@ -817,6 +817,11 @@
       <button class="btn-stop" id="selfStop" type="button" hidden
               title="Switch self-running off: the job in progress finishes, nothing more is queued">
         Stop self-running — the job in progress finishes</button>
+      <!-- A JOB THE WATCHER STARTED CAN BE STOPPED FROM HERE. No browser tab started it, so no
+           tab's own Stop button reaches it; the watcher reports its run id on every beat. -->
+      <button class="btn-stop" id="selfJobStop" type="button" hidden
+              title="Stop the estimate self-running is running now: the run is abandoned and the runner ends the engine">
+        Stop this job</button>
       <p class="note" id="selfStatus">Checking self-running…</p>
       <div id="selfOut" class="sub" style="margin-top:8px;font-size:13px"></div>
     </section>
@@ -4064,7 +4069,7 @@ checkDm();
 /* AI ESTIMATE SELF-RUNNING (D-588). The button is a switch held by the service; the work is
    the watcher's, on the estimating machine. The page shows what the watcher last said and
    when, and refreshes every 20 seconds so a running job can be followed from here. */
-const selfRunBtn = $("selfRun"), selfStopBtn = $("selfStop");
+const selfRunBtn = $("selfRun"), selfStopBtn = $("selfStop"), selfJobBtn = $("selfJobStop");
 const SELF_LABELS = [["ready","ready to run"],["running","running"],
   ["waiting","waiting for drawings"],["held","held — a person must act"],["failed","failed"],
   ["done","done"],["not_asked","not asked (AI CHECK is not YES)"]];
@@ -4095,6 +4100,11 @@ function renderSelf(v){
   const w = v.watcher || {};
   selfRunBtn.hidden = !!v.enabled;
   selfStopBtn.hidden = !v.enabled;
+  const job = (w.phase === "running" && w.connected) ? (w.current || {}) : {};
+  selfJobBtn.hidden = !job.run_id;
+  selfJobBtn.dataset.runId = job.run_id || "";
+  selfJobBtn.textContent = job.run_id ? "Stop this job — " + (job.drawing || job.run_id)
+                                      : "Stop this job";
   $("selfStatus").textContent = selfStatusLine(v);
   const c = w.counts || {};
   const parts = SELF_LABELS.filter(([k]) => c[k]).map(([k, l]) => c[k] + " " + l);
@@ -4157,6 +4167,27 @@ selfStopBtn.onclick = () => {
   if(!confirm("Stop self-running?\n\nThe job in progress finishes on the portal; nothing "
             + "more is queued.")) return;
   switchSelf(false);
+};
+/* STOP MEANS THE SAME HERE AS ON A RUN THIS TAB STARTED: abandoned in the service, and the
+   runner told to end the engine on its next heartbeat. Self-running stays on; switch it off
+   as well if nothing more should be queued. */
+selfJobBtn.onclick = async () => {
+  const id = selfJobBtn.dataset.runId;
+  if(!id || selfJobBtn.disabled) return;
+  if(!confirm("Stop this job?\n\nThe run is abandoned and the runner is told to end the "
+            + "engine. Self-running stays on and moves to the next job; switch it off as well "
+            + "if nothing more should run.")) return;
+  selfJobBtn.disabled = true;
+  try{
+    const r = await api("/api/estimate/" + encodeURIComponent(id) + "/abandon", {method:"POST"});
+    const j = await r.json().catch(() => ({}));
+    $("selfStatus").textContent = r.ok
+      ? "Stop requested. The runner ends the engine on its next heartbeat."
+      : "Could not stop it: " + detailText(j, r, "refused");
+  }catch(e){
+    $("selfStatus").textContent = "Could not stop it — " + e.message;
+  }
+  selfJobBtn.disabled = false;
 };
 refreshSelf();
 setInterval(refreshSelf, 20000);
