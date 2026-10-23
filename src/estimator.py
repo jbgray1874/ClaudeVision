@@ -2719,7 +2719,16 @@ def _is_section_or_wire_candidate(part: Dict[str, Any], material: Optional[str])
             str(material or ""),
         ]
     ).upper()
-    return any(token in blob for token in tokens)
+    hits = [token for token in tokens if token in blob]
+    if hits and _formed_sheet_shape(part, hits):
+        return False
+    return bool(hits)
+
+
+def _formed_sheet_shape(part: Dict[str, Any], hits: Optional[List[str]] = None) -> Optional[str]:
+    """The formed shape a sheet part's description names, or None — see formed_shape (D-589)."""
+    from formed_shape import formed_sheet_shape                       # noqa: PLC0415
+    return formed_sheet_shape(part, hits)
 
 
 def _resolve_labour_rate(operation: str) -> Dict[str, Any]:
@@ -5346,6 +5355,12 @@ def _blank_that_could_have_been_cut(
                               + " — this is a bounding box or a drawing sheet size, not the "
                                 "part"
                               + (f" (source: {_blank_src})" if _blank_src else ""))}
+    elif (str(_blank_src or "") == "printed_extents_provisional"
+          and (part.get("_blank_provisional") or {}).get("weight_confirmed_small_part")):
+        # A SMALL PART ITS OWN SHEET'S WEIGHT CONFIRMS (D-589). Below the 10 mm floor a blank
+        # is a feature callout unless the weight the same sheet states agrees with it —
+        # detail_page_geometry made it only on that agreement, and says so on the record.
+        return blank_length, blank_width
     elif _bc.plausible_as_a_sheet_part(blank_length, blank_width):
         # Unstamped, but it could be the size of something we cut and nothing contradicts
         # it. Keep it — refusing every unstamped blank stopped a 120 x 80 bracket costing
@@ -8880,6 +8895,60 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         if _fold_evidence:
             ops = list(ops) + ["folding"]
             record_operation(part, "folding", "inference")
+        else:
+            # A FORMED SHAPE IS FOLDED (D-589). An angle cut from sheet is one fold whether or
+            # not a callout says so; 0351292's base angle was lasered and never folded.
+            _shape = _formed_sheet_shape(part) if _mat_u in _SHEET_METALS else None
+            if _shape:
+                ops = list(ops) + ["folding"]
+                record_operation(part, "folding", "inference")
+                part.setdefault("operation_evidence", {}).setdefault(
+                    "folding", f"its description names a formed {_shape.lower()}: "
+                               f"\"{str(part.get('description') or '').strip()[:80]}\"")
+
+    # A PART ITS OWN SHEET SHOWS ROLLED IS ROLLED (D-589). detail_page_geometry marks it from a
+    # radius its flat cannot hold; the Roll row charges it at the template's set-up and a
+    # stated allowance per piece, flagged there, until the shop gives a rolling time.
+    _rolled = part.get("rolled_radius") if isinstance(part.get("rolled_radius"), dict) else None
+    if _rolled and "roll" not in ops and not _section_no_dxf:
+        ops = list(ops) + ["roll"]
+        record_operation(part, "roll", "inference")
+    if "roll" in ops:
+        _roll_rule = getattr(config, "ROLL_FROM_RADIUS", {}) or {}
+        setup_times_min["roll"] = round(float(_roll_rule.get("setup_min") or 45.0), 2)
+        run_times_min["roll"] = round(float(_roll_rule.get("run_sec_per_piece") or 60.0) / 60.0, 2)
+
+    # THE SHAPE'S FOLDS BEFORE THE GENERIC ALLOWANCE (D-589). Where nothing counted the bends,
+    # a named shape says how many it has — a channel is two, not the one-fold minimum.
+    _shape_folds = 0
+    if "folding" in ops and not bends and not _model_measured_zero_bends(part):
+        _shape_now = _formed_sheet_shape(part) if _mat_u in _SHEET_METALS else None
+        if _shape_now:
+            _shape_folds = int((getattr(config, "FORMED_SHEET_SHAPE_FOLDS", {}) or {})
+                               .get(_shape_now) or 0)
+            if _shape_folds > 0:
+                bends = _shape_folds
+                part["fold_count_from_shape"] = {"shape": _shape_now, "folds": _shape_folds}
+                part.setdefault("review_flags", []).append(
+                    f"FOLDS FROM THE SHAPE: {_shape_folds} fold(s) charged because the part is "
+                    f"named {'an' if _shape_now[:1] in 'AEIOU' else 'a'} {_shape_now.lower()} "
+                    f"and its sheet states a sheet gauge with no "
+                    f"section size — an allowance from the shape (config "
+                    f"FORMED_SHEET_SHAPE_FOLDS), not a count. If it is cut from rolled "
+                    f"section instead, give the section and it is costed by length; give the "
+                    f"fold count or the flat and the time follows it")
+                try:
+                    from source_precedence import raise_manufacturing_question as _ask_shape
+                    _ask_shape(part,
+                               f"Folding of {part.get('part_number') or 'this part'}: "
+                               f"{_shape_folds} fold(s) from its shape ({_shape_now.lower()})",
+                               "no fold callout, flat pattern or model counted its bends; the "
+                               "shape its description names was used",
+                               "confirm it is folded from sheet and how many folds; or give "
+                               "the rolled section it is cut from",
+                               "estimator.estimate_process_times")
+                except Exception:                                    # noqa: BLE001
+                    pass
 
     if "folding" in ops:
         rule = LABOUR_RULES["folding"]
@@ -12723,7 +12792,68 @@ def _member_carries_its_own_coat(member: Dict[str, Any]) -> bool:
     return "powder_coating" in [str(o) for o in (member.get("textual_operations") or [])]
 
 
-def stamp_members_coated_area(parts: Any) -> int:
+def stamp_members_material(parts: Any, summary: Any = None) -> List[str]:
+    """An assembly's material is what its made members are made of (D-589). Returns the
+    assemblies whose material it set.
+
+    0351292's support assembly ROL2021-2468: its sheet's material field says "SEE DWGS", the
+    reader took the page's boilerplate "304 - STAINLESS STEEL" in its place, and its Weld,
+    Dress and P.Coat rows read STAINLESS STEEL on a weldment of mild-steel tube and sheet.
+    Where the compiled hierarchy gives a record made members and they all agree on one
+    material, that material is offered under "assembly_members" — through apply_field, so a
+    person's reading or a measurement still wins and a displaced reading is recorded. Members
+    that disagree decide nothing. Records with no compiled members are untouched."""
+    if not isinstance(parts, list):
+        return []
+    try:
+        _gp = _compiled_parent_map(parts, summary) if summary is not None else {}
+    except Exception:                                                # noqa: BLE001
+        _gp = {}
+    if not _gp:
+        return []
+    try:
+        from bought_in_policy import is_bought_in as _bought
+    except Exception:                                                # noqa: BLE001
+        def _bought(_p: Any) -> bool:                                # type: ignore[no-redef]
+            return False
+    kids: Dict[str, List[Dict[str, Any]]] = {}
+    for _p in parts:
+        if not isinstance(_p, dict):
+            continue
+        for _par in _gp.get(str(_p.get("part_number") or "").strip().upper(), ()):
+            kids.setdefault(_par, []).append(_p)
+    done: List[str] = []
+    for _a in parts:
+        if not isinstance(_a, dict):
+            continue
+        _pn = str(_a.get("part_number") or "").strip().upper()
+        members = [k for k in kids.get(_pn, []) if not _bought(k)]
+        mats = {str(k.get("normalized_material") or "").strip().upper().replace(" ", "_")
+                for k in members}
+        mats.discard("")
+        if not members or len(mats) != 1:
+            continue
+        _m = next(iter(mats))
+        _cur = str(_a.get("normalized_material") or "").strip().upper().replace(" ", "_")
+        if _cur == _m:
+            continue
+        try:
+            import source_precedence as _sp
+            if _sp.apply_field(_a, "normalized_material", _m, "assembly_members",
+                               note=(f"its {len(members)} made member(s) "
+                                     f"({', '.join(str(k.get('part_number')) for k in members[:4])}"
+                                     f"{', …' if len(members) > 4 else ''}) are all {_m}")):
+                _a.setdefault("review_flags", []).append(
+                    f"MATERIAL FROM ITS MEMBERS: {_a.get('part_number')} is an assembly whose "
+                    f"made members are all {_m.replace('_', ' ')}; the reading of its own sheet "
+                    f"({_cur.replace('_', ' ') or 'none'}) was not used")
+                done.append(str(_a.get("part_number")))
+        except Exception:                                            # noqa: BLE001
+            continue
+    return done
+
+
+def stamp_members_coated_area(parts: Any, summary: Any = None) -> int:
     """An assembly coated as one thing is coated over the area of what it is made of.
 
     12567-02-101 HEADER CASE FABRICATION: its own sheet says POWDER COATED, its members'
@@ -12756,6 +12886,25 @@ def stamp_members_coated_area(parts: Any) -> int:
     for _p in parts:
         if isinstance(_p, dict) and _p.get("owning_assembly"):
             _owned.setdefault(str(_p["owning_assembly"]).strip().upper(), []).append(_p)
+    # THE COMPILED HIERARCHY NAMES THE MEMBERS TOO (D-589). 0351292's records carry
+    # owning_assembly = the product root on every part and no assembly_children at all — the
+    # parts lists printed which sheet each row sits on, and only the route compiler's graph
+    # holds that. The rail, base and supports were coated over NOTHING of their members, and
+    # the POWDER line fell back to the rail's phantom 30 x 20 tube: 0.1214 m2 for a unit
+    # whose base plate alone is over a square metre. A part whose compiled parent is the
+    # assembly is its member, whatever owning_assembly says.
+    if summary is not None:
+        try:
+            _gp = _compiled_parent_map(parts, summary)
+        except Exception:                                            # noqa: BLE001
+            _gp = {}
+        for _p in parts:
+            if not isinstance(_p, dict):
+                continue
+            for _par in _gp.get(str(_p.get("part_number") or "").strip().upper(), ()):
+                _lst = _owned.setdefault(_par, [])
+                if not any(_q is _p for _q in _lst):
+                    _lst.append(_p)
     # A WELDMENT'S PIECES ARE ITS AREA (D-548). 401918-01-03M is a frame welded from a cut list
     # of three sections; it has no blank or section of its own — its tube is on its members —
     # so as a member of 201 it added nothing and the frame's 0.56 m2 of tube left 201's coat.
@@ -14122,7 +14271,8 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         if isinstance(_ap, dict) and _ap.get("assembly_children"):
             _cm = [_mat_by_pn.get(str(k).strip().upper(), "") for k in _ap["assembly_children"]]
             _ap["child_materials"] = [m for m in _cm if m]
-    stamp_members_coated_area(parts)
+    stamp_members_material(parts, summary)
+    stamp_members_coated_area(parts, summary)
     # AN ASSEMBLY WITH NO RECORD OF ITS OWN IS STILL BONDED. 12633-00-GA: the wine lifter and
     # choc holder exist only as graph nodes minted from the SolidWorks tree, so no rule on an
     # assembly RECORD ever ran for them and their panels were costed with no joining. Their

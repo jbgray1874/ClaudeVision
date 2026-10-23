@@ -840,6 +840,29 @@ CONCEPT_CONSUMABLE_WORDS = [
 # never a time: the minutes come from LABOUR_RULES["folding"]. Without it the run time was 0
 # and the workbook's per-part fold rate was pieces over set-up alone (36,036/hr).
 FOLDS_ASSUMED_WHEN_UNCOUNTED = 1
+# A FORMED SHAPE NAMES ITS FOLDS (D-589). A sheet part whose description names one of these
+# shapes, and whose own sheet names no section (no a x b x t, no "RECT TUBE"/"ANGLE" in its
+# material), is folded from sheet: an angle is one fold, a channel two, a top hat four. Charged
+# as an allowance from the shape — never a count — flagged, and asked; a count from a flat
+# pattern, a fold callout or the model replaces it. Longest word first when two match.
+FORMED_SHEET_SHAPE_FOLDS = {
+    "ANGLE": 1, "L BRACKET": 1, "L-BRACKET": 1,
+    "CHANNEL": 2, "U CHANNEL": 2, "U-CHANNEL": 2,
+    "Z BRACKET": 2, "Z-BRACKET": 2, "ZED": 2,
+    "TOP HAT": 4, "TOP-HAT": 4,
+}
+# A RADIUS A FLAT CANNOT HOLD IS ROLLED (D-589). A sheet part whose sheet prints a radius at
+# least `min_radius_mm` and at least `min_radius_to_gauge` times its gauge, LARGER than the
+# smaller side of its own blank (so it cannot be a corner or an edge of the flat), and which
+# is formed (folded, or drawn with a flat pattern) is rolled to that radius. Charged on the
+# Roll row: the template's ROLL set-up and an allowance per piece — an allowance, flagged and
+# asked, until the shop states a rolling time.
+ROLL_FROM_RADIUS = {
+    "min_radius_mm": 50.0,
+    "min_radius_to_gauge": 20.0,
+    "setup_min": 45.0,
+    "run_sec_per_piece": 60.0,
+}
 # A consumable the read says is PER COMPONENT is counted once per piece the unit fits
 # (D-487) — "QR component labels" on a unit of forty pieces is forty labels, not one.
 # Vocabulary, not logic.

@@ -1003,6 +1003,32 @@ def _traced_words(facts: Dict[str, Any]) -> str:
             f"{_g(n)} item{'s' if n != 1 else ''} {'are' if n != 1 else 'is'} still being confirmed.")
 
 
+def _route_claim(facts: Dict[str, Any]) -> str:
+    """"All 9 made parts given a blank, a gauge and a path…" — COUNTED, never asserted (D-589).
+    The sentence was fixed text: 0351292's page said every made part had a blank while the
+    top blanks had none and the base angle's was unresolved. A part counts when it has a blank
+    or cut length, a gauge or section, and sits on a charged department row."""
+    made = facts.get("made") or []
+    if not made:
+        return "Each part's path through SDI's departments recorded in the estimate."
+    on_route = {str(x).strip().upper() for xs in (facts.get("parts_by_dept") or {}).values()
+                for x in xs}
+
+    def _complete(p: Dict[str, Any]) -> bool:
+        me = p.get("material_estimate") if isinstance(p.get("material_estimate"), dict) else {}
+        sized = bool(_num(me.get("blank_length_mm")) or _num(p.get("blank_length_mm")))
+        gauged = bool(_num(p.get("normalized_thickness_mm")) or _num(me.get("thickness_mm"))
+                      or me.get("section_profile_mm") or me.get("section_stock"))
+        return sized and gauged and str(p.get("part_number") or "").strip().upper() in on_route
+
+    n, m = sum(1 for p in made if _complete(p)), len(made)
+    if n == m:
+        return (f"All {_g(m)} made part{'s' if m != 1 else ''} given a blank, a gauge and a "
+                f"path through SDI's departments.")
+    return (f"{_g(n)} of {_g(m)} made parts given a blank, a gauge and a path through SDI's "
+            f"departments; {_g(m - n)} {'are' if m - n != 1 else 'is'} still being confirmed.")
+
+
 def reading_page(summary: Dict[str, Any], facts: Dict[str, Any], *, customer: str,
                  product: str, job_number: str, unit_price: Optional[float], qty: int,
                  sdi_logo: str, cust_header: str, page_no: str) -> str:
@@ -1043,7 +1069,7 @@ def reading_page(summary: Dict[str, Any], facts: Dict[str, Any], *, customer: st
          f"Materials, gauges and joints — {len(facts['made'])} parts SDI makes, "
          f"{len(facts['bought'])} bought in."),
         ("03 · CONNECTED", "Turned the design into a route", chain_route,
-         "Every made part given a blank, a gauge and a path through SDI's departments."),
+         _route_claim(facts)),
         ("04 · COSTED", "Priced it in SDI's workbook", costed, _sourced_words(facts)),
     ]
     chain_html = "".join(

@@ -202,6 +202,15 @@ def withdraw_stale_envelope_flags(parts: Any) -> int:
 PROVISIONAL_SOURCE = "printed_extents_provisional"
 # A DECIMAL COMMA IS A DECIMAL (D-584): European CAD prints 1435,2 and 208,9.
 _NUMBER_WORD = re.compile(r"\d{2,4}(?:[.,]\d+)?")
+# A SMALL DIMENSION PRINTED WITH ITS DECIMAL IS A DIMENSION (D-589). 0351292's top blank is
+# 30 x 7,4 x 2: its own sheet prints "30" across and "7,4" upright, and the 10 mm floor that
+# keeps a gauge label ("2") and a radius ("R2") out dropped the 7,4 with them — so the blank
+# could not be put on two axes and the part had no size. A single-digit figure WITH a decimal
+# is somebody dimensioning a small part; a bare single digit stays out. Used only where the
+# axis has nothing larger (every reader takes the largest figure per axis), and checked
+# against the weight the same sheet states.
+_SMALL_DECIMAL = re.compile(r"\d[.,]\d+")
+_SMALL_DECIMAL_MIN_MM = 3.0
 
 
 def _local_page_number(page: Mapping[str, Any]) -> Optional[int]:
@@ -226,6 +235,23 @@ def _cfg() -> Dict[str, Any]:
     except Exception:                                                # noqa: BLE001
         pass
     return base
+
+
+_REVISION_WORDS = re.compile(r"\b(?:REV|REVISION|REVISIONS|CHANGE|ECN|ECO|AMENDMENT|ISS|ISSUE)\b",
+                             re.IGNORECASE)
+
+
+def _zone_holds_words(layout: Mapping[str, Any], box: Sequence[float], words: Any) -> bool:
+    """True when any text line inside `box` matches `words`."""
+    bx0, by0, bx1, by1 = (float(v) for v in box)
+    for block in layout.get("blocks") or []:
+        for line in block.get("lines") or []:
+            x0, y0, x1, y1 = (float(v) for v in (line.get("bbox") or (0, 0, 0, 0)))
+            if x1 >= bx0 and x0 <= bx1 and y1 >= by0 and y0 <= by1:
+                text = "".join(str(sp.get("text") or "") for sp in line.get("spans") or [])
+                if words.search(text):
+                    return True
+    return False
 
 
 def read_sheet_figures(page: Mapping[str, Any]) -> Dict[str, Any]:
@@ -261,7 +287,13 @@ def read_sheet_figures(page: Mapping[str, Any]) -> Dict[str, Any]:
     try:
         from layout_zones import zone_boxes
         zones = zone_boxes(width, height)
-        skip = [zones["title_block"], zones["revision"]]
+        skip = [zones["title_block"]]
+        # THE REVISION ZONE IS SKIPPED FOR WHAT IT HOLDS (D-589). 0351292's downstand sheet
+        # keeps its revision table top right; the box where one usually sits held the flat's
+        # 25 mm width instead, and the blank could not be read. Skipped only where revision
+        # words are actually printed in it.
+        if _zone_holds_words(layout, zones["revision"], _REVISION_WORDS):
+            skip.append(zones["revision"])
     except Exception:                                                # noqa: BLE001
         skip = [(width * 0.58, height * 0.72, width, height)]
     for block in layout.get("blocks") or []:
@@ -281,10 +313,12 @@ def read_sheet_figures(page: Mapping[str, Any]) -> Dict[str, Any]:
             # INT", "258 259 259" — so figures are taken from the front of a line up to its
             # first word, and a line that opens with a word, a bullet or a symbol gives none.
             for token in text.split():
-                if not _NUMBER_WORD.fullmatch(token.strip()):
+                _tok = token.strip()
+                _small = bool(_SMALL_DECIMAL.fullmatch(_tok))
+                if not (_NUMBER_WORD.fullmatch(_tok) or _small):
                     break
-                value = float(token.replace(",", "."))
-                if 10.0 <= value <= 4000.0:
+                value = float(_tok.replace(",", "."))
+                if 10.0 <= value <= 4000.0 or (_small and _SMALL_DECIMAL_MIN_MM <= value < 10.0):
                     out["figures"].append((value, axis))
     return out
 
@@ -407,6 +441,46 @@ def sheet_envelope(sheets: Sequence[Mapping[str, Any]]) -> Optional[Dict[str, An
             "pages": [s.get("page_number") for s in sheets]}
 
 
+def _weight_on_sheets(sheets: Sequence[Mapping[str, Any]]) -> Optional[float]:
+    """The one weight the given sheets' own title blocks state, in kg; None when they state
+    none, or more than one (two weights on the sheets that size a part decide nothing)."""
+    seen: List[float] = []
+    for sheet in sheets or []:
+        tb = ((sheet.get("page_analysis") or {}).get("title_block") or {}) \
+            if isinstance(sheet, Mapping) else {}
+        for w in (tb.get("weights") or []) if isinstance(tb, Mapping) else []:
+            m = _WEIGHT_TEXT.match(str(w).strip().upper().replace(",", "").replace(" ", ""))
+            if not m:
+                continue
+            val = float(m.group(1)) / (1000.0 if m.group(2) == "G" else 1.0)
+            if 0.001 <= val <= 500.0 and not any(abs(val - s) < 1e-9 for s in seen):
+                seen.append(val)
+    return seen[0] if len(seen) == 1 else None
+
+
+def _small_blank_agrees_with_its_weight(part: Mapping[str, Any],
+                                        sheets: Sequence[Mapping[str, Any]],
+                                        length: float, width: float,
+                                        cfg: Mapping[str, Any]) -> bool:
+    """True when a blank below the general floor is confirmed by the weight the same sheets
+    state: both sides at least _SMALL_DECIMAL_MIN_MM, and the blank's mass within
+    [min_blank_to_part_weight_ratio, weight_question_above_ratio] of that weight."""
+    if min(length, width) < _SMALL_DECIMAL_MIN_MM:
+        return False
+    weight = _weight_on_sheets(sheets)
+    t = _num(part.get("normalized_thickness_mm") or part.get("thickness_mm"))
+    mat = str(part.get("normalized_material") or "").upper()
+    dens = next((float(d) for k, d in (cfg.get("density_kg_m3") or {}).items() if k in mat),
+                None)
+    if not (weight and t and dens):
+        return False
+    implied_m2 = weight / (t / 1000.0 * dens)
+    ratio = (length * width / 1e6) / implied_m2 if implied_m2 else None
+    lo = float(cfg.get("min_blank_to_part_weight_ratio") or 0.9)
+    hi = float(cfg.get("weight_question_above_ratio") or 1.6)
+    return ratio is not None and lo <= ratio <= hi
+
+
 def provisional_blank_from_sheets(part: Mapping[str, Any],
                                   sheets: Sequence[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
     """{length, width, formed, folds, flange_mm, pages, working, developed} — or None, with
@@ -444,6 +518,14 @@ def provisional_blank_from_sheets(part: Mapping[str, Any],
     folds = _fold_count(part)
     if _is_folded(part) and not folds:
         folds = 2
+    if not folds:
+        # A FORMED SHAPE HAS ITS FOLDS BEFORE ANYTHING ROUTES THEM (D-589): an angle cut from
+        # sheet is developed for one flange, whether or not a fold has been charged yet.
+        try:
+            from formed_shape import shape_folds
+            folds = shape_folds(part)
+        except Exception:                                            # noqa: BLE001
+            folds = 0
     stated = _stated_flanges(part)
     length, width, flange_note = formed_l, formed_w, ""
     if folds and not developed:
@@ -474,7 +556,18 @@ def provisional_blank_from_sheets(part: Mapping[str, Any],
     try:
         from blank_credibility import fits_a_stock_sheet, plausible_as_a_sheet_part
         if not plausible_as_a_sheet_part(length, width):
-            return None
+            # A SMALL PART IS SIZED ONLY WITH ITS WEIGHT'S AGREEMENT (D-589). The 10 mm floor
+            # is there because a 16 x 3.7 feature callout was once read as a part (12392);
+            # what tells a real 30 x 7.4 blank from that is the weight its own sheet states.
+            # Below the floor, the blank stands only when the sheets it was read from state
+            # a weight it agrees with, within the configured window — never on figures alone.
+            if not _small_blank_agrees_with_its_weight(part, sheets, length, width, cfg):
+                if isinstance(part, dict):
+                    part["_provisional_blank_refused"] = (
+                        f"{length:g} x {width:g} mm is below the smallest size a sheet part is "
+                        f"taken at on figures alone, and its own sheet states no weight it "
+                        f"agrees with")
+                return None
         if fits_a_stock_sheet(length, width, part.get("normalized_material")) is False:
             if isinstance(part, dict):
                 part["_provisional_blank_refused"] = (
@@ -489,7 +582,12 @@ def provisional_blank_from_sheets(part: Mapping[str, Any],
     # blank LIGHTER than the part cut from it is too small, so the figures read are not its
     # size. Heavier is kept, with the factor written into the working, and the estimator's
     # WEIGHT CHECK on the costed blank puts the gauge question.
-    weight = _stated_weight_kg(part)
+    # THE WEIGHT THESE SHEETS STATE, BEFORE ANY WEIGHT THE RECORD COLLECTED (D-589). A part
+    # bound to its own sheet and to the assembly sheet that lists it collects both title
+    # blocks' weights — 0351292's top blank holds 8.1 kg (the rail) and 0.003 kg (itself) —
+    # and the first one decided. The blank is read from these sheets; so is its weight, when
+    # they print exactly one. Otherwise the record's own reading stands, as before.
+    weight = _weight_on_sheets(sheets) or _stated_weight_kg(part)
     t = _num(part.get("normalized_thickness_mm") or part.get("thickness_mm"))
     weight_note = ""
     if weight and t:
@@ -509,6 +607,27 @@ def provisional_blank_from_sheets(part: Mapping[str, Any],
                         f"cut from it, which a blank cannot, so the figures read are not its "
                         f"size")
                 return None
+            if ratio is not None and ratio > hi and developed:
+                # THE WIDTH THE WEIGHT AGREES WITH (D-589). The largest upright figure on a
+                # flat-pattern sheet can belong to the formed view — 0351292's downstand
+                # prints 208.9 for its returns and 25 for its flat width. Among the figures
+                # the same sheets print below the width taken, the one whose blank the stated
+                # weight agrees with (within the window, nearest to it) is the flat's width;
+                # two equally near, or none, decide nothing and the refusal stands.
+                _fits = sorted(
+                    ((abs((length * w / 1e6) / implied_m2 - 1.0), w,
+                      (length * w / 1e6) / implied_m2)
+                     for w in {round(v, 1) for v, _a in figures}
+                     if w < width and lo <= (length * w / 1e6) / implied_m2 <= hi),
+                    key=lambda c: c[0])
+                if _fits and (len(_fits) == 1 or _fits[1][0] - _fits[0][0] > 0.05):
+                    _w_was, width = width, _fits[0][1]
+                    weight_note = (f"; the width is {width:g} mm, not {_w_was:g}: the largest "
+                                   f"upright figure would weigh {ratio:.2f}x the stated "
+                                   f"{weight:g} kg on a flat pattern, and {width:g} mm is the "
+                                   f"printed figure that weight agrees with "
+                                   f"({_fits[0][2]:.2f}x) — confirm the flat width")
+                    ratio = None
             if ratio is not None and ratio > hi and developed:
                 # A FLAT PATTERN IS THE NET BLANK (D-584): nothing is cut out of it after
                 # development, so a developed size that weighs several times the stated part
@@ -532,9 +651,17 @@ def provisional_blank_from_sheets(part: Mapping[str, Any],
     working = (f"formed envelope {formed_l:g} x {formed_w:g} mm — the largest figure printed "
                f"along each axis of its own sheet (page {', '.join(str(p) for p in pages)})"
                + flange_note + weight_note)
+    try:
+        from blank_credibility import plausible_as_a_sheet_part as _plausible
+        _small = not _plausible(length, width)
+    except Exception:                                                # noqa: BLE001
+        _small = False
     return {"length": length, "width": width, "formed": (formed_l, formed_w), "folds": folds,
             "flange_mm": stated or [float(cfg.get('flange_allowance_mm') or 25)],
-            "developed": developed, "pages": pages, "working": working}
+            "developed": developed, "pages": pages, "working": working,
+            # Below the general floor, the blank stands on its sheet's weight (D-589): said
+            # on the result so the costing's own floor reads the same evidence.
+            "weight_confirmed_small_part": bool(_small)}
 
 
 def _stamp_provisional(part: Dict[str, Any], blank: Mapping[str, Any], why_refused: str) -> None:
@@ -721,6 +848,105 @@ def _write_blank(part: Dict[str, Any], length: float, width: float, source: str)
     for holder in (ng, part):
         holder["blank_length_mm"], holder["blank_width_mm"] = round(length, 1), round(width, 1)
         holder["blank_length_mm_source"] = holder["blank_width_mm_source"] = source
+
+
+_RADIUS_TEXT = re.compile(r"(?<![A-Z0-9])R\s?(\d{2,4}(?:[.,]\d+)?)(?![\d.,])", re.IGNORECASE)
+
+
+def _squash(value: Any) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+
+
+def own_sheets(part: Mapping[str, Any], summary: Mapping[str, Any]) -> List[Mapping[str, Any]]:
+    """The pages that ARE this part's drawing: bound to it, and titled with its own drawing
+    number. A page that only lists it (a parts list, an assembly view) is someone else's sheet
+    and prints someone else's radii."""
+    pn = _squash(part.get("part_number"))
+    if not pn:
+        return []
+    pages = _page_index(summary)
+    out = []
+    for b in sorted(p for p in (part.get("pages") or []) if isinstance(p, int)):
+        page = pages.get(b)
+        if not page:
+            continue
+        tb = ((page.get("page_analysis") or {}).get("title_block") or {})
+        dns = [_squash(d) for d in (tb.get("drawing_numbers") or [])] if isinstance(tb, Mapping) else []
+        if pn in dns:
+            out.append(page)
+    return out
+
+
+def stamp_rolled_radii(parts: Any, summary: Mapping[str, Any]) -> List[str]:
+    """Mark each sheet part its own drawing shows ROLLED: a radius printed on its own sheet that
+    its flat cannot hold (D-589). Returns the part numbers marked.
+
+    0351292's downstand ROL2021-2410 is a 25 mm strip, 1435.2 mm developed, whose sheet prints
+    R225 beside a flat pattern; the base plate it runs round prints the same R225 on a 1154 x
+    450 flat. On the plate it is a corner of the profile — the laser cuts it. On a 25 mm strip
+    it cannot be: no 25 mm flat has a 225 mm corner, so the strip is rolled to it. Nothing
+    charged a roll. The rule is the geometry, not the part: a radius at least
+    ROLL_FROM_RADIUS's floor and multiple of the gauge, LARGER than the smaller side of the
+    part's own blank, on a part its sheet shows formed (a flat pattern, or a fold). Read from
+    the part's own sheet only (own_sheets), never from an assembly sheet that lists it."""
+    if not isinstance(parts, Sequence) or not isinstance(summary, Mapping):
+        return []
+    try:
+        import config
+        rule = dict(getattr(config, "ROLL_FROM_RADIUS", {}) or {})
+    except Exception:                                                # noqa: BLE001
+        rule = {}
+    if not rule:
+        return []
+    floor = float(rule.get("min_radius_mm") or 50.0)
+    to_gauge = float(rule.get("min_radius_to_gauge") or 20.0)
+    developed_re = re.compile(str(_cfg().get("developed_words") or "$^"), re.I)
+    marked: List[str] = []
+    for part in parts:
+        if not isinstance(part, dict) or part.get("rolled_radius"):
+            continue
+        if _is_section_stock(part) or not_cut_from_a_blank(part):
+            continue
+        t = _num(part.get("normalized_thickness_mm") or part.get("thickness_mm"))
+        bl, bw = _blank_pair(part)
+        if not (t and bl and bw):
+            continue
+        short = min(bl, bw)
+        sheets = own_sheets(part, summary)
+        if not sheets:
+            continue
+        text = "\n".join(str(s.get("text") or s.get("page_text") or "") for s in sheets)
+        if not text.strip():
+            text = "\n".join(str(read_sheet_figures(s).get("text") or "") for s in sheets)
+        radii = sorted({float(m.replace(",", ".")) for m in _RADIUS_TEXT.findall(text)},
+                       reverse=True)
+        big = [r for r in radii if r >= floor and r >= to_gauge * t and r > short]
+        if not big:
+            continue
+        formed = bool(developed_re.search(text)) or _is_folded(part) or _fold_count(part) > 0
+        if not formed:
+            continue
+        r = big[0]
+        pgs = [s.get("page_number") for s in sheets]
+        pn = str(part.get("part_number") or "this part")
+        why = (f"R{r:g} is printed on its own sheet (page {', '.join(str(p) for p in pgs)}) "
+               f"and its blank is {bl:g} x {bw:g} mm: no {short:g} mm flat holds a {r:g} mm "
+               f"corner, so the part is rolled to that radius")
+        part["rolled_radius"] = {"radius_mm": r, "pages": pgs, "why": why}
+        part.setdefault("operation_evidence", {}).setdefault("roll", why)
+        part.setdefault("review_flags", []).append(
+            f"ROLLING FROM THE RADIUS: {pn} — {why}. Charged on the Roll row at the template's "
+            f"set-up and an allowance per piece (config ROLL_FROM_RADIUS) — an allowance, not "
+            f"a shop time; confirm it is rolled and the time")
+        try:
+            from source_precedence import raise_manufacturing_question as _ask
+            _ask(part, f"Rolling of {pn}: R{r:g} from its own sheet",
+                 why, "confirm it is rolled to this radius, and the rolling time",
+                 "detail_page_geometry.stamp_rolled_radii")
+        except Exception:                                            # noqa: BLE001
+            pass
+        marked.append(pn)
+    return marked
 
 
 def mirror_provisional_blanks(parts: Any) -> List[str]:
