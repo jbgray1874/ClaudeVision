@@ -1698,7 +1698,8 @@ def operation_coverage(source: Any) -> Dict[str, Any]:
             ruled.setdefault(str(p["part_number"]).upper(), set()).update(
                 str(k).strip().lower() for k in (p.get("operations_ruled_out") or {}))
     result: Dict[str, List[Dict[str, Any]]] = {
-        "charged": [], "covered": [], "uncovered": [], "charged_twice": [], "no_department": []}
+        "charged": [], "covered": [], "uncovered": [], "charged_twice": [], "no_department": [],
+        "possible_stages": []}
     for d in decisions:
         did = str(d.get("decision_id") or "")
         op = str(d.get("operation") or "").strip().lower()
@@ -1724,8 +1725,13 @@ def operation_coverage(source: Any) -> Dict[str, Any]:
                      tuple(sorted(str(x).strip().upper() for x in (r.get("part_numbers") or [])))),
                     []).append(r)
             twice = next((rs for rs in by_work.values() if len(rs) > 1), None)
+            # DIFFERENT ROWS ARE POSSIBLY SEPARATE STAGES, NOT VERIFIED ONES (D-589b). No row
+            # records the joint, hole group, bend or set-up it covers, so two rows that differ
+            # in what they list can still overlap; and two that match are possibly, not
+            # certainly, the same work. Both are asked; neither is passed.
             if len(on) > 1 and not twice:
                 entry["stages"] = len(on)
+                result["possible_stages"].append(dict(entry))
             if twice:
                 entry.update(rows=[r.get("workbook_row") for r in twice],
                              gbp=round(sum(_num(r.get("total_value_gbp")) for r in twice), 2))
@@ -3728,11 +3734,30 @@ def costed_job(source: Any) -> Dict[str, Any]:
             "part": _tgt_c, "kind": "manufacturing_decision",
             "operation": _op_c, "operations": [_op_c],
             "issue": (f"{_op_c.replace('_', ' ').capitalize()} on {_tgt_c} is charged on "
-                      f"{len(_t.get('rows') or [])} rows for one requirement"),
+                      f"{len(_t.get('rows') or [])} rows with the same department, operations "
+                      f"and parts — possibly the same work twice"),
             "assumption": (f"Estimate rows {', '.join(str(r) for r in _t.get('rows') or [])} "
-                           f"all carry decision {_t.get('decision_id')}"),
-            "action": "keep the row that does the work and strike the other",
+                           f"all carry decision {_t.get('decision_id')}; no row records which "
+                           f"joint, hole group, bend or set-up it covers"),
+            "action": ("confirm whether the rows cover different work; if they are the same, "
+                       "strike one"),
             "owner": "estimator", "gbp_at_stake": _t.get("gbp") or None})
+    for _t in (_cov.get("possible_stages") or []):
+        _tgt_c, _op_c = str(_t.get("target") or ""), str(_t.get("operation") or "")
+        if (_tgt_c.upper(), _op_c) in _asked_ops:
+            continue
+        decisions.append({
+            "part": _tgt_c, "kind": "manufacturing_decision",
+            "operation": _op_c, "operations": [_op_c],
+            "issue": (f"{_op_c.replace('_', ' ').capitalize()} on {_tgt_c} is on "
+                      f"{_t.get('stages')} rows — possibly separate stages, not verified"),
+            "assumption": (f"each of Estimate rows "
+                           f"{', '.join(str(r) for r in _t.get('rows') or [])} is charged; they "
+                           f"list different operations or parts, but no row records which "
+                           f"joint, hole group, bend or set-up it covers, so they may overlap"),
+            "action": ("confirm each row covers different work; where two cover the same, "
+                       "strike one"),
+            "owner": "estimator", "gbp_at_stake": None})
 
     # ── A LINE COSTED AT A QUANTITY ITS OWN BOM ROW DOES NOT STATE ────────────────
     # 12312-01-GA: the driver, LED tape, power cord and Y-splitter each stated 1 and were

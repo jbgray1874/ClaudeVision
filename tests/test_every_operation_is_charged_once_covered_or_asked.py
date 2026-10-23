@@ -278,6 +278,34 @@ def test_a_brushed_member_and_bought_hardware_stay_out_of_the_assemblys_coat(mon
     assert any("M-2" in x and "brushed" in x for x in asm.get("_powder_members_left_out", []))
 
 
+def _brushed_case(monkeypatch, **strip_extra):
+    asm = {"part_number": "ASM-1", "textual_operations": ["powder_coating"], "quantity": 1}
+    plate = _sheet_part("M-1", "PLATE", 2.0, materials=["MILD STEEL - RAW"],
+                        blank_length_mm=500.0, blank_width_mm=100.0)
+    strip = dict(_sheet_part("M-2", "STRIP", 3.0, materials=["STAINLESS STEEL - BRUSHED"],
+                             blank_length_mm=1000.0, blank_width_mm=50.0),
+                 normalized_material="STAINLESS_STEEL", **strip_extra)
+    _graph(monkeypatch, {"M-1": {"ASM-1"}, "M-2": {"ASM-1"}})
+    e.stamp_members_coated_area([asm, plate, strip], {"pages": []})
+    return asm
+
+
+def test_a_persons_instruction_to_overcoat_outranks_the_material_finish(monkeypatch):
+    asm = _brushed_case(monkeypatch, _coat_with_assembly={"by": "an estimator"})
+    assert asm["_powder_members_coated_m2"] == pytest.approx(0.1 + 0.1)
+
+
+def test_a_finish_that_includes_powder_is_not_another_finish(monkeypatch):
+    asm = _brushed_case(monkeypatch, normalized_finish="GALVANISED AND POWDER COATED",
+                        materials=["MILD STEEL"])
+    assert asm["_powder_members_coated_m2"] == pytest.approx(0.1 + 0.1)
+
+
+def test_galvanised_material_alone_does_not_take_a_member_out(monkeypatch):
+    asm = _brushed_case(monkeypatch, materials=["GALVANISED STEEL"])
+    assert asm["_powder_members_coated_m2"] == pytest.approx(0.1 + 0.1)
+
+
 def test_without_the_graph_the_root_owned_member_is_not_counted(monkeypatch):
     """The broken case the rail shipped with: owning_assembly is the root on every record."""
     asm = {"part_number": "ASM-1", "textual_operations": ["powder_coating"], "quantity": 2}
@@ -389,6 +417,10 @@ def test_one_requirement_on_two_rows_for_different_parts_is_two_stages_not_a_dou
     cov = cf.operation_coverage(job)
     assert not cov["charged_twice"]
     assert any(c.get("stages") == 2 for c in cov["charged"])
+    # Possibly separate stages, not verified ones: asked, never passed silently.
+    assert cov["possible_stages"]
+    assert any("possibly separate stages, not verified" in d["issue"]
+               for d in cf.costed_job(job)["decisions_required"])
 
 
 def test_a_ruled_out_operation_is_covered_by_its_ruling():

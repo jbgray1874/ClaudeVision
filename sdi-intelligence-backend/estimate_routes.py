@@ -704,6 +704,7 @@ def runners(request: Request = None, x_sdi_key: Optional[str] = Header(default=N
         for entry in listed:
             run = _RUNS.get(entry.get("run_id") or "")
             entry["running"] = None if run is None or run.status != "running" else {
+                "run_id": run.run_id,
                 "drawing_number": run.drawing_number, "client": run.client,
                 "seconds": round(time.time() - (run.started_at or time.time())),
             }
