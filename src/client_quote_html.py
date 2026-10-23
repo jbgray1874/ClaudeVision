@@ -852,13 +852,18 @@ def _materials_line(parts: List[Dict[str, Any]], *, concept: bool = False) -> st
     commercial line, a subcontract service, roll goods, and a bought-in wearing the assembly's
     reading.
     """
-    mats = []
+    # ONE MATERIAL, ONE NAME (D-587): "MILD STEEL" and "MILD_STEEL" are two spellings of
+    # one stock, and the 09:48 quotation told M&S "Mild Steel, Stainless Steel, Mild Steel".
+    # Compared as the customer reads them.
+    mats: List[str] = []
     for p in parts:
         m = describes_the_product(p)
-        if m and m not in mats:
-            mats.append(m)
+        if m:
+            shown = _title_material(m)
+            if shown not in mats:
+                mats.append(shown)
     if mats:
-        return ", ".join(_title_material(m) for m in mats)
+        return ", ".join(mats)
     # "As drawing" is a true sentence on a drawing pack and a false one on a render: there
     # is no drawing to be as. Said as what it is instead — see the lead line (D-186).
     return "Sighted from the visual" if concept else "As drawing"

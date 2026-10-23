@@ -275,15 +275,21 @@ class ACutLengthIsADimensionNotTheNextNumberOnThePage(unittest.TestCase):
 
     def test_a_shared_pages_profile_needs_the_parts_own_row_and_the_length_is_the_sheets_figure(self):
         text = (ROOT / "src" / "document_builder.py").read_text(encoding="utf-8")
+        # The guard's whole block, from its first predicate to where the section is applied
+        # — a fixed character window broke the day the guard grew (D-587).
         guard = text.index("_row_says_sheet")
-        self.assertIn("NOT applied", text[guard:guard + 3500])
-        self.assertIn("read_sheet_figures", text[guard:guard + 5000])
-        self.assertIn('"detail_sheet_figure"', text[guard:guard + 5000])
+        block = text[guard:text.index('part["section_stock"] = _sec', guard) + 40]
+        self.assertIn("NOT applied", block)
+        self.assertIn("read_sheet_figures", block)
+        self.assertIn('"detail_sheet_figure"', block)
         # Fourth tranche: the part's own detail sheet refuses a shared profile without a
         # row, and one detail sheet is enough for the figure path.
-        self.assertIn("_own_detail_silent", text[guard:guard + 3500])
-        self.assertIn("if len(_detail_pages) == 1:", text[guard:guard + 5000])
+        self.assertIn("_own_detail_silent", block)
+        self.assertIn("if len(_detail_pages) == 1:", block)
         self.assertNotIn("if len(_detail_pages) == 1 and len(page_nums) == 1:", text)
+        # D-587: a callout naming another part is that part's; a bought article takes none.
+        self.assertIn("_names_another", block)
+        self.assertIn("_bought_line", block)
 
     def test_a_designation_a_range_and_a_decimal_comma_are_read_as_they_are(self):
         import section_profile as sp

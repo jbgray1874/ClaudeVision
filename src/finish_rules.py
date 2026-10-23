@@ -33,6 +33,7 @@ __all__ = [
     "finish_is_powder",
     "finish_contradiction",
     "holds_drawing_text",
+    "holds_parts_list_rows",
     "process_statements",
     "states_only_a_process",
     "names_one_face",
@@ -251,6 +252,25 @@ def holds_drawing_text(finish_text: Any) -> bool:
     except Exception:                                                # noqa: BLE001
         pass
     return False
+
+
+def holds_parts_list_rows(text: Any) -> bool:
+    """True when a title-block field holds a PARTS LIST — two or more distinct drawing
+    numbers in one cell (D-587). Narrower than holds_drawing_text: a field that overran
+    into notes or dimensions may sit beside a material read correctly, but a field quoting
+    other parts' numbers means the read captured the table's rows, and every value taken
+    from that read — material and gauge as well as finish — is some row's, not this
+    part's. 0351292-2468 took STAINLESS STEEL and 3 mm from the strip's row that way."""
+    t = str(text or "").upper()
+    if not t.strip():
+        return False
+    try:
+        from part_code_conventions import looks_like_a_drawing_number
+    except Exception:                                                # noqa: BLE001
+        return False
+    codes = {w for w in re.findall(r"[A-Z0-9][A-Z0-9.\-]{4,}", t)
+             if looks_like_a_drawing_number(w)}
+    return len(codes) >= 2
 
 
 def stated_finish(record: Mapping[str, Any]) -> str:
