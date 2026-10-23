@@ -796,6 +796,31 @@
       </div>
     </section>
 
+    <!-- ══ AI ESTIMATE SELF-RUNNING (D-588) ══════════════════════════
+         A SWITCH, NOT A RUN. This card does not read the Drawings panel and starts nothing on
+         this machine. It switches self-running on or off in the service; the watcher on the
+         estimating machine (src/self_running.py) asks on every beat, reads the Live Enquiry
+         sheet, collects each waiting row's drawings from Production into the Live Enquiry
+         folder, and runs every ready job through this estimator, one after another. What it
+         shows below is what that watcher last reported, and when — a watcher that has gone
+         quiet is shown as not connected, never as idle. -->
+    <section class="card" id="selfRunCard">
+      <h2>AI Estimate Self-Running</h2>
+      <p class="sub" style="margin:0 0 12px">Works through the <b>Live Enquiry</b> sheet on its
+        own. Every row marked <b>AI CHECK = YES</b> that has not been estimated is taken in
+        turn: its drawings are collected from Production into the Live Enquiry folder when the
+        folder is empty, then it is run through this estimator, one job after another.
+        Finished books file to the usual place. <b>Nothing goes to a customer.</b></p>
+      <button class="btn-run" id="selfRun" type="button"
+              title="Switch self-running on: the watcher reads the Live Enquiry sheet at once and runs every unworked job in turn">
+        AI Estimate Self-Running</button>
+      <button class="btn-stop" id="selfStop" type="button" hidden
+              title="Switch self-running off: the job in progress finishes, nothing more is queued">
+        Stop self-running — the job in progress finishes</button>
+      <p class="note" id="selfStatus">Checking self-running…</p>
+      <div id="selfOut" class="sub" style="margin-top:8px;font-size:13px"></div>
+    </section>
+
     <!-- ══ DRAWINGS ═════════════════════════════════════════════════ -->
     <section class="card">
       <h2>Drawings</h2>
@@ -4035,6 +4060,106 @@ $("addFromDm").onclick = () => {
   openBrowser("files", {dm: true}).then(() => navigate(dmRoot));
 };
 checkDm();
+
+/* AI ESTIMATE SELF-RUNNING (D-588). The button is a switch held by the service; the work is
+   the watcher's, on the estimating machine. The page shows what the watcher last said and
+   when, and refreshes every 20 seconds so a running job can be followed from here. */
+const selfRunBtn = $("selfRun"), selfStopBtn = $("selfStop");
+const SELF_LABELS = [["ready","ready to run"],["running","running"],
+  ["waiting","waiting for drawings"],["held","held — a person must act"],["failed","failed"],
+  ["done","done"],["not_asked","not asked (AI CHECK is not YES)"]];
+function selfEsc(s){
+  return String(s == null ? "" : s).replace(/[&<>"]/g,
+    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+}
+function selfStatusLine(v){
+  const w = v.watcher || {};
+  if(v.enabled && !w.connected){
+    return "Switched on — but no self-running watcher is connected"
+      + (w.seen_at ? " (last heard " + w.seen_at + ")" : "")
+      + ". Nothing runs until it is started on the estimating machine.";
+  }
+  if(v.enabled){
+    const cur = w.current || {};
+    return "Switched on" + (v.switched_on_at ? " at " + v.switched_on_at : "") + ". "
+      + (w.phase === "running" && cur.drawing
+          ? "Running " + cur.drawing + " (" + (cur.customer || "") + ")"
+            + (cur.since ? " since " + cur.since : "") + "."
+          : (w.message || w.phase || "Waiting for the watcher."));
+  }
+  return "Switched off" + (v.switched_off_at ? " at " + v.switched_off_at : "") + ". "
+    + (w.connected ? "The watcher is connected and waiting for the switch."
+                   : "No watcher is connected.");
+}
+function renderSelf(v){
+  const w = v.watcher || {};
+  selfRunBtn.hidden = !!v.enabled;
+  selfStopBtn.hidden = !v.enabled;
+  $("selfStatus").textContent = selfStatusLine(v);
+  const c = w.counts || {};
+  const parts = SELF_LABELS.filter(([k]) => c[k]).map(([k, l]) => c[k] + " " + l);
+  let html = parts.length
+    ? "<div><b>The sheet:</b> " + selfEsc(parts.join(" · "))
+      + (w.last_cycle_at ? " — read " + selfEsc(w.last_cycle_at) : "") + "</div>" : "";
+  const recent = w.recent || [];
+  if(recent.length){
+    html += "<div style='margin-top:6px'><b>Latest runs:</b></div><ul style='margin:4px 0 0 18px'>"
+      + recent.map(r => "<li>" + selfEsc(r.drawing) + " (" + selfEsc(r.customer) + ") — "
+        + selfEsc(r.status)
+        + (r.unit_gbp ? " — £" + Number(r.unit_gbp).toFixed(2) + " a unit" : "")
+        + (r.error ? " — " + selfEsc(String(r.error).slice(0, 160)) : "") + "</li>").join("")
+      + "</ul>";
+  }
+  $("selfOut").innerHTML = html;
+}
+async function refreshSelf(){
+  try{
+    const r = await api("/api/estimate/self-running");
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      $("selfStatus").textContent = "Self-running status unavailable: "
+        + detailText(j, r, "the service did not answer");
+      return;
+    }
+    renderSelf(j);
+  }catch(e){
+    $("selfStatus").textContent = "Self-running status unavailable — " + e.message;
+  }
+}
+async function switchSelf(on){
+  const btn = on ? selfRunBtn : selfStopBtn;
+  btn.disabled = true;
+  try{
+    const r = await api("/api/estimate/self-running/" + (on ? "start" : "stop"),
+      {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({})});
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      $("selfStatus").textContent = "Could not switch it " + (on ? "on" : "off") + ": "
+        + detailText(j, r, "refused");
+    }else{
+      renderSelf(j);
+      if(j.note) $("selfStatus").textContent = j.note;
+    }
+  }catch(e){
+    $("selfStatus").textContent = "Could not switch it " + (on ? "on" : "off") + " — " + e.message;
+  }
+  btn.disabled = false;
+}
+selfRunBtn.onclick = () => {
+  if(!confirm("Start AI Estimate Self-Running?\n\nEvery Live Enquiry row marked AI CHECK = YES "
+            + "that has not been estimated is taken in turn: its drawings are collected from "
+            + "Production into the Live Enquiry folder where the folder is empty, then it is "
+            + "estimated, one job after another. Books file to the usual place; nothing goes "
+            + "to a customer.")) return;
+  switchSelf(true);
+};
+selfStopBtn.onclick = () => {
+  if(!confirm("Stop self-running?\n\nThe job in progress finishes on the portal; nothing "
+            + "more is queued.")) return;
+  switchSelf(false);
+};
+refreshSelf();
+setInterval(refreshSelf, 20000);
 
 </script>
 

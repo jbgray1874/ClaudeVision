@@ -5243,6 +5243,9 @@ LIVE_ENQUIRY_LEDGER = os.getenv("SDI_LIVE_ENQUIRY_LEDGER",
 # The design area, through the endpoint James will provide. Unset: the share is the only
 # source of a pack.
 DESIGN_AREA_ENDPOINT = os.getenv("SDI_DESIGN_AREA_ENDPOINT", "")
+# AI Estimate Self-Running (D-588): a row whose drawings were searched for in Production and
+# not found is searched again after this many hours, not on every read of the sheet.
+LIVE_ENQUIRY_COLLECT_RETRY_HOURS = float(os.getenv("SDI_LIVE_ENQUIRY_COLLECT_RETRY_HOURS", "6"))
 
 # The longest run of letters a title block's drawing number carries: GA, SA05, 01M, ASSY. A
 # code-shaped token with a longer run is words joined across spaces — the M&S border's
