@@ -236,6 +236,8 @@ python src\main.py --pdf "<pack>.pdf" --generate-ai-spreadsheet --deliverables `
 | `SDI_LIVE_ENQUIRY_POLL_MINUTES` / `SDI_LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES` / `SDI_LIVE_ENQUIRY_MAX_ATTEMPTS` | *(Live Enquiry runner)* How often `watch` reads the sheet (**15**), how long it waits on one run before it stops queueing behind it (**240**), and how many tries a failing job gets before it waits for `retry` (**1**) |
 | `SDI_LIVE_ENQUIRY_LEDGER` | *(Live Enquiry runner)* Its record of every run (default `output\live_enquiry\ledger.json`); `live_enquiry_status.csv` is written beside it on every scan |
 | `SDI_DESIGN_AREA_ENDPOINT` | *(Live Enquiry runner)* The design area's endpoint, a second source of packs. **Unset** until it is given; the share is then the only source |
+| `SDI_LIVE_ENQUIRY_COLLECT_RETRY_HOURS` | *(AI Estimate Self-Running)* After a row's drawings were searched for in Production and not found, how long before they are searched for again (**6**) rather than on every read of the sheet |
+| `SDI_SELF_RUNNING_STALE_SECONDS` | *(portal service, AI Estimate Self-Running)* How long without a beat before the page shows the self-running watcher as not connected (**180**) |
 | `SDI_SERVER` / `SDI_API_KEY` | *(runner and Live Enquiry runner)* The portal the estimates are queued through (default `http://10.0.0.5:8071`) and its `X-SDI-Key` |
 
 ## Quick health check

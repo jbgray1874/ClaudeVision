@@ -76,6 +76,7 @@ config = the_service_config(config)   # this service's, even where the engine's 
 import docmgr
 import estimate_email
 import quote_release
+import self_running_switch
 import staging
 
 router = APIRouter(prefix="/api/estimate", tags=["estimate"])
@@ -1228,6 +1229,51 @@ def release_withdraw(req: ReleaseRequest, x_sdi_key: Optional[str] = Header(defa
     if folder is None:
         raise HTTPException(403, "That folder is outside the shares this service may write.")
     return {"ok": True, "withdrawn": quote_release.clear_release_record(folder, req.stem)}
+
+
+# ── AI ESTIMATE SELF-RUNNING (D-588) ─────────────────────────────────────────────────
+# The page's button is a switch held here; the watcher on the estimating machine
+# (src/self_running.py) asks it on every beat and does the work. Defined BEFORE the
+# catch-all GET /{run_id} below, so "self-running" is never read as a run id.
+
+class SelfRunningSwitch(BaseModel):
+    by: str = ""
+
+
+@router.get("/self-running")
+def self_running_view(x_sdi_key: Optional[str] = Header(default=None)):
+    """The switch and the watcher as last heard from — what the page shows."""
+    _check_key(x_sdi_key)
+    return self_running_switch.view()
+
+
+@router.post("/self-running/start")
+def self_running_start(req: SelfRunningSwitch, x_sdi_key: Optional[str] = Header(default=None)):
+    """Switch self-running on, and ask the watcher to read the sheet at once. Switching on
+    with no watcher connected is allowed — it starts as soon as one reports — and says so."""
+    who = _check_key(x_sdi_key)
+    out = self_running_switch.switch(True, by=req.by or who)
+    if not out["watcher"].get("connected"):
+        out["note"] = ("Switched on, but no self-running watcher is connected: nothing will run "
+                       "until it is started on the estimating machine "
+                       "(tools\\start\\install-self-running-task.ps1).")
+    return out
+
+
+@router.post("/self-running/stop")
+def self_running_stop(req: SelfRunningSwitch, x_sdi_key: Optional[str] = Header(default=None)):
+    """Switch self-running off. The job in progress finishes on the portal; nothing more is
+    queued."""
+    who = _check_key(x_sdi_key)
+    return self_running_switch.switch(False, by=req.by or who)
+
+
+@router.post("/self-running/heartbeat")
+def self_running_heartbeat(report: Dict[str, Any],
+                           x_sdi_key: Optional[str] = Header(default=None)):
+    """The watcher's beat. Answers {enabled, run_now}; keeps what it reported."""
+    _check_key(x_sdi_key)
+    return self_running_switch.heartbeat(report or {})
 
 
 @router.get("/recipients")
