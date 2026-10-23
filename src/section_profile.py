@@ -15,9 +15,10 @@ tube came to be weighed as a square one in one place and not the other.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
-__all__ = ["detect_section_stock", "section_kg_per_m", "section_outer_perimeter_mm"]
+__all__ = ["detect_section_stock", "section_kg_per_m", "section_outer_perimeter_mm",
+           "section_form", "is_flat_sided_oval", "section_description"]
 
 # The hollow-section keywords PATH 1 needs. Config (SECTION_HOLLOW_KEYWORDS) since this list
 # also decides which parts-list rows are a frame's cut list; this is the default.
@@ -28,6 +29,13 @@ try:
         getattr(_cfg, "SECTION_HOLLOW_KEYWORDS", None) or _SECTION_HOLLOW_KW_DEFAULT))
 except Exception:                                                # noqa: BLE001
     _SECTION_HOLLOW_KW = _SECTION_HOLLOW_KW_DEFAULT
+# AN OVAL IS NAMED, NOT MEASURED (D-594). A sheet says "30x15x1.5MM TH'K FSO TUBE" — FSO is a
+# flat-sided oval — and the a x b x t reading alone cannot tell it from a rectangle, so it was
+# weighed and priced as 30 x 15 RHS. The word decides the form: OVAL, FSO, F.S.O., FLAT SIDED
+# OVAL. Word-bounded, so "FSO" inside another word is not an oval.
+_OVAL_WORDS_RE = re.compile(
+    r"(?<![A-Z0-9])(?:FLAT[\s-]*SIDED[\s-]+OVAL|F\.?\s?S\.?\s?O\.?|OVAL)(?![A-Z0-9])")
+_FLAT_SIDED_RE = re.compile(r"(?<![A-Z0-9])(?:FLAT[\s-]*SIDED|F\.?\s?S\.?\s?O\.?)(?![A-Z0-9])")
 _SECTION_PROFILE_RE = re.compile(
     r"(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)(?:\s*MM)?",
     re.IGNORECASE,
@@ -101,7 +109,10 @@ def detect_section_stock(text: str) -> Optional[Dict[str, Any]]:
     up = str(text).upper()
 
     # ── PATH 1: canonical 'AxBxC <keyword>' ─────────────────────────────────
-    if any(kw in up for kw in _SECTION_HOLLOW_KW):
+    # A named oval is a hollow-section word in its own right (D-594): "30X15X1.5 FSO" with no
+    # TUBE still reads, but only with a whole a x b x t beside it.
+    _oval = _OVAL_WORDS_RE.search(up)
+    if any(kw in up for kw in _SECTION_HOLLOW_KW) or _oval:
         m = _SECTION_PROFILE_RE.search(up)
         if m:
             dims = sorted(float(m.group(i)) for i in (1, 2, 3))
@@ -120,16 +131,25 @@ def detect_section_stock(text: str) -> Optional[Dict[str, Any]]:
                     all_nums = [float(n) for n in _figures_in(_clean)]
                     cand = [n for n in all_nums if n >= max(side_a, side_b) * 3]
                     length = max(cand) if cand else None
-                return {
+                out = {
                     "a": side_a,
                     "b": side_b,
                     "t": wall,
                     "length_mm": length,
                     "profile_form": "SHS" if abs(side_a - side_b) < 1e-6 else "RHS",
-                    "keyword": next(kw for kw in _SECTION_HOLLOW_KW if kw in up),
+                    "keyword": next((kw for kw in _SECTION_HOLLOW_KW if kw in up),
+                                    _oval.group(0) if _oval else ""),
                     "detection_path": "canonical_profile",
                     "source_text": text[m.start():m.start() + 60].strip(),
                 }
+                if _oval:
+                    # Weighed on the ellipse (section_kg_per_m's OVAL). A flat-sided oval is a
+                    # stadium, about 6% longer round its outside at 30 x 15; said on the stock
+                    # so the shape is not lost, until a stadium form exists.
+                    out["profile_form"] = "OVAL"
+                    if _FLAT_SIDED_RE.search(up):
+                        out["oval_shape"] = "flat_sided"
+                return out
 
     # ── PATH 2: 'n.n WALL' notation (no keyword / no AxBxC) ──────────────────
     wm = re.search(r"(\d+(?:\.\d+)?)\s*WALL", up)
@@ -203,11 +223,68 @@ def detect_section_stock(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+# THE SHAPE A FLAT-SIDED OVAL IS (D-594). Stored as profile_form OVAL with oval_shape
+# "flat_sided" — every reader that asks "is it an oval" still hears yes — and weighed and
+# coated as what it is: a stadium, two flats joined by two half-rounds. "FSO" below is the
+# formula's key, asked through section_form(stock), never written onto a stock dict.
+_FSO_FORM = "FSO"
+
+
+def is_flat_sided_oval(stock: Any) -> bool:
+    """A section stock dict (or a form key) that is a flat-sided oval."""
+    if isinstance(stock, Mapping):
+        form = str(stock.get("profile_form") or "").strip().upper()
+        return form == _FSO_FORM or (form == "OVAL"
+                                     and str(stock.get("oval_shape") or "") == "flat_sided")
+    return str(stock or "").strip().upper() == _FSO_FORM
+
+
+def section_form(stock: Any) -> str:
+    """The form key the weight and perimeter formulas take for this stock: its profile_form,
+    or the stadium's key for a flat-sided oval."""
+    if not isinstance(stock, Mapping):
+        return str(stock or "")
+    return _FSO_FORM if is_flat_sided_oval(stock) else str(stock.get("profile_form") or "")
+
+
+def section_description(stock: Any) -> str:
+    """The section in purchasing words — "30 x 15 x 1.5 flat-sided oval (FSO) tube" — or ""
+    where the stock does not hold a whole size. Major side first, as a stockist lists it."""
+    if not isinstance(stock, Mapping):
+        return ""
+    try:
+        a, b, t = float(stock.get("a")), float(stock.get("b")), float(stock.get("t"))
+    except (TypeError, ValueError):
+        return ""
+    if a <= 0 or b <= 0 or t <= 0:
+        return ""
+    major, minor = max(a, b), min(a, b)
+    dims = f"{major:g} x {minor:g} x {t:g}"
+    form = str(stock.get("profile_form") or "").strip().upper()
+    if is_flat_sided_oval(stock):
+        return f"{dims} flat-sided oval (FSO) tube"
+    if form == "OVAL":
+        return f"{dims} oval tube"
+    if form == "CHS":
+        return f"{major:g} x {t:g} round tube (CHS)"
+    if form in ("SHS", "RHS"):
+        return f"{dims} {form}"
+    return ""
+
+
+def _stadium_area_mm2(major: float, minor: float) -> float:
+    if major <= 0 or minor <= 0:
+        return 0.0
+    major = max(major, minor)
+    return (major - minor) * minor + _PI * (minor / 2.0) ** 2
+
+
 def section_outer_perimeter_mm(a: Any, b: Any = None, profile_form: Any = "") -> Optional[float]:
     """The outer perimeter of a section, mm — what powder lands on per mm of length.
 
         round / CHS / ROUND   pi x D
         OVAL                  Ramanujan's ellipse on the semi-axes
+        FSO (flat-sided oval) a stadium: 2 x (major - minor) + pi x minor (D-594)
         everything else       2 x (a + b) — a closed box, and also an open angle or channel
                               (both faces of both legs) or a flat bar (b is its thickness)
 
@@ -227,6 +304,9 @@ def section_outer_perimeter_mm(a: Any, b: Any = None, profile_form: Any = "") ->
     form = str(profile_form or "").strip().upper()
     if form in ("CHS", "ROUND", "TUBE_ROUND"):
         return _PI * a_f
+    if form == _FSO_FORM:
+        major, minor = max(a_f, b_f), min(a_f, b_f)
+        return 2.0 * (major - minor) + _PI * minor
     if form == "OVAL":
         ha, hb = a_f / 2.0, b_f / 2.0
         return _PI * (3 * (ha + hb) - ((3 * ha + hb) * (ha + 3 * hb)) ** 0.5)
@@ -260,6 +340,10 @@ def section_kg_per_m(a: Any, b: Any, t: Any, profile_form: Any = "",
         area_mm2 = a_f * b_f
     elif form == "ROUND":
         area_mm2 = _PI / 4.0 * (a_f ** 2)
+    elif form == _FSO_FORM:
+        # A STADIUM, NOT AN ELLIPSE (D-594): outer flats-and-half-rounds less the inner.
+        area_mm2 = max(0.0, _stadium_area_mm2(max(a_f, b_f), min(a_f, b_f))
+                       - _stadium_area_mm2(max(inner_a, inner_b), min(inner_a, inner_b)))
     elif form == "OVAL":
         area_mm2 = max(0.0, _PI / 4.0 * ((a_f * b_f) - (inner_a * inner_b)))
     elif form == "CHS":

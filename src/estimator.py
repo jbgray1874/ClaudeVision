@@ -641,14 +641,28 @@ def _assess_estimate_data_sufficiency(
     elif len(fabricated) >= 2 and dxf_part_ratio < min_dxf_ratio:
         insufficient = True
 
+    # NOTHING READ IS NOT ENOUGH (D-594). With no line at all every ratio above is vacuous —
+    # nothing unreliable, so "OK" — and a pack whose drawing page carries no text layer read as
+    # sufficient at £0. An estimate with no line to price is provisional, with the reason.
+    _nothing_read = not any(isinstance(e, dict) for e in (part_estimates or []))
+    if _nothing_read:
+        insufficient = True
+        credible_cost_ratio = 0.0
+
     _sized_from_drawing = max(len(fabricated) - len(with_dxf), 0)
     status = "provisional" if insufficient else "ok"
     msg = (
+        "PROVISIONAL — nothing was read: this estimate has no part or line to price"
+        if _nothing_read else
         (f"PROVISIONAL — {_sized_from_drawing} of {len(fabricated)} fabricated part(s) were "
          f"sized from the drawing rather than measured")
         if insufficient else "Data sufficiency OK"
     )
     reason = (
+        ("No parts list, part record or line was read from the pack, so the total is £0 by "
+         "absence, not by price. A drawing page with no text layer is read only by the image "
+         "reading; check that the drawing was read.")
+        if _nothing_read else
         (f"{credible_cost_ratio:.0%} of £{document_total:,.2f} rests on a measurement; the "
          f"rest on geometry read off a view or on prices that could not be verified. A part "
          f"DXF or a SOLIDWORKS model for the {_sized_from_drawing} part(s) below would move "
@@ -656,7 +670,9 @@ def _assess_estimate_data_sufficiency(
         if insufficient else ""
     )
 
-    if insufficient:
+    if _nothing_read:
+        print(f"   [data] {msg}. {reason}", flush=True)
+    elif insufficient:
         print(
             f"   [data] {msg} — {credible_cost_ratio:.0%} of £{document_total:,.2f} measured; "
             f"DXF on {dxf_part_ratio:.0%} of {len(fabricated)} fabricated part(s). Priced in "
@@ -6877,9 +6893,10 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             # metre of every round tube we buy, which is most of the tube we buy.
             # One formula for every reader that weighs a section (section_profile, D-383): the
             # cut-list reader's mass check uses the same one.
-            from section_profile import section_kg_per_m as _section_kg_per_m
+            from section_profile import section_kg_per_m as _section_kg_per_m, \
+                section_form as _section_form
             kg_per_m = _section_kg_per_m(side_a_mm, side_b_mm, wall_t_mm,
-                                         _ss.get("profile_form"), density) or 0.0
+                                         _section_form(_ss), density) or 0.0
             unit_length_m = length_mm / 1000.0
             unit_mass_kg = kg_per_m * unit_length_m
             policy = getattr(config, "SECTION_STOCK_POLICY", {}) or {}
@@ -6975,6 +6992,17 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                     f"Small section is not sold on that basis — 12.7x1.2 tube is about "
                     f"GBP 7.29/kg — so this line UNDER-READS, likely several times over. Set "
                     f"config.SECTION_STOCK_PRICE_GBP_PER_KG to the trade rate")
+            # A FLAT-SIDED OVAL HAS NO RATE OF ITS OWN HERE (D-594). Both catalogue paths above
+            # take hollow box sections only, so an FSO is never priced off an RHS row; it is
+            # priced by its stadium weight at the rate just chosen, and the line says so.
+            from section_profile import is_flat_sided_oval as _is_fso, \
+                section_description as _section_words
+            if _is_fso(_ss) and price_per_kg is not None:
+                part.setdefault("review_flags", []).append(
+                    f"no flat-sided oval rate: priced on "
+                    f"{'the indicative section rate' if (_sec_rate and _sec_rate > 0) else 'the flat-product rate'} "
+                    f"GBP {price_per_kg:.2f}/kg at the stadium section's {kg_per_m:.3f} kg/m "
+                    f"({_section_words(_ss)}), confirm against a stockist's FSO price")
             unit_cost = (unit_mass_kg * price_per_kg * waste_factor) if price_per_kg is not None else None
             extended = (unit_cost * quantity) if unit_cost is not None else None
             # TAG THE PART ITSELF, not only the material estimate. The route compiler's
@@ -7009,6 +7037,8 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 "cost_method": ("section_stock_config_rate" if (_sec_rate and _sec_rate > 0)
                                 else "section_stock_flat_rate"),
                 "rate_gbp_per_kg": price_per_kg,
+                # THE SECTION IN PURCHASING WORDS (D-594): the line a buyer reads says what to buy.
+                "section_description": _section_words(_ss),
                 "stock_estimate": {"section_length_mm": round(length_mm, 2), "kg_per_m": round(kg_per_m, 4)} | _len_stamp,
                 # This branch has a full a×b×t hollow-section profile + a real cut length, so it IS a
                 # tube — declare it as one (like the catalogue branch above) so the workbook routes it
@@ -13268,10 +13298,10 @@ def _section_outer_area_m2(part: Dict[str, Any]) -> float:
             return round(3.14159265 * (_wd / 1000.0) * (_wl / 1000.0), 6)
         return 0.0
     try:
-        from section_profile import section_outer_perimeter_mm
+        from section_profile import section_outer_perimeter_mm, section_form
     except Exception:                                                # noqa: BLE001
         return 0.0
-    _perim = section_outer_perimeter_mm(_ss.get("a"), _ss.get("b"), _ss.get("profile_form"))
+    _perim = section_outer_perimeter_mm(_ss.get("a"), _ss.get("b"), section_form(_ss))
     # EVERY PIECE OF THE CUT LIST IS COATED (D-563). length_mm is the longest piece; a part
     # cut from several pieces (its own table's cut list, D-383/D-557) is coated over all of
     # them — three pieces of 703 + 451 + 451 are 1,605 mm of tube, not 703.

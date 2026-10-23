@@ -2230,7 +2230,7 @@ DESIGN_INTENT_MARKERS = [
 # A size that names a SECTION is the stock's profile, never a blank and never a gauge:
 # "40 x 20mm … OVAL TUBE", "30 x 30 x 2mm SHS", "25 x 3 FLAT BAR".
 SECTION_CALLOUT_WORDS = [
-    r"TUBE", r"SECTION", r"OVAL", r"SHS", r"RHS", r"CHS", r"BOX", r"ANGLE", r"CHANNEL",
+    r"TUBE", r"SECTION", r"OVAL", r"FSO", r"SHS", r"RHS", r"CHS", r"BOX", r"ANGLE", r"CHANNEL",
     r"FLAT\s+BAR", r"BAR", r"ROD", r"UPRIGHT", r"POST",
 ]
 # A weight the sheet qualifies as somebody else's — the customer's goods, a load, an estimate
@@ -2450,7 +2450,8 @@ CONCEPT_SHEET_ENVELOPE_TOLERANCE_MM = 5.0
 CONCEPT_STOCK_FORM_WORDS = (
     ("mesh", ("WELDED MESH", "WELDMESH", "WELD MESH", "WIRE MESH", "MESH")),
     # Oval before any tube word: "40 X 20 OVAL" is neither a box nor a round (D-531).
-    ("oval_tube", ("OVAL TUBE", "OVALTUBE", "OVAL")),
+    # FSO is a flat-sided oval (D-594); "F.S.O." reads as "F S O" once punctuation is spaced.
+    ("oval_tube", ("FLAT SIDED OVAL", "OVAL TUBE", "OVALTUBE", "OVAL", "FSO", "F S O")),
     ("box_section", ("BOX SECTION", "SQUARE TUBE", "RECTANGULAR TUBE", "BOX TUBE", "SHS", "RHS")),
     ("angle", ("ANGLE IRON", "ANGLE")),
     ("channel", ("CHANNEL",)),

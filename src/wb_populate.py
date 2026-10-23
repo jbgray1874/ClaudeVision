@@ -1145,8 +1145,8 @@ def section_coated_area_m2(part: Dict[str, Any]) -> float:
         return 0.0
     # ONE PERIMETER FOR EVERY READER THAT COATS A SECTION (D-532): section_profile's, shared
     # with the costing's own coated area so the sheet and the record agree.
-    from section_profile import section_outer_perimeter_mm
-    _perim_mm = section_outer_perimeter_mm(_a, _b, _ss.get("profile_form")) or 0.0
+    from section_profile import section_outer_perimeter_mm, section_form
+    _perim_mm = section_outer_perimeter_mm(_a, _b, section_form(_ss)) or 0.0
     _q = _safe(_p.get("quantity"), 1) or 1
     return (_perim_mm / 1000.0) * (_len / 1000.0) * float(_q)
 
@@ -3252,6 +3252,19 @@ def row_parts_for(scope: Any, target_id: Any, participants: Any) -> Tuple[List[s
     if str(scope or "").strip().lower() == "assembly" and _t:
         return [_t], [p for p in _p if p != _t]
     return (_p or ([_t] if _t else [])), []
+
+
+def section_words_on_line(desc: Any, material_estimate: Any) -> str:
+    """AN OVAL SAYS IT IS ONE (D-594). A tube bought as a flat-sided oval read on the bill as
+    its part name and two numbers, which a buyer orders as box section. The section in
+    purchasing words ("30 x 15 x 1.5 flat-sided oval (FSO) tube") goes on the line wherever
+    the description does not already say oval."""
+    me = material_estimate if isinstance(material_estimate, dict) else {}
+    words = str(me.get("section_description") or "")
+    text = str(desc or "")
+    if "OVAL" in words.upper() and "OVAL" not in text.upper():
+        return f"{text}  {words}".strip()
+    return text
 
 
 def canonical_labour_groups(
@@ -6266,6 +6279,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                     desc = f"{desc} (cat ref: {_size})"
         else:
             desc = _cat_desc or _own_pn
+        desc = section_words_on_line(desc, me)
         # THE SIZE THE PART'S OWN SHEET OR MODEL GIVES, ON THE LINE (D-403). A bought line
         # read "9598-02-02G GRAPHIC" while its sheet prints 210 x 148.5 and its model carries
         # the same extents; the estimator pricing the print had to open the pack to learn
