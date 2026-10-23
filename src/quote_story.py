@@ -758,6 +758,20 @@ def _line_is_supported(summary: Dict[str, Any], facts: Dict[str, Any], code: str
         sized = False
     if not sized:
         return False
+    # ITS MACHINING MEASURED, AND NOTHING ASKED OF IT (D-592a, review of D-592). A blank that
+    # is measured says nothing about which circles on the PDF are holes: a laser or punch line
+    # whose cutting was read off the drawing's lines is not walked through, and neither is a
+    # line carrying any open manufacturing question.
+    try:
+        from detail_page_geometry import machining_is_measured
+        _ops = {str(o).lower() for k in ("textual_operations", "inferred_operations")
+                for o in (rec.get(k) or [])}
+        if _ops & {"laser_cutting", "punch"} and not machining_is_measured(rec):
+            return False
+    except Exception:                                                # noqa: BLE001
+        return False
+    if any(isinstance(q, dict) for q in (rec.get("manufacturing_questions") or [])):
+        return False
     try:
         from costed_facts import FIRM, record_lines
         line = (record_lines(summary) or {}).get(code) or {}
@@ -799,7 +813,9 @@ def trace_part(summary: Dict[str, Any], facts: Dict[str, Any]) -> Optional[Dict[
                  for d in (_cj(summary).get("decisions_required") or [])
                  if isinstance(d, dict)}
     except Exception:                                                # noqa: BLE001
-        _open = set()
+        # UNREAD DECISIONS ARE NOT A SETTLED LINE (D-592a): with the list unreadable, no line
+        # can be shown to have none open, so no example is shown.
+        return None
     # AND IT MUST BE SUPPORTED, NOT ONLY UNQUESTIONED (D-592). A line nobody has asked about yet
     # can still rest on a guess. The example is shown only for a line whose size is measured or
     # read from its own sheet with the weight agreeing, whose price is firm, and whose charged
@@ -807,7 +823,8 @@ def trace_part(summary: Dict[str, Any], facts: Dict[str, Any]) -> Optional[Dict[
     # says what was costed without walking through a figure it cannot stand behind.
     _supported = {c for c in (_code_in(r.get("description")).upper() for r in rows)
                   if c and c not in _open and _line_is_supported(summary, facts, c)}
-    rows = [r for r in rows if _code_in(r.get("description")).upper() in _supported]
+    rows = [r for r in rows if _code_in(r.get("description")).upper() in _supported
+            and _route_len(r) > 0]   # a line no charged department touches walks through nothing
     if not rows:
         return None
     row = max(rows, key=lambda r: (_route_len(r), _num(r.get("total_value_gbp")) or 0))

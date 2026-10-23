@@ -176,6 +176,11 @@ SOURCE_RANK: Dict[str, int] = {
     # others, when its own sheet states one value. Above the page reads (70), below a person
     # (72) and every measurement.
     "own_sheet_title_block": 71,
+    # A SECTION'S WALL AS ITS OWN SHEET PRINTS THE SECTION (D-592a). 0351292's cross rail kept
+    # the support assembly's 3 mm while its own sheet reads RECT TUBE 50X20X2MM. Offered only by
+    # revalidate_from_own_sheets, when its own sheets name exactly one section. Same footing as
+    # the own sheet's title block: above the page reads, below a person and every measurement.
+    "own_sheet_section": 71,
     # ── AN OPEN QUESTION, DELIBERATELY NOT SETTLED HERE (raised 11 Sep 2026) ──────────
     #
     # The order below is MODEL FIRST: solidworks_api 90, dxf 80. The review position is the
@@ -558,6 +563,7 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "assembly_envelope_allowance": "the outline of the assembly it sits in (provisional — the part read larger)",
     "assembly_members": "its members' material — the parts the compiled hierarchy gives it",
     "own_sheet_title_block": "its own sheet's title block",
+    "own_sheet_section":      "the section its own sheet names",
     "mirror_of_provisional":  "its other hand's provisional reading",
     "compiler_default":       "an engine default",
     # A NAME FOR THE THING THAT WAS CALLED NOTHING.

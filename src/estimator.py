@@ -7996,6 +7996,18 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         int(geom.get("estimated_pierce_count") or 0),
         len(part.get("hole_sizes_mm", []) or []),
     )
+    # A CUTTING ALLOWANCE IS CUT WITH A PIERCE, AND HOLES IT LEFT UNREAD ARE NOT PRICED
+    # (D-592a, review of D-592). A part bounded to its outline had its hole holders cleared
+    # as unread, then took no pierce at all for the outline it is cut on, and its own sheet's
+    # hole sizes could still bring a count back. Unread holes are unread: not priced here, and
+    # on the decisions list as "internal features unread" — never a count that says none.
+    _cut_allowance = part.get("_cut_allowance") if isinstance(part.get("_cut_allowance"), dict) else None
+    if part.get("_internal_features_unread") and _cut_allowance:
+        if _cut_allowance.get("mode") == "outline":
+            holes = 0
+            pierces = 1 if cut_length_mm else 0
+        elif cut_length_mm:
+            pierces = max(int(pierces or 0), 1)
     # A MEASURED ZERO IS A VALUE. Where the model was read and found no bends, that answer
     # stands and nothing falls through to the drawing. Everywhere else the fold-shadowing fix
     # applies unchanged: a present-but-zero bend_count from something that cannot see bends
@@ -8011,10 +8023,9 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         # provenance label from the flat pattern that had said one.
         from fold_count import press_brake_folds as _press_folds      # noqa: PLC0415
         _fold_res = _press_folds(part)
-        bends = _fold_res["count"] or (
-            manufacturing_features.get("bend_count")
-            or max(len(part.get("angles_deg", [])), len(part.get("fold_values_mm", [])),
-                   part.get("fold_count_textual", 0) or 0))
+        # ONE RESOLVER, NO SECOND OPINION (D-592a). This fell back to the angle list when the
+        # resolver said none, so an angle the resolver had refused as a fold came back as one.
+        bends = _fold_res["count"] or (_safe_int(manufacturing_features.get("bend_count")) or 0)
     bend_length_mm = sum([_safe_float(value) or 0.0 for value in part.get("fold_values_mm", [])])
     thickness_mm = _safe_thickness_mm(part)
 
@@ -8029,6 +8040,39 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                    "OAK_VENEER_MDF", "PLYWOOD", "BIRCH_PLYWOOD", "HDPE_PLASTIC",
                    "FOAMEX", "DIBOND", "TIMBER"}
     _CUTTING_OPS = ("laser_cutting", "cnc_routing", "cnc", "punch", "guillotine", "saw")
+    # A PUNCH NOBODY STATED, ON HOLES NOBODY MEASURED, IS NOT KEPT (D-592a, review of D-592).
+    # The punch switch below no longer fires on a page's circles, but a punch an earlier pass
+    # inferred from them could still ride in on the part's operations. It stays where the
+    # drawing states it (its words on the operation), where the part names a punched family,
+    # or where its holes were measured; otherwise it is removed, said, and the part is cut by
+    # the laser like any other unmeasured sheet part.
+    if "punch" in ops:
+        try:
+            from detail_page_geometry import machining_is_measured as _mach_measured
+            _holes_measured_early = bool(_mach_measured(part))
+        except Exception:                                            # noqa: BLE001
+            _holes_measured_early = True
+        _punch_words_early = " ".join([str(part.get("description") or ""),
+                                       str(part.get("part_number") or ""),
+                                       ";".join(part.get("process_notes") or [])]).upper()
+        _punch_named_early = any(
+            str(k).upper() in _punch_words_early
+            for k in ((getattr(config, "PUNCH_RECOGNITION", {}) or {}).get("punch_keywords") or []))
+        _punch_src_early = str((part.get("operation_sources") or {}).get("punch") or "").strip().lower()
+        if (not _holes_measured_early and not _punch_named_early
+                and not (part.get("operation_evidence") or {}).get("punch")
+                and _punch_src_early in ("", "inference", "geometry", "page_vectors",
+                                         "unknown", "unrecorded")):
+            ops = [o for o in ops if o != "punch"]
+            if isinstance(part.get("textual_operations"), list):
+                part["textual_operations"] = [o for o in part["textual_operations"] if o != "punch"]
+            if isinstance(part.get("inferred_operations"), list):
+                part["inferred_operations"] = [o for o in part["inferred_operations"] if o != "punch"]
+            part.setdefault("review_flags", []).append(
+                f"PUNCH REMOVED: {part.get('part_number') or 'this part'} carried a punch nobody "
+                f"stated ({_punch_src_early or 'no source'}) on holes nobody measured — the "
+                f"drawing names no punched pattern and no DXF counts them. Cut on the laser; "
+                f"say so if SDI punches it and the punch follows")
     _has_cut_op = any(o in ops for o in _CUTTING_OPS)
 
     # SDI Intelligence — metal holes are LASER-CUT, not a separate hole/drill op. Tim's
@@ -8617,13 +8661,17 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     if (_made_part and ("laser_cutting" in ops or "punch" in ops)
             and _mev.get("basis") == UNVERIFIED_FEATURES
             and not part.get("_cut_path_not_bounded")   # already asked, with the reason kept
-            and UNVERIFIED_FEATURES and (int(pierces or 0) > 0 or int(holes or 0) > 0)):
+            and UNVERIFIED_FEATURES and (int(pierces or 0) > 0 or int(holes or 0) > 0
+                                         or float(cut_length_mm or 0) > 0)):
+        # A plausible page path is still a page path (D-592a): asked with or without circles.
         try:
             from source_precedence import raise_manufacturing_question as _ask_cut
             _pn_cut = str(part.get("part_number") or "this part")
+            _n_cut = int(max(holes or 0, pierces or 0))
             _ask_cut(part,
-                     f"Cutting of {_pn_cut}: {int(max(holes or 0, pierces or 0))} hole(s) and "
-                     f"{cut_length_mm:,.0f} mm of cutting read off the drawing's lines",
+                     f"Cutting of {_pn_cut}: "
+                     + (f"{_n_cut} hole(s) and " if _n_cut else "")
+                     + f"{cut_length_mm:,.0f} mm of cutting read off the drawing's lines",
                      "costed as candidates — the counts are the page's circles and lines, not a "
                      "measured flat, so they may include views, notes and the title block",
                      "give the DXF, or confirm the hole count and the internal cutting",
@@ -8933,19 +8981,34 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     # already been and gone. Drawing evidence infers a fold; a measurement rules one out.
     if ("folding" not in ops and (_mat_u in _SHEET_METALS or _mat_u in _CUT_BOARDS)
             and not _section_no_dxf and not _model_measured_zero_bends(part)):
+        # A BARE ANGLE INFERS NO FOLD (D-592a). An angle list is every angle the sheet prints
+        # — a countersink, a mitre, a chamfer — so it no longer adds the operation; where it
+        # is the only sign, the fold is asked, not charged and not dropped in silence.
         _fold_evidence = (
             (bends or 0) > 0
-            or len(part.get("angles_deg") or []) > 0
             or int(part.get("fold_count_textual") or 0) > 0
             or int((part.get("manufacturing_features") or {}).get("bend_count") or 0) > 0
         )
+        _shape = _formed_sheet_shape(part) if _mat_u in _SHEET_METALS else None
         if _fold_evidence:
             ops = list(ops) + ["folding"]
             record_operation(part, "folding", "inference")
+        elif part.get("angles_deg") and not _shape:
+            try:
+                from source_precedence import raise_manufacturing_question as _ask_fold
+                _pn_f = str(part.get("part_number") or "this part")
+                _ask_fold(part, f"Folding of {_pn_f}: its drawing prints "
+                                f"{', '.join(str(a) for a in (part.get('angles_deg') or [])[:4])}° "
+                                f"but states no fold",
+                          "an angle alone is not a fold — it can be a countersink, a mitre or a "
+                          "chamfer — so no folding is charged",
+                          "say whether it is folded, and how many folds",
+                          "estimator.estimate_process_times")
+            except Exception:                                        # noqa: BLE001
+                pass
         else:
             # A FORMED SHAPE IS FOLDED (D-589). An angle cut from sheet is one fold whether or
             # not a callout says so; 0351292's base angle was lasered and never folded.
-            _shape = _formed_sheet_shape(part) if _mat_u in _SHEET_METALS else None
             if _shape:
                 ops = list(ops) + ["folding"]
                 record_operation(part, "folding", "inference")

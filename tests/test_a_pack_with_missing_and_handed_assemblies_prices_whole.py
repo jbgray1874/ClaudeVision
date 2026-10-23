@@ -420,7 +420,10 @@ def test_callouts_past_the_drawn_bend_lines_are_not_charged():
     part = {"angles_deg": ["90"], "drawing_bend_callouts": 7,
             "geometry_rollup": {"dashed_long_axis_lines": 4}}
     out = fc.press_brake_folds(part)
-    assert out["count"] == 1 and "callouts" in (out["disagreement"] or "")
+    # Not the seven callouts. Since D-592a not the lone 90° either — an angle is not a fold
+    # count — so the drawn bend lines are the charge, and the callouts are still said.
+    assert out["count"] == 4 and out["source"] == fc.DASHED_PROXY
+    assert "callouts" in (out["disagreement"] or "")
 
 
 def test_a_model_still_has_to_confirm_callouts_over_a_flat():
