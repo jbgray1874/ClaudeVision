@@ -13010,6 +13010,18 @@ def stamp_members_coated_area(parts: Any, summary: Any = None) -> int:
             # finish, complete on its own line; only a silent, RAW or pointing member is coated
             # as the case. The judgement is finish_rules', one reader for every gate.
             _own_fin = "" if _m.get("finish_inherited_from") else _stated_fin(_m)
+            # A FINISH PRINTED IN THE MATERIAL FIELD IS STATED TOO (D-589, review). ROL's
+            # sheets print "STAINLESS STEEL - BRUSHED" and "MILD STEEL - RAW" as the material,
+            # with no finish field; once the compiled hierarchy made 0351292's brushed strip a
+            # member of the rail, its area would have joined the rail's coat. Only a surface
+            # finish counts from there — brushed, polished, anodised. A coated STOCK named as
+            # the material (galvanised, zinc plated) can still go through the booth.
+            if not _own_fin:
+                _mat_fin = " ".join(
+                    [str(_m.get("material") or ""), str(_m.get("material_text_as_printed") or "")]
+                    + [str(x) for x in (_m.get("materials") or []) if x]).upper().strip()
+                if _mat_fin and (_fin_families(_mat_fin) & {"brushed", "polish", "anodise"}):
+                    _own_fin = _mat_fin
             _other = ((_fin_families(_own_fin) - {"powder", "bare"})
                       if _own_fin and not _fin_pointer(_own_fin) else set())
             if _other:

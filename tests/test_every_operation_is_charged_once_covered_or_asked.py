@@ -135,6 +135,22 @@ def test_two_widths_the_weight_fits_equally_decide_nothing(tmp_path):
     assert "flat pattern" in part["_provisional_blank_refused"]
 
 
+def test_a_figure_along_the_length_is_never_the_width_however_well_it_fits(tmp_path):
+    """The real sheet also prints 31,7 along the strip; it fits the weight too (1.19x)."""
+    items = _downstand_items() + [("31,7", 400, 250, 0)]
+    blank = g.provisional_blank_from_sheets(_sheet_part("D-1", "DOWNSTAND", 2.0),
+                                            [_sheet(tmp_path, "d6", items, weight="0.6KG")])
+    assert blank and blank["width"] == 25.0
+
+
+def test_the_weight_alone_never_picks_a_width(tmp_path):
+    """With only a figure along the length fitting the weight, no width is chosen."""
+    items = [i for i in _downstand_items() if i[0] != "25"] + [("31,7", 400, 250, 0)]
+    part = _sheet_part("D-1", "DOWNSTAND", 2.0)
+    assert g.provisional_blank_from_sheets(
+        part, [_sheet(tmp_path, "d7", items, weight="0.6KG")]) is None
+
+
 def test_the_weight_on_the_parts_own_sheet_beats_one_collected_from_an_assembly(tmp_path):
     """The record holds the assembly's 8.6 kg first; the sheet the blank is read from says 0.6."""
     part = _sheet_part("D-1", "DOWNSTAND", 2.0, weights=["8.6KG", "0.6KG"])
@@ -245,6 +261,23 @@ def test_an_assemblys_coat_is_its_compiled_members_area(monkeypatch):
         "a member named only by the compiled graph is still a member"
 
 
+def test_a_brushed_member_and_bought_hardware_stay_out_of_the_assemblys_coat(monkeypatch):
+    """ROL prints the finish in the material field: STAINLESS STEEL - BRUSHED."""
+    asm = {"part_number": "ASM-1", "textual_operations": ["powder_coating"], "quantity": 1}
+    plate = _sheet_part("M-1", "PLATE", 2.0, materials=["MILD STEEL - RAW"],
+                        blank_length_mm=500.0, blank_width_mm=100.0)
+    strip = dict(_sheet_part("M-2", "ANTI SCRATCH STRIP", 3.0,
+                             materials=["STAINLESS STEEL - BRUSHED"],
+                             blank_length_mm=1200.0, blank_width_mm=40.0),
+                 normalized_material="STAINLESS_STEEL")
+    nut = {"part_number": "DIN 934 - M10", "description": "Hex Nut", "page_roles": ["bought_in"],
+           "is_bought_in": True, "blank_length_mm": 20.0, "blank_width_mm": 20.0}
+    _graph(monkeypatch, {"M-1": {"ASM-1"}, "M-2": {"ASM-1"}, "DIN 934 - M10": {"ASM-1"}})
+    e.stamp_members_coated_area([asm, plate, strip, nut], {"pages": []})
+    assert asm["_powder_members_coated_m2"] == pytest.approx(0.5 * 0.1 * 2)
+    assert any("M-2" in x and "brushed" in x for x in asm.get("_powder_members_left_out", []))
+
+
 def test_without_the_graph_the_root_owned_member_is_not_counted(monkeypatch):
     """The broken case the rail shipped with: owning_assembly is the root on every record."""
     asm = {"part_number": "ASM-1", "textual_operations": ["powder_coating"], "quantity": 2}
@@ -343,6 +376,19 @@ def test_one_requirement_on_two_rows_of_one_department_is_asked():
                for t in cov["charged_twice"])
     assert any("is charged on 2 rows" in d["issue"]
                for d in cf.costed_job(job)["decisions_required"])
+
+
+def test_one_requirement_on_two_rows_for_different_parts_is_two_stages_not_a_double_charge():
+    job = _job()
+    accepted = job["estimate_summary"]["workbook_labour"]["rows"]
+    src = next(r for r in accepted if r.get("decision_ids"))
+    calc = next(r for r in job["final_estimate"]["labour_rows"]
+                if int(r["workbook_row"]) == int(src["workbook_row"]))
+    accepted.append(dict(src, workbook_row=998, part_numbers=["7332-01-GA"]))
+    job["final_estimate"]["labour_rows"].append(dict(calc, workbook_row=998))
+    cov = cf.operation_coverage(job)
+    assert not cov["charged_twice"]
+    assert any(c.get("stages") == 2 for c in cov["charged"])
 
 
 def test_a_ruled_out_operation_is_covered_by_its_ruling():
