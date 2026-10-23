@@ -2420,6 +2420,92 @@ def check_a_charged_identity_is_whole_and_charged_once(summary: Any) -> List[Dic
         lines=out, count=len(out))]
 
 
+def check_what_the_read_returned_is_accounted_for(summary: Any) -> List[Dict[str, Any]]:
+    """Every item an LLM read returned is charged, covered by a named charge, excluded by a
+    person with a reason, or unresolved — and unresolved holds the release (D-596). Every
+    engine allowance no read item explains is listed apart; one the shop stated for another
+    product, a purchase nothing names, or one with no stated basis holds the release too, with
+    its minutes a unit and the hours at each quantity asked for.
+
+    The contract (read_charge_contract) runs in main after Excel, beside the section and
+    material contracts. Where a ledger exists and its result does not, the audit runs here over
+    the record — with no calculated workbook every item is unresolved, which is right: nothing
+    has been shown to reach a charged cell. BLOCKING throughout."""
+    if not isinstance(summary, dict):
+        return []
+    ledger = summary.get("read_ledger")
+    if not isinstance(ledger, dict) or not (ledger.get("items") or ledger.get("error")):
+        return []
+    result = summary.get("read_charge_result")
+    if not isinstance(result, dict):
+        try:
+            import read_charge_contract as rcc
+            result = rcc.audit(summary)
+        except Exception as exc:                                     # noqa: BLE001
+            return [_violation("read_charge_check_failed", BLOCKING,
+                               f"The read contract could not run ({type(exc).__name__}: {exc}). "
+                               f"A check that did not run is not a pass.")]
+    issues = [i for i in (result.get("issues") or []) if isinstance(i, dict)]
+    if not issues and result.get("passed") is True:
+        return []
+    out: List[Dict[str, Any]] = []
+    unresolved = [i for i in issues if i.get("code") == "read_item_unresolved"]
+    if unresolved:
+        said = "; ".join(f"{i.get('item')} {i.get('label') or ''} "
+                         f"({str(i.get('why') or '').split(' — ')[0]})" for i in unresolved[:6])
+        more = f"; and {len(unresolved) - 6} more" if len(unresolved) > 6 else ""
+        out.append(_violation(
+            "read_item_unresolved", BLOCKING,
+            f"{len(unresolved)} item(s) the read returned reach no charge and no ruling: "
+            f"{said}{more}. Charge each, name the charge that covers it, or rule it out with "
+            f"the reason (answers file estimator_decisions.read_rulings).",
+            identities=sorted({str(i["part"]) for i in unresolved if i.get("part")}),
+            items=[str(i.get("item")) for i in unresolved], count=len(unresolved)))
+    by_op: Dict[str, List[Dict[str, Any]]] = {}
+    for i in issues:
+        if i.get("code") == "engine_allowance_unconfirmed":
+            by_op.setdefault(str(i.get("item")), []).append(i)
+    for item, group in by_op.items():
+        op = item.split(":", 1)[-1]
+        minutes = round(sum(float(g.get("minutes_per_product") or 0) for g in group), 2)
+        hours: Dict[str, float] = {}
+        for g in group:
+            for q, h in (g.get("hours_at") or {}).items():
+                hours[str(q)] = round(hours.get(str(q), 0.0) + float(h or 0), 1)
+        at = ", ".join(f"{h:g} h at {int(q):,} off"
+                       for q, h in sorted(hours.items(), key=lambda kv: int(kv[0])))
+        parts = sorted({str(g["part"]) for g in group if g.get("part")})
+        out.append(_violation(
+            "engine_allowance_unconfirmed", BLOCKING,
+            f"Engine allowance not confirmed for this job: {op.replace('_', ' ')}, {minutes:g} "
+            f"min a unit on {', '.join(parts) or 'the job'}" + (f" ({at})" if at else "")
+            + f". Basis: {group[0].get('basis')}. Confirm it for this job with the reason "
+              f"(read_rulings 'allowance:{op}'), or take it off (operations_off).",
+            target_id=(parts[0] if len(parts) == 1 else ""), identities=parts, operation=op,
+            minutes_per_unit=minutes, hours_at=hours,
+            allowance_class=str(group[0].get("class") or "")))
+    lines = [i for i in issues if i.get("code") == "engine_line_unconfirmed"]
+    if lines:
+        out.append(_violation(
+            "engine_line_unconfirmed", BLOCKING,
+            f"{len(lines)} line(s) the engine added that no read item names: "
+            + "; ".join(f"{i.get('part')} ({i.get('class')}: {i.get('basis')})" for i in lines[:6])
+            + ". Confirm each for this job (read_rulings 'line:<code>') or remove it.",
+            identities=[str(i.get("part")) for i in lines], count=len(lines)))
+    known = ("read_item_unresolved", "engine_allowance_unconfirmed", "engine_line_unconfirmed")
+    other = [i for i in issues if i.get("code") not in known]
+    if other:
+        out.append(_violation(
+            "read_charge_unverified", BLOCKING,
+            "The read could not be held to the calculated sheet: "
+            + "; ".join(str(i.get("code")) + (f" ({i.get('why') or i.get('text')})"
+                                              if (i.get("why") or i.get("text")) else "")
+                        for i in other[:6])
+            + ". Until it is, nothing the read returned is shown to reach a charged cell.",
+            count=len(other)))
+    return out
+
+
 def check_a_sheet_blank_and_a_bought_item_reach_the_charged_cells(summary: Any) -> List[Dict[str, Any]]:
     """Every canonical blank and bought item is on the calculated sheet at its quantity, in
     its block, charged, with the arithmetic holding and the saved cells agreeing — and every
@@ -5153,6 +5239,7 @@ CHECKS = (
     check_a_printed_quantity_is_not_divided_without_evidence,
     check_a_charged_identity_is_whole_and_charged_once,
     check_a_sheet_blank_and_a_bought_item_reach_the_charged_cells,
+    check_what_the_read_returned_is_accounted_for,
     check_a_blank_and_its_cut_path_can_both_be_true,
     check_prices_are_firm,
     check_an_unresolved_reading_blocks_the_quote,

@@ -2172,6 +2172,20 @@ def main() -> None:
                     "unverified": [], "trace": [],
                     "issues": [{"code": "material_contract_failed", "part": "",
                                 "detail": f"{type(_mc_exc).__name__}: {_mc_exc}"}]}
+            # WHAT THE READ RETURNED (D-596), at the same boundary: every item of an LLM read
+            # charged, covered, excluded with a reason, or unresolved with the release held,
+            # and every engine allowance listed apart with its basis. Always recomputed; a
+            # failure of the checker is a finding, never a pass.
+            try:
+                from read_charge_contract import record as _record_read_charges
+                _record_read_charges(_target, xlsx_path)
+                summary["read_charge_result"] = _target.get("read_charge_result")
+            except Exception as _rc_exc:                                 # noqa: BLE001
+                _target["read_charge_result"] = summary["read_charge_result"] = {
+                    "schema": "read_charge_contract.v1", "applicable": True, "passed": False,
+                    "items": [], "allowances": [], "engine_lines": [],
+                    "issues": [{"code": "read_charge_audit_failed", "item": "", "part": "",
+                                "text": f"{type(_rc_exc).__name__}: {_rc_exc}"}]}
             _inv = _check_job(_target)
             summary["invariants"] = _inv          # so anything reading `summary` agrees
             # NOT REWRITTEN HERE (D-361). D-359 wrote the banner again at this point, after
