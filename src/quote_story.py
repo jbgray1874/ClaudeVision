@@ -393,9 +393,16 @@ def _is_line_item(p: Dict[str, Any]) -> bool:
 
 
 def _is_assembly(p: Dict[str, Any]) -> bool:
-    return (str(p.get("_canonical_kind") or "").lower() == "assembly"
-            or "assembly" in {str(r).lower() for r in (p.get("page_roles") or [])}
-            and not _num(p.get("blank_length_mm")))
+    """An assembly by the canonical graph's word, or by its sheet's role where the graph
+    said nothing. A BOUGHT ARTICLE LISTED ON AN ASSEMBLY SHEET IS A BOUGHT LINE (D-587):
+    0351292's five fasteners are bound to the GA, so its role read "assembly", and the
+    quote told the customer "11 parts SDI makes, 0 bought in" beside five bought lines."""
+    if str(p.get("_canonical_kind") or "").lower() == "assembly":
+        return True
+    if "assembly" not in {str(r).lower() for r in (p.get("page_roles") or [])} \
+            or _num(p.get("blank_length_mm")):
+        return False
+    return not _is_bought(p)
 
 
 def _qty(p: Dict[str, Any]) -> float:

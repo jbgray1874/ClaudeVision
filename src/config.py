@@ -2092,6 +2092,16 @@ CODE_PREFIXES_THAT_ARE_NOT_DRAWINGS = {
     "PG", "AWG", "DN", "NB", "IP", "M",
 }
 
+# The subset of those prefixes that are STANDARDS BODIES (D-587): a code led by one of
+# these and a number ("DIN 7991 - M3 x 10", "ISO 7380-1 - M8 x 16") designates one exact
+# article — thread, length, head — so a price found for it by a single shared word of its
+# description is not its price. Colour (RAL, NCS), thread (UNC, M) and pipe words are not
+# here: they qualify a thing, they do not name one.
+STANDARDS_BODY_PREFIXES = {
+    "DIN", "ISO", "EN", "BS", "BSI", "ANSI", "ASTM", "ASME", "JIS", "GB", "UNI", "NF",
+    "SAE", "AS", "NZS",
+}
+
 CODE_TAIL_NOISE_WORDS = {
     "PLATINUM", "CENTRES", "CENTERS", "CTRS", "GLOSS", "MATT", "MATTE", "SATIN",
     "WHITE", "BLACK", "GREY", "GRAY", "CLEAR", "CHROME", "ZINC", "NICKEL", "SILVER",

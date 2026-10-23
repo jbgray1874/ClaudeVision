@@ -1474,6 +1474,22 @@ class PricingService:
                 str(part.get("unit_of_measure") or "").strip().lower()
                 in getattr(config, "CONTINUOUS_UNITS_OF_MEASURE", ()))):
             return None
+        # A STANDARD DESIGNATION NAMES ONE ARTICLE, AND A WORD IN ITS DESCRIPTION DOES NOT
+        # (D-587). This rung matches a category row by ANY single word of the description,
+        # longest first. On 0351292's 09:48 book "ISO 7380-1 - M8 x 16 Hexagon Socket Button
+        # Head Screw" took £10.00 each from whatever row "HEXAGON" or "PRODUCT" hit — twelve
+        # of them, £124.80, on a screw a researched rung had priced at £0.15. The line's code
+        # is a DIN / ISO / EN designation: an exact thread, length and head, which a category
+        # row reached by one shared word cannot be. Such a line skips this rung and falls to
+        # the researched one, which must name a listing, a date and a unit basis.
+        if _is_purchase:
+            try:
+                import part_code_conventions as _pcc
+                _code = str(part.get("part_number") or "").strip()
+                if _code and _pcc.is_standard_designation(_code):
+                    return None
+            except Exception:                                    # noqa: BLE001
+                pass
         if _is_purchase:
             # THE WORDS THAT NAME THE THING, NOT THE STUFF IT IS MADE OF. Asked by every word,
             # "PLASTIC END CAP" found PLASTIC SHEET and "STEEL BACKED MAGNET" found MILD STEEL

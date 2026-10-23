@@ -242,6 +242,23 @@ def is_supplier_article(text: str) -> bool:
     return bool(_pre and _pre.group(1).upper() in _refused_prefixes())
 
 
+def is_standard_designation(text: str) -> bool:
+    """True when a code is a standards body's designation of one article: a prefix from
+    config.STANDARDS_BODY_PREFIXES followed by its number ("DIN 7980 - 8", "ISO 7380-1 -
+    M8 x 16", "DIN7991-M3X10"). Spacing is ignored. A bare prefix ("DIN") is no
+    designation — it names no number — and nor is a colour or thread word (D-587)."""
+    token = re.sub(r"\s+", "", str(text or "").strip()).upper()
+    _pre = _LETTER_PREFIX.match(token)
+    if not _pre:
+        return False
+    try:
+        from config import STANDARDS_BODY_PREFIXES as _bodies
+        bodies = {str(b).upper() for b in _bodies}
+    except Exception:                                                # noqa: BLE001
+        bodies = {"DIN", "ISO", "EN", "BS", "ANSI", "ASTM", "JIS", "SAE"}
+    return _pre.group(1).upper() in bodies
+
+
 def drawing_family(text: str) -> str:
     """The numbering family of a drawing-number-shaped code: the letters and the leading
     digits ("ROL2021-2466" -> "ROL2021", "12349-02-69-100" -> "12349"); "" for anything

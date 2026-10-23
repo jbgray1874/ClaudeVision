@@ -3496,6 +3496,57 @@ def costed_job(source: Any) -> Dict[str, Any]:
                        "or once — strike the charge that is not real"),
             "owner": "estimator", "gbp_at_stake": _o_gbp or None})
 
+    # ── A WELD OR A FOLD CHARGED WITH NO RECORDED SOURCE IS ASKED, WITH ITS MONEY (D-587) ──
+    # D-586 stopped an operation with no source and no quoted words calling itself "a note on
+    # the drawing"; it is priced as "an unrecorded source". On 0351292's 09:48 book that left
+    # the anti-scratch strip welded, dressed and folded — £57.58 — with the question only in
+    # the confidence section, where nobody acts on it. A weld or a fold is physical work a
+    # drawing shows or does not: where one is charged on nobody's evidence it is a decision,
+    # priced by its own rows. Not where another question already covers that part's weld
+    # (an inferred weld, a joint charged twice, its reader's own question).
+    _covered_weld = ({str(d.get("part") or "").upper() for d in decisions
+                      if {"welding", "spot_welding", "dress_welds"}
+                      & {str(o) for o in (d.get("operations") or [d.get("operation")])}}
+                     | {m for (_a, m) in _joint_asked} | set(_weld_asked))
+    _unsourced: Dict[Tuple[str, str], Mapping[str, Any]] = {}
+    for _d in _shadow_d:
+        if not (isinstance(_d, Mapping) and _d.get("status") == "required"):
+            continue
+        _op_u = str(_d.get("operation") or "")
+        if _op_u not in ("welding", "spot_welding", "folding"):
+            continue
+        if str(_d.get("source") or "").strip().lower() != "unrecorded" \
+                or str(_d.get("evidence") or "").strip():
+            continue
+        _tgt_u = str(_d.get("target_id") or "")
+        if not _tgt_u or (_op_u != "folding" and _tgt_u.upper() in _covered_weld):
+            continue
+        _unsourced.setdefault((_tgt_u, _op_u), _d)
+    for (_tgt_u, _op_u), _d in sorted(_unsourced.items()):
+        _ops_u = {"folding": {"folding"}}.get(_op_u, {_op_u, "dress_welds"})
+        _urows = [r for r in (_workbook_rows(source) or [])
+                  if _ops_u & {str(o) for o in _row_engine_ops(r)}
+                  and _tgt_u.upper() in {str(pn).upper() for pn in (r.get("part_numbers") or [])}]
+        _u_gbp = round(sum(_num(r.get("total_value_gbp")) for r in _urows), 2)
+        _u_nums = [str(r.get("workbook_row")) for r in _urows if r.get("workbook_row")]
+        _word = {"folding": "Folding", "spot_welding": "Spot welding"}.get(_op_u, "Welding")
+        decisions.append({
+            "part": _tgt_u, "kind": "manufacturing_decision",
+            "operation": _op_u, "operations": sorted(_ops_u),
+            "issue": f"{_word} on {_tgt_u} has no recorded source",
+            "assumption": ((f"charged{' with its dressing' if _op_u != 'folding' else ''}"
+                            + (f" (£{_u_gbp:,.2f} a unit"
+                               + (f", Estimate row{'s' if len(_u_nums) > 1 else ''} "
+                                  f"{', '.join(_u_nums)}" if _u_nums else "") + ")"
+                               if _u_gbp else ""))
+                           + " — no reader recorded where it came from and the drawing's "
+                             "words for it were not found; it is priced so nothing is "
+                             "silently left out"),
+            "action": (f"read {_tgt_u}'s own sheet: if it is "
+                       f"{'folded' if _op_u == 'folding' else 'welded'}, confirm it; if not, "
+                       f"strike the {'Fold row' if _op_u == 'folding' else 'Weld and Dress rows'}"),
+            "owner": "estimator", "gbp_at_stake": _u_gbp or None})
+
     # ── A LINE COSTED AT A QUANTITY ITS OWN BOM ROW DOES NOT STATE ────────────────
     # 12312-01-GA: the driver, LED tape, power cord and Y-splitter each stated 1 and were
     # costed at 2, reached once through the lighting assembly and once from the GA's table.

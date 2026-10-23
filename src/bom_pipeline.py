@@ -206,8 +206,13 @@ def reconciled_bom_rows_for_job(
             #     everything except the fields needed to retire the blanket-6mm
             #     assumption. Copied only when a reader actually stamped them, so an
             #     SDI row without the columns is byte-identical.
+            # THE DIMENSION CELL TOO (D-587). The words reader learned to read a parts
+            # list's DIMENSION column (D-584: "2 mm" for 0351292's top blank, "30X20X2MM"
+            # for its base rail), and this flatten copied every printed field but that one —
+            # so the stock-form guard downstream never saw the row that said "sheet", and
+            # the rail's tube callout priced the top blanks as tube on the 09:48 book.
             for _ev in ("material_text", "thickness_mm", "stated_weight_kg",
-                        "segmentation_uncertain", "code_token", "length_mm"):
+                        "segmentation_uncertain", "code_token", "length_mm", "dimension"):
                 _v = r.get(_ev)
                 if _v not in (None, ""):
                     _row_out[_ev] = _v

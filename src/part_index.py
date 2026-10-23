@@ -289,14 +289,38 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
                 part["page_roles"].append(effective_page_role)
 
             allow_local_component_data = bool(component_sheet)
-            part["materials"].extend(prefer_local_title_block_values(effective_page_role, title_block.get("materials", []), allow_on_assembly=allow_local_component_data))
-            part["surface_finishes"].extend(prefer_local_title_block_values(effective_page_role, title_block.get("surface_finishes", []), allow_on_assembly=allow_local_component_data))
-            part["colours"].extend(prefer_local_title_block_values(effective_page_role, title_block.get("colours", []), allow_on_assembly=allow_local_component_data))
+            # A TITLE-BLOCK READ THAT CAPTURED A PARTS LIST SPEAKS FOR NO PART (D-587).
+            # 0351292's support 2468 is bound to the GA, and the GA's "finish" read came back
+            # as the parts list itself — the supports' own row, the strip's STAINLESS STEEL -
+            # BRUSHED 3MM, the fasteners' codes. Material, gauge and finish were then taken
+            # from that same read, so the supports reached the book as 3 mm stainless. Where
+            # the finish field quotes two or more drawing numbers, the read is a table's
+            # rows: its material, gauge, finish and colour are not applied, and the part's
+            # own parts-list row (material_text_as_printed) or its members speak instead.
+            _tb_finish_text = " ".join(
+                [str(v) for v in (title_block.get("surface_finishes") or []) if v]
+                + [str((title_block.get("normalized") or {}).get("primary_finish") or "")])
+            try:
+                from finish_rules import holds_parts_list_rows as _rows_bleed
+                _tb_is_a_table = _rows_bleed(_tb_finish_text)
+            except Exception:                                        # noqa: BLE001
+                _tb_is_a_table = False
+            if _tb_is_a_table:
+                _msg = (f"page {page.get('page_number')}'s title-block read holds parts-list "
+                        f"rows (other parts' numbers in its finish field), so its material, "
+                        f"gauge, finish and colour were NOT applied to this part — they are "
+                        f"some row's, not this part's own")
+                if _msg not in part["review_flags"]:
+                    part["review_flags"].append(_msg)
+            _tb_lists = (lambda _k: [] if _tb_is_a_table else title_block.get(_k, []))
+            part["materials"].extend(prefer_local_title_block_values(effective_page_role, _tb_lists("materials"), allow_on_assembly=allow_local_component_data))
+            part["surface_finishes"].extend(prefer_local_title_block_values(effective_page_role, _tb_lists("surface_finishes"), allow_on_assembly=allow_local_component_data))
+            part["colours"].extend(prefer_local_title_block_values(effective_page_role, _tb_lists("colours"), allow_on_assembly=allow_local_component_data))
             part["revisions"].extend(prefer_local_title_block_values(effective_page_role, title_block.get("revisions", []), allow_on_assembly=True))
             part["drawing_numbers"].extend(
                 [value for value in prefer_local_title_block_values(effective_page_role, title_block.get("drawing_numbers", []), allow_on_assembly=True) if is_valid_part_identifier(value)]
             )
-            part["thicknesses_mm"].extend(prefer_local_title_block_values(effective_page_role, title_block.get("thicknesses_mm", []), allow_on_assembly=allow_local_component_data))
+            part["thicknesses_mm"].extend(prefer_local_title_block_values(effective_page_role, _tb_lists("thicknesses_mm"), allow_on_assembly=allow_local_component_data))
             part["weights"].extend(prefer_local_title_block_values(effective_page_role, title_block.get("weights", []), allow_on_assembly=allow_local_component_data))
             part["dates"].extend(prefer_local_title_block_values(effective_page_role, title_block.get("dates", []), allow_on_assembly=True))
             part["sheet_refs"].extend(prefer_local_title_block_values(effective_page_role, title_block.get("sheet_refs", []), allow_on_assembly=True))
@@ -335,6 +359,8 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
                                   ("normalized_thickness_mm", "primary_thickness_mm")):
                 _v = prefer_local_scalar(effective_page_role, _norm_tb.get(_tb_key),
                                          allow_on_assembly=allow_local_component_data)
+                if _tb_is_a_table:
+                    continue                 # a table's row, not this part's (D-587)
                 if _v not in (None, ""):
                     apply_field(part, _fld, _v, "drawing_deterministic")
 

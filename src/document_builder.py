@@ -918,8 +918,33 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         _seen = _printed_material_rows.setdefault(_code, [])
         if not any(_t.upper() == _text.upper() for _t in _seen):
             _seen.append(_text)
+    # THE ROW'S PRINTED DIMENSION, COLLECTED THE SAME WAY (D-587). One cell per part, kept
+    # only where every row that lists the part prints the same figure: two rows printing
+    # different stock is a question for the estimator, never a choice by table order.
+    _printed_dimension_rows: Dict[str, List[str]] = {}
+    for _row in ((summary.get("document_analysis") or {}).get("bom_rows") or []):
+        if not isinstance(_row, dict):
+            continue
+        _dim = str(_row.get("dimension") or "").strip()
+        _code = _bare_code(str(_row.get("part_number") or ""))
+        if not _dim or not _code:
+            continue
+        _seen = _printed_dimension_rows.setdefault(_code, [])
+        if not any(re.sub(r"\s+", "", _t).upper() == re.sub(r"\s+", "", _dim).upper()
+                   for _t in _seen):
+            _seen.append(_dim)
 
     for part in parts:
+        _dims_printed = _printed_dimension_rows.get(
+            _bare_code(str(part.get("part_number") or ""))) or []
+        if len(_dims_printed) == 1:
+            part.setdefault("bom_dimension", _dims_printed[0])
+        elif len(_dims_printed) > 1:
+            part["bom_dimension_candidates"] = list(_dims_printed)
+            part.setdefault("review_flags", []).append(
+                "the parts lists print this part's stock more than once and the cells differ — "
+                + " / ".join(f"'{_d}'" for _d in _dims_printed)
+                + ". Neither is used to decide its stock form; confirm which is right")
         page_nums: List[int] = part.get("pages", [])
         page_roles: List[str] = part.get("page_roles", [])
         materials: List[str] = part.get("materials", [])
@@ -1086,6 +1111,34 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 _own_detail_silent = bool(_own_detail_text) and not any(
                     kw in _own_detail_text for kw in _hollow_kw) and not re.search(
                     r"\d\s*X\s*\d+(?:\.\d+)?\s*X\s*\d", _own_detail_text)
+                # A PROFILE BELONGS TO THE ROW THAT PRINTS IT, AND A BOUGHT ITEM TAKES NO
+                # STOCK FORM FROM A PAGE (D-587). On 0351292's 09:48 book the rail sheet's
+                # "30X20X2MM ROL2021-2405" reached the top blanks AND a hex nut listed on the
+                # same sheet. The callout's own text names the part it belongs to: where it
+                # names a drawing number that is not this part's, it is another row's, unless
+                # this part's own row or name says it is section stock too. A purchased
+                # article — a nut, a screw, a Hafele foot — is bought as it is, never cut.
+                try:
+                    from part_code_conventions import (is_supplier_article as _is_article,
+                                                       looks_like_a_drawing_number as _is_dwg)
+                except Exception:                                    # noqa: BLE001
+                    _is_article = _is_dwg = (lambda _t: False)        # noqa: E731
+                _mine = _bare_code(str(part.get("part_number") or "")).upper()
+                _src_codes = sorted({
+                    _c for _c in re.findall(r"[A-Z0-9][A-Z0-9.\-]{4,}",
+                                            str(_sec.get("source_text") or "").upper())
+                    if _is_dwg(_c)})
+                _names_another = bool(_src_codes) and not any(
+                    _bare_code(_c).upper() == _mine for _c in _src_codes)
+                _is_assembly_rec = bool(part.get("is_assembly_parent")
+                                        or "assembly" in page_roles)
+                _own_section_word = _row_says_section or (
+                    _looks_like_section and not _is_assembly_rec)
+                # An article by its number (a designation, a supplier's dotted code), or a
+                # bought-in that is not an assembly record — the GA retags its own sub-
+                # assemblies "bought_in", and those are refused below by ownership instead.
+                _bought_line = (_is_article(str(part.get("part_number") or ""))
+                                or ("bought_in" in page_roles and not _is_assembly_rec))
                 if _measured_flat:
                     part.setdefault("review_flags", []).append(
                         f"section '{_path}' read from this part's page text was NOT applied — "
@@ -1096,6 +1149,17 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                         f"section '{_path}' read from this part's page text was NOT applied — "
                         f"nothing about this part says it is section stock, and the callout is "
                         f"shared page text that describes a different part on the drawing")
+                elif _bought_line and not _row_says_section:
+                    part.setdefault("review_flags", []).append(
+                        f"section '{_path}' read from this part's page was NOT applied — "
+                        f"this line is a bought-in article, bought as it is and never cut "
+                        f"from stock; the callout belongs to a made part on the same sheet")
+                elif _shared and _names_another and not _own_section_word:
+                    part.setdefault("review_flags", []).append(
+                        f"section '{_path}' read from a shared page was NOT applied — the "
+                        f"callout names {', '.join(_src_codes[:3])}, another part on the "
+                        f"sheet, and nothing on this part's own row or name says it is "
+                        f"section stock")
                 elif _shared and _row_says_sheet and not _looks_like_section:
                     part.setdefault("review_flags", []).append(
                         f"section '{_path}' read from a shared page was NOT applied — this "
