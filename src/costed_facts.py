@@ -3995,6 +3995,12 @@ def costed_job(source: Any) -> Dict[str, Any]:
         "checks_with_findings": len({str(v.get("check") or v.get("code") or "")
                                      for v in _blocking_v + _ruling_v + _not_run_v}),
     }
+    # THE READ LEDGER'S ROWS AMONG THE BLOCKING CHECKS (D-598), by the codes its invariant
+    # raises — counted on the release so a hold can be traced to the ledger, not inferred.
+    _LEDGER_CODES = {"read_item_unresolved", "engine_allowance_unconfirmed",
+                     "engine_line_unconfirmed", "read_id_stale", "read_charge_unverified",
+                     "read_charge_check_failed"}
+    _ledger_rows = [d for d in _checks if str(d.get("check_code") or "") in _LEDGER_CODES]
     reasons: List[str] = []
     if _stop:
         reasons.append(_stop_sentence(_stop))
@@ -4012,6 +4018,14 @@ def costed_job(source: Any) -> Dict[str, Any]:
         _fc = _failing_checks_words(decisions, _checks_rec)
         if _fc["blocking_words"]:
             reasons.append(_fc["blocking_words"])
+        # WHICH OF THEM ARE THE READ LEDGER'S, SAID (D-598). A provisional status caused by
+        # other issues does not prove the ledger's hold worked: the release names the
+        # ledger's own findings among its blocking checks, item by item.
+        if _ledger_rows:
+            reasons.append(
+                f"{len(_ledger_rows)} of them from the read ledger: "
+                + "; ".join(str(d.get("issue") or d.get("check_code")) for d in _ledger_rows[:4])
+                + (f"; and {len(_ledger_rows) - 4} more" if len(_ledger_rows) > 4 else ""))
         if _fc["ruling_words"]:
             reasons.append(_fc["ruling_words"])
         if _fc["not_run_words"]:
@@ -4101,6 +4115,9 @@ def costed_job(source: Any) -> Dict[str, Any]:
                     # WHAT THE BANNER LEFT OUT (D-356), NOW ROWS (v2). Both values are
                     # counts OF the rows above, kept for the readers that print them.
                     "blocking_checks": len(_checks),
+                    # Of those, the read ledger's own (D-598).
+                    "read_ledger_holds": len(_ledger_rows),
+                    "read_ledger_codes": sorted({str(d.get("check_code")) for d in _ledger_rows}),
                     "sizes_assumed": len(_assumed),
                     "rulings": len(_rulings),
                     **_checks_rec,

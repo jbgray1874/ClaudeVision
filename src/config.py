@@ -908,6 +908,12 @@ CONCEPT_NAME_GENERIC_WORDS = ["main", "part", "piece", "item", "unit", "assembly
                               "from", "steel", "mild", "metal", "sheet", "front", "back",
                               "left", "right", "side", "upper", "lower", "inner", "outer",
                               "large", "small", "plain", "standard"]
+# A PART'S REFERENCE, AS A BRIEF OR A READ LINE STATES IT (D-598). A code is an item's own only
+# where one of these stands in the few words before it, in a sentence naming that item and no
+# other part: "2 chrome end caps per bar, drawing reference CA070092". Vocabulary, not logic.
+STATED_REFERENCE_WORDS = ["reference", "ref", "part no", "part number", "part code", "code",
+                          "cat no", "catalogue no", "catalogue number", "item no",
+                          "supplier code", "drawing no"]
 # A SIZE BELONGS TO THE COMPONENT IT STANDS BESIDE (D-596e). A brief's "A x B" size is a bought
 # item's own only where nothing but these words separates it from the item's name: "UPC ID
 # plate (20 x 10 mm)" and "a 20 x 10 mm UPC ID plate" are the plate's, while "30 x 15 tube
@@ -4569,6 +4575,15 @@ WELD_PROCESS_STATEMENT_PATTERNS = [
 #   process named on the row -> the processes that rate is a rate for
 WELD_RATE_EQUIVALENT_PROCESSES = {"CO2": ("CO2", "MIG"), "MIG": ("MIG", "CO2"),
                                   "TIG": ("TIG",), "MMA": ("MMA",)}
+# THE CARD'S RATE FOR A STATED PROCESS, where the shop has given one (D-598). A charged row
+# titled for the process must carry this £/h; with no entry, the row's own stated department
+# rate is the shop's. Empty until the estimators give a TIG rate.
+#   process -> £ per hour
+WELD_PROCESS_RATES_GBP: dict = {}
+# READ ITEMS A "COVERED" RULING MUST EVIDENCE (D-598). A stated weld process charged at a
+# shared or substitute rate is legitimate only where the ruling names who confirmed the rate or
+# the minutes, and where (read_rulings {..., "evidence": "..."}). Item ids, or their prefixes.
+READ_RULINGS_NEEDING_EVIDENCE = ("S.weld_process",)
 
 # ── OPERATIONS THAT LEGITIMATELY RECUR AT EVERY LEVEL OF A TREE ───────────────────────────
 # An assembly event on 12173-03-GA over 201, and another on 201 over its frames, is two

@@ -54,13 +54,13 @@ def paper(width_pt: Any, height_pt: Any) -> str:
 def effective_dpi(px: Any, width_pt: Any, height_pt: Any) -> Optional[int]:
     """The resolution a rendered page image gives the printed page, on its long side."""
     try:
-        long_px = max(int(px[0]), int(px[1]))
-        long_pt = max(float(width_pt), float(height_pt))
+        short_px, long_px = sorted((int(px[0]), int(px[1])))
+        short_pt, long_pt = sorted((float(width_pt), float(height_pt)))
     except (TypeError, ValueError, IndexError):
         return None
-    if long_px <= 0 or long_pt <= 0:
+    if min(short_px, long_px, short_pt, long_pt) <= 0:
         return None
-    return int(round(long_px / (long_pt / 72.0)))
+    return int(round(min(short_px / (short_pt / 72.0), long_px / (long_pt / 72.0))))
 
 
 def build(summary: Mapping[str, Any], pages: Optional[List[Mapping[str, Any]]] = None) -> Dict[str, Any]:
@@ -69,12 +69,16 @@ def build(summary: Mapping[str, Any], pages: Optional[List[Mapping[str, Any]]] =
     height_pt) defaults to the whole-pack read's own page list."""
     wp = summary.get("llm_full_extract_coverage") if isinstance(summary.get("llm_full_extract_coverage"), Mapping) else {}
     concept = summary.get("concept_read") if isinstance(summary.get("concept_read"), Mapping) else {}
-    page_list = [p for p in (pages if pages is not None else (wp.get("pages") or []))
+    inventory = list(pages if pages is not None else (wp.get("pages") or []))
+    page_list = [p for p in inventory
                  if isinstance(p, Mapping) and p.get("page") is not None]
     wp_ran = bool(wp.get("batches"))
     rendered = {(str(r.get("document")), int(r.get("page"))): r.get("px")
                 for r in (concept.get("pages_rendered") or []) if isinstance(r, Mapping)}
-    concept_ran = bool(rendered)
+    # Rendering is preparation, not a successful answer. Retained raw response is the
+    # current adapter's receipt; it proves response availability, not semantic completeness.
+    concept_ran = bool(rendered) and bool(concept.get("raw_response")) and not (
+        concept.get("error") or concept.get("refused"))
     tc = concept.get("text_coverage") if isinstance(concept.get("text_coverage"), Mapping) else {}
     not_sent = {str(x) for x in (tc.get("omitted_pages") or [])} | {
         str(x) for x in (tc.get("cut_pages") or [])}
@@ -83,6 +87,14 @@ def build(summary: Mapping[str, Any], pages: Optional[List[Mapping[str, Any]]] =
                 if isinstance(p, Mapping)}
     entries: List[Dict[str, Any]] = []
     gaps: List[Dict[str, Any]] = []
+    for p in inventory:
+        if isinstance(p, Mapping) and p.get("page") is None:
+            gaps.append({"document": str(p.get("document") or p.get("path") or "unknown"),
+                         "page": None, "kind": "document_unread",
+                         "detail": str(p.get("error") or "document has no page inventory")})
+    if not inventory:
+        gaps.append({"document": "", "page": None, "kind": "inventory_missing",
+                     "detail": "No page inventory; completeness cannot be checked."})
     for p in page_list:
         doc, num = str(p.get("document")), int(p.get("page"))
         has_text = bool(p.get("has_text"))
@@ -106,7 +118,7 @@ def build(summary: Mapping[str, Any], pages: Optional[List[Mapping[str, Any]]] =
                                      "not return — nothing on this page reached that reading")
         if concept_ran:
             label = f"{doc}, page {num}"
-            if has_text:
+            if has_text and (doc, num) in rendered:
                 entry["concept_text"] = "not sent" if label in not_sent else "sent whole"
                 if label in not_sent:
                     gap("text_not_sent", "its text did not go to the concept read whole — read "
@@ -122,6 +134,13 @@ def build(summary: Mapping[str, Any], pages: Optional[List[Mapping[str, Any]]] =
             gap("image_only", "no text layer, and no LLM read took its image — its notes and "
                               "lettering reached no reading (the page-image BOM reader looks "
                               "for parts tables only)")
+        if has_text and not entry["concept_text"] and not (wp_pages.get((doc, num)) or {}).get("read"):
+            if not any(g["kind"] == "text_not_read" for g in entry["gaps"]):
+                gap("text_not_read", "No successful reading receipt for this page's text")
+        if (doc, num) in rendered and not concept_ran:
+            gap("image_response_unverified", "Page rendered, but no successful concept response retained")
+        if entry["concept_image"] and entry["concept_image"]["dpi"] is None:
+            gap("image_detail_unknown", "Image resolution cannot be checked against page dimensions")
         entries.append(entry)
     return {"schema": SCHEMA, "pages": entries, "gaps": gaps,
             "documents": sorted({e["document"] for e in entries}),

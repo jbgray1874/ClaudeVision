@@ -85,7 +85,7 @@ def _book(*, hole_row=True, plate_gbp=0.0, plating=True, allowances=True, bought
             _lab(152, ["saw"], T, .1917, 6.11, "Saw"),
             _lab(153, ["deburring"], T, .2583, 8.05, "Manual labour (Metal)"),
             _lab(154, ["deburring"], B, .2667, 8.31, "Manual labour (Metal)", 2),
-            _lab(155, ["welding"], U, .6, 25.06, "Weld (CO2)"),
+            _lab(155, ["welding"], U, .6, 25.06, "Weld (CO2)", rate=41.77),
             _lab(156, ["dress_welds"], U, .5667, 16.25, "Dress Welds"),
             _lab(157, ["assembly", "handling"], U, .33, 9.42, "Assemble/pack (Metal)")]
     if hole_row:
@@ -277,7 +277,8 @@ def test_rulings_with_reasons_resolve_items_and_confirm_allowances():
         "S.polish": {"ruling": "covered", "reason": "the dress row includes the grits",
                      "covered_by": "dress_welds"},
         "S.weld_process": {"ruling": "covered", "reason": "TIG at the arc row, agreed",
-                           "covered_by": "welding"},
+                           "covered_by": "welding",
+                           "evidence": "production manager's e-mail, TIG minutes at the arc rate"},
         "allowance:brush_before_plate": {"ruling": "confirmed", "reason": "production: 15 min"},
         "allowance:plater_pack": {"ruling": "confirmed", "reason": "same packer"},
         "allowance:plater_final_pack": {"ruling": "confirmed", "reason": "same packer"}})
@@ -569,7 +570,8 @@ def test_a_record_carries_its_read_lines_source_id_and_links_by_it():
     kept, aside = cs.set_aside_undrawn(answer)
     parts = cs.parts_from_concept(kept, STEM, brief=BRIEF, source_answer=answer)
     tube = next(p for p in parts if p["part_number"] == T)
-    assert tube["read_id"] == f"R2:{rcc.fingerprint(answer['parts'][1])}", \
+    assert tube["read_id"] == (f"{rcc.response_id(answer)}/R2:"
+                               f"{rcc.fingerprint(answer['parts'][1])}"), \
         "its place in the read as returned, not in the copy with the hinge set aside"
     led = rcc.capture(answer, records=parts, brief=BRIEF, set_aside=aside)
     r2 = next(i for i in led["items"] if i["id"] == "R2")
@@ -743,3 +745,158 @@ def test_the_1715_book_after_d596e_clears_the_false_finding_and_keeps_the_real_o
     assert next(l for l in r["engine_lines"] if l["record"] == f"{STEM}-NV02")["holds"]
     assert by["PS1"]["state"] == rcc.UNRESOLVED and by["PS1"]["relates_to"] == ["R4"]
     assert not r["passed"]
+
+
+# ── D-598: a read ID names its response; TIG proved past its title; references and holes ───
+
+def test_a_read_id_from_another_response_is_a_finding_before_any_fallback():
+    """A line's place is stable within one response, not across two. A record minted from one
+    read and audited against another says so first; only then may its words link it."""
+    first = _answer()
+    parts = cs.parts_from_concept(first, STEM, brief=BRIEF)
+    second = copy.deepcopy(first)
+    second["product"]["name"] = "HOOK BAR, READ AGAIN"
+    led = rcc.capture(second, records=parts, brief=BRIEF)
+    assert led["response"] == rcc.response_id(second) != rcc.response_id(first)
+    assert {s["record"] for s in led["stale_read_ids"]} >= {T, B, C, L}
+    r1 = next(i for i in led["items"] if i["id"] == "R1")
+    assert r1["record"] == T and r1["link"] == "fingerprint, after a stale read ID"
+    s = _book()
+    s["read_ledger"] = led
+    r = rcc.audit(s)
+    assert any(i["code"] == "read_id_stale" and i["part"] == T for i in r["issues"])
+    s["read_charge_result"] = r
+    viol = invariants.check_what_the_read_returned_is_accounted_for(s)
+    stale = next(v for v in viol if v["code"] == "read_id_stale")
+    assert stale["severity"] == invariants.BLOCKING and T in stale["detail"]["identities"]
+    same = rcc.capture(first, records=parts, brief=BRIEF)
+    assert same["stale_read_ids"] == [] and all(
+        i["link"] == "read_id" for i in same["items"] if i["kind"] == "part")
+
+
+def _tig_row(s, **row):
+    s["final_estimate"]["labour_rows"] = [dict(r, **row) if r["workbook_row"] == 155 else r
+                                          for r in s["final_estimate"]["labour_rows"]]
+    return s
+
+
+def _weld(s):
+    return next(e for e in rcc.audit(s)["items"] if e["id"] == "S.weld_process")
+
+
+def test_a_tig_title_without_a_rate_or_at_the_wrong_quantity_does_not_prove_the_charge():
+    s = _tig_row(_book(), operation="Weld (TIG)", dept_rate_gbp_per_hour=None)
+    e = _weld(s)
+    assert e["state"] == rcc.UNRESOLVED and "states no rate" in e["how"]
+    s = _tig_row(_book(), operation="Weld (TIG)", dept_rate_gbp_per_hour=48.0, qty_per_unit=2)
+    e = _weld(s)
+    assert e["state"] == rcc.UNRESOLVED and f"2 of {U} against 1" in e["how"]
+
+
+def test_a_tig_row_at_another_rate_than_the_cards_does_not_prove_the_charge(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "WELD_PROCESS_RATES_GBP", {"TIG": 52.0}, raising=False)
+    e = _weld(_tig_row(_book(), operation="Weld (TIG)", dept_rate_gbp_per_hour=48.0))
+    assert e["state"] == rcc.UNRESOLVED and "£48.00/h against the card's £52.00/h" in e["how"]
+    e = _weld(_tig_row(_book(), operation="Weld (TIG)", dept_rate_gbp_per_hour=52.0))
+    assert e["state"] == rcc.COVERED
+
+
+def test_a_tig_row_that_misses_a_welded_piece_does_not_cover_its_joints():
+    s = _tig_row(_book(), operation="Weld (TIG)", dept_rate_gbp_per_hour=48.0,
+                 part_numbers=T)
+    s["workbook_labour"]["rows"] = [dict(r, part_numbers=[T]) if r["workbook_row"] == 155 else r
+                                    for r in s["workbook_labour"]["rows"]]
+    next(p for p in s["manufacturing_writeup"]["parts"] if p["part_number"] == B)[
+        "inferred_operations"] = ["laser_cutting", "welding"]
+    e = _weld(s)
+    assert e["state"] == rcc.UNRESOLVED and f"{B}'s weld is on no TIG row" in e["how"]
+
+
+def test_a_shared_weld_rate_passes_only_on_an_evidenced_ruling():
+    ruling = {"ruling": "covered", "reason": "TIG at the arc row, agreed", "covered_by": "welding"}
+    e = _weld(_ruled(_book(), {"S.weld_process": dict(ruling)}))
+    assert e["state"] == rcc.UNRESOLVED and "with no evidence" in e["how"]
+    e = _weld(_ruled(_book(), {"S.weld_process": dict(ruling, evidence="T. Wilkes e-mail 24/10")}))
+    assert e["state"] == rcc.COVERED and "evidence: T. Wilkes e-mail 24/10" in e["how"]
+    import estimator_confirmed as ec
+    out, _p = ec._read_decisions({"estimator_decisions": {"read_rulings": {
+        "S.weld_process": dict(ruling, evidence="T. Wilkes e-mail 24/10")}}}, "f.json")
+    assert out["read_rulings"]["S.weld_process"]["evidence"] == "T. Wilkes e-mail 24/10"
+
+
+CAP_BRIEF = BRIEF + "\nFit 2 chrome end caps per finished bar, drawing reference EC123456; " \
+                    "verify the supplier match."
+
+
+def test_a_reference_the_brief_states_rides_the_line_and_its_match_is_held():
+    _a, _u, parts = _records(brief=CAP_BRIEF)
+    cap = next(p for p in parts if p["part_number"] == C)
+    assert cap["concept_stated_reference"] == {"code": "EC123456", "source": "the enquiry brief"}
+    assert "reference EC123456" in cap["research_description"]
+    s = _book(brief=CAP_BRIEF)
+    e = next(e for e in rcc.audit(s)["items"] if e["id"] == "R3.reference")
+    assert e["state"] == rcc.UNRESOLVED and "supplier match is unproven" in e["how"]
+    next(c for c in s["estimate_summary"]["canonical_part_estimates"] if c["part_number"] == C)[
+        "material_estimate"] = {"supplier_code": "EC123456"}
+    assert _state(rcc.audit(s), "R3.reference") == rcc.CARRIED
+
+
+def test_a_code_without_a_reference_word_or_in_another_parts_sentence_is_not_a_reference():
+    assert cs.stated_item_reference("CHROME END CAP", "2 chrome end caps, RAL9010 white") == ""
+    assert cs.stated_item_reference("CHROME END CAP", "End caps EC123456") == ""
+    assert cs.stated_item_reference(
+        "CHROME END CAP", "Fit the chrome end cap and the identification label, part no EC123456",
+        others=["IDENTIFICATION LABEL"]) == ""
+    assert cs.stated_item_reference("CHROME END CAP", "chrome end caps, part no EC123456") \
+        == "EC123456"
+
+
+HOLE_BRIEF = BRIEF + "\nEach bracket has the 3mm diameter hanging hole shown in its detail."
+
+
+def test_a_hole_the_brief_states_must_be_in_a_cutting_rows_count():
+    s = _book(brief=HOLE_BRIEF)
+    ids = {i["id"] for i in s["read_ledger"]["items"]}
+    assert "R2.stated_hole1" in ids and not any(i.startswith("R1.stated_hole") for i in ids), \
+        "the tube's hole is the read's own cut-out, not stated again"
+    e = next(e for e in rcc.audit(s)["items"] if e["id"] == "R2.stated_hole1")
+    assert e["state"] == rcc.UNRESOLVED and "records no hole count" in e["how"]
+    for r in s["workbook_labour"]["rows"]:
+        if r["workbook_row"] == 151:
+            r["holes"] = 0
+    assert "cuts no hole" in next(e for e in rcc.audit(s)["items"]
+                                  if e["id"] == "R2.stated_hole1")["how"]
+    for r in s["workbook_labour"]["rows"]:
+        if r["workbook_row"] == 151:
+            r["holes"] = 2
+    assert _state(rcc.audit(s), "R2.stated_hole1") == rcc.COVERED
+
+
+def test_the_release_names_the_read_ledgers_own_findings_among_its_checks():
+    """A provisional status caused by other issues does not prove the ledger held: the
+    release counts the ledger's rows, and they go when the ledger's findings are settled."""
+    import costed_facts
+    s = _book(plate_gbp=120.0)
+    s["final_estimate"]["totals"] = {"unit_gbp": 177.72}
+    s["read_charge_result"] = rcc.audit(s)
+    s["invariants"] = invariants.check_job(s, write_back=False)
+    rel = costed_facts.costed_job(s)["release"]
+    assert rel["read_ledger_holds"] >= 1 and "read_item_unresolved" in rel["read_ledger_codes"]
+    assert any("from the read ledger" in r for r in rel["reasons"])
+    s = _ruled(_book(plate_gbp=120.0), {
+        "NV1": {"ruling": "excluded", "reason": "the customer fits the ticket holder"},
+        "S.polish": {"ruling": "covered", "reason": "the dress row includes the grits",
+                     "covered_by": "dress_welds"},
+        "S.weld_process": {"ruling": "covered", "reason": "TIG at the arc row", "covered_by":
+                           "welding", "evidence": "production manager's e-mail"},
+        "allowance:brush_before_plate": {"ruling": "confirmed", "reason": "production: 15 min"},
+        "allowance:plater_pack": {"ruling": "confirmed", "reason": "same packer"},
+        "allowance:plater_final_pack": {"ruling": "confirmed", "reason": "same packer"}})
+    s["final_estimate"]["totals"] = {"unit_gbp": 177.72}
+    s["read_charge_result"] = rcc.audit(s)
+    assert s["read_charge_result"]["passed"]
+    s["invariants"] = invariants.check_job(s, write_back=False)
+    rel = costed_facts.costed_job(s)["release"]
+    assert rel["read_ledger_holds"] == 0 and not any("from the read ledger" in r
+                                                     for r in rel["reasons"])

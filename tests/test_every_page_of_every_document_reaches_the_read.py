@@ -236,7 +236,9 @@ def test_coverage_names_image_only_and_coarse_pages_and_unsent_text():
                            {"document": "ga.pdf", "page": 2, "px": [2000, 1414]},
                            {"document": "big.pdf", "page": 1, "px": [2000, 1414]},
                            {"document": "spec.pdf", "page": 1, "px": [1414, 2000]}],
-        "text_coverage": {"omitted_pages": ["spec.pdf, page 1"]}}}
+        "text_coverage": {"omitted_pages": ["spec.pdf, page 1"]},
+        # A RENDERED PAGE IS NOT A READ ONE (D-598): the response is the receipt.
+        "raw_response": '{"parts": []}'}}
     pc = pcov.build(summary, pages)
     kinds = {(g["document"], g["page"]): g["kind"] for g in pc["gaps"]}
     assert kinds == {("big.pdf", 1): "image_coarse", ("spec.pdf", 1): "text_not_sent"}
@@ -258,8 +260,10 @@ def test_an_image_only_page_no_llm_read_took_is_named_and_asks_a_ruling():
 
 
 def test_no_llm_reading_is_said_not_reported_as_every_page_read():
+    """And its text is a named gap (D-598): no reading took it, so nothing on it is known."""
     pc = pcov.build({}, _pages(("ga.pdf", 1, 400, 595, 842)))
-    assert pc["llm_read"] is False and pc["gaps"] == []
+    assert pc["llm_read"] is False
+    assert [(g["page"], g["kind"]) for g in pc["gaps"]] == [(1, "text_not_read")]
     src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
     assert "NO LLM READING RAN" in src
 

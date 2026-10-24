@@ -937,7 +937,16 @@ def _tracing_failures(scan: Dict[str, Dict[str, Any]], pack: List[str],
                        "could not be bound to a part in the BOM")
         if geom in _UNTRACED_GEOMETRY:
             why.append(_UNTRACED_GEOMETRY[geom])
-        if not pages and not str(rec.get("dxf_source_file") or "").strip():
+        if not pages and not str(rec.get("dxf_source_file") or "").strip() and rec.get("concept"):
+            # DRAWN IN THE PACK, READ BY THE MODEL (D-598). 0320730's note said nothing in the
+            # pack draws the tube and bracket; page 2 draws both. What is missing is a measured
+            # link from the drawing to the size, not the drawing.
+            _drawn = str(rec.get("concept_drawn") or rec.get("concept_seen") or "").strip()
+            why.append("read by the vision model off the pack's sheet"
+                       + (f" ({_drawn})" if _drawn else "")
+                       + " — no detail sheet or DXF of its own, so its size is the read's, "
+                         "not a measured dimension")
+        elif not pages and not str(rec.get("dxf_source_file") or "").strip():
             why.append("no sheet of its own in the pack and no DXF — nothing in the pack "
                        "draws this part")
         if not why:
@@ -3533,7 +3542,8 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             + (f"; <b>{_plural(_phantom, 'part')} were left out because the blank recorded "
                f"for them fits no sheet the material is stocked in</b> — that is a defect "
                f"upstream, not a gap in the drawings" if _phantom else "")
-            + ". Weight is blank area × gauge × the material's density, times how many are "
+            + ". Weight uses each recorded stock basis: section kg/m × cut length for sections, "
+              "or blank area × gauge × density for sheet, times how many are "
               "made. It decides the next line.</p>")
         # WHAT WAS LEFT OUT, BY NAME. A unit weight that comes up short against the title
         # block is a part that was not weighed, and a tally of "2 parts had no blank" cannot
@@ -3850,6 +3860,11 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             "fix — nothing here needs anything from you:</p>")
         add("<ul>" + "".join(f"<li>{_e(o)}</li>" for o in _ours) + "</ul>")
 
+    # 9. THE RELEASE RECORD AND THE READ LEDGER (D-598), as the record states them: the final
+    # status and its reasons, what rests on held allowances at each quantity, and every finding
+    # of the read ledger with what the read said. The e-mail repeats; it does not decide.
+    add(release_section_html(record, g.get("scan_doc") or {}))
+
     # AI ESTIMATOR CALCULATOR INPUTS — at the bottom, the full working of each calculator the
     # engine ran on the estimators' own figures (the box calculator first).
     _calc_html = calculator_inputs_html(_commercial)
@@ -3887,6 +3902,12 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     # It says so when there is nothing, too. "Nothing here needs you" is a finding, and an
     # absent panel reads as an unwritten one.
     _focus: List[tuple] = []                                 # (£ at stake, html)
+    # THE RELEASE RECORD AND THE READ LEDGER LEAD (D-598): read from the persisted records,
+    # never decided here, each line pointing at §9 where the reasons and findings are listed.
+    # The 12:51 0320730 note left the ledger's findings out altogether.
+    from robust_ownership import release_focus_lines as _release_focus
+    for _n, _message in enumerate(_release_focus(record, g.get("scan_doc") or {})):
+        _focus.append((30_000_000.0 - _n, _e(_message)))
 
     # WHAT WAS PRICED COMES BEFORE HOW MUCH. A run given the wrong Drawing Number prices a
     # different product in full confidence (11650-02, 23 Sep 2026: the cabinet top, with the
@@ -3976,6 +3997,58 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     add("</div>")
     html = "\n".join(h)
     return {"subject": subject, "html": html, "text": _as_text(html)}
+
+
+def release_section_html(record: Any, summary: Any) -> str:
+    """§9 of the covering note: the final release record, the held allowances apart from the
+    priced subtotal, and the read ledger's findings (D-598). A missing record is said, never
+    left out: the panel points here either way."""
+    rel = (record or {}).get("release") if isinstance(record, Mapping) else None
+    res = summary.get("read_charge_result") if isinstance(summary, Mapping) else None
+    res = res if isinstance(res, Mapping) and res.get("applicable") else None
+    out = ["<h3>9. The release record and the read ledger</h3>"]
+    if not isinstance(rel, Mapping):
+        out.append("<p><b>The final release record is not available</b>, so this e-mail is not "
+                   "release evidence: the price above has not been held to the release "
+                   "authority.</p>")
+    else:
+        out.append(f"<p>The final release record says <b>{_e(str(rel.get('status') or 'status unknown'))}"
+                   f"{'' if rel.get('draft') is False else ', a draft'}</b>, with "
+                   f"{_e(str(rel.get('to_confirm', rel.get('outstanding', 'unknown'))))} to confirm. "
+                   f"This note repeats that record; it does not decide release. Its reasons:</p>")
+        reasons = [str(r) for r in (rel.get("reasons") or []) if str(r).strip()]
+        if reasons:
+            out.append("<ul>" + "".join(f"<li>{_e(r)}</li>" for r in reasons) + "</ul>")
+        breaks = [b for b in (rel.get("held_at_breaks") or []) if isinstance(b, Mapping)]
+        if breaks:
+            out.append("<p><b>What rests on held allowances</b> — engine allowances calibrated "
+                       "on another product and not confirmed for this job, apart from the rest "
+                       "of the price. The work still unresolved is priced in neither column.</p>")
+            out.append("<table><tr><th>Quantity</th><th>Unit £</th><th>Held allowances £/unit</th>"
+                       "<th>Priced subtotal excluding them £/unit</th></tr>"
+                       + "".join(f"<tr><td>{int(_money(b.get('quantity')) or 0):,}</td>"
+                                 f"<td>{_gbp(_money(b.get('unit_gbp')))}</td>"
+                                 f"<td>{_gbp(_money(b.get('held_gbp_per_unit')))}</td>"
+                                 f"<td>{_gbp(_money(b.get('unit_excluding_held_gbp')))}</td></tr>"
+                                 for b in breaks) + "</table>")
+    if res is not None:
+        c = res.get("counts") or {}
+        out.append(f"<p><b>The read ledger</b> holds every item the model read to the calculated "
+                   f"sheet: {c.get('charged', 0)} charged, {c.get('covered', 0)} covered by a "
+                   f"named charge, {c.get('excluded', 0)} ruled out, {c.get('unresolved', 0)} "
+                   f"unresolved — "
+                   + ("it passes.</p>" if res.get("passed") else "it holds the release.</p>"))
+        labels = {str(e.get("id")): e.get("label") for e in (res.get("items") or [])
+                  if isinstance(e, Mapping)}
+        issues = [i for i in (res.get("issues") or []) if isinstance(i, Mapping)]
+        if issues:
+            out.append("<table><tr><th>Item</th><th>What the read said</th><th>Why it holds"
+                       "</th></tr>" + "".join(
+                           f"<tr><td>{_e(str(i.get('item') or i.get('part') or i.get('code')))}</td>"
+                           f"<td>{_e(str(labels.get(str(i.get('item'))) or i.get('label') or ''))}</td>"
+                           f"<td>{_e(str(i.get('why') or i.get('basis') or i.get('code')))}</td></tr>"
+                           for i in issues) + "</table>")
+    return "\n".join(out)
 
 
 _TAG = re.compile(r"<[^>]+>")
