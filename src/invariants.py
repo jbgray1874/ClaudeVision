@@ -2547,7 +2547,8 @@ def check_every_page_reached_a_read(summary: Any) -> List[Dict[str, Any]]:
                                                   "document_unread")]
     soft = [g for g in gaps if g.get("kind") in ("image_only", "image_coarse",
                                                   "image_response_unverified",
-                                                  "image_detail_unknown")]
+                                                  "image_detail_unknown",
+                                                  "text_llm_read_failed")]
     if hard:
         out.append(_violation(
             "page_text_not_read", BLOCKING,

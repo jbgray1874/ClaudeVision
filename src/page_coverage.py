@@ -13,15 +13,20 @@ its notes reach no reading. That is a gap, and it is named.
         "gaps":  [{document, page, kind, detail}],
         "readers": {"whole_pack": bool, "concept": bool}}
 
-Gap kinds: `text_not_read` (a whole-pack part failed: its text reached no reading),
-`text_not_sent` (the concept read could not send the page's text whole), `image_only` (no text
-layer and no LLM read took its image), `image_coarse` (its image went at a resolution where
-small notes are at risk). invariants.check_every_page_reached_a_read raises them.
+Gap kinds: `text_not_read` (no reading of any kind took its text), `text_llm_read_failed` (the
+rule-based readers read it and the whole-pack LLM read did not return it), `text_not_sent` (the
+concept read could not send the page's text whole), `image_only` (no text layer and no LLM read
+took its image), `image_coarse` (its image went at a resolution where small notes are at risk),
+`document_unread`, `image_response_unverified`, `image_detail_unknown`. EVIDENCE, NOT A READER
+(review of D-598): a page the rule-based readers read for its text is read; a normal pack fully
+read by them is not held because no LLM ran. invariants.check_every_page_reached_a_read raises
+them.
 
 Read-only: nothing here reads a document, calls a model, or changes a record but its own.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 SCHEMA = "page_coverage.v1"
@@ -85,6 +90,19 @@ def build(summary: Mapping[str, Any], pages: Optional[List[Mapping[str, Any]]] =
     min_dpi = int(_cfg("PAGE_IMAGE_MIN_DPI", 150) or 150)
     wp_pages = {(str(p.get("document")), p.get("page")): p for p in (wp.get("pages") or [])
                 if isinstance(p, Mapping)}
+    # THE RULE-BASED READERS' OWN RECEIPT (review of D-598): each page the scan read for its
+    # text, title block and patterns, by document and page. Coverage measures the evidence a
+    # page reached, not which reader gave it.
+    rule_read = set()
+    for sp in (summary.get("pages") or []):
+        if not isinstance(sp, Mapping) or not str(sp.get("pdfplumber_text")
+                                                  or sp.get("normalized_text") or "").strip():
+            continue
+        try:
+            rule_read.add((Path(str(sp.get("source_pdf_path") or "")).name,
+                           int(sp.get("page_number"))))
+        except (TypeError, ValueError):
+            continue
     entries: List[Dict[str, Any]] = []
     gaps: List[Dict[str, Any]] = []
     for p in inventory:
@@ -103,7 +121,8 @@ def build(summary: Mapping[str, Any], pages: Optional[List[Mapping[str, Any]]] =
             "paper": paper(p.get("width_pt"), p.get("height_pt")),
             "size_pt": [p.get("width_pt"), p.get("height_pt")],
             "text_chars": p.get("chars"), "has_text": has_text,
-            "whole_pack_read": None, "concept_text": None, "concept_image": None, "gaps": []}
+            "whole_pack_read": None, "concept_text": None, "concept_image": None,
+            "rule_based_text": "read" if (doc, num) in rule_read else None, "gaps": []}
 
         def gap(kind: str, detail: str) -> None:
             entry["gaps"].append({"kind": kind, "detail": detail})
@@ -114,8 +133,13 @@ def build(summary: Mapping[str, Any], pages: Optional[List[Mapping[str, Any]]] =
             entry["whole_pack_read"] = {"batches": w.get("batches") or [],
                                         "read": bool(w.get("read"))}
             if has_text and not w.get("read"):
-                gap("text_not_read", "its text is in a part of the pack the whole-pack read did "
-                                     "not return — nothing on this page reached that reading")
+                if (doc, num) in rule_read:
+                    gap("text_llm_read_failed", "its text reached the rule-based readers, and "
+                                                "the whole-pack LLM read did not return it — "
+                                                "what the rules do not look for went unread")
+                else:
+                    gap("text_not_read", "its text is in a part of the pack the whole-pack read "
+                                         "did not return, and no other reading took it")
         if concept_ran:
             label = f"{doc}, page {num}"
             if has_text and (doc, num) in rendered:
@@ -134,9 +158,10 @@ def build(summary: Mapping[str, Any], pages: Optional[List[Mapping[str, Any]]] =
             gap("image_only", "no text layer, and no LLM read took its image — its notes and "
                               "lettering reached no reading (the page-image BOM reader looks "
                               "for parts tables only)")
-        if has_text and not entry["concept_text"] and not (wp_pages.get((doc, num)) or {}).get("read"):
+        if (has_text and not entry["concept_text"] and (doc, num) not in rule_read
+                and not (wp_pages.get((doc, num)) or {}).get("read")):
             if not any(g["kind"] == "text_not_read" for g in entry["gaps"]):
-                gap("text_not_read", "No successful reading receipt for this page's text")
+                gap("text_not_read", "no reading of any kind took this page's text")
         if (doc, num) in rendered and not concept_ran:
             gap("image_response_unverified", "Page rendered, but no successful concept response retained")
         if entry["concept_image"] and entry["concept_image"]["dpi"] is None:

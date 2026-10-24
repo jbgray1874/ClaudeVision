@@ -74,6 +74,9 @@ def main(argv=None) -> int:
     snapshot = fcc.snapshot_xlsx(args.xlsx) if args.xlsx else None
     result = rcc.audit(summary, snapshot)
 
+    led = summary.get("read_ledger") or {}
+    print(f"Brief: {led.get('brief_chars', '?')} characters, sha256 "
+          f"{str(led.get('brief_sha256') or 'none')[:16]}; response {led.get('response') or '?'}")
     print(f"\n{'item':24} {'state':11} how")
     for e in result.get("items") or []:
         print(f"{e['id']:24} {e['state']:11} {e['how']}")
@@ -115,6 +118,14 @@ def main(argv=None) -> int:
     else:
         print(f"  the run's own ledger check raised {len(ledger_v)} finding(s): "
               + (", ".join(f"{v.get('code')} ({v.get('severity')})" for v in ledger_v) or "none"))
+    saved_rows = [d for d in (((summary.get("costed_job") or {}).get("decisions_required"))
+                              or []) if isinstance(d, dict) and d.get("kind") == "consistency_check"]
+    ledger_rows = [d for d in saved_rows if str(d.get("check_code") or "") in rcc.LEDGER_CHECK_CODES]
+    if saved_rows:
+        # The saved release's own rows, by the check that raised each (review of D-598).
+        print(f"  the saved release holds on {len(saved_rows)} check row(s), "
+              f"{len(ledger_rows)} of them the ledger's: "
+              + (", ".join(str(d.get("check_code")) for d in ledger_rows) or "none"))
     if rel:
         print(f"  release record: {rel.get('status')}, draft {rel.get('draft')}, "
               f"{rel.get('blocking_checks')} blocking check(s)"

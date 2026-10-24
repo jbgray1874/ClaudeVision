@@ -671,7 +671,13 @@ def test_a_generic_co2_charge_leaves_a_stated_tig_unresolved():
     assert "'Weld (CO2)' (£41.77/h)" in e["how"] and "a CO2/MIG rate, not a TIG rate" in e["how"]
 
 
-def test_an_evidenced_tig_charge_satisfies_a_stated_tig():
+def test_an_evidenced_tig_charge_satisfies_a_stated_tig(monkeypatch):
+    """A TIG title, its documented rate with its source, the welded part's quantity and every
+    joint charged once on it (review of D-598: a title and a positive rate are not enough)."""
+    import config
+    monkeypatch.setattr(config, "WELD_PROCESS_RATES_GBP",
+                        {"TIG": {"gbp_per_hour": 48.0, "source": "rate card rev C, 24/10"}},
+                        raising=False)
     s = _book()
     s["final_estimate"]["labour_rows"] = [dict(r, operation="Weld (TIG)", dept_rate_gbp_per_hour=48.0)
                                           if r["workbook_row"] == 155 else r
@@ -793,9 +799,16 @@ def test_a_tig_title_without_a_rate_or_at_the_wrong_quantity_does_not_prove_the_
     assert e["state"] == rcc.UNRESOLVED and f"2 of {U} against 1" in e["how"]
 
 
-def test_a_tig_row_at_another_rate_than_the_cards_does_not_prove_the_charge(monkeypatch):
+def test_a_tig_row_without_a_documented_rate_does_not_prove_the_charge(monkeypatch):
     import config
-    monkeypatch.setattr(config, "WELD_PROCESS_RATES_GBP", {"TIG": 52.0}, raising=False)
+    e = _weld(_tig_row(_book(), operation="Weld (TIG)", dept_rate_gbp_per_hour=48.0))
+    assert e["state"] == rcc.UNRESOLVED and "no documented TIG rate" in e["how"]
+    monkeypatch.setattr(config, "WELD_PROCESS_RATES_GBP", {"TIG": {"gbp_per_hour": 52.0}},
+                        raising=False)
+    e = _weld(_tig_row(_book(), operation="Weld (TIG)", dept_rate_gbp_per_hour=52.0))
+    assert e["state"] == rcc.UNRESOLVED and "names no source" in e["how"]
+    monkeypatch.setattr(config, "WELD_PROCESS_RATES_GBP",
+                        {"TIG": {"gbp_per_hour": 52.0, "source": "rate card rev C"}}, raising=False)
     e = _weld(_tig_row(_book(), operation="Weld (TIG)", dept_rate_gbp_per_hour=48.0))
     assert e["state"] == rcc.UNRESOLVED and "£48.00/h against the card's £52.00/h" in e["how"]
     e = _weld(_tig_row(_book(), operation="Weld (TIG)", dept_rate_gbp_per_hour=52.0))
@@ -855,22 +868,71 @@ def test_a_code_without_a_reference_word_or_in_another_parts_sentence_is_not_a_r
 HOLE_BRIEF = BRIEF + "\nEach bracket has the 3mm diameter hanging hole shown in its detail."
 
 
-def test_a_hole_the_brief_states_must_be_in_a_cutting_rows_count():
+def _row(s, wb_row, **kw):
+    for r in s["workbook_labour"]["rows"]:
+        if r["workbook_row"] == wb_row:
+            r.update(kw)
+    return s
+
+
+def test_a_hole_the_brief_states_reaches_its_parts_record_and_is_held_to_its_cut():
+    """Review of D-598: a recorded hole is not necessarily the required hole. The bracket's
+    record must carry the Ø3 the brief states, at its count, and the bracket's own cutting row
+    must have been costed for it."""
     s = _book(brief=HOLE_BRIEF)
     ids = {i["id"] for i in s["read_ledger"]["items"]}
     assert "R2.stated_hole1" in ids and not any(i.startswith("R1.stated_hole") for i in ids), \
         "the tube's hole is the read's own cut-out, not stated again"
+    bracket = next(p for p in s["manufacturing_writeup"]["parts"] if p["part_number"] == B)
+    assert bracket["concept_cutouts_from_brief"] == [{"diameter_mm": 3.0, "count": 1}]
+    assert {"what": "hole", "count": 1, "length_mm": 3.0, "width_mm": 3.0} in \
+        bracket["concept_cutout_dims"]
     e = next(e for e in rcc.audit(s)["items"] if e["id"] == "R2.stated_hole1")
-    assert e["state"] == rcc.UNRESOLVED and "records no hole count" in e["how"]
-    for r in s["workbook_labour"]["rows"]:
-        if r["workbook_row"] == 151:
-            r["holes"] = 0
-    assert "cuts no hole" in next(e for e in rcc.audit(s)["items"]
-                                  if e["id"] == "R2.stated_hole1")["how"]
-    for r in s["workbook_labour"]["rows"]:
-        if r["workbook_row"] == 151:
-            r["holes"] = 2
+    assert e["state"] == rcc.COVERED and "does not state the holes" in e["how"]
+    _row(s, 151, holes_cut=0)
+    e = next(e for e in rcc.audit(s)["items"] if e["id"] == "R2.stated_hole1")
+    assert e["state"] == rcc.UNRESOLVED and "costed for 0 hole(s) against 2" in e["how"]
+    _row(s, 151, holes_cut=2)
     assert _state(rcc.audit(s), "R2.stated_hole1") == rcc.COVERED
+
+
+def test_a_hole_of_another_size_or_on_another_part_does_not_cover_the_stated_one():
+    s = _book(brief=HOLE_BRIEF)
+    _row(s, 151, holes_cut=2)
+    bracket = next(p for p in s["manufacturing_writeup"]["parts"] if p["part_number"] == B)
+    bracket["concept_cutout_dims"] = [{"what": "hole", "count": 1, "length_mm": 6.0,
+                                       "width_mm": 6.0}]
+    e = next(e for e in rcc.audit(s)["items"] if e["id"] == "R2.stated_hole1")
+    assert e["state"] == rcc.UNRESOLVED and "carries no Ø3 hole" in e["how"]
+    bracket["concept_cutout_dims"] = []
+    tube = next(p for p in s["manufacturing_writeup"]["parts"] if p["part_number"] == T)
+    tube["concept_cutout_dims"] = [{"what": "hole", "count": 1, "length_mm": 3.0, "width_mm": 3.0}]
+    assert _state(rcc.audit(s), "R2.stated_hole1") == rcc.UNRESOLVED, "the tube's hole is not "\
+        "the bracket's"
+
+
+def test_a_sawn_sections_read_hole_reaches_its_record_and_drives_its_drilling():
+    """The 12:51 book drilled the tube with no hole on its record: cut-outs were taken only on
+    the sheet path."""
+    answer = _answer()
+    answer["parts"][0]["stock"] = {"form": "tube", "section_mm": [30, 15], "wall_mm": 1.5,
+                                   "length_mm": 1192}
+    tube = next(p for p in cs.parts_from_concept(answer, STEM, brief=BRIEF)
+                if p["part_number"] == T)
+    assert tube.get("section_stock")
+    assert tube["concept_cutout_dims"] == [{"what": "hole", "count": 1, "length_mm": 5.0,
+                                            "width_mm": 5.0}]
+    assert tube["geometry_rollup"]["estimated_hole_count"] == 1
+    import estimator as E
+    est = E.estimate_part(tube)
+    assert est["process_estimate"]["hole_count"] == 1
+    assert est["process_estimate"]["run_times_min_per_unit"]["hole_machining"] > 0
+    s = _book()
+    for p in s["manufacturing_writeup"]["parts"]:
+        if p["part_number"] == T:
+            p.pop("concept_cutout_dims", None)
+    e = next(e for e in rcc.audit(s)["items"] if e["id"] == "R1.cutout1")
+    assert e["state"] == rcc.UNRESOLVED and "carries no Ø5 hole" in e["how"]
 
 
 def test_the_release_names_the_read_ledgers_own_findings_among_its_checks():
@@ -900,3 +962,56 @@ def test_the_release_names_the_read_ledgers_own_findings_among_its_checks():
     rel = costed_facts.costed_job(s)["release"]
     assert rel["read_ledger_holds"] == 0 and not any("from the read ledger" in r
                                                      for r in rel["reasons"])
+
+
+# ── D-598a: a welded piece's joint is charged exactly once ─────────────────────────────────
+
+def test_a_piece_the_brief_has_welded_is_a_joint_charged_exactly_once():
+    s = _book()
+    joints = {i["id"]: i for i in s["read_ledger"]["items"] if i["kind"] == "joint"}
+    assert joints["R2.joint"]["said_by"] == "the enquiry brief", "brackets TIG welded to the tube"
+    e = next(e for e in rcc.audit(s)["items"] if e["id"] == "R2.joint")
+    assert e["state"] == rcc.CHARGED and "charged once" in e["how"]
+    assert "runs per joint are not counted" in e["how"]
+    a, b = _lab(161, ["welding"], B, .2, 8.0, "Weld (CO2)", 2, rate=41.77)
+    s["workbook_labour"]["rows"].append(a)
+    s["final_estimate"]["labour_rows"].append(b)
+    e = next(e for e in rcc.audit(s)["items"] if e["id"] == "R2.joint")
+    assert e["state"] == rcc.UNRESOLVED and "charged on 2 weld rows" in e["how"]
+    s = _book()
+    s["final_estimate"]["labour_rows"] = [r for r in s["final_estimate"]["labour_rows"]
+                                          if r["workbook_row"] != 155]
+    e = next(e for e in rcc.audit(s)["items"] if e["id"] == "R2.joint")
+    assert e["state"] == rcc.UNRESOLVED and "no weld row charges" in e["how"]
+
+
+def test_a_piece_no_weld_sentence_names_is_not_a_joint():
+    s = _book(brief="1200mm Hook in Bar, 1000 off. Brackets bolted to the tube.")
+    assert not any(i["kind"] == "joint" for i in s["read_ledger"]["items"])
+
+
+def test_the_saved_acceptance_tool_attributes_the_saved_releases_own_rows(tmp_path):
+    """A record from before read_ledger_holds still names which of its release rows were the
+    ledger's, by the check code each persisted row carries — read, not recomputed."""
+    import costed_facts
+    import hashlib
+    import openpyxl
+    sys.path.insert(0, str(ROOT / "tools"))
+    import prove_saved_acceptance as tool
+    book = tmp_path / "book.xlsx"
+    openpyxl.Workbook().save(book)
+    s = _book(plate_gbp=120.0)
+    s["final_estimate"]["totals"] = {"unit_gbp": 177.72}
+    s["read_charge_result"] = dict(rcc.audit(s),
+                                   workbook_sha256=hashlib.sha256(book.read_bytes()).hexdigest())
+    s["invariants"] = invariants.check_job(s, write_back=False)
+    s["costed_job"] = costed_facts.costed_job(s)
+    s["costed_job"]["release"].pop("read_ledger_holds")         # as an older record saved it
+    record = tmp_path / "job.json"
+    record.write_text(json.dumps(s, default=str), encoding="utf-8")
+    out = tmp_path / "accept.json"
+    assert tool.main([str(record), str(book), "--out", f"{out}\n"]) == 2, "held, not accepted"
+    rep = json.loads(out.read_text(encoding="utf-8"))
+    assert rep["matches_saved_audit_hash"] is True
+    codes = {r["check_code"] for r in rep["saved_release_rows"]["from_the_ledger"]}
+    assert "read_item_unresolved" in codes and rep["saved_release_rows"]["blocking"] >= len(codes)
