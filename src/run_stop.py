@@ -35,6 +35,9 @@ KINDS: Dict[str, str] = {
     "concept_read_refused":
         "the pack has measurable geometry that produced no parts, so the concept read was "
         "refused rather than guess from pictures",
+    # THE BACKSTOP (D-598d): no part, and none of the kinds above said why.
+    "no_parts_read":
+        "no reader found a part in this pack, so there was nothing to cost",
 }
 
 

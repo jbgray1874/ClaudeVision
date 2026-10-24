@@ -2979,6 +2979,17 @@ _REFUSAL_BY_CAUSE: Dict[str, Dict[str, Any]] = {
             "throughput) and re-run the job once it is fixed.",
         ),
     },
+    # THE RUN COSTED NOTHING (D-598d). 0320730's 15:36 run read no part, and this note told
+    # the estimator to look for a #DIV/0! in a workbook with nothing on it.
+    "nothing_to_cost": {
+        "headline": "nothing to cost, so there is no price",
+        "happened": "No part reached the bill, so the workbook carries no price: {detail}.",
+        "default_detail": "no reader found a part in this pack",
+        "means": "The workbook's 0.00 is not a price. Nothing in it is costed.",
+        "steps": (
+            "Do what the reason above says, then re-run the job.",
+        ),
+    },
 }
 # Any other cause, or a record stamped before causes were recorded.
 _REFUSAL_UNKNOWN: Dict[str, Any] = {

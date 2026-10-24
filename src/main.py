@@ -2492,6 +2492,23 @@ def main() -> None:
             # gets the cause and the plain reason, and whether Excel calculated the book later
             # in the run, so it can say what to do.
             _mp_ev = (_mp_block or {}).get("evidence") or {}
+            # A RUN THAT STOPPED WITH NOTHING TO COST SAYS SO (D-598d), in the note's place,
+            # with the stop's own reason, not the read-back's repair.
+            try:
+                from run_stop import nothing_to_cost as _ntc_note
+                _stop_note = _ntc_note(summary)
+            except Exception:                                    # noqa: BLE001
+                _stop_note = None
+            if _stop_note:
+                _provisional = True
+                _money_refused = True
+                _mp_block = dict(_mp_block or {}, cause="nothing_to_cost")
+                _mp_ev = {"workbook_stage_skipped_because": (
+                    f"{str(_stop_note.get('short') or '').rstrip('.')}. "
+                    f"{str(_stop_note.get('next_step') or '')}").strip().rstrip(".")}
+                print(f"   [covering-note] DO NOT SEND — nothing to cost: "
+                      f"{_stop_note.get('short')}; the covering email is replaced by a "
+                      f"refusal and the quote is held", flush=True)
             _dns_args = {
                 "why": str((_mp_block or {}).get("why") or "") if _money_refused else "",
                 "cause": str((_mp_block or {}).get("cause") or "") if _money_refused else "",
