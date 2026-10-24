@@ -794,11 +794,13 @@ not in the brief" in why_size. Do not describe visual cues: there are none.
 #       (D-418: the 14:42 read dropped the front and back and sized the divider off a bag)
 SHEET_PROMPT_VERSION = "s4"
 # THE BUDGET FITS A WHOLE DOCUMENT (D-466). 6,000 characters was sized for single drawing
-# sheets and silently cut a sixteen-page tech brief at page six; 24,000 holds such a
-# document entire (the K-Wellness brief extracts ~15,000), and the page-aware trimming
-# with its disclosed coverage remains the safety net for truly huge packs. The words are
-# what is hashed, so a text that always fitted keeps its cache key and its answer.
-SHEET_TEXT_MAX_CHARS = 24000
+# sheets and silently cut a sixteen-page tech brief at page six; 24,000 held such a document
+# entire. D-597 raises it to 120,000 — well inside the model's window beside the page images —
+# and stops trimming pages to fit: a proportional trim can drop the one finish note that
+# matters while saying every page was included. Whole pages go in order; a page that does not
+# fit is NOT sent and is named as a gap, on the record and to the model. The words are what is
+# hashed, so a text that always fitted keeps its cache key and its answer.
+SHEET_TEXT_MAX_CHARS = 120000
 
 _SHEET_PREAMBLE = """THESE ARE DRAWING SHEETS, NOT PHOTOGRAPHS. Each image is a general-arrangement or
 design-intent drawing with a title block, dimensions and notes; the text printed on the sheets
@@ -1594,12 +1596,14 @@ def sheet_text_with_coverage(pdf_paths: List[Any]) -> tuple:
     Verbatim and unparsed: the model is told it is the pages' words, and `sheet_check` looks
     a figure up in it. A scan with no text layer gives "" and the read proceeds on the image.
 
-    EVERY PAGE CONTRIBUTES, AND A CUT IS SAID (D-466). The cap used to be one silent slice
-    off the front, so a sixteen-page brief reached the model as pages one to six and nothing
-    anywhere said so. Over the cap, each page now keeps its proportional share (never less
-    than a floor), a trimmed page says it was trimmed, and the text ends by stating the
-    coverage — to the model, on the record, and in the run log through the caller.
-    coverage = {"total": chars extracted, "sent": chars sent, "pages_trimmed": n}."""
+    WHOLE PAGES, AND A GAP IS NAMED (D-466, D-597). The cap used to be one silent slice off
+    the front; then every page kept a proportional share, which could drop a critical note
+    while claiming the page was included. Now whole pages go in order until the budget; a page
+    that does not fit is not sent at all and is named — to the model at the end of the text,
+    on the record, and in the run log through the caller. Only a single page larger than the
+    whole budget is cut, and that cut is named too.
+    coverage = {"total", "sent", "pages_trimmed", "pages_omitted", "omitted_pages",
+    "cut_pages"}."""
     chunks: List[str] = []
     for pdf in (pdf_paths or []):
         if is_brief_page(pdf):
@@ -1627,35 +1631,50 @@ def sheet_text_with_coverage(pdf_paths: List[Any]) -> tuple:
     total = sum(len(c) for c in chunks) + max(0, len(chunks) - 1)
     if total <= SHEET_TEXT_MAX_CHARS:
         return "\n".join(chunks), {"total": total, "sent": total, "pages_trimmed": 0,
-                                   "pages_omitted": 0}
-    # A BUDGET, NOT A GUESS: each page gets its proportional share, never less than a floor
-    # that itself shrinks when pages are many, and the spend is counted as written so a
-    # thousand tiny pages cannot ride a per-page floor past the cap. Pages the budget cannot
-    # reach are omitted and counted — said, not silent.
-    _MARK = "\n[… trimmed — the full page is in the images]"
-    floor = min(200, max(40, SHEET_TEXT_MAX_CHARS // len(chunks)))
-    budget = SHEET_TEXT_MAX_CHARS
+                                   "pages_omitted": 0, "omitted_pages": [], "cut_pages": []}
+
+    def _label(c: str) -> str:
+        return c.split("\n", 1)[0].strip("[]")
+
     out: List[str] = []
-    trimmed = omitted = 0
+    omitted: List[str] = []
+    cut: List[str] = []
+    budget = SHEET_TEXT_MAX_CHARS
     for c in chunks:
-        if budget <= floor:
-            omitted += 1
-            continue
-        share = min(budget, max(floor, int(len(c) * SHEET_TEXT_MAX_CHARS / total)))
-        if len(c) > share:
-            piece = c[:share].rstrip() + _MARK
-            trimmed += 1
+        need = len(c) + (1 if out else 0)
+        if need <= budget:
+            out.append(c)
+            budget -= need
+        elif not out and len(c) > SHEET_TEXT_MAX_CHARS:
+            # ONE PAGE LARGER THAN THE WHOLE BUDGET: the only cut, and it is named.
+            out.append(c[:SHEET_TEXT_MAX_CHARS - 200].rstrip()
+                       + "\n[… this page is cut here — the rest of it is NOT in this text]")
+            cut.append(_label(c))
+            budget = 0
         else:
-            piece = c
-        out.append(piece)
-        budget -= len(piece) + 1
-    text = "\n".join(out) + (
-        f"\n[text coverage: {len(chunks) - omitted} of {len(chunks)} page(s) included"
-        + (f", {trimmed} trimmed" if trimmed else "")
-        + (f", {omitted} only in the images" if omitted else "")
-        + f" — {SHEET_TEXT_MAX_CHARS} character budget of {total} extracted]")
-    return text, {"total": total, "sent": len(text), "pages_trimmed": trimmed,
-                  "pages_omitted": omitted}
+            omitted.append(_label(c))
+    text = "\n".join(out)
+    if omitted or cut:
+        # The note names up to eight pages and counts the rest — the record keeps every one,
+        # and a note listing a thousand pages would itself overrun the budget it reports.
+        named = ", ".join(omitted[:8]) + (f" and {len(omitted) - 8} more" if len(omitted) > 8
+                                          else "")
+        text += ("\n[text coverage: " + f"{len(chunks) - len(omitted)} of {len(chunks)} page(s) "
+                 f"sent whole" + (f"; cut: {', '.join(cut)}" if cut else "")
+                 + (f"; NOT SENT (read them from the images only): {named}" if omitted else "")
+                 + f" — {SHEET_TEXT_MAX_CHARS} character budget of {total} extracted]")
+    return text, {"total": total, "sent": len(text), "pages_trimmed": len(cut),
+                  "pages_omitted": len(omitted), "omitted_pages": omitted, "cut_pages": cut}
+
+
+def png_size(png: bytes) -> Tuple[int, int]:
+    """(width, height) in pixels from a PNG's own header, or (0, 0)."""
+    try:
+        if png[:8] == b"\x89PNG\r\n\x1a\n":
+            return int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+    except Exception:                                                # noqa: BLE001
+        pass
+    return 0, 0
 
 
 def sheet_text(pdf_paths: List[Any]) -> str:
@@ -1874,6 +1893,7 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
         model = os.environ.get("XAI_VISION_MODEL", "grok-4.3")
     brief = str(brief or "").strip()[:BRIEF_MAX_CHARS]
     pngs: List[bytes] = []
+    rendered: List[Dict[str, Any]] = []
     for pdf in pdf_paths:
         # A BRIEF ALONE IS A PACK (D-401). A run queued from a typed brief with no drawings
         # is staged as the brief's own page (ENQUIRY_BRIEF.png beside ENQUIRY_BRIEF.txt) so
@@ -1884,7 +1904,12 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
         if is_brief_page(pdf):
             continue
         for index in range(pathB.count_pages(str(pdf))):
-            pngs.append(pathB.render_page_to_png(str(pdf), index))
+            png = pathB.render_page_to_png(str(pdf), index)
+            pngs.append(png)
+            # WHICH PAGE WENT AS AN IMAGE, AND HOW BIG (D-597): the page coverage record
+            # says what each page was read from, and a coarse image is a named risk.
+            rendered.append({"document": Path(str(pdf)).name, "page": index + 1,
+                             "px": list(png_size(png))})
     if not pngs and not brief:
         raise ConceptUnavailable("no pages could be rendered from this pack")
     recheck = str(recheck or "").strip()
@@ -1915,9 +1940,11 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
     key = base_key
     _extra = ({"sheet_text": _words} if sheet
               else ({"document_text_chars": len(_words)} if _words else {}))
-    if _words and _coverage.get("pages_trimmed"):
-        # A CUT IS SAID (D-466): on the record and, through the caller, in the run log.
+    if _words and (_coverage.get("pages_trimmed") or _coverage.get("pages_omitted")):
+        # A CUT OR A PAGE NOT SENT IS SAID (D-466, D-597): on the record and, through the
+        # caller, in the run log and on the page coverage record.
         _extra = dict(_extra, text_coverage=dict(_coverage))
+    _extra = dict(_extra, pages_rendered=rendered)
     if _refs:
         # The declared documents and what of them was readable, on the record: a scanned
         # manual with no text layer sends nothing, and that is a fact the caller flags.
@@ -2297,22 +2324,44 @@ _ITEM_STOP_WORDS = {"THE", "AND", "FOR", "WITH", "ONE", "OFF", "MM", "BOUGHT", "
 
 
 def stated_item_size(name: Any, text: Any) -> Optional[List[float]]:
-    """The size a brief line states for this named item, or None (D-532).
+    """The size a brief states for this named item, or None (D-532).
 
-    A line counts when every significant word of the item's name is on it and the line
-    carries an "A x B" size: "7. one UPC ID plate (20 x 10 mm), bought in" for "UPC ID
-    PLATE". A name of one significant word is too loose to match by — it returns None."""
+    A size counts when it stands beside the item's name in the sentence that names it, with
+    nothing but config.STATED_SIZE_FILLER_WORDS between: "7. one UPC ID plate (20 x 10 mm),
+    bought in" for "UPC ID PLATE". A name of one significant word is too loose to match by —
+    it returns None."""
     sig = [w for w in re.findall(r"[A-Z0-9]+", str(name or "").upper())
            if len(w) >= 2 and w not in _ITEM_STOP_WORDS and not w.isdigit()]
     if len(sig) < 2:
         return None
-    for line in re.split(r"[\n;]+", str(text or "")):
-        up = " " + re.sub(r"[^A-Z0-9]+", " ", line.upper()) + " "
-        if not all(f" {w} " in up for w in sig):
-            continue
-        m = _STOCK_SIZE_RE.search(line)
-        if m:
-            return [float(g) for g in m.groups() if g]
+    filler = {str(w).upper() for w in _vocab("STATED_SIZE_FILLER_WORDS", ()) or ()}
+    # THE SENTENCE THAT NAMES THE ITEM, NOT THE LINE (D-596d). A brief typed as one line put
+    # every item's words "on the line" with the tube's "30 x 15 x 1.5mm", and 0320730's
+    # identification label was described and researched at the tube's size.
+    for line in re.split(r"(?<!\d)\.(?!\d)|[\n;]+", str(text or "")):
+        words = [(m.group(0).upper(), m.start(), m.end())
+                 for m in re.finditer(r"\d+(?:\.\d+)?|[A-Za-z]+", line)]
+        # THE COMPONENT THE SIZE STANDS BESIDE, NOT THE SENTENCE IT IS IN (D-596e). A sentence
+        # can name the tube and the label together: "30 x 15 tube with an ID label fitted" is
+        # the tube's size, and only a size the item's own name stands next to is the item's.
+        spans = []
+        for a in range(len(words)):
+            for b in range(a, min(len(words), a + len(sig) + 2)):
+                if all(w in {x for x, _s, _e in words[a:b + 1]} for w in sig):
+                    spans.append((words[a][1], words[b][2]))
+                    break
+        for m in _STOCK_SIZE_RE.finditer(line):
+            for start, end in spans:
+                gap = ((end, m.start()) if m.start() >= end else
+                       (m.end(), start) if m.end() <= start else None)
+                if gap is None:
+                    continue
+                between = [w for w, s, e in words if s >= gap[0] and e <= gap[1]]
+                # A size the words after it name as a section is that section's: "ID label,
+                # 30 x 15 tube" sizes the tube.
+                after = [w for w, s, _e in words if s >= m.end() and w not in filler][:2]
+                if all(w in filler for w in between) and not _stock_form_in_words(" ".join(after)):
+                    return [float(g) for g in m.groups() if g]
     return None
 
 
@@ -3789,7 +3838,8 @@ def cutout_geometry(sighted: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def parts_from_concept(answer: Dict[str, Any], stem: str, *,
-                       sheet: bool = False, brief: str = "") -> List[Dict[str, Any]]:
+                       sheet: bool = False, brief: str = "",
+                       source_answer: Optional[Mapping[str, Any]] = None) -> List[Dict[str, Any]]:
     """The sighted parts as engine part records, every field attributed at concept rank.
 
     Written through apply_field so the stamps are the arbitration machinery's own, not a
@@ -3798,10 +3848,19 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
 
     `sheet`: the pages are drawing sheets (D-415). A fitting the sheet does not draw is not
     minted by the implied-fittings net; it is asked on the part that implies it.
+
+    `source_answer`: the read as the model returned it, where `answer` is a copy with lines set
+    aside — so each record carries the ID of its line in the read itself (D-596e).
     """
     from document_builder import _empty_part_record                 # noqa: WPS433
     from source_precedence import apply_field                       # noqa: WPS433
 
+    # WHICH LINE OF THE READ, BY ITS ID (D-596e), taken before any line is added or changed.
+    try:
+        from read_charge_contract import read_ids as _read_ids
+        _ids = _read_ids(source_answer if source_answer is not None else answer)
+    except Exception:                                                # noqa: BLE001
+        _ids = {}
     parts: List[Dict[str, Any]] = []
     answer = _with_print_lines(answer)
     _implied: List[Dict[str, Any]] = []
@@ -3869,6 +3928,10 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
             record["read_fingerprint"] = _read_fp(sighted)
         except Exception:                                            # noqa: BLE001
             pass
+        # ITS SOURCE ID, the read line's place and words (D-596e): a description the engine
+        # changes afterwards — a size appended, a name tidied — cannot break the link.
+        if _ids.get(id(sighted)):
+            record["read_id"] = _ids[id(sighted)]
         record["read_origin"] = ("engine:implied_fitting" if sighted.get("_minted_fitting_for")
                                  else "engine:print_line" if sighted.get("_minted_print_for")
                                  else "read")
@@ -4545,6 +4608,8 @@ def allow_components_inside(records: List[Dict[str, Any]],
                                 else f"{_from} line '{row.get('name')}' — a provisional "
                                      f"allowance, not confirmed by this read")}
         (rec,) = parts_from_concept({"product": {}, "parts": [sighted]}, stem)[:1]
+        # NOT A READ LINE: the allowance is the engine's, so it carries no read identity.
+        rec.pop("read_id", None), rec.pop("read_fingerprint", None), rec.pop("read_origin", None)
         rec["part_number"] = f"{_slug(stem, 'CONCEPT')}-CPA{n:02d}"
         rec["welded_to_hosts"] = [str(h.get("part_number")) for h in hosts]
         _coated = [str(h.get("part_number")) for h in hosts if "powder_coating" in _ops_of(h)]
@@ -5432,29 +5497,39 @@ def carry_stated_finish(unit: Optional[Dict[str, Any]], parts: List[Any],
     return changes
 
 
-def carry_weld_process(unit: Optional[Dict[str, Any]], parts: List[Any],
-                       answer: Mapping[str, Any], brief: str = "") -> List[Dict[str, Any]]:
-    """The weld PROCESS the brief or the read states reaches the welded records (D-595), so the
-    weld row names it and a process the rate card has no rate for is asked
-    (weld_symbols.weld_rate_gap_question) instead of being charged as CO2 in silence."""
+def stated_weld_process(answer: Mapping[str, Any], brief: str = "",
+                        parts: Optional[List[Any]] = None) -> Dict[str, str]:
+    """The weld process the brief or the read STATES, from their own words — {"process",
+    "word", "source"}, or {} (D-595). The read ledger takes it from here, never from the records
+    the transfer wrote, so a transfer that fails cannot hide the statement it lost (D-596d)."""
     try:
         import config as _cfg                                       # noqa: WPS433
         vocab = dict(getattr(_cfg, "WELD_PROCESS_VOCAB", None) or {})
     except Exception:                                                # noqa: BLE001
         vocab = {}
+    lines = [p for p in (answer.get("parts") or []) if isinstance(p, Mapping)] if isinstance(
+        answer, Mapping) else []
     texts = [(str(brief or ""), "enquiry_brief")] + [
+        (f"{p.get('name') or ''} {p.get('seen') or ''}", "concept_read") for p in lines] + [
         (f"{p.get('description') or ''} {p.get('concept_seen') or ''}", "concept_read")
-        for p in (parts or []) if isinstance(p, dict)]
-    found = None
+        for p in (parts or []) if isinstance(p, Mapping)]
     for text, src in texts:
         m = _WELD_PROCESS_WORD.search(text)
         if m:
             word = (m.group(1) or m.group(2) or "").upper()
-            found = (str(vocab.get(word) or word), word, src)
-            break
-    if not found:
+            return {"process": str(vocab.get(word) or word), "word": word, "source": src}
+    return {}
+
+
+def carry_weld_process(unit: Optional[Dict[str, Any]], parts: List[Any],
+                       answer: Mapping[str, Any], brief: str = "") -> List[Dict[str, Any]]:
+    """The weld PROCESS the brief or the read states reaches the welded records (D-595), so the
+    weld row names it and a process the rate card has no rate for is asked
+    (weld_symbols.weld_rate_gap_question) instead of being charged as CO2 in silence."""
+    stated = stated_weld_process(answer, brief, parts)
+    if not stated:
         return []
-    proc, word, src = found
+    proc, word, src = stated["process"], stated["word"], stated["source"]
     records = ([unit] if isinstance(unit, dict) else []) + [p for p in (parts or [])
                                                             if isinstance(p, dict)]
     hosts = [r for r in records if "welding" in _record_ops(r) or r.get("weld_stated_by_note")]

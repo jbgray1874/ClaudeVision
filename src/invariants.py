@@ -23,7 +23,7 @@ outputs to each other, so a drawing nobody has seen yet is held to the same stan
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
 # The one place that decides what a price source IS. Shared with the estimator and the
 # pricing service so a writer and a checker cannot reach different verdicts about the same
@@ -2505,6 +2505,48 @@ def check_what_the_read_returned_is_accounted_for(summary: Any) -> List[Dict[str
                         for i in other[:6])
             + ". Until it is, nothing the read returned is shown to reach a charged cell.",
             count=len(other)))
+    return out
+
+
+def check_every_page_reached_a_read(summary: Any) -> List[Dict[str, Any]]:
+    """Every page of every document reached a reading, or the gap is named (D-597).
+
+    A page whose text went to no reading in full — a whole-pack part that failed, a page the
+    concept read could not send whole — holds the release: the engine had the words and did
+    not read them. A page read only from an image with no LLM reading of it, or from an image
+    too coarse for small notes, needs a ruling until page transcription and detail crops read
+    it (D-597b): nothing on it can be said to have been read."""
+    if not isinstance(summary, dict):
+        return []
+    pc = summary.get("page_coverage")
+    if not isinstance(pc, dict):
+        return []
+    if pc.get("error"):
+        return [_violation("page_coverage_not_built", BLOCKING,
+                           f"The page coverage record could not be built ({pc['error']}), so "
+                           f"no page can be said to have reached a reading.")]
+    gaps = [g for g in (pc.get("gaps") or []) if isinstance(g, dict)]
+
+    def _where(g: Mapping[str, Any]) -> str:
+        return f"{g.get('document')} page {g.get('page')}"
+    out: List[Dict[str, Any]] = []
+    hard = [g for g in gaps if g.get("kind") in ("text_not_read", "text_not_sent")]
+    soft = [g for g in gaps if g.get("kind") in ("image_only", "image_coarse")]
+    if hard:
+        out.append(_violation(
+            "page_text_not_read", BLOCKING,
+            f"{len(hard)} page(s) whose text reached no reading in full: "
+            + "; ".join(f"{_where(g)} ({g.get('kind')})" for g in hard[:6])
+            + ". Read them, or rule them out of scope; until then nothing on them is known.",
+            pages=hard[:20], count=len(hard)))
+    if soft:
+        out.append(_violation(
+            "page_image_not_read_reliably", WARNING,
+            f"{len(soft)} page(s) read only from an image, or from a coarse one: "
+            + "; ".join(f"{_where(g)} ({g.get('kind')})" for g in soft[:6])
+            + ". Confirm nothing on them is missed — page transcription and detail crops are "
+              "not yet built (D-597b).",
+            pages=soft[:20], count=len(soft), needs_ruling=True))
     return out
 
 
@@ -5242,6 +5284,7 @@ CHECKS = (
     check_a_charged_identity_is_whole_and_charged_once,
     check_a_sheet_blank_and_a_bought_item_reach_the_charged_cells,
     check_what_the_read_returned_is_accounted_for,
+    check_every_page_reached_a_read,
     check_a_blank_and_its_cut_path_can_both_be_true,
     check_prices_are_firm,
     check_an_unresolved_reading_blocks_the_quote,

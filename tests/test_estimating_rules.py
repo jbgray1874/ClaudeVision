@@ -3481,7 +3481,8 @@ def test_transcription_and_inference_are_separate_passes():
     # BUILT IS NOT WIRED. Three times this session a capability went in with nothing calling
     # it. A capability nothing calls looks exactly like one that does not work.
     _fs = open(__import__("file_scan").__file__, encoding="utf-8").read()
-    ok("infer_missing_details(" in _fs, "the inference pass is actually called by the scan")
+    ok("infer_missing_details(" in _fs or "infer_missing_details_in_batches(" in _fs,
+       "the inference pass is actually called by the scan")
     ok("parts_missing_detail(" in _fs, "on the parts the first pass left empty")
     ok('_job["inferred_parts"]' in _fs, "and its result is kept on the job")
     # KEPT IS NOT MERGED. The line above passed while the pass was a no-op: the result was

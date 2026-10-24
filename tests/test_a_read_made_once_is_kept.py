@@ -347,8 +347,16 @@ def llm(tmp_path, monkeypatch):
     return lfe
 
 
+def _one_page_pdf(path, text):
+    import pymupdf
+    doc = pymupdf.open()
+    doc.new_page(width=595, height=842).insert_text((40, 60), text)
+    doc.save(str(path))
+    return str(path)
+
+
 def test_a_kept_transcription_is_read_again_by_the_current_code(llm, monkeypatch, tmp_path):
-    monkeypatch.setattr(llm, "build_document_context", lambda p: "PACK TEXT")
+    pdf = _one_page_pdf(tmp_path / "x.pdf", "PACK TEXT")
     answer = json.dumps({"bom": [{"part_number": "P1", "description": "BRACKET",
                                   "material_family": "metal", "material": "MILD STEEL",
                                   "thickness_or_section": "3mm", "quantity": 2}]})
@@ -359,7 +367,7 @@ def test_a_kept_transcription_is_read_again_by_the_current_code(llm, monkeypatch
         return answer
 
     monkeypatch.setattr(llm, "_call_llm", fake_call)
-    first = llm.extract_full_job("x.pdf", model="m")
+    first = llm.extract_full_job(pdf, model="m")
     assert first.get("found") is True and calls == [1]
     entry = json.loads(next((tmp_path / "llm").glob("v1_*.json")).read_text(encoding="utf-8"))
     assert entry["_raw_full"] == answer                              # the words, whole
@@ -375,7 +383,7 @@ def test_a_kept_transcription_is_read_again_by_the_current_code(llm, monkeypatch
         job["reread_by"] = "newer code"
         return job
     monkeypatch.setattr(llm, "normalize_job", newer)
-    second = llm.extract_full_job("x.pdf", model="m")
+    second = llm.extract_full_job(pdf, model="m")
     assert second.get("found") is True and second.get("_from_cache") is True
     assert second.get("reread_by") == "newer code" and calls == [1]
     assert second.get("parts") == first.get("parts")
@@ -404,9 +412,12 @@ def test_a_kept_inference_is_read_again_too(llm, monkeypatch):
 
 
 def test_an_entry_kept_before_the_words_were_is_used_as_it_is(llm, monkeypatch, tmp_path):
-    monkeypatch.setattr(llm, "build_document_context", lambda p: "OLD PACK")
-    key = llm._cache_key("full", "OLD PACK", "m", llm._PROMPT, llm.SYSTEM_TRANSCRIBE)
+    # Keyed on the context the read was always given: one document under the budget is word
+    # for word what build_document_context gave before D-597, so its old entry is found.
+    pdf = _one_page_pdf(tmp_path / "x.pdf", "OLD PACK")
+    key = llm._cache_key("full", llm.build_document_context(pdf), "m", llm._PROMPT,
+                         llm.SYSTEM_TRANSCRIBE)
     llm._cache_write(key, {"source": llm.SOURCE_NAME, "found": True, "parts": [{"part_number": "OLD"}]})
     monkeypatch.setattr(llm, "_call_llm", lambda *a, **k: pytest.fail("the model was asked"))
-    got = llm.extract_full_job("x.pdf", model="m")
+    got = llm.extract_full_job(pdf, model="m")
     assert got["parts"] == [{"part_number": "OLD"}] and got.get("_from_cache") is True

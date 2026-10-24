@@ -908,6 +908,17 @@ CONCEPT_NAME_GENERIC_WORDS = ["main", "part", "piece", "item", "unit", "assembly
                               "from", "steel", "mild", "metal", "sheet", "front", "back",
                               "left", "right", "side", "upper", "lower", "inner", "outer",
                               "large", "small", "plain", "standard"]
+# A SIZE BELONGS TO THE COMPONENT IT STANDS BESIDE (D-596e). A brief's "A x B" size is a bought
+# item's own only where nothing but these words separates it from the item's name: "UPC ID
+# plate (20 x 10 mm)" and "a 20 x 10 mm UPC ID plate" are the plate's, while "30 x 15 tube
+# with an ID label fitted" is the tube's — "tube" and "with" stand between. Articles, units,
+# size words and the material, colour and finish adjectives that name no other component.
+STATED_SIZE_FILLER_WORDS = ["a", "an", "the", "one", "of", "at", "is", "mm", "cm", "size",
+                            "sized", "measuring", "approx", "approximately", "nominal",
+                            "overall", "thick", "x", "clear", "transparent", "stainless",
+                            "steel", "mild", "aluminium", "aluminum", "acrylic", "brass",
+                            "plastic", "pvc", "vinyl", "polycarbonate", "printed", "self",
+                            "adhesive", "black", "white", "silver", "chrome", "matt", "gloss"]
 # BOUGHT HARDWARE IS FIXED TOO (D-532). 0356453's hanging rail welded every made piece, so the
 # per-piece count found nothing to fix — and its four bolted castors and its ID plate went on
 # with no fixings at all. A bought item whose words name hardware that is screwed or bolted on
@@ -2628,6 +2639,11 @@ ENGINE_ALLOWANCE_BASIS = {
 # The classes that hold the release until a person rules on them for this job.
 ENGINE_ALLOWANCE_HOLDING_CLASSES = ("calibrated_elsewhere", "inferred_purchase",
                                     "unclassified")
+
+# A PAGE IMAGE COARSER THAN THIS ON ITS PRINTED PAGE IS A NAMED RISK (D-597). Page images go
+# to the model at most 2,000 px on the long side: an A4 sheet gets about 171 dpi, an A3 about
+# 121, an A1 about 60 — at which small notes and dimensions are not reliably legible.
+PAGE_IMAGE_MIN_DPI = 150
 
 # A finish the sheet states, and the operation the bill must then carry somewhere (D-417).
 CONCEPT_FINISH_OPERATIONS = (
@@ -4545,6 +4561,14 @@ WELD_PROCESS_STATEMENT_PATTERNS = [
     r"ALLWELDS(?:TOBE|ARE|:)?({proc})",
     r"WELD(?:ING)?SPEC(?:IFICATION)?S?:?(?:ALLWELDS(?:TOBE|ARE)?)?({proc})",
 ]
+# THE PROCESSES ONE WELD RATE IS A RATE FOR (D-596e). A charged weld row is a rate for the
+# process its own rate-card title or engine operation names — never its description, which
+# names a stated process beside the rate it rides on. A CO2 row is the shop's MIG/MAG rate (CO2
+# is that process's shielding gas). A title naming two processes this table does not make
+# equivalent ("Welding (MIG/TIG)") is a shared rate, and is evidence for neither.
+#   process named on the row -> the processes that rate is a rate for
+WELD_RATE_EQUIVALENT_PROCESSES = {"CO2": ("CO2", "MIG"), "MIG": ("MIG", "CO2"),
+                                  "TIG": ("TIG",), "MMA": ("MMA",)}
 
 # ── OPERATIONS THAT LEGITIMATELY RECUR AT EVERY LEVEL OF A TREE ───────────────────────────
 # An assembly event on 12173-03-GA over 201, and another on 201 over its frames, is two
