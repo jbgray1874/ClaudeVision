@@ -151,6 +151,7 @@ def review_cautions(summary):
             out.append(f"{name}: unresolved evidence remains ({result.get('mode') or 'audit'}); not an acceptance pass.")
     for issue in (summary.get("invariants") or {}).get("violations") or []:
         if issue.get("code") in {"two_sources_disagree_about_the_material",
+                                 "material_priced_from_a_lower_ranked_reading",
                                  "owned_specification_not_preserved"}:
             out.append(str(issue.get("message") or issue["code"]))
     return out
@@ -192,6 +193,67 @@ def role_charge_issues(summary, pieces):
     return out
 
 
+# The drawing office's own word for a part's material; mirrors the estimator's rescue guard.
+DRAWING_OFFICE_MATERIAL_SOURCES = ("estimator_confirmed", "estimator_read_drawing",
+                                   "drawing_deterministic", "title_block", "dxf_filename",
+                                   "drawn_on_sheet")
+
+
+def _same_material(a, b):
+    return identity(a).replace("_", " ") == identity(b).replace("_", " ")
+
+
+def drawing_office_material(part):
+    """The part's material, where the drawing office (or an estimator) named it; else None."""
+    material = part.get("normalized_material")
+    if not material:
+        return None
+    from source_precedence import source_of
+    won = str(source_of(part, "normalized_material") or "")
+    if part.get("owned_material_evidence") or any(
+            won.startswith(s) for s in DRAWING_OFFICE_MATERIAL_SOURCES):
+        return material
+    return None
+
+
+def priced_as_issues(summary, parts):
+    """A specified material is charged as itself, on its own block (D-598o).
+
+    9287-10-005 read SOLID SURFACE from its flat's name, and the pricing step costed it as
+    12 mm steel on the Sheet Steel block because steel has a rate. A missing price is a price
+    to find; it must never change what the part is made of on the charged row.
+    """
+    costed = {identity(p.get("part_number")): p
+              for p in ((summary.get("estimate_summary") or {}).get("part_estimates") or [])
+              if isinstance(p, dict)}
+    final = summary.get("final_estimate") if isinstance(summary.get("final_estimate"), dict) else {}
+    rows = [r for r in final.get("material_rows") or [] if isinstance(r, dict)]
+    out = []
+    for part in parts:
+        material = drawing_office_material(part)
+        if not material:
+            continue
+        pn = identity(part.get("part_number"))
+        for rec in (part, costed.get(pn) or {}):
+            swap = rec.get("material_priced_as")
+            if (isinstance(swap, dict) and swap.get("priced_material")
+                    and not _same_material(swap["priced_material"], material)):
+                out.append(f"{pn}: the drawing office specifies {material}, and it was priced "
+                           f"as {swap['priced_material']}. A missing price must not change the "
+                           f"material: price {material}, or leave it unpriced and ask.")
+                break
+        from costed_facts import is_other_sheet_material
+        if is_other_sheet_material(material):
+            mine = [r for r in rows if identity(r.get("part_number")) == pn
+                    or str(r.get("description") or "").upper().startswith(pn + " ")]
+            wrong = sorted({str(r.get("block")) for r in mine
+                            if r.get("block") and r.get("block") not in ("other_sheet", "bom")})
+            if wrong:
+                out.append(f"{pn}: {material} is costed by the sheet, and its calculated "
+                           f"material row is on the {', '.join(wrong)} block.")
+    return out
+
+
 def audit_owned_specifications(summary):
     """Narrow post-cost guards; these do not enable the broad shadow contracts."""
     out = list(summary.get("role_quantity_input_issues") or [])
@@ -212,4 +274,5 @@ def audit_owned_specifications(summary):
                     or any(not role_count_preserved(p) for p in children)):
                 out.append(f"{pn}: DXF roles are preserved but their per-parent counts are not all evidenced. One file does not establish one piece per product.")
     out.extend(role_charge_issues(summary, [p for p in parts if isinstance(p, dict)]))
+    out.extend(priced_as_issues(summary, [p for p in parts if isinstance(p, dict)]))
     return out

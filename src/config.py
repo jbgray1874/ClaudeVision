@@ -815,6 +815,11 @@ CUT_METHOD_PROPOSED_BY_MATERIAL: list = [
                "cut and edged with router tooling, and a laser chars it"},
 ]
 
+# A FRAME OR A STEP (D-598o, drawing_job_merge._nested_outline_question). A flat whose only
+# other outline is an inner one covering at least this share of the blank, with no holes, is
+# asked whether that outline is cut through (a frame) or a step machined to a depth.
+NESTED_OUTLINE_INNER_SHARE = 0.75
+
 # THE DRAWING'S OWN WORDS FOR THE CUTTER (D-440, cut_method_reader): read off the sheets that
 # draw a part, legend removed; one method named stamps it, two named put the question on the
 # part and the rule above prices the working figure.
