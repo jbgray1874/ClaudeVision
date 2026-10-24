@@ -2391,6 +2391,9 @@ STANDARD_SHEET_SIZES_MM = {
     "REYNOBOND": [(3050, 1500), (2050, 3050)],
     "ETALBOND": [(3050, 1500), (2050, 3050)],
     "COMPOSITE": [(3050, 1500)],
+    # Solid surface (Hanex, Corian, HI-MACS), stocked as 3680 x 760 and 3658 x 760 slabs
+    # (D-598l). A stock fact; its price is NOT here and stays asked.
+    "SOLID_SURFACE": [(3680, 760), (3658, 760)],
     "POLYPROPYLENE": [(2050, 1520)],
     "POLYSTYRENE": [(2050, 1520)],
     "PMMA": [(2050, 1520), (3050, 2050)],
@@ -2722,6 +2725,8 @@ MATERIAL_DENSITY_KG_PER_M3 = {
     "REYNOBOND": 1500,
     "ETALBOND": 1500,
     "COMPOSITE": 1500,
+    # Solid surface: acrylic resin and alumina trihydrate, about 1.7 g/cm3 (D-598l).
+    "SOLID_SURFACE": 1700,
     "POLYPROPYLENE": 905,
     "POLYSTYRENE": 1050,
     "PMMA": 1190,

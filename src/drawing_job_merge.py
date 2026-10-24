@@ -310,6 +310,14 @@ _DXF_MATERIAL_TOKENS: List[Tuple[str, str]] = [
     # its own live UDEF sheet price (labour still routes acrylic-like in the estimator).
     (r"\bHIPS\b|POLYSTYRENE", "HIPS"),
     (r"HI\s*ACR|HIGH\s*IMPACT\s*ACR", "HIGH IMPACT ACRYLIC"),
+    # SOLID SURFACE, BY ITS NAME OR ITS MAKER'S (D-598l). 9287-10-005's flat is named "12mm SOLID
+    # SURFACE" and nothing here could say it, so the material entered only as an inference and
+    # the SolidWorks model's appearance default ("Steel") took the base for 12 mm mild steel
+    # plate, lasered. Read here, it carries the drawing office's own word at the filename's
+    # rank, which the model's library appearance does not outrank. No rate is implied: the
+    # material stays unpriced until a sheet or supplier price is given.
+    (r"SOLID\s*SURFACE|\bHANEX\b|\bCORIAN\b|\bHI\s*-?\s*MACS\b|\bSTARON\b|\bKRION\b|\bAVONITE\b",
+     "SOLID SURFACE"),
     (r"\bACRYLIC\b|\bACR\b|\bPERSPEX\b|\bPMMA\b", "ACRYLIC"),
     (r"POLYCARB|\bPC\b", "POLYCARBONATE"),
     (r"\bCARD\b|GREYBOARD|GREY\s*BOARD", "CARD"),
@@ -2374,7 +2382,9 @@ _CUT_OPS = ("laser_cutting", "cnc_routing", "waterjet_cutting", "plasma_cutting"
 _METHOD_TO_OP = {"laser": "laser_cutting", "router": "cnc_routing", "punch": "punching"}
 # Stock a router cuts when the shop has not said otherwise: board, foam board and plastic sheet.
 _ROUTED_STOCK = ("FOAM", "PVC", "ACRYLIC", "PERSPEX", "PMMA", "PETG", "HIPS", "ABS",
-                 "POLYCARBONATE", "POLYPROP", "DIBOND", "ACM", "MDF", "PLY", "BOARD", "TIMBER")
+                 "POLYCARBONATE", "POLYPROP", "DIBOND", "ACM", "MDF", "PLY", "BOARD", "TIMBER",
+                 # Solid surface is routed, never lasered (D-598l); proposed and asked.
+                 "SOLID SURFACE")
 # Stock whose cutting method the flat does not tell us (a graphic may arrive cut to shape).
 _UNSAID_STOCK = ("CARD", "PAPER", "VINYL", "FABRIC", "BOOK", "LABEL", "FILM")
 # Other names for a material the shop table already rules on. 12633-10's files say PMMA and its
