@@ -1824,6 +1824,10 @@ PRICE_ORIGIN_LABELS: Dict[str, str] = {
 }
 
 _MARKET_AI_TOKENS = ("grok", "llm", "xai", "market")
+# The estimator's material cost methods whose money is a market lookup, wherever the line sits
+# on the sheet (D-598q).
+_MARKET_COST_METHODS = frozenset({"llm_market_sheet_rate", "last_resort_market_indication",
+                                  "board_rate_researched"})
 _CATALOGUE_TOKENS = ("udef", "pma", "erp", "bought_in_price", "price_book", "catalog",
                      "historical", "supplier_quote", "sheet_rate_live")
 # The fabricated block KEYS. The names are a fallback only: a block is named by
@@ -2220,6 +2224,18 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
             label = f"costed by length on the {_name} block"
         if sheet_row:
             label += f" — Estimate!{int(sheet_row)}"
+        # THE NEST IS THE SHEET'S, THE SHEET PRICE MAY BE A MARKET GUESS (D-598q). 9287-10-005
+        # was nested 22 to a 3680 x 760 slab at £523.11 a sheet, and that sheet price was an AI
+        # market lookup; the line was called firm because it sat on a nested block, so the
+        # headline asked only for the bumpons' £1.16 to be replaced.
+        _flags = {str(f) for f in (me.get("reliability_flags") or [])}
+        if (str(me.get("cost_method") or "") in _MARKET_COST_METHODS
+                or _flags & {"llm_market_rate_not_a_supplier_price", "llm_indicative"}):
+            _sheet = _num(me.get("sheet_price_gbp"))
+            return {"class": "market_ai", "firmness": INDICATIVE_MARKET, "owner": "estimator",
+                    "label": (label + " at a market sheet price"
+                              + (f" of £{_sheet:,.2f}" if _sheet else "")
+                              + " — an AI lookup, not a supplier price; replace before quoting")}
         return {"class": f"nest_{block}", "firmness": FIRM, "owner": None, "label": label}
     if kind == "assembly" and not money:
         return {"class": "nil_by_design", "firmness": NIL, "owner": "nobody",
