@@ -36,6 +36,14 @@ def main(argv=None) -> int:
     ap.add_argument("--breaks", help="quantity breaks for the allowance hours, e.g. 1000")
     ap.add_argument("--out", help="folder for the result (default output/replay)")
     args = ap.parse_args(argv)
+    # A FILE NOT THERE IS SAID, NOT A TRACEBACK: the first laptop run stopped on a workbook
+    # that had not been copied into the evidence folder.
+    for what, given in (("record", args.record), ("workbook", args.xlsx),
+                        ("saved read", args.read), ("brief", args.brief)):
+        if given and not Path(given).is_file():
+            print(f"The {what} is not there: {given} — copy it in and run again. Nothing was "
+                  f"audited.")
+            return 2
 
     os.environ.setdefault("SDI_OFFLINE", "1")
     if args.breaks:

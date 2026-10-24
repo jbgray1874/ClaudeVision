@@ -322,8 +322,27 @@ def test_nothing_the_product_only_receives_becomes_a_purchase():
     assert cs.mechanically_fitted(parts, brief=BRIEF)["pieces"] == 0, \
         "the brief names both pieces' weld, so nothing is fitted by hand"
     loose = cs.mechanically_fitted(parts)
-    assert set(loose["counted"]) == {f"{STEM7}-CPT01"}, \
-        "with no weld named on it the tube is counted — its fixings asked, never bought"
+    assert set(loose["counted"]) == {f"{STEM7}-CPT01", f"{STEM7}-CPT02"}, \
+        "with no weld named on them both pieces are counted — their fixings asked, never " \
+        "bought; the word HOOK in the bracket's name says nothing about how it joins the tube"
+
+
+def test_a_hook_in_a_name_is_not_how_the_piece_is_fitted():
+    """Review of D-596a: the bracket was excused as a piece that 'hangs or clips' because its
+    name contains HOOK. A piece is fitted without fixings only where its words say how."""
+    def made(name):
+        return {"part_number": name[:3], "description": name, "concept_kind": "fabricated",
+                "material_guess": "MILD STEEL", "quantity": 1}
+    got = cs.mechanically_fitted([made("HOOK BRACKET"), made("SIGN (HANGS ON RAIL)"),
+                                  made("CLIP STRIP"), made("PANEL CLIP-ON")])
+    assert set(got["counted"]) == {"HOO", "CLI"}
+    assert "hangs or clips" in got["excluded"]["SIG"] and "hangs or clips" in got["excluded"]["PAN"]
+    tray = {"part_number": "TRAY", "description": "TRAY", "concept_kind": "fabricated",
+            "material_guess": "MILD STEEL", "quantity": 1}
+    hook = dict(made("HOOKED BRACKET (WELDED TO TRAY)"), part_number="HB",
+                welded_to_hosts=["TRAY"])
+    got = cs.mechanically_fitted([tray, hook])
+    assert "hangs on HB" in got["excluded"]["TRAY"], "a hook welded to a host still hangs it"
 
 
 # ── a saved read replays with no model call ────────────────────────────────────────────────

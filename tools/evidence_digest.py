@@ -4,10 +4,12 @@
 
 A run record carries every page's text, every reader's raw answer and every intermediate
 pass, and runs to many megabytes. Checking a book against its read needs a fraction of it:
-the read as kept (its key, its hash and length, not its words), the read ledger and its
-final states, the engine's allowances, the calculated workbook rows and totals, the quantity
-sweep, the parts as costed, the consistency findings and the release. That is what this
-writes, to <out>/<job>_digest.json (default output/replay), and prints a short account.
+the concept read's raw answer WHOLE, with its hash and the place its immutable copy lives (a
+key and a hash alone cannot prove a faithful extraction — the words must travel), the read
+ledger and its final states, the engine's allowances, the calculated workbook rows and
+totals, the quantity sweep, the parts as costed, the consistency findings and the release.
+That is what this writes, to <out>/<job>_digest.json (default output/replay), and prints a
+short account.
 
 Read-only: the record is not changed. The digest is private job data like the record it is
 cut from — internal, never published.
@@ -55,10 +57,15 @@ def digest(record: dict) -> dict:
                          or record.get("commit")),
         "llm_only": record.get("llm_only"),
         "requested_order_quantity": record.get("requested_order_quantity"),
-        "concept_read": dict({k: v for k, v in cr.items() if k != "raw_response"},
-                             raw_chars=len(raw),
+        "concept_read": dict(cr, raw_chars=len(raw),
                              raw_sha256=(hashlib.sha256(raw.encode("utf-8")).hexdigest()
-                                         if raw else "")),
+                                         if raw else ""),
+                             raw_evidence={
+                                 "cache_entry": (f"cache/vision_concept/{cr['read_key']}.json"
+                                                 if cr.get("read_key") else ""),
+                                 "replayed_from": cr.get("replayed_from") or "",
+                                 "ledger_raw_sha256": ((record.get("read_ledger") or {})
+                                                       .get("raw_sha256") or "")}),
         "read_ledger": ledger,
         "read_charge_result": record.get("read_charge_result"),
         "final_estimate": record.get("final_estimate"),
