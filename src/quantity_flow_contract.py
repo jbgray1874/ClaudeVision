@@ -234,8 +234,12 @@ def audit(summary: Dict[str, Any]) -> Dict[str, Any]:
             fail("canonical_record_outside_graph", pn)
     printed = printed_rows_audit(summary, ps)
     issues.extend(printed["issues"])
+    from source_population_coverage import audit as population_audit
+    source_population = population_audit(summary, graph, ps)
+    issues.extend(source_population["issues"])
     return {"schema": SCHEMA, "issues": issues, "trace": trace, "passed": not issues,
-            "notes": notes, "printed_trace": printed["trace"]}
+            "notes": notes, "printed_trace": printed["trace"],
+            "source_population": source_population}
 
 
 def printed_rows_audit(summary: Dict[str, Any], ps: Optional[Dict[str, Dict[str, Any]]] = None
@@ -290,12 +294,16 @@ def printed_rows_audit(summary: Dict[str, Any], ps: Optional[Dict[str, Dict[str,
                                "source_pdf": r.get("source_pdf")})
         key = (parent, child)
         e = edges.setdefault(key, {"parent": parent, "child": child, "local": 0.0,
-                                   "printed": 0.0, "items": set(), "sources": set()})
-        item = str(r.get("item_number") or r.get("item") or "")
-        stamp = (str(r.get("source_pdf") or ""), item)
+                                   "printed": 0.0, "items": set(), "sources": set(), "readings": {}})
+        item = str(r.get("bom_item_no") or r.get("item_number") or r.get("item") or "")
+        stamp = (str(r.get("bom_sheet") or r.get("source_pdf") or ""), item)
         if item and stamp in e["items"]:
+            if e["readings"].get(stamp) != (q, q_printed):
+                issues.append({"code": "conflicting_source_row_quantity", "part": child,
+                               "parent": parent, "sheet": stamp[0], "item": item})
             continue                          # the same row, read again
         e["items"].add(stamp)
+        e["readings"][stamp] = (q, q_printed)
         e["sources"].add(str(r.get("source_pdf") or ""))
         e["local"] += q
         e["printed"] += q_printed if q_printed is not None else q
@@ -306,6 +314,13 @@ def printed_rows_audit(summary: Dict[str, Any], ps: Optional[Dict[str, Dict[str,
             for bp in (rec.get("bom_parents") or []):
                 if isinstance(bp, dict) and _flat(bp.get("parent")) == parent:
                     local_edge = numeric(bp.get("qty"))
+        if not isinstance(rec, dict) or "bom_parents" not in rec:
+            matches = [edge for node in (_graph(summary).get("nodes") or [])
+                       if isinstance(node, dict) and _flat(node.get("part_number")) == parent
+                       for edge in (node.get("children") or [])
+                       if isinstance(edge, dict) and _flat(edge.get("part_number")) == child]
+            if len(matches) == 1:
+                local_edge = numeric(matches[0].get("qty"))
         trace.append({"parent": parent, "child": child, "printed_local": e["printed"],
                       "used_local": e["local"], "canonical_edge": local_edge,
                       "sources": sorted(s for s in e["sources"] if s)})

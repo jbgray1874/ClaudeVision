@@ -73,6 +73,8 @@ class QuantityTests(unittest.TestCase):
                       'qty_by_parent': {'UNIT': 2}, 'children': [{'part_number': 'MEMBER', 'qty': 3}]})
         nodes[1].update(parents=['SUB'], qty_by_parent={'SUB': 6}, qty_per_unit=6)
         es['canonical_part_estimates'][1]['quantity'] = 6
+        # Valid six-per-product fixture: keep the independent source consistent.
+        s['read_ledger']['items'][0]['as_read']['quantity'] = 6
         es['canonical_part_estimates'].append({'part_number': 'SUB', 'quantity': 2})
         s['manufacturing_writeup'] = {'parts': [
             {'part_number': 'SUB', 'bom_parents': [{'parent': 'UNIT', 'qty': 2}]},
@@ -96,6 +98,7 @@ class QuantityTests(unittest.TestCase):
                       'qty_by_parent': {'UNIT': 3}, 'children': [{'part_number': 'MEMBER', 'qty': 4}]})
         nodes[1].update(parents=['UNIT', 'SUB'], qty_per_unit=14, qty_by_parent={'UNIT': 2, 'SUB': 12})
         es['canonical_part_estimates'][1].update(quantity=14, bom_parents=[{'parent': 'UNIT', 'qty': 2}, {'parent': 'SUB', 'qty': 4}])
+        s['read_ledger']['items'][0]['as_read']['quantity'] = 14
         es['canonical_part_estimates'].append({'part_number': 'SUB', 'quantity': 3, 'bom_parents': [{'parent': 'UNIT', 'qty': 3}]})
         self.assertTrue(audit(s)['passed'])
 
