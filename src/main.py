@@ -1887,8 +1887,10 @@ def main() -> None:
                                 # table is shorter than the BOM block; a material past
                                 # its last row is absent from the table, and an absent
                                 # row reads as one that does not move with quantity.
-                                print("   [price-break] BELOW THE TABLE, so not priced "
-                                      "across the breaks — the Material Price Break tab "
+                                print("   [price-break] NOT IN THE PRICE TABLE — this "
+                                      "does not establish whether the workbook charges "
+                                      "the line at each break. Check calculated rows. "
+                                      "The Material Price Break tab "
                                       "stops at Estimate row "
                                       f"{_mpb.get('last_bom_row')}: "
                                       + ", ".join(_res["outside_table"]), flush=True)
@@ -2561,6 +2563,26 @@ def main() -> None:
                       f"fall back to its own short note.", flush=True)
 
         _time_stage("deliverables", False)
+
+        # ── THE RUN'S OWN RECORD, PINNED TO ITS WORKBOOK (D-598d) ──────────────────────
+        # output/json/<job>.json is the job's LATEST record: the next run of the same job
+        # overwrites it. Twice on 24 Oct the record collected as one run's evidence was a later
+        # run's — a 15:36 record beside the 15:26 book. The copy beside the workbook, named
+        # after it and taken after the last write above, is this run's record, and no later
+        # run touches it. Its hash is in the log so the copy can be shown unchanged.
+        _canon_pin = (summary.get("saved_output_paths") or {}).get("json")
+        if xlsx_path and _canon_pin and Path(str(_canon_pin)).is_file():
+            try:
+                import hashlib as _hl_pin
+                _pin = Path(str(xlsx_path)).with_name(f"{Path(str(xlsx_path)).stem}_record.json")
+                _pin_bytes = Path(str(_canon_pin)).read_bytes()
+                _pin.write_bytes(_pin_bytes)
+                print(f"   [record] pinned to its workbook: {_pin.name} sha256 "
+                      f"{_hl_pin.sha256(_pin_bytes).hexdigest()}", flush=True)
+            except Exception as _pin_exc:                            # noqa: BLE001
+                print(f"   [record] NOT pinned ({_pin_exc}) — {Path(str(_canon_pin)).name} is "
+                      f"the job's latest record and the next run of it will overwrite it.",
+                      flush=True)
 
         print("\nPage text preview:\n")
         for page in summary["pages"]:

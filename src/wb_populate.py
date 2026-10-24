@@ -5231,6 +5231,8 @@ def build_workbook_labour(
                 # Without this the audit tabs present an unmeasured constant and the
                 # estimators' own calculator as the same kind of claim.
                 "rate_basis": g.get("rate_basis"),
+                # A COSTED TIME KEPT OUTSIDE THE DEFAULT'S RANGE, and the question it raised.
+                "throughput_review": g.get("throughput_review"),
                 "part_numbers": list(g.get("parts") or []),
                 # THE NEST IS ROW DATA, NOT A FORMULA TRICK. A split laser row says which
                 # nest it shares its ONE department set-up with, how many rows share it,
@@ -6267,7 +6269,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 _shared = sorted(_sref.identity_keys(_dup) & _sref.identity_keys(bom_parts[_keep]))
                 _flag(f"BOM {_dup.get('part_number')} and {_kept_pn} are the SAME ARTICLE "
                       + (f"(both name manufacturer reference {', '.join(_shared)})" if _shared
-                         else "(one line's description names the other's part number)")
+                         else "(one line's description leads with the other's part number)")
                       + ". The quantity is "
                       f"costed once, on {_kept_pn}; this line is shown at GBP 0.00 because "
                       f"the drawing names the part twice. CHECK THE QUANTITY — if the two "
@@ -8447,7 +8449,27 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 elif default_tp:
                     _ceiling = default_tp * _THROUGHPUT_CEILING_MULTIPLIER
                     _floor = default_tp / _THROUGHPUT_FLOOR_DIVISOR
-                    if _derived > _ceiling:
+                    # THE WRITER IS NOT A SECOND ESTIMATOR (D-598d). A time worked out per
+                    # finished product is the costed time; outside the default's range it is
+                    # a question, not a cue to charge the department default instead. 0320730's
+                    # drilling row derived 461/hr from its own run time and was charged at the
+                    # 30/hr default. A batch-only derivation keeps the guards below, and a time
+                    # the shop stated keeps its own branch. Keeping a time is not validating it.
+                    from charge_transfer_policy import preserve_run_rate
+                    if ((_derived > _ceiling or _derived < _floor)
+                            and preserve_run_rate(_qty, _rhpu, _derived)
+                            and not (_derived < _floor and _group_carries_a_stated_shop_time(
+                                g, _stated_time_by_pn, _stated_ops_by_pn))):
+                        _why = (f"'{wb_op}' derives {_derived:.2f}/hr from this job's run "
+                                f"hours per finished product, outside the default range "
+                                f"{_floor:.2f}-{_ceiling:.2f}/hr. Costed time retained; "
+                                f"confirm the operation count and time basis.")
+                        _flag(_why, flags)
+                        _inputs.append({"kind": "assumption_unconfirmed",
+                                        "part": ", ".join(str(p) for p in g.get("parts", [])),
+                                        "where": f"Estimate row {row}", "what": _why})
+                        g["throughput_review"] = _why
+                    elif _derived > _ceiling:
                         throughput = float(default_tp)
                         _flag(f"throughput CEILING hit on '{wb_op}': derived {_derived:.2f}/hr "
                               f"is {_derived/default_tp:.1f}x the default {default_tp}/hr "

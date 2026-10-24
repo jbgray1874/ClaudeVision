@@ -453,19 +453,23 @@ def _is_a_service_line(part: Dict[str, Any]) -> bool:
     return bool(part.get("_plating_placeholder") or part.get("_plater_freight")
                 or part.get("_commercial_placeholder") or part.get("_commercial_line") is True
                 or (isinstance(part.get("commercial_line"), dict) and part.get("commercial_line"))
-                or part.get("line_kind") == "service")
+                or part.get("line_kind") == "service"
+                or str(part.get("source") or "") == "commercial_placeholder")
 
 
 def same_article_groups(parts: Any) -> List[List[int]]:
     """Indices of the lines that name the same article, grouped. Singletons omitted.
 
-    Corroborated ONLY by shared manufacturer reference, and by one line naming another's part
-    number as a WHOLE TOKEN. Whole-token matters more than it looks: "FIXING1081-M8" contains
+    Corroborated ONLY by shared manufacturer reference, and by one line's description leading
+    with another's part number as a WHOLE TOKEN. Whole-token matters more than it looks: "FIXING1081-M8" contains
     the characters of FIXING1081 and also the characters of FIXING, which is a different part
     on the same sheet — a nylon washer at GBP 0.66. Substring matching would merge every
     FIXING line on every job into one.
     """
-    rows = [p for p in (parts or []) if isinstance(p, dict)]
+    # THE CALLER'S INDICES ARE KEPT (D-598d). Dropping a malformed entry renumbered every line
+    # after it, and the writer then zeroed a different row from the one this matched.
+    rows = list(parts or [])
+    eligible = {i for i, p in enumerate(rows) if isinstance(p, dict) and not _is_a_service_line(p)}
     # A PART NUMBER THAT IS ALSO AN ENGLISH WORD CANNOT BE LOOKED FOR IN PROSE. SDI's own BOM
     # carries POWDER, PACKAGING, DELIVERY and FIXING as part numbers, and a description
     # reading "PACKAGING FOAM INSERT 50MM" contains the word PACKAGING for reasons that have
@@ -476,8 +480,7 @@ def same_article_groups(parts: Any) -> List[List[int]]:
     # A digit is what separates a code from a word. FIXING1081 is a key; FIXING is a noun.
     codes = {str(p.get("part_number") or "").strip().upper(): i
              for i, p in enumerate(rows)
-             if _is_a_code_not_a_word(str(p.get("part_number") or "").strip())
-             and not _is_a_service_line(p)}
+             if i in eligible and _is_a_code_not_a_word(str(p.get("part_number") or "").strip())}
     parent = list(range(len(rows)))
 
     def find(i):
@@ -493,15 +496,18 @@ def same_article_groups(parts: Any) -> List[List[int]]:
 
     by_ref: Dict[str, int] = {}
     for i, p in enumerate(rows):
-        if _is_a_service_line(p):
+        if i not in eligible:
             continue
         for key in identity_keys(p):
             if key in by_ref:
                 union(by_ref[key], i)
             else:
                 by_ref[key] = i
-        # A line whose description names another line's part number outright.
-        for cand in _code_candidates(p.get("description")):
+        # A line whose description LEADS with another line's part number (D-598d). "FIXING1081-M8
+        # foot" is that fixing; "weld to X", "fits X" and "plate X" relate a line to X and never
+        # make it X. A shared manufacturer reference, above, is still matched wherever it sits.
+        leading = str(p.get("description") or "").strip().split(maxsplit=1)
+        for cand in _code_candidates(leading[0] if leading else ""):
             j = codes.get(cand)
             if j is not None and j != i:
                 union(i, j)

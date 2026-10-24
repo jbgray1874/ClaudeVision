@@ -650,6 +650,10 @@ def test_a_service_line_naming_the_parts_it_serves_is_not_the_same_article():
                "_commercial_placeholder": True,
                "description": "Delivery to and from the platers for 1234567-CPT01"}
     assert sr.same_article_groups([tube, plate, freight]) == []
-    twin = {"part_number": "1234567-CPT09", "description": "spare tube, as 1234567-CPT01"}
+    twin = {"part_number": "1234567-CPT09", "description": "1234567-CPT01 tube, second call-out"}
     assert sr.same_article_groups([tube, plate, twin]) == [[0, 2]], \
-        "a made line naming another's number is still grouped"
+        "a made line LEADING with another's number is still grouped"
+    # A RELATIONSHIP IS NOT AN ALIAS (D-598d): a made line that names another's number later in
+    # its description is related to it, not it.
+    welded = {"part_number": "1234567-CPT09", "description": "bracket, weld to 1234567-CPT01"}
+    assert sr.same_article_groups([tube, plate, welded]) == []

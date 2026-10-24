@@ -1041,3 +1041,25 @@ def test_the_saved_acceptance_tool_attributes_the_saved_releases_own_rows(tmp_pa
     assert rep["matches_saved_audit_hash"] is True
     codes = {r["check_code"] for r in rep["saved_release_rows"]["from_the_ledger"]}
     assert "read_item_unresolved" in codes and rep["saved_release_rows"]["blocking"] >= len(codes)
+
+
+def test_a_record_naming_another_workbook_is_said_to_be_another_runs(tmp_path, capsys):
+    """24 Oct: the 15:26 book was paired with output/json's record, which a 15:36 run of the
+    same job had rewritten (D-598d). The proof says so by name; the run's own record is pinned
+    beside its workbook after the last write to it."""
+    import openpyxl
+    sys.path.insert(0, str(ROOT / "tools"))
+    import prove_saved_acceptance as tool
+    book = tmp_path / "job_20261024_152627.xlsx"
+    openpyxl.Workbook().save(book)
+    record = tmp_path / "job.json"
+    record.write_text(json.dumps({"saved_output_paths": {
+        "estimate_xlsx": "C:\\out\\estimates\\job_20261024_153659.xlsx"}}), encoding="utf-8")
+    assert tool.main([str(record), str(book)]) == 2
+    said = capsys.readouterr().out
+    assert "names workbook job_20261024_153659.xlsx" in said
+    assert "job_20261024_152627_record.json" in said
+    assert json.loads(said.strip().splitlines()[-1])["record_names_workbook"] == \
+        "job_20261024_153659.xlsx"
+    src = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    assert src.index('stem}_record.json"') > src.index('_time_stage("deliverables", False)')
