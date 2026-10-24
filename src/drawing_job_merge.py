@@ -429,7 +429,8 @@ def _nested_outline_question(part: Dict[str, Any], flat: Dict[str, Any]) -> None
                        f"{band:,.0f} mm2 band between the two. A solid part with a step or "
                        f"rebate machines that band to a depth instead, and that machining is "
                        f"not charged"),
-        "action": "say which; for a step give its depth, so its machining is costed",
+        "action": ("say which; for a step, give its depth and add its machining to the "
+                   "route: the engine does not cost a step from a flat"),
         "source": "drawing_job_merge.augment_summary_with_dxf",
         "subject": "nested_outline_frame_or_step",
     })
