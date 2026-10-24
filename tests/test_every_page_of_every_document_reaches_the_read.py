@@ -281,3 +281,33 @@ def test_paper_sizes_are_named_from_the_page_itself():
     assert pcov.paper(2384, 1684) == "A1" and pcov.paper(500, 500) == "176 x 176 mm"
     assert pcov.effective_dpi([2000, 1414], 842, 595) == 171
     assert pcov.effective_dpi([2000, 1414], 2384, 1684) == 60
+
+
+def _scanned(*specs):
+    """The rule-based readers' receipt: summary["pages"] as the scan writes it."""
+    return [{"page_number": n, "source_pdf_path": f"C:/pack/{d}", "pdfplumber_text": "WORDS"}
+            for d, n in specs]
+
+
+def test_a_page_the_rule_based_readers_read_is_read_whatever_ran():
+    """Review of D-598: coverage measures the evidence, not the reader. A normal pack read in
+    full by the deterministic readers is not held because no LLM ran."""
+    pages = _pages(("ga.pdf", 1, 400, 595, 842), ("ga.pdf", 2, 300, 595, 842))
+    pc = pcov.build({"pages": _scanned(("ga.pdf", 1), ("ga.pdf", 2))}, pages)
+    assert pc["llm_read"] is False and pc["gaps"] == []
+    assert all(p["rule_based_text"] == "read" for p in pc["pages"])
+    assert invariants.check_every_page_reached_a_read({"page_coverage": pc}) == []
+
+
+def test_an_llm_part_that_failed_on_a_page_the_rules_read_asks_a_ruling_not_a_hold():
+    pages = _pages(("ga.pdf", 1, 400, 595, 842), ("spec.pdf", 1, 900, 595, 842))
+    cov = {"batches": [{"index": 1, "read": True}, {"index": 2, "read": False}],
+           "pages": [dict(pages[0], read=True, batches=[1]), dict(pages[1], read=False, batches=[2])]}
+    pc = pcov.build({"llm_full_extract_coverage": cov, "pages": _scanned(("spec.pdf", 1))}, pages)
+    assert [(g["document"], g["kind"]) for g in pc["gaps"]] == [("spec.pdf", "text_llm_read_failed")]
+    viol = invariants.check_every_page_reached_a_read({"page_coverage": pc})
+    assert [v["severity"] for v in viol] == [invariants.WARNING]
+    pc = pcov.build({"llm_full_extract_coverage": cov}, pages)
+    assert [(g["document"], g["kind"]) for g in pc["gaps"]] == [("spec.pdf", "text_not_read")]
+    assert invariants.check_every_page_reached_a_read(
+        {"page_coverage": pc})[0]["severity"] == invariants.BLOCKING

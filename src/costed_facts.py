@@ -3997,9 +3997,10 @@ def costed_job(source: Any) -> Dict[str, Any]:
     }
     # THE READ LEDGER'S ROWS AMONG THE BLOCKING CHECKS (D-598), by the codes its invariant
     # raises — counted on the release so a hold can be traced to the ledger, not inferred.
-    _LEDGER_CODES = {"read_item_unresolved", "engine_allowance_unconfirmed",
-                     "engine_line_unconfirmed", "read_id_stale", "read_charge_unverified",
-                     "read_charge_check_failed"}
+    try:
+        from read_charge_contract import LEDGER_CHECK_CODES as _LEDGER_CODES  # noqa: PLC0415
+    except Exception:                                                # noqa: BLE001
+        _LEDGER_CODES = frozenset()
     _ledger_rows = [d for d in _checks if str(d.get("check_code") or "") in _LEDGER_CODES]
     reasons: List[str] = []
     if _stop:

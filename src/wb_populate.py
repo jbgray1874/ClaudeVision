@@ -1882,6 +1882,12 @@ def part_cannot_be_powder_coated(pe: Dict[str, Any]) -> bool:
         return False
 
 
+# The operations that cut a part's holes with it: the profile cuts the read contract names
+# (config READ_PROFILE_CUTS) and the drilling family.
+_HOLE_CUTTING_OPS = frozenset(set(getattr(config, "READ_PROFILE_CUTS", ()) or ())
+                              | {"hole_machining", "drilling", "punch"})
+
+
 def costed_geometry_value(pe: Dict[str, Any], *names: str) -> Any:
     """A geometry datum off a COSTED part record, from whichever of its two geometry
     records has one — normalized_geometry first, geometry_rollup second.
@@ -3801,6 +3807,13 @@ def canonical_labour_groups(
             elif operation in {"hole_machining", "drilling", "punch"}:
                 group["holes"] += int(_safe(
                     geometry.get("estimated_hole_count"), 0) or 0) * int(qty)
+            # THE HOLES THE ROW'S TIME WAS COSTED FOR, ON EVERY CUTTING ROW (D-598a): the
+            # count the process estimate used, times the part's quantity — so a hole can be
+            # held to the row that cuts it, laser or drill.
+            if operation in _HOLE_CUTTING_OPS:
+                group["holes_cut"] = int(group.get("holes_cut") or 0) + int(_safe(
+                    (estimates[representative_id].get("process_estimate") or {})
+                    .get("hole_count"), 0) or 0) * int(qty)
 
     _merge_unread_colour_into_the_known_one(groups)
     _prove_laser_nests(groups)
@@ -5202,9 +5215,10 @@ def build_workbook_labour(
                 "material": g.get("material"),
                 "thickness_mm": g.get("thickness"),
                 "qty_per_unit": g.get("qty"),
-                # THE HOLES THE ROW'S PARTS CARRY INTO ITS TIME (D-598): the read contract
-                # holds a hole the brief states to a cutting row that counts one.
-                "holes": g.get("holes"),
+                # THE HOLES THE ROW'S PARTS CARRY INTO ITS TIME (D-598a): every cutting row's
+                # count of the holes it was costed for, so the read contract can hold a hole
+                # to the row on its owning part that cuts it.
+                "holes_cut": g.get("holes_cut"),
                 # HOW THE RATE WAS ARRIVED AT — template_calculated / size_banded /
                 # historical / historical_unbanded / engine_derived / unmeasured_default.
                 # Without this the audit tabs present an unmeasured constant and the
@@ -7857,6 +7871,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 g["bends"] += int(_safe((_ng2 or {}).get("estimated_bend_line_count"), 0)) * _qty_pu
             elif _ol in ("hole_machining", "drilling", "punch"):
                 g["holes"] += int(_safe((_ng2 or {}).get("estimated_hole_count"), 0)) * _qty_pu
+            if _ol in _HOLE_CUTTING_OPS:
+                g["holes_cut"] = int(g.get("holes_cut") or 0) + int(_safe(
+                    (pe.get("process_estimate") or {}).get("hole_count"), 0) or 0) * _qty_pu
 
     # ── MANM: insert labour for pressed fasteners (self-clinch nuts, PEM studs) ──
     # Tim books the press/insert time as Manual labour (Metal) (MANM). His 12120 sheet

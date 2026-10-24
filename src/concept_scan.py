@@ -1307,6 +1307,21 @@ def consumable_lines(items: List[Any], stem: str,
     return out
 
 
+def brief_names_weld_of(name: Any, brief: Any) -> bool:
+    """Does an affirmative weld sentence of the brief name this piece, and name no fixing
+    (D-598a)? The same reading mechanically_fitted gives a piece's weld, from the words alone:
+    "Brackets: 2 per bar, TIG welded down both sides to the tube" names the brackets and the
+    tube."""
+    fixing_words = _vocab_list("CONCEPT_FIXING_WORDS") + _vocab_list("CONCEPT_FIXED_WITH_WORDS")
+    generic = set(_vocab_list("CONCEPT_NAME_GENERIC_WORDS"))
+    said = [s.lower() for s in brief_weld_statements(brief)
+            if not any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", s.lower())
+                       for w in fixing_words)]
+    words = [w for w in re.findall(r"[a-z]{4,}", str(name or "").lower()) if w not in generic]
+    return any(re.search(rf"(?<![a-z]){re.escape(w)}(?:s|es)?(?![a-z])", s)
+               for s in said for w in words)
+
+
 def mechanically_fitted(parts: List[Any], brief: str = "") -> Dict[str, Any]:
     """The made pieces a sighted unit fixes with fasteners, and why each other one is not (D-499).
 
@@ -2403,22 +2418,26 @@ def stated_item_reference(name: Any, text: Any, others: Any = ()) -> str:
     return ""
 
 
-def stated_item_holes(name: Any, text: Any, others: Any = ()) -> List[float]:
-    """The hole diameters a brief states for this item, in a sentence whose only part noun is
-    this item's (D-598): "Each bracket has the 3mm diameter hanging hole" for "HOOK BRACKET".
-    The size must be called a diameter, beside the word hole."""
+def stated_item_holes(name: Any, text: Any, others: Any = ()) -> List[Dict[str, float]]:
+    """The holes a brief states for this item — [{"diameter_mm", "count"}] — in a sentence whose
+    only part noun is this item's (D-598): "Each bracket has the 3mm diameter hanging hole" for
+    "HOOK BRACKET" is one Ø3. The size must be called a diameter, beside the word hole; a count
+    written before it ("2 x 5mm diameter", "two Ø4") is the count, else one per part."""
     head = _head_noun(name)
     if not head:
         return []
     other_heads = {_head_noun(o) for o in (others or ()) if _head_noun(o) != head} - {""}
-    out: List[float] = []
+    out: List[Dict[str, float]] = []
     for sentence in _SENTENCES.split(str(text or "")):
         words = {_singular(w) for w in re.findall(r"[A-Za-z]+", sentence.upper())}
         if head not in words or words & other_heads or "HOLE" not in words:
             continue
-        for m in re.finditer(r"(?:Ø|⌀)\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*mm\s*(?:diameter|dia\b)",
-                             sentence, re.IGNORECASE):
-            out.append(float(m.group(1) or m.group(2)))
+        for m in re.finditer(r"(?:(\d+)\s*[x×]\s*|\b(one|two|three|four|six|eight)\s+)?"
+                             r"(?:(?:Ø|⌀)\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*mm\s*"
+                             r"(?:diameter|dia\b))", sentence, re.IGNORECASE):
+            count = (int(m.group(1)) if m.group(1) else
+                     _COUNT_WORDS.get(str(m.group(2) or "").lower(), 1))
+            out.append({"diameter_mm": float(m.group(3) or m.group(4)), "count": count})
     return out
 
 
@@ -4150,6 +4169,25 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
         # The flat blank, the fold count and the internal cutting, each with its working.
         _cuts: Dict[str, Any] = {}
         _stock = _stocks[n - 1] if n - 1 < len(_stocks) else {}
+        # THE HOLES THE BRIEF STATES FOR THIS PART, WHERE THE READ LISTED NONE OF THAT SIZE
+        # (D-598a): carried into its cut-outs, so the part that owns the hole is the part that
+        # is charged for cutting it, at its diameter and count. The read line is not changed.
+        _read_dias = [max(_num(c.get("length_mm")), _num(c.get("width_mm")))
+                      for c in (sighted.get("cutouts") or []) if isinstance(c, Mapping)
+                      and str(c.get("what") or "").strip().lower().startswith("hole")]
+        _brief_holes = [h for h in (stated_item_holes(name, brief, [
+            str(o.get("name") or "") for o in (answer.get("parts") or [])
+            if isinstance(o, dict) and o is not sighted]) if kind == "fabricated" else [])
+            if not any(abs(h["diameter_mm"] - d) <= 0.25 for d in _read_dias)]
+        _cut_line = (dict(sighted, cutouts=list(sighted.get("cutouts") or []) + [
+            {"what": "hole", "count": h["count"], "length_mm": h["diameter_mm"],
+             "width_mm": h["diameter_mm"]} for h in _brief_holes]) if _brief_holes else sighted)
+        if _brief_holes:
+            record["concept_cutouts_from_brief"] = [dict(h) for h in _brief_holes]
+            record["review_flags"].append(
+                "CONCEPT: the brief states " + ", ".join(
+                    f"{h['count']} × Ø{h['diameter_mm']:g} hole" for h in _brief_holes)
+                + " on this part, which the read did not list — carried into its cutting")
         if kind == "fabricated" and not unclassified and _stock.get("form") in (
                 STOCK_SECTION_FORMS + ("mesh", "wire")):
             # STOCK THAT IS NOT SHEET (D-528): costed as what it is cut from — a section by the
@@ -4187,7 +4225,7 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
                 record["concept_fold_count"] = _dev["folds"]
                 _assume("", _dev["folds"], "folds given by the concept read — provisional, not "
                         "counted off a drawing", field="fold count")
-            _cuts = cutout_geometry(sighted)
+            _cuts = cutout_geometry(_cut_line)
         # What the read said its size came from — the words a strip names its host in (D-499).
         record["concept_why_size"] = str(sighted.get("why_size") or "")
         wrote_size = False
@@ -4228,6 +4266,20 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
                     f"internal cut-outs given by the concept read — {_cuts['internal_mm']:g} mm "
                     f"of internal cutting and {_cuts['pierces']} pierce(s), provisional",
                     field="cut-outs")
+        elif record.get("section_stock"):
+            # A SECTION'S HOLES ARE ITS OWN (D-598a). The tube's Ø5 hole reached no record:
+            # cut-outs were taken only on the sheet path, so the drilling charged for it had no
+            # hole behind it. A sawn section keeps its holes as features — their count drives
+            # the drilling — and no laser cut length is added for them.
+            _sec_cuts = cutout_geometry(_cut_line)
+            _sec_holes = sum(int(i["count"]) for i in _sec_cuts.get("items") or []
+                             if str(i.get("what") or "").startswith("hole"))
+            if _sec_cuts.get("items"):
+                record["concept_cutouts"] = list(_sec_cuts["said"])
+                record["concept_cutout_dims"] = [dict(i) for i in _sec_cuts["items"]]
+            if _sec_holes:
+                record.setdefault("manufacturing_features", {})["hole_count"] = _sec_holes
+                record.setdefault("geometry_rollup", {})["estimated_hole_count"] = _sec_holes
 
         # ── THE WORK, OR THE LINE COSTS NOTHING ─────────────────────────────────────
         #

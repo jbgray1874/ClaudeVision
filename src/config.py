@@ -4575,10 +4575,12 @@ WELD_PROCESS_STATEMENT_PATTERNS = [
 #   process named on the row -> the processes that rate is a rate for
 WELD_RATE_EQUIVALENT_PROCESSES = {"CO2": ("CO2", "MIG"), "MIG": ("MIG", "CO2"),
                                   "TIG": ("TIG",), "MMA": ("MMA",)}
-# THE CARD'S RATE FOR A STATED PROCESS, where the shop has given one (D-598). A charged row
-# titled for the process must carry this £/h; with no entry, the row's own stated department
-# rate is the shop's. Empty until the estimators give a TIG rate.
-#   process -> £ per hour
+# THE DOCUMENTED RATE FOR A STATED PROCESS (D-598, D-598a). A charged row titled for the
+# process is a verified charge only at this £/h, and only with the source named: a title and a
+# positive rate are not a verified TIG price (review of D-598). With no entry, only an
+# estimator's evidenced ruling (read_rulings S.weld_process with "evidence") covers the process.
+# Empty until the estimators give a TIG rate.
+#   process -> {"gbp_per_hour": £/h, "source": "who stated it, where, when"}
 WELD_PROCESS_RATES_GBP: dict = {}
 # READ ITEMS A "COVERED" RULING MUST EVIDENCE (D-598). A stated weld process charged at a
 # shared or substitute rate is legitimate only where the ruling names who confirmed the rate or

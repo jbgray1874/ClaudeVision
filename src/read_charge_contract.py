@@ -56,6 +56,11 @@ SCHEMA = "read_charge_contract.v1"
 LEDGER_SCHEMA = "read_ledger.v1"
 
 CHARGED, COVERED, EXCLUDED, UNRESOLVED = "charged", "covered", "excluded", "unresolved"
+# The codes invariants.check_what_the_read_returned_is_accounted_for raises — what a release
+# row's check_code says when the read ledger is what holds it (D-598).
+LEDGER_CHECK_CODES = frozenset({"read_item_unresolved", "engine_allowance_unconfirmed",
+                                "engine_line_unconfirmed", "read_id_stale",
+                                "read_charge_unverified", "read_charge_check_failed"})
 CARRIED, CORRECTED, REFERENCE = "carried", "corrected", "reference"
 WORK_STATES = (CHARGED, COVERED, EXCLUDED, UNRESOLVED)
 
@@ -365,18 +370,32 @@ def capture(answer: Any, *, records: Iterable[Any] = (), raw_response: str = "",
                 ref, ref_by = cs.stated_item_reference(name, " ".join(
                     str(line.get(k) or "") for k in ("name", "seen", "sighted_material")),
                     ()), said_by
-            holes = ([] if any("hole" in str((c or {}).get("what") if isinstance(c, Mapping)
-                                             else c).lower() for c in (line.get("cutouts") or []))
-                     else cs.stated_item_holes(name, brief, others))
+            read_dias = [max(fcc.number(c.get("length_mm")) or 0, fcc.number(c.get("width_mm")) or 0)
+                         for c in (line.get("cutouts") or []) if isinstance(c, Mapping)
+                         and "hole" in str(c.get("what") or "").lower()]
+            holes = [h for h in cs.stated_item_holes(name, brief, others)
+                     if not any(abs(h["diameter_mm"] - d) <= 0.25 for d in read_dias)]
         except Exception:                                            # noqa: BLE001
             ref, ref_by, holes = "", said_by, []
+        # A WELDED PIECE IS A JOINT TO CHARGE ONCE (review of D-598): from the read's own
+        # operations or a brief weld sentence naming it, never from the records under audit.
+        read_ops = {op_name(o) for o in (line.get("operations") or [])}
+        try:
+            weld_by = ("the read" if read_ops & set(_families("welding")) else
+                       "the enquiry brief" if cs.brief_names_weld_of(name, brief) else "")
+        except Exception:                                            # noqa: BLE001
+            weld_by = ""
+        if weld_by:
+            add(id=f"{rid}.joint", kind="joint", work=True, item="weld joint",
+                label=f"{name}: welded ({weld_by})", record=pn, of=rid, as_read=weld_by,
+                said_by=weld_by)
         if ref:
             add(id=f"{rid}.reference", kind="stated_reference", work=False, item=ref,
                 label=f"{name}: reference {ref}", record=pn, of=rid, as_read=ref, said_by=ref_by)
-        for k, dia in enumerate(holes, start=1):
+        for k, h in enumerate(holes, start=1):
             add(id=f"{rid}.stated_hole{k}", kind="feature", work=True, item="stated hole",
-                label=f"{name}: Ø{dia:g} hole (the brief)", record=pn, of=rid,
-                as_read={"diameter_mm": dia}, said_by="the enquiry brief")
+                label=f"{name}: {h['count']} × Ø{h['diameter_mm']:g} hole (the brief)",
+                record=pn, of=rid, as_read=dict(h), said_by="the enquiry brief")
 
     unit = next((r for r in recs if r.get("is_assembly_parent") and r.get("concept")), None)
     unit_pn = _pn((unit or {}).get("part_number"))
@@ -458,6 +477,9 @@ def capture(answer: Any, *, records: Iterable[Any] = (), raw_response: str = "",
         "raw_chars": len(raw), "replayed_from": str(replayed_from or ""),
         "brief_sha256": (hashlib.sha256(str(brief).encode("utf-8")).hexdigest()
                          if str(brief or "").strip() else ""),
+        # WHICH BRIEF (review of D-598): a replay on a revised brief is told apart from one on
+        # the original, so added input is never taken for better reading.
+        "brief_chars": len(str(brief or "")),
         "unit": unit_pn, "items": items, "engine_lines": engine_lines,
         "response": resp, "stale_read_ids": stale,
     }
@@ -503,8 +525,8 @@ class _Book:
                                 "value": fcc.cached_number(row.get("total_value_gbp")),
                                 "cell": row.get("charged_cell"),
                                 "wb_row": row.get("workbook_row"),
-                                # The holes the row's parts carry into its time, where recorded.
-                                "holes": group.get("holes"),
+                                # The holes the row was costed for, where recorded (D-598a).
+                                "holes_cut": group.get("holes_cut"),
                                 "title": str(row.get("operation") or group.get("wb_operation") or "")})
         dec = summary.get("estimator_decisions") if isinstance(summary.get("estimator_decisions"), Mapping) else {}
         self.rulings = {str(k).strip().lower(): v for k, v in (dec.get("read_rulings") or {}).items()
@@ -935,26 +957,66 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
         elif what == "banded edges":
             work_state(item, "edge_banding", pn)
         else:
-            rows = book.charged_rows(pn, _cfg("READ_PROFILE_CUTS", ()))
             if "hole" in what:
-                rows = rows or book.charged_rows(pn, _families("hole_machining"))
-            if what == "stated hole" and rows:
-                # A ROW THAT CUTS NO HOLE DOES NOT CUT THIS ONE (D-598): a hole the brief states
-                # is covered by a cutting row on its part only where that row counts holes.
-                cutting = [l for l in rows if (fcc.number(l.get("holes")) or 0) > 0]
-                if not cutting:
-                    said = ", ".join(sorted({l["title"] for l in rows}))
-                    done(item, UNRESOLVED,
-                         f"the brief states it, and {said} on {pn} "
-                         + ("records no hole count" if all(l.get("holes") is None for l in rows)
-                            else "cuts no hole") + " — the hole is not shown in the cut", rows)
-                    return
-                rows = cutting
+                hole_cover(item, pn)
+                return
+            rows = book.charged_rows(pn, _cfg("READ_PROFILE_CUTS", ()))
             if rows:
                 labour_evidence(rows, set(_cfg("READ_PROFILE_CUTS", ())) | set(_families("hole_machining")), pn)
                 done(item, COVERED, f"cut with the part ({', '.join(sorted({l['title'] for l in rows}))})", rows)
             else:
                 done(item, UNRESOLVED, "no calculated cutting row on its part cuts it")
+
+    def hole_cover(item: Mapping[str, Any], pn: str) -> None:
+        """A HOLE IS COVERED BY WHAT OWNS AND CUTS IT, NOT BY A ROW THAT CUTS SOME HOLE (review of
+        D-598). Its owning part's record must carry a hole of the stated diameter at the stated
+        count, a cutting or drilling row on that part must charge it, and where the row records
+        the holes it was costed for, at least that many — or it is unresolved."""
+        said = item.get("as_read") if isinstance(item.get("as_read"), Mapping) else {}
+        dia = fcc.number(said.get("diameter_mm")) or max(fcc.number(said.get("length_mm")) or 0,
+                                                         fcc.number(said.get("width_mm")) or 0)
+        count = int(fcc.number(said.get("count")) or 0)
+        if not pn:
+            done(item, UNRESOLVED, "no record carries its part, so nothing on the sheet can cut it")
+            return
+        rec = book.records.get(pn) or book.costs.get(pn) or {}
+        held = [(max(fcc.number(c.get("length_mm")) or 0, fcc.number(c.get("width_mm")) or 0),
+                 int(fcc.number(c.get("count")) or 0))
+                for c in (rec.get("concept_cutout_dims") or []) if isinstance(c, Mapping)
+                and str(c.get("what") or "").lower().startswith("hole")]
+        held += [(fcc.number(d) or 0, 0) for d in (rec.get("hole_sizes_mm") or [])]
+        size = f"Ø{dia:g}" if dia else "the"
+        match = [h for h in held if not dia or abs(h[0] - dia) <= 0.25]
+        if not match:
+            done(item, UNRESOLVED, f"{pn}'s record carries no {size} hole — nothing charged "
+                                   f"cuts this hole")
+            return
+        have = sum(n for _d, n in match)
+        if count and 0 < have < count:
+            done(item, UNRESOLVED, f"{pn}'s record carries {have} {size} hole(s) against {count} "
+                                   f"required")
+            return
+        ops = set(_cfg("READ_PROFILE_CUTS", ())) | set(_families("hole_machining"))
+        rows = book.charged_rows(pn, ops)
+        if not rows:
+            done(item, UNRESOLVED, f"{size} hole on {pn}'s record, and no cutting or drilling row "
+                                   f"on {pn} charges it")
+            return
+        qty = fcc.number((book.costs.get(pn) or {}).get("quantity")) or 1
+        need = (count or max(have, 1)) * qty
+        counted = [l for l in rows if l.get("holes_cut") is not None]
+        if counted and sum(fcc.number(l.get("holes_cut")) or 0 for l in counted) < need:
+            done(item, UNRESOLVED,
+                 f"{size} hole on {pn}'s record, and {', '.join(sorted({l['title'] for l in counted}))} "
+                 f"on {pn} was costed for {sum(fcc.number(l.get('holes_cut')) or 0 for l in counted):g} "
+                 f"hole(s) against {need:g} — the hole is not in the cut", counted)
+            return
+        labour_evidence(rows, ops, pn)
+        done(item, COVERED,
+             f"{count or have or 'its'} × {size} hole on {pn}'s record, cut by "
+             f"{', '.join(sorted({l['title'] for l in rows}))}"
+             + ("" if counted else " — the row does not state the holes it was costed for (saved "
+                                   "before D-598a)"), rows)
 
     def not_visible(item: Mapping[str, Any]) -> None:
         if not book.calculated:
@@ -1088,17 +1150,74 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
         else:
             done(item, UNRESOLVED, "a stated requirement no rule here can account for")
 
+    def weld_rows_for(pn: str) -> List[Dict[str, Any]]:
+        """The charged weld rows that carry this piece's joint: on the piece, on the host it is
+        welded to, or on the unit that owns its members' joints (D-531)."""
+        rec = book.records.get(pn) or {}
+        unit = _pn(ledger.get("unit"))
+        hosts = ({_pn(rec.get("weld_charged_on"))}
+                 | {_pn(h) for h in (rec.get("welded_to_hosts") or [])}) - {""}
+        return [l for l in book.any_rows(_families("welding"))
+                if l["parts"] & ({pn} | hosts | ({unit} if unit else set()))]
+
+    def joint_cover(item: Mapping[str, Any]) -> None:
+        """A WELDED PIECE'S JOINT IS CHARGED EXACTLY ONCE (review of D-598): on one weld row —
+        none is a lost joint, two is the same joint charged twice. The runs per joint (one side
+        or both) are not counted on the sheet, and the state says so."""
+        if not book.calculated:
+            done(item, UNRESOLVED, "the calculated workbook was not read back")
+            return
+        if ruled(item):
+            return
+        pn = _pn(item.get("record"))
+        if not pn:
+            done(item, UNRESOLVED, f"{item.get('said_by')} has it welded, and no record carries it")
+            return
+        rows = weld_rows_for(pn)
+        wb_rows = {l["wb_row"] for l in rows}
+        if not rows:
+            done(item, UNRESOLVED, f"{item.get('said_by')} has it welded, and no weld row charges "
+                                   f"{pn}, its host or the unit")
+        elif len(wb_rows) > 1:
+            done(item, UNRESOLVED, f"{pn}'s joint is charged on {len(wb_rows)} weld rows "
+                                   f"({', '.join(sorted({l['title'] for l in rows}))}) — a joint "
+                                   f"is charged once", rows)
+        else:
+            bad = labour_evidence(rows, _families("welding"), next(iter(rows[0]["parts"])))
+            done(item, UNRESOLVED if bad else CHARGED,
+                 bad or f"charged once, on {rows[0]['title']} on "
+                        f"{', '.join(sorted(rows[0]['parts']))}; the runs per joint are not "
+                        f"counted on the sheet", rows)
+
     def weld_proof_gaps(rows: List[Dict[str, Any]], proc: str) -> List[str]:
-        """What a row titled for the stated process still has to show (D-598)."""
+        """What a row titled for the stated process still has to show (D-598, D-598a): a rate
+        with a documented source — config WELD_PROCESS_RATES_GBP names the rate and where it
+        came from; an estimator's evidenced ruling is the other way — the welded part's quantity,
+        and every welded piece's joint on such a row, charged once."""
         short: List[str] = []
-        card = fcc.number((_cfg("WELD_PROCESS_RATES_GBP", {}) or {}).get(proc))
+        spec = (_cfg("WELD_PROCESS_RATES_GBP", {}) or {}).get(proc)
+        card = fcc.number(spec.get("gbp_per_hour")) if isinstance(spec, Mapping) else None
+        source = str(spec.get("source") or "").strip() if isinstance(spec, Mapping) else ""
+        arc = {str(p).upper() for p in ((_cfg("WELD_RATE_EQUIVALENT_PROCESSES", {}) or {})
+                                        .get("CO2") or ())}
+        if spec is None and proc in arc:
+            # The card's own arc-weld row is the documented rate for the processes it is a rate
+            # for (config HOURLY_RATES_GBP, read from the template's rate block).
+            card = fcc.number((_cfg("HOURLY_RATES_GBP", {}) or {}).get("welding"))
+            source = "the rate card's arc-weld row"
         for l in rows:
             rate = fcc.cached_number(l["row"].get("dept_rate_gbp_per_hour"))
             if not rate or rate <= 0:
                 short.append(f"'{l['title']}' states no rate")
-            elif card and not math.isclose(rate, card, rel_tol=0, abs_tol=0.005):
+            elif not card:
+                short.append(f"no documented {proc} rate holds its £{rate:.2f}/h — give the rate "
+                             f"and its source (config WELD_PROCESS_RATES_GBP), or rule it with "
+                             f"evidence")
+            elif not source:
+                short.append(f"the configured {proc} rate names no source")
+            elif not math.isclose(rate, card, rel_tol=0, abs_tol=0.005):
                 short.append(f"'{l['title']}' charges £{rate:.2f}/h against the card's "
-                             f"£{card:.2f}/h for {proc}")
+                             f"£{card:.2f}/h for {proc} ({source})")
             got = fcc.cached_number(l["row"].get("qty_per_unit"))
             if len(l["parts"]) == 1 and got is not None:
                 pn = next(iter(l["parts"]))
@@ -1106,23 +1225,23 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                 if want is not None and not math.isclose(got, want, rel_tol=0, abs_tol=1e-8):
                     short.append(f"'{l['title']}' charges {got:g} of {pn} against {want:g} on "
                                  f"the record")
-        charged = {p for l in rows for p in l["parts"]}
-        unit = _pn(ledger.get("unit"))
+        evidenced = {l["wb_row"] for l in rows}
+        welded = {_pn(i.get("record")) for i in items if i.get("kind") == "joint"}
         for i in items:
             pn = _pn(i.get("record"))
             rec = book.records.get(pn) or {}
-            if i.get("kind") != "part" or not pn:
-                continue
-            ops = {op_name(o) for o in (list(rec.get("inferred_operations") or [])
-                                        + list(rec.get("operations") or []))}
-            hosts = {_pn(rec.get("weld_charged_on"))} | {_pn(h) for h in
-                                                         (rec.get("welded_to_hosts") or [])}
-            hosts.discard("")
-            if not ("welding" in ops or hosts):
-                continue
-            # The unit owns its members' joints (D-531); a host carries the piece welded to it.
-            if not ({pn, unit} | hosts) & charged:
+            if i.get("kind") == "part" and pn and (
+                    "welding" in {op_name(o) for o in (list(rec.get("inferred_operations") or [])
+                                                       + list(rec.get("operations") or []))}
+                    or rec.get("weld_charged_on") or rec.get("welded_to_hosts")):
+                welded.add(pn)
+        for pn in sorted(welded - {""}):
+            mine = weld_rows_for(pn)
+            if not {l["wb_row"] for l in mine} & evidenced:
                 short.append(f"{pn}'s weld is on no {proc} row")
+            elif len({l["wb_row"] for l in mine}) > 1:
+                short.append(f"{pn}'s joint is charged on {len({l['wb_row'] for l in mine})} weld "
+                             f"rows")
         return short
 
     items = [i for i in (ledger.get("items") or []) if isinstance(i, Mapping)]
@@ -1139,6 +1258,8 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
             work_state(item, op_name(item.get("item")), _pn(item.get("record")))
         elif kind == "feature":
             feature(item)
+        elif kind == "joint":
+            joint_cover(item)
         elif kind == "not_visible":
             not_visible(item)
         elif kind == "print_set":
