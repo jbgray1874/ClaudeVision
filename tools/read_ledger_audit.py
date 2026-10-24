@@ -77,6 +77,9 @@ def main(argv=None) -> int:
     print(f"\n{'item':24} {'state':11} how")
     for e in result.get("items") or []:
         print(f"{e['id']:24} {e['state']:11} {e['how']}")
+        # WHAT THE ITEM IS, as the read put it — so a pasted table can be judged on its own.
+        if e.get("label"):
+            print(f"{'':36} read as: {str(e['label'])[:110]}")
         if e.get("cells"):
             print(f"{'':36} cells: {', '.join(e['cells'])}")
     print("\nEngine allowances (charges no read item explains):")

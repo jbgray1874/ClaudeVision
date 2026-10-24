@@ -168,14 +168,25 @@ def capture(answer: Any, *, records: Iterable[Any] = (), raw_response: str = "",
         item.setdefault("said_by", said_by)
         items.append(item)
 
+    def _compact(text: Any) -> str:
+        return re.sub(r"[^A-Z0-9]", "", str(text or "").upper())
+
+    def _by_name(name: str) -> Optional[Mapping[str, Any]]:
+        """A record saved before the fingerprint, matched on its name — the read's own, or the
+        read's with words the engine appended (a size from the brief, D-532)."""
+        want = _compact(name)
+        for key, rs in by_name.items():
+            if rs and want and (_compact(key) == want or _compact(key).startswith(want)):
+                return rs.pop(0)
+        return None
+
     for i, line in enumerate(answer.get("parts") or [], start=1):
         if not isinstance(line, Mapping):
             continue
         rid = f"R{i}"
         name = str(line.get("name") or rid).strip()
         fp = fingerprint(line)
-        rec = by_fp[fp].pop(0) if by_fp.get(fp) else (
-            by_name[_words(name)].pop(0) if by_name.get(_words(name)) else None)
+        rec = by_fp[fp].pop(0) if by_fp.get(fp) else _by_name(name)
         pn = _pn(rec.get("part_number")) if rec else ""
         if pn:
             linked.add(pn)
@@ -187,8 +198,11 @@ def capture(answer: Any, *, records: Iterable[Any] = (), raw_response: str = "",
                 why_aside = ("set aside at the read: the sheet does not draw it (a bought line "
                              "with no drawn view), and asked")
         kind = str(line.get("kind") or "").strip().lower()
+        described = str((rec or {}).get("description") or "")
         add(id=rid, kind="part", work=True, label=name, record=pn, part_kind=kind,
             set_aside=why_aside,
+            # WHAT THE SHEET CALLS IT, where the engine changed the read's name (D-596d).
+            renamed_to=(described if described and _words(described) != _words(name) else ""),
             as_read={k: line.get(k) for k in ("name", "kind", "quantity", "material_guess",
                                                "sighted_material", "assumed_blank_mm", "stock")
                      if k in line})
@@ -262,16 +276,20 @@ def capture(answer: Any, *, records: Iterable[Any] = (), raw_response: str = "",
         add(id=st["id"], kind="stated", work=True, item=st["item"],
             label=f"{st['item']}: {st['text']}", record=unit_pn, as_read=st["text"],
             said_by=st["said_by"] or said_by)
-    stated_weld = next((r.get("weld_process_stated") for r in ([unit] if unit else []) + recs
-                        if isinstance(r, Mapping)
-                        and isinstance(r.get("weld_process_stated"), Mapping)
-                        and not r["weld_process_stated"].get("default")), None)
+    # FROM THE WORDS, NEVER FROM THE RECORDS (D-596d): taking the process from what the transfer
+    # wrote let a transfer that lost it hide the loss — the 17:15 book's TIG went unlisted.
+    try:
+        import concept_scan as cs                                   # noqa: WPS433
+        stated_weld = cs.stated_weld_process(answer, brief)
+    except Exception:                                                # noqa: BLE001
+        stated_weld = {}
     if stated_weld:
         add(id="S.weld_process", kind="stated", work=True, item="weld_process",
             label=f"weld process: {stated_weld.get('process')}", record=unit_pn,
             as_read=stated_weld.get("word") or stated_weld.get("process"),
             process=str(stated_weld.get("process") or "").upper(),
-            said_by=str(stated_weld.get("source") or said_by))
+            said_by=("the enquiry brief" if stated_weld.get("source") == "enquiry_brief"
+                     else said_by))
 
     product = answer.get("product") if isinstance(answer.get("product"), Mapping) else {}
     if product:
@@ -441,6 +459,10 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                  "record": item.get("record") or "", "said_by": item.get("said_by"),
                  "as_read": item.get("as_read"), "state": state, "how": how,
                  "cells": [c for c in cells if c], **extra}
+        if item.get("renamed_to"):
+            # A NAME THE ENGINE CHANGED IS SHOWN BESIDE THE READ'S (D-596d).
+            entry["renamed_to"] = item["renamed_to"]
+            entry["how"] = f"{how}; the sheet calls it '{item['renamed_to']}', not the read's name"
         out_items.append(entry)
         return entry
 

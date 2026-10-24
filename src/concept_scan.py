@@ -2333,7 +2333,10 @@ def stated_item_size(name: Any, text: Any) -> Optional[List[float]]:
            if len(w) >= 2 and w not in _ITEM_STOP_WORDS and not w.isdigit()]
     if len(sig) < 2:
         return None
-    for line in re.split(r"[\n;]+", str(text or "")):
+    # THE SENTENCE THAT NAMES THE ITEM, NOT THE LINE (D-596d). A brief typed as one line put
+    # every item's words "on the line" with the tube's "30 x 15 x 1.5mm", and 0320730's
+    # identification label was described and researched at the tube's size.
+    for line in re.split(r"(?<!\d)\.(?!\d)|[\n;]+", str(text or "")):
         up = " " + re.sub(r"[^A-Z0-9]+", " ", line.upper()) + " "
         if not all(f" {w} " in up for w in sig):
             continue
@@ -5459,29 +5462,39 @@ def carry_stated_finish(unit: Optional[Dict[str, Any]], parts: List[Any],
     return changes
 
 
-def carry_weld_process(unit: Optional[Dict[str, Any]], parts: List[Any],
-                       answer: Mapping[str, Any], brief: str = "") -> List[Dict[str, Any]]:
-    """The weld PROCESS the brief or the read states reaches the welded records (D-595), so the
-    weld row names it and a process the rate card has no rate for is asked
-    (weld_symbols.weld_rate_gap_question) instead of being charged as CO2 in silence."""
+def stated_weld_process(answer: Mapping[str, Any], brief: str = "",
+                        parts: Optional[List[Any]] = None) -> Dict[str, str]:
+    """The weld process the brief or the read STATES, from their own words — {"process",
+    "word", "source"}, or {} (D-595). The read ledger takes it from here, never from the records
+    the transfer wrote, so a transfer that fails cannot hide the statement it lost (D-596d)."""
     try:
         import config as _cfg                                       # noqa: WPS433
         vocab = dict(getattr(_cfg, "WELD_PROCESS_VOCAB", None) or {})
     except Exception:                                                # noqa: BLE001
         vocab = {}
+    lines = [p for p in (answer.get("parts") or []) if isinstance(p, Mapping)] if isinstance(
+        answer, Mapping) else []
     texts = [(str(brief or ""), "enquiry_brief")] + [
+        (f"{p.get('name') or ''} {p.get('seen') or ''}", "concept_read") for p in lines] + [
         (f"{p.get('description') or ''} {p.get('concept_seen') or ''}", "concept_read")
-        for p in (parts or []) if isinstance(p, dict)]
-    found = None
+        for p in (parts or []) if isinstance(p, Mapping)]
     for text, src in texts:
         m = _WELD_PROCESS_WORD.search(text)
         if m:
             word = (m.group(1) or m.group(2) or "").upper()
-            found = (str(vocab.get(word) or word), word, src)
-            break
-    if not found:
+            return {"process": str(vocab.get(word) or word), "word": word, "source": src}
+    return {}
+
+
+def carry_weld_process(unit: Optional[Dict[str, Any]], parts: List[Any],
+                       answer: Mapping[str, Any], brief: str = "") -> List[Dict[str, Any]]:
+    """The weld PROCESS the brief or the read states reaches the welded records (D-595), so the
+    weld row names it and a process the rate card has no rate for is asked
+    (weld_symbols.weld_rate_gap_question) instead of being charged as CO2 in silence."""
+    stated = stated_weld_process(answer, brief, parts)
+    if not stated:
         return []
-    proc, word, src = found
+    proc, word, src = stated["process"], stated["word"], stated["source"]
     records = ([unit] if isinstance(unit, dict) else []) + [p for p in (parts or [])
                                                             if isinstance(p, dict)]
     hosts = [r for r in records if "welding" in _record_ops(r) or r.get("weld_stated_by_note")]

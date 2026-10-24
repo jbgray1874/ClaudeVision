@@ -403,6 +403,48 @@ def test_the_audit_tool_says_a_missing_file_instead_of_failing(tmp_path, capsys)
     assert "The workbook is not there" in capsys.readouterr().out
 
 
+# ── found on the real 17:15 record (D-596d) ────────────────────────────────────────────────
+
+def test_a_size_is_taken_from_the_sentence_that_names_the_item_not_the_whole_line():
+    """The brief was one line: the label's words and the tube's '30 x 15 x 1.5mm' sat on it
+    together, and the label was described and researched at the tube's size."""
+    one_line = ("Hook bar, 1000 off. Tube: 30 x 15 x 1.5mm flat-sided oval tube, cut 1192mm. "
+                "Fit one transparent identification label to the front face.")
+    assert cs.stated_item_size("TRANSPARENT IDENTIFICATION LABEL", one_line) is None
+    assert cs.stated_item_size("UPC ID PLATE", "7. one UPC ID plate (20 x 10 mm), bought in") \
+        == [20.0, 10.0]
+    assert cs.stated_item_size("ID LABEL", "Fit an ID label 30 x 15mm to the face.") == [30.0, 15.0]
+
+
+def test_the_weld_process_is_captured_from_the_words_not_from_the_records():
+    """A ledger that took TIG from the records the transfer wrote could not list a TIG the
+    transfer lost — the 17:15 audit showed no S.weld_process at all."""
+    answer = _answer()
+    parts = cs.parts_from_concept(answer, STEM, brief=BRIEF)
+    unit = cs.unit_assembly_part(parts, answer, STEM)
+    led = rcc.capture(answer, records=[unit] + parts, brief=BRIEF)
+    weld = next(i for i in led["items"] if i["id"] == "S.weld_process")
+    assert weld["process"] == "TIG" and weld["said_by"] == "the enquiry brief"
+    assert not any(isinstance(r.get("weld_process_stated"), dict) for r in [unit] + parts), \
+        "no record carries it, and the ledger still lists it"
+
+
+def test_a_record_the_engine_renamed_still_links_and_the_change_is_shown():
+    s = _book()
+    for p in s["manufacturing_writeup"]["parts"]:
+        p.pop("read_fingerprint", None), p.pop("read_origin", None)
+        if p["part_number"] == L:
+            p["description"] = "IDENTIFICATION LABEL 30 x 15 x 1.5 MM"
+    s["read_ledger"] = rcc.capture(_answer(), records=s["manufacturing_writeup"]["parts"],
+                                   brief=BRIEF)
+    r = rcc.audit(s)
+    label = next(e for e in r["items"] if e["id"] == "R4")
+    assert label["state"] == rcc.CHARGED and label["record"] == L
+    assert label["renamed_to"] == "IDENTIFICATION LABEL 30 x 15 x 1.5 MM"
+    assert "not the read's name" in label["how"]
+    assert not any(l["record"] == L for l in r["engine_lines"])
+
+
 def test_the_answers_file_refuses_a_ruling_without_a_reason():
     import estimator_confirmed as ec
     out, problems = ec._read_decisions({"estimator_decisions": {"read_rulings": {
