@@ -684,7 +684,12 @@ _DECISION_KEYS = ("plating_gbp_per_unit", "plating_spec", "operations_off",
                   # model can answer, because which edges are exposed is the product's
                   # design. The rate still comes from SDI Live, the catalogue, a quote or
                   # evidenced research — this key is refused a price on purpose.
-                  "banded_metres", "banded_length_m")
+                  "banded_metres", "banded_length_m",
+                  # A RULING ON WHAT THE READ RETURNED (D-596): an item excluded or covered,
+                  # or an engine allowance confirmed for this job — each with its reason.
+                  "read_rulings")
+
+READ_RULINGS = ("excluded", "covered", "confirmed")
 
 
 def _read_decisions(raw: Mapping[str, Any], path: Any) -> Tuple[Dict[str, Any], List[str]]:
@@ -865,6 +870,57 @@ def _read_decisions(raw: Mapping[str, Any], path: Any) -> Tuple[Dict[str, Any], 
                                     "cannot be negative — ignored")
                 else:
                     out["banded_metres"] = {"per_unit": _mv}
+
+    # ── A RULING ON WHAT THE READ RETURNED (D-596) ────────────────────────────────────
+    #
+    # {item id: {"ruling": "excluded" | "covered", "reason": ..., "covered_by": operation}}
+    # for an item the read returned (R2.op.hole_machining, NV1, S.polish), and
+    # {"allowance:<operation>": {"ruling": "confirmed", "reason": ...}} for an engine
+    # allowance a person confirms for THIS job. The reason is the evidence and is required:
+    # a ruling with none is refused, so nothing leaves the unresolved list on a word alone.
+    _rr = block.get("read_rulings")
+    if _rr is not None:
+        if not isinstance(_rr, Mapping):
+            problems.append("estimator_decisions.read_rulings: expected {item id: {ruling, "
+                            "reason}} — ignored")
+        else:
+            clean_rr: Dict[str, Dict[str, str]] = {}
+            for _item, _rul in _rr.items():
+                _id = str(_item or "").strip()
+                if not _id or _id.startswith("_"):
+                    continue
+                if not isinstance(_rul, Mapping):
+                    problems.append(f"estimator_decisions.read_rulings['{_id}']: expected "
+                                    f"{{\"ruling\": ..., \"reason\": ...}} — that entry did "
+                                    f"nothing")
+                    continue
+                _kind = str(_rul.get("ruling") or "").strip().lower()
+                _why = str(_rul.get("reason") or "").strip()
+                _by = str(_rul.get("covered_by") or "").strip().lower().replace(" ", "_")
+                if _kind not in READ_RULINGS:
+                    problems.append(f"estimator_decisions.read_rulings['{_id}']: the ruling "
+                                    f"must be one of {', '.join(READ_RULINGS)} — that entry "
+                                    f"did nothing")
+                    continue
+                if not _why:
+                    problems.append(f"estimator_decisions.read_rulings['{_id}']: a ruling "
+                                    f"needs its reason — that entry did nothing")
+                    continue
+                if _kind == "covered" and not _by:
+                    problems.append(f"estimator_decisions.read_rulings['{_id}']: 'covered' "
+                                    f"must name the operation that covers it (covered_by) — "
+                                    f"that entry did nothing")
+                    continue
+                if (_kind == "confirmed") != _id.lower().startswith(("allowance:", "line:")):
+                    problems.append(f"estimator_decisions.read_rulings['{_id}']: 'confirmed' "
+                                    f"is for an engine allowance ('allowance:<operation>' or "
+                                    f"'line:<code>'), and an allowance is confirmed here or "
+                                    f"taken off with operations_off — that entry did nothing")
+                    continue
+                clean_rr[_id] = dict({"ruling": _kind, "reason": _why},
+                                     **({"covered_by": _by} if _by else {}))
+            if clean_rr:
+                out["read_rulings"] = clean_rr
 
     _tp = block.get("throughput_per_hour")
     if _tp is not None:

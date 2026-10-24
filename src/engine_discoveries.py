@@ -91,6 +91,9 @@ _ESTIMATOR = {
     # Work stated against a materials-list item number that names no part (D-533): which part
     # it belongs to is read off the drawing by a person.
     "route_participant_is_a_callout_number",
+    # An engine allowance the shop stated for another product, held until a person confirms
+    # it for this job (D-596): the time is a judgement about this product, not a defect.
+    "engine_allowance_unconfirmed",
 }
 
 # The union, so any caller still asking only "is this the engine's fault" gets the answer it
@@ -155,6 +158,12 @@ _OURS = {
     # run behind an accepted price and not one could evidence it, because none of them
     # mentioned that their totals were never read back. The omission is the engine's.
     "money_provenance_undeclared",
+    # An item the read returned that reaches no charge and no ruling, or a line the engine
+    # added that nothing the read or the brief names (D-596): the engine was given it and did
+    # not account for it, or bought on no evidence — ours. The checker failing is ours too.
+    "read_item_unresolved",
+    "engine_line_unconfirmed",
+    "read_charge_check_failed",
 }
 
 # A RECORD THAT SAYS, CORRECTLY, THAT IT CANNOT EVIDENCE A PRICE. This one is deliberately
@@ -165,6 +174,9 @@ _OURS = {
 # push whoever is driving it down to suppress the declaration rather than fix the read-back.
 _ENVIRONMENT = {
     "money_provenance_cannot_evidence_a_price",
+    # The read could not be held to a calculated sheet because none was read back (D-596): on
+    # a machine with no Excel that is the only honest answer, for the same reason as above.
+    "read_charge_unverified",
 }
 
 _NOT_OURS = _NOT_OURS | _ENVIRONMENT

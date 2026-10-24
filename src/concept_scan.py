@@ -3837,6 +3837,17 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
             f"{_slug(stem, 'CONCEPT')}-CPT{n:02d}",
             item_number=n, description=name, quantity=None)
         record["concept"] = True
+        # WHICH READ LINE THIS IS (D-596): the fingerprint of the line as the read returned it,
+        # so the read ledger links the answer to this record whatever was set aside or
+        # appended before it was numbered; and whether the engine, not the read, minted it.
+        try:
+            from read_charge_contract import fingerprint as _read_fp
+            record["read_fingerprint"] = _read_fp(sighted)
+        except Exception:                                            # noqa: BLE001
+            pass
+        record["read_origin"] = ("engine:implied_fitting" if sighted.get("_minted_fitting_for")
+                                 else "engine:print_line" if sighted.get("_minted_print_for")
+                                 else "read")
         # WHICH KIND OF LINE THIS IS, on the record rather than inferred from its material.
         # A fabricated panel must carry work or it is a part nobody can price; a bought-in
         # castor and an applied graphic correctly carry none, and the difference has to be
@@ -5330,8 +5341,8 @@ def carry_stated_finish(unit: Optional[Dict[str, Any]], parts: List[Any],
     prices it, or, for a spec the zinc card does not cover (nickel, chrome), carries it unpriced
     and asks for the plater's price. A "plating" operation is the same requirement and becomes
     the finish, never a labour row. Polishing is put on the plated unit as its surface
-    preparation — the shop's stated brushing-before-plating time charges it, flagged — and is
-    always asked, with the grits as stated."""
+    preparation and always asked, with the grits as stated: nothing on the card charges it,
+    and the brushing-before-plating allowance is not it (D-596)."""
     try:
         from finish_rules import finish_families
         from source_precedence import apply_field, raise_manufacturing_question
@@ -5381,13 +5392,16 @@ def carry_stated_finish(unit: Optional[Dict[str, Any]], parts: List[Any],
         if host is not None:
             host["surface_preparation"] = polish
             pn = str(host.get("part_number") or "this part")
+            # BRUSHING IS NOT THIS POLISHING (review of D-595). The shop's brushing-before-
+            # plating allowance is its own line, calibrated on another product; a stated grit
+            # sequence is charged only by polishing time, and there is none on the card.
             raise_manufacturing_question(
                 host, f"Polishing of {pn}: {polish}",
-                ("timed at the shop's stated brushing-before-plating minutes a unit on the plated "
-                 "weldment — an indicative figure calibrated on one stand, not on this part"
-                 if plate else
-                 "the rate card has no polishing time, so the polishing is NOT in the price"),
-                "confirm the polishing minutes a unit for this part, grit by grit",
+                "NOT in the price — the rate card has no polishing time, and the "
+                "brushing-before-plating allowance is a separate job that does not satisfy "
+                "this sequence",
+                "give the polishing minutes a unit for this part, grit by grit, or rule how "
+                "it is covered",
                 "concept_scan.carry_stated_finish")
             changes.append({"kind": "asked", "item": f"polishing: {polish}", "to": [pn],
                             "why": st.get("polish_source") or "the read's operations"})

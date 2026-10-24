@@ -5553,8 +5553,10 @@ def _finalize_scan_summary(
                                            client_document=bool(_client_document))
             # THE READ AS THE MODEL GAVE IT, AND WHAT THE ENGINE MADE OF IT (D-595): kept on the
             # record so a book can be traced back to the answer without another model call.
+            # WHOLE, NOT CUT (D-596): the read ledger's sha256 is of these exact words, so the
+            # record can always be checked against what the model sent.
             summary["concept_read"].update(
-                raw_response=str(_read.get("raw_response") or "")[:60000],
+                raw_response=str(_read.get("raw_response") or ""),
                 read_key=str(_read.get("read_key") or ""),
                 read_changes=list(_transfer),
                 stated_finish=concept_scan.stated_finish(_answer, _brief or "").get("plate", ""),
@@ -5704,6 +5706,29 @@ def _finalize_scan_summary(
                     + (f" Other designs in the pack, not read: "
                        f"{', '.join(_fallback_pick.get('other_designs') or [])} — run with "
                        f"SDI_PRODUCT=<name> for each." if _fallback_pick.get("other_designs") else ""))
+            # THE READ LEDGER (D-596): every item the read returned, with an identity and the
+            # record it became, captured once every line is minted. After Excel,
+            # read_charge_contract holds each to charged, covered, excluded or unresolved.
+            try:
+                import read_charge_contract as _rcc
+                summary["read_ledger"] = _rcc.capture(
+                    (_read or {}).get("parsed") or _answer,
+                    records=([_unit] if _unit else []) + list(_sighted) + list(_nv_lines or []),
+                    raw_response=str((_read or {}).get("raw_response") or ""),
+                    read_key=str((_read or {}).get("read_key") or ""),
+                    said_by=("accepted_construction" if _acc else "llm_read"),
+                    brief=_brief or "", set_aside=_set_aside,
+                    replayed_from=str((_read or {}).get("replayed_from") or ""))
+                _led = summary["read_ledger"]
+                print(f"   [read-ledger] {sum(1 for _i in _led['items'] if _i.get('work'))} "
+                      f"item(s) of work and {sum(1 for _i in _led['items'] if not _i.get('work'))} "
+                      f"fact(s) from the read, each to be charged, covered, excluded or held",
+                      flush=True)
+            except Exception as _rl_exc:                             # noqa: BLE001
+                summary["read_ledger"] = {"schema": "read_ledger.v1", "items": [],
+                                          "error": f"{type(_rl_exc).__name__}: {_rl_exc}"}
+                print(f"   [read-ledger] NOT CAPTURED ({type(_rl_exc).__name__}: {_rl_exc}) — "
+                      f"the read cannot be held to the sheet on this run", flush=True)
             print("")
             print("   " + "=" * 68)
             print("   CONCEPT READ. This pack is a visual, not a drawing pack, so the")

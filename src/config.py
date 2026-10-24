@@ -2521,6 +2521,93 @@ CONCEPT_OPERATIONS_COVERED_ELSEWHERE = (
     "protective_film",
 )
 
+# ── WHAT THE READ RETURNED, AND WHAT CHARGES IT (D-596) ──────────────────────────────────
+#
+# read_charge_contract holds every item a read returned to one final state on the calculated
+# workbook: charged, covered by a named charge, excluded by a person with a reason, or
+# unresolved with the release held. These tables are its vocabulary, not its logic.
+#
+# The engine operations whose calculated labour row charges a read's operation word. A row
+# carrying any of them, naming the part, with hours and money on it, is the charge.
+READ_OPERATION_CHARGED_BY = {
+    "saw": ("saw", "tube", "tube_laser", "guillotine"),
+    "cnc_routing": ("cnc_routing", "cnc", "cnc_joinery", "pin_router", "machines_joinery"),
+    "deburring": ("deburring", "linisher"),
+    "edge_banding": ("edge_banding",),
+    "folding": ("folding", "linebend", "salvagnini"),
+    "glue": ("glue",),
+    "laminating": ("laminating", "glue"),
+    "hole_machining": ("hole_machining", "drilling", "punch"),
+    "laser_cutting": ("laser_cutting", "laser_cutting_acrylic", "tube", "tube_laser"),
+    "powder_coating": ("powder_coating", "oven"),
+    "wet_spray": ("wet_spray",),
+    "welding": ("welding", "spot_welding", "resistance_welding"),
+    "assembly": ("assembly", "assembly_acrylic", "bench_work"),
+    "bench_work": ("bench_work", "assembly", "assembly_acrylic"),
+    # A POLISHING SEQUENCE IS CHARGED ONLY BY POLISHING. Brushing before plating is a
+    # different job: it does not satisfy a stated 160-400 grit sequence (review of D-595).
+    "polishing": ("polishing", "diamond_polish"),
+    # A subcontract finish: the plating line carries it, never a labour row.
+    "plating": (),
+}
+# The profile cuts that cut a part's holes and cut-outs with its outline. A hole on a part one
+# of these charges is covered by that row; a hole on a sawn section is drilled, or unresolved.
+READ_PROFILE_CUTS = ("laser_cutting", "laser_cutting_acrylic", "tube", "tube_laser",
+                     "cnc_routing", "cnc", "cnc_joinery", "pin_router", "punch", "salvagnini")
+# The unit's own bench and pack work, which covers the handling, fitting and packing a read
+# names for a piece (CONCEPT_OPERATIONS_COVERED_ELSEWHERE).
+READ_UNIT_WORK_CHARGES = ("assembly", "assembly_acrylic", "bench_work", "handling",
+                          "packing_joinery", "manual_labour_metal", "manual_labour_acrylic")
+
+# EVERY CHARGE NO READ ITEM EXPLAINS IS AN ENGINE ALLOWANCE, listed apart with its basis. The
+# class says whether it may stand on its basis or holds the release until a person confirms it
+# for this job (estimator_decisions.read_rulings, "allowance:<operation>"):
+#   derived              follows from a charged read item by a stated rule — disclosed
+#   shop_standard        the shop's general rule for any job of this kind — disclosed
+#   calibrated_elsewhere a time the shop stated for ANOTHER product — holds the release: a
+#                        flag does not make it this job's time
+#   inferred_purchase    a purchase no read item and no brief names — holds the release
+#   (an engine charge with no entry here is unclassified, and holds the release)
+ENGINE_ALLOWANCE_BASIS = {
+    "handling": {"class": "shop_standard",
+                 "basis": "the shop's handling minutes a piece, from the rate card"},
+    "assembly": {"class": "shop_standard",
+                 "basis": "the shop's bench rule for a unit of fitted pieces"},
+    "assembly_acrylic": {"class": "shop_standard",
+                         "basis": "the shop's bench rule for a unit of fitted pieces"},
+    "bench_work": {"class": "shop_standard",
+                   "basis": "the shop's bench rule for a unit of fitted pieces"},
+    "packing_joinery": {"class": "shop_standard", "basis": "the shop's pack rule"},
+    "dress_welds": {"class": "derived", "from": "welding",
+                    "basis": "dressing follows the charged weld"},
+    "deburring": {"class": "derived", "from": "cut",
+                  "basis": "a cut edge is deburred — follows the charged cut"},
+    "saw": {"class": "derived", "from": "part", "basis": "the read part's own cut"},
+    "tube": {"class": "derived", "from": "part", "basis": "the read part's own cut"},
+    "tube_laser": {"class": "derived", "from": "part", "basis": "the read part's own cut"},
+    "guillotine": {"class": "derived", "from": "part", "basis": "the read part's own cut"},
+    "laser_cutting": {"class": "derived", "from": "part", "basis": "the read part's own cut"},
+    "laser_cutting_acrylic": {"class": "derived", "from": "part",
+                              "basis": "the read part's own cut"},
+    "cnc_routing": {"class": "derived", "from": "part", "basis": "the read part's own cut"},
+    "cnc": {"class": "derived", "from": "part", "basis": "the read part's own cut"},
+    "punch": {"class": "derived", "from": "part", "basis": "the read part's own cut"},
+    "brush_before_plate": {
+        "class": "calibrated_elsewhere", "shop_stated": "brush_before_plate_min",
+        "basis": "brushing before plating, stated by the shop for one plated stand per unit "
+                 "of similar size — not this product's time, and not a polishing sequence"},
+    "plater_pack": {"class": "calibrated_elsewhere", "shop_stated": "plater_pack_min",
+                    "basis": "packing out to the plater, stated by the shop for one plated "
+                             "stand"},
+    "plater_final_pack": {"class": "calibrated_elsewhere",
+                          "shop_stated": "plater_final_pack_min",
+                          "basis": "packing again on the way back, stated by the shop for "
+                                   "one plated stand"},
+}
+# The classes that hold the release until a person rules on them for this job.
+ENGINE_ALLOWANCE_HOLDING_CLASSES = ("calibrated_elsewhere", "inferred_purchase",
+                                    "unclassified")
+
 # A finish the sheet states, and the operation the bill must then carry somewhere (D-417).
 CONCEPT_FINISH_OPERATIONS = (
     (r"POWDER", "powder_coating"),
