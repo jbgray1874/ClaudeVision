@@ -1177,6 +1177,20 @@ def job_documents(summary: Any, pdf_path: Any = None) -> List[str]:
     return out
 
 
+def image_only_pages(summary: Any) -> List[str]:
+    """The pages with no text layer, as "<document> page <n>" (D-598g). A scanned drawing is
+    one: the text, vector and table readers cannot read it by construction, and the vision
+    read is the one reader that can."""
+    out: List[str] = []
+    for pg in ((summary or {}).get("pages") or []) if isinstance(summary, dict) else []:
+        if not isinstance(pg, dict) or str(pg.get("pdfplumber_text")
+                                           or pg.get("normalized_text") or "").strip():
+            continue
+        doc = re.split(r"[\\/]", str(pg.get("source_pdf_path") or ""))[-1] or "the pack"
+        out.append(f"{doc} page {pg.get('page_number')}")
+    return out
+
+
 def design_intent_pages(summary: Any) -> List[Any]:
     """The page numbers whose role is design_intent (D-406), in order."""
     out: List[Any] = []
@@ -5066,7 +5080,33 @@ def _finalize_scan_summary(
                   "failing that, nothing to cost.", flush=True)
     # The concept read runs for an LLM-only run, and as the FALLBACK for a design-intent pack
     # the model could not answer (D-411) — "even if it's LLM pricing" (James Gray, 8 Oct 2026).
-    _sight_run = _llm_only_run or _design_intent_fallback
+    # A SCANNED DRAWING ON AN ENGINE RUN IS READ BY THE ONE READER THAT CAN READ IT (D-598g).
+    # 0320730 through the portal: an M&S pack whose only drawing is a page with no text layer,
+    # beside seven pages of forms. Every engine reader reads text, vectors, tables or flats, so
+    # none could read the picture; they found no part, correctly, and the book went out empty,
+    # while the same pack as LLM SCAN ONLY priced. With no part read, no design-intent sheet,
+    # and a page that is only an image, the engine run takes the concept read as its fallback,
+    # as a design-intent pack does (D-411). The measured-CAD guard below still refuses a pack
+    # with real geometry, and every part it gives is stamped as sighted.
+    _scanned_pages = image_only_pages(summary)
+    _scanned_drawing_fallback = bool(_no_parts and not _llm_only_run and not _is_render_pack
+                                     and not _design_intent_pages and not _design_intent_fallback
+                                     and _scanned_pages)
+    if _scanned_drawing_fallback:
+        summary["scanned_drawing_fallback"] = {
+            "pages": _scanned_pages[:20],
+            "why": ("no engine reader found a part, and the pack has page(s) with no text "
+                    "layer that only the vision read can read"),
+        }
+        summary.setdefault("review_flags", []).append(
+            "PRICED FROM THE VISION READ OF A SCANNED DRAWING: no engine reader found a part, "
+            f"and {', '.join(_scanned_pages[:6])} carr{'y' if len(_scanned_pages) > 1 else 'ies'} "
+            "no text layer. The parts below were sighted by the vision model, not measured; "
+            "every size and count is for the estimator to confirm.")
+        print(f"   [concept] no engine reader found a part, and {', '.join(_scanned_pages[:6])} "
+              f"has no text layer — the vision read is the fallback (a scanned drawing)",
+              flush=True)
+    _sight_run = _llm_only_run or _design_intent_fallback or _scanned_drawing_fallback
     # ── MEASURED CAD IS NEVER SIGHTED OVER ──────────────────────────────────────────
     #
     # The condition below is "--llm-only AND (a render pack OR nothing came out)", and the
@@ -5886,9 +5926,11 @@ def _finalize_scan_summary(
     if not summary["manufacturing_writeup"]["parts"] and not summary.get("run_stop"):
         from run_stop import record as _record_stop
         _cr = summary.get("concept_read") if isinstance(summary.get("concept_read"), dict) else {}
-        _why_none = ("the drawing read ran and gave no part either"
-                     + (f" ({_cr.get('error') or _cr.get('refused')})"
-                        if (_cr.get("error") or _cr.get("refused")) else "")
+        _why_none = ((f"the drawing read was refused: {str(_cr['refused']).rstrip('.')}"
+                      if _cr.get("refused") else
+                      f"the drawing read was tried and did not answer: "
+                      f"{str(_cr['error']).rstrip('.')}" if _cr.get("error") else
+                      "the drawing read ran and gave no part either")
                      if _sight_run else
                      "this was an engine run, and the drawing read that takes parts off a pack "
                      "with no parts list runs only on an LLM-only run")
