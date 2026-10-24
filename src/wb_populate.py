@@ -4809,7 +4809,7 @@ def _write_run_stop_banner(ws, summary: Dict[str, Any], flags: List[str]) -> boo
         return False
     try:
         _write_beside_price_labels(ws, banner(stop))
-        _flag(f"NO PRICE: {banner(stop)}", flags)
+        _flag(banner(stop), flags)
         return True
     except Exception as _exc:                                          # noqa: BLE001
         _flag(f"the run-stop banner could not be written ({_exc}) — the report and the quote "

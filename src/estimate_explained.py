@@ -267,10 +267,22 @@ def _estimate_bom(wb) -> List[Dict[str, Any]]:
             break
     if header_row is None:
         return []
+
+    def _column_headings(r: int) -> bool:
+        return any(str(ws.cell(r, c).value or "").strip().lower() == "part description"
+                   for c in (3, 4))
+
     out = []
     for r in range(header_row + 1, ws.max_row + 1):
         code = ws.cell(r, 8).value           # "Part code"
         text = ws.cell(r, 3).value           # the description column
+        # THE NEXT BLOCK IS NOT THIS ONE'S LINES (D-598f). An empty bill has no line to end on,
+        # so the walk ran on into the wire block and listed its title "Wire" and its column
+        # headings "Part Description … Kgs" as two unpriced lines on 0320730's 15:36 book. A
+        # row of column headings, or a lone title above one, starts the next block.
+        if _column_headings(r) or (not code and str(text or "").strip()
+                                   and _column_headings(r + 1)):
+            break
         if not code and not text:
             if out:
                 break                        # the block has ended
@@ -2982,8 +2994,8 @@ _REFUSAL_BY_CAUSE: Dict[str, Dict[str, Any]] = {
     # THE RUN COSTED NOTHING (D-598d). 0320730's 15:36 run read no part, and this note told
     # the estimator to look for a #DIV/0! in a workbook with nothing on it.
     "nothing_to_cost": {
-        "headline": "nothing to cost, so there is no price",
-        "happened": "No part reached the bill, so the workbook carries no price: {detail}.",
+        "headline": "no estimate produced, nothing to cost",
+        "happened": "No part reached the bill, so no estimate was produced: {detail}.",
         "default_detail": "no reader found a part in this pack",
         "means": "The workbook's 0.00 is not a price. Nothing in it is costed.",
         "steps": (

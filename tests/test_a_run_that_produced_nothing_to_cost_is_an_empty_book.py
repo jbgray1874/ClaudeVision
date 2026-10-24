@@ -84,10 +84,10 @@ def test_an_unknown_kind_still_stops_the_book_and_is_printed_not_dropped():
 def test_the_banner_and_the_sentence_are_one_wording():
     stop = run_stop.nothing_to_cost(_stopped_summary())
     sent = run_stop.sentence(stop)
-    assert sent.startswith("No price — nothing to cost: the pack is design-intent sheets")
+    assert sent.startswith("No estimate produced — nothing to cost: the pack is design-intent sheets")
     assert sent.endswith(NEXT)
     ban = run_stop.banner(stop)
-    assert ban.startswith("NO PRICE — nothing to cost:") and ban.endswith(NEXT)
+    assert ban.startswith("NO ESTIMATE PRODUCED — nothing to cost:") and ban.endswith(NEXT)
     assert not ban.startswith("PROVISIONAL"), "PROVISIONAL promises a figure to finish"
 
 
@@ -216,7 +216,7 @@ def test_the_price_fact_is_no_price_not_an_indicative_figure():
     price = qs._price_fact(s)
     assert price["amount"] is None and price["workbook_amount"] is None
     assert price["nothing_to_cost"] is True
-    assert price["why"].startswith("No price — nothing to cost:")
+    assert price["why"].startswith("No estimate produced — nothing to cost:")
 
 
 def test_the_quote_state_names_the_stop_as_its_first_gate():
@@ -246,7 +246,7 @@ def test_the_release_words_are_the_stop():
     s = _stopped_summary()
     rec = cf.costed_job(s)
     cls, head, reasons = jrh._release_words(rec, s)
-    assert cls == "t-bad" and head == "No price — this run produced nothing to cost"
+    assert cls == "t-bad" and head == "No estimate produced — this run had nothing to cost"
     assert reasons[0] == run_stop.sentence(rec["run_stop"])
 
 
@@ -259,7 +259,7 @@ def test_the_whole_report_says_no_price_first_and_nowhere_says_pending():
     assert "Nothing to cost" in text                       # the Decisions table's row
     assert "PENDING — NOT TRACEABLE" not in text
     assert "Not for release — " not in text
-    assert "No price was produced on this run" in text    # the verdict
+    assert "No estimate was produced on this run" in text    # the verdict
     # the glance shows no labour figure to contradict the sheet
     glance = text[text.index("Estimate at a glance"):text.index("Estimate at a glance") + 600]
     assert "Labour" not in glance.replace("labour figure", "")
@@ -285,10 +285,10 @@ def test_the_sheet_carries_the_stop_beside_every_price_cell_and_no_provisional_b
     flags: list = []
     assert wp._write_run_stop_banner(ws, _stopped_summary(), flags) is True
     banners = [c.value for row in ws.iter_rows() for c in row
-               if isinstance(c.value, str) and c.value.startswith("NO PRICE — ")]
+               if isinstance(c.value, str) and c.value.startswith("NO ESTIMATE PRODUCED — ")]
     assert len(banners) == 3, banners
     assert all("design-intent sheets" in b for b in banners)
-    assert any(f.startswith("NO PRICE:") for f in flags)
+    assert any(f.startswith("NO ESTIMATE PRODUCED — ") for f in flags)
     # the estimator-inputs banner stands aside, the checklist anchor row is still found
     before = [c.value for row in ws.iter_rows() for c in row if c.value is not None]
     assert wp._write_beside_price_labels(ws, None) == 231
@@ -423,7 +423,8 @@ def test_a_pack_no_reader_found_a_part_in_stops_whatever_the_reason():
     backstop = src.index('_record_stop(summary, "no_parts_read"')
     assert src.index('"design_intent_pack_on_engine_run", _di_pending[0]') < backstop \
         < src.index('pre_costing_passes(summary)\n    summary["estimate_summary"]')
-    assert 'not summary.get("run_stop")' in src[backstop - 900:backstop]
+    guard = src.index('if not summary["manufacturing_writeup"]["parts"] and not summary.get("run_stop"):')
+    assert src.index('"design_intent_pack_on_engine_run", _di_pending[0]') < guard < backstop
     s = {"manufacturing_writeup": {"parts": []}}
     run_stop.record(s, "no_parts_read", "NOTHING TO COST: no reader found a part.",
                     next_step="Check the pack.")
@@ -441,3 +442,69 @@ def test_the_refusal_note_for_an_empty_run_names_it_not_a_formula_error():
     assert "DIV/0" not in note["text"] and "Check the pack" in note["text"]
     main_src = (_ROOT / "src" / "main.py").read_text(encoding="utf-8")
     assert main_src.index("_ntc_note(summary)") < main_src.index("_dns_args = {")
+
+
+# ── NO ESTIMATE PRODUCED, ON EVERY SURFACE (D-598f) ─────────────────────────────────────────
+# Review of 0320730's 15:36 run: the email refused, and the book said "nothing outstanding",
+# the report "the estimate read cleanly" over two template headings listed as lines, and the
+# portal page £0.00 with assembly and packing included.
+
+def test_the_stop_names_the_pages_no_reading_took():
+    s = {"manufacturing_writeup": {"parts": []}}
+    run_stop.record(s, "no_parts_read", "NOTHING TO COST.", next_step="Check the pack.",
+                    pages_not_read=["pack.pdf page 2"])
+    stop = run_stop.nothing_to_cost(s)
+    assert run_stop.sentence(stop).startswith("No estimate produced — nothing to cost:")
+    assert "pack.pdf page 2" in run_stop.doors(stop)
+
+
+def test_the_report_on_an_empty_book_never_says_it_read_cleanly():
+    html = jrh.build_report_html(_stopped_summary())
+    text = _text(re.sub(r"<(style|script)[^>]*>.*?</\1>", " ", html, flags=re.S))
+    assert "read cleanly" not in text
+    assert "No review points: no estimate was produced" in text
+
+
+def test_a_page_nothing_read_is_a_weakness_and_the_verdict_says_so():
+    s = {"job_source_pdfs": [{"name": "pack.pdf"}], "cad_inputs": {},
+         "estimate_summary": {"estimate_workbook_inputs": {"assumed_job_quantity": 1},
+                              "part_estimates": [{"part_number": "A1"}]},
+         "manufacturing_writeup": {"parts": [{"part_number": "A1"}]},
+         "page_coverage": {"pages": [], "gaps": [], "content_not_read": ["pack.pdf page 2"]}}
+    text = _text(jrh.build_report_html(s))
+    assert "Pages whose content no reading took" in text and "pack.pdf page 2" in text
+    assert "The drawing pack has not been read in full" in text
+    assert "The pack read cleanly" not in text
+
+
+def test_the_empty_sheet_lists_no_template_heading_as_a_line():
+    from openpyxl import Workbook
+    import estimate_explained as ee
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Estimate"
+    ws["C10"], ws["H10"] = "Bill of Materials (Per Unit)", "Part code"
+    ws["C81"] = "Wire"
+    ws["C82"], ws["K82"] = "Part Description", "Kgs"
+    assert ee._estimate_bom(wb) == [], "an empty bill has no lines, not the next block's headings"
+    for r in range(11, 81):
+        ws.cell(r, 3, f"LINE {r}")
+        ws.cell(r, 8, f"CODE{r}")
+    assert [r["code"] for r in ee._estimate_bom(wb)][-1] == "CODE80"
+
+
+def test_a_workbook_total_of_zero_is_not_a_price_on_any_page():
+    s = {"estimate_summary": {"workbook_equivalent_pricing": {"m105_total_unit_cost_gbp": 0.0}},
+         "final_estimate": {"totals": {"unit_cell": "Estimate!G6", "unit_cell_value": 0.0}}}
+    price = qs._price_fact(s)
+    assert price["amount"] is None and price["workbook_amount"] is None
+    assert "no estimate was produced" in price["why"]
+
+
+def test_the_portal_page_promises_nothing_for_an_estimate_not_produced():
+    import client_quote_html as cq
+    html = cq.build_quote_html(_stopped_summary())
+    text = _text(html)
+    assert "Nothing: no estimate was produced" in text
+    assert "Clean assembly and inspection" not in text
+    assert "Boxed for transport" not in text and "£0.00" not in text

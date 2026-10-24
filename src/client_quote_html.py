@@ -1637,6 +1637,12 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     _release = _record.get("release") or {}
     _draft = bool(_release.get("draft"))  # retained: the fixtures assert it changes nothing
     ops = _collect_operations(parts, summary, packing_charged=(_packing != "unpriced"))
+    # NOTHING IS INCLUDED IN AN ESTIMATE THAT WAS NOT PRODUCED (D-598f). 0320730's 15:36 portal
+    # page, for a book with nothing on it, listed "Clean assembly and inspection" and
+    # "Individual packing for transport": a scope promised for a product nobody had costed.
+    _not_produced = bool(_state["price"].get("nothing_to_cost")) or not parts
+    if _not_produced:
+        ops = []
 
     # THE INVARIANT GATE, READ BY THE DOCUMENT THAT LEAVES THE BUILDING.
     # The checks ran and wrote their verdict onto the job, and the quote was generated
@@ -1694,7 +1700,8 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     today = date.today().strftime("%d %B %Y")
 
     # operations -> two-column bullet list
-    inc_items = "\n".join(f"      <li>{_esc(o)}</li>" for o in ops)
+    inc_items = ("\n".join(f"      <li>{_esc(o)}</li>" for o in ops) if ops else
+                 "      <li>Nothing: no estimate was produced</li>")
 
     # THE GAP LIST IS INTERNAL, AND THAT IS A DELIBERATE COMMERCIAL CHOICE.
     #
@@ -1826,7 +1833,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     # "to be priced" is the estimator's instruction, not the customer's business — the same
     # tell as the draft banner, in the packing row. What the customer needs is the scope:
     # this price does not cover packaging and delivery.
-    _packing_row = ("Not included in this price"
+    _packing_row = ("&mdash;" if _not_produced else "Not included in this price"
                     if _packing == "unpriced" else "Boxed for transport")
     # The run's own identity, so "which engine run produced this quote" is checkable.
     _run_foot = ""

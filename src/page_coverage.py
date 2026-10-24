@@ -9,7 +9,9 @@ its notes reach no reading. That is a gap, and it is named.
 
     summary["page_coverage"] = {
         "pages": [{document, page, paper, size_pt, text_chars, has_text,
-                   whole_pack_read, concept_text, concept_image, gaps}],
+                   whole_pack_read, concept_text, concept_image, text_processed,
+                   content_read, content_read_by, gaps}],
+        "content_not_read": ["<document> page <n>"],
         "gaps":  [{document, page, kind, detail}],
         "readers": {"whole_pack": bool, "concept": bool}}
 
@@ -21,6 +23,11 @@ took its image), `image_coarse` (its image went at a resolution where small note
 (review of D-598): a page the rule-based readers read for its text is read; a normal pack fully
 read by them is not held because no LLM ran. invariants.check_every_page_reached_a_read raises
 them.
+
+TEXT PROCESSED IS NOT CONTENT READ (D-598f). `text_processed` says the page's text layer was
+extracted and counted; `content_read` says some reading took what the page carries: its text,
+where it has any, or its image, by an LLM read that answered. 0320730's drawing page had no text
+layer, went through the whole-pack text read, and was marked read; nothing had read it.
 
 Read-only: nothing here reads a document, calls a model, or changes a record but its own.
 """
@@ -166,9 +173,25 @@ def build(summary: Mapping[str, Any], pages: Optional[List[Mapping[str, Any]]] =
             gap("image_response_unverified", "Page rendered, but no successful concept response retained")
         if entry["concept_image"] and entry["concept_image"]["dpi"] is None:
             gap("image_detail_unknown", "Image resolution cannot be checked against page dimensions")
+        by: List[str] = []
+        if has_text and (doc, num) in rule_read:
+            by.append("rule-based text")
+        if has_text and (wp_pages.get((doc, num)) or {}).get("read"):
+            by.append("whole-pack LLM text")
+        if has_text and entry["concept_text"] == "sent whole":
+            by.append("concept read text")
+        if entry["concept_image"] and concept_ran:
+            by.append("concept read image")
+        entry["text_processed"] = p.get("chars") is not None and not p.get("error")
+        entry["content_read"] = bool(by)
+        entry["content_read_by"] = by
         entries.append(entry)
     return {"schema": SCHEMA, "pages": entries, "gaps": gaps,
             "documents": sorted({e["document"] for e in entries}),
+            "pages_text_processed": sum(1 for e in entries if e["text_processed"]),
+            "pages_content_read": sum(1 for e in entries if e["content_read"]),
+            "content_not_read": [f"{e['document']} page {e['page']}" for e in entries
+                                 if not e["content_read"]],
             "readers": {"whole_pack": wp_ran, "concept": concept_ran},
             # NO LLM READING AT ALL IS SAID, not reported as every page read: the rule-based
             # readers saw these pages, and nothing read their notes (an offline or keyless run).

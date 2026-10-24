@@ -1717,6 +1717,16 @@ def _render_drawing_analysis(dq: Dict[str, Any], summary: Optional[Dict[str, Any
 
     # 4.2 weaknesses table — only genuine issues
     wk = ""
+    # PAGES NO READING TOOK (D-598f): the text was processed, the content was not read. On
+    # 0320730's 15:36 run that was the drawing itself, and this section said the pack "read
+    # cleanly".
+    _unread_pages = _content_not_read(summary)
+    if _unread_pages:
+        wk += (f'<tr><td><b>Pages whose content no reading took</b></td>'
+               f'<td>{_esc(", ".join(_unread_pages[:6]))}'
+               f'{" …and " + str(len(_unread_pages) - 6) + " more" if len(_unread_pages) > 6 else ""}</td>'
+               f'<td>Their text layer was processed, and holds nothing or was not read; no LLM '
+               f'read took their image. What they show reached no reading.</td></tr>')
     # DRAWINGS THAT NEVER ARRIVED COME FIRST, because it is the one weakness that changes what
     # the total MEANS rather than how precisely it was measured. A pack missing four welded
     # assemblies is not a cheap job; it is a job we have only seen part of, and the reader needs
@@ -1883,6 +1893,8 @@ def _render_drawing_analysis(dq: Dict[str, Any], summary: Optional[Dict[str, Any
     weaknesses = f"""<h3>{_sub('drawings', 3)} &nbsp;Weaknesses &amp; inconsistencies found</h3>
 <table><thead><tr><th>Finding</th><th>Where</th><th>Effect on estimating</th></tr></thead>
 <tbody>{wk}</tbody></table>""" if wk else f"""<h3>{_sub('drawings', 3)} &nbsp;Weaknesses &amp; inconsistencies found</h3>
+<div class="callout warn"><b>No drawing faults were flagged, and no estimate was produced.</b> Nothing
+read from this pack reached a costed part, so how well it was read is not established.</div>""" if _no_estimate_produced(summary) else f"""<h3>{_sub('drawings', 3)} &nbsp;Weaknesses &amp; inconsistencies found</h3>
 <div class="callout good"><b>No significant drawing faults detected.</b> The pack read cleanly with no
 missing DXFs, filename issues, or contaminated fields flagged.</div>"""
 
@@ -2113,7 +2125,31 @@ def _render_readers_panel(readers: List[Dict[str, Any]]) -> str:
             f'{_rows(on, True)}{_rows(off, False)}</tbody></table>')
 
 
-def _render_checklist(review: Dict[str, Any], dq: Dict[str, Any]) -> str:
+def _content_not_read(summary: Any) -> List[str]:
+    """The pages page coverage says no reading took the content of (D-598f)."""
+    pc = summary.get("page_coverage") if isinstance(summary, dict) else None
+    return ([str(x) for x in (pc.get("content_not_read") or []) if str(x).strip()]
+            if isinstance(pc, dict) else [])
+
+
+def _no_estimate_produced(summary: Any) -> bool:
+    """A run stop, or a record with no part at all: nothing was produced to check (D-598f)."""
+    if not isinstance(summary, dict):
+        return False
+    try:
+        from run_stop import nothing_to_cost                           # noqa: PLC0415
+        if nothing_to_cost(summary):
+            return True
+    except Exception:                                                # noqa: BLE001
+        pass
+    wu = summary.get("manufacturing_writeup")
+    es = summary.get("estimate_summary") if isinstance(summary.get("estimate_summary"), dict) else {}
+    return (isinstance(wu, dict) and not (wu.get("parts") or [])
+            and not (es.get("part_estimates") or []))
+
+
+def _render_checklist(review: Dict[str, Any], dq: Dict[str, Any],
+                      summary: Optional[Dict[str, Any]] = None) -> str:
     """5 — THE CHECKLIST, WITH EACH FINDING EXPLAINED ONCE.
 
     WHAT IT LOOKED LIKE, and why nobody could work from it:
@@ -2194,7 +2230,15 @@ def _render_checklist(review: Dict[str, Any], dq: Dict[str, Any]) -> str:
         items += (f'<li><b>Check against the drawing</b><br>{_esc(pn["note"])}<br>'
                   f'<span class="t-muted">{_lbl_who}</span></li>')
 
-    if not items:
+    if not items and _no_estimate_produced(summary):
+        # NOT "READ CLEANLY" ON AN EMPTY BOOK (D-598f): nothing was produced to raise a point on.
+        items = ("<li>No review points: no estimate was produced, so there is nothing priced to "
+                 "check. Why is at the top of this page.</li>")
+    elif not items and _content_not_read(summary):
+        items = ("<li>No review points were raised, but the estimate has not read cleanly: "
+                 f"{len(_content_not_read(summary))} page(s) carry content no reading took "
+                 "(section 4).</li>")
+    elif not items:
         items = "<li>No specific review points — the estimate read cleanly.</li>"
     return f"""{_h2('focus')}
 <p>Grouped by what the finding is, so each one is explained once and you can see every part it
@@ -2263,6 +2307,12 @@ def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool,
     draw_note = ("The drawing pack is largely legible, with the main opportunities captured as Design "
                  "recommendations above." if faults else
                  "The drawing pack read cleanly with no significant faults detected.")
+    if _content_not_read(summary):
+        # A PACK WITH A PAGE NOTHING READ HAS NOT READ CLEANLY (D-598f), whatever else it did.
+        draw_note = (f"The drawing pack has not been read in full: "
+                     f"{len(_content_not_read(summary))} page(s) carry content no reading took.")
+    elif _no_estimate_produced(summary):
+        draw_note = "Nothing read from the drawing pack reached a costed part."
     parity_note = (f" The engine's figures are compared against the manual estimate in {_sec('parity')}." if has_parity else "")
     _inv = summary.get("invariants") if isinstance(summary.get("invariants"), dict) else None
     # NO REASSURANCE THE TOP OF THE PAGE CONTRADICTS. The record's open decisions are stated
@@ -2286,7 +2336,7 @@ def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool,
         # THE VERDICT ON AN EMPTY BOOK IS THAT IT IS EMPTY (D-409), not "PROVISIONAL … the
         # workbook Unit Cost is PENDING" as though a figure were waiting to be finished.
         from run_stop import sentence as _stop_sentence              # noqa: PLC0415
-        _lead = (f"<b>No price was produced on this run.</b> {_esc(_stop_sentence(_stop))} "
+        _lead = (f"<b>No estimate was produced on this run.</b> {_esc(_stop_sentence(_stop))} "
                  f"The checks and figures in this document describe an empty book, not a "
                  f"price; nothing here is to be sent as an estimate.{_open_note}")
     elif _inv is not None and not _inv.get("may_quote_firm"):
@@ -3305,7 +3355,7 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
         _render_whats_right(summary, streams),
         _render_review_items(review),
         _render_drawing_analysis(dq, summary),
-        _render_checklist(review, dq),
+        _render_checklist(review, dq, summary),
         _render_design_recs(dq, summary),
         _render_verdict(hl, dq, has_parity, summary),
     ])
@@ -3570,7 +3620,7 @@ def _release_words(record: Dict[str, Any], summary: Dict[str, Any]) -> Tuple[str
     if _stop:
         from run_stop import sentence as _stop_sentence              # noqa: PLC0415
         _first = _stop_sentence(_stop)
-        return ("t-bad", "No price — this run produced nothing to cost",
+        return ("t-bad", "No estimate produced — this run had nothing to cost",
                 [_first] + [r for r in reasons if r != _first])
     if rel.get("draft"):
         # THE ONE TALLY. The banner said "3 inputs" over a table of 5 items because it read

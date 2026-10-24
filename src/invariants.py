@@ -2564,6 +2564,19 @@ def check_every_page_reached_a_read(summary: Any) -> List[Dict[str, Any]]:
             + ". Confirm nothing on them is missed — page transcription and detail crops are "
               "not yet built (D-597b).",
             pages=soft[:20], count=len(soft), needs_ruling=True))
+    # AN EMPTY BOOK BESIDE A PAGE NOTHING READ IS A READING FAILURE (D-598f). 0320730's 15:36
+    # run costed nothing, and its drawing was the one page no reading took; that is not proof
+    # the pack is empty. Held until the page is read or ruled out.
+    _wu = summary.get("manufacturing_writeup") if isinstance(summary.get("manufacturing_writeup"), dict) else {}
+    unread = [str(x) for x in (pc.get("content_not_read") or []) if str(x).strip()]
+    if unread and not (_wu.get("parts") or []):
+        out.append(_violation(
+            "page_content_not_read", BLOCKING,
+            f"No part was costed, and {len(unread)} page(s) carry content no reading took: "
+            + "; ".join(unread[:6])
+            + ". The empty book may be a reading failure, not an empty pack. Read the page(s), "
+              "or rule them out of scope.",
+            pages=unread[:20], count=len(unread)))
     return out
 
 
