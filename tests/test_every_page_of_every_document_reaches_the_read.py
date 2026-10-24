@@ -311,3 +311,33 @@ def test_an_llm_part_that_failed_on_a_page_the_rules_read_asks_a_ruling_not_a_ho
     assert [(g["document"], g["kind"]) for g in pc["gaps"]] == [("spec.pdf", "text_not_read")]
     assert invariants.check_every_page_reached_a_read(
         {"page_coverage": pc})[0]["severity"] == invariants.BLOCKING
+
+
+# ── TEXT PROCESSED IS NOT CONTENT READ (D-598f) ─────────────────────────────────────────────
+
+def test_a_page_with_no_text_layer_is_processed_not_read(tmp_path, monkeypatch):
+    """0320730's drawing was a page with no text layer. The whole-pack read is of text, and it
+    marked the page read because its batch answered: processed, not read."""
+    pdf = _pdf(tmp_path / "pack.pdf", [_lines("FORM", 3), []])
+    monkeypatch.setenv("SDI_LLM_EXTRACT_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(lfe, "_call_llm", lambda content, model, system="": _answer(
+        [{"part_number": "A1", "description": "BRACKET", "qty": 1}]))
+    cov = lfe.extract_full_pack([pdf])["_coverage"]
+    by_page = {p["page"]: p for p in cov["pages"]}
+    assert by_page[1].get("read") is True and not by_page[2].get("read")
+    pc = pcov.build({"llm_full_extract_coverage": cov})
+    e1, e2 = (next(e for e in pc["pages"] if e["page"] == n) for n in (1, 2))
+    assert e2["text_processed"] is True and e2["content_read"] is False
+    assert e1["content_read"] is True and e1["content_read_by"] == ["whole-pack LLM text"]
+    assert pc["content_not_read"] == ["pack.pdf page 2"]
+    assert pc["pages_text_processed"] == 2 and pc["pages_content_read"] == 1
+
+
+def test_an_empty_book_beside_a_page_nothing_read_is_held():
+    pc = {"pages": [], "gaps": [], "content_not_read": ["pack.pdf page 2"]}
+    held = invariants.check_every_page_reached_a_read(
+        {"page_coverage": pc, "manufacturing_writeup": {"parts": []}})
+    assert [(v["code"], v["severity"]) for v in held] == [("page_content_not_read",
+                                                           invariants.BLOCKING)]
+    assert not invariants.check_every_page_reached_a_read(
+        {"page_coverage": pc, "manufacturing_writeup": {"parts": [{"part_number": "A1"}]}})

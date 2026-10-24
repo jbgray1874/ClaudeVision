@@ -2495,7 +2495,7 @@ def main() -> None:
             # A RUN THAT STOPPED WITH NOTHING TO COST SAYS SO (D-598d), in the note's place,
             # with the stop's own reason, not the read-back's repair.
             try:
-                from run_stop import nothing_to_cost as _ntc_note
+                from run_stop import nothing_to_cost as _ntc_note, doors as _stop_doors
                 _stop_note = _ntc_note(summary)
             except Exception:                                    # noqa: BLE001
                 _stop_note = None
@@ -2504,8 +2504,9 @@ def main() -> None:
                 _money_refused = True
                 _mp_block = dict(_mp_block or {}, cause="nothing_to_cost")
                 _mp_ev = {"workbook_stage_skipped_because": (
-                    f"{str(_stop_note.get('short') or '').rstrip('.')}. "
-                    f"{str(_stop_note.get('next_step') or '')}").strip().rstrip(".")}
+                    "; ".join(x for x in (str(_stop_note.get("short") or "").rstrip("."),
+                                          _stop_doors(_stop_note)) if x)
+                    + f". {str(_stop_note.get('next_step') or '')}").strip().rstrip(".")}
                 print(f"   [covering-note] DO NOT SEND — nothing to cost: "
                       f"{_stop_note.get('short')}; the covering email is replaced by a "
                       f"refusal and the quote is held", flush=True)

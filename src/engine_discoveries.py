@@ -172,6 +172,8 @@ _OURS = {
     "page_text_not_read",
     "page_image_not_read_reliably",
     "page_coverage_not_built",
+    # An empty book beside a page no reading took (D-598f): the engine was given the page.
+    "page_content_not_read",
 }
 
 # A RECORD THAT SAYS, CORRECTLY, THAT IT CANNOT EVIDENCE A PRICE. This one is deliberately

@@ -616,7 +616,12 @@ def extract_full_pack(pdf_paths: Any, model: str = DEFAULT_MODEL,
             entry = by_key.get((str(key[0]), key[1]))
             if entry is not None:
                 entry.setdefault("batches", []).append(batch["index"])
-                entry["read"] = bool(entry.get("read", True)) and ok
+                entry["text_processed"] = bool(entry.get("text_processed", True)) and ok
+                # A PAGE WITH NO TEXT LAYER IS PROCESSED, NOT READ (D-598f). This read is of
+                # text; 0320730's drawing page had none and was marked read because its batch
+                # answered. What it shows reached no reading here.
+                entry["read"] = (bool(entry.get("read", True)) and ok
+                                 and bool(entry.get("has_text")))
 
     if len(batches) == 1:
         obj = _transcribe(batches[0]["text"], model)

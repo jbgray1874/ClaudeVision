@@ -157,6 +157,11 @@ def _price_fact(summary: Mapping[str, Any]) -> Dict[str, Any]:
     elif (isinstance(_raw, (int, float)) and isinstance(_cell_value, (int, float))
             and abs(_raw - _cell_value) > 0.005):
         _raw = None
+    # A WORKBOOK THAT HOLDS NOTHING HAS NO FIGURE TO SHOW (D-598f). 0320730's 15:36 portal page
+    # printed "£0.00 · indicative, from the workbook" for a book with nothing on it. Zero is
+    # not an indicative price; it is the absence of one.
+    if isinstance(_raw, (int, float)) and _raw <= 0:
+        _raw = None
     try:
         from displayed_charge import publishable_total
         fact = publishable_total({"run": {
@@ -176,6 +181,12 @@ def _price_fact(summary: Mapping[str, Any]) -> Dict[str, Any]:
         return {"amount": None, "cell": None, "basis": "none",
                 "workbook_amount": None,
                 "why": f"the traceability check could not run ({exc})"}
+    # NOR IS A TRACEABLE ZERO A PRICE (D-598f): a cell that holds 0.00 costs nothing, and a
+    # customer page must never carry it as the price of the product.
+    if isinstance(fact.get("amount"), (int, float)) and fact["amount"] <= 0:
+        fact = dict(fact, amount=None, basis="none",
+                    why=(f"the sheet's total ({fact.get('cell') or 'its unit cell'}) is 0.00: "
+                         f"nothing on it is costed, so no estimate was produced"))
     fact.setdefault("workbook_amount", _raw)
     return fact
 

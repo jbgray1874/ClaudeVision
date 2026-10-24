@@ -5851,7 +5851,8 @@ def _finalize_scan_summary(
         summary["page_coverage"] = _pcov.build(summary, _pc_pages)
         _pcg = summary["page_coverage"]["gaps"]
         print(f"   [page-coverage] {len(summary['page_coverage']['pages'])} page(s) across "
-              f"{len(summary['page_coverage']['documents'])} document(s); "
+              f"{len(summary['page_coverage']['documents'])} document(s), content read on "
+              f"{summary['page_coverage'].get('pages_content_read', 0)}; "
               + ("NO LLM READING RAN — the rule-based readers alone saw these pages"
                  + (f"; {len(_pcg)} gap(s)" if _pcg else "")
                  if not summary["page_coverage"].get("llm_read") else
@@ -5877,7 +5878,7 @@ def _finalize_scan_summary(
                                        or "the concept read produced no part")))
         print("   !! this pack is design-intent sheets on an ENGINE run — nothing to cost. "
               "Take the chosen design off from its own model, or have Design detail it.", flush=True)
-    # A PACK THAT GAVE NO PART AT ALL STOPS HERE TOO (D-598d), whatever the reason none of the
+    # A PACK THAT GAVE NO PART AT ALL STOPS HERE TOO (D-598e), whatever the reason none of the
     # stops above named. 0320730's 15:36 engine run read an eight-page drawing with no parts
     # list, costed nothing, and its book said "0 item(s) to confirm: nothing outstanding" beside
     # a unit cost of 0, while the refusal note blamed the read-back. No part is added after
@@ -5891,13 +5892,22 @@ def _finalize_scan_summary(
                      if _sight_run else
                      "this was an engine run, and the drawing read that takes parts off a pack "
                      "with no parts list runs only on an LLM-only run")
+        # THE PAGES NOTHING READ ARE NAMED (D-598f): 0320730's drawing was its one page with no
+        # text layer, and the only LLM reading that ran was of text. An empty book beside an
+        # unread page is a reading failure until shown otherwise.
+        _unread = [f"{g.get('document')} page {g.get('page')}"
+                   for g in ((summary.get("page_coverage") or {}).get("gaps") or [])
+                   if isinstance(g, dict) and g.get("kind") == "image_only"]
         _record_stop(summary, "no_parts_read",
-                     f"NOTHING TO COST: no reader found a part in this pack — {_why_none}.",
+                     f"NOTHING TO COST: no reader found a part in this pack — {_why_none}"
+                     + (f"; no reading took the content of {', '.join(_unread[:6])}, which has "
+                        f"no text layer" if _unread else "") + ".",
                      next_step=("Check the pack is the right one and carries a parts list or "
                                 "part drawings. A pack with neither is priced by an LLM-only "
                                 "run with the enquiry brief, or from a parts list supplied "
                                 "with it."),
-                     concept_read=_why_none)
+                     pages_not_read=_unread[:20],
+                     concept_read="" if _sight_run else _why_none)
         print(f"   !! no part was read from this pack — nothing to cost ({_why_none}).",
               flush=True)
     # EVERY READING THAT MUST LAND BEFORE A PRICE, in one function the replay runs too (D-454).
