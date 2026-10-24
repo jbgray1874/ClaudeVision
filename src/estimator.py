@@ -5537,6 +5537,11 @@ def _blank_that_could_have_been_cut(
     return None, None
 
 
+# Readings that are not a specification of what a part is made of (D-598o): a library
+# appearance and the engine's own inference. A pricing rescue never comes from one.
+_NOT_A_MATERIAL_SPEC = ("solidworks_applied_material", "inference", "geometry_inference")
+
+
 def _material_we_can_actually_price(part: Dict[str, Any], material: Any) -> Tuple[Any, Optional[Dict[str, Any]]]:
     """The material to PRICE from, and the conflict record if it is not the arbitrated one.
 
@@ -5582,11 +5587,22 @@ def _material_we_can_actually_price(part: Dict[str, Any], material: Any) -> Tupl
             return material, None
     except Exception:                                        # noqa: BLE001
         pass
+    # A PRICE THAT CANNOT BE FOUND DOES NOT CHANGE THE SPECIFIED MATERIAL (D-598o). 9287-10-005
+    # is SOLID SURFACE by the name the drawing office gave its flat and HANEX GAD-001 by its own
+    # title block; the model's library appearance said steel, and this rescue costed the base as
+    # £13.12 of 12 mm steel because steel has a rate. Where the drawing office named the
+    # material, its price is looked up or the line stays unpriced and blocks; it is not costed
+    # as something else.
+    from owned_specification import drawing_office_material
+    if drawing_office_material(part):
+        return material, None
     # Everything else this part was read as, best-evidenced first: what arbitration displaced,
-    # then the raw tokens off the drawing.
+    # then the raw tokens off the drawing. Only a reading of what the part IS: a library
+    # appearance or the engine's own inference is not a material anyone specified.
     seen, candidates = set(), []
     for entry in (part.get("_displaced") or {}).get("normalized_material") or []:
-        if isinstance(entry, dict) and entry.get("value"):
+        if (isinstance(entry, dict) and entry.get("value") and not any(
+                str(entry.get("source") or "").startswith(s) for s in _NOT_A_MATERIAL_SPEC)):
             candidates.append((entry["value"], entry.get("source") or "an earlier pass"))
     for token in (part.get("materials") or []):
         candidates.append((token, "drawing text"))

@@ -2355,16 +2355,26 @@ def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool,
                  f"checks did NOT run on this job, so none of these figures have been verified "
                  f"against the workbook — treat as provisional.{_open_note}")
     elif _open:
-        _lead = (f"Every consistency check passed — material rows and labour rows each "
+        _lead = (f"No release check failed — material rows and labour rows each "
                  f"reconcile to the workbook's own totals, and those totals to the unit price "
                  f"— <b>but the estimate is not releasable</b>.{_open_note} The workbook Unit "
                  f"Cost is <b>{_unit_text(hl)}</b>.")
     else:
-        _lead = (f"The estimate is <b>structurally sound</b> and every consistency check passed: "
-                 f"material rows and labour rows each reconcile to the workbook's own totals, "
-                 f"and those totals to the unit price. The workbook Unit Cost is "
-                 f"<b>{_unit_text(hl)}</b>. It is presented with a transparent list of "
-                 f"provisional items for estimator review.")
+        # A PASSED RELEASE CHECK IS NOT AN ACCEPTANCE (D-598o). The 18:23 9287-10-GA report led
+        # by calling every check passed, over shadow findings and a material priced as another;
+        # the findings are named here instead of praised past.
+        from owned_specification import review_cautions as _cautions_of
+        _cautions = _cautions_of(summary)
+        _lead = (f"The enabled release checks raised no blocking finding: material rows and "
+                 f"labour rows each reconcile to the workbook's own totals, and those totals "
+                 f"to the unit price. The workbook Unit Cost is <b>{_unit_text(hl)}</b>. "
+                 + (f"<b>{len(_cautions)} finding(s) remain unresolved and this is not an "
+                    f"acceptance pass:</b> {_esc(_cautions[0])}"
+                    + (f" — and {len(_cautions) - 1} more in {_sec('checks')}."
+                       if len(_cautions) > 1 else "")
+                    if _cautions else
+                    "It is presented with a transparent list of provisional items for "
+                    "estimator review."))
     return f"""{_h2('verdict')}
 <p class="lead">{_lead}{parity_note} {draw_note}</p>
 {_provenance_strip(summary)}

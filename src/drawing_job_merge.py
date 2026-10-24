@@ -399,6 +399,43 @@ def build_geometry_summary_for_dxf(dxf_path: Path) -> Tuple[Dict[str, Any], Dict
     return geometry, raw, reliability
 
 
+def _nested_outline_question(part: Dict[str, Any], flat: Dict[str, Any]) -> None:
+    """An outline inside the outline, filling most of the blank, is a frame or a step (D-598o).
+
+    9287-10-005's flat holds its 303 mm square and a 287 mm square inside it, and no holes. Read
+    as a frame, the inner square is cut through and the part is 9,440 mm2 of band; the drawing
+    draws a solid base with a step, whose band is machined to a depth, not cut. A flat cannot
+    say which, so it is asked, and the step's machining is named as not charged.
+    """
+    try:
+        length = float(flat.get("blank_length_mm") or 0)
+        width = float(flat.get("blank_width_mm") or 0)
+        band = float(flat.get("blank_area_mm2") or 0)
+    except (TypeError, ValueError):
+        return
+    import config as _cfg
+    share = float(getattr(_cfg, "NESTED_OUTLINE_INNER_SHARE", 0.75))
+    if not (flat.get("closed_contour_count") == 2 and not flat.get("hole_count")
+            and length > 0 and width > 0 and 0 < band <= (1.0 - share) * length * width):
+        return
+    pn = part.get("part_number")
+    questions = part.setdefault("manufacturing_questions", [])
+    if any(isinstance(q, dict) and q.get("subject") == "nested_outline_frame_or_step"
+           for q in questions):
+        return
+    questions.append({
+        "issue": f"Is the outline inside {pn}'s outer profile cut through, or is it a step?",
+        "assumption": (f"read as a frame: the inner outline is cut through and the part is the "
+                       f"{band:,.0f} mm2 band between the two. A solid part with a step or "
+                       f"rebate machines that band to a depth instead, and that machining is "
+                       f"not charged"),
+        "action": ("say which; for a step, give its depth and add its machining to the "
+                   "route: the engine does not cost a step from a flat"),
+        "source": "drawing_job_merge.augment_summary_with_dxf",
+        "subject": "nested_outline_frame_or_step",
+    })
+
+
 def _pierce_fields(verdict: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Flatten the arbitration into the geometry record: the VALUE costing reads, the SOURCE
     that produced it, and whether it is a measurement or a floor. Kept as three fields rather
@@ -627,6 +664,7 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
                 "DXF outline has segments that could not be chained into closed loops, so "
                 "some cut-outs may not have been counted. The pierce count is a FLOOR — "
                 "check the drawing for cut-outs the laser has not been charged for")
+        _nested_outline_question(part, flat)
     else:
         extents = raw.get("drawing_extents_mm") or []
         if isinstance(extents, (list, tuple)) and len(extents) >= 2:

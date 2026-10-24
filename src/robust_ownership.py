@@ -127,6 +127,26 @@ def release_focus_lines(record, summary, section='§9'):
         if _held_words(release):
             out.append(_held_words(release)[:1].upper() + _held_words(release)[1:]
                        + f'. Not a budget until they are confirmed or taken off. {section}.')
+    # WHAT BLOCKS RELEASE, AND WHAT IS NOT AN ACCEPTANCE, SAID BY NAME (D-598o). The 18:23
+    # 9287-10-GA note's panel did not mention that the base was priced as steel.
+    inv = summary.get('invariants') if isinstance(summary, Mapping) else None
+    blocks = [v for v in ((inv or {}).get('violations') or []) if isinstance(v, Mapping)
+              and str(v.get('severity') or '').lower() == 'blocking']
+    for v in blocks[:3]:
+        out.append(f"Blocks release: {v.get('message') or v.get('code')} {section}.")
+    if len(blocks) > 3:
+        out.append(f'{len(blocks) - 3} more finding(s) block release. {section}.')
+    try:
+        from owned_specification import review_cautions
+        said = {str(v.get('message') or v.get('code')) for v in blocks}
+        cautions = [c for c in review_cautions(summary if isinstance(summary, Mapping) else {})
+                    if c not in said]
+    except Exception:                                                # noqa: BLE001
+        cautions = []
+    if cautions:
+        out.append(f'Not an acceptance pass: {cautions[0]}'
+                   + (f' — and {len(cautions) - 1} more' if len(cautions) > 1 else '')
+                   + f'. {section}.')
     result = summary.get('read_charge_result') if isinstance(summary, Mapping) else None
     if isinstance(result, Mapping) and result.get('applicable') and not result.get('passed'):
         unresolved = [str(i.get('item')) for i in result.get('issues') or []
