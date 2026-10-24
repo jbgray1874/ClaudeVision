@@ -1887,8 +1887,10 @@ def main() -> None:
                                 # table is shorter than the BOM block; a material past
                                 # its last row is absent from the table, and an absent
                                 # row reads as one that does not move with quantity.
-                                print("   [price-break] BELOW THE TABLE, so not priced "
-                                      "across the breaks — the Material Price Break tab "
+                                print("   [price-break] NOT IN THE PRICE TABLE — this "
+                                      "does not establish whether the workbook charges "
+                                      "the line at each break. Check calculated rows. "
+                                      "The Material Price Break tab "
                                       "stops at Estimate row "
                                       f"{_mpb.get('last_bom_row')}: "
                                       + ", ".join(_res["outside_table"]), flush=True)
@@ -2490,6 +2492,23 @@ def main() -> None:
             # gets the cause and the plain reason, and whether Excel calculated the book later
             # in the run, so it can say what to do.
             _mp_ev = (_mp_block or {}).get("evidence") or {}
+            # A RUN THAT STOPPED WITH NOTHING TO COST SAYS SO (D-598d), in the note's place,
+            # with the stop's own reason, not the read-back's repair.
+            try:
+                from run_stop import nothing_to_cost as _ntc_note
+                _stop_note = _ntc_note(summary)
+            except Exception:                                    # noqa: BLE001
+                _stop_note = None
+            if _stop_note:
+                _provisional = True
+                _money_refused = True
+                _mp_block = dict(_mp_block or {}, cause="nothing_to_cost")
+                _mp_ev = {"workbook_stage_skipped_because": (
+                    f"{str(_stop_note.get('short') or '').rstrip('.')}. "
+                    f"{str(_stop_note.get('next_step') or '')}").strip().rstrip(".")}
+                print(f"   [covering-note] DO NOT SEND — nothing to cost: "
+                      f"{_stop_note.get('short')}; the covering email is replaced by a "
+                      f"refusal and the quote is held", flush=True)
             _dns_args = {
                 "why": str((_mp_block or {}).get("why") or "") if _money_refused else "",
                 "cause": str((_mp_block or {}).get("cause") or "") if _money_refused else "",
@@ -2561,6 +2580,26 @@ def main() -> None:
                       f"fall back to its own short note.", flush=True)
 
         _time_stage("deliverables", False)
+
+        # ── THE RUN'S OWN RECORD, PINNED TO ITS WORKBOOK (D-598d) ──────────────────────
+        # output/json/<job>.json is the job's LATEST record: the next run of the same job
+        # overwrites it. Twice on 24 Oct the record collected as one run's evidence was a later
+        # run's — a 15:36 record beside the 15:26 book. The copy beside the workbook, named
+        # after it and taken after the last write above, is this run's record, and no later
+        # run touches it. Its hash is in the log so the copy can be shown unchanged.
+        _canon_pin = (summary.get("saved_output_paths") or {}).get("json")
+        if xlsx_path and _canon_pin and Path(str(_canon_pin)).is_file():
+            try:
+                import hashlib as _hl_pin
+                _pin = Path(str(xlsx_path)).with_name(f"{Path(str(xlsx_path)).stem}_record.json")
+                _pin_bytes = Path(str(_canon_pin)).read_bytes()
+                _pin.write_bytes(_pin_bytes)
+                print(f"   [record] pinned to its workbook: {_pin.name} sha256 "
+                      f"{_hl_pin.sha256(_pin_bytes).hexdigest()}", flush=True)
+            except Exception as _pin_exc:                            # noqa: BLE001
+                print(f"   [record] NOT pinned ({_pin_exc}) — {Path(str(_canon_pin)).name} is "
+                      f"the job's latest record and the next run of it will overwrite it.",
+                      flush=True)
 
         print("\nPage text preview:\n")
         for page in summary["pages"]:

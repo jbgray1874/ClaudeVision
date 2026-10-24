@@ -5877,6 +5877,29 @@ def _finalize_scan_summary(
                                        or "the concept read produced no part")))
         print("   !! this pack is design-intent sheets on an ENGINE run — nothing to cost. "
               "Take the chosen design off from its own model, or have Design detail it.", flush=True)
+    # A PACK THAT GAVE NO PART AT ALL STOPS HERE TOO (D-598d), whatever the reason none of the
+    # stops above named. 0320730's 15:36 engine run read an eight-page drawing with no parts
+    # list, costed nothing, and its book said "0 item(s) to confirm: nothing outstanding" beside
+    # a unit cost of 0, while the refusal note blamed the read-back. No part is added after
+    # this point, so the stop is a fact about the finished record.
+    if not summary["manufacturing_writeup"]["parts"] and not summary.get("run_stop"):
+        from run_stop import record as _record_stop
+        _cr = summary.get("concept_read") if isinstance(summary.get("concept_read"), dict) else {}
+        _why_none = ("the drawing read ran and gave no part either"
+                     + (f" ({_cr.get('error') or _cr.get('refused')})"
+                        if (_cr.get("error") or _cr.get("refused")) else "")
+                     if _sight_run else
+                     "this was an engine run, and the drawing read that takes parts off a pack "
+                     "with no parts list runs only on an LLM-only run")
+        _record_stop(summary, "no_parts_read",
+                     f"NOTHING TO COST: no reader found a part in this pack — {_why_none}.",
+                     next_step=("Check the pack is the right one and carries a parts list or "
+                                "part drawings. A pack with neither is priced by an LLM-only "
+                                "run with the enquiry brief, or from a parts list supplied "
+                                "with it."),
+                     concept_read=_why_none)
+        print(f"   !! no part was read from this pack — nothing to cost ({_why_none}).",
+              flush=True)
     # EVERY READING THAT MUST LAND BEFORE A PRICE, in one function the replay runs too (D-454).
     pre_costing_passes(summary)
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)

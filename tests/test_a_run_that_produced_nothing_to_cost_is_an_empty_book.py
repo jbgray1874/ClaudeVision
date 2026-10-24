@@ -411,3 +411,33 @@ def test_the_scan_records_both_doors_on_the_deferred_stop():
     assert "_di_pending = (_di_stop, _di_next, _di_why)" in src
     assert 'model_takeoff=str(_di_pending[2] or "")' in src
     assert 'or "the concept read produced no part"' in src
+
+
+# ── A PACK THAT GAVE NO PART, WHATEVER THE REASON (D-598e) ─────────────────────────────────
+
+def test_a_pack_no_reader_found_a_part_in_stops_whatever_the_reason():
+    """0320730's 15:36 engine run read a drawing with no parts list and costed nothing. No stop
+    named it, so its book said "0 item(s) to confirm: nothing outstanding" beside a unit cost
+    of 0. The backstop sits after every named stop and before costing."""
+    src = (_ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    backstop = src.index('_record_stop(summary, "no_parts_read"')
+    assert src.index('"design_intent_pack_on_engine_run", _di_pending[0]') < backstop \
+        < src.index('pre_costing_passes(summary)\n    summary["estimate_summary"]')
+    assert 'not summary.get("run_stop")' in src[backstop - 900:backstop]
+    s = {"manufacturing_writeup": {"parts": []}}
+    run_stop.record(s, "no_parts_read", "NOTHING TO COST: no reader found a part.",
+                    next_step="Check the pack.")
+    assert "no reader found a part" in run_stop.banner(run_stop.nothing_to_cost(s))
+    assert cf.costed_job(s)["decisions_required"][0]["kind"] == "nothing_to_cost"
+
+
+def test_the_refusal_note_for_an_empty_run_names_it_not_a_formula_error():
+    from estimate_explained import do_not_send_note
+    note = do_not_send_note(
+        "job_1", "this record is 'pre_workbook'", cause="nothing_to_cost",
+        detail="no reader found a part in this pack, so there was nothing to cost. Check the pack",
+        money_refused=True)
+    assert "nothing to cost" in note["subject"]
+    assert "DIV/0" not in note["text"] and "Check the pack" in note["text"]
+    main_src = (_ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    assert main_src.index("_ntc_note(summary)") < main_src.index("_dns_args = {")

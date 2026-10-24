@@ -42,6 +42,14 @@ def main(argv=None) -> int:
     saved = summary.get("read_charge_result") or {}
     sha = hashlib.sha256(args.workbook.read_bytes()).hexdigest()
     paired = saved.get("workbook_sha256") == sha
+    # THE WORKBOOK THE RECORD NAMES (D-598d): output/json/<job>.json is the job's latest record,
+    # and a later run of the job overwrites it. The run's own copy is <book stem>_record.json
+    # beside its workbook. A record naming another book is said here, before any hash.
+    names = Path(str((summary.get("saved_output_paths") or {}).get("estimate_xlsx")
+                     or "").replace("\\", "/")).name
+    if names and names != args.workbook.name:
+        print(f"The record names workbook {names}, not {args.workbook.name}: it is another "
+              f"run's record. Use {args.workbook.stem}_record.json from beside the workbook.")
     record = summary.get("costed_job") or {}
     release = record.get("release") or {}
     inv = summary.get("invariants") if isinstance(summary.get("invariants"), dict) else {}
@@ -57,6 +65,7 @@ def main(argv=None) -> int:
                     and release and release.get("outstanding") == 0
                     and release.get("draft") is False)
     report = {"record": str(args.record), "workbook": str(args.workbook),
+              "record_names_workbook": names or None,
               "workbook_sha256": sha, "matches_saved_audit_hash": paired,
               "audit": result, "persisted_release": release,
               "saved_ledger_findings": [{"code": v.get("code"), "severity": v.get("severity")}
@@ -73,6 +82,7 @@ def main(argv=None) -> int:
     if args.out:
         args.out.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     print(json.dumps({"paired": paired, "accepted": accepted,
+                      "record_names_workbook": names or None,
                       "issues": len(result.get("issues") or []),
                       "saved_ledger_findings": len(ledger_v),
                       "saved_release_rows": len(saved_rows),
