@@ -154,7 +154,7 @@ if (-not (Test-Path $backendPython)) { throw "No service virtualenv at $backendP
 # second copy to keep in step, and the first one to drift would be the one nobody is watching.
 #
 # -WindowStyle Hidden because this is the always-on site, not a console session. -Log makes it
-# write to output\logs\service-<date>.log, which is the only record there will be.
+# write to output\logs\service-<port>-<date>.log, which is the only record there will be.
 $psExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 $argline = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden " +
            "-File `"$starter`" -Port $Port -Log"
@@ -202,7 +202,7 @@ Write-Host "Installed scheduled task '$TaskName'." -ForegroundColor Green
 Write-Host "  site     http://localhost:$Port/estimating"
 Write-Host "  runs as  $env:USERDOMAIN\$env:USERNAME (so it can read the CAD share)"
 Write-Host "  starts   at logon, restarts on failure, checked every 5 minutes"
-Write-Host "  log      $Root\output\logs\service-<date>.log"
+Write-Host "  log      $Root\output\logs\service-$Port-<date>.log"
 Write-Host ""
 
 Write-Host "Starting it now (the trigger alone would wait for the next logon)..." -ForegroundColor Cyan
@@ -260,7 +260,7 @@ try {
         } else {
             Write-Host "    NOT answering on $Port yet." -ForegroundColor Yellow
             Write-Host "    Give it a few seconds and reload the page. If it stays down, the"
-            Write-Host "    reason is in $Root\output\logs\service-<date>.log" -ForegroundColor Yellow
+            Write-Host "    reason is in $Root\output\logs\service-$Port-<date>.log" -ForegroundColor Yellow
         }
     }
 } catch {

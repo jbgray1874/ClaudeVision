@@ -252,7 +252,10 @@ Write-Host ""
 if ($Log) {
     $logDir = Join-Path $Root "output\logs"
     New-Item -ItemType Directory -Path $logDir -Force | Out-Null
-    $logFile = Join-Path $logDir ("service-" + (Get-Date -Format "yyyy-MM-dd") + ".log")
+    # ONE LOG PER PORT. Two starters on two ports shared one file, and while one held it open
+    # the other could not log and its service died on start (24 Oct, 8072 killed at 17:29:04
+    # while a second starter brought the service up on 8071).
+    $logFile = Join-Path $logDir ("service-" + $Port + "-" + (Get-Date -Format "yyyy-MM-dd") + ".log")
     Write-Host "Logging to $logFile"
     "==== started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on port $Port, commit $($env:SDI_COMMIT) ====" |
         Out-File -FilePath $logFile -Append -Encoding utf8

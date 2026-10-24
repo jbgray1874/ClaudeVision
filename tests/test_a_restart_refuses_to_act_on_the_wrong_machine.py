@@ -181,3 +181,33 @@ def test_no_if_statement_is_used_where_a_value_is_expected():
 def test_the_braces_and_parentheses_balance():
     assert _S.count("{") == _S.count("}"), "unbalanced braces"
     assert _S.count("(") == _S.count(")"), "unbalanced parentheses"
+
+
+# ── A FAILED RESTART SAYS WHY, ON THE SCREEN (24 Oct) ───────────────────────────────────
+# The laptop's restart reported "NOT answering on 8072. The reason is in service-<date>.log"
+# twice while a second starter had the service up on 8071 and both wrote one log file.
+
+def test_each_port_logs_to_its_own_file():
+    start = (_PATH.parent / "start-service.ps1").read_text(encoding="utf-8-sig")
+    assert '("service-" + $Port + "-" + (Get-Date -Format "yyyy-MM-dd") + ".log")' in start
+
+
+def test_the_restart_polls_rather_than_waiting_eight_seconds():
+    assert "Start-Sleep -Seconds 8" not in _S
+    assert "(Get-Date).AddSeconds(60)" in _S and "while ((Get-Date) -lt $deadline)" in _S
+
+
+def test_a_failed_restart_names_another_port_the_log_and_the_task_result():
+    fail = _S[_S.index("NOT answering on $Port after 60 seconds."):]
+    assert "foreach ($other in @(8071, 8072, 8073))" in fail
+    assert "The service IS answering on" in fail
+    assert "ParentProcessId" in fail, "the supervisor behind another port is named"
+    assert "Get-ScheduledTaskInfo" in fail
+    assert '"service-{0}-{1}.log" -f $Port, $day' in fail and "Select-Object -Last 25" in fail
+    assert "service-<date>.log" not in fail, "a file is named, not described"
+
+
+def test_the_scripts_stay_ascii():
+    for name in ("restart-service.ps1", "start-service.ps1", "install-service-task.ps1"):
+        text = (_PATH.parent / name).read_text(encoding="utf-8-sig")
+        assert all(ord(c) < 128 for c in text), f"{name} must stay ASCII for PowerShell 5.1"
