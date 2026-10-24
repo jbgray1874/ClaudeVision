@@ -5613,9 +5613,10 @@ def _finalize_scan_summary(
                 summary.setdefault("review_flags", []).append(
                     f"NOT VISIBLE — SHIPMENT SCOPE: {_s} — carried by the commercial "
                     f"PACKAGING/DELIVERY lines, not duplicated as a parts line")
-            _unit_welded = bool(_unit and ("welding" in concept_scan._record_ops(_unit)
-                                           or _unit.get("weld_stated_by_note")))
-            _mech = concept_scan.mechanically_fitted(_sighted, unit_welded=_unit_welded)
+            # A WELD ON THE UNIT IS NOT EVIDENCE FOR EACH PIECE (review of D-595): a piece is
+            # welded on its own words or a brief sentence naming its weld, else it is counted
+            # and its fixings are asked.
+            _mech = concept_scan.mechanically_fitted(_sighted, brief=_brief or "")
             _nv_lines = concept_scan.consumable_lines(
                 _nv_cons, _job_name,
                 pieces_fitted=int((_unit or {}).get("pieces_fitted") or 0),

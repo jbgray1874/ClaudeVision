@@ -61,11 +61,12 @@ def _records(answer=None, brief=BRIEF):
     return answer, unit, parts
 
 
-def _lab(row, ops, pn, hours, value, title, qty=1):
+def _lab(row, ops, pn, hours, value, title, qty=1, rate=None):
     return ({"workbook_row": row, "engine_operations": ops, "part_numbers": [pn]},
-            {"workbook_row": row, "part_numbers": pn, "batch_hours": hours,
-             "total_value_gbp": value, "charged_cell": f"Estimate!M{row}", "operation": title,
-             "qty_per_unit": qty})
+            dict({"workbook_row": row, "part_numbers": pn, "batch_hours": hours,
+                  "total_value_gbp": value, "charged_cell": f"Estimate!M{row}",
+                  "operation": title, "qty_per_unit": qty},
+                 **({"dept_rate_gbp_per_hour": rate} if rate else {})))
 
 
 def _book(*, hole_row=True, plate_gbp=0.0, plating=True, allowances=True, bought_extras=False,
@@ -90,8 +91,10 @@ def _book(*, hole_row=True, plate_gbp=0.0, plating=True, allowances=True, bought
     if hole_row:
         labs.append(_lab(158, ["hole_machining"], T, .1, 3.2, "Drill"))
     if allowances:
-        labs += [_lab(159, ["brush_before_plate"], U, .6667, 80.0, "Brush before plate"),
-                 _lab(160, ["plater_pack", "plater_final_pack"], U, .2, 5.7, "Plater pack")]
+        labs += [_lab(159, ["brush_before_plate"], U, .6667, 80.0, "Brush before plate",
+                      rate=31.18),
+                 _lab(160, ["plater_pack", "plater_final_pack"], U, .2, 5.7, "Plater pack",
+                      rate=28.56)]
     mats = [{"part_code": T, "qty_per_unit": 1, "total_value_gbp": 7.02, "charged_cell": "Estimate!M11"},
             {"part_code": C, "qty_per_unit": 2, "total_value_gbp": 1.976, "charged_cell": "Estimate!M12"},
             {"part_code": L, "qty_per_unit": 1, "total_value_gbp": 0.1248, "charged_cell": "Estimate!M13"},
@@ -290,6 +293,86 @@ def test_a_covered_ruling_must_name_a_charge_the_sheet_carries():
     s = _ruled(_book(), {"S.polish": {"ruling": "covered", "reason": "linished",
                                       "covered_by": "linisher"}})
     assert _state(rcc.audit(s), "S.polish") == rcc.UNRESOLVED
+
+
+def test_a_covered_ruling_on_another_parts_charge_does_not_cover():
+    """Review of D-596: a reason does not make a cover. The tube's hole ruled covered by the
+    laser, which cuts only the brackets, explains a missing charge away — it stays held."""
+    s = _ruled(_book(hole_row=False), {"R1.op.hole_machining": {
+        "ruling": "covered", "reason": "lasered", "covered_by": "laser_cutting"}})
+    e = next(e for e in rcc.audit(s)["items"] if e["id"] == "R1.op.hole_machining")
+    assert e["state"] == rcc.UNRESOLVED and "charged only on" in e["how"] and B in e["how"]
+
+
+def test_a_covered_ruling_at_the_wrong_quantity_does_not_cover():
+    s = _ruled(_book(), {"R2.op.deburring": {"ruling": "covered", "reason": "lasered clean",
+                                             "covered_by": "laser_cutting"}})
+    next(r for r in s["final_estimate"]["labour_rows"] if r["workbook_row"] == 151)["qty_per_unit"] = 1
+    e = next(e for e in rcc.audit(s)["items"] if e["id"] == "R2.op.deburring")
+    assert e["state"] == rcc.UNRESOLVED and "1 against 2" in e["how"]
+
+
+def test_a_cover_named_by_a_held_allowance_does_not_release_the_allowance():
+    s = _ruled(_book(plate_gbp=120.0), {"S.polish": {
+        "ruling": "covered", "reason": "brushing includes the grits",
+        "covered_by": "brush_before_plate"}})
+    r = rcc.audit(s)
+    assert _state(r, "S.polish") == rcc.COVERED
+    brush = next(a for a in r["allowances"] if a["operation"] == "brush_before_plate")
+    assert brush["holds"], "the covering charge still needs its own confirmation"
+
+
+def test_the_held_allowances_are_costed_apart_from_the_supported_unit_cost():
+    s = _book()
+    s["final_estimate"]["totals"] = {"unit_gbp": 177.72}
+    s["quantity_sweep"] = {"rows": [{"quantity": 1, "unit": 177.72},
+                                    {"quantity": 1000, "unit": 61.0}]}
+    held = rcc.audit(s)["held_allowances"]
+    assert held["operations"] == ["brush_before_plate", "plater_final_pack", "plater_pack"]
+    assert held["gbp_per_unit"] == round(40 / 60 * 31.18 + 4 / 60 * 28.56 + 8 / 60 * 28.56, 2)
+    assert held["supported_unit_gbp"] == round(177.72 - held["gbp_per_unit"], 2)
+    at_1000 = next(b for b in held["at_breaks"] if b["quantity"] == 1000)
+    assert at_1000["supported_unit_gbp"] == round(61.0 - held["gbp_per_unit"], 2)
+    assert held["hours_at"]["1000"] == 866.7
+
+
+def test_the_release_says_what_rests_on_held_allowances_and_the_supported_cost():
+    import costed_facts
+    s = _book()
+    s["final_estimate"]["totals"] = {"unit_gbp": 177.72}
+    s["read_charge_result"] = rcc.audit(s)
+    rel = costed_facts.costed_job(s)["release"]
+    said = " ".join(rel["reasons"])
+    assert "rests on engine allowances not confirmed" in said and "Not a budget" in said
+    assert "866.7 h at 1,000 off" in said
+    assert rel["held_allowances_gbp_per_unit"] == s["read_charge_result"]["held_allowances"]["gbp_per_unit"]
+    assert rel["supported_unit_gbp"] == s["read_charge_result"]["held_allowances"]["supported_unit_gbp"]
+
+
+def test_a_held_allowance_row_carries_its_cost():
+    s = _book()
+    s["read_charge_result"] = rcc.audit(s)
+    brush = next(v for v in invariants.check_what_the_read_returned_is_accounted_for(s)
+                 if v["code"] == "engine_allowance_unconfirmed"
+                 and v["detail"]["operation"] == "brush_before_plate")
+    assert "£20.79 a unit" in brush["message"]
+
+
+def test_the_digest_keeps_what_a_review_needs_and_not_the_raw_words(tmp_path):
+    sys.path.insert(0, str(ROOT / "tools"))
+    import evidence_digest
+    s = _book()
+    s["concept_read"] = {"raw_response": "x" * 5000, "read_key": "k"}
+    s["read_charge_result"] = rcc.audit(s)
+    s["filler"] = ["page text"] * 20000
+    record = tmp_path / "job.json"
+    record.write_text(json.dumps(s), encoding="utf-8")
+    assert evidence_digest.main(["--record", str(record), "--out", str(tmp_path)]) == 0
+    d = json.loads((tmp_path / "job_digest.json").read_text(encoding="utf-8"))
+    assert "raw_response" not in d["concept_read"] and d["concept_read"]["raw_chars"] == 5000
+    assert d["read_charge_result"]["counts"] and d["final_estimate"]["labour_rows"]
+    assert "filler" not in d
+    assert (tmp_path / "job_digest.json").stat().st_size < record.stat().st_size / 3
 
 
 def test_the_answers_file_refuses_a_ruling_without_a_reason():

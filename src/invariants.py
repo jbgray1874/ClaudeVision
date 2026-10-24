@@ -2475,14 +2475,16 @@ def check_what_the_read_returned_is_accounted_for(summary: Any) -> List[Dict[str
         at = ", ".join(f"{h:g} h at {int(q):,} off"
                        for q, h in sorted(hours.items(), key=lambda kv: int(kv[0])))
         parts = sorted({str(g["part"]) for g in group if g.get("part")})
+        gbp = round(sum(float(g.get("gbp_per_unit") or 0) for g in group), 2)
         out.append(_violation(
             "engine_allowance_unconfirmed", BLOCKING,
             f"Engine allowance not confirmed for this job: {op.replace('_', ' ')}, {minutes:g} "
-            f"min a unit on {', '.join(parts) or 'the job'}" + (f" ({at})" if at else "")
+            f"min a unit on {', '.join(parts) or 'the job'}"
+            + (f", £{gbp:.2f} a unit" if gbp else "") + (f" ({at})" if at else "")
             + f". Basis: {group[0].get('basis')}. Confirm it for this job with the reason "
               f"(read_rulings 'allowance:{op}'), or take it off (operations_off).",
             target_id=(parts[0] if len(parts) == 1 else ""), identities=parts, operation=op,
-            minutes_per_unit=minutes, hours_at=hours,
+            minutes_per_unit=minutes, hours_at=hours, gbp_per_unit=gbp,
             allowance_class=str(group[0].get("class") or "")))
     lines = [i for i in issues if i.get("code") == "engine_line_unconfirmed"]
     if lines:

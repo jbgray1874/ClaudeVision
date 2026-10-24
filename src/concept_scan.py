@@ -1305,15 +1305,23 @@ def consumable_lines(items: List[Any], stem: str,
     return out
 
 
-def mechanically_fitted(parts: List[Any], unit_welded: bool = False) -> Dict[str, Any]:
+def mechanically_fitted(parts: List[Any], brief: str = "") -> Dict[str, Any]:
     """The made pieces a sighted unit fixes with fasteners, and why each other one is not (D-499).
 
     Counted: every made piece the unit fits. Not counted: a welded piece (its joint is its weld
     — never a fixing as well), a piece welded to a host (it is part of that host), and a piece
     that hangs or clips — its own words say so (config CONCEPT_FIXING_FREE_WORDS), or a piece
-    welded to it does ("HOOKED BRACKET (WELDED TO TRAY)": the trays hang on their brackets)."""
+    welded to it does ("HOOKED BRACKET (WELDED TO TRAY)": the trays hang on their brackets).
+
+    A WELD IS NAMED PIECE BY PIECE (review of D-595). A weld on the unit says the unit is
+    welded somewhere, not that this piece is: a bracket bolted to a welded frame still takes
+    fixings. So a piece counts as welded only on its own evidence — its own weld, a weld moved
+    from it to the unit, its own words ("welded to the tube"), or a brief weld statement that
+    names it and names no fixing. Any other piece is counted, and its fixings are asked."""
     free = _vocab_list("CONCEPT_FIXING_FREE_WORDS")
     bonded = _vocab_list("CONCEPT_BONDED_WORDS")
+    fixing_words = _vocab_list("CONCEPT_FIXING_WORDS") + _vocab_list("CONCEPT_FIXED_WITH_WORDS")
+    generic = set(_vocab_list("CONCEPT_NAME_GENERIC_WORDS"))
     made = [p for p in (parts or []) if isinstance(p, dict)
             and p.get("concept_kind") == "fabricated"]
 
@@ -1323,6 +1331,18 @@ def mechanically_fitted(parts: List[Any], unit_welded: bool = False) -> Dict[str
 
     def _says_free(p: Mapping[str, Any]) -> bool:
         return _says(p, free)
+
+    # A statement that also names a fixing ("a welded frame, side panels bolted on") does not
+    # say which piece is welded, so it excuses none.
+    weld_said = [s.lower() for s in brief_weld_statements(brief)
+                 if not any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", s.lower())
+                            for w in fixing_words)]
+
+    def _brief_names_its_weld(p: Mapping[str, Any]) -> bool:
+        words = [w for w in re.findall(r"[a-z]{4,}", str(p.get("description") or "").lower())
+                 if w not in generic]
+        return any(re.search(rf"(?<![a-z]){re.escape(w)}(?:s|es)?(?![a-z])", s)
+                   for s in weld_said for w in words)
     hung_by: Dict[str, str] = {}
     for p in made:
         if p.get("welded_to_hosts") and _says_free(p):
@@ -1336,11 +1356,12 @@ def mechanically_fitted(parts: List[Any], unit_welded: bool = False) -> Dict[str
             excluded[pn] = "welded to its host"
         elif "welding" in _ops_of(p) or p.get("weld_charged_on"):
             excluded[pn] = "welded — its joint is the weld"
-        elif unit_welded and _is_metal_record(p) and not _says_free(p) and not _says(p, bonded):
-            # A METAL PIECE OF A WELDED UNIT IS WELDED INTO IT (D-595). 0320730's tube carries
-            # the brackets welded to it; it was counted "mechanically fitted" because the weld
-            # sat on the unit, and four M6 screws were bought for a welded bar.
-            excluded[pn] = "a metal piece of a welded unit — welded into it"
+        elif _WELD_TO_RE.search(f"{p.get('description') or ''} {p.get('concept_seen') or ''}"):
+            excluded[pn] = "welded — its own words name the weld"
+        elif _brief_names_its_weld(p):
+            # 0320730's brief: "Brackets … TIG welded down both sides to the tube" names both
+            # pieces' weld; four M6 screws were bought for that bar on no evidence (D-595).
+            excluded[pn] = "welded — the brief's weld statement names it"
         elif _says(p, bonded):
             # BONDED IS NOT SCREWED (D-500): its adhesive is a different consumable, said.
             excluded[pn] = "bonded — its adhesive is not in this fixings allowance"
@@ -5589,7 +5610,7 @@ def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
                   if _small else
                   ("" if _min_face else "; no too-small exception applied — the customer's "
                    "minimum size is not stated (config CONCEPT_LABEL_MIN_FACE_MM)"))
-    _mech = mechanically_fitted(parts, unit_welded="welding" in (ops or []))
+    _mech = mechanically_fitted(parts)
     record["fitting_counts"] = {
         "handled": {"count": record["pieces_fitted"],
                     "basis": "every piece fitted at the unit, a piece welded to its host "

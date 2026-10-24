@@ -898,6 +898,16 @@ CONCEPT_CONSUMABLE_ALLOWANCE = {
 # them), and words that say a piece needs none. Vocabulary, not logic.
 CONCEPT_FIXING_WORDS = ["fixing", "fixings", "fastener", "fasteners", "screw", "screws",
                         "bolt", "bolts", "rivet", "rivets", "nut", "nuts", "washer"]
+# A brief sentence that says something is fixed mechanically. With a weld word beside it, the
+# sentence does not say which piece is welded, so it excuses no piece's fixings (D-596a).
+CONCEPT_FIXED_WITH_WORDS = ["bolted", "screwed", "riveted", "fastened", "fixed with",
+                            "fixed by"]
+# Words of a part's name that say nothing about WHICH part it is, so a brief sentence using
+# one does not name that part (review of D-595): "MAIN TUBE" is named by "tube", never "main".
+CONCEPT_NAME_GENERIC_WORDS = ["main", "part", "piece", "item", "unit", "assembly", "with",
+                              "from", "steel", "mild", "metal", "sheet", "front", "back",
+                              "left", "right", "side", "upper", "lower", "inner", "outer",
+                              "large", "small", "plain", "standard"]
 # BOUGHT HARDWARE IS FIXED TOO (D-532). 0356453's hanging rail welded every made piece, so the
 # per-piece count found nothing to fix — and its four bolted castors and its ID plate went on
 # with no fixings at all. A bought item whose words name hardware that is screwed or bolted on
