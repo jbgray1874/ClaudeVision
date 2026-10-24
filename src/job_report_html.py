@@ -1339,7 +1339,8 @@ def _render_whats_right(summary: Dict[str, Any], streams: List[Dict[str, Any]]) 
         rows += ('<tr><td><span class="tag t-warn">Check</span></td><td>'
                  f'{_esc(_q)}</td></tr>')
 
-    _unverified = _structure_is_unverified(summary)
+    from owned_specification import review_cautions
+    _unverified = _structure_is_unverified(summary) + review_cautions(summary)
     if _unverified:
         _lines = "".join(f"<li>{_esc(m)}</li>" for m in _unverified[:4])
         return f"""{_h2('right')}
@@ -1360,9 +1361,9 @@ not what a reader takes from a heading like this one.</td></tr>
     stream_names = [s["name"] for s in streams if s.get("count")
                     and s["name"] != "Commercial lines"]
     if len(stream_names) > 1:
-        rows += (f'<tr><td><span class="tag t-good">Sound</span></td><td><b>Material streams correctly separated.</b> '
+        rows += (f'<tr><td><span class="tag t-info">Recorded</span></td><td><b>Material streams recorded separately.</b> '
                  f'The engine costed {len(stream_names)} distinct streams ({_esc(", ".join(stream_names))}) — '
-                 f'each material costed on its own basis, none mis-routed into another.</td></tr>')
+                 f'This describes the bookkeeping; it does not independently verify material selection.</td></tr>')
 
     # NO DOUBLE-COUNTING — CHECKED, NOT ASSERTED.
     #
@@ -1446,8 +1447,9 @@ not what a reader takes from a heading like this one.</td></tr>
                  'checks did not run, so none of its figures have been verified against the '
                  'workbook.</td></tr>')
     elif status == "ok":
-        rows += ('<tr><td><span class="tag t-good">Sound</span></td><td><b>Estimate completed cleanly.</b> '
-                 'The engine reached a full costed estimate, and every consistency check passed.</td></tr>')
+        rows += ('<tr><td><span class="tag t-info">Completed</span></td><td><b>Estimate calculated.</b> '
+                 'The enabled release checks raised no blocking finding. Warnings, unresolved '
+                 'decisions and checks outside their scope still require review.</td></tr>')
 
     # powder handled?
     # Post-costing source, shared with the client quote (costed_facts). The powder MATERIAL

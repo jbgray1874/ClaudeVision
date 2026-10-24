@@ -36,7 +36,7 @@ NEGATIVE_STATUSES = frozenset({RULED_OUT, NOT_APPLICABLE})
 # operations on the parent. A stronger measured claim can still win through source ranking.
 LEAF_ONLY_OPERATIONS = frozenset({
     "laser_cutting", "folding", "punch", "hole_machining", "drilling",
-    "guillotine", "saw", "tube_cut", "tube_bending", "roll",
+    "guillotine", "saw", "tube_cut", "tube_bending", "roll", "cnc_routing",
 })
 
 # Older cached extracts predate the scope field. For these operations, several participants
