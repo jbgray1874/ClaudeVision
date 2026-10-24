@@ -58,6 +58,34 @@ def test_a_side_and_a_top_of_one_size_are_two_pieces_not_two_revisions(tmp_path)
     assert any(a["reason"] == "role_pieces_promoted" for a in report["ambiguous_dxf"])
 
 
+def test_a_named_count_reaches_the_pieces_through_the_answers_file(tmp_path):
+    # D-598n: the answers-file reader passed only the decision keys it knew, so a ruling of
+    # four sides was dropped at intake as "the line did nothing" and never reached a piece.
+    import json
+    import estimator_confirmed as ec
+    from owned_specification import apply_role_counts
+    flats = tmp_path / "flats"
+    flats.mkdir()
+    parts, _ = _merge(flats, ["7777-10-002 SIDE_5mm ACR_REV[A].DXF",
+                              "7777-10-002 TOP_5mm ACR_REV[A].DXF"])
+    rule = {"basis": "per_parent", "decided_by": "Test Estimator",
+            "evidence": "GA page 1, section A-A"}
+    answers = tmp_path / "7777-10-GA_confirmed.json"
+    answers.write_text(json.dumps({"confirmed_by": "Test Estimator", "estimator_decisions": {
+        "dxf_role_quantities": [dict(rule, parent="7777-10-002", role="SIDE", quantity=4),
+                                dict(rule, parent="7777-10-002", role="TOP", quantity=1)]}}),
+                       encoding="utf-8")
+    data, problems = ec.load_corrections(answers)
+    assert problems == [], "the ruling is a decision this engine applies"
+    summary = {"manufacturing_writeup": {"parts": list(parts.values())},
+               "estimator_decisions": data["estimator_decisions"]}
+    assert apply_role_counts(summary) == []
+    assert parts["7777-10-002-SIDE-01"]["quantity"] == 4
+    assert parts["7777-10-002-SIDE-01"]["bom_parents"] == [{"parent": "7777-10-002", "qty": 4}]
+    assert not [q for q in parts["7777-10-002"]["manufacturing_questions"]
+                if q["subject"] == "dxf_piece_count"], "every role evidenced: the count is answered"
+
+
 def test_two_issues_of_one_panel_are_still_one_panel(tmp_path):
     parts, report = _merge(tmp_path, ["7777-10-002 TOP_5mm ACR_REV[A].DXF",
                                       "7777-10-002 TOP_5mm ACR_REV[B].DXF"])

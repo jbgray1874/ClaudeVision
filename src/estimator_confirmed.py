@@ -687,7 +687,12 @@ _DECISION_KEYS = ("plating_gbp_per_unit", "plating_spec", "operations_off",
                   "banded_metres", "banded_length_m",
                   # A RULING ON WHAT THE READ RETURNED (D-596): an item excluded or covered,
                   # or an engine allowance confirmed for this job — each with its reason.
-                  "read_rulings")
+                  "read_rulings",
+                  # HOW MANY OF EACH DXF ROLE PIECE ONE PARENT TAKES (D-598m/n): a list of
+                  # {parent, role, quantity, basis: "per_parent", evidence, decided_by}.
+                  # Carried whole; owned_specification.apply_role_counts validates each entry
+                  # against the minted pieces and names every one it refuses.
+                  "dxf_role_quantities")
 
 READ_RULINGS = ("excluded", "covered", "confirmed")
 
@@ -942,6 +947,14 @@ def _read_decisions(raw: Mapping[str, Any], path: Any) -> Tuple[Dict[str, Any], 
                 clean_tp[str(op).strip()] = n
             if clean_tp:
                 out["throughput_per_hour"] = clean_tp
+
+    _roles = block.get("dxf_role_quantities")
+    if _roles is not None:
+        if not isinstance(_roles, list) or not all(isinstance(r, Mapping) for r in _roles):
+            problems.append("estimator_decisions.dxf_role_quantities: expected a list of "
+                            "{parent, role, quantity, basis, evidence, decided_by} — ignored")
+        elif _roles:
+            out["dxf_role_quantities"] = [dict(r) for r in _roles]
 
     return out, problems
 

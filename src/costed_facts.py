@@ -1348,6 +1348,10 @@ _PLASTIC_SHEET_TOKENS = (
     # (the laser melts the polyethylene core). Brand names because that is what drawings write;
     # "COMPOSITE" is the generic. Dyson 10575-02-009 is DIBOND 3mm.
     "DIBOND", "ALUPANEL", "REYNOBOND", "ETALBOND", "COMPOSITE",
+    # Solid surface (D-598n) — a mineral-filled resin slab sold by the sheet (config holds its
+    # 3680 x 760); read as sheet metal it was nested by mass on the steel block and lasered on
+    # the metal laser. The makers' names resolve to this family before they reach here.
+    "SOLID SURFACE", "SOLID_SURFACE",
 )
 _BOARD_TIMBER_TOKENS = (
     "MDF", "BOARD", "MELAMINE", "MFC",

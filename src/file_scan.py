@@ -4646,7 +4646,8 @@ def _finalize_scan_summary(
                     decided_on=_ec_data.get("confirmed_on") or "",
                     decided_in=_ec_src)
                 from owned_specification import apply_role_counts
-                apply_role_counts(summary)
+                for _rq in apply_role_counts(summary):
+                    print(f"   [confirmed] NOT APPLIED — {_rq}", flush=True)
                 print(f"   [confirmed] {len(_dec)} estimator DECISION(S) from "
                       f"{_ec_src}: {', '.join(sorted(_dec))} — "
                       f"{_ec_data.get('confirmed_by') or 'an estimator'}'s call, applied as "

@@ -805,6 +805,16 @@ CUT_METHOD_BY_MATERIAL: list = [
      "source": "SDI shop default, James Gray, 14 Sep 2026"},
 ]
 
+# A CUTTER PROPOSED WHERE NO SHOP RULE SPEAKS (D-598n). Fabrication practice, NOT an SDI rule:
+# read only where CUT_METHOD_BY_MATERIAL holds nothing for the material and gauge, and applied
+# as a proposal that is put to the estimator. A shop rule above for the same material replaces
+# it. Same keys as the table above.
+CUT_METHOD_PROPOSED_BY_MATERIAL: list = [
+    {"material": "SOLID SURFACE", "method": "router",
+     "source": "proposed from fabrication practice, not an SDI shop rule: solid surface is "
+               "cut and edged with router tooling, and a laser chars it"},
+]
+
 # THE DRAWING'S OWN WORDS FOR THE CUTTER (D-440, cut_method_reader): read off the sheets that
 # draw a part, legend removed; one method named stamps it, two named put the question on the
 # part and the rule above prices the working figure.
