@@ -453,6 +453,22 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                 return f"the saved workbook's cell {l['cell']} does not agree with the read-back"
         return None
 
+    read_parts = {_pn(i.get("record")) for i in (ledger.get("items") or [])
+                  if isinstance(i, Mapping) and i.get("kind") == "part" and i.get("record")}
+
+    def scope(item: Mapping[str, Any]) -> Set[str]:
+        """The parts a charge must name to carry this item: its own record and the host its
+        weld or coat moved to, and the unit, whose bench work carries a piece's fitting; for a
+        requirement of the whole product (a stated finish, a unit operation), the unit and the
+        read's parts."""
+        pn = _pn(item.get("record"))
+        unit = _pn(ledger.get("unit"))
+        if item.get("kind") in ("stated", "unit_operation", "print_set", "not_visible") or not pn:
+            return ({unit} if unit else set()) | read_parts
+        rec = book.records.get(pn) or book.costs.get(pn) or {}
+        hosts = {_pn(rec.get(k)) for k in ("weld_charged_on", "coat_charged_on") if rec.get(k)}
+        return {pn} | hosts | ({unit} if unit else set())
+
     def ruled(item: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         r = book.rulings.get(str(item["id"]).lower())
         if not r:
@@ -460,21 +476,40 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
         if r.get("ruling") == "excluded":
             return done(item, EXCLUDED, f"ruled out by {book.decided_by}: {r.get('reason')}")
         if r.get("ruling") == "covered":
-            # The named charge must itself be on the calculated sheet: an operation row with
-            # hours and money, or a priced line of that code.
+            # A REASON DOES NOT MAKE A COVER (review of D-596). The named charge must be on the
+            # calculated sheet with hours and money, on a part that carries this item, at that
+            # part's quantity, and agree with the saved file — or the ruling explains away a
+            # missing charge. Its rows are not traced to the item: a covering charge the engine
+            # added stays an allowance, and holds on its own basis until confirmed.
             by = op_name(r.get("covered_by"))
-            rows = book.any_rows([by])
-            mats = [{"cell": m.get("charged_cell")}
-                    for m in book.material.get(_pn(r.get("covered_by")), [])
+            parts = scope(item)
+            rows = [l for l in book.labour if by in l["ops"] and l["parts"] & parts
+                    and (l["hours"] or 0) > 0 and (l["value"] or 0) > 0]
+            mats = [m for m in book.material.get(_pn(r.get("covered_by")), [])
                     if (fcc.cached_number(m.get("total_value_gbp")) or 0) > 0]
             if not rows and not mats:
-                return done(item, UNRESOLVED, f"ruled covered by {by}, and no calculated row "
-                                              f"charges {by}")
+                elsewhere = [l for l in book.labour if by in l["ops"]
+                             and (l["hours"] or 0) > 0 and (l["value"] or 0) > 0]
+                return done(item, UNRESOLVED,
+                            f"ruled covered by {by}, and {by} is charged only on "
+                            f"{', '.join(sorted({p for l in elsewhere for p in l['parts']}))}, "
+                            f"which does not carry it" if elsewhere else
+                            f"ruled covered by {by}, and no calculated row charges {by}")
+            pn = _pn(item.get("record"))
+            want = fcc.number((book.costs.get(pn) or {}).get("quantity")) if pn else None
             for l in rows:
-                for p in l["parts"]:
-                    traced_labour.add((l["wb_row"], by, p))
-            return done(item, COVERED, f"covered by {by}, ruled by {book.decided_by}: "
-                                       f"{r.get('reason')}", rows or mats)
+                got = fcc.cached_number(l["row"].get("qty_per_unit"))
+                if (want is not None and l["parts"] == {pn} and got is not None
+                        and not math.isclose(got, want, rel_tol=0, abs_tol=1e-8)):
+                    return done(item, UNRESOLVED, f"ruled covered by {by}, and that row charges "
+                                                  f"{got:g} against {want:g} on the record", [l])
+                if book.saved_cell_agrees(l["row"], next(iter(l["parts"] & parts))) is False:
+                    return done(item, UNRESOLVED, f"ruled covered by {by}, and the saved "
+                                                  f"workbook's cell {l['cell']} does not agree")
+            return done(item, COVERED, f"covered by {by} on "
+                                       f"{', '.join(sorted({p for l in rows for p in l['parts'] & parts})) or _pn(r.get('covered_by'))}, "
+                                       f"ruled by {book.decided_by}: {r.get('reason')}",
+                        rows or [{"cell": m.get("charged_cell")} for m in mats])
         return None
 
     def plating_lines(pn: str = "") -> List[Mapping[str, Any]]:
@@ -804,6 +839,7 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
             issues.append({"code": "engine_allowance_unconfirmed", "item": f"allowance:{a['operation']}",
                            "part": a.get("part") or "", "class": a["class"],
                            "minutes_per_product": a.get("minutes_per_product"),
+                           "gbp_per_unit": a.get("gbp_per_unit"),
                            "hours_at": a.get("hours_at"), "basis": a.get("basis")})
     for line in result["engine_lines"]:
         if line.get("holds"):
@@ -820,9 +856,9 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
 
 def _quantities(summary: Mapping[str, Any]) -> List[int]:
     qs: Set[int] = set()
+    sweep = summary.get("quantity_sweep") if isinstance(summary.get("quantity_sweep"), Mapping) else {}
     for q in [summary.get("requested_order_quantity")] + [
-            s.get("quantity") for s in (summary.get("quantity_sweep") or [])
-            if isinstance(s, Mapping)]:
+            s.get("quantity") for s in (sweep.get("rows") or []) if isinstance(s, Mapping)]:
         n = fcc.number(q)
         if n and n >= 1:
             qs.add(int(n))
@@ -881,12 +917,18 @@ def _allowances(summary: Mapping[str, Any], book: _Book, ledger: Mapping[str, An
                 ruling = book.rulings.get(f"allowance:{op}")
                 confirmed = bool(ruling and ruling.get("ruling") == "confirmed")
                 dedicated = l["ops"] == {op} and l["parts"] == {pn}
+                # ITS COST A UNIT, at the row's own department rate where the sheet states one,
+                # else the rate card's: run minutes only — the row's set-up is spread by Excel.
+                rate = (fcc.cached_number(l["row"].get("dept_rate_gbp_per_hour"))
+                        or fcc.number((_cfg("HOURLY_RATES_GBP", {}) or {}).get(op)))
+                gbp = round(minutes / 60.0 * rate, 2) if minutes is not None and rate else None
                 result["allowances"].append({
                     "operation": op, "part": pn, "class": cls, "basis": note,
                     "row": l["title"], "cell": l["cell"],
                     "minutes_per_product": minutes,
                     "hours_at": ({str(q): round(minutes * q / 60.0, 1) for q in quantities}
                                  if minutes is not None else {}),
+                    "rate_gbp_per_hour": rate, "gbp_per_unit": gbp,
                     "gbp_per_unit_on_sheet": l["value"] if dedicated else None,
                     "confirmed": (f"confirmed for this job by {book.decided_by}: "
                                   f"{ruling.get('reason')}" if confirmed else ""),
@@ -930,6 +972,48 @@ def _allowances(summary: Mapping[str, Any], book: _Book, ledger: Mapping[str, An
             "gbp_on_sheet": sum(fcc.cached_number(r.get("total_value_gbp")) or 0 for r in rows),
             "cells": [r.get("charged_cell") for r in rows],
             "holds": cls in holding and not confirmed})
+    _held_cost(summary, result, quantities)
+
+
+def _held_cost(summary: Mapping[str, Any], result: Dict[str, Any], quantities: List[int]) -> None:
+    """What the held allowances cost, apart from the cost the evidence supports (review of
+    D-596). Holding the release is right; a headline that carries 867 unconfirmed hours at
+    1,000 off is still not a budget, so the record says how much of each unit cost rests on
+    them and what the unit cost is without them — at the sheet's quantity and at every break
+    the sweep calculated."""
+    held = [a for a in result.get("allowances") or [] if a.get("holds")]
+    lines = [l for l in result.get("engine_lines") or [] if l.get("holds")]
+    if not held and not lines:
+        result["held_allowances"] = {}
+        return
+    per_unit = round(sum(a.get("gbp_per_unit") or 0 for a in held)
+                     + sum(l.get("gbp_on_sheet") or 0 for l in lines), 2)
+    unpriced = sorted({a["operation"] for a in held if a.get("gbp_per_unit") is None})
+    final = summary.get("final_estimate") if isinstance(summary.get("final_estimate"), Mapping) else {}
+    unit = fcc.cached_number((final.get("totals") or {}).get("unit_gbp"))
+    sweep = summary.get("quantity_sweep") if isinstance(summary.get("quantity_sweep"), Mapping) else {}
+    at_breaks = []
+    for row in (sweep.get("rows") or []):
+        q, u = fcc.number((row or {}).get("quantity")), fcc.number((row or {}).get("unit"))
+        if q and u is not None:
+            at_breaks.append({"quantity": int(q), "unit_gbp": round(u, 2),
+                              "held_gbp_per_unit": per_unit,
+                              "supported_unit_gbp": round(u - per_unit, 2)})
+    hours: Dict[str, float] = {}
+    for a in held:
+        for q, h in (a.get("hours_at") or {}).items():
+            hours[q] = round(hours.get(q, 0.0) + float(h or 0), 1)
+    result["held_allowances"] = {
+        "operations": sorted({a["operation"] for a in held}),
+        "lines": sorted(l["record"] for l in lines),
+        "minutes_per_unit": round(sum(a.get("minutes_per_product") or 0 for a in held), 2),
+        "hours_at": hours, "gbp_per_unit": per_unit,
+        "not_costed": unpriced,
+        "unit_gbp": unit,
+        "supported_unit_gbp": round(unit - per_unit, 2) if unit is not None else None,
+        "at_breaks": at_breaks,
+        "note": ("run minutes at the row's department rate; each row's set-up is spread by "
+                 "Excel and is not separated here")}
 
 
 def record(summary: Dict[str, Any], workbook_path: Any = None) -> Dict[str, Any]:
