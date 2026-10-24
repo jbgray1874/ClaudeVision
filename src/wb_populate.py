@@ -5202,6 +5202,9 @@ def build_workbook_labour(
                 "material": g.get("material"),
                 "thickness_mm": g.get("thickness"),
                 "qty_per_unit": g.get("qty"),
+                # THE HOLES THE ROW'S PARTS CARRY INTO ITS TIME (D-598): the read contract
+                # holds a hole the brief states to a cutting row that counts one.
+                "holes": g.get("holes"),
                 # HOW THE RATE WAS ARRIVED AT — template_calculated / size_banded /
                 # historical / historical_unbanded / engine_derived / unmeasured_default.
                 # Without this the audit tabs present an unmeasured constant and the

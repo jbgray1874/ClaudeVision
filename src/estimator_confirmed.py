@@ -917,8 +917,12 @@ def _read_decisions(raw: Mapping[str, Any], path: Any) -> Tuple[Dict[str, Any], 
                                     f"'line:<code>'), and an allowance is confirmed here or "
                                     f"taken off with operations_off — that entry did nothing")
                     continue
+                # THE EVIDENCE, KEPT (D-598): who confirmed it and where. Some rulings need it
+                # (config READ_RULINGS_NEEDING_EVIDENCE); the read contract says which.
+                _ev = str(_rul.get("evidence") or "").strip()
                 clean_rr[_id] = dict({"ruling": _kind, "reason": _why},
-                                     **({"covered_by": _by} if _by else {}))
+                                     **({"covered_by": _by} if _by else {}),
+                                     **({"evidence": _ev} if _ev else {}))
             if clean_rr:
                 out["read_rulings"] = clean_rr
 

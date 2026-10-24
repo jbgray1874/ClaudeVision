@@ -102,6 +102,27 @@ def main(argv=None) -> int:
           f"{'PASSES' if result.get('passed') else 'HOLDS THE RELEASE'} "
           f"({len(result.get('issues') or [])} finding(s)); "
           f"saved workbook {'read' if snapshot else 'NOT read'}.")
+    # THE HOLD, TRACED TO THE LEDGER (D-598): what the saved run's own checks raised from the
+    # ledger, and what its release record counted — read from the record, never recomputed.
+    inv = summary.get("invariants") if isinstance(summary.get("invariants"), dict) else {}
+    ledger_v = [v for v in (inv.get("violations") or []) if isinstance(v, dict)
+                and v.get("check") == "check_what_the_read_returned_is_accounted_for"]
+    rel = ((summary.get("costed_job") or {}).get("release") or {}) if isinstance(
+        summary.get("costed_job"), dict) else {}
+    print("\nRelease connection, from the saved record:")
+    if not inv:
+        print("  the saved record carries no check results — the hold cannot be traced")
+    else:
+        print(f"  the run's own ledger check raised {len(ledger_v)} finding(s): "
+              + (", ".join(f"{v.get('code')} ({v.get('severity')})" for v in ledger_v) or "none"))
+    if rel:
+        print(f"  release record: {rel.get('status')}, draft {rel.get('draft')}, "
+              f"{rel.get('blocking_checks')} blocking check(s)"
+              + (f", {rel['read_ledger_holds']} of them the ledger's" if "read_ledger_holds" in rel
+                 else " — this record predates the ledger count (D-598), so the share is not "
+                      "stated"))
+    else:
+        print("  the saved record carries no release record")
     out_dir = Path(args.out) if args.out else ROOT / "output" / "replay"
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"{record_path.stem}_read_ledger.json"

@@ -5396,9 +5396,17 @@ def _finalize_scan_summary(
             # into a confirmations file and nobody can match to a job by eye.
             _job_name = (Path(job_folder).name if job_folder else "") or (
                 Path(_pack[0]).stem if _pack else "CONCEPT")
+            # THE RESPONSE'S IDENTITY, TAKEN ONCE AT THE READ (D-598): every record's read ID
+            # names it, and the ledger holds each record to it.
+            try:
+                from read_charge_contract import response_id as _response_id
+                _resp_id = _response_id((_read or {}).get("parsed") or _answer)
+            except Exception:                                        # noqa: BLE001
+                _resp_id = ""
             _sighted = concept_scan.parts_from_concept(_answer, _job_name, sheet=_sheet_read,
                                                           brief=_brief or "",
-                                                          source_answer=(_read or {}).get("parsed"))
+                                                          source_answer=(_read or {}).get("parsed"),
+                                                          source_response=_resp_id)
             if _acc:
                 # EVERY LINE SAYS WHOSE SCHEDULE IT CAME FROM (D-534).
                 for _rec in _sighted:
@@ -5763,7 +5771,8 @@ def _finalize_scan_summary(
                     read_key=str((_read or {}).get("read_key") or ""),
                     said_by=("accepted_construction" if _acc else "llm_read"),
                     brief=_brief or "", set_aside=_set_aside,
-                    replayed_from=str((_read or {}).get("replayed_from") or ""))
+                    replayed_from=str((_read or {}).get("replayed_from") or ""),
+                    response=_resp_id)
                 _led = summary["read_ledger"]
                 print(f"   [read-ledger] {sum(1 for _i in _led['items'] if _i.get('work'))} "
                       f"item(s) of work and {sum(1 for _i in _led['items'] if not _i.get('work'))} "

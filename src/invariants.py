@@ -2494,7 +2494,17 @@ def check_what_the_read_returned_is_accounted_for(summary: Any) -> List[Dict[str
             + "; ".join(f"{i.get('part')} ({i.get('class')}: {i.get('basis')})" for i in lines[:6])
             + ". Confirm each for this job (read_rulings 'line:<code>') or remove it.",
             identities=[str(i.get("part")) for i in lines], count=len(lines)))
-    known = ("read_item_unresolved", "engine_allowance_unconfirmed", "engine_line_unconfirmed")
+    stale = [i for i in issues if i.get("code") == "read_id_stale"]
+    if stale:
+        out.append(_violation(
+            "read_id_stale", BLOCKING,
+            f"{len(stale)} record(s) carry a read ID that is not this response's: "
+            + "; ".join(str(i.get("why")) for i in stale[:6])
+            + ". Audit the record against the response it was minted from, or re-mint it.",
+            identities=sorted({str(i["part"]) for i in stale if i.get("part")}),
+            count=len(stale)))
+    known = ("read_item_unresolved", "engine_allowance_unconfirmed", "engine_line_unconfirmed",
+             "read_id_stale")
     other = [i for i in issues if i.get("code") not in known]
     if other:
         out.append(_violation(
@@ -2528,10 +2538,16 @@ def check_every_page_reached_a_read(summary: Any) -> List[Dict[str, Any]]:
     gaps = [g for g in (pc.get("gaps") or []) if isinstance(g, dict)]
 
     def _where(g: Mapping[str, Any]) -> str:
-        return f"{g.get('document')} page {g.get('page')}"
+        return (f"{g.get('document')} page {g.get('page')}" if g.get("page") is not None
+                else f"{g.get('document') or 'the pack'}")
     out: List[Dict[str, Any]] = []
-    hard = [g for g in gaps if g.get("kind") in ("text_not_read", "text_not_sent")]
-    soft = [g for g in gaps if g.get("kind") in ("image_only", "image_coarse")]
+    # A DOCUMENT THAT COULD NOT BE OPENED IS UNREAD TEXT; A PAGE RENDERED WITH NO RESPONSE
+    # KEPT, OR WHOSE IMAGE DETAIL CANNOT BE CHECKED, IS AN IMAGE NOT READ RELIABLY (D-598).
+    hard = [g for g in gaps if g.get("kind") in ("text_not_read", "text_not_sent",
+                                                  "document_unread")]
+    soft = [g for g in gaps if g.get("kind") in ("image_only", "image_coarse",
+                                                  "image_response_unverified",
+                                                  "image_detail_unknown")]
     if hard:
         out.append(_violation(
             "page_text_not_read", BLOCKING,

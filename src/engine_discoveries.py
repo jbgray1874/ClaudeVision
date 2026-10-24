@@ -164,6 +164,9 @@ _OURS = {
     "read_item_unresolved",
     "engine_line_unconfirmed",
     "read_charge_check_failed",
+    # A record whose read ID names another response or a line this one does not hold
+    # (D-598): the engine audited a record against a read it was not minted from — ours.
+    "read_id_stale",
     # A page whose words the engine had and no reading received in full, or a page read only
     # from a coarse or unread image (D-597): a perfect engine reads every page it is given.
     "page_text_not_read",

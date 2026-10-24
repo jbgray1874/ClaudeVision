@@ -5180,6 +5180,7 @@ def compile_job_route(
                              pack_mode=pack_mode, declared_product=declared_product,
                              source_names=source_names)
     raw: Dict[str, Mapping[str, Any]] = graph["raw"]
+    from robust_ownership import nonphysical
     kinds = {node.part_number: node.kind for node in graph["nodes"]}
     graph_quantities = graph["quantities"]
     claims_by_event: Dict[str, List[OperationClaim]] = {}
@@ -5373,6 +5374,15 @@ def compile_job_route(
                     })
 
         for target_index, (scope, target_id, members) in enumerate(targets):
+            if operation == "assembly":
+                _services = [m for m in members if nonphysical(raw.get(m) or {})]
+                members = [m for m in members if m not in _services]
+                if _services:
+                    issues.append({"code": "services_not_physical_assembly_members",
+                                   "target": target_id, "excluded": _services,
+                                   "detail": "Service charges remain in the graph; excluded only from physical assembly participants."})
+                if _services and not members:
+                    continue
             route_id = (
                 base_route_id if len(targets) == 1
                 else f"{base_route_id}:{target_index + 1}"
@@ -5972,10 +5982,14 @@ def compile_job_route(
             or (node.part_number in welded_targets and not _is_top)
         ):
             continue
+        _physical_children = [edge.part_number for edge in node.children
+                              if not nonphysical(raw.get(edge.part_number) or {})]
+        if not _physical_children:
+            continue
         assembly_route_id = stable_id("route", {
             "operation": "assembly",
             "target_id": node.part_number,
-            "participants": [edge.part_number for edge in node.children],
+            "participants": _physical_children,
         })
         assembly_event_id = stable_id("decision", {
             "route_id": assembly_route_id,
@@ -5988,7 +6002,7 @@ def compile_job_route(
             subject_id=node.part_number,
             target_id=node.part_number,
             scope="assembly",
-            participants=[edge.part_number for edge in node.children],
+            participants=_physical_children,
             qty_per_unit=node.qty_per_unit,
             sequence=90 if _is_top else 60,
             reason=("the top assembly is packed whatever joined it"

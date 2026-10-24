@@ -98,14 +98,24 @@ def fingerprint(line: Mapping[str, Any]) -> str:
                         .encode("utf-8")).hexdigest()[:16]
 
 
-def read_ids(answer: Any) -> Dict[int, str]:
-    """Each read line's source ID, "R4:<fingerprint>" — its place in the read as returned and
-    what it said — keyed by the line object (D-596e). A record minted from a copy of the answer
-    with lines set aside or added still carries the ID of the very line it came from; two lines
-    that read alike are two IDs."""
+def response_id(answer: Any) -> str:
+    """The identity of one saved response (D-598): a hash of the answer as parsed from its
+    words. A line's place is stable within one response and means nothing across two, so
+    every line ID carries the response it was numbered in."""
+    return "A" + hashlib.sha256(json.dumps(answer if isinstance(answer, Mapping) else {},
+                                           sort_keys=True, default=str, ensure_ascii=False)
+                                .encode("utf-8")).hexdigest()[:12]
+
+
+def read_ids(answer: Any, response: str = "") -> Dict[int, str]:
+    """Each read line's source ID, "<response>/R4:<fingerprint>" — the response it came in,
+    its place there and what it said — keyed by the line object (D-596e, D-598). A record
+    minted from a copy of the answer with lines set aside or added still carries the ID of the
+    very line it came from; two lines that read alike are two IDs."""
     parts = answer.get("parts") if isinstance(answer, Mapping) else None
-    return {id(line): f"R{i}:{fingerprint(line)}" for i, line in enumerate(parts or [], start=1)
-            if isinstance(line, Mapping)}
+    resp = response or response_id(answer)
+    return {id(line): f"{resp}/R{i}:{fingerprint(line)}"
+            for i, line in enumerate(parts or [], start=1) if isinstance(line, Mapping)}
 
 
 def _size_suffix(words: str) -> bool:
@@ -116,31 +126,47 @@ def _size_suffix(words: str) -> bool:
             and all(t.isdigit() or t in ("X", "MM") for t in toks))
 
 
-def _link_records(lines: List[Tuple[str, Mapping[str, Any]]],
-                  recs: List[Mapping[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """Each read line's record, and how it was found, keyed by "R{i}" (D-596e).
+def _link_records(lines: List[Tuple[str, Mapping[str, Any]]], recs: List[Mapping[str, Any]],
+                  response: str = "", stale: Optional[List[Dict[str, Any]]] = None
+                  ) -> Dict[str, Dict[str, Any]]:
+    """Each read line's record, and how it was found, keyed by "R{i}" (D-596e, D-598).
 
-    1. Its source ID, stamped on the record at mint — exact, whatever the engine later did to
-       the record's description.
-    2. A record with no ID this read holds that carries the line's fingerprint, where exactly
+    1. Its source ID, stamped on the record at mint — the response it was numbered in, its
+       place there and its words — exact, whatever the engine later did to the record's
+       description.
+    2. A record whose ID names another response, or a line this response does not hold, is a
+       STALE ID: it goes on `stale` as a finding first, and only then may the line's words
+       link it.
+    3. A record with no ID this read holds that carries the line's fingerprint, where exactly
        one line and one record carry it.
-    3. A record from before the fingerprint, by its name: the read's own, or the read's with a
+    4. A record from before the fingerprint, by its name: the read's own, or the read's with a
        size the engine appended — and only where that record answers to this line alone and
        this line to that record alone. Anything else is ambiguous and stays unlinked: a guess
        between two lines that read alike is not a link.
     """
     out: Dict[str, Dict[str, Any]] = {}
-    sid_of = {rid: f"{rid}:{fingerprint(line)}" for rid, line in lines}
+    sid_of = {rid: f"{response}/{rid}:{fingerprint(line)}" for rid, line in lines}
     by_sid: Dict[str, List[Mapping[str, Any]]] = {}
     by_fp: Dict[str, List[Mapping[str, Any]]] = {}
     old: List[Mapping[str, Any]] = []
     sids = set(sid_of.values())
+    stale_pns: Set[str] = set()
     for r in recs:
-        if r.get("read_id") and str(r["read_id"]) in sids:
-            by_sid.setdefault(str(r["read_id"]), []).append(r)
-        elif r.get("read_fingerprint"):
-            # An ID this read does not hold (a record minted from a copy whose lines were
-            # renumbered) still has its line's words: the fingerprint rule, unique only.
+        rid_said = str(r.get("read_id") or "")
+        if rid_said and rid_said in sids:
+            by_sid.setdefault(rid_said, []).append(r)
+            continue
+        if "/" in rid_said and stale is not None:
+            # NOT THIS RESPONSE'S LINE (D-598), said before any other match is tried.
+            said_resp = rid_said.split("/", 1)[0]
+            stale.append({"record": _pn(r.get("part_number")), "read_id": rid_said,
+                          "record_response": said_resp, "ledger_response": response,
+                          "why": ("minted from another response" if said_resp != response
+                                  else "names a line this response does not hold")})
+            stale_pns.add(_pn(r.get("part_number")))
+        if r.get("read_fingerprint"):
+            # An ID this read does not hold still has its line's words: the fingerprint rule,
+            # unique only.
             by_fp.setdefault(str(r["read_fingerprint"]), []).append(r)
         elif (r.get("concept_kind") and not r.get("is_assembly_parent")
               and _engine_origin(r) == "engine:unclassified"):
@@ -174,7 +200,10 @@ def _link_records(lines: List[Tuple[str, Mapping[str, Any]]],
                         "why": f"{len(hit)} records carry this line's read ID"}
         elif by_fp.get(fp):
             if len(by_fp[fp]) == 1 and len(line_fps.get(fp) or []) == 1:
-                out[rid] = {"record": by_fp[fp][0], "link": "fingerprint"}
+                out[rid] = {"record": by_fp[fp][0],
+                            "link": ("fingerprint, after a stale read ID"
+                                     if _pn(by_fp[fp][0].get("part_number")) in stale_pns
+                                     else "fingerprint")}
             else:
                 out[rid] = {"record": None, "link": "ambiguous", "candidates": by_fp[fp],
                             "why": (f"{len(line_fps.get(fp) or [])} read lines and "
@@ -244,13 +273,20 @@ def _engine_origin(rec: Mapping[str, Any]) -> str:
 
 def capture(answer: Any, *, records: Iterable[Any] = (), raw_response: str = "",
             read_key: str = "", said_by: str = "llm_read", brief: str = "",
-            set_aside: Iterable[Any] = (), replayed_from: str = "") -> Dict[str, Any]:
-    """The read's items, each with an identity and the record it became. Pure."""
+            set_aside: Iterable[Any] = (), replayed_from: str = "",
+            response: str = "") -> Dict[str, Any]:
+    """The read's items, each with an identity and the record it became. Pure.
+
+    `response`: the response's identity as taken at the read (response_id), so a record minted
+    in this run is held to the response it was minted from; computed from `answer` if not
+    given."""
     answer = answer if isinstance(answer, Mapping) else {}
     recs = [r for r in (records or []) if isinstance(r, Mapping)]
+    resp = str(response or response_id(answer))
     lines = [(f"R{i}", line) for i, line in enumerate(answer.get("parts") or [], start=1)
              if isinstance(line, Mapping)]
-    links = _link_records(lines, recs)
+    stale: List[Dict[str, Any]] = []
+    links = _link_records(lines, recs, resp, stale)
     aside = [dict(a) for a in (set_aside or []) if isinstance(a, Mapping)]
     items: List[Dict[str, Any]] = []
     linked: Set[str] = set()
@@ -283,7 +319,7 @@ def capture(answer: Any, *, records: Iterable[Any] = (), raw_response: str = "",
         described = str((rec or {}).get("description") or "")
         add(id=rid, kind="part", work=True, label=name, record=pn, part_kind=kind,
             set_aside=why_aside, link=str(link.get("link") or ""),
-            source_id=f"{rid}:{fingerprint(line)}",
+            source_id=f"{resp}/{rid}:{fingerprint(line)}",
             # WHAT THE SHEET CALLS IT, where the engine changed the read's name (D-596d).
             renamed_to=(described if described and _words(described) != _words(name) else ""),
             as_read={k: line.get(k) for k in ("name", "kind", "quantity", "material_guess",
@@ -318,6 +354,29 @@ def capture(answer: Any, *, records: Iterable[Any] = (), raw_response: str = "",
         if banded.lower() not in _NOTHING:
             add(id=f"{rid}.banded", kind="feature", work=True, item="banded edges",
                 label=f"{name}: banded edges ({banded})", record=pn, of=rid, as_read=banded)
+        # WHAT THE BRIEF STATES FOR THIS PART, FROM ITS WORDS (D-598): a reference code the
+        # priced line must be shown to match, and a hole the read did not list, which a cutting
+        # row on the part must be shown to cut. Never from the records under audit.
+        others = [str(o.get("name") or "") for _r, o in lines if o is not line]
+        try:
+            import concept_scan as cs                               # noqa: WPS433
+            ref, ref_by = cs.stated_item_reference(name, brief, others), "the enquiry brief"
+            if not ref:
+                ref, ref_by = cs.stated_item_reference(name, " ".join(
+                    str(line.get(k) or "") for k in ("name", "seen", "sighted_material")),
+                    ()), said_by
+            holes = ([] if any("hole" in str((c or {}).get("what") if isinstance(c, Mapping)
+                                             else c).lower() for c in (line.get("cutouts") or []))
+                     else cs.stated_item_holes(name, brief, others))
+        except Exception:                                            # noqa: BLE001
+            ref, ref_by, holes = "", said_by, []
+        if ref:
+            add(id=f"{rid}.reference", kind="stated_reference", work=False, item=ref,
+                label=f"{name}: reference {ref}", record=pn, of=rid, as_read=ref, said_by=ref_by)
+        for k, dia in enumerate(holes, start=1):
+            add(id=f"{rid}.stated_hole{k}", kind="feature", work=True, item="stated hole",
+                label=f"{name}: Ø{dia:g} hole (the brief)", record=pn, of=rid,
+                as_read={"diameter_mm": dia}, said_by="the enquiry brief")
 
     unit = next((r for r in recs if r.get("is_assembly_parent") and r.get("concept")), None)
     unit_pn = _pn((unit or {}).get("part_number"))
@@ -384,7 +443,7 @@ def capture(answer: Any, *, records: Iterable[Any] = (), raw_response: str = "",
             add(id=f"SF.{key}", kind=REFERENCE, work=False, label=f"sheet fact: {key}",
                 record="", as_read=facts.get(key))
 
-    sids = {f"{rid}:{fingerprint(line)}" for rid, line in lines}
+    sids = {f"{resp}/{rid}:{fingerprint(line)}" for rid, line in lines}
     engine_lines = [{"record": _pn(r.get("part_number")),
                      "origin": ("read:link_ambiguous" if _pn(r.get("part_number")) in ambiguous
                                 else "read:id_not_in_this_read"
@@ -400,6 +459,7 @@ def capture(answer: Any, *, records: Iterable[Any] = (), raw_response: str = "",
         "brief_sha256": (hashlib.sha256(str(brief).encode("utf-8")).hexdigest()
                          if str(brief or "").strip() else ""),
         "unit": unit_pn, "items": items, "engine_lines": engine_lines,
+        "response": resp, "stale_read_ids": stale,
     }
 
 
@@ -443,6 +503,8 @@ class _Book:
                                 "value": fcc.cached_number(row.get("total_value_gbp")),
                                 "cell": row.get("charged_cell"),
                                 "wb_row": row.get("workbook_row"),
+                                # The holes the row's parts carry into its time, where recorded.
+                                "holes": group.get("holes"),
                                 "title": str(row.get("operation") or group.get("wb_operation") or "")})
         dec = summary.get("estimator_decisions") if isinstance(summary.get("estimator_decisions"), Mapping) else {}
         self.rulings = {str(k).strip().lower(): v for k, v in (dec.get("read_rulings") or {}).items()
@@ -615,6 +677,16 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
             return None
         if r.get("ruling") == "excluded":
             return done(item, EXCLUDED, f"ruled out by {book.decided_by}: {r.get('reason')}")
+        if (r.get("ruling") == "covered" and not str(r.get("evidence") or "").strip()
+                and any(str(item["id"]).lower().startswith(str(k).lower())
+                        for k in (_cfg("READ_RULINGS_NEEDING_EVIDENCE", ()) or ()))):
+            # A SHARED OR SUBSTITUTE RATE IS ACCEPTED ONLY ON EVIDENCE (review of D-596e): an
+            # estimator may rule a stated weld process covered by another rate, and the ruling
+            # names who confirmed it and where, or it covers nothing.
+            return done(item, UNRESOLVED,
+                        f"ruled covered by {op_name(r.get('covered_by'))} with no evidence — this "
+                        f"needs a ruling that names its evidence (who confirmed the rate or the "
+                        f"minutes, and where)")
         if r.get("ruling") == "covered":
             # A REASON DOES NOT MAKE A COVER (review of D-596). The named charge must be on the
             # calculated sheet with hours and money, on a part that carries this item, at that
@@ -648,7 +720,8 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                                                   f"workbook's cell {l['cell']} does not agree")
             return done(item, COVERED, f"covered by {by} on "
                                        f"{', '.join(sorted({p for l in rows for p in l['parts'] & parts})) or _pn(r.get('covered_by'))}, "
-                                       f"ruled by {book.decided_by}: {r.get('reason')}",
+                                       f"ruled by {book.decided_by}: {r.get('reason')}"
+                                       + (f" (evidence: {r.get('evidence')})" if r.get("evidence") else ""),
                         rows or [{"cell": m.get("charged_cell")} for m in mats])
         return None
 
@@ -795,6 +868,24 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                 done(item, CORRECTED, f"{read_q:g} as read, {rec_q:g} charged — by {by}",
                      corrected={"from": read_q, "to": rec_q, "by": by})
             return
+        if item["kind"] == "stated_reference":
+            # A STATED REFERENCE IS MATCHED, OR THE MATCH IS ASKED (D-598): the priced line must
+            # carry the code — a catalogue row's supplier code — or a person rules on it.
+            if ruled(item):
+                return
+            ref = str(item.get("as_read") or "")
+            me = cost.get("material_estimate") if isinstance(cost.get("material_estimate"), Mapping) else {}
+            codes = [me.get("supplier_code"), cost.get("supplier_code"), rec.get("supplier_code")]
+            if not pn:
+                done(item, UNRESOLVED, f"{item.get('said_by')} names {ref}, and no record carries "
+                                       f"the line")
+            elif any(_words(c).replace(" ", "") == _words(ref).replace(" ", "") for c in codes if c):
+                done(item, CARRIED, f"priced on {ref}")
+            else:
+                done(item, UNRESOLVED, f"{item.get('said_by')} names {ref}, and no priced line "
+                                       f"carries that code — the item priced is not shown to be "
+                                       f"{ref}; the supplier match is unproven")
+            return
         if item["kind"] == "material":
             held = rec.get("normalized_material") or cost.get("normalized_material")
             if not held:
@@ -847,6 +938,18 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
             rows = book.charged_rows(pn, _cfg("READ_PROFILE_CUTS", ()))
             if "hole" in what:
                 rows = rows or book.charged_rows(pn, _families("hole_machining"))
+            if what == "stated hole" and rows:
+                # A ROW THAT CUTS NO HOLE DOES NOT CUT THIS ONE (D-598): a hole the brief states
+                # is covered by a cutting row on its part only where that row counts holes.
+                cutting = [l for l in rows if (fcc.number(l.get("holes")) or 0) > 0]
+                if not cutting:
+                    said = ", ".join(sorted({l["title"] for l in rows}))
+                    done(item, UNRESOLVED,
+                         f"the brief states it, and {said} on {pn} "
+                         + ("records no hole count" if all(l.get("holes") is None for l in rows)
+                            else "cuts no hole") + " — the hole is not shown in the cut", rows)
+                    return
+                rows = cutting
             if rows:
                 labour_evidence(rows, set(_cfg("READ_PROFILE_CUTS", ())) | set(_families("hole_machining")), pn)
                 done(item, COVERED, f"cut with the part ({', '.join(sorted({l['title'] for l in rows}))})", rows)
@@ -963,11 +1066,18 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
             if not rows:
                 done(item, UNRESOLVED, f"{proc} stated, and no weld row is charged")
             elif evidenced:
+                # A TITLE IS NECESSARY, NOT SUFFICIENT (review of D-596e): the row must also
+                # carry a stated rate (and the card's, where config states one for the
+                # process), hours, the welded part's quantity, and every welded piece's joints.
                 for l in evidenced:
                     for p in l["parts"]:
                         traced_labour.add((l["wb_row"], "welding", p))
-                done(item, COVERED, f"{proc} stated, and {_rates_said(evidenced)} is a {proc} "
-                                    f"rate that charges it", evidenced)
+                short = weld_proof_gaps(evidenced, proc)
+                done(item, UNRESOLVED if short else COVERED,
+                     (f"{proc} stated, and {_rates_said(evidenced)} names it — but "
+                      + "; ".join(short)) if short else
+                     f"{proc} stated, and {_rates_said(evidenced)} is a {proc} rate that charges "
+                     f"it, at the welded part's quantity, covering every welded piece", evidenced)
             else:
                 named = sorted({p for l in rows for p in _rate_processes(l)})
                 done(item, UNRESOLVED,
@@ -978,6 +1088,43 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
         else:
             done(item, UNRESOLVED, "a stated requirement no rule here can account for")
 
+    def weld_proof_gaps(rows: List[Dict[str, Any]], proc: str) -> List[str]:
+        """What a row titled for the stated process still has to show (D-598)."""
+        short: List[str] = []
+        card = fcc.number((_cfg("WELD_PROCESS_RATES_GBP", {}) or {}).get(proc))
+        for l in rows:
+            rate = fcc.cached_number(l["row"].get("dept_rate_gbp_per_hour"))
+            if not rate or rate <= 0:
+                short.append(f"'{l['title']}' states no rate")
+            elif card and not math.isclose(rate, card, rel_tol=0, abs_tol=0.005):
+                short.append(f"'{l['title']}' charges £{rate:.2f}/h against the card's "
+                             f"£{card:.2f}/h for {proc}")
+            got = fcc.cached_number(l["row"].get("qty_per_unit"))
+            if len(l["parts"]) == 1 and got is not None:
+                pn = next(iter(l["parts"]))
+                want = fcc.number((book.costs.get(pn) or {}).get("quantity"))
+                if want is not None and not math.isclose(got, want, rel_tol=0, abs_tol=1e-8):
+                    short.append(f"'{l['title']}' charges {got:g} of {pn} against {want:g} on "
+                                 f"the record")
+        charged = {p for l in rows for p in l["parts"]}
+        unit = _pn(ledger.get("unit"))
+        for i in items:
+            pn = _pn(i.get("record"))
+            rec = book.records.get(pn) or {}
+            if i.get("kind") != "part" or not pn:
+                continue
+            ops = {op_name(o) for o in (list(rec.get("inferred_operations") or [])
+                                        + list(rec.get("operations") or []))}
+            hosts = {_pn(rec.get("weld_charged_on"))} | {_pn(h) for h in
+                                                         (rec.get("welded_to_hosts") or [])}
+            hosts.discard("")
+            if not ("welding" in ops or hosts):
+                continue
+            # The unit owns its members' joints (D-531); a host carries the piece welded to it.
+            if not ({pn, unit} | hosts) & charged:
+                short.append(f"{pn}'s weld is on no {proc} row")
+        return short
+
     items = [i for i in (ledger.get("items") or []) if isinstance(i, Mapping)]
     for item in items:
         if item.get("kind") == "part":
@@ -986,7 +1133,7 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
         kind = item.get("kind")
         if kind == "part":
             continue
-        if kind in ("quantity", "material", "size"):
+        if kind in ("quantity", "material", "size", "stated_reference"):
             fact(item)
         elif kind in ("operation", "unit_operation"):
             work_state(item, op_name(item.get("item")), _pn(item.get("record")))
@@ -1003,6 +1150,17 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
 
     _allowances(summary, book, ledger, traced_labour, traced_material, result)
 
+    # A STALE READ ID IS A FINDING BEFORE IT IS A FALLBACK (D-598): a record minted from
+    # another response, or naming a line this response does not hold, is said and holds,
+    # whatever its words later linked it to.
+    for s in ledger.get("stale_read_ids") or []:
+        if isinstance(s, Mapping):
+            issues.append({"code": "read_id_stale", "item": str(s.get("read_id") or ""),
+                           "part": str(s.get("record") or ""),
+                           "why": (f"{s.get('record')} carries read ID {s.get('read_id')}, "
+                                   f"{s.get('why')} (this ledger's response is "
+                                   f"{s.get('ledger_response')}) — any link to it is by the "
+                                   f"line's words, not its ID")})
     for e in out_items:
         if e["state"] == UNRESOLVED:
             issues.append({"code": "read_item_unresolved", "item": e["id"], "part": e["record"],

@@ -2365,6 +2365,67 @@ def stated_item_size(name: Any, text: Any) -> Optional[List[float]]:
     return None
 
 
+_REFERENCE_CODE = re.compile(r"\b[A-Z]{1,4}-?\d{4,}[A-Z]{0,2}\b")
+_SENTENCES = re.compile(r"(?<!\d)\.(?!\d)|[\n;]+")
+
+
+def _names_item(sentence_words: set, name: Any) -> bool:
+    """Does a sentence name this item: every significant word of its name, singular?"""
+    sig = {_singular(w) for w in re.findall(r"[A-Z0-9]+", str(name or "").upper())
+           if len(w) >= 2 and w not in _ITEM_STOP_WORDS and not w.isdigit()}
+    return bool(sig) and sig <= sentence_words
+
+
+def _head_noun(name: Any) -> str:
+    sig = [w for w in re.findall(r"[A-Z]+", str(name or "").upper())
+           if len(w) >= 3 and w not in _ITEM_STOP_WORDS]
+    return _singular(sig[-1]) if sig else ""
+
+
+def stated_item_reference(name: Any, text: Any, others: Any = ()) -> str:
+    """The reference code a brief or a read line gives this named item, or "" (D-598).
+
+    A code counts in a sentence that names this item and no other read part, where a reference
+    word (config STATED_REFERENCE_WORDS) stands in the few words before it: "Fit 2 chrome end
+    caps per finished bar, drawing reference CA070092" for "CHROME END CAP". A colour or grade
+    with no reference word before it is not a part's reference."""
+    refs = [str(w).upper() for w in _vocab("STATED_REFERENCE_WORDS", ()) or ()]
+    for sentence in _SENTENCES.split(str(text or "")):
+        words = {_singular(w) for w in re.findall(r"[A-Za-z0-9]+", sentence.upper())}
+        if not _names_item(words, name) or any(
+                _names_item(words, o) for o in (others or ()) if _words(o) != _words(name)):
+            continue
+        up = " ".join(re.findall(r"[A-Z0-9-]+", sentence.upper()))
+        for m in _REFERENCE_CODE.finditer(up):
+            before = " " + " ".join(up[:m.start()].split()[-5:]) + " "
+            if any(f" {r} " in before for r in refs):
+                return m.group(0)
+    return ""
+
+
+def stated_item_holes(name: Any, text: Any, others: Any = ()) -> List[float]:
+    """The hole diameters a brief states for this item, in a sentence whose only part noun is
+    this item's (D-598): "Each bracket has the 3mm diameter hanging hole" for "HOOK BRACKET".
+    The size must be called a diameter, beside the word hole."""
+    head = _head_noun(name)
+    if not head:
+        return []
+    other_heads = {_head_noun(o) for o in (others or ()) if _head_noun(o) != head} - {""}
+    out: List[float] = []
+    for sentence in _SENTENCES.split(str(text or "")):
+        words = {_singular(w) for w in re.findall(r"[A-Za-z]+", sentence.upper())}
+        if head not in words or words & other_heads or "HOLE" not in words:
+            continue
+        for m in re.finditer(r"(?:Ø|⌀)\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*mm\s*(?:diameter|dia\b)",
+                             sentence, re.IGNORECASE):
+            out.append(float(m.group(1) or m.group(2)))
+    return out
+
+
+def _words(value: Any) -> str:
+    return " ".join(re.sub(r"[^A-Z0-9]+", " ", str(value or "").upper()).split())
+
+
 def stated_section_forms(text: Any) -> Dict[Tuple[float, float], set]:
     """The section forms a brief's or sheet's materials lines name, by size (D-532):
     "1. 40 × 20 oval tube frame" gives {(20, 40): {"oval_tube"}}. One line, one size."""
@@ -2529,8 +2590,9 @@ def resolve_stocks(parts: List[Any], brief: str = "") -> List[Dict[str, Any]]:
     oval — where the brief names no other form at that size."""
     out = [resolve_stock(p) if isinstance(p, Mapping) else {} for p in parts or []]
     _stated = stated_section_forms(brief)
+    from robust_ownership import brief_oval_shape
     for s in out:
-        if s.get("form") not in ("tube", "box_section") or not s.get("section_mm"):
+        if s.get("form") not in ("tube", "box_section", "oval_tube") or not s.get("section_mm"):
             continue
         if _stated.get(tuple(sorted(s["section_mm"][:2]))) == {"oval_tube"}:
             a, b = s["section_mm"][:2]
@@ -2540,6 +2602,10 @@ def resolve_stocks(parts: List[Any], brief: str = "") -> List[Dict[str, Any]]:
                                      .get("oval_tube", s.get("wall_mm") or 1.5))
             s.setdefault("notes", []).append(
                 f"oval: the brief's materials list gives {a:g} x {b:g} as oval tube")
+        if s.get("form") == "oval_tube" and brief_oval_shape(
+                brief, s["section_mm"], s.get("wall_mm")) == "flat_sided":
+            s["oval_shape"] = "flat_sided"
+            s.setdefault("notes", []).append("flat-sided shape from matching section clause in brief")
     known: Dict[Tuple[float, float], Tuple[Dict[str, Any], str]] = {}
     for p, s in zip(parts or [], out):
         if s.get("form") in STOCK_SECTION_FORMS:
@@ -3839,7 +3905,8 @@ def cutout_geometry(sighted: Mapping[str, Any]) -> Dict[str, Any]:
 
 def parts_from_concept(answer: Dict[str, Any], stem: str, *,
                        sheet: bool = False, brief: str = "",
-                       source_answer: Optional[Mapping[str, Any]] = None) -> List[Dict[str, Any]]:
+                       source_answer: Optional[Mapping[str, Any]] = None,
+                       source_response: str = "") -> List[Dict[str, Any]]:
     """The sighted parts as engine part records, every field attributed at concept rank.
 
     Written through apply_field so the stamps are the arbitration machinery's own, not a
@@ -3851,6 +3918,7 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
 
     `source_answer`: the read as the model returned it, where `answer` is a copy with lines set
     aside — so each record carries the ID of its line in the read itself (D-596e).
+    `source_response`: that response's identity as taken at the read (D-598).
     """
     from document_builder import _empty_part_record                 # noqa: WPS433
     from source_precedence import apply_field                       # noqa: WPS433
@@ -3858,7 +3926,8 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
     # WHICH LINE OF THE READ, BY ITS ID (D-596e), taken before any line is added or changed.
     try:
         from read_charge_contract import read_ids as _read_ids
-        _ids = _read_ids(source_answer if source_answer is not None else answer)
+        _ids = _read_ids(source_answer if source_answer is not None else answer,
+                         response=source_response)
     except Exception:                                                # noqa: BLE001
         _ids = {}
     parts: List[Dict[str, Any]] = []
@@ -4041,7 +4110,25 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
                 record["review_flags"].append(
                     f"CONCEPT: {_sz} mm is the size the brief states for this item — carried "
                     f"on its line and into the price research, never nested")
+            # THE PART'S OWN REFERENCE, WHERE THE BRIEF OR THE READ STATES ONE (D-598). The 12:51
+            # 0320730 book priced a generic chrome end cap from the market; the drawing names
+            # CA070092. The code rides the research and the line, and the match is asked.
+            _others = [str(p.get("name") or "") for p in (answer.get("parts") or [])
+                       if isinstance(p, dict) and p is not sighted]
+            _ref = stated_item_reference(name, brief, _others)
+            _ref_src = "the enquiry brief" if _ref else ""
+            if not _ref:
+                _ref = stated_item_reference(name, " ".join(
+                    str(sighted.get(k) or "") for k in ("name", "seen", "sighted_material")), ())
+                _ref_src = "the read" if _ref else ""
+            if _ref:
+                record["concept_stated_reference"] = {"code": _ref, "source": _ref_src}
+                record["review_flags"].append(
+                    f"CONCEPT: {_ref_src} names {_ref} for this item — priced as found; the "
+                    f"supplier match to {_ref} is unproven until a catalogue line carries it")
             _spec = [name]
+            if _ref:
+                _spec.append(f"reference {_ref} (stated — price this part, or say it is not found)")
             if _stated_sz:
                 _spec.append(f"{' x '.join(f'{v:g}' for v in _stated_sz)} mm (stated)")
             if sighted_mat:
@@ -5655,7 +5742,9 @@ def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
             return max(1, int(p.get("quantity") or 1))
         except (TypeError, ValueError):
             return 1
+    from robust_ownership import nonphysical
     fitted = [p for p in (parts or []) if isinstance(p, dict)
+              and not nonphysical(p)
               and p.get("concept_kind") != "assembly" and str(p.get("part_number") or "")]
     # A PIECE WELDED TO ITS HOST IS FITTED WITH IT (D-499): thirty brackets welded to fifteen
     # trays are fifteen trays to fit, label and fix, not forty-five pieces.

@@ -224,8 +224,9 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any,
                                                  "is_assembly_parent")
                                              or part.get("is_sub_assembly"))})
 
+    from robust_ownership import nonphysical, section_shipping
     for part in parts or ():
-        if not isinstance(part, dict) or is_commercial_line(part):
+        if not isinstance(part, dict) or nonphysical(part):
             continue
         # AN ASSEMBLY IS NOT A THING YOU PUT IN A BOX. Its material is already counted on its
         # children, so weighing it too counts the same steel twice — and its "blank" is not a
@@ -249,6 +250,33 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any,
                 part.get("product_envelope_mm"), dict) else {}
             if _env and _unit is None:
                 _unit = part
+            continue
+        _section = section_shipping(part, _density_for(part.get("normalized_material")))
+        if _section:
+            if _section.get("error"):
+                skipped += 1
+                _leave_out(part, _section["basis"] + ": " + _section["error"])
+                continue
+            try:
+                per = float(part.get("quantity") or 1)
+                if per <= 0:
+                    raise ValueError("non-positive quantity")
+            except (TypeError, ValueError):
+                skipped += 1
+                _leave_out(part, "section quantity unverified")
+                continue
+            counted += 1
+            shippable.append(part)
+            L, W, T = _section["length"], _section["width"], _section["thickness"]
+            weight_kg += _section["kg"] * per
+            longest, widest = max(longest, L), max(widest, W)
+            counted_parts.append({"part_number": part.get("part_number"),
+                "description": part.get("description"), "length_mm": L, "width_mm": W,
+                "thickness_mm": T, "material": part.get("normalized_material"),
+                "blank_from": _section["basis"], "weight_basis": _section["basis"],
+                "density_kg_m3": _density_for(part.get("normalized_material")),
+                "per_assembly": per, "kg_each": round(_section["kg"], 3),
+                "kg_in_order": round(_section["kg"] * per * qty, 3)})
             continue
         L, W = _num(part.get("blank_length_mm")), _num(part.get("blank_width_mm"))
         _blank_from = "the flat blank on the part's record"
@@ -1627,7 +1655,8 @@ def packaging_line(parts: List[Dict[str, Any]], order_qty: Any, customer: Any = 
             else "protective packaging and a pallet")
     return _line("PACKAGING", order,
                  f"{what[0].upper()}{what[1:]} for {order['order_quantity']} "
-                 f"flat-packed display assemblies, {where}{weight}{count}UK trade, per order",
+                 f"{'assembled' if order.get('assembled_unit') else 'parts-packed'} display assemblies, "
+                 f"{where}{weight}{count}UK trade, per order",
                  "PACKAGING")
 
 
