@@ -2186,6 +2186,17 @@ def main() -> None:
                     "items": [], "allowances": [], "engine_lines": [],
                     "issues": [{"code": "read_charge_audit_failed", "item": "", "part": "",
                                 "text": f"{type(_rc_exc).__name__}: {_rc_exc}"}]}
+            # THE NORMAL-PACK AUDIT, IN SHADOW (D-598b): the retained raw BOM held to the costed
+            # parts and the saved charged cells, missing source and basis named. It decides no
+            # release, and a checker that fails is recorded, never a stop.
+            try:
+                from normal_pdf_audit import record as _normal_pdf_record
+                summary["normal_pdf_audit"] = _normal_pdf_record(_target, xlsx_path)
+            except Exception as _np_exc:                                 # noqa: BLE001
+                _target["normal_pdf_audit"] = summary["normal_pdf_audit"] = {
+                    "mode": "shadow", "applicable": True, "passed": False,
+                    "coverage": "incomplete",
+                    "findings": [f"checker_failed:{type(_np_exc).__name__}:{_np_exc}"]}
             _inv = _check_job(_target)
             summary["invariants"] = _inv          # so anything reading `summary` agrees
             # NOT REWRITTEN HERE (D-361). D-359 wrote the banner again at this point, after

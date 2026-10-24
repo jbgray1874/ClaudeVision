@@ -3811,6 +3811,11 @@ def canonical_labour_groups(
             # count the process estimate used, times the part's quantity — so a hole can be
             # held to the row that cuts it, laser or drill.
             if operation in _HOLE_CUTTING_OPS:
+                _hc = (estimates[representative_id].get("process_estimate") or {}).get("hole_count")
+                if isinstance(_hc, (int, float)) and not isinstance(_hc, bool) and _hc >= 0:
+                    _hp = group.setdefault("holes_cut_by_part", {})
+                    _hp[representative_id] = _hp.get(representative_id, 0) + _hc * qty
+                    group["holes_cut_basis"] = "per_finished_product"
                 group["holes_cut"] = int(group.get("holes_cut") or 0) + int(_safe(
                     (estimates[representative_id].get("process_estimate") or {})
                     .get("hole_count"), 0) or 0) * int(qty)
@@ -5219,6 +5224,8 @@ def build_workbook_labour(
                 # count of the holes it was costed for, so the read contract can hold a hole
                 # to the row on its owning part that cuts it.
                 "holes_cut": g.get("holes_cut"),
+                "holes_cut_by_part": dict(g.get("holes_cut_by_part") or {}),
+                "holes_cut_basis": g.get("holes_cut_basis"),
                 # HOW THE RATE WAS ARRIVED AT — template_calculated / size_banded /
                 # historical / historical_unbanded / engine_derived / unmeasured_default.
                 # Without this the audit tabs present an unmeasured constant and the
@@ -7872,6 +7879,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             elif _ol in ("hole_machining", "drilling", "punch"):
                 g["holes"] += int(_safe((_ng2 or {}).get("estimated_hole_count"), 0)) * _qty_pu
             if _ol in _HOLE_CUTTING_OPS:
+                _hc = (pe.get("process_estimate") or {}).get("hole_count")
+                if isinstance(_hc, (int, float)) and not isinstance(_hc, bool) and _hc >= 0:
+                    _hp = g.setdefault("holes_cut_by_part", {})
+                    _hp[_pn] = _hp.get(_pn, 0) + _hc * _qty_pu
+                    g["holes_cut_basis"] = "per_finished_product"
                 g["holes_cut"] = int(g.get("holes_cut") or 0) + int(_safe(
                     (pe.get("process_estimate") or {}).get("hole_count"), 0) or 0) * _qty_pu
 
