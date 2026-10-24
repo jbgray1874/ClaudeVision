@@ -61,8 +61,14 @@ def _records(answer=None, brief=BRIEF):
     return answer, unit, parts
 
 
-def _lab(row, ops, pn, hours, value, title, qty=1, rate=None):
-    return ({"workbook_row": row, "engine_operations": ops, "part_numbers": [pn]},
+def _lab(row, ops, pn, hours, value, title, qty=1, rate=None, holes=None):
+    group = {"workbook_row": row, "engine_operations": ops, "part_numbers": [pn]}
+    if holes is not None:
+        # What the writer saves on a cutting row (D-598b): the holes per finished product,
+        # by the part that owns them.
+        group.update(holes_cut=holes, holes_cut_by_part={pn: holes},
+                     holes_cut_basis="per_finished_product")
+    return (group,
             dict({"workbook_row": row, "part_numbers": pn, "batch_hours": hours,
                   "total_value_gbp": value, "charged_cell": f"Estimate!M{row}",
                   "operation": title, "qty_per_unit": qty},
@@ -89,7 +95,7 @@ def _book(*, hole_row=True, plate_gbp=0.0, plating=True, allowances=True, bought
             _lab(156, ["dress_welds"], U, .5667, 16.25, "Dress Welds"),
             _lab(157, ["assembly", "handling"], U, .33, 9.42, "Assemble/pack (Metal)")]
     if hole_row:
-        labs.append(_lab(158, ["hole_machining"], T, .1, 3.2, "Drill"))
+        labs.append(_lab(158, ["hole_machining"], T, .1, 3.2, "Drill", holes=1))
     if allowances:
         labs += [_lab(159, ["brush_before_plate"], U, .6667, 80.0, "Brush before plate",
                       rate=31.18),
@@ -271,6 +277,14 @@ def _ruled(s, rulings):
     return s
 
 
+# Both sides of both brackets, confirmed by a person with the evidence: the sheet counts the
+# welded pieces, not the joint runs (D-598b).
+_JOINTS_RULED = {f"{rid}.joint": {"ruling": "covered", "covered_by": "welding",
+                                  "reason": "both sides of each bracket in the weld minutes",
+                                  "evidence": "welding supervisor, 24/10"}
+                 for rid in ("R1", "R2")}
+
+
 def test_rulings_with_reasons_resolve_items_and_confirm_allowances():
     s = _ruled(_book(plate_gbp=120.0), {
         "NV1": {"ruling": "excluded", "reason": "the customer fits the ticket holder"},
@@ -279,6 +293,7 @@ def test_rulings_with_reasons_resolve_items_and_confirm_allowances():
         "S.weld_process": {"ruling": "covered", "reason": "TIG at the arc row, agreed",
                            "covered_by": "welding",
                            "evidence": "production manager's e-mail, TIG minutes at the arc rate"},
+        **_JOINTS_RULED,
         "allowance:brush_before_plate": {"ruling": "confirmed", "reason": "production: 15 min"},
         "allowance:plater_pack": {"ruling": "confirmed", "reason": "same packer"},
         "allowance:plater_final_pack": {"ruling": "confirmed", "reason": "same packer"}})
@@ -888,17 +903,22 @@ def test_a_hole_the_brief_states_reaches_its_parts_record_and_is_held_to_its_cut
     assert {"what": "hole", "count": 1, "length_mm": 3.0, "width_mm": 3.0} in \
         bracket["concept_cutout_dims"]
     e = next(e for e in rcc.audit(s)["items"] if e["id"] == "R2.stated_hole1")
-    assert e["state"] == rcc.COVERED and "does not state the holes" in e["how"]
-    _row(s, 151, holes_cut=0)
+    assert e["state"] == rcc.UNRESOLVED and "no part-owned hole count" in e["how"], \
+        "a row that does not say whose holes, per finished product, proves none (D-598b)"
+    _row(s, 151, holes_cut=2, holes_cut_by_part={B: 1},
+         holes_cut_basis="per_finished_product")
     e = next(e for e in rcc.audit(s)["items"] if e["id"] == "R2.stated_hole1")
-    assert e["state"] == rcc.UNRESOLVED and "costed for 0 hole(s) against 2" in e["how"]
-    _row(s, 151, holes_cut=2)
+    assert e["state"] == rcc.UNRESOLVED and "below required 2" in e["how"]
+    _row(s, 151, holes_cut_by_part={B: 2})
     assert _state(rcc.audit(s), "R2.stated_hole1") == rcc.COVERED
+    _row(s, 151, holes_cut_basis="per_order")
+    assert _state(rcc.audit(s), "R2.stated_hole1") == rcc.UNRESOLVED, "an order count is not "\
+        "a product count"
 
 
 def test_a_hole_of_another_size_or_on_another_part_does_not_cover_the_stated_one():
     s = _book(brief=HOLE_BRIEF)
-    _row(s, 151, holes_cut=2)
+    _row(s, 151, holes_cut=2, holes_cut_by_part={B: 2}, holes_cut_basis="per_finished_product")
     bracket = next(p for p in s["manufacturing_writeup"]["parts"] if p["part_number"] == B)
     bracket["concept_cutout_dims"] = [{"what": "hole", "count": 1, "length_mm": 6.0,
                                        "width_mm": 6.0}]
@@ -952,6 +972,7 @@ def test_the_release_names_the_read_ledgers_own_findings_among_its_checks():
                      "covered_by": "dress_welds"},
         "S.weld_process": {"ruling": "covered", "reason": "TIG at the arc row", "covered_by":
                            "welding", "evidence": "production manager's e-mail"},
+        **_JOINTS_RULED,
         "allowance:brush_before_plate": {"ruling": "confirmed", "reason": "production: 15 min"},
         "allowance:plater_pack": {"ruling": "confirmed", "reason": "same packer"},
         "allowance:plater_final_pack": {"ruling": "confirmed", "reason": "same packer"}})
@@ -971,8 +992,13 @@ def test_a_piece_the_brief_has_welded_is_a_joint_charged_exactly_once():
     joints = {i["id"]: i for i in s["read_ledger"]["items"] if i["kind"] == "joint"}
     assert joints["R2.joint"]["said_by"] == "the enquiry brief", "brackets TIG welded to the tube"
     e = next(e for e in rcc.audit(s)["items"] if e["id"] == "R2.joint")
-    assert e["state"] == rcc.CHARGED and "charged once" in e["how"]
-    assert "runs per joint are not counted" in e["how"]
+    assert e["state"] == rcc.UNRESOLVED and "covered once" in e["how"], \
+        "one row on the piece does not prove both sides of its joint (D-598b)"
+    assert "runs per joint are not captured" in e["how"]
+    ruled = _ruled(_book(), {"R2.joint": dict(_JOINTS_RULED["R2.joint"], evidence="")})
+    assert _state(rcc.audit(ruled), "R2.joint") == rcc.UNRESOLVED, "a ruling with no evidence"
+    ruled = _ruled(_book(), {"R2.joint": _JOINTS_RULED["R2.joint"]})
+    assert _state(rcc.audit(ruled), "R2.joint") == rcc.COVERED
     a, b = _lab(161, ["welding"], B, .2, 8.0, "Weld (CO2)", 2, rate=41.77)
     s["workbook_labour"]["rows"].append(a)
     s["final_estimate"]["labour_rows"].append(b)

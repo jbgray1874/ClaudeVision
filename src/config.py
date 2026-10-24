@@ -4582,10 +4582,11 @@ WELD_RATE_EQUIVALENT_PROCESSES = {"CO2": ("CO2", "MIG"), "MIG": ("MIG", "CO2"),
 # Empty until the estimators give a TIG rate.
 #   process -> {"gbp_per_hour": £/h, "source": "who stated it, where, when"}
 WELD_PROCESS_RATES_GBP: dict = {}
-# READ ITEMS A "COVERED" RULING MUST EVIDENCE (D-598). A stated weld process charged at a
-# shared or substitute rate is legitimate only where the ruling names who confirmed the rate or
-# the minutes, and where (read_rulings {..., "evidence": "..."}). Item ids, or their prefixes.
-READ_RULINGS_NEEDING_EVIDENCE = ("S.weld_process",)
+# READ ITEMS A "COVERED" RULING MUST EVIDENCE (D-598, D-598b). A stated weld process charged at
+# a shared or substitute rate, and a welded piece whose joint sides and runs the sheet does not
+# count, are covered only where the ruling names who confirmed it, and where
+# (read_rulings {..., "evidence": "..."}). Item ids, or their prefixes or suffixes.
+READ_RULINGS_NEEDING_EVIDENCE = ("S.weld_process", ".joint")
 
 # ── OPERATIONS THAT LEGITIMATELY RECUR AT EVERY LEVEL OF A TREE ───────────────────────────
 # An assembly event on 12173-03-GA over 201, and another on 201 over its frames, is two

@@ -527,6 +527,9 @@ class _Book:
                                 "wb_row": row.get("workbook_row"),
                                 # The holes the row was costed for, where recorded (D-598a).
                                 "holes_cut": group.get("holes_cut"),
+                                "holes_cut_by_part": {_pn(k): v for k, v in
+                                    (group.get("holes_cut_by_part") or {}).items()},
+                                "holes_cut_basis": group.get("holes_cut_basis"),
                                 "title": str(row.get("operation") or group.get("wb_operation") or "")})
         dec = summary.get("estimator_decisions") if isinstance(summary.get("estimator_decisions"), Mapping) else {}
         self.rulings = {str(k).strip().lower(): v for k, v in (dec.get("read_rulings") or {}).items()
@@ -701,6 +704,7 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
             return done(item, EXCLUDED, f"ruled out by {book.decided_by}: {r.get('reason')}")
         if (r.get("ruling") == "covered" and not str(r.get("evidence") or "").strip()
                 and any(str(item["id"]).lower().startswith(str(k).lower())
+                        or str(item["id"]).lower().endswith(str(k).lower())
                         for k in (_cfg("READ_RULINGS_NEEDING_EVIDENCE", ()) or ()))):
             # A SHARED OR SUBSTITUTE RATE IS ACCEPTED ONLY ON EVIDENCE (review of D-596e): an
             # estimator may rule a stated weld process covered by another rate, and the ruling
@@ -992,7 +996,7 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                                    f"cuts this hole")
             return
         have = sum(n for _d, n in match)
-        if count and 0 < have < count:
+        if count and have < count:
             done(item, UNRESOLVED, f"{pn}'s record carries {have} {size} hole(s) against {count} "
                                    f"required")
             return
@@ -1005,6 +1009,11 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
         qty = fcc.number((book.costs.get(pn) or {}).get("quantity")) or 1
         need = (count or max(have, 1)) * qty
         counted = [l for l in rows if l.get("holes_cut") is not None]
+        from detail_evidence import hole_row_coverage
+        _hole_gap = hole_row_coverage(rows, pn, count or have, qty)
+        if _hole_gap:
+            done(item, UNRESOLVED, f"{pn}: {_hole_gap}", rows)
+            return
         if counted and sum(fcc.number(l.get("holes_cut")) or 0 for l in counted) < need:
             done(item, UNRESOLVED,
                  f"{size} hole on {pn}'s record, and {', '.join(sorted({l['title'] for l in counted}))} "
@@ -1184,10 +1193,10 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                                    f"is charged once", rows)
         else:
             bad = labour_evidence(rows, _families("welding"), next(iter(rows[0]["parts"])))
-            done(item, UNRESOLVED if bad else CHARGED,
-                 bad or f"charged once, on {rows[0]['title']} on "
+            done(item, UNRESOLVED,
+                 bad or f"welded piece covered once, on {rows[0]['title']} on "
                         f"{', '.join(sorted(rows[0]['parts']))}; the runs per joint are not "
-                        f"counted on the sheet", rows)
+                        f"captured: confirm joint sides/runs through an evidenced ruling", rows)
 
     def weld_proof_gaps(rows: List[Dict[str, Any]], proc: str) -> List[str]:
         """What a row titled for the stated process still has to show (D-598, D-598a): a rate
