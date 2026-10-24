@@ -7884,13 +7884,17 @@ _SPECIAL_ITEM_FAB_OPS = {
 }
 
 
-def _cut_method_entry(part: Dict[str, Any]) -> Dict[str, Any]:
-    """The shop rule row that covers this part's material and gauge, or {}."""
+def _cut_method_entry(part: Dict[str, Any],
+                      table: str = "CUT_METHOD_BY_MATERIAL") -> Dict[str, Any]:
+    """The shop rule row that covers this part's material and gauge, or {}.
+
+    `table` names the config list to read: the shop's rules by default, or the proposals
+    (CUT_METHOD_PROPOSED_BY_MATERIAL, D-598n) that are asked rather than ruled."""
     _mat = str(part.get("normalized_material") or part.get("material") or "").strip().upper()
     if not _mat:
         return {}
     _th = _safe_float(part.get("normalized_thickness_mm") or part.get("thickness_mm"))
-    for _rule in (getattr(config, "CUT_METHOD_BY_MATERIAL", []) or []):
+    for _rule in (getattr(config, table, []) or []):
         if not isinstance(_rule, dict):
             continue
         if str(_rule.get("material") or "").strip().upper() != _mat:
@@ -9028,10 +9032,17 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         _named = _cut_method_rule(part)
         _drop: List[str] = []
         _kept = ""
+        # WHERE NO SHOP RULE SPEAKS, A PROPOSAL MAY (D-598n). 9287-10-005, a 12 mm solid-surface
+        # base, carried the read's CNC routing and its flat's laser, and the laser went to the
+        # metal laser. Fabrication practice names the router for solid surface; it is not the
+        # shop's rule, so the laser comes off as a proposal and the machine is asked.
+        _proposal = {} if _named else _cut_method_entry(part, "CUT_METHOD_PROPOSED_BY_MATERIAL")
         if _named in ("router",):
             _drop, _kept = list(_laser_on), "router"
         elif _named in ("laser", "punch"):
             _drop, _kept = list(_router_on), _named
+        elif str(_proposal.get("method") or "").strip().lower() == "router":
+            _drop, _kept = list(_laser_on), "router"
         if _drop:
             ops = [o for o in ops if o not in _drop]
             for _tf in ("textual_operations", "inferred_operations"):
@@ -9041,6 +9052,24 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 for _o in _drop:
                     _timing.pop(_o, None)
             part.setdefault("removed_operations", []).extend(_drop)
+        if _drop and _proposal:
+            _pn_cut = part.get("part_number")
+            _mat_cut = part.get("normalized_material") or part.get("material")
+            part.setdefault("review_flags", []).append(
+                f"{', '.join(_drop)} removed: {_pn_cut} was charged BOTH a laser cut and a "
+                f"routed cut, the same profile paid for twice. No SDI shop rule names "
+                f"{_mat_cut}; the router is PROPOSED ({_proposal.get('source')}). Confirm the "
+                f"machine")
+            part.setdefault("manufacturing_questions", []).append({
+                "issue": f"Which machine cuts {_pn_cut} ({_mat_cut})?",
+                "assumption": (f"routed, with the laser cut taken off — proposed, not a shop "
+                               f"rule: {_proposal.get('source')}"),
+                "action": (f"confirm the machine, and add {_mat_cut} to "
+                           f"CUT_METHOD_BY_MATERIAL so the next job does not ask"),
+                "source": "estimator.estimate_process_times",
+                "subject": "cut_method_proposed",
+            })
+        elif _drop:
             part.setdefault("review_flags", []).append(
                 f"{', '.join(_drop)} removed: this blank was charged BOTH a laser cut and a "
                 f"routed cut, which is the same profile paid for twice. SDI's own rule for "
