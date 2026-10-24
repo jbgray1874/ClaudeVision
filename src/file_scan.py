@@ -2051,9 +2051,24 @@ def _material_family(name: Any) -> str:
     return canon
 
 
+def _own_sheet_unresolved_material(part: Dict[str, Any], pages: Any) -> str:
+    """The material a part's OWN sheet prints and the book cannot resolve, or "" (D-598j)."""
+    bare = re.sub(r"[\s\-_]+", "", str(part.get("part_number") or "").upper())
+    if not bare:
+        return ""
+    for pg in pages or []:
+        pa = pg.get("page_analysis") if isinstance(pg, dict) else None
+        tb = (pa.get("title_block") or {}) if isinstance(pa, dict) else {}
+        own = {re.sub(r"[\s\-_]+", "", str(n).upper()) for n in (tb.get("drawing_numbers") or [])}
+        if bare in own and tb.get("material_stated_unresolved") and not tb.get("materials"):
+            return str(tb["material_stated_unresolved"])
+    return ""
+
+
 def _inherit_document_material_to_parts(
     parts: List[Dict[str, Any]],
     document_analysis: Dict[str, Any],
+    pages: Any = None,
 ) -> None:
     """
     Propagate document-level material to parts that have no material of their own.
@@ -2093,6 +2108,18 @@ def _inherit_document_material_to_parts(
         if existing and existing not in ("?", "", "None", "UNKNOWN"):
             continue
         if part.get("materials"):
+            continue
+        # A PART WHOSE OWN SHEET PRINTS A MATERIAL KEEPS IT, EVEN ONE THE BOOK CANNOT NAME
+        # (D-598j). 9287-10-005's sheet says "HANEX GAD-001", a solid surface; the GA's "HANEX,
+        # ACRYLIC" resolved to acrylic and the base inherited it. Unresolved, the base reaches
+        # the estimator as a visible gap; inherited, it reaches them as somebody else's sheet.
+        _printed = _own_sheet_unresolved_material(part, pages)
+        if _printed:
+            part["material_stated"] = _printed
+            part.setdefault("review_flags", []).append(
+                f"MATERIAL AS PRINTED: {part.get('part_number')}'s own sheet states "
+                f"'{_printed}', which the material book does not name — not taken from the "
+                f"document's '{doc_mat_norm or doc_mat_raw}'. Say its stock and its price.")
             continue
         if doc_mat_norm:
             # INHERITED from the document, not read from this part. Rank 60: better than a
@@ -2273,7 +2300,7 @@ def _build_additive_summary_sections(summary: Dict[str, Any]) -> None:
     document_analysis = summary.get("document_analysis", {})
     parts = manufacturing_writeup.get("parts", [])
 
-    _inherit_document_material_to_parts(parts, document_analysis)
+    _inherit_document_material_to_parts(parts, document_analysis, summary.get("pages"))
 
     summary["drawing_metadata"] = {
         "source_file": summary.get("source_file"),

@@ -955,6 +955,15 @@ CONCEPT_HANGING_HARDWARE_WORDS = ["hook", "hooks", "hooked", "hanger", "hangers"
 # A PIECE JOINED BY ADHESIVE TAKES NO SCREWS (D-500): bonded, taped or glued — its adhesive is a
 # different consumable, named on the line as not in the fixings allowance.
 CONCEPT_BONDED_WORDS = ["bonded", "bond", "adhesive", "glued", "taped", "tape", "vhb"]
+
+# THE ROLE A FLAT'S NAME GIVES ITS PIECE (D-598j). Two flats on one part number with the same
+# blank and the same stock were read as revisions and one was dropped: "SIDE" and "TOP" are two
+# pieces of one bonded box, not two issues of one panel. A word from this list in every file's
+# name, different in each, makes the files pieces. Words that name a layer, a view or a marking
+# (TEXT, ENGRAVE, ETCH, VIEW, UNDERSIDE, REAR) are deliberately absent: those stay one part.
+DXF_PIECE_ROLE_WORDS = ("TOP", "SIDE", "BASE", "BOTTOM", "BACK", "FRONT", "END", "LID", "LEFT",
+                        "RIGHT", "SHELF", "DIVIDER", "PLINTH", "HEADER", "FASCIA", "DOOR",
+                        "UPRIGHT", "RAIL", "SKIRT", "FLOOR", "ROOF", "INNER", "OUTER")
 # THE ADHESIVE A BONDED PIECE NEEDS, SO EXCLUDING ITS SCREWS NEVER LEAVES IT UNPRICED (D-501),
 # BY A METHOD SUITED TO THE JOINT (D-502): "bonded" is not always tape. The read's own words
 # choose the method (taped/VHB -> tape; glued/epoxy/structural -> structural adhesive); where
