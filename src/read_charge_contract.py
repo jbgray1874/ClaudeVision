@@ -1193,10 +1193,17 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                                    f"is charged once", rows)
         else:
             bad = labour_evidence(rows, _families("welding"), next(iter(rows[0]["parts"])))
+            # THE JOINT'S SIDES AND RUNS, AS CAPTURED (D-598h), shown on the finding and never
+            # taken as proof the weld row charges them: capture is scope, not charge.
+            from joint_scope_evidence import joint_scope, said
+            scope = joint_scope(summary, pn)
+            scope_note = (
+                "its sides and runs are captured, and their allocation to the charged weld "
+                "time is not yet verified" if scope["scope_verified"] else said(scope["issues"]))
             done(item, UNRESOLVED,
                  bad or f"welded piece covered once, on {rows[0]['title']} on "
-                        f"{', '.join(sorted(rows[0]['parts']))}; the runs per joint are not "
-                        f"captured: confirm joint sides/runs through an evidenced ruling", rows)
+                        f"{', '.join(sorted(rows[0]['parts']))}; {scope_note}; "
+                        f"confirm coverage through an evidenced ruling", rows, joint_scope=scope)
 
     def weld_proof_gaps(rows: List[Dict[str, Any]], proc: str) -> List[str]:
         """What a row titled for the stated process still has to show (D-598, D-598a): a rate

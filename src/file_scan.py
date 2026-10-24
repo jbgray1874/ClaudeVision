@@ -5098,14 +5098,17 @@ def _finalize_scan_summary(
             "why": ("no engine reader found a part, and the pack has page(s) with no text "
                     "layer that only the vision read can read"),
         }
+        # NO TEXT IS NOT PROOF OF A DRAWING (review of D-598g): a blank page, lettering drawn
+        # as outlines and an image-only form qualify too. The read establishes what is there,
+        # and the flag claims no more than the missing text layer.
         summary.setdefault("review_flags", []).append(
-            "PRICED FROM THE VISION READ OF A SCANNED DRAWING: no engine reader found a part, "
-            f"and {', '.join(_scanned_pages[:6])} carr{'y' if len(_scanned_pages) > 1 else 'ies'} "
-            "no text layer. The parts below were sighted by the vision model, not measured; "
-            "every size and count is for the estimator to confirm.")
+            "PRICED FROM THE VISION READ: no engine reader found a part, and "
+            f"{', '.join(_scanned_pages[:6])} carr{'y' if len(_scanned_pages) > 1 else 'ies'} "
+            "no text layer, which only the vision read can read. The parts below were sighted "
+            "by the vision model, not measured; every size and count is for the estimator to "
+            "confirm.")
         print(f"   [concept] no engine reader found a part, and {', '.join(_scanned_pages[:6])} "
-              f"has no text layer — the vision read is the fallback (a scanned drawing)",
-              flush=True)
+              f"has no text layer — the vision read is the fallback", flush=True)
     _sight_run = _llm_only_run or _design_intent_fallback or _scanned_drawing_fallback
     # ── MEASURED CAD IS NEVER SIGHTED OVER ──────────────────────────────────────────
     #
