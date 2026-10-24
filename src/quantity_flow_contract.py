@@ -30,6 +30,7 @@ contracts), merged on the engine's terms.
 from __future__ import annotations
 
 from collections import Counter
+from quantity_path_evidence import local_edges
 from math import isclose, isfinite
 from typing import Any, Dict, List, Optional
 
@@ -143,10 +144,16 @@ def audit(summary: Dict[str, Any]) -> Dict[str, Any]:
             fail("quantity_parent_missing", pn)
             return None
         n = ns[pn]
-        # THE LOCAL EDGE is the canonical record's bom_parents entry; qty_by_parent on the
-        # node is already the rolled contribution and is what we check, never what we
-        # multiply.
-        edges = [e for e in ((ps.get(pn) or {}).get("bom_parents") or []) if isinstance(e, dict)]
+        # Prefer explicit canonical local edges. Where the adapter omitted that field,
+        # use the compiler's local children, corroborated against reader evidence.
+        # qty_by_parent is a rolled contribution: check it, NEVER multiply it again.
+        raw_edges, edge_basis, edge_issues = local_edges(summary, ns, ps, pn, root)
+        issues.extend(edge_issues)
+        if raw_edges and edge_basis != "canonical_local_edges":
+            # SAID ONLY WHERE THE FALLBACK WAS USED (D-598h): a record that carries its own
+            # parents is checked exactly as before.
+            notes.append({"code": "local_quantity_evidence", "part": pn, "basis": edge_basis})
+        edges = [e for e in raw_edges if isinstance(e, dict)]
         parent_counts = Counter(identity(e.get("parent")) for e in edges)
         if any(not k or v != 1 for k, v in parent_counts.items()):
             fail("duplicate_or_missing_parent_edge", pn)

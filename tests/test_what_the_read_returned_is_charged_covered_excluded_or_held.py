@@ -1063,3 +1063,19 @@ def test_a_record_naming_another_workbook_is_said_to_be_another_runs(tmp_path, c
         "job_20261024_153659.xlsx"
     src = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
     assert src.index('stem}_record.json"') > src.index('_time_stage("deliverables", False)')
+
+
+def test_a_joints_captured_runs_are_shown_and_still_hold_it():
+    """Captured sides and runs reach the finding in words, and never clear it (D-598h)."""
+    s = _book()
+    e = next(e for e in rcc.audit(s)["items"] if e["id"] == "R2.joint")
+    assert "runs per joint are not captured" in e["how"] and "joint_runs" not in e["how"]
+    pn = next(i for i in s["read_ledger"]["items"] if i["id"] == "R2.joint")["record"]
+    s["weld_joint_requirements"] = [
+        {"part": pn, "joint_id": "J1", "side": side, "process": "TIG", "runs_per_joint": 1,
+         "joints_per_product": 2, "basis": "per_finished_product",
+         "source": {"document": "drawing", "locator": "weld note"}} for side in ("left", "right")]
+    e = next(e for e in rcc.audit(s)["items"] if e["id"] == "R2.joint")
+    assert e["state"] == rcc.UNRESOLVED, "capture is scope, not charge"
+    assert "its sides and runs are captured" in e["how"]
+    assert e["joint_scope"]["scope_verified"] and not e["joint_scope"]["charge_verified"]

@@ -62,7 +62,7 @@ def test_the_fallback_is_a_sight_run_behind_the_measured_cad_guard():
     assert SRC.index("_scanned_drawing_fallback = bool(") < sight
     guard = SRC.index("_concept_refused = _cs_probe.why_not_sightable(summary, _pack_files)")
     assert sight < guard, "the guard runs for every sight run, the fallback included"
-    assert "PRICED FROM THE VISION READ OF A SCANNED DRAWING" in SRC
+    assert "PRICED FROM THE VISION READ: no engine reader found a part" in SRC
 
 
 # ── END TO END: the engine's own PDF scan, a replayed read, no model call ───────────────────
@@ -122,7 +122,7 @@ def test_the_engine_run_of_a_scanned_drawing_is_priced_from_the_vision_read(tmp_
             if str(p.get("part_number") or "").startswith("HOOKBAR-PACK-CPT")]
     assert len(made) == 3, "the unit, the tube and the bracket reach costing"
     assert not s.get("run_stop")
-    assert any("PRICED FROM THE VISION READ OF A SCANNED DRAWING" in f
+    assert any(f.startswith("PRICED FROM THE VISION READ: no engine reader found a part")
                for f in s.get("review_flags") or [])
 
 
