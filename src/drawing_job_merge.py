@@ -1371,6 +1371,82 @@ def flats_are_different_pieces(paths: Sequence[Path]) -> bool:
 _MEMBER_SUFFIX = re.compile(r"_-(\d{1,2})(?:[_.]|$)")
 
 
+def _role_of_flat(path: Path) -> Optional[str]:
+    """The piece role a flat's own name gives it — "SIDE", "TOP" — or None (D-598j)."""
+    words = set(getattr(config, "DXF_PIECE_ROLE_WORDS", ()) or ())
+    tokens = re.findall(r"[A-Z]+", Path(str(getattr(path, "name", path))).stem.upper())
+    return " ".join(dict.fromkeys(t for t in tokens if t in words)) or None
+
+
+def _promote_role_pieces(summary: Dict[str, Any], part: Dict[str, Any], paths: Sequence[Path],
+                         parts: List[Dict[str, Any]], parts_by_key: Dict[str, Dict[str, Any]],
+                         report: Dict[str, Any], matched_keys: set) -> None:
+    """Each flat a piece of `part`, named by its role, hung on the part, and the count asked.
+
+    A NAME SAYS WHAT A PIECE IS, NOT HOW MANY (D-598j). 9287-10-002's box is a top and four
+    sides from one SIDE flat and one TOP flat; the files cannot say four. Each is costed once,
+    the part becomes the assembly of its pieces, and the part asks how many of each it takes."""
+    pn = str(part.get("part_number") or "")
+    parent_key = _normalize_part_key(pn) or "PART"
+    taken = {_normalize_part_key(p.get("part_number", "")) for p in parts}
+    taken.discard("")
+    minted: List[Tuple[str, str, str]] = []
+    for path in paths:
+        if not dxf_may_mint_a_part(path, report):
+            continue                      # a drawing of a part is not a part (D-406)
+        role = _role_of_flat(path) or "PIECE"
+        # Numbered, because the key normaliser reads a bare trailing word as a descriptor and
+        # "<part>-SIDE" would collapse back onto the part itself.
+        n = 1
+        name = f"{parent_key}-{role.replace(' ', '-')}-{n:02d}"
+        while _normalize_part_key(name) in taken:
+            n += 1
+            name = f"{parent_key}-{role.replace(' ', '-')}-{n:02d}"
+        taken.add(_normalize_part_key(name))
+        piece = _create_orphan_dxf_part(summary, name, path)
+        piece["part_number"] = name
+        piece["description"] = f"{part.get('description') or pn} — {role}"
+        piece["dxf_minted_piece_of"] = pn
+        piece.setdefault("review_flags", []).append(
+            f"piece {role} of {pn}, read from its DXF name {path.name} — see {pn}")
+        # THE PART'S OWN SHEET STATES THE FINISH OF ITS PIECES: "POLISHED EDGES" on the box's
+        # sheet is every panel's edge, and a piece minted from a flat carries no finish of its own.
+        _fin = str(part.get("normalized_finish") or "").strip()
+        if _fin and not piece.get("normalized_finish"):
+            if _apply_field(piece, "normalized_finish", _fin, "drawing_deterministic"):
+                piece["surface_finishes"] = list(part.get("surface_finishes") or [_fin])
+                piece["normalized_finish_inherited_from"] = pn
+        parts.append(piece)
+        parts_by_key[_normalize_part_key(name)] = piece
+        summary.setdefault("manufacturing_writeup", {})["parts"] = parts
+        _apply_and_report(piece, path, report, matched_keys, reason="role_piece_promoted")
+        report["orphan_dxf_promoted"].append({"part_number": name, "dxf": str(path.resolve()),
+                                              "reason": "role_piece_of_a_part"})
+        kids = part.setdefault("assembly_children", [])
+        if isinstance(kids, list) and name not in kids:
+            kids.append(name)
+        minted.append((role, name, path.name))
+    if not minted:
+        return
+    part["is_assembly_parent"] = True
+    part["dxf_pieces"] = [{"dxf": f, "piece": r, "costed_as": c} for r, c, f in minted]
+    said = ", ".join(f"{r} ({f})" for r, _c, f in minted)
+    q = {"issue": f"How many of each piece does one {pn} take: {said}?",
+         "assumption": (f"each piece is costed once — the files name what each piece is, not "
+                        f"how many; the drawing states no count"),
+         "action": f"state the count of each per {pn}, and each piece is costed at it",
+         "source": "drawing_job_merge.augment_summary_with_dxf",
+         "subject": "dxf_piece_count",
+         "gbp_parts": [c for _r, c, _f in minted]}
+    qs = part.setdefault("manufacturing_questions", [])
+    if isinstance(qs, list) and not any(isinstance(x, dict) and x.get("issue") == q["issue"]
+                                        for x in qs):
+        qs.append(q)
+    part.setdefault("review_flags", []).append(
+        f"PIECES BY ROLE: {pn} is made of {said}; each is costed once. A file names a piece, "
+        f"not a count — confirm how many of each one {pn} takes")
+
+
 def _member_suffix_of_flat(path: Path) -> Optional[str]:
     """The `_-NN` member number SDI's exporter puts on each piece of a fabrication.
 
@@ -3495,6 +3571,21 @@ def augment_summary_with_dxf(
     for pid, paths in by_part.items():
         part = part_by_id[pid]
         _as_pieces = [p for p in paths if str(p) in piece_files]
+        # PIECES BY ROLE (D-598j): every flat names a different role and the part has no child
+        # in scope to bind them to. Same blank and same stock no longer read as revisions.
+        _roles = [_role_of_flat(p) for p in paths]
+        _pkey = _normalize_part_key(part.get("part_number", ""))
+        if (len(paths) > 1 and not _as_pieces and None not in _roles
+                and len(set(_roles)) == len(paths)
+                and not any(k != _pkey and k.startswith(_pkey + "-") and not k.endswith("-GA")
+                            for k in parts_by_key)):
+            report["ambiguous_dxf"].append({
+                "part_number": part.get("part_number"),
+                "candidates": [str(p) for p in paths],
+                "reason": "role_pieces_promoted", "roles": list(_roles)})
+            _promote_role_pieces(summary, part, paths, parts, parts_by_key, report,
+                                 matched_keys)
+            continue
         if len(paths) == 1:
             _apply_and_report(part, paths[0], report, matched_keys)
             if _as_pieces:

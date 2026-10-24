@@ -1336,14 +1336,20 @@ def material_field_states_something(text: str) -> bool:
     not run over it: 9598-02-02G's "MATERIAL: 400 MIC" was refused by the keyword list, the
     page was scanned instead, and the legend's TIMBER became the graphic's material. A
     pointer ("REFER TO INDIVIDUAL COMPONENT DRAWINGS") or a bare gauge ("2MM") names nothing."""
+    return bool(material_field_text(text))
+
+
+def material_field_text(text: str) -> str:
+    """The labelled MATERIAL field's words where it names something, else "" (D-598j): kept so
+    a material the book cannot resolve is still the sheet's own statement downstream."""
     for value in _extract_labeled_values(text or "", r"MATERIAL(?!\s*SPEC)\s*[:\-]",
                                          TITLE_BLOCK_STOP_LABELS):
         v = _strip_material_boilerplate(_truncate_at_drawing_note(normalize_text(value))).strip(" :;-,.")
         if not v or _MATERIAL_REF_NOTE_RE.search(v):
             continue
         if re.search(r"[A-Za-z]{3,}", v) and not re.fullmatch(r"[\d.\s]*MM\s*(?:THK|THICK)?", v, re.IGNORECASE):
-            return True
-    return False
+            return " ".join(v.split())
+    return ""
 
 
 def fold_note_count(text: str) -> Dict[str, Any]:
@@ -1385,9 +1391,11 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
     # collapses the blanked run of spaces and brings the removal verb within reach of the
     # labelled callout itself — "MATERIAL: MDF ... ALUMINIUM PANEL REMOVED" then lost MDF too.
     labelled_materials = _extract_material_candidates(raw_text)
+    material_unresolved = ""
     if labelled_materials:
         materials = [canonical_material(value) for value in labelled_materials]
     elif material_field_states_something(raw_text):
+        material_unresolved = material_field_text(raw_text)
         # THE FIELD NAMED SOMETHING THE READER COULD NOT RESOLVE (D-402). That is the sheet's
         # answer, recorded as unresolved by the readers downstream; the page is NOT scanned,
         # because the page's other material words are the legend's and another part's.
@@ -1442,6 +1450,9 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
         "revisions": revisions,
         "dates": dates,
         "materials": material_values,
+        # THE SHEET'S MATERIAL AS PRINTED, WHERE THE BOOK CANNOT RESOLVE IT (D-598j): an
+        # answer, so nothing downstream hands this sheet's part another material instead.
+        "material_stated_unresolved": material_unresolved or None,
         "surface_finishes": finishes,
         "colours": colours,
         "weights": _findall_unique(WEIGHT_PATTERN, strip_weights_not_the_parts(text), flags=re.IGNORECASE),
@@ -1490,6 +1501,10 @@ def merge_title_block_fields(primary: Dict[str, Any], fallback: Dict[str, Any]) 
         "revisions": revisions,
         "dates": dates,
         "materials": materials,
+        # Carried only where neither read resolved a material (D-598j).
+        "material_stated_unresolved": (None if materials else
+                                       (primary.get("material_stated_unresolved")
+                                        or fallback.get("material_stated_unresolved"))),
         "surface_finishes": finishes,
         "colours": _pick_preferred(primary, fallback, "colours"),
         "weights": _pick_preferred(primary, fallback, "weights"),
