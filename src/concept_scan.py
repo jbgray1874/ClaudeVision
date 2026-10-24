@@ -794,11 +794,13 @@ not in the brief" in why_size. Do not describe visual cues: there are none.
 #       (D-418: the 14:42 read dropped the front and back and sized the divider off a bag)
 SHEET_PROMPT_VERSION = "s4"
 # THE BUDGET FITS A WHOLE DOCUMENT (D-466). 6,000 characters was sized for single drawing
-# sheets and silently cut a sixteen-page tech brief at page six; 24,000 holds such a
-# document entire (the K-Wellness brief extracts ~15,000), and the page-aware trimming
-# with its disclosed coverage remains the safety net for truly huge packs. The words are
-# what is hashed, so a text that always fitted keeps its cache key and its answer.
-SHEET_TEXT_MAX_CHARS = 24000
+# sheets and silently cut a sixteen-page tech brief at page six; 24,000 held such a document
+# entire. D-597 raises it to 120,000 — well inside the model's window beside the page images —
+# and stops trimming pages to fit: a proportional trim can drop the one finish note that
+# matters while saying every page was included. Whole pages go in order; a page that does not
+# fit is NOT sent and is named as a gap, on the record and to the model. The words are what is
+# hashed, so a text that always fitted keeps its cache key and its answer.
+SHEET_TEXT_MAX_CHARS = 120000
 
 _SHEET_PREAMBLE = """THESE ARE DRAWING SHEETS, NOT PHOTOGRAPHS. Each image is a general-arrangement or
 design-intent drawing with a title block, dimensions and notes; the text printed on the sheets
@@ -1594,12 +1596,14 @@ def sheet_text_with_coverage(pdf_paths: List[Any]) -> tuple:
     Verbatim and unparsed: the model is told it is the pages' words, and `sheet_check` looks
     a figure up in it. A scan with no text layer gives "" and the read proceeds on the image.
 
-    EVERY PAGE CONTRIBUTES, AND A CUT IS SAID (D-466). The cap used to be one silent slice
-    off the front, so a sixteen-page brief reached the model as pages one to six and nothing
-    anywhere said so. Over the cap, each page now keeps its proportional share (never less
-    than a floor), a trimmed page says it was trimmed, and the text ends by stating the
-    coverage — to the model, on the record, and in the run log through the caller.
-    coverage = {"total": chars extracted, "sent": chars sent, "pages_trimmed": n}."""
+    WHOLE PAGES, AND A GAP IS NAMED (D-466, D-597). The cap used to be one silent slice off
+    the front; then every page kept a proportional share, which could drop a critical note
+    while claiming the page was included. Now whole pages go in order until the budget; a page
+    that does not fit is not sent at all and is named — to the model at the end of the text,
+    on the record, and in the run log through the caller. Only a single page larger than the
+    whole budget is cut, and that cut is named too.
+    coverage = {"total", "sent", "pages_trimmed", "pages_omitted", "omitted_pages",
+    "cut_pages"}."""
     chunks: List[str] = []
     for pdf in (pdf_paths or []):
         if is_brief_page(pdf):
@@ -1627,35 +1631,50 @@ def sheet_text_with_coverage(pdf_paths: List[Any]) -> tuple:
     total = sum(len(c) for c in chunks) + max(0, len(chunks) - 1)
     if total <= SHEET_TEXT_MAX_CHARS:
         return "\n".join(chunks), {"total": total, "sent": total, "pages_trimmed": 0,
-                                   "pages_omitted": 0}
-    # A BUDGET, NOT A GUESS: each page gets its proportional share, never less than a floor
-    # that itself shrinks when pages are many, and the spend is counted as written so a
-    # thousand tiny pages cannot ride a per-page floor past the cap. Pages the budget cannot
-    # reach are omitted and counted — said, not silent.
-    _MARK = "\n[… trimmed — the full page is in the images]"
-    floor = min(200, max(40, SHEET_TEXT_MAX_CHARS // len(chunks)))
-    budget = SHEET_TEXT_MAX_CHARS
+                                   "pages_omitted": 0, "omitted_pages": [], "cut_pages": []}
+
+    def _label(c: str) -> str:
+        return c.split("\n", 1)[0].strip("[]")
+
     out: List[str] = []
-    trimmed = omitted = 0
+    omitted: List[str] = []
+    cut: List[str] = []
+    budget = SHEET_TEXT_MAX_CHARS
     for c in chunks:
-        if budget <= floor:
-            omitted += 1
-            continue
-        share = min(budget, max(floor, int(len(c) * SHEET_TEXT_MAX_CHARS / total)))
-        if len(c) > share:
-            piece = c[:share].rstrip() + _MARK
-            trimmed += 1
+        need = len(c) + (1 if out else 0)
+        if need <= budget:
+            out.append(c)
+            budget -= need
+        elif not out and len(c) > SHEET_TEXT_MAX_CHARS:
+            # ONE PAGE LARGER THAN THE WHOLE BUDGET: the only cut, and it is named.
+            out.append(c[:SHEET_TEXT_MAX_CHARS - 200].rstrip()
+                       + "\n[… this page is cut here — the rest of it is NOT in this text]")
+            cut.append(_label(c))
+            budget = 0
         else:
-            piece = c
-        out.append(piece)
-        budget -= len(piece) + 1
-    text = "\n".join(out) + (
-        f"\n[text coverage: {len(chunks) - omitted} of {len(chunks)} page(s) included"
-        + (f", {trimmed} trimmed" if trimmed else "")
-        + (f", {omitted} only in the images" if omitted else "")
-        + f" — {SHEET_TEXT_MAX_CHARS} character budget of {total} extracted]")
-    return text, {"total": total, "sent": len(text), "pages_trimmed": trimmed,
-                  "pages_omitted": omitted}
+            omitted.append(_label(c))
+    text = "\n".join(out)
+    if omitted or cut:
+        # The note names up to eight pages and counts the rest — the record keeps every one,
+        # and a note listing a thousand pages would itself overrun the budget it reports.
+        named = ", ".join(omitted[:8]) + (f" and {len(omitted) - 8} more" if len(omitted) > 8
+                                          else "")
+        text += ("\n[text coverage: " + f"{len(chunks) - len(omitted)} of {len(chunks)} page(s) "
+                 f"sent whole" + (f"; cut: {', '.join(cut)}" if cut else "")
+                 + (f"; NOT SENT (read them from the images only): {named}" if omitted else "")
+                 + f" — {SHEET_TEXT_MAX_CHARS} character budget of {total} extracted]")
+    return text, {"total": total, "sent": len(text), "pages_trimmed": len(cut),
+                  "pages_omitted": len(omitted), "omitted_pages": omitted, "cut_pages": cut}
+
+
+def png_size(png: bytes) -> Tuple[int, int]:
+    """(width, height) in pixels from a PNG's own header, or (0, 0)."""
+    try:
+        if png[:8] == b"\x89PNG\r\n\x1a\n":
+            return int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+    except Exception:                                                # noqa: BLE001
+        pass
+    return 0, 0
 
 
 def sheet_text(pdf_paths: List[Any]) -> str:
@@ -1874,6 +1893,7 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
         model = os.environ.get("XAI_VISION_MODEL", "grok-4.3")
     brief = str(brief or "").strip()[:BRIEF_MAX_CHARS]
     pngs: List[bytes] = []
+    rendered: List[Dict[str, Any]] = []
     for pdf in pdf_paths:
         # A BRIEF ALONE IS A PACK (D-401). A run queued from a typed brief with no drawings
         # is staged as the brief's own page (ENQUIRY_BRIEF.png beside ENQUIRY_BRIEF.txt) so
@@ -1884,7 +1904,12 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
         if is_brief_page(pdf):
             continue
         for index in range(pathB.count_pages(str(pdf))):
-            pngs.append(pathB.render_page_to_png(str(pdf), index))
+            png = pathB.render_page_to_png(str(pdf), index)
+            pngs.append(png)
+            # WHICH PAGE WENT AS AN IMAGE, AND HOW BIG (D-597): the page coverage record
+            # says what each page was read from, and a coarse image is a named risk.
+            rendered.append({"document": Path(str(pdf)).name, "page": index + 1,
+                             "px": list(png_size(png))})
     if not pngs and not brief:
         raise ConceptUnavailable("no pages could be rendered from this pack")
     recheck = str(recheck or "").strip()
@@ -1915,9 +1940,11 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
     key = base_key
     _extra = ({"sheet_text": _words} if sheet
               else ({"document_text_chars": len(_words)} if _words else {}))
-    if _words and _coverage.get("pages_trimmed"):
-        # A CUT IS SAID (D-466): on the record and, through the caller, in the run log.
+    if _words and (_coverage.get("pages_trimmed") or _coverage.get("pages_omitted")):
+        # A CUT OR A PAGE NOT SENT IS SAID (D-466, D-597): on the record and, through the
+        # caller, in the run log and on the page coverage record.
         _extra = dict(_extra, text_coverage=dict(_coverage))
+    _extra = dict(_extra, pages_rendered=rendered)
     if _refs:
         # The declared documents and what of them was readable, on the record: a scanned
         # manual with no text layer sends nothing, and that is a fact the caller flags.

@@ -313,6 +313,29 @@ def extract_drawing_facts(pdf_path: str | Path) -> Dict[str, Any]:
     return result
 
 
+def extract_drawing_facts_for(pdf_paths: Any) -> Dict[str, Any]:
+    """The printed facts of EVERY document of the job, rolled up the same way (D-597): the
+    overlay read the anchor PDF alone, so a detail sheet in another file never filled a gap.
+    A part's facts come from the first document that prints them; a spec value likewise."""
+    out: Dict[str, Any] = {"pages": [], "by_part": {}, "spec_block": {},
+                           "source": "drawing_pdf_deterministic", "documents": []}
+    for pdf in (pdf_paths or []):
+        facts = extract_drawing_facts(pdf)
+        out["documents"].append({"document": Path(str(pdf)).name,
+                                 "error": facts.get("error") or ""})
+        for rec in facts.get("pages") or []:
+            out["pages"].append(dict(rec, document=Path(str(pdf)).name))
+        for pn, d in (facts.get("by_part") or {}).items():
+            slot = out["by_part"].setdefault(pn, {})
+            for k, v in (d or {}).items():
+                if v not in (None, "") and slot.get(k) in (None, ""):
+                    slot[k] = v
+        for k, v in (facts.get("spec_block") or {}).items():
+            if v not in (None, "", [], {}) and out["spec_block"].get(k) in (None, "", [], {}):
+                out["spec_block"][k] = v
+    return out
+
+
 if __name__ == "__main__":
     import argparse, json
     ap = argparse.ArgumentParser(description="Deterministically extract printed manufacturing facts from a drawing PDF.")

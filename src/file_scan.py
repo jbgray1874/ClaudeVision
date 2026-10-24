@@ -1153,6 +1153,30 @@ def scan_folder_job(
     )
 
 
+def job_documents(summary: Any, pdf_path: Any = None) -> List[str]:
+    """Every PDF of the job a whole-pack read must see (D-597): the anchor first, then each
+    other document the scan read, in order — never a declared reference document (those are
+    held out on purpose) and never the staged brief page (the brief rides as words)."""
+    out: List[str] = []
+    seen: set = set()
+    cands = ([str(pdf_path)] if pdf_path else []) + [
+        str(p) for p in ((summary or {}).get("scanned_documents") or [])
+        if isinstance(summary, dict)]
+    try:
+        from concept_scan import is_brief_page as _is_brief
+    except Exception:                                                # noqa: BLE001
+        _is_brief = lambda _p: False                                 # noqa: E731
+    for c in cands:
+        p = Path(c)
+        if p.suffix.lower() != ".pdf" or not p.exists() or _is_brief(str(p)):
+            continue
+        key = str(p.resolve()).lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(str(p))
+    return out
+
+
 def design_intent_pages(summary: Any) -> List[Any]:
     """The page numbers whose role is design_intent (D-406), in order."""
     out: List[Any] = []
@@ -3606,18 +3630,23 @@ def _finalize_scan_summary(
                or (_llm_flag == "" and bool(_os_llm.getenv("XAI_API_KEY"))))
     if pdf_path and _llm_on and not _llm_off:
         try:
-            from llm_full_extract import extract_full_job
+            from llm_full_extract import extract_full_pack
             from source_connectors.llm_full_job import apply_full_job_to_pre_estimate, overlay_drawing_facts
+            # EVERY DOCUMENT OF THE JOB, NOT THE ANCHOR ALONE (D-597): the anchor first, then
+            # every other PDF the job read. A specification or a parts list in another file
+            # used to reach no whole-pack read at all.
+            _job_pdfs = job_documents(summary, pdf_path)
             run_timing.mark("start llm_full_extract")
-            _job = extract_full_job(str(pdf_path))
+            _job = extract_full_pack(_job_pdfs)
             run_timing.mark("done llm_full_extract")
+            summary["llm_full_extract_coverage"] = _job.get("_coverage") or {}
             if _job.get("found"):
                 # Overlay the DETERMINISTIC drawing_facts onto the LLM job: printed title-block
                 # values (per-part finish/thickness) fill the LLM's nulls, and the weld spec is
                 # combined (LLM 'set-down 20%' + deterministic 'ALL WELDS TO BE TIG'). Best of both.
                 try:
-                    from drawing_facts import extract_drawing_facts
-                    overlay_drawing_facts(_job, extract_drawing_facts(str(pdf_path)))
+                    from drawing_facts import extract_drawing_facts_for
+                    overlay_drawing_facts(_job, extract_drawing_facts_for(_job_pdfs))
                 except Exception as _e_ov:
                     print(f"   [llm-full-extract] overlay skipped ({_e_ov})", flush=True)
                 # SECOND PASS — what the drawing IMPLIES but does not print. The pass above
@@ -3631,13 +3660,17 @@ def _finalize_scan_summary(
                 # overwrite a printed or measured value. Failure-isolated: no model, no key,
                 # or a refusal all leave the job exactly as it is today.
                 try:
-                    from llm_full_extract import (build_document_context,
-                                                  infer_missing_details, merge_inference,
+                    from llm_full_extract import (INFER_BATCH_CHARS, context_batches,
+                                                  infer_missing_details_in_batches,
+                                                  merge_inference, pack_pages,
                                                   parts_missing_detail)
                     _missing = parts_missing_detail(_job.get("parts") or [])
                     if _missing:
-                        _inf = infer_missing_details(
-                            build_document_context(str(pdf_path)),
+                        # THE INFERENCE PASS SEES THE WHOLE PACK TOO (D-597), in whole-page
+                        # parts, where it saw the anchor's first 40,000 characters.
+                        _inf = infer_missing_details_in_batches(
+                            [b["text"] for b in context_batches(pack_pages(_job_pdfs),
+                                                                INFER_BATCH_CHARS)],
                             _job.get("bom") or [], _missing)
                         if _inf.get("found"):
                             _job["inferred_parts"] = _inf.get("parts")
@@ -3691,6 +3724,9 @@ def _finalize_scan_summary(
                     "from_cache": bool(_job.get("_from_cache")),
                     "inference_from_cache": bool(_job.get("_inference_from_cache")),
                     "counts": _c,
+                    # Which pages of which documents the read had, in which part (D-597).
+                    "coverage": _job.get("_coverage") or {},
+                    "batch_conflicts": _job.get("_batch_conflicts") or [],
                 }
                 print(f"   [llm-full-extract] drove tube+{_c['tube']} qty+{_c.get('qty', 0)} "
                       f"material+{_c['material']} weight+{_c['weight']} thickness+{_c['thickness']} "
@@ -5342,12 +5378,16 @@ def _finalize_scan_summary(
             _tc = (_read.get("text_coverage")
                    if isinstance(_read.get("text_coverage"), dict) else None)
             if _tc:
-                # EVERY PAGE WENT IN, AND THE CUT IS SAID (D-466) — never again a sixteen-page
-                # brief silently reaching the model as pages one to six.
-                _tc_note = (f"DOCUMENT TEXT TRIMMED TO FIT — {_tc.get('sent')} of "
-                            f"{_tc.get('total')} extracted character(s) went to the model, "
-                            f"every page included, {_tc.get('pages_trimmed')} page(s) "
-                            f"trimmed; the page images carry the full pages")
+                # WHAT DID NOT GO IS NAMED (D-466, D-597): whole pages only, and a page that
+                # did not fit is said by name — never trimmed and called included.
+                _tc_note = (f"DOCUMENT TEXT NOT SENT WHOLE — {_tc.get('sent')} of "
+                            f"{_tc.get('total')} extracted character(s) went to the model"
+                            + (f"; pages NOT sent as text: "
+                               f"{', '.join(_tc.get('omitted_pages') or [])}"
+                               if _tc.get("omitted_pages") else "")
+                            + (f"; cut: {', '.join(_tc.get('cut_pages') or [])}"
+                               if _tc.get("cut_pages") else "")
+                            + " — those pages were read from their images only")
                 summary.setdefault("review_flags", []).append(_tc_note)
                 print(f"   [concept] {_tc_note}", flush=True)
             # THE JOB'S NAME, NOT THE WRAPPER'S. A render is scanned as a content-keyed PDF
@@ -5560,7 +5600,10 @@ def _finalize_scan_summary(
                 read_key=str(_read.get("read_key") or ""),
                 read_changes=list(_transfer),
                 stated_finish=concept_scan.stated_finish(_answer, _brief or "").get("plate", ""),
-                replayed_from=str(_read.get("replayed_from") or ""))
+                replayed_from=str(_read.get("replayed_from") or ""),
+                # WHICH PAGES WENT AS IMAGES AND AS TEXT (D-597), for the page coverage record.
+                pages_rendered=list(_read.get("pages_rendered") or []),
+                text_coverage=dict(_read.get("text_coverage") or {}))
             if _sheet_read:
                 summary["concept_read"].update(
                     sheet_read=True, sheet_check=_sheet_check, set_aside_undrawn=_set_aside,
@@ -5784,6 +5827,31 @@ def _finalize_scan_summary(
                 f"CONCEPT READ FAILED ({type(_ce).__name__}: {_ce}) — this book is empty "
                 f"because the read failed, not because the pack has no parts")
             print(f"   !! concept read failed: {type(_ce).__name__}: {_ce}", flush=True)
+
+    # THE PAGE COVERAGE RECORD (D-597): every page of every document, what read it, and what
+    # nothing read — built once the whole-pack read and any concept read have run.
+    try:
+        import page_coverage as _pcov
+        _pc_pages = None
+        if not (summary.get("llm_full_extract_coverage") or {}).get("pages"):
+            from llm_full_extract import pack_pages as _pack_pages
+            _pc_pages = [{k: p.get(k) for k in ("document", "page", "chars", "has_text",
+                                                 "width_pt", "height_pt")}
+                         for p in _pack_pages(job_documents(summary, pdf_path))]
+        summary["page_coverage"] = _pcov.build(summary, _pc_pages)
+        _pcg = summary["page_coverage"]["gaps"]
+        print(f"   [page-coverage] {len(summary['page_coverage']['pages'])} page(s) across "
+              f"{len(summary['page_coverage']['documents'])} document(s); "
+              + ("NO LLM READING RAN — the rule-based readers alone saw these pages"
+                 + (f"; {len(_pcg)} gap(s)" if _pcg else "")
+                 if not summary["page_coverage"].get("llm_read") else
+                 f"{len(_pcg)} gap(s): " + "; ".join(
+                     f"{g['document']} page {g['page']} {g['kind']}" for g in _pcg[:6])
+                 if _pcg else "every page reached an LLM reading"), flush=True)
+    except Exception as _pc_exc:                                     # noqa: BLE001
+        summary["page_coverage"] = {"schema": "page_coverage.v1", "pages": [], "gaps": [],
+                                    "error": f"{type(_pc_exc).__name__}: {_pc_exc}"}
+        print(f"   [page-coverage] NOT BUILT ({type(_pc_exc).__name__}: {_pc_exc})", flush=True)
 
     # A DESIGN-INTENT PACK THAT NEITHER THE MODEL NOR THE CONCEPT READ COULD PRICE STOPS HERE,
     # as the fact on the record (D-409), with the reasons both doors gave (D-411).

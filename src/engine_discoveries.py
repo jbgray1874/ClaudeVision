@@ -164,6 +164,11 @@ _OURS = {
     "read_item_unresolved",
     "engine_line_unconfirmed",
     "read_charge_check_failed",
+    # A page whose words the engine had and no reading received in full, or a page read only
+    # from a coarse or unread image (D-597): a perfect engine reads every page it is given.
+    "page_text_not_read",
+    "page_image_not_read_reliably",
+    "page_coverage_not_built",
 }
 
 # A RECORD THAT SAYS, CORRECTLY, THAT IT CANNOT EVIDENCE A PRICE. This one is deliberately

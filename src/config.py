@@ -2629,6 +2629,11 @@ ENGINE_ALLOWANCE_BASIS = {
 ENGINE_ALLOWANCE_HOLDING_CLASSES = ("calibrated_elsewhere", "inferred_purchase",
                                     "unclassified")
 
+# A PAGE IMAGE COARSER THAN THIS ON ITS PRINTED PAGE IS A NAMED RISK (D-597). Page images go
+# to the model at most 2,000 px on the long side: an A4 sheet gets about 171 dpi, an A3 about
+# 121, an A1 about 60 — at which small notes and dimensions are not reliably legible.
+PAGE_IMAGE_MIN_DPI = 150
+
 # A finish the sheet states, and the operation the bill must then carry somewhere (D-417).
 CONCEPT_FINISH_OPERATIONS = (
     (r"POWDER", "powder_coating"),
