@@ -84,16 +84,32 @@ def test_a_material_the_book_cannot_name_is_kept_as_printed():
     assert resolved["material_stated_unresolved"] is None
 
 
-def test_a_part_whose_own_sheet_prints_a_material_does_not_inherit_another():
+def _own_sheet(printed):
     pages = [{"page_number": 2, "page_analysis": {"title_block": {
         "drawing_numbers": ["7777-10-005"], "materials": [],
-        "material_stated_unresolved": "HANEX GAD-001"}}}]
+        "material_stated_unresolved": printed}}}]
     doc = {"primary_fields": {"normalized_material": "ACRYLIC"},
            "title_block": {"materials": ["ACRYLIC"],
                            "normalized": {"primary_material": "ACRYLIC"}}}
     base = {"part_number": "7777-10-005", "description": "BASE"}
     other = {"part_number": "7777-10-009", "description": "SPACER"}
     file_scan._inherit_document_material_to_parts([base, other], doc, pages)
-    assert not base.get("normalized_material") and base["material_stated"] == "HANEX GAD-001"
-    assert any("MATERIAL AS PRINTED" in f for f in base["review_flags"])
+    return base, other
+
+
+def test_a_part_whose_own_sheet_prints_a_material_does_not_inherit_another():
+    # D-598m: the printed words go through the same vocabulary as a DXF name, so a brand
+    # the vocabulary knows names its family; the exact grade and its page are kept.
+    base, other = _own_sheet("HANEX GAD-001")
+    assert base["normalized_material"] == "SOLID SURFACE"
+    assert base["material_stated"] == "HANEX GAD-001"
+    assert base["owned_material_evidence"]["page"] == 2
+    assert file_scan._source_of(base, "normalized_material") == "drawing_deterministic"
     assert other["normalized_material"] == "ACRYLIC", "a part with no sheet still inherits"
+
+
+def test_a_material_no_vocabulary_names_is_carried_as_printed_and_asked():
+    base, other = _own_sheet("RESIN-X9 GRADE 4")
+    assert base["normalized_material"] == "RESIN-X9 GRADE 4", "never another sheet's acrylic"
+    assert any(f.startswith("MATERIAL AS PRINTED") for f in base["review_flags"])
+    assert other["normalized_material"] == "ACRYLIC"

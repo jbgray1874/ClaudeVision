@@ -5268,7 +5268,20 @@ def check_a_callout_weld_is_assigned(summary: Any) -> List[Dict[str, Any]]:
             operation=iss.get("operation"), callout=_ids, needs_ruling=True))
     return out
 
+def check_owned_specifications_survive(summary: Any) -> List[Dict[str, Any]]:
+    """A library default and a one-file count cannot masquerade as a specification.
+
+    Narrow release protection only. The broader material and normal-pack contracts
+    remain in their configured shadow mode. Exceptions use check_job's existing
+    failure handling, never a silent pass.
+    """
+    from owned_specification import audit_owned_specifications
+    return [_violation("owned_specification_not_preserved", BLOCKING, message)
+            for message in audit_owned_specifications(summary)]
+
+
 CHECKS = (
+    check_owned_specifications_survive,
     check_a_banded_board_buys_its_edging,
     check_stated_bores_reach_the_inventory,
     check_the_identity_gate_actually_ran,

@@ -104,6 +104,7 @@ _NOT_OURS = _PACK | _COMMERCE | _ESTIMATOR
 # Would a perfect engine still raise it? NO. These are confessions: something was invented,
 # lost, guessed, or written where nothing can weigh it. This is the number that must fall.
 _OURS = {
+    "owned_specification_not_preserved",
     # Two readings of one nested line an order of magnitude apart (D-407): the engine's own
     # material basis and the sheet's charge. One of them is our wrong blank, gauge, weight or
     # stock form; never the drawing office's and never the estimator's to settle by hand.

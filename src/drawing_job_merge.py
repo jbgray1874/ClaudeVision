@@ -358,7 +358,15 @@ def material_from_dxf_filename(path: Path) -> Optional[str]:
     — and anything else falls through to the engine's own vocabulary. Adding a material to
     costed_facts now teaches this reader too, and the guard fails the suite if it does not.
     """
-    stem = path.stem.upper().replace("_", " ")
+    return material_from_drawing_text(path.stem)
+
+
+def material_from_drawing_text(text: str) -> Optional[str]:
+    """One vocabulary for a filename and an owned title-block material callout.
+
+    Classifies only: callers retain the exact grade and the original evidence source.
+    """
+    stem = str(text).upper().replace("_", " ")
     for pat, mat in _DXF_MATERIAL_TOKENS:
         if re.search(pat, stem):
             return mat
@@ -1415,6 +1423,7 @@ def _promote_role_pieces(summary: Dict[str, Any], part: Dict[str, Any], paths: S
         piece["part_number"] = name
         piece["description"] = f"{part.get('description') or pn} — {role}"
         piece["dxf_minted_piece_of"] = pn
+        piece["dxf_piece_role"] = role
         piece.setdefault("review_flags", []).append(
             f"piece {role} of {pn}, read from its DXF name {path.name} — see {pn}")
         # THE PART'S OWN SHEET STATES THE FINISH OF ITS PIECES: "POLISHED EDGES" on the box's
@@ -1441,7 +1450,7 @@ def _promote_role_pieces(summary: Dict[str, Any], part: Dict[str, Any], paths: S
     said = ", ".join(f"{r} ({f})" for r, _c, f in minted)
     q = {"issue": f"How many of each piece does one {pn} take: {said}?",
          "assumption": (f"each piece is costed once — the files name what each piece is, not "
-                        f"how many; the drawing states no count"),
+                        f"how many; a count has not been captured from the drawing"),
          "action": f"state the count of each per {pn}, and each piece is costed at it",
          "source": "drawing_job_merge.augment_summary_with_dxf",
          "subject": "dxf_piece_count",

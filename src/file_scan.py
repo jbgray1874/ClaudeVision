@@ -2076,6 +2076,11 @@ def _inherit_document_material_to_parts(
     """
     if not parts:
         return
+    # Own-sheet evidence is independent of the document's majority material,
+    # and must be submitted before any already-populated/default early return.
+    from owned_specification import retain_own_material
+    for _part in parts:
+        retain_own_material(_part, pages, _apply_field)
     pf = document_analysis.get("primary_fields") or {}
     doc_mat_norm = (
         pf.get("normalized_material_majority")
@@ -4640,6 +4645,8 @@ def _finalize_scan_summary(
                     decided_by=_ec_data.get("confirmed_by") or "an estimator",
                     decided_on=_ec_data.get("confirmed_on") or "",
                     decided_in=_ec_src)
+                from owned_specification import apply_role_counts
+                apply_role_counts(summary)
                 print(f"   [confirmed] {len(_dec)} estimator DECISION(S) from "
                       f"{_ec_src}: {', '.join(sorted(_dec))} — "
                       f"{_ec_data.get('confirmed_by') or 'an estimator'}'s call, applied as "
