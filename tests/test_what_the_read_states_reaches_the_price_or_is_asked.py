@@ -143,13 +143,29 @@ def test_a_thing_the_product_receives_is_not_a_consumable():
     assert unknown == ["ticket holder inserted in central hole"] and ship == ["pallet"]
 
 
-def test_a_metal_piece_of_a_welded_unit_is_welded_not_screwed():
+def test_a_piece_is_welded_on_its_own_evidence_not_the_units():
+    """Review of D-595: "a welded bar gets no fixings" must stay narrower than "every welded
+    assembly needs none". The unit's weld proves nothing about a given piece."""
     _a, parts, _u = _built()
     tube = next(p for p in parts if p["description"] == "MAIN TUBE")
-    assert tube["part_number"] in cs.mechanically_fitted(parts)["counted"]
-    welded = cs.mechanically_fitted(parts, unit_welded=True)
-    assert tube["part_number"] not in welded["counted"]
-    assert "welded into it" in welded["excluded"][tube["part_number"]]
+    assert tube["part_number"] in cs.mechanically_fitted(parts)["counted"], \
+        "no weld named on the tube: counted, and its fixings asked"
+    named = cs.mechanically_fitted(parts, brief=BRIEF)
+    assert tube["part_number"] not in named["counted"]
+    assert "brief's weld statement names it" in named["excluded"][tube["part_number"]]
+    tube["description"] = "MAIN TUBE (WELDED TO BRACKETS)"
+    assert "its own words" in cs.mechanically_fitted(parts)["excluded"][tube["part_number"]]
+
+
+def test_a_brief_sentence_that_also_names_a_fixing_excuses_no_piece():
+    frame = [{"part_number": "F-1", "description": "SIDE PANEL", "concept_kind": "fabricated",
+              "material_guess": "MILD STEEL", "quantity": 2},
+             {"part_number": "F-2", "description": "FRAME", "concept_kind": "fabricated",
+              "material_guess": "MILD STEEL", "quantity": 1}]
+    got = cs.mechanically_fitted(frame, brief="Welded frame with the panels bolted on.")
+    assert set(got["counted"]) == {"F-1", "F-2"}, "the sentence does not say which is welded"
+    got = cs.mechanically_fitted(frame, brief="The frame is welded. Panels bolted on.")
+    assert "F-2" in got["excluded"] and "F-1" in got["counted"]
 
 
 def test_the_scan_asks_for_unnamed_fixings_rather_than_buying_them():
@@ -303,8 +319,11 @@ def test_nothing_the_product_only_receives_becomes_a_purchase():
     assert not any(w in words for w in ("ticket holder", "fixing", "screw", "mounting strip"))
     cons, _ship, unknown = cs.split_not_visible(answer["not_visible"])
     assert cons == [] and len(unknown) == 2, "both are asked, neither is a consumable"
-    assert cs.mechanically_fitted(parts, unit_welded=True)["pieces"] == 0, \
-        "a welded bar has no hand-fitted piece to buy fixings for"
+    assert cs.mechanically_fitted(parts, brief=BRIEF)["pieces"] == 0, \
+        "the brief names both pieces' weld, so nothing is fitted by hand"
+    loose = cs.mechanically_fitted(parts)
+    assert set(loose["counted"]) == {f"{STEM7}-CPT01"}, \
+        "with no weld named on it the tube is counted — its fixings asked, never bought"
 
 
 # ── a saved read replays with no model call ────────────────────────────────────────────────
