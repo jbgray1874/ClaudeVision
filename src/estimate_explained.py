@@ -4042,6 +4042,15 @@ def release_section_html(record: Any, summary: Any) -> str:
         reasons = [str(r) for r in (rel.get("reasons") or []) if str(r).strip()]
         if reasons:
             out.append("<ul>" + "".join(f"<li>{_e(r)}</li>" for r in reasons) + "</ul>")
+        # The opening panel links here for details. Repeat recorded blocking
+        # findings, not a second release decision, and escape source text.
+        findings = ((summary.get("invariants") or {}).get("violations") or []) if isinstance(summary, Mapping) else []
+        blocking = list(dict.fromkeys(str(v.get("message") or v.get("code"))
+                        for v in findings if isinstance(v, Mapping)
+                        and str(v.get("severity") or "").lower() == "blocking"))
+        if blocking:
+            out.append("<p><b>Recorded blocking findings</b></p><ul>"
+                       + "".join(f"<li>{_e(message)}</li>" for message in blocking) + "</ul>")
         breaks = [b for b in (rel.get("held_at_breaks") or []) if isinstance(b, Mapping)]
         if breaks:
             out.append("<p><b>What rests on held allowances</b> — engine allowances calibrated "
