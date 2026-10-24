@@ -330,9 +330,9 @@ def test_the_held_allowances_are_costed_apart_from_the_supported_unit_cost():
     held = rcc.audit(s)["held_allowances"]
     assert held["operations"] == ["brush_before_plate", "plater_final_pack", "plater_pack"]
     assert held["gbp_per_unit"] == round(40 / 60 * 31.18 + 4 / 60 * 28.56 + 8 / 60 * 28.56, 2)
-    assert held["supported_unit_gbp"] == round(177.72 - held["gbp_per_unit"], 2)
+    assert held["unit_excluding_held_gbp"] == round(177.72 - held["gbp_per_unit"], 2)
     at_1000 = next(b for b in held["at_breaks"] if b["quantity"] == 1000)
-    assert at_1000["supported_unit_gbp"] == round(61.0 - held["gbp_per_unit"], 2)
+    assert at_1000["unit_excluding_held_gbp"] == round(61.0 - held["gbp_per_unit"], 2)
     assert held["hours_at"]["1000"] == 866.7
 
 
@@ -346,7 +346,7 @@ def test_the_release_says_what_rests_on_held_allowances_and_the_supported_cost()
     assert "rests on engine allowances not confirmed" in said and "Not a budget" in said
     assert "866.7 h at 1,000 off" in said
     assert rel["held_allowances_gbp_per_unit"] == s["read_charge_result"]["held_allowances"]["gbp_per_unit"]
-    assert rel["supported_unit_gbp"] == s["read_charge_result"]["held_allowances"]["supported_unit_gbp"]
+    assert rel["unit_excluding_held_gbp"] == s["read_charge_result"]["held_allowances"]["unit_excluding_held_gbp"]
 
 
 def test_a_held_allowance_row_carries_its_cost():
@@ -358,21 +358,49 @@ def test_a_held_allowance_row_carries_its_cost():
     assert "£20.79 a unit" in brush["message"]
 
 
-def test_the_digest_keeps_what_a_review_needs_and_not_the_raw_words(tmp_path):
+def test_the_digest_keeps_the_raw_words_whole_and_where_they_live(tmp_path):
+    """Review of D-596b: a key and a hash cannot prove a faithful extraction — the original
+    response travels with the digest, unchanged, with the place its immutable copy lives."""
     sys.path.insert(0, str(ROOT / "tools"))
     import evidence_digest
+    import hashlib
     s = _book()
-    s["concept_read"] = {"raw_response": "x" * 5000, "read_key": "k"}
+    raw = json.dumps(_answer())
+    s["concept_read"] = {"raw_response": raw, "read_key": "k"}
     s["read_charge_result"] = rcc.audit(s)
     s["filler"] = ["page text"] * 20000
     record = tmp_path / "job.json"
     record.write_text(json.dumps(s), encoding="utf-8")
     assert evidence_digest.main(["--record", str(record), "--out", str(tmp_path)]) == 0
     d = json.loads((tmp_path / "job_digest.json").read_text(encoding="utf-8"))
-    assert "raw_response" not in d["concept_read"] and d["concept_read"]["raw_chars"] == 5000
+    cr = d["concept_read"]
+    assert cr["raw_response"] == raw and cr["raw_chars"] == len(raw)
+    assert cr["raw_sha256"] == hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    assert cr["raw_evidence"]["cache_entry"] == "cache/vision_concept/k.json"
+    assert cr["raw_evidence"]["ledger_raw_sha256"] == cr["raw_sha256"]
     assert d["read_charge_result"]["counts"] and d["final_estimate"]["labour_rows"]
     assert "filler" not in d
     assert (tmp_path / "job_digest.json").stat().st_size < record.stat().st_size / 3
+
+
+def test_the_subtotal_is_not_called_supported_and_the_unresolved_work_is_said():
+    import costed_facts
+    s = _book()
+    s["final_estimate"]["totals"] = {"unit_gbp": 177.72}
+    s["read_charge_result"] = rcc.audit(s)
+    said = " ".join(costed_facts.costed_job(s)["release"]["reasons"])
+    assert "priced subtotal excluding them" in said and "supports" not in said
+    n = len(s["read_charge_result"]["held_allowances"]["unresolved_work"])
+    assert n and f"{n} item(s) of required work are unresolved and priced in neither" in said
+
+
+def test_the_audit_tool_says_a_missing_file_instead_of_failing(tmp_path, capsys):
+    sys.path.insert(0, str(ROOT / "tools"))
+    import read_ledger_audit as tool
+    record = tmp_path / "job.json"
+    record.write_text("{}", encoding="utf-8")
+    assert tool.main(["--record", str(record), "--xlsx", str(tmp_path / "missing.xlsx")]) == 2
+    assert "The workbook is not there" in capsys.readouterr().out
 
 
 def test_the_answers_file_refuses_a_ruling_without_a_reason():

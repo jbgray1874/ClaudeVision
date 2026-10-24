@@ -4042,8 +4042,9 @@ def costed_job(source: Any) -> Dict[str, Any]:
                        f"{', '.join(str(d['part']) for d in _assumed)}")
     # WHAT THE HEADLINE RESTS ON THAT NOBODY HAS CONFIRMED (review of D-596). Holding the
     # release is right, and not enough: a unit cost carrying hundreds of unconfirmed hours is
-    # not a budget at any quantity. How much of it rests on held engine allowances, and the
-    # cost the evidence supports, are said beside each other.
+    # not a budget at any quantity. How much of it rests on held engine allowances, the priced
+    # subtotal excluding them, and the work still unresolved (priced in neither) are said
+    # beside each other — the subtotal is not called a supported cost (review of D-596).
     _rcr = source.get("read_charge_result") if isinstance(source.get("read_charge_result"), Mapping) else {}
     _held = _rcr.get("held_allowances") if isinstance(_rcr.get("held_allowances"), Mapping) else {}
     if _num(_held.get("gbp_per_unit")) > 0:
@@ -4053,9 +4054,12 @@ def costed_job(source: Any) -> Dict[str, Any]:
             f"£{_num(_held['gbp_per_unit']):.2f} a unit rests on engine allowances not confirmed "
             f"for this job ({', '.join(list(_held.get('operations') or []) + list(_held.get('lines') or []))}"
             + (f"; {_num(_hrs[_top]):g} h at {int(_top):,} off" if _top else "") + ")"
-            + (f" — the cost the evidence supports is £{_num(_held['supported_unit_gbp']):.2f} a "
-               f"unit against £{_num(_held.get('unit_gbp')):.2f}"
-               if _held.get("supported_unit_gbp") is not None else "")
+            + (f" — the priced subtotal excluding them is "
+               f"£{_num(_held['unit_excluding_held_gbp']):.2f} a unit against "
+               f"£{_num(_held.get('unit_gbp')):.2f}"
+               if _held.get("unit_excluding_held_gbp") is not None else "")
+            + (f"; {len(_held['unresolved_work'])} item(s) of required work are unresolved and "
+               f"priced in neither figure" if _held.get("unresolved_work") else "")
             + ". Not a budget until they are confirmed or taken off")
     unpriced_all = [d for d in decisions if d["kind"] == "missing_price"]
     status = ("provisional" if (unpriced_all or _stated or _off_sheet or market or _provisional
@@ -4105,7 +4109,7 @@ def costed_job(source: Any) -> Dict[str, Any]:
                     # The held engine allowances, apart from the supported cost (D-596).
                     "held_allowances_gbp_per_unit": (_num(_held.get("gbp_per_unit"))
                                                      if _held else 0.0),
-                    "supported_unit_gbp": (_held.get("supported_unit_gbp") if _held else None),
+                    "unit_excluding_held_gbp": (_held.get("unit_excluding_held_gbp") if _held else None),
                     "held_at_breaks": list(_held.get("at_breaks") or []) if _held else []},
     }
     # THE ONE TALLY, ON THE RECORD ITSELF (D-580). `outstanding` is the rows that make the

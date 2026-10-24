@@ -1310,8 +1310,10 @@ def mechanically_fitted(parts: List[Any], brief: str = "") -> Dict[str, Any]:
 
     Counted: every made piece the unit fits. Not counted: a welded piece (its joint is its weld
     — never a fixing as well), a piece welded to a host (it is part of that host), and a piece
-    that hangs or clips — its own words say so (config CONCEPT_FIXING_FREE_WORDS), or a piece
-    welded to it does ("HOOKED BRACKET (WELDED TO TRAY)": the trays hang on their brackets).
+    that hangs or clips — its own words state how it is fitted (config
+    CONCEPT_FIXING_FREE_WORDS: "hangs on", "clip-on", never the bare noun "hook" in its name),
+    or a hook welded to it says it hangs ("HOOKED BRACKET (WELDED TO TRAY)": the trays hang on
+    their brackets, config CONCEPT_HANGING_HARDWARE_WORDS).
 
     A WELD IS NAMED PIECE BY PIECE (review of D-595). A weld on the unit says the unit is
     welded somewhere, not that this piece is: a bracket bolted to a welded frame still takes
@@ -1344,8 +1346,9 @@ def mechanically_fitted(parts: List[Any], brief: str = "") -> Dict[str, Any]:
         return any(re.search(rf"(?<![a-z]){re.escape(w)}(?:s|es)?(?![a-z])", s)
                    for s in weld_said for w in words)
     hung_by: Dict[str, str] = {}
+    hanging = _vocab_list("CONCEPT_HANGING_HARDWARE_WORDS")
     for p in made:
-        if p.get("welded_to_hosts") and _says_free(p):
+        if p.get("welded_to_hosts") and (_says(p, hanging) or _says_free(p)):
             for h in p["welded_to_hosts"]:
                 hung_by.setdefault(str(h), str(p.get("part_number")))
     counted: Dict[str, int] = {}

@@ -921,9 +921,20 @@ CONCEPT_FASTENED_BOUGHT_ITEMS = (
     (("lock", "latch", "catch"), 2),
     (("foot", "feet", "leveller", "levellers", "leveler", "glide", "glides"), 1),
 )
-CONCEPT_FIXING_FREE_WORDS = ["hook", "hooked", "hooks", "hang", "hangs", "hung", "hanging",
-                             "clip", "clips", "clip-in", "clip-on", "slot-in", "push-fit",
-                             "snap", "magnet", "magnetic", "tool-free"]
+# HOW A PIECE IS FITTED, NOT WHAT IT IS CALLED (review of D-596a). "HOOK BRACKET" names a
+# bracket the product hangs by; it says nothing about how the bracket joins its parent, and
+# the bare nouns "hook" and "clip" excused 0320730's brackets from the fixings question on
+# their name alone. A piece is fitted without fixings only where its words state the fitting.
+CONCEPT_FIXING_FREE_WORDS = ["hangs on", "hung on", "hanging on", "hangs from", "hung from",
+                             "hangs over", "hooks on", "hooks over", "hooks onto", "hooked on",
+                             "hooked over", "hooked onto", "clips on", "clipped on",
+                             "clips into", "clipped into", "clip-in", "clip-on", "slot-in",
+                             "slots in", "slots into", "push-fit", "snap-fit", "snaps on",
+                             "snaps into", "drop-in", "drops in", "lift-off", "magnetic",
+                             "tool-free"]
+# A HOOK WELDED TO A HOST MAKES THE HOST HANG (D-499): "HOOKED BRACKET (WELDED TO TRAY)" — the
+# trays hang on their brackets, so the trays take no fixings. The hook's own joint is its weld.
+CONCEPT_HANGING_HARDWARE_WORDS = ["hook", "hooks", "hooked", "hanger", "hangers"]
 # A PIECE JOINED BY ADHESIVE TAKES NO SCREWS (D-500): bonded, taped or glued — its adhesive is a
 # different consumable, named on the line as not in the fixings allowance.
 CONCEPT_BONDED_WORDS = ["bonded", "bond", "adhesive", "glued", "taped", "tape", "vhb"]

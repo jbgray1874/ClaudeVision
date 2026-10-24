@@ -976,11 +976,12 @@ def _allowances(summary: Mapping[str, Any], book: _Book, ledger: Mapping[str, An
 
 
 def _held_cost(summary: Mapping[str, Any], result: Dict[str, Any], quantities: List[int]) -> None:
-    """What the held allowances cost, apart from the cost the evidence supports (review of
-    D-596). Holding the release is right; a headline that carries 867 unconfirmed hours at
-    1,000 off is still not a budget, so the record says how much of each unit cost rests on
-    them and what the unit cost is without them — at the sheet's quantity and at every break
-    the sweep calculated."""
+    """What the held allowances cost, and the priced subtotal excluding them (review of D-596).
+    Holding the release is right; a headline that carries 867 unconfirmed hours at 1,000 off is
+    still not a budget, so the record says how much of each unit cost rests on them and what
+    the unit cost is without them — at the sheet's quantity and at every break the sweep
+    calculated. The subtotal is NOT a supported cost: the work still unresolved is priced in
+    neither figure, so it is counted and named beside them, never folded in."""
     held = [a for a in result.get("allowances") or [] if a.get("holds")]
     lines = [l for l in result.get("engine_lines") or [] if l.get("holds")]
     if not held and not lines:
@@ -998,7 +999,7 @@ def _held_cost(summary: Mapping[str, Any], result: Dict[str, Any], quantities: L
         if q and u is not None:
             at_breaks.append({"quantity": int(q), "unit_gbp": round(u, 2),
                               "held_gbp_per_unit": per_unit,
-                              "supported_unit_gbp": round(u - per_unit, 2)})
+                              "unit_excluding_held_gbp": round(u - per_unit, 2)})
     hours: Dict[str, float] = {}
     for a in held:
         for q, h in (a.get("hours_at") or {}).items():
@@ -1010,8 +1011,10 @@ def _held_cost(summary: Mapping[str, Any], result: Dict[str, Any], quantities: L
         "hours_at": hours, "gbp_per_unit": per_unit,
         "not_costed": unpriced,
         "unit_gbp": unit,
-        "supported_unit_gbp": round(unit - per_unit, 2) if unit is not None else None,
+        "unit_excluding_held_gbp": round(unit - per_unit, 2) if unit is not None else None,
         "at_breaks": at_breaks,
+        "unresolved_work": [e["id"] for e in result.get("items") or []
+                            if e.get("state") == UNRESOLVED],
         "note": ("run minutes at the row's department rate; each row's set-up is spread by "
                  "Excel and is not separated here")}
 
