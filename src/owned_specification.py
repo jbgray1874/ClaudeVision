@@ -203,6 +203,16 @@ def _same_material(a, b):
     return identity(a).replace("_", " ") == identity(b).replace("_", " ")
 
 
+def _same_family(a, b):
+    """One material by the estimator's own family names: "MR MDF" is priced as MDF, and that
+    is the part's own material, not a substitute (D-598p)."""
+    try:
+        from estimator import _canonical_material_family as family
+        return _same_material(family(a) or a, family(b) or b)
+    except Exception:                                                # noqa: BLE001
+        return _same_material(a, b)
+
+
 def drawing_office_material(part):
     """The part's material, where the drawing office (or an estimator) named it; else None."""
     material = part.get("normalized_material")
@@ -234,7 +244,26 @@ def priced_as_issues(summary, parts):
         if not material:
             continue
         pn = identity(part.get("part_number"))
+        # A bad transfer need not leave a substitution stamp. Compare the
+        # actual pricing payload too, even when both materials use one block.
+        priced = (costed.get(pn) or {}).get("material_estimate")
+        if not isinstance(priced, dict):
+            priced = part.get("material_estimate")
+        actual = priced.get("material") if isinstance(priced, dict) else None
+        mismatch = bool(actual and not _same_family(actual, material))
+        if mismatch:
+            cells = sorted({str(r["charged_cell"]) for r in rows
+                            if r.get("charged_cell") and
+                            (identity(r.get("part_number") or r.get("part_code")) == pn or
+                             str(r.get("description") or "").upper().startswith(pn + " "))})
+            location = (f" Calculated material cell(s): {', '.join(cells)}."
+                        if cells else " No matching calculated material cell is recorded.")
+            out.append(f"{pn}: the drawing office specifies {material}, but the actual "
+                       f"material estimate prices {actual}.{location} Reprice the specified "
+                       f"material or correct its specification through a sourced ruling.")
         for rec in (part, costed.get(pn) or {}):
+            if mismatch:
+                break  # the pricing payload already names this failure
             swap = rec.get("material_priced_as")
             if (isinstance(swap, dict) and swap.get("priced_material")
                     and not _same_material(swap["priced_material"], material)):
