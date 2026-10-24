@@ -271,14 +271,26 @@ if ($task) {
 }
 
 # uvicorn has to import the app before it listens; reporting failure while it is still
-# starting would be its own false alarm.
-Start-Sleep -Seconds 8
+# starting would be its own false alarm. POLLED, NOT A FIXED WAIT: eight seconds was the
+# whole allowance, and a slow start read as a dead service. Up to 60 seconds, every 2.
 
 # -- 4. IS IT SERVING THE CODE ON DISK? -------------------------------------------------
 #
 # The only question worth asking. git is on the PATH in THIS shell and not in the
 # virtualenv the service starts from, so the comparison can be made here and nowhere else.
 $head = Get-HeadCommit $Root
+
+$health = $null
+$deadline = (Get-Date).AddSeconds(60)
+while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Seconds 2
+    try {
+        $health = Invoke-RestMethod "http://localhost:$Port/api/health" -TimeoutSec 4
+        break
+    } catch {
+        if ($_.Exception.Response -and $_.Exception.Response.StatusCode.value__ -eq 401) { break }
+    }
+}
 
 try {
     $health = Invoke-RestMethod "http://localhost:$Port/api/health" -TimeoutSec 6
@@ -299,8 +311,68 @@ try {
         Write-Host "  answering on $Port (401 - key required, which is fine)" -ForegroundColor Green
     } else {
         Write-Host ""
-        Write-Host "  NOT answering on $Port." -ForegroundColor Red
-        Write-Host "  The reason is in $Root\output\logs\service-<date>.log" -ForegroundColor Yellow
+        Write-Host "  NOT answering on $Port after 60 seconds." -ForegroundColor Red
+
+        # -- 5. NOT ANSWERING: THE REASON, HERE ----------------------------------------
+        #
+        # The old message pointed at a dated log file and never printed its name, twice, while
+        # the service was up on another port. What is known is gathered and shown instead.
+
+        # FIRST: IS THE SERVICE UP ON ANOTHER PORT? Then the portal works now, on that port.
+        foreach ($other in @(8071, 8072, 8073)) {
+            if ($other -eq $Port) { continue }
+            try {
+                $h2 = Invoke-RestMethod "http://localhost:$other/api/health" -TimeoutSec 4
+                $c2 = "$($h2.commit)".Trim()
+                $tag = ""
+                if ($head -and $c2 -eq $head) { $tag = " - the code on disk" }
+                Write-Host ("  The service IS answering on {0}, serving {1}{2}." -f $other, $c2, $tag) -ForegroundColor Green
+                Write-Host ("  Use http://localhost:{0}/estimating now." -f $other) -ForegroundColor Green
+                # WHO RUNS IT, NAMED: the listener, the starter that launched it, and whatever
+                # launched that: a scheduled task, an NSSM service, or a window somebody opened.
+                foreach ($conn in @(Get-NetTCPConnection -LocalPort $other -State Listen -ErrorAction SilentlyContinue)) {
+                    $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($conn.OwningProcess)" -ErrorAction SilentlyContinue
+                    $hop = 0
+                    while ($proc -and $hop -lt 3) {
+                        Write-Host ("    pid {0} started {1}: {2}" -f $proc.ProcessId, $proc.CreationDate, $proc.CommandLine) -ForegroundColor Yellow
+                        $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.ParentProcessId)" -ErrorAction SilentlyContinue
+                        $hop++
+                    }
+                }
+                Write-Host ("  To restart that one instead:  .\tools\start\restart-service.ps1 -Port {0}" -f $other) -ForegroundColor Yellow
+            } catch { }
+        }
+
+        # SECOND: THE SCHEDULED TASK'S OWN LAST RESULT.
+        if ($task) {
+            $info = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
+            if ($info) {
+                Write-Host ("  scheduled task: last run {0}, result 0x{1:X}" -f $info.LastRunTime, $info.LastTaskResult) -ForegroundColor Yellow
+            }
+        }
+
+        # THIRD: THE LOG, NAMED AND QUOTED. Opened for read while a running starter may hold it;
+        # it mixes UTF-8 stamps with UTF-16 console output, so the NULs are dropped to read it.
+        $logDir = Join-Path $Root "output\logs"
+        $day = Get-Date -Format "yyyy-MM-dd"
+        $logs = @((Join-Path $logDir ("service-{0}-{1}.log" -f $Port, $day)),
+                  (Join-Path $logDir ("service-{0}.log" -f $day))) | Where-Object { Test-Path -LiteralPath $_ }
+        if (@($logs).Count -gt 0) {
+            $log = @($logs)[0]
+            Write-Host "  last lines of $log :" -ForegroundColor Yellow
+            try {
+                $fs = [System.IO.File]::Open($log, 'Open', 'Read', 'ReadWrite')
+                $sr = New-Object System.IO.StreamReader($fs)
+                $text = $sr.ReadToEnd()
+                $sr.Close()
+                ($text -replace "`0", "") -split "`r?`n" | Where-Object { $_.Trim() } |
+                    Select-Object -Last 25 | ForEach-Object { Write-Host "    $_" }
+            } catch {
+                Write-Host "    (could not read it: $($_.Exception.Message))" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "  no service log for today under $logDir" -ForegroundColor Yellow
+        }
         exit 1
     }
 }
