@@ -5397,7 +5397,8 @@ def _finalize_scan_summary(
             _job_name = (Path(job_folder).name if job_folder else "") or (
                 Path(_pack[0]).stem if _pack else "CONCEPT")
             _sighted = concept_scan.parts_from_concept(_answer, _job_name, sheet=_sheet_read,
-                                                          brief=_brief or "")
+                                                          brief=_brief or "",
+                                                          source_answer=(_read or {}).get("parsed"))
             if _acc:
                 # EVERY LINE SAYS WHOSE SCHEDULE IT CAME FROM (D-534).
                 for _rec in _sighted:

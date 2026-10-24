@@ -98,6 +98,103 @@ def fingerprint(line: Mapping[str, Any]) -> str:
                         .encode("utf-8")).hexdigest()[:16]
 
 
+def read_ids(answer: Any) -> Dict[int, str]:
+    """Each read line's source ID, "R4:<fingerprint>" — its place in the read as returned and
+    what it said — keyed by the line object (D-596e). A record minted from a copy of the answer
+    with lines set aside or added still carries the ID of the very line it came from; two lines
+    that read alike are two IDs."""
+    parts = answer.get("parts") if isinstance(answer, Mapping) else None
+    return {id(line): f"R{i}:{fingerprint(line)}" for i, line in enumerate(parts or [], start=1)
+            if isinstance(line, Mapping)}
+
+
+def _size_suffix(words: str) -> bool:
+    """Words that are only a size — what the engine appends to a bought line's name where the
+    brief states its size (D-532): "30 X 15 X 1 5 MM"."""
+    toks = words.split()
+    return (any(t.isdigit() for t in toks)
+            and all(t.isdigit() or t in ("X", "MM") for t in toks))
+
+
+def _link_records(lines: List[Tuple[str, Mapping[str, Any]]],
+                  recs: List[Mapping[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Each read line's record, and how it was found, keyed by "R{i}" (D-596e).
+
+    1. Its source ID, stamped on the record at mint — exact, whatever the engine later did to
+       the record's description.
+    2. A record with no ID this read holds that carries the line's fingerprint, where exactly
+       one line and one record carry it.
+    3. A record from before the fingerprint, by its name: the read's own, or the read's with a
+       size the engine appended — and only where that record answers to this line alone and
+       this line to that record alone. Anything else is ambiguous and stays unlinked: a guess
+       between two lines that read alike is not a link.
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    sid_of = {rid: f"{rid}:{fingerprint(line)}" for rid, line in lines}
+    by_sid: Dict[str, List[Mapping[str, Any]]] = {}
+    by_fp: Dict[str, List[Mapping[str, Any]]] = {}
+    old: List[Mapping[str, Any]] = []
+    sids = set(sid_of.values())
+    for r in recs:
+        if r.get("read_id") and str(r["read_id"]) in sids:
+            by_sid.setdefault(str(r["read_id"]), []).append(r)
+        elif r.get("read_fingerprint"):
+            # An ID this read does not hold (a record minted from a copy whose lines were
+            # renumbered) still has its line's words: the fingerprint rule, unique only.
+            by_fp.setdefault(str(r["read_fingerprint"]), []).append(r)
+        elif (r.get("concept_kind") and not r.get("is_assembly_parent")
+              and _engine_origin(r) == "engine:unclassified"):
+            old.append(r)
+    line_fps: Dict[str, List[str]] = {}
+    for rid, line in lines:
+        line_fps.setdefault(fingerprint(line), []).append(rid)
+
+    def candidates(line: Mapping[str, Any]) -> List[Mapping[str, Any]]:
+        name = _words(line.get("name"))
+        hits = []
+        for r in old:
+            desc = _words(r.get("description"))
+            if name and (desc == name or (desc.startswith(name + " ")
+                                          and _size_suffix(desc[len(name) + 1:]))):
+                hits.append(r)
+        return hits
+
+    claims: Dict[int, List[str]] = {}
+    cands = {rid: candidates(line) for rid, line in lines}
+    for rid, hits in cands.items():
+        for r in hits:
+            claims.setdefault(id(r), []).append(rid)
+    for rid, line in lines:
+        fp = fingerprint(line)
+        hit = by_sid.get(sid_of[rid]) or []
+        if len(hit) == 1:
+            out[rid] = {"record": hit[0], "link": "read_id"}
+        elif len(hit) > 1:
+            out[rid] = {"record": None, "link": "ambiguous", "candidates": hit,
+                        "why": f"{len(hit)} records carry this line's read ID"}
+        elif by_fp.get(fp):
+            if len(by_fp[fp]) == 1 and len(line_fps.get(fp) or []) == 1:
+                out[rid] = {"record": by_fp[fp][0], "link": "fingerprint"}
+            else:
+                out[rid] = {"record": None, "link": "ambiguous", "candidates": by_fp[fp],
+                            "why": (f"{len(line_fps.get(fp) or [])} read lines and "
+                                    f"{len(by_fp[fp])} record(s) read alike, and no record "
+                                    f"carries a read ID that tells them apart")}
+        elif cands[rid]:
+            hits = cands[rid]
+            if len(hits) == 1 and claims.get(id(hits[0])) == [rid]:
+                out[rid] = {"record": hits[0], "link": "name"}
+            else:
+                others = sorted({o for r in hits for o in claims.get(id(r), []) if o != rid})
+                out[rid] = {"record": None, "link": "ambiguous", "candidates": hits,
+                            "why": (f"{len(hits)} record(s) answer to this name"
+                                    + (f", and {', '.join(others)} answer(s) to the same"
+                                       if others else "")
+                                    + " — a record from before the read ID cannot say which "
+                                      "line it was")}
+    return out
+
+
 # ── capture: at the read ─────────────────────────────────────────────────────────────
 
 def _finish_statements(answer: Mapping[str, Any], brief: str) -> List[Dict[str, str]]:
@@ -151,47 +248,32 @@ def capture(answer: Any, *, records: Iterable[Any] = (), raw_response: str = "",
     """The read's items, each with an identity and the record it became. Pure."""
     answer = answer if isinstance(answer, Mapping) else {}
     recs = [r for r in (records or []) if isinstance(r, Mapping)]
-    by_fp: Dict[str, List[Mapping[str, Any]]] = {}
-    by_name: Dict[str, List[Mapping[str, Any]]] = {}
-    for r in recs:
-        if r.get("read_fingerprint"):
-            by_fp.setdefault(str(r["read_fingerprint"]), []).append(r)
-        elif (r.get("concept_kind") and not r.get("is_assembly_parent")
-              and _engine_origin(r) == "engine:unclassified"):
-            # A record saved before D-596 carries no fingerprint: matched on its name, in order.
-            by_name.setdefault(_words(r.get("description")), []).append(r)
+    lines = [(f"R{i}", line) for i, line in enumerate(answer.get("parts") or [], start=1)
+             if isinstance(line, Mapping)]
+    links = _link_records(lines, recs)
     aside = [dict(a) for a in (set_aside or []) if isinstance(a, Mapping)]
     items: List[Dict[str, Any]] = []
     linked: Set[str] = set()
+    ambiguous: Set[str] = set()
 
     def add(**item: Any) -> None:
         item.setdefault("said_by", said_by)
         items.append(item)
 
-    def _compact(text: Any) -> str:
-        return re.sub(r"[^A-Z0-9]", "", str(text or "").upper())
-
-    def _by_name(name: str) -> Optional[Mapping[str, Any]]:
-        """A record saved before the fingerprint, matched on its name — the read's own, or the
-        read's with words the engine appended (a size from the brief, D-532)."""
-        want = _compact(name)
-        for key, rs in by_name.items():
-            if rs and want and (_compact(key) == want or _compact(key).startswith(want)):
-                return rs.pop(0)
-        return None
-
-    for i, line in enumerate(answer.get("parts") or [], start=1):
-        if not isinstance(line, Mapping):
-            continue
-        rid = f"R{i}"
+    for rid, line in lines:
         name = str(line.get("name") or rid).strip()
-        fp = fingerprint(line)
-        rec = by_fp[fp].pop(0) if by_fp.get(fp) else _by_name(name)
+        link = links.get(rid) or {}
+        rec = link.get("record")
         pn = _pn(rec.get("part_number")) if rec else ""
         if pn:
             linked.add(pn)
         why_aside = ""
-        if rec is None:
+        if link.get("link") == "ambiguous":
+            # NOT LINKED BY GUESS (D-596e): the line stays unresolved, its candidates named.
+            ambiguous |= {_pn(r.get("part_number")) for r in link.get("candidates") or []}
+            why_aside = (f"not linked: {link.get('why')} "
+                         f"({', '.join(sorted(_pn(r.get('part_number')) for r in link.get('candidates') or []))})")
+        elif rec is None:
             hit = next((a for a in aside if _words(a.get("name")) == _words(name)), None)
             if hit is not None:
                 aside.remove(hit)
@@ -200,7 +282,8 @@ def capture(answer: Any, *, records: Iterable[Any] = (), raw_response: str = "",
         kind = str(line.get("kind") or "").strip().lower()
         described = str((rec or {}).get("description") or "")
         add(id=rid, kind="part", work=True, label=name, record=pn, part_kind=kind,
-            set_aside=why_aside,
+            set_aside=why_aside, link=str(link.get("link") or ""),
+            source_id=f"{rid}:{fingerprint(line)}",
             # WHAT THE SHEET CALLS IT, where the engine changed the read's name (D-596d).
             renamed_to=(described if described and _words(described) != _words(name) else ""),
             as_read={k: line.get(k) for k in ("name", "kind", "quantity", "material_guess",
@@ -301,7 +384,12 @@ def capture(answer: Any, *, records: Iterable[Any] = (), raw_response: str = "",
             add(id=f"SF.{key}", kind=REFERENCE, work=False, label=f"sheet fact: {key}",
                 record="", as_read=facts.get(key))
 
-    engine_lines = [{"record": _pn(r.get("part_number")), "origin": _engine_origin(r),
+    sids = {f"{rid}:{fingerprint(line)}" for rid, line in lines}
+    engine_lines = [{"record": _pn(r.get("part_number")),
+                     "origin": ("read:link_ambiguous" if _pn(r.get("part_number")) in ambiguous
+                                else "read:id_not_in_this_read"
+                                if r.get("read_id") and str(r["read_id"]) not in sids
+                                else _engine_origin(r)),
                      "description": str(r.get("description") or "")}
                     for r in recs if _pn(r.get("part_number")) not in linked]
     raw = str(raw_response or "")
@@ -408,6 +496,34 @@ def _families(op: str) -> Tuple[str, ...]:
     return tuple(fam[op]) if op in fam else (op,)
 
 
+def _rate_processes(row: Mapping[str, Any]) -> Set[str]:
+    """The weld processes a charged row is a rate for (D-596e): those its rate-card title or
+    engine operations name, widened by config.WELD_RATE_EQUIVALENT_PROCESSES. A row naming
+    processes that are not equivalent is a shared rate, a rate for none of them."""
+    vocab = {str(k).upper(): str(v).upper()
+             for k, v in (_cfg("WELD_PROCESS_VOCAB", {}) or {}).items()}
+    same = {str(k).upper(): {str(p).upper() for p in v}
+            for k, v in (_cfg("WELD_RATE_EQUIVALENT_PROCESSES", {}) or {}).items()}
+    words = set(_words(row.get("title")).split())
+    for op in row.get("ops") or ():
+        words |= set(str(op).upper().split("_"))
+    named = {vocab[w] for w in words if w in vocab}
+    if not named:
+        return set()
+    groups = [same.get(n, {n}) for n in named]
+    if any(not (named <= g) for g in groups):
+        return set()
+    return set().union(*groups)
+
+
+def _rates_said(rows: Iterable[Mapping[str, Any]]) -> str:
+    said = []
+    for l in rows:
+        rate = fcc.cached_number(l["row"].get("dept_rate_gbp_per_hour"))
+        said.append(f"'{l['title']}'" + (f" (£{rate:.2f}/h)" if rate else ""))
+    return ", ".join(sorted(set(said)))
+
+
 def _covered_elsewhere(op: str) -> bool:
     return op in {op_name(w) for w in (_cfg("CONCEPT_OPERATIONS_COVERED_ELSEWHERE", ()) or ())}
 
@@ -459,6 +575,8 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                  "record": item.get("record") or "", "said_by": item.get("said_by"),
                  "as_read": item.get("as_read"), "state": state, "how": how,
                  "cells": [c for c in cells if c], **extra}
+        if item.get("link"):
+            entry["link"] = item["link"]
         if item.get("renamed_to"):
             # A NAME THE ENGINE CHANGED IS SHOWN BESIDE THE READ'S (D-596d).
             entry["renamed_to"] = item["renamed_to"]
@@ -773,14 +891,37 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
             return
         if ruled(item):
             return
+        # WHAT THE PRINT SET IS OF, BEFORE ANY CHARGE IS TAKEN FOR IT (D-596e). A print set that
+        # describes a read part that is not a graphic line — a bought label — may be that
+        # part's own print (shared coverage) or separate printing and application work; which,
+        # only a person can say. It stays open, the part named, until a ruling settles it.
+        text = set(_words(item.get("as_read")).split())
+        generic = {str(w).upper() for w in (_cfg("CONCEPT_NAME_GENERIC_WORDS", ()) or ())}
+        relates = []
+        for i in items:
+            if i.get("kind") != "part":
+                continue
+            sig = [w for w in _words(i.get("label")).split()
+                   if len(w) >= 3 and w not in generic and not w.isdigit()]
+            if sig and sig[-1] in text and 2 * sum(w in text for w in sig) >= len(sig):
+                relates.append(i)
+        others = [i for i in relates if i.get("part_kind") != "graphic"]
+        about = "; ".join(f"{i['id']} '{i.get('label')}' ({i.get('part_kind') or 'part'}"
+                          f"{', ' + i['record'] if i.get('record') else ''})" for i in others)
         graphics = [pn for pn, r in book.records.items() if r.get("concept_kind") == "graphic"]
         rows = [r for pn in graphics for r in (book.material.get(pn) or [])
                 if (fcc.cached_number(r.get("total_value_gbp")) or 0) > 0]
-        if rows:
-            done(item, COVERED, "the graphic line(s) carry the print",
+        if others:
+            done(item, UNRESOLVED,
+                 f"it describes {about}: rule whether that line carries this print (covered, "
+                 f"covered_by its record) or it is separate printing or application work, "
+                 f"which then needs its own charge", relates_to=[i["id"] for i in others])
+        elif rows:
+            done(item, COVERED, f"the graphic line(s) {', '.join(sorted(graphics))} carry the print",
                  [{"cell": r.get("charged_cell")} for r in rows])
         else:
-            done(item, UNRESOLVED, "no priced graphic line carries this print set")
+            done(item, UNRESOLVED, "no priced graphic line carries this print set, and no read "
+                                   "part it describes was found — rule what it is")
 
     def stated(item: Mapping[str, Any]) -> None:
         if not book.calculated:
@@ -812,18 +953,28 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                  "stated, and no polishing row charges it — brushing before plating is not this "
                  "sequence", rows)
         elif what == "weld_process":
+            # THE PROCESS STATED, HELD TO THE RATE CHARGED (D-596e). The process comes from the
+            # words; the charge is the weld row's own rate — its rate-card title and engine
+            # operation, never its description, which names a stated TIG beside the CO2 rate it
+            # rides on. Only a row that is a rate for the stated process satisfies it.
             proc = str(item.get("process") or "").upper()
             rows = book.any_rows(_families("welding"))
+            evidenced = [l for l in rows if proc and proc in _rate_processes(l)]
             if not rows:
                 done(item, UNRESOLVED, f"{proc} stated, and no weld row is charged")
-            elif proc in ("CO2", "MIG", "MAG", "GMAW"):
-                for l in rows:
+            elif evidenced:
+                for l in evidenced:
                     for p in l["parts"]:
                         traced_labour.add((l["wb_row"], "welding", p))
-                done(item, COVERED, f"the arc-weld row is a {proc} rate", rows)
+                done(item, COVERED, f"{proc} stated, and {_rates_said(evidenced)} is a {proc} "
+                                    f"rate that charges it", evidenced)
             else:
-                done(item, UNRESOLVED, f"charged at the arc-weld row as a placeholder — the card "
-                                       f"has no {proc} rate", rows)
+                named = sorted({p for l in rows for p in _rate_processes(l)})
+                done(item, UNRESOLVED,
+                     f"{proc} stated, and the weld is charged at {_rates_said(rows)} — "
+                     + (f"a {'/'.join(named)} rate" if named else "a rate that names no process")
+                     + f", not a {proc} rate; give the {proc} rate or the minutes at it, or rule "
+                       f"how it is covered", rows)
         else:
             done(item, UNRESOLVED, "a stated requirement no rule here can account for")
 
@@ -985,6 +1136,11 @@ def _allowances(summary: Mapping[str, Any], book: _Book, ledger: Mapping[str, An
             cls, note = "inferred_purchase", ("a fitting no read item names, implied by a rule"
                                               if origin == "engine:implied_fitting" else
                                               "fixings no read item names")
+        elif origin in ("read:link_ambiguous", "read:id_not_in_this_read"):
+            cls, note = "unclassified", (
+                "a record more than one read line could be, linked to none — rule which line "
+                "it is" if origin == "read:link_ambiguous" else
+                "a record made from a read line this read does not contain")
         else:
             cls, note = "unclassified", "an engine line with no stated basis"
         ruling = book.rulings.get(f"line:{pn}".lower())

@@ -2324,25 +2324,44 @@ _ITEM_STOP_WORDS = {"THE", "AND", "FOR", "WITH", "ONE", "OFF", "MM", "BOUGHT", "
 
 
 def stated_item_size(name: Any, text: Any) -> Optional[List[float]]:
-    """The size a brief line states for this named item, or None (D-532).
+    """The size a brief states for this named item, or None (D-532).
 
-    A line counts when every significant word of the item's name is on it and the line
-    carries an "A x B" size: "7. one UPC ID plate (20 x 10 mm), bought in" for "UPC ID
-    PLATE". A name of one significant word is too loose to match by — it returns None."""
+    A size counts when it stands beside the item's name in the sentence that names it, with
+    nothing but config.STATED_SIZE_FILLER_WORDS between: "7. one UPC ID plate (20 x 10 mm),
+    bought in" for "UPC ID PLATE". A name of one significant word is too loose to match by —
+    it returns None."""
     sig = [w for w in re.findall(r"[A-Z0-9]+", str(name or "").upper())
            if len(w) >= 2 and w not in _ITEM_STOP_WORDS and not w.isdigit()]
     if len(sig) < 2:
         return None
+    filler = {str(w).upper() for w in _vocab("STATED_SIZE_FILLER_WORDS", ()) or ()}
     # THE SENTENCE THAT NAMES THE ITEM, NOT THE LINE (D-596d). A brief typed as one line put
     # every item's words "on the line" with the tube's "30 x 15 x 1.5mm", and 0320730's
     # identification label was described and researched at the tube's size.
     for line in re.split(r"(?<!\d)\.(?!\d)|[\n;]+", str(text or "")):
-        up = " " + re.sub(r"[^A-Z0-9]+", " ", line.upper()) + " "
-        if not all(f" {w} " in up for w in sig):
-            continue
-        m = _STOCK_SIZE_RE.search(line)
-        if m:
-            return [float(g) for g in m.groups() if g]
+        words = [(m.group(0).upper(), m.start(), m.end())
+                 for m in re.finditer(r"\d+(?:\.\d+)?|[A-Za-z]+", line)]
+        # THE COMPONENT THE SIZE STANDS BESIDE, NOT THE SENTENCE IT IS IN (D-596e). A sentence
+        # can name the tube and the label together: "30 x 15 tube with an ID label fitted" is
+        # the tube's size, and only a size the item's own name stands next to is the item's.
+        spans = []
+        for a in range(len(words)):
+            for b in range(a, min(len(words), a + len(sig) + 2)):
+                if all(w in {x for x, _s, _e in words[a:b + 1]} for w in sig):
+                    spans.append((words[a][1], words[b][2]))
+                    break
+        for m in _STOCK_SIZE_RE.finditer(line):
+            for start, end in spans:
+                gap = ((end, m.start()) if m.start() >= end else
+                       (m.end(), start) if m.end() <= start else None)
+                if gap is None:
+                    continue
+                between = [w for w, s, e in words if s >= gap[0] and e <= gap[1]]
+                # A size the words after it name as a section is that section's: "ID label,
+                # 30 x 15 tube" sizes the tube.
+                after = [w for w, s, _e in words if s >= m.end() and w not in filler][:2]
+                if all(w in filler for w in between) and not _stock_form_in_words(" ".join(after)):
+                    return [float(g) for g in m.groups() if g]
     return None
 
 
@@ -3819,7 +3838,8 @@ def cutout_geometry(sighted: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def parts_from_concept(answer: Dict[str, Any], stem: str, *,
-                       sheet: bool = False, brief: str = "") -> List[Dict[str, Any]]:
+                       sheet: bool = False, brief: str = "",
+                       source_answer: Optional[Mapping[str, Any]] = None) -> List[Dict[str, Any]]:
     """The sighted parts as engine part records, every field attributed at concept rank.
 
     Written through apply_field so the stamps are the arbitration machinery's own, not a
@@ -3828,10 +3848,19 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
 
     `sheet`: the pages are drawing sheets (D-415). A fitting the sheet does not draw is not
     minted by the implied-fittings net; it is asked on the part that implies it.
+
+    `source_answer`: the read as the model returned it, where `answer` is a copy with lines set
+    aside — so each record carries the ID of its line in the read itself (D-596e).
     """
     from document_builder import _empty_part_record                 # noqa: WPS433
     from source_precedence import apply_field                       # noqa: WPS433
 
+    # WHICH LINE OF THE READ, BY ITS ID (D-596e), taken before any line is added or changed.
+    try:
+        from read_charge_contract import read_ids as _read_ids
+        _ids = _read_ids(source_answer if source_answer is not None else answer)
+    except Exception:                                                # noqa: BLE001
+        _ids = {}
     parts: List[Dict[str, Any]] = []
     answer = _with_print_lines(answer)
     _implied: List[Dict[str, Any]] = []
@@ -3899,6 +3928,10 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
             record["read_fingerprint"] = _read_fp(sighted)
         except Exception:                                            # noqa: BLE001
             pass
+        # ITS SOURCE ID, the read line's place and words (D-596e): a description the engine
+        # changes afterwards — a size appended, a name tidied — cannot break the link.
+        if _ids.get(id(sighted)):
+            record["read_id"] = _ids[id(sighted)]
         record["read_origin"] = ("engine:implied_fitting" if sighted.get("_minted_fitting_for")
                                  else "engine:print_line" if sighted.get("_minted_print_for")
                                  else "read")
@@ -4575,6 +4608,8 @@ def allow_components_inside(records: List[Dict[str, Any]],
                                 else f"{_from} line '{row.get('name')}' — a provisional "
                                      f"allowance, not confirmed by this read")}
         (rec,) = parts_from_concept({"product": {}, "parts": [sighted]}, stem)[:1]
+        # NOT A READ LINE: the allowance is the engine's, so it carries no read identity.
+        rec.pop("read_id", None), rec.pop("read_fingerprint", None), rec.pop("read_origin", None)
         rec["part_number"] = f"{_slug(stem, 'CONCEPT')}-CPA{n:02d}"
         rec["welded_to_hosts"] = [str(h.get("part_number")) for h in hosts]
         _coated = [str(h.get("part_number")) for h in hosts if "powder_coating" in _ops_of(h)]

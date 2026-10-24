@@ -80,6 +80,10 @@ def main(argv=None) -> int:
         # WHAT THE ITEM IS, as the read put it — so a pasted table can be judged on its own.
         if e.get("label"):
             print(f"{'':36} read as: {str(e['label'])[:110]}")
+        if e.get("link"):
+            # HOW THE LINE WAS LINKED TO ITS RECORD (D-596e): read_id, fingerprint, name, or
+            # ambiguous — so a link by name on an old record is never mistaken for an exact one.
+            print(f"{'':36} linked by: {e['link']}")
         if e.get("cells"):
             print(f"{'':36} cells: {', '.join(e['cells'])}")
     print("\nEngine allowances (charges no read item explains):")

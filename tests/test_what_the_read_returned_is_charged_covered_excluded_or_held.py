@@ -550,3 +550,196 @@ def test_the_saved_run_tool_audits_a_record_from_before_the_ledger(tmp_path):
     states = {e["id"]: e["state"] for e in out["result"]["items"]}
     assert states["R1"] == rcc.CHARGED, "linked by name with no fingerprint"
     assert states["R1.op.hole_machining"] == rcc.UNRESOLVED
+
+
+# ── D-596e: a source ID, a size its component's, TIG held to its rate, a print set opened ──
+
+def _old(s):
+    """The records as a run from before the read ID and the fingerprint saved them."""
+    for p in s["manufacturing_writeup"]["parts"]:
+        for k in ("read_id", "read_fingerprint", "read_origin"):
+            p.pop(k, None)
+    return s
+
+
+def test_a_record_carries_its_read_lines_source_id_and_links_by_it():
+    answer = _answer()
+    answer["parts"].insert(0, {"name": "UNDRAWN HINGE", "kind": "bought_in", "quantity": 2,
+                               "drawn": ""})
+    kept, aside = cs.set_aside_undrawn(answer)
+    parts = cs.parts_from_concept(kept, STEM, brief=BRIEF, source_answer=answer)
+    tube = next(p for p in parts if p["part_number"] == T)
+    assert tube["read_id"] == f"R2:{rcc.fingerprint(answer['parts'][1])}", \
+        "its place in the read as returned, not in the copy with the hinge set aside"
+    led = rcc.capture(answer, records=parts, brief=BRIEF, set_aside=aside)
+    r2 = next(i for i in led["items"] if i["id"] == "R2")
+    assert r2["record"] == T and r2["link"] == "read_id"
+
+
+def test_a_changed_description_does_not_break_a_read_id_link():
+    s = _book()
+    label = next(p for p in s["manufacturing_writeup"]["parts"] if p["part_number"] == L)
+    label["description"] = "CLEAR TAG, RESEARCHED"
+    s["read_ledger"] = rcc.capture(_answer(), records=s["manufacturing_writeup"]["parts"],
+                                   brief=BRIEF)
+    e = next(e for e in rcc.audit(s)["items"] if e["id"] == "R4")
+    assert e["state"] == rcc.CHARGED and e["record"] == L and e["link"] == "read_id"
+    assert e["renamed_to"] == "CLEAR TAG, RESEARCHED", "the change stays visible"
+
+
+def test_two_lines_that_read_alike_each_link_to_their_own_record_by_id():
+    answer = _answer()
+    answer["parts"].append(dict(answer["parts"][2]))          # a second, identical end-cap line
+    parts = cs.parts_from_concept(answer, STEM, brief=BRIEF)
+    led = rcc.capture(answer, records=parts, brief=BRIEF)
+    by = {i["id"]: i for i in led["items"] if i["kind"] == "part"}
+    assert by["R3"]["record"] != by["R5"]["record"] and by["R3"]["record"] and by["R5"]["record"]
+    assert by["R3"]["link"] == by["R5"]["link"] == "read_id"
+
+
+def test_old_records_that_read_alike_stay_unlinked_and_are_named():
+    """Two read lines and two records answer to one name, and nothing on a record from before
+    the read ID says which line it was: neither line is linked by guess."""
+    answer = _answer()
+    answer["parts"].append(dict(answer["parts"][2], quantity=4))   # END CAP again, another count
+    s = _old(_book(answer=answer))
+    s["read_ledger"] = rcc.capture(answer, records=s["manufacturing_writeup"]["parts"], brief=BRIEF)
+    r = rcc.audit(s)
+    for rid in ("R3", "R5"):
+        e = next(e for e in r["items"] if e["id"] == rid)
+        assert e["state"] == rcc.UNRESOLVED and e["record"] == "" and e["link"] == "ambiguous"
+        assert "not linked" in e["how"] and "answer to this name" in e["how"]
+    caps = [l for l in r["engine_lines"] if l["record"] in (C, f"{STEM}-CPT05")]
+    assert caps and all(l["class"] == "unclassified" and l["holds"] for l in caps)
+    assert all("linked to none" in l["basis"] for l in caps)
+
+
+def test_old_records_with_similar_names_link_only_where_the_match_is_unique():
+    lines = [("R1", {"name": "LABEL"}), ("R2", {"name": "LABEL HOLDER"})]
+    old = [{"part_number": "X-CPT01", "description": "LABEL HOLDER", "concept_kind": "bought_in"},
+           {"part_number": "X-CPT02", "description": "LABEL 30 x 15 MM", "concept_kind": "bought_in"}]
+    links = rcc._link_records(lines, old)
+    assert links["R1"]["record"]["part_number"] == "X-CPT02" and links["R1"]["link"] == "name"
+    assert links["R2"]["record"]["part_number"] == "X-CPT01"
+    # A name the record only starts with, followed by words that are not a size, is no link.
+    links = rcc._link_records([("R1", {"name": "LABEL"})], old[:1])
+    assert "R1" not in links
+
+
+def test_a_size_belongs_to_the_component_it_stands_beside():
+    assert cs.stated_item_size("ID LABEL", "30 × 15 tube with an ID label fitted") is None
+    assert cs.stated_item_size(
+        "TRANSPARENT IDENTIFICATION LABEL",
+        "30 x 15 x 1.5mm flat-sided oval tube with a transparent identification label fitted") is None
+    assert cs.stated_item_size("ID LABEL", "ID label, 30 x 15 tube") is None, "the tube's section"
+    assert cs.stated_item_size("UPC ID PLATE", "one UPC ID plate (20 x 10 mm), bought in") == [20, 10]
+    assert cs.stated_item_size("UPC ID PLATE", "a 20 x 10 mm UPC ID plate") == [20, 10]
+
+
+def test_a_label_in_the_tubes_sentence_is_not_named_or_researched_at_the_tubes_size():
+    brief = ("Hook bar, 1000 off. 30 x 15 x 1.5mm flat-sided oval tube with a transparent "
+             "identification label fitted. Brackets TIG welded to the tube.")
+    answer = _answer()
+    answer["parts"][3]["name"] = "TRANSPARENT IDENTIFICATION LABEL"
+    label = next(p for p in cs.parts_from_concept(answer, STEM, brief=brief)
+                 if p["part_number"] == L)
+    assert label["description"] == "TRANSPARENT IDENTIFICATION LABEL"
+    assert not label.get("concept_stated_size_mm")
+    plate = dict(answer["parts"][3], name="UPC ID PLATE")
+    answer["parts"][3] = plate
+    rec = next(p for p in cs.parts_from_concept(answer, STEM, brief=brief + " One UPC ID plate "
+                                                "(20 x 10 mm), bought in.") if p["part_number"] == L)
+    assert rec["description"] == "UPC ID PLATE 20 x 10 MM" and rec["concept_stated_size_mm"] == [20, 10]
+
+
+def _weld_row(s):
+    return next(r for r in s["final_estimate"]["labour_rows"] if r["workbook_row"] == 155)
+
+
+def test_a_generic_co2_charge_leaves_a_stated_tig_unresolved():
+    s = _book()
+    row = _weld_row(s)
+    row["dept_rate_gbp_per_hour"] = 41.77
+    # The row's DESCRIPTION names the stated TIG beside the rate it rides on (D-393); that is
+    # not a TIG rate, and it must not read as one.
+    row["description"] = ("Weld (CO2) [TIG per the enquiry brief; charged at the Weld (CO2) "
+                          "rate, the card's one arc-weld row — confirm]")
+    e = next(e for e in rcc.audit(s)["items"] if e["id"] == "S.weld_process")
+    assert e["state"] == rcc.UNRESOLVED
+    assert "'Weld (CO2)' (£41.77/h)" in e["how"] and "a CO2/MIG rate, not a TIG rate" in e["how"]
+
+
+def test_an_evidenced_tig_charge_satisfies_a_stated_tig():
+    s = _book()
+    s["final_estimate"]["labour_rows"] = [dict(r, operation="Weld (TIG)", dept_rate_gbp_per_hour=48.0)
+                                          if r["workbook_row"] == 155 else r
+                                          for r in s["final_estimate"]["labour_rows"]]
+    e = next(e for e in rcc.audit(s)["items"] if e["id"] == "S.weld_process")
+    assert e["state"] == rcc.COVERED and "'Weld (TIG)' (£48.00/h) is a TIG rate" in e["how"]
+
+
+def test_a_shared_mig_tig_row_is_evidence_for_neither():
+    s = _book()
+    _weld_row(s)["operation"] = "Welding (MIG/TIG)"
+    assert _state(rcc.audit(s), "S.weld_process") == rcc.UNRESOLVED
+    assert rcc._rate_processes({"title": "Welding (MIG/TIG)", "ops": {"welding"}}) == set()
+    assert rcc._rate_processes({"title": "Weld (CO2)", "ops": {"welding"}}) == {"CO2", "MIG"}
+
+
+def _with_print_set(text, answer=None):
+    answer = answer or _answer()
+    answer["print_sets"] = [text]
+    return answer
+
+
+def test_a_print_set_that_describes_the_label_stays_open_and_names_it():
+    answer = _with_print_set("identification label printed with the part number")
+    s = _book(answer=answer)
+    e = next(e for e in rcc.audit(s)["items"] if e["id"] == "PS1")
+    assert e["state"] == rcc.UNRESOLVED and e["relates_to"] == ["R4"]
+    assert "R4 'IDENTIFICATION LABEL'" in e["how"] and "separate printing or application" in e["how"]
+    # A priced graphic line elsewhere does not settle what this print set is.
+    s["manufacturing_writeup"]["parts"].append({"part_number": f"{STEM}-CPT09",
+                                                "concept_kind": "graphic", "concept": True})
+    s["final_estimate"]["material_rows"].append({"part_code": f"{STEM}-CPT09", "qty_per_unit": 1,
+                                                 "total_value_gbp": 4.0, "charged_cell": "Estimate!M19"})
+    assert _state(rcc.audit(s), "PS1") == rcc.UNRESOLVED
+
+
+def test_shared_coverage_of_a_print_set_is_a_ruling_on_a_priced_line():
+    s = _ruled(_book(answer=_with_print_set("identification label printed with the part number")),
+               {"PS1": {"ruling": "covered", "covered_by": L,
+                        "reason": "the label is bought printed; one line carries both"}})
+    e = next(e for e in rcc.audit(s)["items"] if e["id"] == "PS1")
+    assert e["state"] == rcc.COVERED and "one line carries both" in e["how"]
+    next(m for m in s["final_estimate"]["material_rows"] if m.get("part_code") == L)[
+        "total_value_gbp"] = 0.0
+    assert _state(rcc.audit(s), "PS1") == rcc.UNRESOLVED, "an unpriced line covers nothing"
+
+
+def test_the_1715_book_after_d596e_clears_the_false_finding_and_keeps_the_real_ones():
+    """The old book's shape: records from before the read ID, the label renamed with the tube's
+    size, TIG named only in the CO2 row's description, no hole row, no plating line, a ticket
+    holder and four screws bought, and a print set that describes the label.
+
+    Before: R4 'no record' (a false missing label) and no weld-process item at all.
+    After: the label links by name with the rename shown; TIG fails against the CO2 rate; the
+    hole, the finish, the purchases and the print set stay held."""
+    answer = _with_print_set("identification label printed with the part number")
+    s = _old(_book(answer=answer, hole_row=False, plating=False, allowances=False,
+                   bought_extras=True))
+    next(p for p in s["manufacturing_writeup"]["parts"] if p["part_number"] == L)[
+        "description"] = "IDENTIFICATION LABEL 30 x 15 x 1.5 MM"
+    _weld_row(s)["description"] = "Weld (CO2) [TIG per the enquiry brief; charged at the Weld (CO2) rate]"
+    s["read_ledger"] = rcc.capture(answer, records=s["manufacturing_writeup"]["parts"], brief=BRIEF)
+    r = rcc.audit(s)
+    by = {e["id"]: e for e in r["items"]}
+    assert by["R4"]["state"] == rcc.CHARGED and by["R4"]["link"] == "name"
+    assert by["R4"]["renamed_to"] == "IDENTIFICATION LABEL 30 x 15 x 1.5 MM"
+    assert by["S.weld_process"]["state"] == rcc.UNRESOLVED and "not a TIG rate" in by["S.weld_process"]["how"]
+    assert by["R1.op.hole_machining"]["state"] == rcc.UNRESOLVED
+    assert by["S.finish"]["state"] == rcc.UNRESOLVED and by["S.polish"]["state"] == rcc.UNRESOLVED
+    assert by["NV1"]["state"] == rcc.UNRESOLVED and "no supply-scope evidence" in by["NV1"]["how"]
+    assert next(l for l in r["engine_lines"] if l["record"] == f"{STEM}-NV02")["holds"]
+    assert by["PS1"]["state"] == rcc.UNRESOLVED and by["PS1"]["relates_to"] == ["R4"]
+    assert not r["passed"]
