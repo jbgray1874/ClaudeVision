@@ -637,3 +637,19 @@ def test_the_writer_records_no_field_that_nothing_reads():
 
 if __name__ == "__main__":                                            # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ── A SERVICE NAMES WHAT IT SERVES (D-598c) ───────────────────────────────────────────────
+
+def test_a_service_line_naming_the_parts_it_serves_is_not_the_same_article():
+    """0320730's plating line named the tube it plates and was zeroed as the tube's twin."""
+    tube = {"part_number": "1234567-CPT01", "description": "MAIN TUBE 30 x 15 x 1.5 oval tube"}
+    plate = {"part_number": "1234567-CPT00-PLATE", "_plating_placeholder": True,
+             "description": "1234567-CPT00 plating — members 1234567-CPT01, 1234567-CPT02"}
+    freight = {"part_number": "PLATERFREIGHT", "_plater_freight": True,
+               "_commercial_placeholder": True,
+               "description": "Delivery to and from the platers for 1234567-CPT01"}
+    assert sr.same_article_groups([tube, plate, freight]) == []
+    twin = {"part_number": "1234567-CPT09", "description": "spare tube, as 1234567-CPT01"}
+    assert sr.same_article_groups([tube, plate, twin]) == [[0, 2]], \
+        "a made line naming another's number is still grouped"

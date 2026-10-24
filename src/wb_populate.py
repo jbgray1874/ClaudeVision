@@ -6264,9 +6264,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 _dup["description"] = (
                     f"{str(_dup.get('description') or '')[:110]} — SAME ARTICLE AS "
                     f"{_kept_pn}: costed there, not here")
+                _shared = sorted(_sref.identity_keys(_dup) & _sref.identity_keys(bom_parts[_keep]))
                 _flag(f"BOM {_dup.get('part_number')} and {_kept_pn} are the SAME ARTICLE "
-                      f"(both name manufacturer reference "
-                      f"{', '.join(sorted(_sref.identity_keys(_dup)))}). The quantity is "
+                      + (f"(both name manufacturer reference {', '.join(_shared)})" if _shared
+                         else "(one line's description names the other's part number)")
+                      + ". The quantity is "
                       f"costed once, on {_kept_pn}; this line is shown at GBP 0.00 because "
                       f"the drawing names the part twice. CHECK THE QUANTITY — if the two "
                       f"lines are genuinely different fittings, one of them is mis-numbered.",

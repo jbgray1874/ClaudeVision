@@ -445,6 +445,17 @@ def identity_keys(part: Dict[str, Any]) -> Set[str]:
     return keys
 
 
+def _is_a_service_line(part: Dict[str, Any]) -> bool:
+    """A charge for work done to other lines — plating, the plater's carriage, packaging,
+    delivery — whose description names the parts it serves (D-598c). Naming them never makes
+    it one of them: 0320730's plating line named the tube it plates and was zeroed as "the
+    same article" as the tube. The marks are the ones the engine's own stubs carry."""
+    return bool(part.get("_plating_placeholder") or part.get("_plater_freight")
+                or part.get("_commercial_placeholder") or part.get("_commercial_line") is True
+                or (isinstance(part.get("commercial_line"), dict) and part.get("commercial_line"))
+                or part.get("line_kind") == "service")
+
+
 def same_article_groups(parts: Any) -> List[List[int]]:
     """Indices of the lines that name the same article, grouped. Singletons omitted.
 
@@ -465,7 +476,8 @@ def same_article_groups(parts: Any) -> List[List[int]]:
     # A digit is what separates a code from a word. FIXING1081 is a key; FIXING is a noun.
     codes = {str(p.get("part_number") or "").strip().upper(): i
              for i, p in enumerate(rows)
-             if _is_a_code_not_a_word(str(p.get("part_number") or "").strip())}
+             if _is_a_code_not_a_word(str(p.get("part_number") or "").strip())
+             and not _is_a_service_line(p)}
     parent = list(range(len(rows)))
 
     def find(i):
@@ -481,6 +493,8 @@ def same_article_groups(parts: Any) -> List[List[int]]:
 
     by_ref: Dict[str, int] = {}
     for i, p in enumerate(rows):
+        if _is_a_service_line(p):
+            continue
         for key in identity_keys(p):
             if key in by_ref:
                 union(by_ref[key], i)
