@@ -1405,6 +1405,8 @@ def _select_catalogue_section_stock_rate(rows: Any, side_a_mm: Optional[float],
 # Cache the HIPS rate table per-thickness for the duration of one run so we don't
 # re-query UDEF for every HIPS part. Keyed by rounded thickness; value is £/m².
 _SHEET_RATE_CACHE: Dict[Tuple[str, float], Optional[float]] = {}
+# The catalogue rows behind each cached median, under the same key (D-598q).
+_SHEET_RATE_ROWS: Dict[Tuple[Any, ...], List[Dict[str, Any]]] = {}
 
 # The researched £/m² for a board, by family and gauge, for the life of the run. Three parts
 # cut from one sheet must not be researched three times and must not come back with three
@@ -1444,8 +1446,15 @@ def _plain_stock_rates_gbp_per_m2(rows: Iterable[Any], token: str,
     # THE TOKEN AS A WHOLE WORD. SQL LIKE cannot say "word boundary", so '%ABS%' comes back
     # with every ABSORBER, ABSOLUTE and GLASSBOARD in the catalogue -- and a median built from
     # those is not wrong-looking, it is simply wrong, with nothing on the sheet to say so.
+    return [r["gbp_per_m2"] for r in _plain_stock_rows(rows, token, thickness_key)]
+
+
+def _plain_stock_rows(rows: Iterable[Any], token: str,
+                      thickness_key: float) -> List[Dict[str, Any]]:
+    """The same filter, keeping each answering row's code and description (D-598q), so the
+    estimate can say which catalogue rows its median came from."""
     word_re = re.compile(rf"\b{re.escape(token)}\b")
-    rates: List[float] = []
+    kept: List[Dict[str, Any]] = []
     for r in rows or ():
         try:
             desc = str(r[1] or "")
@@ -1473,8 +1482,9 @@ def _plain_stock_rates_gbp_per_m2(rows: Iterable[Any], token: str,
         rate = cost / area_m2
         if rate <= 0 or rate > _SHEET_RATE_MAX_GBP_PER_M2:
             continue
-        rates.append(rate)
-    return rates
+        kept.append({"part_code": str(r[0] or "") if len(r) > 0 else "",
+                     "description": desc, "gbp_per_m2": rate})
+    return kept
 
 
 def _commercial_order_quantity(summary: Any) -> int:
@@ -2608,9 +2618,12 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
                   else (_token, _t_key))
     if _cache_key in _SHEET_RATE_CACHE:
         _cached = _SHEET_RATE_CACHE[_cache_key]
+        _rows_cached = _SHEET_RATE_ROWS.get(_cache_key)
         return None if _cached is None else {
             "rate_gbp_per_m2": _cached, "thickness_mm": _t_key, "material_token": _token,
-            "sample_count": None, "basis": f"udef_{_token.lower()}_median_cached",
+            "sample_count": len(_rows_cached) if _rows_cached else None,
+            "rows": _rows_cached,
+            "basis": f"udef_{_token.lower()}_median_cached",
             "product_reference_match": _token in {p[0] for p in _ref_probes},
         }
 
@@ -2624,6 +2637,7 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
     # ANSWERS WINS. Never pooled: two spellings can be two different boards, and a median
     # across them would be one rate answering two questions.
     rates: List[float] = []
+    _matched: List[Dict[str, Any]] = []
     _used, _needed = _token, None
     try:
         cur = cn.cursor()
@@ -2640,9 +2654,10 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
             if _require:
                 _rows = [r for r in _rows
                          if _require in str(r[1] if len(r) > 1 else "").upper()]
-            _r = _plain_stock_rates_gbp_per_m2(_rows, _try_token, _t_key)
-            if _r:
-                rates, _used, _needed = _r, _try_token, _require
+            _kept = _plain_stock_rows(_rows, _try_token, _t_key)
+            if _kept:
+                rates, _used, _needed = [k["gbp_per_m2"] for k in _kept], _try_token, _require
+                _matched = _kept
                 break
     except Exception:
         rates = []
@@ -2658,11 +2673,15 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
     import statistics as _stats
     _median = round(_stats.median(rates), 2)
     _SHEET_RATE_CACHE[_cache_key] = _median
+    _SHEET_RATE_ROWS[_cache_key] = _matched
     return {
         "rate_gbp_per_m2": _median,
         "thickness_mm": _t_key,
         "material_token": _used,
         "sample_count": len(rates),
+        # WHICH ROWS (D-598q): the median is only as good as the rows behind it, and the
+        # estimate has to be able to name them.
+        "rows": _matched,
         # Whether the rows that answered carry the drawing's own product reference (the
         # exact product) or only the material word (the class).
         "product_reference_match": _used in {p[0] for p in _ref_probes},
@@ -6365,6 +6384,32 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             _hips_dims = _hips_sheet_est.get("candidate_sheet_size_mm") or [3050.0, 2050.0]
             _hips_sheet_area_m2 = (float(_hips_dims[0]) * float(_hips_dims[1])) / 1_000_000.0
             _hips_pps = _hips_sheet_est.get("parts_per_sheet")
+            # A STATED GRADE PRICED FROM ITS CLASS IS ASKED (D-598q). 9287-10-005's own sheet
+            # prints HANEX GAD-001; the catalogue answered for the word SURFACE at 12 mm, a
+            # median over whatever solid surface it holds, and nothing on the book said so.
+            # A real rate, and not yet the stated product's.
+            _cat_rows = list(_hips_rate.get("rows") or [])
+            _cat_token = str(_hips_rate.get("material_token") or "").upper()
+            _cat_seen = "; ".join(f"{r.get('part_code') or ''} {r.get('description') or ''}".strip()
+                                  for r in _cat_rows[:3])
+            _stated = str(part.get("material_stated") or "").strip()
+            if (_stated and _cat_token and not _hips_rate.get("product_reference_match")
+                    and _cat_token not in _stated.upper()
+                    and not any(isinstance(q, dict) and q.get("subject") == "catalogue_class_rate"
+                                for q in part.get("manufacturing_questions") or [])):
+                part.setdefault("manufacturing_questions", []).append({
+                    "issue": (f"Is £{_rate_m2:.2f}/m² right for {part.get('part_number')}'s "
+                              f"{_stated}?"),
+                    "assumption": (f"priced from the median of "
+                                   f"{_hips_rate.get('sample_count') or len(_cat_rows) or 'the'} "
+                                   f"SDI catalogue row(s) for '{_cat_token}' at "
+                                   f"{_hips_rate.get('thickness_mm') or thickness}mm"
+                                   + (f" ({_cat_seen})" if _cat_seen else "")
+                                   + f", not from {_stated} itself"),
+                    "action": f"confirm the rate, or give the price of {_stated}",
+                    "source": "estimator.estimate_material",
+                    "subject": "catalogue_class_rate",
+                })
             return {
                 "material": material,
                 "thickness_mm": thickness,
@@ -6395,10 +6440,16 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 "part_confidence_overall": _part_confidence_overall(part),
                 "part_geometry_reliability": _part_geometry_reliability(part),
                 "reliability_flags": [],
-                "note": "%s sheet cost from LIVE UDEF rate £%.2f/m² (%s plain-stock sample(s) at %.1fmm) × %.4f m² area."
-                        % (_hips_rate.get("material_token") or material, _rate_m2,
-                           _hips_rate.get("sample_count"), _hips_rate.get("thickness_mm") or 0.0,
-                           _acr_area_m2),
+                "note": ("%s sheet cost from LIVE UDEF rate £%.2f/m² (%s plain-stock sample(s) at %.1fmm) × %.4f m² area."
+                         % (_hips_rate.get("material_token") or material, _rate_m2,
+                            _hips_rate.get("sample_count"), _hips_rate.get("thickness_mm") or 0.0,
+                            _acr_area_m2)
+                         + (f" Catalogue rows: {_cat_seen}." if _cat_seen else "")),
+                # The rows behind the median and whether they are the drawing's own product
+                # or only its class (D-598q).
+                "catalogue_rows": _cat_rows[:10],
+                "catalogue_token": _cat_token,
+                "catalogue_product_match": bool(_hips_rate.get("product_reference_match")),
                 "price_source": _build_price_source_metadata(
                     {}, fallback_source="sheet_rate_live_udef",
                     applied=True, applied_basis=(_hips_rate.get("basis")

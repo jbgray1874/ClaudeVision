@@ -1763,9 +1763,14 @@ def check_a_material_we_cannot_price_is_declared(summary: Any) -> List[Dict[str,
         # job cannot go out firm on it -- check_prices_are_firm sees the stamp and says so.
         # What remains is the thing an estimator has to know: this figure is not a supplier
         # price and nobody has agreed to it.
-        indication = part.get("material_market_indication")
+        # ASKED OF THE COSTED ROW (D-598q): the raw record carries no material estimate, so on
+        # 9287-10-005 this looked at a part with no cost method and stayed silent over a sheet
+        # price that was an AI lookup.
+        _priced = _costed_rows.get(str(part.get("part_number") or "").strip().upper()) or part
+        indication = (_priced.get("material_market_indication")
+                      or part.get("material_market_indication"))
         if isinstance(indication, dict) and indication.get("gbp_per_m2") and \
-                str((part.get("material_estimate") or {}).get("cost_method") or "") == \
+                str((_priced.get("material_estimate") or {}).get("cost_method") or "") == \
                 "llm_market_sheet_rate":
             indicated.append({
                 "part_number": part.get("part_number"),
@@ -1774,7 +1779,7 @@ def check_a_material_we_cannot_price_is_declared(summary: Any) -> List[Dict[str,
                 "source": indication.get("source"),
             })
             continue
-        conflict = part.get("material_priced_as")
+        conflict = part.get("material_priced_as") or _priced.get("material_priced_as")
         if isinstance(conflict, dict) and conflict.get("priced_material"):
             substituted.append({
                 "part_number": part.get("part_number"),
