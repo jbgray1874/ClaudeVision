@@ -51,6 +51,7 @@ import re
 import subprocess
 import sys
 import threading
+import urllib.parse
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -94,6 +95,7 @@ _PARITY_CLI = str(_REPO_ROOT / "src" / "parity_run.py")
 _PRINT_CLI = str(_REPO_ROOT / "src" / "drawings_print.py")
 _MATERIAL_CLI = str(_REPO_ROOT / "src" / "material_confirmation.py")
 _PRODUCT_CLI = str(_REPO_ROOT / "src" / "product_identity.py")
+_EXTRACT_CLI = str(_REPO_ROOT / "src" / "bom_and_route_extract.py")
 _MAX_OVERRIDE_UPLOAD_BYTES = int(os.getenv("SDI_MAX_OVERRIDE_UPLOAD_MB", "20")) * 1024 * 1024
 
 # Where finished estimates are filed. A DRIVE LETTER IS NOT A LOCATION: K: is the
@@ -3245,10 +3247,13 @@ def recent(x_sdi_key: Optional[str] = Header(default=None), limit: int = 25):
 # returning empty sheets that read as "this pack contains nothing".
 
 class ExtractRequest(BaseModel):
-    """`kind` is which of the three buttons was pressed. The rest mirrors an estimate request
-    so the page can send what it already has, and nothing here is required except the files or
-    folder that identify the job."""
+    """`kind` is which of the three buttons was pressed. `run_folder`, or `run_id` for a run
+    this service queued, is the run the estimator CHOSE: an extract is taken from one named
+    run's saved record, never from whichever run happens to be newest (SCRUM-132). The rest
+    mirrors an estimate request so the page can send what it already has."""
     kind: str = "both"
+    run_folder: Optional[str] = None
+    run_id: Optional[str] = None
     job_folder: Optional[str] = None
     files: List[str] = []
     output_root: Optional[str] = None
@@ -3271,6 +3276,57 @@ def _extract_job_label(req: "ExtractRequest") -> str:
     return (req.drawing_number or "").strip() or "job"
 
 
+def _readable_run_folder(raw: str) -> Optional[Path]:
+    """A run folder this service may read: inside the share it files to, or an allowed root."""
+    t = os.path.normcase(os.path.normpath(str(raw)))
+    for root in [str(OUTPUT_ROOT)] + list(getattr(config, "FILE_ROOTS", []) or []):
+        r = os.path.normcase(os.path.normpath(str(root)))
+        if t == r or t.startswith(r + os.sep):
+            return Path(os.path.normpath(str(raw)))
+    return None
+
+
+def _run_records(folder: Path) -> List[Path]:
+    """The run records filed in one run folder: JSON the engine wrote about a job, not the
+    timing file or a copied answers file. The runner files flat, so they sit at the top."""
+    found = []
+    for p in sorted(folder.glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:                                                # noqa: BLE001
+            continue
+        if isinstance(data, dict) and ("estimate_summary" in data
+                                       or "manufacturing_writeup" in data):
+            found.append(p)
+    return found
+
+
+@router.get("/extract/runs")
+def estimate_extract_runs(client: Optional[str] = None, drawing_number: Optional[str] = None,
+                          job: Optional[str] = None,
+                          x_sdi_key: Optional[str] = Header(default=None)):
+    """The saved runs of one drawing, for the estimator to choose from. Newest first, but the
+    choice is theirs: the extract never takes one of these on its own."""
+    _check_key(x_sdi_key)
+    drawing = safe_segment(drawing_number or job or "")
+    if not drawing:
+        raise HTTPException(400, "Give the drawing number to list its saved runs.")
+    root = Path(str(OUTPUT_ROOT))
+    bases = ([root / safe_segment(client) / drawing] if client
+             else sorted(p / drawing for p in root.glob("*") if (p / drawing).is_dir()))
+    runs = []
+    for base in bases:
+        if not base.is_dir():
+            continue
+        for folder in sorted((d for d in base.iterdir() if d.is_dir()), reverse=True):
+            records = _run_records(folder)
+            if records:
+                runs.append({"run_folder": str(folder), "name": folder.name,
+                             "client": base.parent.name,
+                             "records": [p.name for p in records]})
+    return {"drawing": drawing, "runs": runs[:40]}
+
+
 @router.post("/extract")
 def estimate_extract(req: ExtractRequest,
                      x_sdi_key: Optional[str] = Header(default=None)):
@@ -3278,66 +3334,125 @@ def estimate_extract(req: ExtractRequest,
     kind = str(req.kind or "both").strip().lower()
     if kind not in ("boms", "routes", "both"):
         raise HTTPException(400, f"kind must be boms, routes or both — not {req.kind!r}")
-    if not (req.files or req.job_folder):
-        raise HTTPException(400, "No drawings were given. Add the pack in the Drawings panel "
-                                 "first — the extract is taken from that job's saved record.")
 
-    label = _extract_job_label(req)
-    lines: List[str] = [f"Job read as {label}."]
+    # THE RUN THE ESTIMATOR CHOSE, AND ONLY THAT RUN (SCRUM-132). This read
+    # `config.OUTPUT_ROOT`, a name the service's configuration never defined, so every press
+    # was a server error; and it looked for `json/<label>.json` under the share, where the
+    # runner files nothing. Taking "the newest matching folder" instead would quietly extract
+    # from the wrong evidence the day a second run lands, so nothing is chosen for them.
+    raw = (req.run_folder or "").strip()
+    if not raw and req.run_id:
+        with _LOCK:
+            run = _RUNS.get(str(req.run_id))
+        if run is None:
+            raise HTTPException(404, f"Run {req.run_id} is not known to this service — it "
+                                     f"forgets runs when it restarts. Choose the run's "
+                                     f"folder instead.")
+        raw = run.output_path
+    if not raw:
+        raise HTTPException(400, "Choose the run to extract from. The extract is rebuilt from "
+                                 "one run's saved record; it reads no drawings and never "
+                                 "picks a run for you.")
+    folder = _readable_run_folder(raw)
+    if folder is None:
+        raise HTTPException(403, f"{raw} is outside the folders this service may read.")
+    if not folder.is_dir():
+        raise HTTPException(404, f"No run folder at {folder}.")
 
-    # THE RECORD OF THAT JOB'S LAST RUN. Searched under the roots this service is already
-    # allowed to read, so this cannot become a way to open any file on the box.
-    record: Optional[dict] = None
-    found_at = ""
-    candidates: List[Path] = []
-    for root in (config.OUTPUT_ROOT, getattr(config, "ENGINE_ROOT", None)):
-        if not root:
-            continue
-        base = Path(str(root))
-        for rel in (Path("json") / f"{label}.json", Path("output") / "json" / f"{label}.json",
-                    Path(f"{label}.json")):
-            candidates.append(base / rel)
-    for path in candidates:
-        try:
-            if path.is_file():
-                record = json.loads(path.read_text(encoding="utf-8"))
-                found_at = str(path)
-                break
-        except Exception as err:                                         # noqa: BLE001
-            lines.append(f"{path} could not be read: {type(err).__name__}: {err}")
-    if record is None:
-        # NAMED, NOT EMPTY SHEETS. Returning blank tables here would read as "this pack
-        # contains nothing", which is the one answer this feature must never give by accident.
+    records = _run_records(folder)
+    label = safe_segment(req.drawing_number or "") or _extract_job_label(req)
+    if len(records) > 1:
+        named = [p for p in records if p.stem.lower() == label.lower()]
+        if len(named) != 1:
+            raise HTTPException(409, f"{folder.name} holds {len(records)} run records ("
+                                     + ", ".join(p.name for p in records)
+                                     + ") and none is named for this drawing alone. Nothing "
+                                       "was guessed.")
+        records = named
+    if not records:
+        # NAMED, NOT EMPTY SHEETS. Blank tables would read as "this pack contains nothing",
+        # which is the one answer this feature must never give by accident.
         raise HTTPException(
-            404,
-            f"No saved record found for {label}, so there is nothing to extract yet. The BOMs "
-            f"and the routes are produced by a run: press SDI (UK) Intelligence Estimator "
-            f"once for this pack and the extracts are written with it — then this button "
-            f"rebuilds them instantly, as often as you like.")
-    lines.append(f"Read from {found_at}.")
-
-    out_dir = Path(str(req.output_root or config.OUTPUT_ROOT)) / "estimates"
+            404, f"{folder.name} holds no saved run record, so there is nothing to extract. "
+                 f"A run that stopped before its record was written has none.")
+    record_path = records[0]
     try:
-        sys.path.insert(0, str(Path(getattr(config, "ENGINE_ROOT", ".")) / "src"))
-        import bom_and_route_extract as _bre
-        result = _bre.write_both(record, out_dir, job=label, want=kind)
+        record = json.loads(record_path.read_text(encoding="utf-8"))
     except Exception as err:                                             # noqa: BLE001
-        raise HTTPException(500, f"The extract could not be built: "
+        raise HTTPException(422, f"{record_path.name} could not be read: "
                                  f"{type(err).__name__}: {err}")
+    job = str(record.get("job_output_stem") or record_path.stem)
+    built = record.get("build_stamp") or {}
+    lines: List[str] = [
+        f"Run {folder.name}, record {record_path.name}.",
+        f"Record written {record.get('processed_at') or 'at a time it does not state'}.",
+        ("Build " + str(built.get("line") or built.get("commit"))) if built
+        else "Build: not recorded in this record.",
+        "Reads no drawings and prices nothing: every figure is the saved run's."]
 
-    # WHAT THE RECORD CAN AND CANNOT SUPPORT, said here rather than left to be inferred from
-    # an empty sheet. A record that never reached the workbook stage has no route rows, and
-    # that is a fact about the record — not about the pack.
+    # THE RUN'S OWN FILES FIRST. Every run writes its BOMs and routes beside its record, with
+    # the full engine, at the time; the runner files them flat in the run folder under the names
+    # the record lists. Those are this run's evidence exactly, and serving them needs nothing on
+    # this server but the share.
+    own: Dict[str, Path] = {}
+    for k in ("xlsx", "html"):
+        listed = str(((record.get("saved_output_paths") or {}).get(f"boms_and_routes_{k}")) or "")
+        name = re.split(r"[\\/]", listed)[-1] if listed else ""
+        if name and (folder / name).is_file():
+            own[k] = folder / name
+    if len(own) == 2:
+        result: Dict[str, Any] = {"xlsx": str(own["xlsx"]), "html": str(own["html"]),
+                                  "boms": None, "routes": None}
+        lines.append("These are the files the run itself wrote, from this record.")
+        if kind != "both":
+            lines.append(f"The {'BOMs' if kind == 'boms' else 'routes'} are the "
+                         f"{'BOMs' if kind == 'boms' else 'Routes'} sheet of that workbook.")
+    else:
+        # REBUILT OUT OF PROCESS, in the engine's own Python, like the override and parity
+        # helpers. The extract reaches into engine modules that load the engine's `config`;
+        # inside this service that name is the service's own, so loading them here would either
+        # quietly degrade the file or bind the wrong settings. Derived files never go into the
+        # run folder: they are written beside it, under the same client and drawing.
+        root = Path(str(OUTPUT_ROOT))
+        try:
+            out_dir = root / "_extracts" / folder.relative_to(root)
+        except ValueError:
+            out_dir = folder.parent / f"{folder.name} extracts"
+        if not Path(_ENGINE_PYTHON).exists():
+            raise HTTPException(503, f"{folder.name} has no extract files of its own, and "
+                                     f"rebuilding them needs the engine's Python, which is not "
+                                     f"at {_ENGINE_PYTHON} on this machine. Set "
+                                     f"SDI_ENGINE_PYTHON, or rebuild on the estimating laptop.")
+        cmd = [_ENGINE_PYTHON, _EXTRACT_CLI, "--record", str(record_path), "--out", str(out_dir),
+               "--job", job, "--want", kind]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180,
+                                  cwd=str(_REPO_ROOT))
+        except subprocess.TimeoutExpired:
+            raise HTTPException(504, "The extract took longer than three minutes and was stopped.")
+        try:
+            result = json.loads((proc.stdout or "").strip().splitlines()[-1])
+        except Exception:                                                # noqa: BLE001
+            result = {}
+        if proc.returncode != 0 or result.get("error") or not (result.get("xlsx")
+                                                                or result.get("html")):
+            why = result.get("error") or (proc.stderr or proc.stdout or "").strip()[-400:]
+            raise HTTPException(500, f"The extract could not be built: {why}")
+        lines.append("Rebuilt from this record by the engine; the run wrote no extract files.")
+
+    # WHAT THE RECORD CAN AND CANNOT SUPPORT, said here rather than left to an empty sheet.
     if kind in ("routes", "both") and not result.get("routes"):
-        lines.append(
-            "This record carries NO route decisions. That is a "
-            "fact about the record, not about the pack"
-            " — a run whose workbook stage did not complete has none. See money_provenance "
-            "on the estimate, which says why.")
+        lines.append("This record carries NO route decisions. That is a "
+                     "fact about the record, not about the pack"
+                     " — a run whose workbook stage did not complete has none. See "
+                     "money_provenance on the record, which says why.")
     if kind in ("boms", "both") and not result.get("boms"):
         lines.append("This record carries NO BOM rows.")
-    lines.append("Prices nothing: no figure in either file is a cost.")
-    return {"ok": True, "kind": kind, "job": label, "record": found_at,
+    files = [f for f in (result.get("xlsx"), result.get("html")) if f]
+    return {"ok": True, "kind": kind, "job": job, "run_folder": str(folder),
+            "record": str(record_path), "processed_at": record.get("processed_at"),
             "xlsx": result.get("xlsx"), "html": result.get("html"),
-            "boms": result.get("boms"), "routes": result.get("routes"),
-            "lines": lines}
+            "downloads": [{"name": Path(f).name,
+                           "url": "/api/file?path=" + urllib.parse.quote(str(f))}
+                          for f in files],
+            "boms": result.get("boms"), "routes": result.get("routes"), "lines": lines}

@@ -900,15 +900,24 @@
          these finish in a fraction of the time an estimate takes and can be run on a pack before
          anybody commits to costing it. -->
     <section class="card" id="extractCard">
-      <h2>Extracts — what is in the pack</h2>
-      <p class="sub" style="margin:0 0 12px">Reads the drawings listed in <b>Drawings</b> above
-        and writes a spreadsheet and a page to the same output folder. <b>Prices nothing.</b>
+      <h2>Extracts — from a saved run</h2>
+      <p class="sub" style="margin:0 0 12px">Rebuilt from the saved record of <b>one run you
+        choose</b>: it reads no drawings and runs nothing, so it shows what that run read, not
+        what the pack holds today. <b>Prices nothing.</b>
         Every column says where it came from and what it does mean.</p>
       <!-- .exgrid, and it has a rule behind it — see the stylesheet. The first version of this
            used a bare `row` class that this page does not define, which renders as nothing
            without erroring; caught by the page's own component test. The flex row that replaced
            it was no better in practice, because .btn-run is width:100% and each button took a
            whole line anyway. -->
+      <!-- THE RUN IS CHOSEN, NEVER ASSUMED (SCRUM-132). The service lists the drawing's saved
+           runs, newest first; the extract is taken from the one selected here and from nothing
+           else, so a second run landing in the folder cannot quietly change what it shows. -->
+      <div class="field">
+        <label for="exRun">Saved run</label>
+        <select id="exRun"><option value="">Press Find saved runs, then choose one</option></select>
+        <button type="button" id="exFind" class="btn-measure">Find saved runs</button>
+      </div>
       <div class="exgrid">
         <button class="btn-run" id="exBoms" disabled
                 title="Every parts-list row, with the page it was read from and the reader that read it.">
@@ -1987,16 +1996,18 @@ function refresh(){
      no Excel, no client, no quantity, no drawing number. So they want drawings and a runner
      (the drawings are on the runner's side of the wire) and nothing else — asking for a client
      before somebody can see what is IN a pack is the wrong way round. */
+  /* A SAVED RUN, AND NOTHING ELSE (SCRUM-132). The extract reads one run's saved record on
+     the service; it needs no drawings and no runner, only the run the estimator chose. */
   const exMissing = [];
-  if(!drawings.length)  exMissing.push("at least one drawing");
-  if(!runnersOnline)    exMissing.push("an estimating runner (none connected)");
+  const exRunSel = document.getElementById("exRun");
+  if(!exRunSel || !exRunSel.value) exMissing.push("a saved run, chosen above");
   [["exBoms","parts-list rows"],["exRoutes","route decisions"],
    ["exBoth","both, in one workbook"]].forEach(([id, what]) => {
     const b = document.getElementById(id);
     if(!b) return;
     b.disabled = running || exMissing.length > 0;
     b.title = exMissing.length ? "Still needed: " + exMissing.join(", ")
-            : "Reads the drawings above and writes " + what + " — prices nothing";
+            : "Rebuilds " + what + " from the chosen run's saved record — prices nothing";
   });
   runBtn.textContent = running ? "Estimating…" : "SDI (UK) Intelligence Estimator";
   // Offered only while there is something to stop, so it cannot be pressed against a run
@@ -3071,20 +3082,20 @@ function setStatus(cls, text){ dot.className = "dot " + cls; statusText.textCont
    was IN the pack either. */
 async function runExtract(kind, label){
   const out = document.getElementById("exOut");
-  const folder = drawings.find(d => d.is_dir);
+  const runSel = document.getElementById("exRun");
+  const runFolder = runSel ? runSel.value : "";
   line("");
   line("── " + label + " ──");
-  line("Reading " + drawings.length + " drawing file(s). No pricing, no workbook.");
-  line("Output → " + (destination() || OUTPUT_ROOT));
+  if(!runFolder){
+    line("Choose the saved run first: press Find saved runs and pick one.");
+    if(out) out.textContent = label + ": choose a saved run first";
+    return;
+  }
+  line("From the saved run " + runFolder.split(/[\\/]/).pop() + ". Reads no drawings; prices nothing.");
   if(out) out.textContent = label + ": working…";
   const body = {
     kind: kind,
-    job_folder: folder ? folder.path : null,
-    files: drawings.filter(d => !d.is_dir).map(d => d.path),
-    output_root: OUTPUT_ROOT,
-    // Carried when they happen to be filled, because they name the output folder — but never
-    // REQUIRED, because needing a client before you can see what is in a pack is the wrong way
-    // round. The service falls back to the pack's own name.
+    run_folder: runFolder,
     client: safe(client.value) || null,
     drawing_number: safe(drawing.value) || null
   };
@@ -3093,40 +3104,65 @@ async function runExtract(kind, label){
       headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
     if(!r.ok){
-      /* SAID, NOT SWALLOWED. A button that goes quiet on a 404 teaches people it is broken and
-         they stop pressing it; one that says the service has not been updated yet sends them to
-         the right person. */
-      const why = j.detail || j.error || (r.status === 404
-        ? "this service does not have the /api/extract endpoint yet — it needs the deploy that "
-        + "added it" : "HTTP " + r.status);
+      /* SAID, NOT SWALLOWED. Each refusal names its reason: no run chosen, no record in it, two
+         records, a folder outside the shares, or a build that failed. */
+      const why = j.detail || j.error || ("HTTP " + r.status);
       line("EXTRACT REFUSED — " + why);
       if(out) out.textContent = label + " refused: " + why;
       return;
     }
     (j.lines || []).forEach(line);
-    const wrote = [j.xlsx, j.html].filter(Boolean);
-    if(wrote.length){
-      line("saved " + wrote.length + " file(s):");
-      wrote.forEach(f => line("   " + f));
-    }
     if(typeof j.boms === "number")   line(j.boms + " BOM row(s)");
     if(typeof j.routes === "number") line(j.routes + " route decision(s)");
+    const downloads = j.downloads || [];
     if(out){
       out.innerHTML = "";
-      wrote.forEach(f => {
+      /* THROUGH THE PORTAL, NOT A FILE LINK. A file link opens only on a machine that maps the
+         share the same way; /api/file serves it to anyone signed in, under the same roots. */
+      downloads.forEach(d => {
         const a = document.createElement("a");
-        a.href = "file:///" + String(f).replace(/\\/g, "/");
-        a.textContent = String(f).split(/[\\/]/).pop();
+        a.href = d.url || ("/api/file?path=" + encodeURIComponent(d.path || ""));
+        a.textContent = d.name;
         a.style.marginRight = "12px";
         out.appendChild(a);
       });
-      if(!wrote.length) out.textContent = label + ": nothing was written — see the log";
+      if(!downloads.length) out.textContent = label + ": nothing was written — see the log";
     }
   }catch(err){
     line("EXTRACT FAILED — " + (err && err.message ? err.message : String(err)));
     if(out) out.textContent = label + " failed: " + (err && err.message ? err.message : err);
   }
 }
+/* THE DRAWING'S SAVED RUNS, FOR THE ESTIMATOR TO CHOOSE FROM. Listed newest first; none is
+   selected for them. */
+async function findSavedRuns(){
+  const sel = document.getElementById("exRun");
+  const dn = safe(drawing.value) || "";
+  if(!sel) return;
+  if(!dn){ line("Type the drawing number to find its saved runs."); return; }
+  const q = "?drawing_number=" + encodeURIComponent(dn)
+          + (safe(client.value) ? "&client=" + encodeURIComponent(safe(client.value)) : "");
+  try{
+    const r = await api("/api/estimate/extract/runs" + q);
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){ line("Saved runs could not be listed — " + (j.detail || "HTTP " + r.status)); return; }
+    sel.innerHTML = '<option value="">Choose one of ' + (j.runs || []).length + ' saved run(s)</option>';
+    (j.runs || []).forEach(run => {
+      const o = document.createElement("option");
+      o.value = run.run_folder;
+      o.textContent = run.client + " · " + run.name;
+      sel.appendChild(o);
+    });
+    if(!(j.runs || []).length) line("No saved run of " + dn + " was found on the share.");
+  }catch(err){
+    line("Saved runs could not be listed — " + (err && err.message ? err.message : String(err)));
+  }
+  refresh();
+}
+const exFindBtn = document.getElementById("exFind");
+if(exFindBtn) exFindBtn.addEventListener("click", findSavedRuns);
+const exRunPick = document.getElementById("exRun");
+if(exRunPick) exRunPick.addEventListener("change", refresh);
 [["exBoms","boms","SDI Estimating Intel BOMs Extract"],
  ["exRoutes","routes","SDI Estimating Intel Routes Extract"],
  ["exBoth","both","SDI Intel BOMs and Routes"]].forEach(([id, kind, label]) => {

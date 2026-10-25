@@ -1257,3 +1257,26 @@ __all__ = ["SHEETS", "READER_MEANING", "STATUS_MEANING", "WrongJobRecord",
            "route_sheet", "derivation_sheet", "source_declaration",
            "bom_columns_not_recorded", "build_tables", "write_workbook", "write_html",
            "write_both"]
+
+
+if __name__ == "__main__":
+    # THE PORTAL'S REBUILD, IN THE ENGINE'S OWN INTERPRETER (SCRUM-132). The service runs this
+    # out of process for a chosen run that wrote no extract files of its own, so the engine
+    # modules this file reaches for load with the engine's config, never the service's. The
+    # last line printed is the JSON result the service reads.
+    import argparse
+    import json
+    import sys
+
+    _ap = argparse.ArgumentParser(description="Rebuild one saved run's BOMs and routes files.")
+    _ap.add_argument("--record", required=True, help="the run's saved record (JSON)")
+    _ap.add_argument("--out", required=True, help="folder to write the files into")
+    _ap.add_argument("--job", default="", help="the job the files are named for")
+    _ap.add_argument("--want", default="both", choices=("boms", "routes", "both"))
+    _args = _ap.parse_args()
+    try:
+        _summary = json.loads(Path(_args.record).read_text(encoding="utf-8"))
+        print(json.dumps(write_both(_summary, Path(_args.out), job=_args.job, want=_args.want)))
+    except WrongJobRecord as _err:
+        print(json.dumps({"error": str(_err)}))
+        sys.exit(2)

@@ -92,19 +92,23 @@ def test_the_builder_accepts_exactly_those_three_kinds():
 # ── what the page does with the answer ────────────────────────────────────────────────
 
 
-def test_a_missing_endpoint_is_reported_rather_than_going_quiet():
-    """A button that goes silent on a 404 teaches people it is broken and they stop pressing it.
-    One that says the service has not been updated yet sends them to the right person."""
+def test_a_refusal_is_reported_rather_than_going_quiet():
+    """A button that goes silent on a refusal teaches people it is broken and they stop pressing
+    it. Every refusal now carries its own reason from the service (SCRUM-132)."""
     page = _page()
-    assert "does not have the /api/extract endpoint yet" in page
-    assert "EXTRACT REFUSED" in page
+    fn = page[page.index("async function runExtract"):]
+    fn = fn[:fn.index("\n}\n")]
+    assert "EXTRACT REFUSED" in fn and "j.detail" in fn
 
 
 def test_the_output_is_shown_on_screen_and_linked():
-    """Asked for: output in the estimating folder AND on screen, the same way a run reports."""
+    """Asked for: output on screen, linked. Through the portal's own file route, so the link opens
+    for anyone signed in, not only on a machine that maps the share (SCRUM-132)."""
     page = _page()
     assert 'id="exOut"' in page
-    assert "saved " in page and "file(s):" in page
+    fn = page[page.index("async function runExtract"):]
+    fn = fn[:fn.index("\n}\n")]
+    assert "j.downloads" in fn and "/api/file?path=" in fn
 
 
 def test_the_page_never_claims_a_price():
@@ -120,8 +124,7 @@ def test_no_record_is_an_explained_404_not_empty_sheets():
     """Returning blank tables would read as "this pack contains nothing", which is the one answer
     this feature must never give by accident."""
     routes = _routes()
-    assert "nothing to extract yet" in routes
-    assert "press SDI (UK) Intelligence Estimator" in routes, "and names what produces it"
+    assert "holds no saved run record, so there is nothing to extract" in routes
 
 
 def test_an_empty_route_list_is_explained_as_a_fact_about_the_record():
@@ -139,13 +142,14 @@ def test_the_endpoint_needs_no_client_or_quantity():
     assert "client: Optional[str] = None" in model
 
 
-def test_the_buttons_are_gated_on_drawings_and_a_runner_only():
+def test_the_buttons_are_gated_on_a_chosen_saved_run_only():
+    """It reads one run's saved record on the service: no drawings, no runner, no estimate inputs.
+    Only the run the estimator chose (SCRUM-132)."""
     page = _page()
     block = page[page.index("const exMissing"):page.index("runBtn.textContent")]
-    assert "at least one drawing" in block
-    assert "runnersOnline" in block
-    for estimate_only in ("number of units", "client", "drawing number"):
-        assert estimate_only not in block, f"an extract must not require {estimate_only}"
+    assert "a saved run, chosen above" in block
+    for not_needed in ("at least one drawing", "runnersOnline", "number of units"):
+        assert not_needed not in block, f"an extract must not require {not_needed}"
 
 
 # ── every run writes them, so the files are always there ──────────────────────────────
@@ -175,15 +179,16 @@ def test_the_endpoint_cannot_reach_a_replay_fixture():
     routes = _routes()
     block = routes[routes.index("@router.post(\"/extract\")"):]
     block = block[:block.index("return {\"ok\": True")]
-    assert "for root in (config.OUTPUT_ROOT, getattr(config, \"ENGINE_ROOT\", None)):" in block, \
-        "the search roots are the output share and the engine root, and nothing else"
+    # SCRUM-132: the record comes from the ONE run folder the estimator chose, and that folder
+    # must sit inside the share this service files to or an allowed root.
+    assert "folder = _readable_run_folder(raw)" in block
+    assert "records = _run_records(folder)" in block
+    helper = routes[routes.index("def _readable_run_folder"):routes.index("def _run_records")]
+    assert "OUTPUT_ROOT" in helper and "FILE_ROOTS" in helper
     for never in ("tests", "replay", "fixture"):
         assert never not in block, (
             f"the extract endpoint mentions {never!r} — the record it reads must be the job's "
             f"own, produced by a run on this box")
-    # and the relative paths under those roots are the three the engine actually writes
-    for rel in ("Path(\"json\")", "Path(\"output\") / \"json\"", "Path(f\"{label}.json\")"):
-        assert rel in block
 
 
 def test_a_record_found_is_named_in_the_answer():
@@ -191,8 +196,8 @@ def test_a_record_found_is_named_in_the_answer():
     turned on exactly this: a probe was run against tests/replay/7332-01 and read as a failed
     freeze of the live job, because nothing on the output said which file had been opened."""
     routes = _routes()
-    assert 'lines.append(f"Read from {found_at}.")' in routes
-    assert '"record": found_at' in routes, "and it is in the payload, not only the console"
+    assert 'f"Run {folder.name}, record {record_path.name}."' in routes
+    assert '"record": str(record_path)' in routes, "and it is in the payload, not only the console"
 
 
 # ── laid out, not stacked ─────────────────────────────────────────────────────────────
