@@ -157,12 +157,14 @@ from dxf_probe import probe_dxf                                          # noqa:
 
 MM, INCH, UNITLESS = 4, 1, 0
 
-# The corpus DXFs are not in the repo, so anything asserting against them skips on a fresh
-# checkout. Every behaviour they cover is also proved on a synthetic file built in-test.
-UPLOADS = Path("/root/.claude/uploads/09b98f42-bd9e-534a-8993-f8eb3975326c")
+# The corpus DXFs are customer drawings and not in the repo, so anything asserting against them
+# skips, by name, where SDI_PRIVATE_CORPUS does not hold them (SCRUM-137). Every behaviour they
+# cover is also proved on a synthetic file built in-test.
+from private_evidence import corpus_file, missing_reason                 # noqa: E402
+
 real_dxf = pytest.mark.skipif(
-    not (UPLOADS / "f124e9e8-117620202M_0.9mm_MS_revA.DXF").exists(),
-    reason="corpus DXFs not present in this checkout")
+    corpus_file("f124e9e8-117620202M_0.9mm_MS_revA.DXF") is None,
+    reason=missing_reason("the corpus DXFs"))
 
 
 def _dxf(tmp_path: Path, name: str, build, insunits: int = MM) -> Path:
@@ -442,8 +444,8 @@ def test_the_corpus_bend_counts_are_exact():
     for name, expected in (("f124e9e8-117620202M_0.9mm_MS_revA.DXF", 5),
                            ("3c321a99-117621702M_2MM_MS_RevA.DXF", 2),
                            ("f421e02c-1097502A01_2mm_ACRY_Rev_B.DXF", 2)):
-        path = UPLOADS / name
-        if path.exists():
+        path = corpus_file(name)
+        if path is not None:
             assert probe_dxf(path)["candidate_fold_axes"] == expected, name
 
 

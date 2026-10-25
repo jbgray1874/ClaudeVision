@@ -8,7 +8,10 @@ Each subdirectory is one estimator-REVIEWED job. It holds:
   to skip with a loud message and the message was not loud: four skips inside a 4,600-test
   run is indistinguishable from four passes, and both packs here sat unprotected for weeks
   while every push reported green. Set `SDI_REPLAY_ALLOW_MISSING=1` to downgrade that to a
-  skip while working on a checkout without the packs; **CI must never set it**.
+  skip while working on a checkout without the packs. **A frozen record is job data and is
+  never committed** (SCRUM-137), so GitHub CI cannot hold one: it sets the opt-out and
+  prints every such skip by name (`-rs`). The laptop's acceptance run, which holds the
+  records, must never set it: there a missing record is a failure (SCRUM-134, SCRUM-135).
 - `provenance.json` — who accepted this record, when, and where it came from. Required
   whenever `summary.json` is present; see `provenance.template.json`. A baseline nobody can
   attribute cannot be audited.
