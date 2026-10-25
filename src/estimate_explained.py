@@ -1036,6 +1036,19 @@ def _split_by_firmness(bom: List[Dict[str, Any]], record: Optional[Dict[str, Dic
             market.append(r)
         elif code in house_codes:
             house.append(r)
+    # A NESTED LINE IS A LINE (D-598t, SCRUM-76). The solid-surface top costed on the Other
+    # Sheet Material block has no Bill of Materials row, so the walk above never met it, and
+    # "What must be replaced?" said no line rests on a market price beside the record's own
+    # "1 market figure to replace (£8.24)". The record classes it; it is named from the record.
+    met = {str((_record_line(record, r) or {}).get("part_number") or r.get("code") or "").upper()
+           for r in house + market}
+    for codes, into in ((market_codes, market), (house_codes, house)):
+        for code in sorted(codes - met):
+            line = (record or {}).get(code) or {}
+            into.append({"code": code, "text": f"{code} {line.get('description') or ''}".strip(),
+                         "price": line.get("charged_unit_gbp"),
+                         "qty": line.get("qty_per_unit"), "supplier": "",
+                         "nested_block": line.get("block") or ""})
     return house, market
 
 
@@ -3203,8 +3216,11 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                        f"drawing pack attached.")
         return {"subject": _empty_subject, "html": _empty_html, "text": _empty_text}
 
+    # A RULING IS A DECISION THAT NEEDS YOU TOO (D-598t). 9439-07-04's 09:10 note listed the
+    # manufacturing decisions only, so the TIG rate, the glue stages, the bar's purchase basis
+    # and the coating allowance the report asked for reached the e-mail as nothing.
     _mfg = [d for d in ((record or {}).get("decisions_required") or [])
-            if isinstance(d, dict) and d.get("kind") == "manufacturing_decision"]
+            if isinstance(d, dict) and d.get("kind") in ("manufacturing_decision", "ruling")]
     _state = "PROVISIONAL. " if provisional else ""
     # THE ONE TALLY in the subject line too — the same phrase as the report banner, the
     # explanation and the quote's draft strip, so the e-mail cannot count the same open
@@ -3700,7 +3716,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         if not needs_a_person:
             add(f"<h3>5. {_plural(len(_mfg), 'decision')} that need you</h3>")
         else:
-            add(f"<h4>And {_plural(len(_mfg), 'manufacturing decision')} still open</h4>")
+            add(f"<h4>And {_plural(len(_mfg), 'decision')} still open</h4>")
         add(_table(["Decision", "Part", "Current assumption", "Action", "£ at stake"],
                    [[str(d.get("issue") or ""), str(d.get("part") or "—"),
                      str(d.get("assumption") or ""), str(d.get("action") or ""),

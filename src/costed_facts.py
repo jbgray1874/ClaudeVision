@@ -3307,6 +3307,24 @@ def costed_job(source: Any) -> Dict[str, Any]:
             _qrow["operations"] = [str(o) for o in _asks if o]
         return _qrow
 
+    # A QUESTION STRONGER EVIDENCE HAS ANSWERED IS RETIRED, NOT ASKED (D-598t, SCRUM-100).
+    # 9439-07-04-03M, 25 Oct: the parts-list reader asked about a '5 x 5mm BAR' row "no
+    # cut-list reading took ... nothing is costed", beside the part's own cut list read as
+    # 5 x 5 x 290 bar and its line charged. Raised before that reading existed; it stands
+    # only where the owned reading does not cover the row.
+    try:
+        from owned_route_evidence import bar_covers_row as _bar_covers   # noqa: PLC0415
+    except Exception:                                                # pragma: no cover
+        _bar_covers = None
+    _pages_q = (source.get("pages") or []) if isinstance(source, Mapping) else []
+
+    def _answered(part: Mapping[str, Any], mq: Mapping[str, Any]) -> bool:
+        if _bar_covers is None or str(mq.get("source") or "") != \
+                "bom_pipeline.raise_unread_parts_list_rows":
+            return False
+        _row = re.search(r"section row, '([^']*)'", str(mq.get("issue") or ""))
+        return bool(_row and _bar_covers(part, _pages_q, _row.group(1)))
+
     def _questions_of(part: Mapping[str, Any]) -> None:
         _seen_q: Set[str] = set()
         for _mq in (part.get("manufacturing_questions") or []):
@@ -3314,6 +3332,8 @@ def costed_job(source: Any) -> Dict[str, Any]:
                 continue
             if str(_mq["issue"]) in _seen_q or any(
                     d.get("issue") == _mq["issue"] for d in decisions):
+                continue
+            if _answered(part, _mq):
                 continue
             _seen_q.add(str(_mq["issue"]))
             _dq = _question_decision(part, _mq)
@@ -3453,6 +3473,17 @@ def costed_job(source: Any) -> Dict[str, Any]:
                 if _k and _k.upper() not in _seen_b:
                     _seen_b.add(_k.upper())
                     _bonded.append(_k)
+    # A JOINT THE DRAWING STATES IS NOT ASKED (D-598t, SCRUM-105). 9439-07-04, 25 Oct: the GA
+    # prints "TOP BE SECURED USING HOLT MELT GLUE" and this asked how the top and the frame
+    # are joined, saying no drawing states the joint. Where the bond is printed on the part's
+    # own sheet or an assembly above it, how it is joined is answered; whether two glue rows
+    # are two stages is the owned-route ruling's question.
+    try:
+        from owned_route_evidence import stated_bond as _stated_bond   # noqa: PLC0415
+        if isinstance(source, Mapping):
+            _bonded = [_k for _k in _bonded if not _stated_bond(source, _k)]
+    except Exception:                                                # noqa: BLE001
+        pass
     if _bonded:
         decisions.append({
             "part": ", ".join(_bonded), "kind": "manufacturing_decision",
@@ -3499,9 +3530,26 @@ def costed_job(source: Any) -> Dict[str, Any]:
             if _k not in _ws_recs or (_ws_recs[_k].get("weld_symbols") is None
                                       and _wp.get("weld_symbols") is not None):
                 _ws_recs[_k] = _wp
+    # A WELD ITS OWN SHEET STATES IS DRAWN (D-598t, SCRUM-104). 9439-07-04-101, 25 Oct: the
+    # frame's sheet prints TIG, and this still asked whether the frame is welded at all, the
+    # TIG ruling netted underneath it in this question's words. The process is the drawing's
+    # statement; what stays open is its rate and runs, which the owned-route ruling asks.
+    try:
+        from owned_route_evidence import stated_weld_process as _stated_weld   # noqa: PLC0415
+    except Exception:                                                # pragma: no cover
+        _stated_weld = None
+    _pages_w = (source.get("pages") or []) if isinstance(source, Mapping) else []
+    _weld_stated = {str(_r.get("part_number")).upper()
+                    for _r in list(job_parts(source)) + list(
+                        ((source.get("manufacturing_writeup") or {}).get("parts") or [])
+                        if isinstance(source, Mapping) else [])
+                    if _stated_weld is not None and isinstance(_r, Mapping)
+                    and _r.get("part_number") and _stated_weld(_r, _pages_w)}
     for _tgt, _d in _guessed.items():
         if _tgt.upper() in _weld_asked:
             continue                      # its reader already asked, with the rows' money
+        if _tgt.upper() in _weld_stated:
+            continue
         _wrec = _ws_recs.get(_tgt.upper()) or {}
         _wsc = _wrec.get("weld_symbols")
         _drawn = (_describe_ws(_wsc if isinstance(_wsc, Mapping) else None,
@@ -3946,6 +3994,12 @@ def costed_job(source: Any) -> Dict[str, Any]:
         _hit = (next((d for d in decisions if _row_covers(d, _asm.upper(), _op)), None)
                 or next((d for d in decisions
                          if _row_covers(d, _asm.upper(), _op, _kids)), None))
+        # A RULING THAT SAYS WHAT STANDS AND WHAT TO RULE IS ITS OWN ROW (D-598t). Netted onto
+        # a question on the same part and operation, its requirement was printed in that
+        # question's words: the TIG rate became "confirm it is welded" on 9439-07-04-101.
+        # Only a ruling with no words of its own (the overlap check's) is netted.
+        if det.get("assumption") and det.get("action"):
+            _hit = None
         if _hit is not None:
             _hit["also_ruled_by_check"] = str(v.get("code") or "")
             _ruling_netted += 1
