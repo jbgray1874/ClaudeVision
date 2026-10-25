@@ -3954,8 +3954,12 @@ def costed_job(source: Any) -> Dict[str, Any]:
             "part": _asm or str(v.get("code") or ""), "kind": "ruling",
             "operation": _op, "check_code": str(v.get("code") or ""),
             "issue": _first_sentence(v),
-            "assumption": "both levels stay charged as the route has them",
-            "action": "rule: two real events, or strike one of the charges",
+            # A check may say what stands and what to rule (D-598r); otherwise the overlap
+            # wording this row was written for.
+            "assumption": str(det.get("assumption")
+                              or "both levels stay charged as the route has them"),
+            "action": str(det.get("action")
+                          or "rule: two real events, or strike one of the charges"),
             "owner": "estimator", "gbp_at_stake": None})
 
     # A SIZE READ OFF A PICTURE IS A ROW (D-356 counted it beside the list, never in it).

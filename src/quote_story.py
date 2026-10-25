@@ -700,7 +700,10 @@ def evidence_items(summary: Dict[str, Any], facts: Dict[str, Any]) -> List[Dict[
                        for m in re.finditer(fix_rx, str(p.get("description") or ""), re.I)}))
     welded = sorted(facts["parts_by_dept"].get("Weld") or ())
     if welded:
-        concl = (f"Welded where the pack calls for it — {len(welded)} part line"
+        # A bonding quotation is not evidence of welding, even on the same page.
+        if not re.search(r"\b(?:weld\w*|TIG|MIG)\b", str((q or {}).get('text') or ''), re.I):
+            q = None
+        concl = (f"Welded work is included on {len(welded)} part line"
                  f"{'s' if len(welded) != 1 else ''} — and dressed after welding"
                  + (f"; {len(fix)} fixing line{'s' if len(fix) != 1 else ''} bought in" if fix else "")
                  + ".")
@@ -731,11 +734,11 @@ def evidence_items(summary: Dict[str, Any], facts: Dict[str, Any]) -> List[Dict[
                    + [c.lower() for c in colours])
     if coated:
         how = "Powder coated" if "Powder coat" in coat_kinds else "Painted"
-        concl = (f"{how}, priced by the area actually coated, across {len(coated)} "
+        concl = (f"{how}, priced on the recorded coating-area basis, across {len(coated)} "
                  f"part line{'s' if len(coated) != 1 else ''}"
                  + (f" in {len(colours)} colour{'s' if len(colours) != 1 else ''} "
                     f"({', '.join(c.upper() for c in colours)})" if colours else "")
-                 + "; bought-in parts are not coated.")
+                 + "; confirm any area allowance and coating exclusions before the price is final.")
         bill = (_money(facts, _rows_value(coat) + sum(_num(r.get('total_value_gbp')) or 0
                                                       for r in powder),
                        "Coating {} a unit", "Coating rows on the bill")
