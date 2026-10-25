@@ -111,8 +111,30 @@ class TestOwnedRoutes(unittest.TestCase):
     def test_a_stated_weld_charged_nowhere_is_a_contradiction(self):
         self.assertTrue(audit(summary([part()], [page(text='TIG')], [row('P-1', 'Saw')])))
 
-    def test_no_read_back_is_not_a_missing_charge(self):
-        self.assertFalse(audit(summary([part()], [page(text='TIG')])))
+    def test_an_empty_calculated_labour_table_is_not_a_pass(self):
+        # D-598s: a stamped read-back with no labour rows is a book that charges no weld.
+        s = summary([part()], [page(text='TIG')])
+        self.assertEqual(s['final_estimate']['labour_rows'], [])
+        self.assertTrue(audit(s))
+
+    def test_no_read_back_is_unverified_never_a_pass(self):
+        from invariants import check_owned_route_scope_is_ruled, check_owned_specifications_survive
+        gap = part('GA'); gap['assembly_children'] = ['TOP', 'FRAME']
+        s = dict(manufacturing_writeup={'parts': [part(), gap]},
+                 pages=[page(text='ITEM QTY DESCRIPTION LENGTH\n1 1 5 x 5mm BAR 290\nTIG'),
+                        page('GA', 'HOT MELT GLUE', 2)])
+        self.assertFalse(check_owned_specifications_survive(s), 'no read-back is not a contradiction')
+        v = check_owned_route_scope_is_ruled(s)
+        missing = [x for x in v if x['code'] == 'owned_route_rows_not_evaluated']
+        self.assertEqual({x['detail']['operation'] for x in missing},
+                         {'welding', 'laser_cutting', 'glue'})
+        self.assertTrue(all(x['severity'] == 'unverified' for x in missing))
+
+    def test_a_stated_bond_charged_nowhere_is_asked(self):
+        p = part('GA'); p['assembly_children'] = ['TOP', 'FRAME']
+        s = summary([p], [page('GA', 'HOT MELT GLUE')], [row('TOP', 'Saw')])
+        self.assertTrue(any('no glue row' in f['message'] for f in unresolved(s)))
+        self.assertFalse(audit(s), 'bonding may sit inside an assembly row: asked, not blocked')
 
     def test_tig_charge_does_not_fail_process_comparison(self):
         self.assertFalse(findings(summary([part()], [page(text='TIG')], [row('P-1', 'Weld (TIG)')])))
@@ -168,6 +190,36 @@ class TestOwnedRoutes(unittest.TestCase):
             p = part('GA'); p['assembly_children'] = ['TOP', 'FRAME']
             s = summary([p], [page('GA', text)], [row('TOP', 'Glue'), row('FRAME', 'Glue', 'Estimate!M152')])
             self.assertTrue(unresolved(s), text)
+
+    def test_a_ga_known_only_to_the_route_graph_has_its_bond_checked(self):
+        # D-598s: on 9439-07-04 the GA is a compiled-route node with children and no part
+        # record; its own sheet carries the hot-melt note.
+        def graph_only(rows):
+            s = summary([part('TOP'), part('FRAME')], [page('GA', 'HOT MELT GLUE', 2)], rows)
+            s['estimate_summary'] = {'canonical_route_shadow': {'nodes': [
+                dict(part_number='GA', kind='assembly',
+                     children=[dict(part_number='TOP', qty=1), dict(part_number='FRAME', qty=1)]),
+                dict(part_number='TOP', kind='leaf', children=[]),
+                dict(part_number='FRAME', kind='leaf', children=[])]}}
+            return s
+        two = graph_only([row('TOP', 'Glue'), row('FRAME', 'Glue', 'Estimate!M152')])
+        self.assertTrue(any(f['part'] == 'GA' and 'stage allocation' in f['message']
+                            for f in unresolved(two)))
+        self.assertTrue(any(f['part'] == 'GA' and 'no glue row' in f['message']
+                            for f in unresolved(graph_only([]))), 'empty labour table')
+        self.assertFalse(findings(graph_only([row('TOP', 'Glue')])), 'one row covers one note')
+
+    def test_an_unreadable_labour_block_is_unverified_not_a_missing_weld(self):
+        from invariants import check_owned_route_scope_is_ruled, check_owned_specifications_survive
+        s = summary([part()], [page(text='TIG')])
+        s['final_estimate']['adapter_problems'] = [
+            dict(block='labour', code='header_row_not_found', message='', detail={})]
+        self.assertFalse(check_owned_specifications_survive(s), 'nothing was read, so no contradiction')
+        v = check_owned_route_scope_is_ruled(s)
+        self.assertTrue(any(x['code'] == 'owned_route_rows_not_evaluated' and
+                            x['detail']['operation'] == 'welding' for x in v))
+        s['final_estimate']['adapter_problems'][0]['block'] = 'tube'
+        self.assertTrue(audit(s), 'a material block problem does not excuse the labour table')
 
     def test_real_process_adapter_removes_only_page_laser(self):
         import estimator

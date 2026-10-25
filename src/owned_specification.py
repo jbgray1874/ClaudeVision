@@ -153,7 +153,8 @@ def review_cautions(summary):
         if issue.get("code") in {"two_sources_disagree_about_the_material",
                                  "material_priced_from_a_lower_ranked_reading",
                                  "owned_specification_not_preserved",
-                                 "owned_route_scope_unresolved"}:
+                                 "owned_route_scope_unresolved",
+                                 "owned_route_rows_not_evaluated"}:
             out.append(str(issue.get("message") or issue["code"]))
     return out
 
