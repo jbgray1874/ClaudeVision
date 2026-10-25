@@ -125,10 +125,17 @@ def findings(summary):
     and is put to a person as a ruling; it holds the firm price without hiding the estimate.
     """
     parts = [p for p in (summary.get('manufacturing_writeup') or {}).get('parts') or [] if isinstance(p, dict)]
-    rows = (summary.get('final_estimate') or {}).get('labour_rows') or []
-    # No calculated rows means no read-back, not no charges: the row checks wait for the book.
-    # Read-back availability is the existing release checks' to report.
-    read_back = bool(rows)
+    # A STAMPED READ-BACK IS AUTHORITATIVE EVEN WHEN ITS LABOUR TABLE IS EMPTY (D-598s): the
+    # book was calculated and charges no labour, so a stated weld with no row is a
+    # contradiction. With no read-back at all nothing was checked, and each requirement the
+    # rows would have settled is raised as not evaluated, never passed in silence. A labour
+    # block the adapter could not read is stamped empty too; that is no read-back, not a
+    # book that charges nothing.
+    fe = summary.get('final_estimate')
+    read_back = (isinstance(fe, dict) and isinstance(fe.get('labour_rows'), list)
+                 and not any(isinstance(p, dict) and p.get('block') == 'labour'
+                             for p in fe.get('adapter_problems') or []))
+    rows = fe['labour_rows'] if read_back else []
     prices = {key(p.get('part_number')): p for p in
               (summary.get('estimate_summary') or {}).get('part_estimates') or []}
     pages = summary.get('pages') or []
@@ -145,7 +152,11 @@ def findings(summary):
         if bar:
             laser = [r for r in mine if 'LASER' in key(r.get('operation'))]
             saw = [r for r in mine if 'SAW' in key(r.get('operation'))]
-            if laser and saw:
+            if not read_back:
+                add('not_evaluated', pn, 'laser_cutting',
+                    f'{pn}: its own sheet identifies solid bar, and its cutting rows could not be '
+                    'checked: no calculated workbook was read back.', '', '')
+            elif laser and saw:
                 add('unresolved', pn, 'laser_cutting',
                     f'{pn}: solid bar has saw and laser charges at ' +
                     ', '.join(str(r.get('charged_cell')) for r in saw + laser) +
@@ -164,7 +175,11 @@ def findings(summary):
                     'confirm the bar purchase rate and unit')
         tig = part.get('owned_weld_process_evidence') or [
             pg for pg in own_pages(part, pages) if re.search(r'^\s*TIG\s*$', page_text(pg), re.M)]
-        if tig and read_back:
+        if tig and not read_back:
+            add('not_evaluated', pn, 'welding',
+                f'{pn}: its own sheet states TIG, and its weld charge could not be checked: no '
+                'calculated workbook was read back.', '', '')
+        elif tig:
             weld = [r for r in mine if 'WELD' in key(r.get('operation')) and 'DRESS' not in key(r.get('operation'))]
             wrong = [r for r in weld if 'TIG' not in key(r.get('operation')) + ' ' + key(r.get('department'))]
             if not weld:
@@ -187,16 +202,35 @@ def findings(summary):
                 'confirm the coated members and surface, or accept the allowance')
     # One assembly note and multiple glue rows is a coverage question, not proof
     # of duplicate work. Keep all money until distinct stages or a correction exist.
-    for parent in parts:
+    # THE COMPILED ROUTE KNOWS THE ASSEMBLIES (D-598s): a GA is often a node with children and
+    # no part record of its own, and its sheet is where the bonding note is printed.
+    graph = {key(n.get('part_number')): n for n in
+             ((summary.get('estimate_summary') or {}).get('canonical_route_shadow') or {}).get('nodes') or []
+             if isinstance(n, dict) and n.get('part_number')}
+    known = {key(p.get('part_number')) for p in parts}
+    candidates = parts + [n for k, n in graph.items() if k not in known and n.get('kind') == 'assembly']
+    for parent in candidates:
         owned = own_pages(parent, pages)
         if not any(_HOT_MELT.search(' '.join(page_text(pg).split())) for pg in owned):
             continue
         children = {key(x) for x in parent.get('assembly_children') or []}
         children.update(key(p.get('part_number')) for p in parts for edge in p.get('bom_parents') or []
                         if key(edge.get('parent')) == key(parent.get('part_number')))
+        children.update(key(c.get('part_number') if isinstance(c, dict) else c) for c in
+                        (graph.get(key(parent.get('part_number'))) or {}).get('children') or [])
+        children.discard('')
         scope = children | {key(parent.get('part_number'))}
         glue = [r for r in rows if 'GLUE' in key(r.get('operation')) and row_parts(r) & scope]
-        if len(glue) > 1:
+        if not read_back:
+            add('not_evaluated', str(parent.get('part_number')), 'glue',
+                f'{parent.get("part_number")}: its own sheet states hot-melt bonding, and its glue '
+                'charges could not be checked: no calculated workbook was read back.', '', '')
+        elif not glue:
+            add('unresolved', str(parent.get('part_number')), 'glue',
+                f'{parent.get("part_number")}: its own sheet states hot-melt bonding and no glue '
+                'row charges it. Confirm it is inside an assembly row, or add the bonding.',
+                'no separate bonding charge', 'name the row that covers the bond, or add a glue row')
+        elif len(glue) > 1:
             add('unresolved', str(parent.get('part_number')), 'glue',
                 f'{parent.get("part_number")}: stated hot-melt bonding reaches multiple rows (' +
                 ', '.join(str(r.get('charged_cell')) for r in glue) +
@@ -218,3 +252,8 @@ def audit(summary):
 def unresolved(summary):
     """Unresolved scope, raised as rulings: priced, visible, and holding the firm price."""
     return [f for f in findings(summary) if f['kind'] == 'unresolved']
+
+
+def not_evaluated(summary):
+    """Requirements the calculated rows would settle, where no rows were read back (D-598s)."""
+    return [f for f in findings(summary) if f['kind'] == 'not_evaluated']

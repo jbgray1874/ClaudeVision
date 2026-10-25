@@ -5292,11 +5292,16 @@ def check_owned_route_scope_is_ruled(summary: Any) -> List[Dict[str, Any]]:
     firm price is held without the working estimate being withdrawn. A confirmed
     contradiction is not here: it blocks through check_owned_specifications_survive.
     """
-    from owned_route_evidence import unresolved
-    return [_violation("owned_route_scope_unresolved", WARNING, f["message"],
-                       assembly=f["part"], operation=f["operation"], needs_ruling=True,
-                       assumption=f["assumption"], action=f["action"])
-            for f in unresolved(summary)]
+    from owned_route_evidence import not_evaluated, unresolved
+    # WITH NO READ-BACK THE ROW CHECKS VERIFIED NOTHING (D-598s): unverified, so no firm price,
+    # and never read as a pass.
+    return ([_violation("owned_route_scope_unresolved", WARNING, f["message"],
+                        assembly=f["part"], operation=f["operation"], needs_ruling=True,
+                        assumption=f["assumption"], action=f["action"])
+             for f in unresolved(summary)]
+            + [_violation("owned_route_rows_not_evaluated", UNVERIFIED, f["message"],
+                          part_number=f["part"], operation=f["operation"])
+               for f in not_evaluated(summary)])
 
 
 CHECKS = (

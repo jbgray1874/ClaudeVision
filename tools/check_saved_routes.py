@@ -13,7 +13,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     record = json.loads(args.record.read_text(encoding='utf-8-sig'))
     findings = {kind: [f['message'] for f in graded_findings(record) if f['kind'] == kind]
-                for kind in ('contradiction', 'unresolved')}
+                for kind in ('contradiction', 'unresolved', 'not_evaluated')}
     print(json.dumps({'record': str(args.record), 'findings': findings,
                       'acceptance_proven': False,
                       'note': 'Diagnostic only; a clean result is not full estimate acceptance.'}, indent=2))
