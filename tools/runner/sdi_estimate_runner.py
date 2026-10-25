@@ -114,6 +114,10 @@ _BEAT_SECONDS = max(5, min(30, int(os.getenv("SDI_RUNNER_LEASE_SECONDS", "900"))
 # minutes, because the person watching needs to know it is working well before the lease
 # would have expired -- that uncertainty is most of what made this morning expensive.
 _SAY_QUIET_AFTER = 120
+# How often the engine's console reaches the service (D-598w): at most one post every this many
+# seconds, or sooner once this many lines are waiting. Was one post per line.
+_POST_EVERY_SECONDS = float(os.getenv("SDI_RUNNER_POST_SECONDS", "2"))
+_POST_MAX_LINES = 500
 
 # The engine's output tree. Deliverables land in estimates/ (workbook AND the HTML
 # quote/report, which share a folder); the auditable summary lands in json/.
@@ -924,27 +928,36 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
     # reported "no output for 645s" with engine output ten seconds above it. A console that
     # is wrong about how long it has been quiet is no better than one that says nothing.
     last_said = time.time()
-    _post_lock = threading.Lock()
+    _post_lock = threading.Lock()       # guards `pending`, held only to take or return a batch
+    _send_lock = threading.Lock()       # one post at a time, so batches arrive in order
 
     def say(text: str) -> None:
         nonlocal last_said
         text = text.rstrip("\n")
         log.append(text)
-        pending.append(text)
+        with _post_lock:
+            pending.append(text)
         last_said = time.time()
         print(text)
 
     def flush(force: bool = False) -> None:
-        nonlocal last_sent, pending
-        # Batched, because a chatty engine would otherwise be one HTTP request per
-        # console line.
-        if not force and not pending and (time.time() - last_sent) < 20:
-            return
-        if not force and not pending:
-            return
-        nonlocal stop_asked
+        nonlocal last_sent, pending, stop_asked
+        # BATCHED IN TIME, NOT PER LINE (D-598w). This said "batched" and was not: it returned
+        # early only when nothing was pending, so every line the engine printed was its own
+        # HTTP post, made from the loop that reads the engine's pipe. While each post was in
+        # flight the pipe filled and the ENGINE waited. 9439-07-04, 25 Oct: printing eight
+        # parts' details took 146.4 s of a 762 s run. Now a batch goes at most every
+        # _POST_EVERY_SECONDS, or sooner once _POST_MAX_LINES are waiting, and the post is made
+        # outside the lock `say` needs, so reading the pipe never waits on the network.
         with _post_lock:
+            if not force:
+                if not pending:
+                    return
+                if ((time.time() - last_sent) < _POST_EVERY_SECONDS
+                        and len(pending) < _POST_MAX_LINES):
+                    return
             batch, pending = pending, []
+        with _send_lock:
             try:
                 resp = requests.post(f"{base}/runner/{run_id}/progress",
                                      json={"runner_id": runner_id, "lines": batch},
@@ -975,7 +988,15 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
                 elif resp.ok and (resp.json() or {}).get("cancel"):
                     stop_asked = "stopped from the page"
             except Exception:                          # noqa: BLE001
-                pending = batch + pending              # keep it for the next try
+                with _post_lock:
+                    pending = batch + pending          # keep it for the next try
+
+    def poster() -> None:
+        """Send what the engine has said while it is quiet, so a line printed just before a
+        silent Excel phase reaches the page within seconds, not at the next line or beat."""
+        while proc.poll() is None:
+            time.sleep(_POST_EVERY_SECONDS)
+            flush()
 
     def beat() -> None:
         """Renew the lease while the ENGINE PROCESS is alive, said or unsaid.
@@ -1105,6 +1126,7 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
 
     assert proc.stdout is not None
     threading.Thread(target=beat, name="lease-heartbeat", daemon=True).start()
+    threading.Thread(target=poster, name="progress-poster", daemon=True).start()
     for text in proc.stdout:
         say(text)
         flush()

@@ -761,3 +761,48 @@ def test_a_restart_does_not_drop_a_marker_into_the_middle_of_the_log(engine):
     runner._Tee(None, log).write("first run\n")
     runner._Tee(None, log).write("second run\n")
     assert log.read_bytes().count(b"\xef\xbb\xbf") == 1
+
+
+class _Chatty:
+    """Prints a burst of lines at once, the way the part-details block does."""
+
+    def __init__(self, n):
+        self._n = n
+        self._alive = True
+
+    @property
+    def stdout(self):
+        def _lines():
+            for i in range(self._n):
+                yield f"  line {i}\n"
+            self._alive = False
+        return _lines()
+
+    def poll(self):
+        return None if self._alive else 0
+
+    def wait(self):
+        self._alive = False
+        return 0
+
+
+def test_a_burst_of_console_is_a_few_posts_not_one_per_line(engine, monkeypatch):
+    """D-598w. flush() said "batched" and posted every line, from the loop that reads the
+    engine's pipe, so each post stalled the engine: 146 s of a 9439-07-04 run went on printing
+    eight parts. A burst now goes in a handful of posts, every line in order, none lost."""
+    runner_mod = __import__("sdi_estimate_runner")
+    _tpl = engine[1] / "Blank Estimate Sheet  WB 2026.xlsx"
+    _tpl.write_bytes(b"present is all this check asks")
+    monkeypatch.setenv("SDI_WB_TEMPLATE", str(_tpl))
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", lambda *a, **k: _Chatty(300))
+    req = _FakeRequests()
+    root = engine[1]
+    job = {"run_id": "r1", "client": "Boots", "units": 1, "drawing_number": "9439-07-04",
+           "job_folder": str(root), "output_path": str(root / "share" / "Boots")}
+    runner_mod._execute(req, "http://x/api/estimate", {}, job, root, Path("python"), "rnr-1")
+    said = [ln for post in req.progress for ln in (post.get("lines") or [])
+            if ln.startswith("  line ")]
+    assert said == [f"  line {i}" for i in range(300)], "every line, once, in order"
+    carrying = [p for p in req.progress if any(str(ln).startswith("  line ")
+                                               for ln in (p.get("lines") or []))]
+    assert len(carrying) <= 3, f"{len(carrying)} posts for one burst: still one per line"
