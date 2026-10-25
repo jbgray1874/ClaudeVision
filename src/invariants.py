@@ -5285,8 +5285,23 @@ def check_owned_specifications_survive(summary: Any) -> List[Dict[str, Any]]:
             for message in audit_owned_specifications(summary)]
 
 
+def check_owned_route_scope_is_ruled(summary: Any) -> List[Dict[str, Any]]:
+    """Unresolved stock, process, coating and bonding scope is put to a person (D-598r).
+
+    The money stays on the sheet as a disclosed allowance; the finding is a ruling, so the
+    firm price is held without the working estimate being withdrawn. A confirmed
+    contradiction is not here: it blocks through check_owned_specifications_survive.
+    """
+    from owned_route_evidence import unresolved
+    return [_violation("owned_route_scope_unresolved", WARNING, f["message"],
+                       assembly=f["part"], operation=f["operation"], needs_ruling=True,
+                       assumption=f["assumption"], action=f["action"])
+            for f in unresolved(summary)]
+
+
 CHECKS = (
     check_owned_specifications_survive,
+    check_owned_route_scope_is_ruled,
     check_a_banded_board_buys_its_edging,
     check_stated_bores_reach_the_inventory,
     check_the_identity_gate_actually_ran,

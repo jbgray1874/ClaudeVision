@@ -94,6 +94,9 @@ _ESTIMATOR = {
     # An engine allowance the shop stated for another product, held until a person confirms
     # it for this job (D-596): the time is a judgement about this product, not a defect.
     "engine_allowance_unconfirmed",
+    # Stock, weld process, coating or bonding scope priced as an allowance and put to a
+    # person (D-598r): a TIG rate, a coated surface, separate bonding stages.
+    "owned_route_scope_unresolved",
 }
 
 # The union, so any caller still asking only "is this the engine's fault" gets the answer it

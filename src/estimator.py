@@ -8085,6 +8085,8 @@ def _weld_time_is_an_allowance(part: Dict[str, Any], ops: Any) -> bool:
 def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str, Any]:
     geom = part.get("geometry_rollup", {})
     ops = _part_ops(part)
+    from owned_route_evidence import filter_cutting as _owned_cutting
+    ops = _owned_cutting(part, ops)
 
     # A PLATE DOES NOT FOLD — enforced HERE, at costing time, because this is the last point
     # before an op becomes money.
@@ -13430,6 +13432,10 @@ def _section_outer_area_m2(part: Dict[str, Any]) -> float:
     WIRE IS COATED ON ITS SURFACE TOO (D-537): pi x d x length, the figure the workbook's own
     wire sum uses. 0356455's 21:37 book booked P.Coat on four 6 mm wire bars and said "charged
     with no coated area" — the costing had no wire term, the sheet had one."""
+    from owned_route_evidence import bar_area as _owned_bar_area
+    _bar_area = _owned_bar_area(part)
+    if _bar_area:
+        return _bar_area
     _ss = part.get("section_stock") if isinstance(part.get("section_stock"), dict) else {}
     if not _ss:
         _wd = _safe_float(part.get("wire_gauge_mm"))
@@ -13586,6 +13592,8 @@ def cost_uncosted_bought_in_records(summary: Dict[str, Any]) -> int:
 def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     debug = os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}
     if summary is not None:
+        from owned_route_evidence import stamp as _stamp_owned_routes
+        _stamp_owned_routes(parts, summary)
         # THE SHEET'S BANDING STATEMENT, READ WHERE THE MONEY IS COMPUTED (D-514). The
         # document-build stamp (D-513) can be lost between the build and the costing —
         # 12343-01J's 09:36 record held "EDGED ALL AROUND EDGING ORDER: 2S/SL" in its own

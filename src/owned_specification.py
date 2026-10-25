@@ -152,7 +152,8 @@ def review_cautions(summary):
     for issue in (summary.get("invariants") or {}).get("violations") or []:
         if issue.get("code") in {"two_sources_disagree_about_the_material",
                                  "material_priced_from_a_lower_ranked_reading",
-                                 "owned_specification_not_preserved"}:
+                                 "owned_specification_not_preserved",
+                                 "owned_route_scope_unresolved"}:
             out.append(str(issue.get("message") or issue["code"]))
     return out
 
@@ -304,4 +305,6 @@ def audit_owned_specifications(summary):
                 out.append(f"{pn}: DXF roles are preserved but their per-parent counts are not all evidenced. One file does not establish one piece per product.")
     out.extend(role_charge_issues(summary, [p for p in parts if isinstance(p, dict)]))
     out.extend(priced_as_issues(summary, [p for p in parts if isinstance(p, dict)]))
+    from owned_route_evidence import audit as audit_owned_routes
+    out.extend(audit_owned_routes(summary))
     return out
