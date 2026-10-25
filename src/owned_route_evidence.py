@@ -116,6 +116,71 @@ def row_parts(row):
 _HOT_MELT = re.compile(r'\b(?:HOT|HOLT)\s*-?\s*MELT(?:\s+(?:GLUE|ADHESIVE))?\b', re.I)
 
 
+def stated_weld_process(part, pages):
+    """The weld process the part's own sheet states, captured or read there (D-598t)."""
+    return part.get('owned_weld_process_evidence') or [
+        dict(process='TIG', page=pg.get('page_number'), file=pg.get('source_pdf_path'), text='TIG')
+        for pg in own_pages(part, pages) if re.search(r'^\s*TIG\s*$', page_text(pg), re.M)]
+
+
+def bar_covers_row(part, pages, text):
+    """Has the part's own headed cut list already read this parts-list bar row? (D-598t)"""
+    bar = part.get('owned_bar_evidence') or solid_bar(part, pages)
+    sizes = [float(x.replace(',', '.')) for x in re.findall(r'\d+(?:[.,]\d+)?', str(text or ''))]
+    return bool(bar and re.search(r'\bBAR\b', str(text or ''), re.I) and len(sizes) >= 2
+                and sorted(sizes[:2]) == sorted([bar['a'], bar['b']]))
+
+
+def _graph(summary):
+    return {key(n.get('part_number')): n for n in
+            ((summary.get('estimate_summary') or {}).get('canonical_route_shadow') or {}).get('nodes') or []
+            if isinstance(n, dict) and n.get('part_number')}
+
+
+def stated_bond(summary, part_number):
+    """The hot-melt note on this part's own sheet or an assembly above it, or '' (D-598t).
+
+    The bond a GA prints joins the parts beneath it, so a glue route on a member or a
+    sub-assembly is stated work, not an inference, wherever that note is printed above it.
+    """
+    pages = summary.get('pages') or []
+    graph = _graph(summary)
+    records = {key(p.get('part_number')): p for p in
+               (summary.get('manufacturing_writeup') or {}).get('parts') or [] if isinstance(p, dict)}
+    seen, todo = set(), [key(part_number)]
+    while todo:
+        pn = todo.pop()
+        if not pn or pn in seen:
+            continue
+        seen.add(pn)
+        for pg in own_pages(records.get(pn) or {'part_number': pn}, pages):
+            lines = page_text(pg).splitlines()
+            for i, line in enumerate(lines):
+                if _HOT_MELT.search(' '.join(line.split())):
+                    # A note wraps on the sheet; quote it with the lines either side.
+                    return f'{pn}: {" ".join(" ".join(lines[max(0, i - 1):i + 2]).split())}'
+        todo.extend(key(x.get('part_number') if isinstance(x, dict) else x)
+                    for x in (graph.get(pn) or {}).get('parents') or [])
+    return ''
+
+
+def corroborates(summary, operation, part_number):
+    """Owned drawing evidence for one route operation on one part, or '' (D-598t)."""
+    pages = summary.get('pages') or []
+    op = str(operation or '').lower()
+    rec = next((p for p in (summary.get('manufacturing_writeup') or {}).get('parts') or []
+                if isinstance(p, dict) and key(p.get('part_number')) == key(part_number)),
+               {'part_number': part_number})
+    if 'saw' in op:
+        bar = rec.get('owned_bar_evidence') or solid_bar(rec, pages)
+        return f'{key(part_number)}: own cut list, {bar["text"]}' if bar else ''
+    if 'glue' in op:
+        return stated_bond(summary, part_number)
+    if 'weld' in op and 'dress' not in op:
+        return f'{key(part_number)}: own sheet states TIG' if stated_weld_process(rec, pages) else ''
+    return ''
+
+
 def findings(summary):
     """Calculated rows, not proposed operations, decide what reached the book.
 
@@ -173,8 +238,7 @@ def findings(summary):
                     'a recorded bar or section basis. Verify the stock rate; do not borrow a tube rate.',
                     'the material line stands at the price it was given',
                     'confirm the bar purchase rate and unit')
-        tig = part.get('owned_weld_process_evidence') or [
-            pg for pg in own_pages(part, pages) if re.search(r'^\s*TIG\s*$', page_text(pg), re.M)]
+        tig = stated_weld_process(part, pages)
         if tig and not read_back:
             add('not_evaluated', pn, 'welding',
                 f'{pn}: its own sheet states TIG, and its weld charge could not be checked: no '
@@ -204,10 +268,8 @@ def findings(summary):
     # of duplicate work. Keep all money until distinct stages or a correction exist.
     # THE COMPILED ROUTE KNOWS THE ASSEMBLIES (D-598s): a GA is often a node with children and
     # no part record of its own, and its sheet is where the bonding note is printed.
-    graph = {key(n.get('part_number')): n for n in
-             ((summary.get('estimate_summary') or {}).get('canonical_route_shadow') or {}).get('nodes') or []
-             if isinstance(n, dict) and n.get('part_number')}
-    known = {key(p.get('part_number')) for p in parts}
+    graph = _graph(summary)
+    known ={key(p.get('part_number')) for p in parts}
     candidates = parts + [n for k, n in graph.items() if k not in known and n.get('kind') == 'assembly']
     for parent in candidates:
         owned = own_pages(parent, pages)

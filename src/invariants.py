@@ -1490,10 +1490,24 @@ def check_uncorroborated_route_operations(summary: Any) -> List[Dict[str, Any]]:
         if _v <= 0:
             continue
         _op = str(row.get("operation") or "").strip().lower().replace(" ", "_")
-        for (_dop, _dtgt), _d in decisions.items():
+        # THE ROW'S OWN PART FIRST (D-598t). Matched on operation alone, both 9439-07-04 glue
+        # rows took the top's decision, so the top was listed twice and the frame not at all.
+        _row_pns = {str(x).strip().upper() for x in (
+            re.split(r"[,;\s]+", row["part_numbers"]) if isinstance(row.get("part_numbers"), str)
+            else (row.get("part_numbers") or [])) if str(x).strip()}
+        _cands = sorted(decisions.items(),
+                        key=lambda kv: kv[0][1] not in _row_pns)
+        for (_dop, _dtgt), _d in _cands:
             if _dop != _op and _dop not in _op:
                 continue
-            if _d.get("corroborated") is False:
+            # OWNED DRAWING EVIDENCE IS A READING. The bar's own cut list is why it is sawn,
+            # and a GA's printed hot-melt note is why its members are glued.
+            try:
+                from owned_route_evidence import corroborates as _owned_ev   # noqa: PLC0415
+                _owned = _owned_ev(summary, _dop, _dtgt)
+            except Exception:                                        # noqa: BLE001
+                _owned = ""
+            if _d.get("corroborated") is False and not _owned:
                 flagged.append({"operation": row.get("operation"), "target": _dtgt,
                                 "value_gbp": round(_v, 2),
                                 "sources": _d.get("source"),
