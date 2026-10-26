@@ -10,6 +10,13 @@ from typing import Any
 # workbook template in app.py. Without it the folder simply is not there, and
 # the failure reads as "the share is unavailable to this service", which sends
 # somebody looking at share permissions that are fine.
+# What the scanner shows. Drawings the estimator can run from, plus the notes
+# and emails that come with a brief. Anything else is counted, not listed - see
+# browse_briefs.
+SHOWN = (".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step",
+         ".stp", ".txt", ".msg", ".xlsx", ".xls", ".csv", ".docx", ".doc",
+         ".png", ".jpg", ".jpeg", ".eml")
+
 BRIEFS_ROOT = Path(os.getenv(
     "SDI_COMPLETED_AI_BRIEFS_ROOT",
     r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Live Enquiries\completed AI briefs",
@@ -58,7 +65,14 @@ def browse_briefs(relative: str = "") -> dict[str, Any]:
         raise ValueError("Folder is outside the approved briefs area.")
     if not target.is_dir():
         raise ValueError("Not a folder.")
-    rows = []
+    # ── "0 items" HAS THREE MEANINGS, AND ONLY ONE OF THEM IS "EMPTY" ─────────
+    # A child is skipped silently when its type is not on the list below, and
+    # again when it cannot be read at all - a permission, a broken shortcut, a
+    # file that has gone. All three looked identical on the screen: a job
+    # folder full of spreadsheets and one full of files the service account
+    # cannot open both said "0 items". They are counted and reported, because
+    # "empty" and "you cannot see this" need different people to fix them.
+    rows, other_types, unreadable = [], 0, 0
     for child in target.iterdir():
         if child.name.startswith("."):
             continue
@@ -67,9 +81,8 @@ def browse_briefs(relative: str = "") -> dict[str, Any]:
             if root not in resolved.parents:
                 continue
             is_dir = child.is_dir()
-            if not is_dir and child.suffix.lower() not in (
-                    ".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm",
-                    ".slddrw", ".step", ".stp", ".txt", ".msg"):
+            if not is_dir and child.suffix.lower() not in SHOWN:
+                other_types += 1
                 continue
             rows.append({"name": child.name,
                          "relative": "/".join(segments + [child.name]),
@@ -77,8 +90,11 @@ def browse_briefs(relative: str = "") -> dict[str, Any]:
                          "kind": "folder" if is_dir else "file",
                          "size": None if is_dir else child.stat().st_size})
         except (OSError, ValueError):
+            unreadable += 1
             continue
     rows.sort(key=lambda r: (r["kind"] != "folder", r["name"].casefold()))
+    # What can actually be ESTIMATED from. Narrower than what is shown: a
+    # spreadsheet beside a drawing is worth seeing and is not a drawing.
     drawing_names = [r["name"] for r in rows if r["kind"] == "file" and
                      Path(r["name"]).suffix.lower() in (
                          ".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw")]
@@ -86,7 +102,8 @@ def browse_briefs(relative: str = "") -> dict[str, Any]:
     return {"relative": relative, "parent": "/".join(segments[:-1]),
             "folder_path": str(target), "folder_name": target.name,
             "entries": rows[:300], "truncated": len(rows) > 300,
-            "can_select": can_select, "drawing_count": len(drawing_names)}
+            "can_select": can_select, "drawing_count": len(drawing_names),
+            "other_types": other_types, "unreadable": unreadable}
 
 
 def answer_saved_record(record: dict[str, Any], question: str) -> dict[str, Any]:

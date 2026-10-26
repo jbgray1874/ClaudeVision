@@ -4302,11 +4302,18 @@ async function loadBriefs(relative=""){
       li.appendChild(button);
       $("briefList").appendChild(li);
     }
-    $("briefStatus").textContent = (j.entries || []).length + " items"
+    // "0 items" meant empty, all-filtered and all-unreadable alike. Say which.
+    const shown = (j.entries || []).length, hidden = [];
+    if(j.other_types) hidden.push(j.other_types + " of a type this scanner does not list");
+    if(j.unreadable)  hidden.push(j.unreadable + " this service cannot read — a permission on the share, or a shortcut to something that has gone");
+    $("briefStatus").textContent = shown + " items"
+      + (hidden.length ? " (" + hidden.join("; ") + ")" : "")
       + (j.truncated ? " · showing the first page only; narrow to a folder" : "")
       + (j.can_select
          ? ". " + j.drawing_count + " drawing file(s) here. Add this job folder to Drawings."
-         : ". Open a job folder containing drawings before adding it to Drawings.");
+         : shown || hidden.length
+           ? ". Open a job folder containing drawings before adding it to Drawings."
+           : ". This folder is empty.");
   }catch(e){
     briefFolder = null;
     $("briefStatus").textContent = "Cannot browse completed briefs: " + e.message;
