@@ -49,6 +49,17 @@ class Confirmation(BaseModel):
     digest: str
 
 
+class Compose(BaseModel):
+    about: str = Field(min_length=1, max_length=4000)
+    to: str = Field(default="", max_length=500)
+
+
+class NewMessage(BaseModel):
+    to: str = Field(min_length=3, max_length=2000)
+    subject: str = Field(min_length=1, max_length=255)
+    body: str = Field(min_length=1, max_length=20000)
+
+
 class Suggestion(BaseModel):
     message_id: str = Field(min_length=1, max_length=2048)
     # "say yes but push the date to the 14th". Steers the wording; it is not a
@@ -214,6 +225,29 @@ def make_router(auth, policy, database, origin, drafts_enabled=False, page_dir=N
             raise HTTPException(403, "Draft saving is disabled in this read-only release")
         user, mailbox = context(request, True)
         return run(lambda: store.propose(user["oid"], mailbox.source(data.message_id), data.body))
+
+    @router.post("/compose")
+    def compose_new(request: Request, data: Compose):
+        """Words a new message from an instruction. Writes nothing anywhere."""
+        context(request)
+        drafted = writer.write_new(data.about, data.to)
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            {**drafted, "why_not": "" if drafted["draft"] else
+             ("Suggestions are switched off for this app." if not writer.available()
+              else "Claude could not be reached just now - write it yourself, "
+                   "or try again.")},
+            headers={"Cache-Control": "no-store"})
+
+    @router.post("/new")
+    def new_message(request: Request, data: NewMessage):
+        """A new message awaiting approval. Saves nothing - /confirm does, once,
+        and only against the exact text and recipients this returned."""
+        if not drafts_enabled:
+            raise HTTPException(403, "Draft saving is disabled in this read-only release")
+        user, _ = context(request, True)
+        return run(lambda: store.propose_new(user["oid"], data.to, data.subject,
+                                             data.body))
 
     @router.post("/confirm")
     def confirm(request: Request, data: Confirmation):

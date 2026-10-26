@@ -29,6 +29,30 @@ class Denied(Exception):
     pass
 
 
+def _addresses(text):
+    """The email addresses in what was typed into a To box.
+
+    Separated by comma, semicolon, space or newline, with "Name <addr>" allowed.
+    Anything that is not plainly an address is refused rather than guessed at -
+    a mis-parsed recipient on a new message is an email to a stranger.
+    """
+    if isinstance(text, (list, tuple)):
+        parts = [str(x) for x in text]
+    else:
+        parts = re.split(r"[,;\s]+", str(text or ""))
+    found = []
+    for part in parts:
+        part = part.strip().strip("<>").strip()
+        if not part:
+            continue
+        if not re.fullmatch(r"[^@\s<>\"]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", part):
+            raise Denied(f"“{part[:80]}” is not an email address")
+        lowered = part.lower()
+        if lowered not in found:
+            found.append(lowered)
+    return found
+
+
 def _is_from(message, wanted):
     """Does this message come from the person asked for?
 
@@ -285,6 +309,23 @@ class GraphMailbox:
                 "contentType": str(item.get("contentType") or OCTET),
                 "content": content}
 
+    def create_draft(self, to, subject, body):
+        """A new message, saved to Drafts. Not a reply, and still never sent.
+
+        POST /me/messages creates a draft; sending is /send or /sendMail, which
+        this app has no code for and no permission to call. A new message is the
+        one place the app chooses the recipients rather than reading them off a
+        thread, so they are checked here and shown for approval before this runs.
+        """
+        self.verify()
+        result = self.request(
+            "POST", self.BASE + "/me/messages",
+            json={"subject": subject, "toRecipients": to,
+                  "body": {"contentType": "Text", "content": body}})
+        if not result.get("id") or result.get("isDraft") is not True:
+            raise Denied("Draft creation outcome requires manual verification")
+        return {"id": result["id"], "isDraft": True, "webLink": result.get("webLink")}
+
     def create_reply(self, message_id, body):
         self.verify()
         # createReply creates a draft; sending is a different endpoint, never exposed.
@@ -331,6 +372,38 @@ Database contains private draft text. Host must encrypt disk and restrict its AC
                        (pid, owner, time.time() + 900, encoded, digest))
         return {"proposal_id": pid, "digest": digest, **payload, "expires_in_seconds": 900}
 
+    def propose_new(self, owner, to, subject, body):
+        """A new message awaiting approval. Nothing is written until confirm().
+
+        A reply's recipients are read off the thread and re-checked at save
+        time, because the thread can change underneath. A new message's
+        recipients are chosen by the person, so there is nothing to re-check
+        against - which makes the approval screen the only place a wrong address
+        can be caught. They go into the digest, so approving one set of
+        recipients cannot save a different one.
+        """
+        if not body.strip() or len(body) > 20000:
+            raise Denied("The message must contain 1 to 20000 characters")
+        if not subject.strip():
+            raise Denied("A subject is required")
+        recipients = []
+        for address in _addresses(to):
+            recipients.append({"emailAddress": {"address": address}})
+        if not recipients:
+            raise Denied("At least one valid email address is required")
+        if len(recipients) > 20:
+            raise Denied("Twenty recipients is the most this app will address at once")
+        payload = {"new_message": True, "subject": subject.strip()[:255],
+                   "recipients": recipients, "body": body}
+        encoded = json.dumps(payload, sort_keys=True)
+        digest = hashlib.sha256(encoded.encode()).hexdigest()
+        pid = secrets.token_urlsafe(24)
+        with self.db() as db:
+            db.execute("DELETE FROM proposals WHERE expires < ? AND state = 'pending'", (time.time(),))
+            db.execute("INSERT INTO proposals VALUES (?,?,?,?,?,'pending',NULL)",
+                       (pid, owner, time.time() + 900, encoded, digest))
+        return {"proposal_id": pid, "digest": digest, **payload, "expires_in_seconds": 900}
+
     def confirm(self, owner, pid, digest, mailbox):
         with self.db() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -344,6 +417,15 @@ Database contains private draft text. Host must encrypt disk and restrict its AC
             payload = json.loads(row[2])
             db.execute("UPDATE proposals SET state='attempted' WHERE id=?", (pid,))
         # 'attempted' survives a crash or timeout. Never duplicate an uncertain POST.
+        if payload.get("new_message"):
+            # Nothing to re-check against: the recipients ARE the approval, and
+            # they are inside the digest that was just matched.
+            result = mailbox.create_draft(payload["recipients"],
+                                          payload["subject"], payload["body"])
+            with self.db() as db:
+                db.execute("UPDATE proposals SET state='saved',result=?,payload='{}' WHERE id=?",
+                           (json.dumps(result), pid))
+            return result
         source = mailbox.source(payload["message_id"])
         recipients = source.get("replyTo") or [source.get("from")]
         if recipients != payload["recipients"]:

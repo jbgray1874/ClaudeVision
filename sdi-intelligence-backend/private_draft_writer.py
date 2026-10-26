@@ -87,6 +87,34 @@ def _sender(message: dict) -> str:
     return f"{name} <{address}>".strip() if name or address else "unknown sender"
 
 
+NEW_SYSTEM = """You draft work email for James Gray, AI & Systems Controller at SDI Displays, a UK manufacturer of retail displays.
+
+You are writing a DRAFT of a NEW message - not a reply. James reads it, amends it, and sends it himself. You never send anything.
+
+Return ONE JSON object and nothing else, with exactly these three keys:
+
+{"subject": "...", "draft": "...", "gaps": ["..."]}
+
+- "subject": a short, plain subject line. No "Re:", no marketing wording.
+- "draft": the message body, as described below.
+- "gaps": every piece of information the message needed and you were not given, worded as James would need to look it up. Every [square-bracket] placeholder in the draft must appear here. An empty list if it invents nothing and leaves nothing blank.
+
+Write what he would write:
+
+- British English. Plain, direct, courteous. No American spellings.
+- Short. Most are two to five sentences. Say the thing and stop.
+- No "I hope this email finds you well", no "I wanted to reach out", no "Please do not hesitate".
+- Sign off "Thanks, James" unless it is formal, then "Kind regards, James".
+
+What you must not do:
+
+- Do not state any fact you were not given. No prices, quantities, dates, lead times, stock levels or commitments.
+- Where the message needs something you were not told, leave a clear [gap] for James to fill and list it. Never guess a value.
+- Do not agree to anything on his behalf: no discounts, deadlines, meetings or orders. Propose, and let him commit.
+
+The "draft" value is the body text only: no subject line, no explanation, no markdown."""
+
+
 def _blank() -> dict:
     return {"summary": "", "asks": [], "draft": "", "gaps": []}
 
@@ -163,3 +191,49 @@ def compose(message: dict, instruction: str = "", client=None) -> dict:
               f"{type(problem).__name__}: {problem}", flush=True)
         return _blank()
     return _read(text)
+
+
+def write_new(about: str, to: str = "", client=None) -> dict:
+    """A new message from a plain instruction: "tell Nick the tracker is fixed".
+
+    Returns {"subject", "draft", "gaps"} - all empty if no suggestion could be
+    had, in which case the screen stays usable and James writes it himself.
+
+    `to` is passed only so the wording can suit the reader; the recipients that
+    get saved are the ones on the approval screen, never anything from here.
+    """
+    if client is None and not available():
+        return {"subject": "", "draft": "", "gaps": []}
+    wanted = str(about or "").strip()
+    if not wanted:
+        return {"subject": "", "draft": "", "gaps": []}
+    asked = {"what_to_say": wanted[:4000]}
+    if to.strip():
+        asked["who_it_is_to"] = to.strip()[:500]
+    try:
+        if client is None:
+            import anthropic
+            client = anthropic.Anthropic()
+        answer = client.messages.create(
+            model=_opt("SDI_PRIVATE_DRAFT_MODEL", MODEL),
+            max_tokens=MAX_TOKENS,
+            thinking={"type": "adaptive"},
+            system=NEW_SYSTEM,
+            messages=[{"role": "user",
+                       "content": json.dumps(asked, ensure_ascii=False)}],
+        )
+        text = "".join(block.text for block in answer.content
+                       if getattr(block, "type", "") == "text").strip()
+    except Exception as problem:                                   # noqa: BLE001
+        print(f"[private-email] no suggested wording this time: "
+              f"{type(problem).__name__}: {problem}", flush=True)
+        return {"subject": "", "draft": "", "gaps": []}
+    read = _read(text)
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-z]*\n?|\n?```$", "", text).strip()
+    try:
+        got = json.loads(text)
+        subject = str(got.get("subject") or "").strip()[:255]
+    except (ValueError, AttributeError):
+        subject = ""
+    return {"subject": subject, "draft": read["draft"], "gaps": read["gaps"]}

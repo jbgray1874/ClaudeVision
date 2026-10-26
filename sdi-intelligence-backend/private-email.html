@@ -34,7 +34,7 @@ main{max-width:1280px;margin:0 auto;padding:28px 22px 70px}.eyebrow{font-size:11
 <main>
 <section class="hero"><div><div class="eyebrow">Your personal workspace · Outlook</div><h1>Email, with you in control.</h1><p>Review the last seven days and prepare a reply in Outlook Drafts. You review each draft before it is saved. This app has no send or delete action.</p></div><div class="safety"><strong>Private to James Gray</strong><br>Separate Entra sign-in. Drafts are never sent from this screen.</div></section>
 <div class="tools"><button class="primary" id="load" type="button">Search the mailbox</button><select id="when" aria-label="When to search"><option value="">Last seven days</option><option value="this morning">This morning</option><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="this week">This week</option><option value="last week">Last week</option><option value="last 30 days">Last 30 days</option></select><input id="sender" type="search" placeholder="From anyone — or type a name" aria-label="From"><label class="tick"><input id="unread" type="checkbox"> Unread only</label><label class="tick"><input id="withfiles" type="checkbox"> With attachments</label></div>
-<div class="tools"><input id="filter" type="search" placeholder="Filter loaded messages" aria-label="Filter loaded messages" disabled><span id="window" class="count"></span></div>
+<div class="tools"><button class="secondary" id="newmsg" type="button">New email</button><input id="filter" type="search" placeholder="Filter loaded messages" aria-label="Filter loaded messages" disabled><span id="window" class="count"></span></div>
 <div id="status" class="status" role="status" aria-live="polite">Ready to connect to your mailbox. Select “Review last seven days”.</div>
 <div class="layout"><section class="panel" aria-label="Recent messages"><div class="panel-head"><h2>Recent messages</h2><span id="count" class="count">Not loaded</span></div><div id="items" class="items"><div class="empty">Your recent mail will appear here after the secure read.</div></div></section><section class="panel" aria-label="Selected message"><div id="detail" class="detail empty">Select a message to inspect its preview and prepare a reply draft.</div></section></div>
 <p class="foot">This reads message previews, not full threads or attachments. It does not yet rank priorities or generate AI summaries. Check the source message in Outlook before making a decision.</p>
@@ -69,7 +69,7 @@ async function listFiles(box,m){const mine=m.id;box.replaceChildren();el('div','
 if(state.selected?.id!==mine)return;box.replaceChildren();const list=(r.attachments||[]).filter(a=>!a.isInline);if(!list.length)return;
 el('div','ATTACHMENTS',box,'label');const ul=el('ul',null,box);for(const a of list){const li=el('li',null,ul);if(a.kind==='fileAttachment'){const link=el('a',a.name+' · '+fileSize(a.size),li);link.href=root+'/attachments/'+encodeURIComponent(m.id)+'/'+encodeURIComponent(a.id);link.download=a.name;link.rel='noopener';}else{el('span',a.name+' — an attached email or a link; open this one in Outlook',li);}}
 el('p','These download rather than open here, so a file cannot run as a page on this address.',box,'hint');}
-function showProposal(box,p){box.querySelector('.proposal')?.remove();const review=el('section',null,box,'proposal');el('h3','Confirm the exact draft',review);el('p','To: '+(p.recipients||[]).map(r=>r.emailAddress?.address||'').join(', '),review);el('pre',p.body,review);el('p','Saving creates an unsent Outlook draft. Check it in Outlook before sending.',review,'hint');const actions=el('div',null,review,'actions');const save=el('button','Confirm · save to Drafts',actions,'primary');save.type='button';const result=el('span','',actions,'hint');save.onclick=async()=>{save.disabled=true;result.textContent='Saving once…';try{await api('/confirm',{proposal_id:p.proposal_id,digest:p.digest});result.className='success';result.textContent='Saved to Outlook Drafts. Not sent.';}catch(e){result.textContent=e.message+' Check Outlook before creating another proposal.';}};}
+function showProposal(box,p){box.querySelector('.proposal')?.remove();const review=el('section',null,box,'proposal');el('h3',p.new_message?'Confirm the exact email':'Confirm the exact draft',review);el('p','To: '+(p.recipients||[]).map(r=>r.emailAddress?.address||'').join(', '),review);if(p.subject)el('p','Subject: '+p.subject,review);el('pre',p.body,review);el('p','Saving creates an unsent Outlook draft. Check it in Outlook before sending.',review,'hint');const actions=el('div',null,review,'actions');const save=el('button','Confirm · save to Drafts',actions,'primary');save.type='button';const result=el('span','',actions,'hint');save.onclick=async()=>{save.disabled=true;result.textContent='Saving once…';try{await api('/confirm',{proposal_id:p.proposal_id,digest:p.digest});result.className='success';result.textContent='Saved to Outlook Drafts. Not sent.';}catch(e){result.textContent=e.message+' Check Outlook before creating another proposal.';}};}
 // ── THE ANSWER ALWAYS SAYS WHERE IT LOOKED ──────────────────────────────────
 // "Nothing from Charlotte this morning" is a sentence that can be wrong in a
 // way that looks exactly like being right. So the status line reports the span
@@ -82,6 +82,32 @@ try{const result=await api('/review'+(query.toString()?'?'+query:''));state.mess
 const found=state.messages.length?state.messages.length+(state.messages.length===1?' message.':' messages.'):'Nothing matched.';
 setStatus(found+' '+(result.looked_in||'')+(result.complete?'':' Some may be missing - narrow the search.'),result.complete?'ok':'error');
 renderList();renderDetail();}catch(e){setStatus(e.message,'error');}finally{button.disabled=false;}}
+// ── A NEW MESSAGE, NOT A REPLY ──────────────────────────────────────────────
+// The one place the app chooses who an email goes to. So the recipients are
+// typed, parsed strictly by the server, and shown back on the approval screen
+// before anything is written - and the approval covers them, so confirming one
+// set of addresses cannot save another.
+function newMessage(){const box=byId('detail');box.replaceChildren();box.className='detail';state.selected=null;renderList();
+el('div','NEW MESSAGE',box,'eyebrow');el('h2','Write a new email',box);
+el('p','It is saved to your Outlook Drafts, unsent, for you to check and send yourself.',box,'hint');
+el('div','TO',box,'label');const to=el('input',null,box,'steer');to.type='text';to.placeholder='nick@wearesdi.com, selina@wearesdi.com';to.setAttribute('aria-label','To');to.maxLength=2000;
+el('div','WHAT DO YOU WANT TO SAY?',box,'label');const about=el('input',null,box,'steer');about.type='text';about.placeholder='e.g. “tell Nick the tracker reads and writes now, and ask when Ian can test it”';about.setAttribute('aria-label','What to say');about.maxLength=4000;
+const ask=el('button','Draft it',box,'secondary');ask.type='button';
+const gaps=el('section',null,box,'reading');
+el('div','SUBJECT',box,'label');const subject=el('input',null,box,'steer');subject.type='text';subject.setAttribute('aria-label','Subject');subject.maxLength=255;
+el('div','MESSAGE',box,'label');const body=el('textarea',null,box);body.placeholder='Type the message…';body.setAttribute('aria-label','Message');body.maxLength=20000;
+const actions=el('div',null,box,'actions');const prepare=el('button','Review draft',actions,'primary');prepare.type='button';const feedback=el('span','',actions,'hint');
+ask.onclick=async()=>{if(!about.value.trim()){feedback.textContent='Say what the email is about first.';return;}ask.disabled=true;gaps.replaceChildren();el('p','Writing…',gaps,'hint');
+try{const r=await api('/compose',{about:about.value,to:to.value});gaps.replaceChildren();
+if(!r.draft){el('p',r.why_not||'No wording came back.',gaps,'warn');}
+else{if(r.subject&&!subject.value.trim())subject.value=r.subject;if(!body.value.trim())body.value=r.draft;
+if((r.gaps||[]).length){el('div','YOU STILL NEED TO FILL IN',gaps,'label');const ul=el('ul',null,gaps);ul.className='gaps';for(const g of r.gaps)el('li',g,ul);}}}
+catch(e){gaps.replaceChildren();el('p',e.message,gaps,'warn');}finally{ask.disabled=false;}};
+prepare.onclick=async()=>{if(!to.value.trim()||!subject.value.trim()||!body.value.trim()){feedback.textContent='To, subject and message are all needed.';return;}
+prepare.disabled=true;feedback.textContent='Checking the addresses…';
+try{const p=await api('/new',{to:to.value,subject:subject.value,body:body.value});feedback.textContent='';showProposal(box,p);}
+catch(e){feedback.textContent=e.message;}finally{prepare.disabled=false;}};}
+byId('newmsg').onclick=newMessage;
 byId('load').onclick=loadMail;
 byId('sender').addEventListener('keydown',e=>{if(e.key==='Enter')loadMail();});
 byId('when').addEventListener('change',loadMail);
