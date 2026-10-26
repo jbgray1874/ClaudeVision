@@ -13,9 +13,14 @@ from typing import Any
 # What the scanner shows. Drawings the estimator can run from, plus the notes
 # and emails that come with a brief. Anything else is counted, not listed - see
 # browse_briefs.
+# A "completed AI brief" folder holds the OUTPUT of a finished estimate, not a
+# pack of incoming drawings: the record, the report, the client quotation, the
+# BOM and routes, the covering email. Listing only drawing types showed one
+# file out of eleven and read as an empty job.
 SHOWN = (".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step",
-         ".stp", ".txt", ".msg", ".xlsx", ".xls", ".csv", ".docx", ".doc",
-         ".png", ".jpg", ".jpeg", ".eml")
+         ".stp", ".txt", ".msg", ".eml", ".xlsx", ".xls", ".csv",
+         ".docx", ".doc", ".html", ".htm", ".json",
+         ".png", ".jpg", ".jpeg")
 
 BRIEFS_ROOT = Path(os.getenv(
     "SDI_COMPLETED_AI_BRIEFS_ROOT",

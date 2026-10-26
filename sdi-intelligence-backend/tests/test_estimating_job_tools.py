@@ -154,3 +154,51 @@ class WhyZeroItemsTests(unittest.TestCase):
         self.assertIn("This folder is empty.", page)
         self.assertIn("a type this scanner does not list", page)
         self.assertIn("this service cannot read", page)
+
+
+class ACompletedBriefFolderTests(unittest.TestCase):
+    """What is actually in one, taken from Harrods/9439-07-04-GA on 26 Oct 2026.
+
+    Eleven files, none of them a drawing: the saved record, the report, the
+    client quotation, the BOM and routes, the extraction evidence and the
+    covering email. The scanner recognised ONE of them and the folder read as
+    empty.
+    """
+
+    REAL = ("9439-07-04_20261025_103002.xlsx",
+            "9439-07-04_20261025_103002_covering_email.html",
+            "9439-07-04_20261025_103002_covering_email.txt",
+            "9439-07-04_20261025_103002_record.json",
+            "9439-07-04_boms_and_routes.html",
+            "9439-07-04_boms_and_routes.xlsx",
+            "9439-07-04_llm_extract.json",
+            "9439-07-04_quote_PORTAL.html",
+            "9439-07-04_report.html",
+            "9439-07-04_source_drawing_data.html",
+            "9439-07-04_source_drawing_data.xlsx")
+
+    def test_every_file_in_a_real_completed_folder_is_listed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job = root / "Harrods" / "9439-07-04-GA"
+            job.mkdir(parents=True)
+            for name in self.REAL:
+                (job / name).write_bytes(b"x")
+            with patch.object(tools, "BRIEFS_ROOT", root):
+                result = tools.browse_briefs("Harrods/9439-07-04-GA")
+        self.assertEqual(len(result["entries"]), len(self.REAL))
+        self.assertEqual(result["other_types"], 0)
+
+    def test_a_folder_of_outputs_cannot_be_added_to_drawings(self):
+        """There is nothing here to estimate FROM, and the button says so
+        rather than staging eleven files that are not drawings."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job = root / "Harrods" / "9439-07-04-GA"
+            job.mkdir(parents=True)
+            for name in self.REAL:
+                (job / name).write_bytes(b"x")
+            with patch.object(tools, "BRIEFS_ROOT", root):
+                result = tools.browse_briefs("Harrods/9439-07-04-GA")
+        self.assertEqual(result["drawing_count"], 0)
+        self.assertFalse(result["can_select"])
