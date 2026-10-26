@@ -125,11 +125,25 @@ async function ask(){
     if(!r.ok) throw new Error(typeof j.detail === "string" ? j.detail
                               : "Could not read the plan (" + r.status + ").");
 
-    setStatus(j.line_count
-      ? j.line_count + (j.line_count === 1 ? " line is" : " lines are")
-        + " planned to leave on " + pretty(day) + "."
-      : "Nothing in the plan is set to leave on " + pretty(day) + ".",
-      j.line_count ? "ok" : "");
+    // ── "NOTHING IS LEAVING" IS ONLY SAFE WHEN NOTHING IS UNREADABLE ───────
+    // A line whose date could not be interpreted cannot be ruled OUT of the
+    // day being asked about. Saying "nothing is set to leave" over the top of
+    // six such lines is an unqualified claim resting on the ones it could not
+    // read - and that is the sentence somebody would act on.
+    const unread = j.unresolved_date_count || 0;
+    const some = n => n + (n === 1 ? " line" : " lines");
+    setStatus(
+      j.line_count
+        ? some(j.line_count) + (j.line_count === 1 ? " is" : " are")
+          + " planned to leave on " + pretty(day) + "."
+          + (unread ? "  " + some(unread) + " could not be read, so this may not"
+                      + " be all of them." : "")
+        : unread
+          ? "No confirmed matches for " + pretty(day) + ". " + some(unread)
+            + " could not be read and cannot be ruled out - check those below"
+            + " before relying on this."
+          : "Nothing in the plan is set to leave on " + pretty(day) + ".",
+      j.line_count && !unread ? "ok" : unread ? "error" : "");
 
     for(const line of j.lines || []) card(line, $("lines"));
 
@@ -141,11 +155,21 @@ async function ask(){
     // so they are offered rather than quietly dropped from the count.
     if(j.unresolved_date_count){
       const d = el("details", null, $("extra"));
-      el("summary", j.unresolved_date_count + " line(s) have a date this cannot read"
-         + " — check these in the workbook", d);
+      d.open = !j.line_count;        // nothing else to show: lead with these
+      el("summary", some(j.unresolved_date_count)
+         + " have a date this cannot read — check these in the workbook", d);
       for(const line of j.unresolved_date_lines || []) card(line, d, "unresolved");
       if(j.unresolved_date_truncated)
         el("p", "Only the first 25 are shown.", d, "hint");
+    }
+    // Ordinary, and kept apart: a plan weeks out is MEANT to have blanks, and
+    // counting them with the unreadable ones buries the ones that matter.
+    if(j.no_date_count){
+      const d = el("details", null, $("extra"));
+      el("summary", some(j.no_date_count) + " have no departure date set yet"
+         + " (N/A, TBC, blank) — normal for work not yet planned", d);
+      for(const line of j.no_date_lines || []) card(line, d);
+      if(j.no_date_truncated) el("p", "Only the first 25 are shown.", d, "hint");
     }
     $("foot").textContent = "Plan last saved " + new Date(j.plan_saved).toLocaleString("en-GB")
       + "  ·  version " + j.plan_version + "  ·  " + j.rows_read + " rows read."

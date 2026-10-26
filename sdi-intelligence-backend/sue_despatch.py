@@ -19,6 +19,14 @@ MONTHS = {name: number for number, name in enumerate(
 # How far either side of the snapshot a bare "5th Jan" may be read. A despatch
 # plan looks weeks ahead and keeps recent history; it does not schedule a year
 # out, and a date most of a year in the past is a misread, not a plan.
+# Cells that say "no departure date yet" rather than a date this cannot read.
+# Telling them apart matters: the first is how a plan normally looks weeks out,
+# the second is something to go and check. Reported as one number, the normal
+# ones bury the real ones.
+NOT_A_DATE_YET = {"", "-", "--", "?", "??", "n/a", "na", "n a", "tbc", "tba",
+                  "tbd", "none", "nil", "x", "xx", "not known", "unknown",
+                  "await", "awaiting", "no date", "pending"}
+
 BACKWARD_LIMIT = 180
 FORWARD_LIMIT = 270
 
@@ -102,8 +110,12 @@ def schedule_date(raw: Any, *, as_of: date) -> ScheduleDate:
         return ScheduleDate(raw, "cell date", False, raw.isoformat())
     text = _clean(raw)
     if not text:
-        return ScheduleDate(None, "missing", False, text)
+        return ScheduleDate(None, "no departure date set", False, text)
     tentative = bool(re.search(r"\b(TBC|await|provision|estimated)\b", text, re.I))
+    # A bare "TBC" is not a date this failed to read; it is a plan that has not
+    # said yet. "Mon 2nd Nov TBC" is a tentative DATE and carries on below.
+    if _norm(text) in {_norm(w) for w in NOT_A_DATE_YET}:
+        return ScheduleDate(None, "no departure date set", tentative, text)
     if "\n" in str(raw) or re.search(r"\b(moved|from|until|now to)\b", text, re.I):
         return ScheduleDate(None, "multiple or revised dates", tentative, text)
     try:
@@ -156,6 +168,7 @@ def going_out(rows: Iterable[SourceRow], *, day: date, as_of: date) -> dict:
     """Answer 'what is leaving SDI on day?' from dispatch, not due-date, cells."""
     found: list[dict] = []
     ambiguous: list[dict] = []
+    not_yet: list[dict] = []
     for row in rows:
         if not _business_row(row):
             continue
@@ -172,6 +185,8 @@ def going_out(rows: Iterable[SourceRow], *, day: date, as_of: date) -> dict:
         }
         if parsed.value == day:
             found.append(line)
+        elif parsed.basis == "no departure date set":
+            not_yet.append(line)
         elif parsed.value is None and parsed.raw:
             ambiguous.append(line)
     return {
@@ -181,6 +196,10 @@ def going_out(rows: Iterable[SourceRow], *, day: date, as_of: date) -> dict:
         "unresolved_date_count": len(ambiguous),
         "unresolved_date_lines": ambiguous[:25],
         "unresolved_date_truncated": len(ambiguous) > 25,
+        # Ordinary, and counted separately so it cannot bury the line above.
+        "no_date_count": len(not_yet),
+        "no_date_lines": not_yet[:25],
+        "no_date_truncated": len(not_yet) > 25,
         "line_count": len(found),
         "pallet_total": None,
         "pallet_total_reason": "Rows are order lines, not evidenced unique shipments; pallet cells may repeat.",

@@ -127,3 +127,62 @@ class YearOfABareDate(unittest.TestCase):
     def test_the_twenty_ninth_of_february_does_not_crash(self):
         got = schedule_date("29th Feb", as_of=date(2026, 2, 1))   # 2026 is not a leap year
         self.assertIsNone(got.value)
+
+
+class NoDateIsNotAnUnreadableDate(unittest.TestCase):
+    """"N/A" and "TBC" are not dates this failed to read. They are a plan that
+    has not said yet, which is how a despatch plan normally looks weeks out.
+    Counted together, the ordinary ones bury the ones worth checking - the
+    first live read showed six "unreadable" lines of which four were blanks.
+    """
+
+    def rows(self):
+        return [SourceRow("Oct 26 WK 40", 5, {"SDI ORDER NO": 16507,
+                                              "LORRY FROM SDI": "N/A"}),
+                SourceRow("Nov 26 WK 41", 5, {"SDI ORDER NO": 16679,
+                                              "LORRY FROM SDI": "TBC"}),
+                SourceRow("Nov 26 WK 41", 6, {"SDI ORDER NO": 16680,
+                                              "LORRY FROM SDI": ""}),
+                SourceRow("Nov 26 WK 41", 9, {"SDI ORDER NO": 15194,
+                                              "LORRY FROM SDI":
+                                              "Moved to 26 Nov not due from 14/10/2026"})]
+
+    def test_the_two_are_counted_apart(self):
+        out = going_out(self.rows(), day=date(2026, 10, 29), as_of=AS_OF)
+        self.assertEqual(out["no_date_count"], 3)
+        self.assertEqual(out["unresolved_date_count"], 1)
+
+    def test_a_bare_tbc_is_no_date_and_a_dated_tbc_is_still_a_date(self):
+        self.assertEqual(schedule_date("TBC", as_of=AS_OF).basis,
+                         "no departure date set")
+        dated = schedule_date("Mon 2nd Nov TBC", as_of=AS_OF)
+        self.assertEqual(dated.value, date(2026, 11, 2))
+        self.assertTrue(dated.tentative)
+
+    def test_the_usual_ways_of_writing_nothing(self):
+        for blank in ("N/A", "n/a", "TBC", "TBA", "-", "?", "", "  ", "none",
+                      "Pending", "unknown"):
+            with self.subTest(cell=blank):
+                self.assertEqual(schedule_date(blank, as_of=AS_OF).basis,
+                                 "no departure date set")
+
+
+class NothingIsLeavingIsAClaim(unittest.TestCase):
+    """It is only safe when nothing was unreadable. A line whose date could not
+    be interpreted cannot be ruled OUT of the day being asked about."""
+
+    PAGE = (__import__("pathlib").Path(__file__).resolve().parent.parent
+            / "appportal" / "tti-despatch.html").read_text(encoding="utf-8")
+
+    def test_the_screen_qualifies_an_empty_answer(self):
+        self.assertIn("No confirmed matches for", self.PAGE)
+        self.assertIn("cannot be ruled out", self.PAGE)
+
+    def test_a_found_answer_is_qualified_too(self):
+        self.assertIn("so this may not", self.PAGE)
+
+    def test_the_flat_sentence_survives_only_when_nothing_is_unreadable(self):
+        said = self.PAGE.split("const unread =", 1)[1].split("renderUnused", 1)[0]
+        flat = said.index('"Nothing in the plan is set to leave on "')
+        guard = said.index(": unread")
+        self.assertLess(guard, flat, "the unreadable case must be handled first")
