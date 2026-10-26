@@ -54,7 +54,9 @@ def make_router(auth, policy, database, origin, drafts_enabled=False, page_dir=N
             raise HTTPException(403, "Same-origin confirmation required")
         token = auth.graph_token(request)
         if not token:
-            raise HTTPException(403, "Mailbox consent required; ask the administrator before changing scopes")
+            # A session can pre-date a consent change, or its refresh token may no
+            # longer be usable. Neither case proves that tenant consent is absent.
+            raise HTTPException(401, "Mail connection needs renewal. Sign in to the Private Assistant again; if it still fails, ask IT to check the app's delegated Mail.ReadWrite consent.")
 
         def transport(method, url, **kwargs):
             try:
@@ -71,7 +73,7 @@ def make_router(auth, policy, database, origin, drafts_enabled=False, page_dir=N
                           f"{response.status_code} {response.text[:300]}", flush=True)
                     raise HTTPException(403, "Microsoft refused access to the mailbox. Sign in "
                                              "again; if it keeps happening the private app's "
-                                             "Mail.Read consent needs checking.")
+                                             "delegated Mail.ReadWrite consent needs checking.")
                 if response.status_code >= 300:
                     print(f"[private-email] Graph {method} {urlsplit(url).path} returned "
                           f"{response.status_code}", flush=True)
