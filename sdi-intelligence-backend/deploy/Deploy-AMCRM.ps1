@@ -56,6 +56,10 @@ $Files = @(
     "private_email_routes.py",
     "private_email_integration.py",
     "private_draft_writer.py",
+    "sue_despatch.py",
+    "tracker_snapshot.py",
+    "tti_despatch_routes.py",
+    "appportal/tti-despatch.html",
     "private-email-readonly.html",
     "private-email.html",
     # The app portal's catalogue. Not Python, so it copies without a restart -

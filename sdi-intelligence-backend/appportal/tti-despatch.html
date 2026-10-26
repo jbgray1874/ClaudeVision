@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0d0d0f">
+<title>TTI Despatch · SDI Intelligence</title>
+<style>
+:root{--bg:#0d0d0f;--panel:#17171b;--line:#303037;--text:#f3f2ee;--muted:#a3a3aa;
+      --yellow:#ffd400;--amber:#ffd77a;--red:#ff7777;font-family:Arial,Helvetica,sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);line-height:1.5}
+button,input{font:inherit}a{color:var(--yellow)}button{cursor:pointer}
+button:disabled{cursor:wait;opacity:.55}
+.top{border-bottom:1px solid var(--line);background:#101013;
+     padding:15px max(22px,calc((100vw - 1100px)/2));display:flex;align-items:center;
+     gap:14px;flex-wrap:wrap}
+.logo{background:var(--yellow);color:#080808;font-weight:900;width:38px;height:38px;
+      display:grid;place-items:center;border-radius:4px;font-size:22px}
+.brand{font-size:13px;font-weight:800;letter-spacing:.14em}
+.subbrand{font-size:10px;letter-spacing:.25em;color:var(--muted)}
+.topnav{margin-left:auto;display:flex;gap:10px}
+.topnav a{border:1px solid var(--line);color:var(--text);border-radius:4px;
+          padding:9px 12px;text-decoration:none;font-size:13px}
+.topnav a:hover{border-color:var(--yellow)}
+main{max-width:1100px;margin:0 auto;padding:26px 22px 70px}
+.eyebrow{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--yellow);
+         font-weight:700}
+h1{font-size:clamp(26px,4vw,42px);line-height:1.1;letter-spacing:-.04em;margin:10px 0 8px}
+p{margin:0}.hint{color:var(--muted);font-size:14px;margin-top:6px}
+.tools{display:flex;gap:12px;align-items:center;margin:22px 0;flex-wrap:wrap}
+input[type=date]{background:#101013;border:1px solid var(--line);color:var(--text);
+                 border-radius:4px;padding:11px 12px}
+input[type=date]:focus{outline:none;border-color:var(--yellow)}
+.primary{background:var(--yellow);color:#111;border:1px solid var(--yellow);font-weight:800;
+         padding:11px 16px;border-radius:4px}
+.primary:hover{background:#ffe659}
+.secondary{background:#202026;color:var(--text);border:1px solid var(--line);
+           padding:11px 16px;border-radius:4px}
+.status{min-height:48px;padding:13px 16px;border:1px solid var(--line);background:var(--panel);
+        border-radius:4px;color:var(--muted);margin-bottom:18px}
+.status.ok{border-color:#315f43;color:#b5edc9}.status.error{border-color:#8d4545;color:#ffd1d1}
+.card{border:1px solid var(--line);background:var(--panel);border-radius:5px;padding:16px 18px;
+      margin-bottom:12px}
+.card h3{margin:0 0 4px;font-size:17px}
+.meta{color:var(--muted);font-size:13px;font-family:ui-monospace,Consolas,monospace}
+.flag{display:inline-block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+      border:1px solid var(--amber);color:var(--amber);border-radius:3px;padding:1px 6px;
+      margin-left:8px}
+.caveat{border-left:3px solid var(--amber);background:#1c1c22;padding:12px 14px;
+        margin:18px 0;border-radius:0 4px 4px 0}
+.unresolved{border-left:3px solid var(--red)}
+details{margin-top:14px}summary{cursor:pointer;color:var(--amber)}
+.foot{color:var(--muted);font-size:12px;margin-top:26px;border-top:1px solid var(--line);
+      padding-top:14px}
+@media(max-width:700px){.top{padding:14px 16px}main{padding:18px 16px 60px}
+  .topnav{margin-left:0;width:100%}.tools input[type=date]{flex:1 1 150px}}
+</style></head>
+<body>
+<header class="top">
+  <div class="logo" aria-hidden="true">S</div>
+  <div><div class="brand">SDI INTELLIGENCE</div><div class="subbrand">TTI DESPATCH</div></div>
+  <nav class="topnav" aria-label="Workspace"><a href="/app/">← App portal</a></nav>
+</header>
+<main>
+  <div class="eyebrow">Customer services · TTI</div>
+  <h1>What is leaving SDI?</h1>
+  <p class="hint">Read from the TTI Despatch Plan. Every line says which sheet and row it
+    came from, so you can check it in the workbook. Nothing here changes either tracker.</p>
+
+  <div class="tools">
+    <input id="day" type="date" aria-label="Day to look at">
+    <button class="primary" id="ask" type="button">What is leaving that day?</button>
+    <button class="secondary" id="today" type="button">Today</button>
+    <button class="secondary" id="thursday" type="button">Next Thursday</button>
+  </div>
+
+  <div id="status" class="status" role="status" aria-live="polite">Pick a day and ask.</div>
+  <div id="lines"></div>
+  <div id="extra"></div>
+
+  <p class="foot" id="foot"></p>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const el = (tag, text, parent, cls) => { const n = document.createElement(tag);
+  if(text != null) n.textContent = text; if(cls) n.className = cls;
+  if(parent) parent.append(n); return n; };
+
+function setStatus(text, kind=""){ const box = $("status");
+  box.className = "status " + kind; box.textContent = text; }
+
+function nextThursday(){ const d = new Date();
+  d.setDate(d.getDate() + ((4 - d.getDay() + 7) % 7 || 7)); return d; }
+const iso = d => d.toISOString().slice(0,10);
+const pretty = s => { const d = new Date(s + "T00:00:00");
+  return isNaN(d) ? s : d.toLocaleDateString("en-GB",
+    {weekday:"long", day:"numeric", month:"long", year:"numeric"}); };
+
+$("day").value = iso(new Date());
+$("today").onclick = () => { $("day").value = iso(new Date()); ask(); };
+$("thursday").onclick = () => { $("day").value = iso(nextThursday()); ask(); };
+$("ask").onclick = ask;
+
+function card(line, parent, cls){
+  const c = el("div", null, parent, "card" + (cls ? " " + cls : ""));
+  const h = el("h3", line.order ? "Order " + line.order : "(no order number)", c);
+  if(line.tentative) el("span", "tentative", h, "flag");
+  if(line.part || line.description)
+    el("p", [line.part, line.description].filter(Boolean).join(" — "), c);
+  el("p", "Lorry from SDI: " + (line.dispatch_cell || "(blank)")
+        + "  ·  " + line.date_basis, c, "meta");
+  el("p", line.source + (line.pallets_as_recorded != null
+      ? "  ·  pallets as recorded: " + line.pallets_as_recorded : ""), c, "meta");
+}
+
+async function ask(){
+  const day = $("day").value;
+  if(!day){ setStatus("Pick a day first."); return; }
+  $("ask").disabled = true;
+  $("lines").replaceChildren(); $("extra").replaceChildren(); $("foot").textContent = "";
+  setStatus("Reading the Despatch Plan…");
+  try{
+    const r = await fetch("/api/tti/despatch/day?day=" + encodeURIComponent(day),
+                          {cache:"no-store", credentials:"same-origin"});
+    let j = {}; try{ j = await r.json(); }catch(e){}
+    if(!r.ok) throw new Error(typeof j.detail === "string" ? j.detail
+                              : "Could not read the plan (" + r.status + ").");
+
+    setStatus(j.line_count
+      ? j.line_count + (j.line_count === 1 ? " line is" : " lines are")
+        + " planned to leave on " + pretty(day) + "."
+      : "Nothing in the plan is set to leave on " + pretty(day) + ".",
+      j.line_count ? "ok" : "");
+
+    for(const line of j.lines || []) card(line, $("lines"));
+
+    const note = el("div", null, $("extra"), "caveat");
+    el("p", j.caveat, note);
+    el("p", "Pallets are not totalled: " + j.pallet_total_reason, note, "hint");
+
+    // Lines whose date could not be read are the ones most likely to be missed,
+    // so they are offered rather than quietly dropped from the count.
+    if(j.unresolved_date_count){
+      const d = el("details", null, $("extra"));
+      el("summary", j.unresolved_date_count + " line(s) have a date this cannot read"
+         + " — check these in the workbook", d);
+      for(const line of j.unresolved_date_lines || []) card(line, d, "unresolved");
+      if(j.unresolved_date_truncated)
+        el("p", "Only the first 25 are shown.", d, "hint");
+    }
+    $("foot").textContent = "Plan last saved " + new Date(j.plan_saved).toLocaleString("en-GB")
+      + "  ·  version " + j.plan_version + "  ·  " + j.rows_read + " rows read."
+      + "  This answer is only as current as that save.";
+  }catch(e){
+    setStatus(e.message, "error");
+  }finally{ $("ask").disabled = false; }
+}
+</script>
+</body>
+</html>

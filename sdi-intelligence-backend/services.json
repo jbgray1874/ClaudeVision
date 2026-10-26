@@ -65,6 +65,30 @@
       "next": "Search by sender and date; new emails as well as replies; then ChatGPT and the Claude app, so the same mailbox can be worked by speaking to it."
     },
     {
+      "id": "tti-despatch",
+      "name": "TTI Despatch",
+      "status": "Phase one · read only",
+      "cls": "c-prog",
+      "category": "Apps",
+      "app_category": "Co-worker agents",
+      "surface": "app",
+      "app_url": "/api/tti/despatch",
+      "desc": "Ask what is due to leave SDI on a day, answered from the TTI Despatch Plan with the sheet and row it came from.",
+      "requires": "Named Customer Services people only (SDI_TTI_OIDS), through Microsoft sign-in with MFA. It reads a live commercial tracker, so every read is attributable to a person.",
+      "detail": "Phase one of Sue Rogers' request. It answers <b>\"what is due to leave SDI on Thursday?\"</b> from the Despatch Plan, citing the workbook sheet and row so the answer can be checked at source. It reads the <code>LORRY FROM SDI</code> column, not the customer due date - a date the customer wants is not a date a lorry leaves - and it says when a date is tentative, revised, or disagrees with the weekday beside it rather than guessing one.",
+      "sections": [
+        {
+          "title": "What it will not do",
+          "body": "Write to the Despatch Plan or to Completed Orders. Send email. Total pallets across repeated order lines, because an order line is not an evidenced shipment and the same pallet count appears on several. Treat a planned departure as proof that goods went out."
+        },
+        {
+          "title": "Still to agree with Sue",
+          "body": "The Despatch Plan to Completed Orders transfer is written and <b>deliberately not switched on</b>: Completed Orders could not be read when this was built, and what counts as \"dispatched\", the duplicate check and the destination columns are Sue's to confirm. The morning despatch summary and the Cat Forms reader are not in this phase."
+        }
+      ],
+      "next": "Read Completed Orders, agree the dispatch rule and the duplicate check with Sue, then a reviewable transfer. Then the morning summary, then Cat Forms."
+    },
+    {
       "id": "hr-inventry",
       "name": "HRInventry Anywhere",
       "status": "Built · awaiting approval",

@@ -211,6 +211,7 @@ _PUBLIC_ALLOW = (
     "/api/voicecrm",           # Nick's app
     "/api/hr/app",             # HRInventry Anywhere only - never the rest of /api/hr
     "/api/private-email",      # separate private registration and owner gate
+    "/api/tti",                # Sue's TTI despatch view - named people, read only
     "/favicon.ico",
 )
 
@@ -838,6 +839,11 @@ app.include_router(auth.router)
 # cookies. Mounts nothing unless SDI_PRIVATE_ENABLED=yes - see PRIVATE_ASSISTANT_SETUP.md.
 from private_email_integration import install as install_private_email
 install_private_email(app)
+
+# Sue's TTI despatch question. Read only, named Customer Services people, and
+# mounted only when SDI_TTI_ENABLED=yes.
+from tti_despatch_routes import install as install_tti
+install_tti(app)
 
 from voicecrm import router as voicecrm_router
 app.include_router(voicecrm_router)
