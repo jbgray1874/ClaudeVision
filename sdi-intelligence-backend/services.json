@@ -42,6 +42,29 @@
       "app_category": "Apps"
     },
     {
+      "id": "private-assistant",
+      "name": "SDI Private Assistant",
+      "status": "Live · owner only",
+      "cls": "c-prog",
+      "category": "Co-worker agents",
+      "surface": "app",
+      "app_url": "/api/private-email/workspace",
+      "desc": "Your own Outlook, read for the last seven days, with replies prepared into Drafts for you to amend and send by hand.",
+      "requires": "One account only — James Gray's ordinary account, through its own Microsoft sign-in with MFA. It is not shared, and signing in to the portal does not sign you in to this.",
+      "detail": "A separate Entra registration from the rest of SDI Intelligence: its own application, its own credential, its own token store and its own cookies. The portal sign-in cannot reach it and it cannot reach the portal's data. <b>It holds <code>Mail.ReadWrite</code>, which writes a reply into the Drafts folder — it does not hold <code>Mail.Send</code></b>, so nothing it prepares can leave the mailbox without you opening Outlook and sending it yourself. A token carrying a send permission, or any permission reaching another person's mailbox, is refused outright.",
+      "sections": [
+        {
+          "title": "What it does today",
+          "body": "Lists the last seven days of your mail with links back to the real message in Outlook, and prepares a reply you approve before it is written. It reads previews, not full threads or attachments, and does not yet rank priorities or write summaries."
+        },
+        {
+          "title": "What it cannot do",
+          "body": "Send, delete or move anything, from the page or from the API. Reach any mailbox but your own. Be opened by anyone else, on any device, with any key."
+        }
+      ],
+      "next": "ChatGPT and voice, so the same mailbox can be worked by speaking to it; then AI summaries and priority."
+    },
+    {
       "id": "hr-inventry",
       "name": "HRInventry Anywhere",
       "status": "Built · awaiting approval",
