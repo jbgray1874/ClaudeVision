@@ -835,9 +835,9 @@
     </section>
 
     <section class="card" id="briefCard">
-      <h2>Completed AI briefs · job scanner</h2>
-      <p class="hint">Browse the approved estimating briefs on the server. Select a job folder to add it to this estimate; review the client, drawing number and quantities before running.</p>
-      <button type="button" id="briefOpen">Browse completed AI briefs</button>
+      <h2>Job scanner · completed estimates and live enquiries</h2>
+      <p class="hint">Two approved folders on the server. <b>Completed estimates</b> is where the finished work is filed — the record, the report, the quotation. <b>Live enquiries</b> is where the drawing packs waiting to be priced are; a job folder there can be added to this estimate. Review the client, drawing number and quantities before running.</p>
+      <button type="button" id="briefOpen">Completed estimates</button><button type="button" id="enquiryOpen">Live enquiries · drawings</button>
       <button type="button" id="briefUp" hidden>Up one folder</button>
       <p class="note" id="briefWhere" aria-live="polite"></p>
       <ul class="brief-list" id="briefList"></ul>
@@ -4273,22 +4273,30 @@ selfJobBtn.onclick = async () => {
 refreshSelf();
 setInterval(refreshSelf, 20000);
 
-/* COMPLETED AI BRIEFS: one fixed server-side root, never an arbitrary path supplied
-   by the browser. A selected folder feeds the ordinary Drawings list and its
-   existing run checks; browsing alone does not start a cost estimate. */
+/* JOB SCANNER: two fixed server-side roots, never an arbitrary path supplied by
+   the browser. "briefs" is where finished estimates are filed - the record, the
+   report, the quotation - and has no drawings in it. "enquiries" is the drawing
+   packs waiting to be priced, and is the only one a folder can be staged from.
+   A selected folder feeds the ordinary Drawings list and its existing run
+   checks; browsing alone does not start a cost estimate. */
 let briefRelative = "";
 let briefFolder = null;
-async function loadBriefs(relative=""){
-  $("briefStatus").textContent = "Reading the approved briefs folder…";
+let briefArea = "briefs";
+const AREA_NAME = {briefs:"Completed estimates", enquiries:"Live enquiries"};
+async function loadBriefs(relative="", area=briefArea){
+  briefArea = area;
+  $("briefStatus").textContent = "Reading " + (AREA_NAME[area]||area).toLowerCase() + "…";
   $("briefList").replaceChildren();
   $("briefUse").hidden = true;
   try{
-    const r = await api("/api/estimate/tools/briefs?relative=" + encodeURIComponent(relative));
+    const r = await api("/api/estimate/tools/briefs?area=" + encodeURIComponent(briefArea)
+                        + "&relative=" + encodeURIComponent(relative));
     const j = await r.json().catch(() => ({}));
     if(!r.ok) throw new Error(detailText(j, r, "Folder unavailable"));
     briefRelative = j.relative || "";
     briefFolder = j;
-    $("briefWhere").textContent = "Completed AI briefs" + (briefRelative ? " / " + briefRelative : "");
+    $("briefWhere").textContent = (AREA_NAME[briefArea] || briefArea)
+      + (briefRelative ? " / " + briefRelative : "");
     $("briefUp").hidden = !briefRelative;
     $("briefUse").hidden = !j.can_select;
     for(const item of j.entries || []){
@@ -4311,15 +4319,18 @@ async function loadBriefs(relative=""){
       + (j.truncated ? " · showing the first page only; narrow to a folder" : "")
       + (j.can_select
          ? ". " + j.drawing_count + " drawing file(s) here. Add this job folder to Drawings."
-         : shown || hidden.length
-           ? ". Open a job folder containing drawings before adding it to Drawings."
-           : ". This folder is empty.");
+         : !shown && !hidden.length
+           ? ". This folder is empty."
+           : briefArea === "briefs"
+             ? ". These are finished estimates - open one to read its report or quotation. Drawings to price are under Live enquiries."
+             : ". Open a job folder containing drawings before adding it to Drawings.");
   }catch(e){
     briefFolder = null;
     $("briefStatus").textContent = "Cannot browse completed briefs: " + e.message;
   }
 }
-$("briefOpen").onclick = () => loadBriefs("");
+$("briefOpen").onclick = () => loadBriefs("", "briefs");
+$("enquiryOpen").onclick = () => loadBriefs("", "enquiries");
 $("briefUp").onclick = () => {
   if(briefFolder) loadBriefs(briefFolder.parent || "");
 };

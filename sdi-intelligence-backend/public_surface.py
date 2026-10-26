@@ -48,10 +48,20 @@ NEVER_PUBLIC_POST = (
 # folder is not there, and the failure reads as a share permission problem.
 BRIEFS_DEFAULT = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed"
                   r"\Live Enquiries\completed AI briefs")
+ENQUIRY_DEFAULT = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed"
+                   r"\AI Estimating\Live Enquiry")
 
 
 def briefs_root() -> str:
     return (os.getenv("SDI_COMPLETED_AI_BRIEFS_ROOT", "") or BRIEFS_DEFAULT).strip()
+
+
+def approved_roots() -> tuple:
+    """The two trees the scanner may browse: finished estimates, and the
+    drawings waiting to be priced. Everything else on every share stays inside
+    the office, whoever is asking."""
+    return (briefs_root(),
+            (os.getenv("SDI_LIVE_ENQUIRY_ROOT", "") or ENQUIRY_DEFAULT).strip())
 
 
 def post_allowed(path: str) -> bool:
@@ -73,9 +83,13 @@ def under_the_briefs(asked: str) -> bool:
     anywhere else, which is how two outages happened on 26 October 2026. Naming
     the flavour makes the answer the same on both.
     """
-    root = briefs_root()
-    if not root or not str(asked or "").strip():
+    if not str(asked or "").strip():
         return False
     here = ntpath.normcase(ntpath.normpath(str(asked)))
-    there = ntpath.normcase(ntpath.normpath(root))
-    return here == there or here.startswith(there.rstrip("\\") + "\\")
+    for root in approved_roots():
+        if not root:
+            continue
+        there = ntpath.normcase(ntpath.normpath(root))
+        if here == there or here.startswith(there.rstrip("\\") + "\\"):
+            return True
+    return False

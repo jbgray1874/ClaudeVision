@@ -202,3 +202,58 @@ class ACompletedBriefFolderTests(unittest.TestCase):
                 result = tools.browse_briefs("Harrods/9439-07-04-GA")
         self.assertEqual(result["drawing_count"], 0)
         self.assertFalse(result["can_select"])
+
+
+class TwoAreasTests(unittest.TestCase):
+    """"it's the area where estimators look for results. I think it's a good
+    idea to be able to see the drawings through another button also at
+    K:\\Estimating\\Completed\\AI Estimating\\Live Enquiry" - James Gray,
+    26 October 2026.
+
+    Two questions, two folders. One scanner over one root could only answer
+    one of them, and answered the other with an empty folder.
+    """
+
+    def test_both_areas_are_offered_and_nothing_else_is(self):
+        self.assertEqual(sorted(tools.areas()), ["briefs", "enquiries"])
+
+    def test_an_unknown_area_is_refused_rather_than_quietly_substituted(self):
+        """A name nobody recognises must not resolve to a real folder."""
+        for made_up in ("payroll", "..", "BRIEFS/../..", "enquiries ", "Briefs"):
+            with self.subTest(area=made_up):
+                with self.assertRaises(ValueError):
+                    tools.area_root(made_up)
+
+    def test_asking_for_nothing_means_the_completed_estimates(self):
+        """What every existing caller passes, and what the route defaults to."""
+        for quiet in ("", None):
+            with self.subTest(area=quiet):
+                self.assertEqual(tools.area_root(quiet), tools.BRIEFS_ROOT)
+
+    def test_the_live_enquiry_default_is_the_folder_james_named(self):
+        self.assertEqual(
+            str(tools.LIVE_ENQUIRY_ROOT),
+            r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\Live Enquiry")
+
+    def test_each_area_browses_its_own_tree_only(self):
+        with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+            briefs, enquiries = Path(a), Path(b)
+            (briefs / "Harrods" / "9439-07-04-GA").mkdir(parents=True)
+            (enquiries / "Boots" / "1234-01").mkdir(parents=True)
+            with patch.object(tools, "BRIEFS_ROOT", briefs), \
+                 patch.object(tools, "LIVE_ENQUIRY_ROOT", enquiries):
+                self.assertEqual([e["name"] for e in
+                                  tools.browse_briefs("", "briefs")["entries"]], ["Harrods"])
+                self.assertEqual([e["name"] for e in
+                                  tools.browse_briefs("", "enquiries")["entries"]], ["Boots"])
+                # And the area travels back, so the page cannot mislabel the list.
+                self.assertEqual(tools.browse_briefs("", "enquiries")["area"], "enquiries")
+
+    def test_one_areas_relative_path_cannot_reach_the_other(self):
+        with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+            briefs, enquiries = Path(a), Path(b)
+            (enquiries / "Boots").mkdir(parents=True)
+            with patch.object(tools, "BRIEFS_ROOT", briefs), \
+                 patch.object(tools, "LIVE_ENQUIRY_ROOT", enquiries):
+                with self.assertRaises(ValueError):
+                    tools.browse_briefs("Boots", "briefs")

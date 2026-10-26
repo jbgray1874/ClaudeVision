@@ -78,7 +78,7 @@ import estimate_email
 import quote_release
 import self_running_switch
 import staging
-from estimating_job_tools import BRIEFS_ROOT, browse_briefs, answer_saved_record
+from estimating_job_tools import areas, browse_briefs, answer_saved_record
 
 router = APIRouter(prefix="/api/estimate", tags=["estimate"])
 
@@ -3227,13 +3227,19 @@ def recent(x_sdi_key: Optional[str] = Header(default=None), limit: int = 25):
 
 
 @router.get("/tools/briefs")
-def completed_briefs(relative: str = "", x_sdi_key: Optional[str] = Header(default=None)):
-    """Browse only the approved completed AI briefs tree, one level at a time."""
+def completed_briefs(relative: str = "", area: str = "briefs",
+                     x_sdi_key: Optional[str] = Header(default=None)):
+    """Browse one approved tree, one level at a time: the completed estimates,
+    or the live enquiry drawings. Nothing else, and never an absolute path."""
     _check_key(x_sdi_key)
-    if _within_a_root(str(BRIEFS_ROOT)) is None:
-        raise HTTPException(503, "The completed AI briefs folder must be added to SDI_FILE_ROOTS.")
+    known = areas()
+    if area not in known:
+        raise HTTPException(400, "Unknown area.")
+    if _within_a_root(str(known[area])) is None:
+        raise HTTPException(503, f"The {area} folder ({known[area]}) must be added "
+                                 f"to SDI_FILE_ROOTS.")
     try:
-        return browse_briefs(relative)
+        return browse_briefs(relative, area)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except OSError as exc:

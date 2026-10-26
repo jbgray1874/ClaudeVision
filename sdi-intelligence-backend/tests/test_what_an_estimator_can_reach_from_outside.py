@@ -147,3 +147,36 @@ class TheGuardUsesThemTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BothApprovedAreasTests(unittest.TestCase):
+    """The scanner grew a second folder; the public boundary has to know about
+    it, or the drawings button works in the office and 403s on a phone."""
+
+    BRIEFS = r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Live Enquiries\completed AI briefs"
+    ENQUIRY = r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\Live Enquiry"
+
+    def setUp(self):
+        for key in ("SDI_COMPLETED_AI_BRIEFS_ROOT", "SDI_LIVE_ENQUIRY_ROOT"):
+            os.environ.pop(key, None)
+            self.addCleanup(os.environ.pop, key, None)
+
+    def test_both_approved_trees_are_reachable(self):
+        for inside in (self.BRIEFS, self.BRIEFS + r"\Harrods\9439-07-04-GA\report.html",
+                       self.ENQUIRY, self.ENQUIRY + r"\Boots\1234-01\GA.pdf"):
+            with self.subTest(path=inside):
+                self.assertTrue(surface.under_the_briefs(inside))
+
+    def test_their_shared_parent_is_not(self):
+        """Both sit under ...\\Estimating\\Completed. That parent holds other
+        things and is not approved."""
+        for outside in (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed",
+                        r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating",
+                        r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Live Enquiries"):
+            with self.subTest(path=outside):
+                self.assertFalse(surface.under_the_briefs(outside))
+
+    def test_the_second_root_can_be_moved_without_a_code_change(self):
+        os.environ["SDI_LIVE_ENQUIRY_ROOT"] = r"\\other\share\enquiries"
+        self.assertTrue(surface.under_the_briefs(r"\\other\share\enquiries\Boots"))
+        self.assertFalse(surface.under_the_briefs(self.ENQUIRY + r"\Boots"))

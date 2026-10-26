@@ -27,6 +27,31 @@ BRIEFS_ROOT = Path(os.getenv(
     r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Live Enquiries\completed AI briefs",
 ))
 
+# ── TWO AREAS, BECAUSE AN ESTIMATOR ASKS TWO DIFFERENT QUESTIONS ──────────────
+# "What did we quote for this?" and "what has come in to be priced?" are not the
+# same question and do not live in the same folder. Completed AI briefs holds
+# what a finished estimate PRODUCED - the record, the report, the quotation - and
+# has no drawings in it at all. Live Enquiry holds the drawing packs waiting to
+# be run. One scanner over one root could only ever answer one of them, and
+# answered the other by showing an empty folder.
+LIVE_ENQUIRY_ROOT = Path(os.getenv(
+    "SDI_LIVE_ENQUIRY_ROOT",
+    r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\Live Enquiry",
+))
+
+
+def areas() -> dict:
+    """The approved trees, by the name the page asks for them with."""
+    return {"briefs": BRIEFS_ROOT, "enquiries": LIVE_ENQUIRY_ROOT}
+
+
+def area_root(area: str) -> Path:
+    found = areas().get(str(area or "briefs"))
+    if found is None:
+        raise ValueError("Unknown area. The scanner browses the completed "
+                         "estimates and the live enquiries, and nothing else.")
+    return found
+
 
 def _is_number(value: Any) -> bool:
     """A figure that is really there. False for None, "" and anything unparseable."""
@@ -53,15 +78,16 @@ def _named_in(part_number: str, question: str) -> bool:
                      question) is not None
 
 
-def browse_briefs(relative: str = "") -> dict[str, Any]:
-    """List one level only; the caller never supplies an absolute path."""
+def browse_briefs(relative: str = "", area: str = "briefs") -> dict[str, Any]:
+    """List one level of one approved area; never an absolute path from a caller."""
+    chosen = area_root(area)
     if len(relative) > 512:
         raise ValueError("Folder path is too long.")
     segments = relative.split("/") if relative else []
     if any(not s or s in (".", "..") or "\\" in s or ":" in s
            or any(ord(c) < 32 for c in s) for s in segments):
         raise ValueError("Invalid folder path.")
-    root = BRIEFS_ROOT.resolve(strict=True)
+    root = chosen.resolve(strict=True)
     try:
         target = root.joinpath(*segments).resolve(strict=True)
     except FileNotFoundError as exc:
@@ -104,7 +130,7 @@ def browse_briefs(relative: str = "") -> dict[str, Any]:
                      Path(r["name"]).suffix.lower() in (
                          ".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw")]
     can_select = len(segments) >= 2 and bool(drawing_names)
-    return {"relative": relative, "parent": "/".join(segments[:-1]),
+    return {"area": area, "relative": relative, "parent": "/".join(segments[:-1]),
             "folder_path": str(target), "folder_name": target.name,
             "entries": rows[:300], "truncated": len(rows) > 300,
             "can_select": can_select, "drawing_count": len(drawing_names),
