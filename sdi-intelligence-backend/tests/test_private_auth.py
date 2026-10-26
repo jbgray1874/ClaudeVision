@@ -226,6 +226,78 @@ class AuthTests(unittest.TestCase):
                                        'https://graph.microsoft.com/Mail.Send User.Read'}
         self.assertIsNone(self.auth.graph_token(request))
 
+    def test_the_permissions_are_asked_for_both_ways_microsoft_writes_them(self):
+        """26 October 2026, the live sign-in: a fresh, successful sign-in, and a
+        second later "holds []" in the log - MSAL answering that it had no token
+        at all. It files a token under the scope strings Entra replied with, and
+        matches a silent request against them literally, so asking for
+        "Mail.ReadWrite" finds nothing when the cache says
+        "https://graph.microsoft.com/Mail.ReadWrite". That comparison is inside
+        MSAL and out of our reach, so both forms get asked."""
+        from starlette.requests import Request
+        self.login(); self.callback()
+        request = Request({'type':'http','headers':[(b'host',url_host().encode()),
+                           (b'cookie',(COOKIE+'='+self.client.cookies[COOKIE]).encode())]})
+
+        answers = {}   # only the fully-qualified form is known to this cache
+        def silent(asked, account=None):
+            answers[tuple(asked)] = True
+            if all(s.startswith('https://graph.microsoft.com/') for s in asked):
+                return {'access_token':'test-token',
+                        'scope':'https://graph.microsoft.com/User.Read '
+                                'https://graph.microsoft.com/Mail.ReadWrite'}
+            return None
+        self.msal.acquire_token_silent.side_effect = silent
+
+        self.assertEqual(self.auth.graph_token(request), 'test-token')
+        self.assertIn(('User.Read','Mail.ReadWrite'), answers, answers)
+        self.assertIn(('https://graph.microsoft.com/User.Read',
+                       'https://graph.microsoft.com/Mail.ReadWrite'), answers, answers)
+
+        # The mirror case: a cache that only knows the short names still works,
+        # and is not asked twice for nothing.
+        answers.clear()
+        self.msal.acquire_token_silent.side_effect = lambda asked, account=None: (
+            {'access_token':'short-form','scope':'User.Read Mail.ReadWrite'}
+            if not any(s.startswith('https://') for s in asked) else None)
+        self.assertEqual(self.auth.graph_token(request), 'short-form')
+
+    def test_no_token_at_all_is_logged_as_itself_not_as_missing_consent(self):
+        """"holds []" read as a permission problem and cost an afternoon in Entra.
+        Nothing from the cache is a different fault from a token lacking a scope,
+        and the log has to say which, with MSAL's own reason."""
+        from starlette.requests import Request
+        import io, contextlib
+        self.login(); self.callback()
+        request = Request({'type':'http','headers':[(b'host',url_host().encode()),
+                           (b'cookie',(COOKIE+'='+self.client.cookies[COOKIE]).encode())]})
+        self.msal.acquire_token_silent.return_value = None
+        self.msal.acquire_token_silent_with_error.return_value = {
+            'error':'invalid_grant', 'error_description':'AADSTS50173 token expired'}
+
+        log = io.StringIO()
+        with contextlib.redirect_stdout(log):
+            self.assertIsNone(self.auth.graph_token(request))
+        said = log.getvalue()
+        self.assertIn('no token from the cache', said)
+        self.assertIn('invalid_grant', said)
+        self.assertIn('AADSTS50173', said)
+        self.assertNotIn('test-not-real-secret', said)
+        self.assertNotIn(self.client.cookies[COOKIE], said)
+
+    def test_a_probe_that_itself_fails_says_nothing_and_breaks_nothing(self):
+        from starlette.requests import Request
+        import io, contextlib
+        self.login(); self.callback()
+        request = Request({'type':'http','headers':[(b'host',url_host().encode()),
+                           (b'cookie',(COOKIE+'='+self.client.cookies[COOKIE]).encode())]})
+        self.msal.acquire_token_silent.return_value = None
+        self.msal.acquire_token_silent_with_error.side_effect = RuntimeError("offline")
+        log = io.StringIO()
+        with contextlib.redirect_stdout(log):
+            self.assertIsNone(self.auth.graph_token(request))
+        self.assertIn('RuntimeError: offline', log.getvalue())
+
     def test_graph_cache_wrong_account_or_broad_scope_denied(self):
         from starlette.requests import Request
         self.login(); self.callback()

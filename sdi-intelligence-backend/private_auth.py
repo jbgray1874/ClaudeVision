@@ -28,10 +28,27 @@ SCOPES = ["User.Read", "Mail.ReadWrite"]
 NEVER = ("Mail.Send", "Mail.Send.Shared", "Mail.ReadWrite.Shared", "Mail.Read.Shared")
 
 
+GRAPH = "https://graph.microsoft.com/"
+
+
 def _short(scope: str) -> str:
     """"https://graph.microsoft.com/Mail.ReadWrite" -> "Mail.ReadWrite"; a short
     name is returned unchanged. Entra uses both forms for the same permission."""
     return str(scope or "").rsplit("/", 1)[-1]
+
+
+def _both_forms(scopes):
+    """The same permissions written the two ways Microsoft writes them.
+
+    Entra accepts either, and caches the token under whichever form it answered
+    with. MSAL then matches a silent request against those cached strings
+    literally: ask for "Mail.ReadWrite" when the cache says
+    "https://graph.microsoft.com/Mail.ReadWrite" and MSAL reports no token at
+    all, which is indistinguishable from no consent. We cannot reach inside
+    MSAL's comparison, so ask it both ways and keep whichever it answers.
+    """
+    short = [_short(s) for s in scopes]
+    return [short, [GRAPH + s for s in short]]
 
 
 @dataclass(frozen=True)
@@ -144,6 +161,34 @@ class PrivateAuth:
         c = row[0]["claims"]
         return {"kind": "user", "tid": c["tid"], "oid": c["oid"]}
 
+    @staticmethod
+    def _why(app, account):
+        """MSAL's own reason for a silent refusal. For the log only, and never
+        allowed to decide anything: a probe that fails tells us nothing."""
+        probe = getattr(app, "acquire_token_silent_with_error", None)
+        if not callable(probe):
+            return ""
+        try:
+            answer = probe(SCOPES, account=account)
+        except Exception as problem:
+            return f"{type(problem).__name__}: {problem}"
+        if not isinstance(answer, dict):       # a stand-in, under test
+            return ""
+        said = " ".join(str(answer.get(k, "")) for k in ("error", "error_description"))
+        return said.strip()
+
+    @staticmethod
+    def _held(cache):
+        """The permissions the cached access tokens are filed under - scope names
+        only. No token material, no claims, nothing that identifies a person."""
+        look = getattr(cache, "search", None) or cache.find
+        try:
+            tokens = list(look(msal.TokenCache.CredentialType.ACCESS_TOKEN))
+        except Exception:
+            return ""
+        return "; ".join(sorted(
+            " ".join(sorted(str(t.get("target", "")).split())) for t in tokens))
+
     def graph_token(self, request):
         row = self.session(request)
         if not row:
@@ -157,9 +202,25 @@ class PrivateAuth:
                     a.get("realm") == self.settings.tenant]
         if len(accounts) != 1:
             return None
-        try:
-            result = app.acquire_token_silent(SCOPES, account=accounts[0]) or {}
-        except Exception:
+        result = {}
+        for asked in _both_forms(SCOPES):
+            try:
+                answer = app.acquire_token_silent(asked, account=accounts[0]) or {}
+            except Exception:
+                return None
+            if answer.get("access_token"):
+                result = answer
+                break
+        if not result:
+            # Nothing came back at all, which is NOT the same as a token without
+            # the permission - and the 403 it produces says "consent required",
+            # which sent the first live sign-in looking in Entra at a consent
+            # that was already granted. Say what MSAL actually objected to and
+            # what its cache is holding, so the next look starts in the right place.
+            print(f"[private-email] no token from the cache. msal: "
+                  f"{self._why(app, accounts[0]) or 'no reason given'}; "
+                  f"cache holds {self._held(cache) or 'no access token'}; "
+                  f"asked for {sorted(_short(s) for s in SCOPES)}", flush=True)
             return None
         # Do not accept a token acquired for a broader feature's permissions. A
         # consent granted elsewhere, or widened later in Entra, must not quietly
