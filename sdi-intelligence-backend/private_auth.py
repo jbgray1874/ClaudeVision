@@ -37,6 +37,40 @@ def _short(scope: str) -> str:
     return str(scope or "").rsplit("/", 1)[-1]
 
 
+def _granted(result, cache):
+    """The permissions a token actually carries, as short names.
+
+    MSAL's answer leaves out "scope" when it serves a token from its cache: that
+    field echoes what the identity provider said, and nothing was issued. The
+    permissions are on the cached entry itself, under "target".
+
+    Reading a missing "scope" as "this token has no permissions" refused every
+    good token the cache ever served, and logged it as "holds []" - which reads
+    like a consent that was never granted, and was chased as one for most of a
+    day. An empty answer here still refuses the token; it just has to be empty
+    because the permissions really are absent, not because we looked in the one
+    place MSAL does not fill in.
+    """
+    said = str(result.get("scope") or "").split()
+    if said:
+        return {_short(s) for s in said}
+    look = getattr(cache, "search", None) or getattr(cache, "find", None)
+    if not callable(look):
+        return set()
+    try:
+        entries = list(look(msal.TokenCache.CredentialType.ACCESS_TOKEN))
+    except Exception:
+        return set()
+    # Every access token the cache holds for this registration. Wider than the
+    # one token in hand, so it can only refuse where the exact answer would
+    # allow - the safe direction for a check whose job is to refuse.
+    held = set()
+    for entry in entries:
+        if isinstance(entry, dict):
+            held |= {_short(s) for s in str(entry.get("target") or "").split()}
+    return held
+
+
 def _both_forms(scopes):
     """The same permissions written the two ways Microsoft writes them.
 
@@ -245,7 +279,7 @@ class PrivateAuth:
         # the short name we asked for made every real token look like it was
         # missing the permission - and the mocked tests, written in short form,
         # agreed with each other and not with Entra.
-        scopes = {_short(s) for s in result.get("scope", "").split()}
+        scopes = _granted(result, cache)
         if not {_short(s) for s in SCOPES}.issubset(scopes) or scopes & {_short(n) for n in NEVER}:
             print(f"[private-email] token refused: holds {sorted(scopes)}, "
                   f"needs {sorted(_short(s) for s in SCOPES)}", flush=True)
