@@ -186,3 +186,17 @@ class NothingIsLeavingIsAClaim(unittest.TestCase):
         flat = said.index('"Nothing in the plan is set to leave on "')
         guard = said.index(": unread")
         self.assertLess(guard, flat, "the unreadable case must be handled first")
+
+
+class ItReadsLikeEnglish(unittest.TestCase):
+    """"1 line have a date this cannot read" was on the screen Sue would read."""
+
+    PAGE = (__import__("pathlib").Path(__file__).resolve().parent.parent
+            / "appportal" / "tti-despatch.html").read_text(encoding="utf-8")
+
+    def test_the_verb_agrees_with_the_count(self):
+        self.assertIn('const have = n => n === 1 ? " has" : " have";', self.PAGE)
+        for summary in ("a date this cannot read", "no departure date set yet"):
+            with self.subTest(summary=summary):
+                before = self.PAGE.split(summary, 1)[0]
+                self.assertIn("have(", before.rsplit("el(\"summary\"", 1)[1])

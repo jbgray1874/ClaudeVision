@@ -132,6 +132,7 @@ async function ask(){
     // read - and that is the sentence somebody would act on.
     const unread = j.unresolved_date_count || 0;
     const some = n => n + (n === 1 ? " line" : " lines");
+    const have = n => n === 1 ? " has" : " have";
     setStatus(
       j.line_count
         ? some(j.line_count) + (j.line_count === 1 ? " is" : " are")
@@ -156,8 +157,8 @@ async function ask(){
     if(j.unresolved_date_count){
       const d = el("details", null, $("extra"));
       d.open = !j.line_count;        // nothing else to show: lead with these
-      el("summary", some(j.unresolved_date_count)
-         + " have a date this cannot read — check these in the workbook", d);
+      el("summary", some(j.unresolved_date_count) + have(j.unresolved_date_count)
+         + " a date this cannot read — check these in the workbook", d);
       for(const line of j.unresolved_date_lines || []) card(line, d, "unresolved");
       if(j.unresolved_date_truncated)
         el("p", "Only the first 25 are shown.", d, "hint");
@@ -166,8 +167,9 @@ async function ask(){
     // counting them with the unreadable ones buries the ones that matter.
     if(j.no_date_count){
       const d = el("details", null, $("extra"));
-      el("summary", some(j.no_date_count) + " have no departure date set yet"
-         + " (N/A, TBC, blank) — normal for work not yet planned", d);
+      el("summary", some(j.no_date_count) + have(j.no_date_count)
+         + " no departure date set yet (N/A, TBC, blank)"
+         + " — normal for work not yet planned", d);
       for(const line of j.no_date_lines || []) card(line, d);
       if(j.no_date_truncated) el("p", "Only the first 25 are shown.", d, "hint");
     }
