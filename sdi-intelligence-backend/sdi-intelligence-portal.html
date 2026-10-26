@@ -2349,7 +2349,7 @@
       </div>
       <pre id="reports-view" class="console" style="margin-top:16px;max-height:440px;overflow:auto"></pre>
 
-      <div class="note reveal" style="animation-delay:.1s">If this section says <i>StatusReporting root not configured</i>, add the path to <code>SDI_FILE_ROOTS</code> in <code>.env</code> (comma-separated alongside the existing AISheets root) and restart <code>python app.py</code>.</div>
+      <div class="note reveal" style="animation-delay:.1s">If this section says <i>StatusReporting root not configured</i>, add the path to <code>SDI_FILE_ROOTS</code> in <code>.env</code> (separated by a <code>|</code> from the existing AISheets root, and as a <code>\\sdi-dc01\shareddata$\...</code> path, never a <code>K:</code> drive letter) and restart <code>python app.py</code>.</div>
       <div class="note reveal" style="animation-delay:.15s;border-left-color:var(--info)"><b>Tech Radar reports</b> — the AI Tech Radar writes HTML reports to <code>C:\ClaudeVision\output\reports\</code>, which is the third file root in <code>SDI_FILE_ROOTS</code>. Reports appear under <b>Files &amp; Directories → output → reports</b>, not here. To generate a new report: <code>python tech_radar.py</code> from <code>C:\ClaudeVision\sdi-intelligence-backend\</code>. Make sure <code>SDI_OUTPUT_ROOT</code> is set in <code>.env</code> if reports aren't appearing.</div>
     </section>
 
@@ -4753,7 +4753,7 @@
       });
       if(!match){
         crumb.textContent='StatusReporting root not configured';
-        list.innerHTML='<div class="muted">Add <code>K:\\IT\\AI &amp; Automation\\StatusReporting</code> to <code>SDI_FILE_ROOTS</code> in <code>.env</code> (comma-separated alongside the existing root) and restart <code>python app.py</code>.</div>';
+        list.innerHTML='<div class="muted">Add <code>\\\\sdi-dc01\\shareddata$\\Shared\\IT\\AI &amp; Automation\\StatusReporting</code> to <code>SDI_FILE_ROOTS</code> in <code>.env</code> (separated by a <code>|</code> from the existing root; a <code>K:</code> drive letter does not exist for the service account) and restart <code>python app.py</code>.</div>';
         return;
       }
       const r=await _get('/api/files?path='+encodeURIComponent(match.path));
