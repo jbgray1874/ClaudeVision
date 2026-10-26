@@ -167,6 +167,72 @@ class AuthTests(unittest.TestCase):
         self.assertIsNone(self.auth.graph_token(request))
 
 
+    # ── THE THREE THINGS THE REVIEW ASKED FOR, 26 OCTOBER 2026 ──────────────────
+
+    def test_the_login_flow_round_trips_through_real_sqlite(self):
+        """BEGIN IMMEDIATE inside sqlite3's own context manager is driver behaviour,
+        not ours, and it sits on the one path every sign-in takes. Nothing here is
+        mocked below the store, so running this suite on the SERVER's Python is what
+        proves the server's Python can sign somebody in."""
+        import sqlite3
+        self.assertEqual(self.login().status_code, 302, 'login writes the flow row')
+        self.assertEqual(self.callback().status_code, 302, 'callback consumes it')
+        # Single use: the same state cannot be replayed, and the failure is the
+        # intended 400 rather than a sqlite transaction error.
+        replay = self.client.get(CALLBACK + '?state=one-use-state&code=test')
+        self.assertEqual(replay.status_code, 400, replay.text)
+        # And the store itself, directly, on this interpreter's sqlite3.
+        store = Store(self.settings.database, self.settings.encryption_key)
+        store.put('flow:direct', {'flow': {}, 'browser': 'n'}, time.time() + 60)
+        self.assertIsNotNone(store.get('flow:direct', consume=True))
+        self.assertIsNone(store.get('flow:direct', consume=True))
+        self.assertGreaterEqual(sqlite3.sqlite_version_info, (3, 0, 0))
+
+    def test_graph_refusing_access_is_not_reported_as_an_outage(self):
+        """401 and 403 are what a missing consent looks like. Calling that "Graph
+        unavailable" sends somebody to check the network when the answer is in Entra."""
+        import httpx as _httpx
+        from private_email_routes import make_router as _make
+        self.login(); self.callback()
+
+        for status in (401, 403):
+            with self.subTest(status=status):
+                class _Client:
+                    def __init__(self, *a, **k): pass
+                    def __enter__(self): return self
+                    def __exit__(self, *a): return False
+                    def request(self, method, url, **kw):
+                        return _httpx.Response(status, json={'error': {'code': 'x',
+                                               'message': 'tenant-specific detail'}},
+                                               request=_httpx.Request(method, url))
+                real, _httpx.Client = _httpx.Client, _Client
+                try:
+                    r = self.client.get('/api/private-email/review')
+                finally:
+                    _httpx.Client = real
+                self.assertEqual(r.status_code, 403, r.text)
+                detail = r.json()['detail']
+                self.assertIn('consent', detail.lower())
+                self.assertNotIn('unavailable', detail.lower())
+                # Graph's own body never reaches the browser.
+                self.assertNotIn('tenant-specific detail', r.text)
+
+    def test_a_server_without_the_draft_page_cannot_serve_drafts(self):
+        """The draft UI is not in this release. The flag is the only thing between a
+        reader and a page with a Save Draft button, so asking for drafts without the
+        page must stop the service starting, not fail later at a 404."""
+        from private_email_routes import make_router as _make, DRAFT_PAGE, READONLY_PAGE
+        here = Path(__file__).parent
+        self.assertFalse((here / DRAFT_PAGE).exists(),
+                         'the draft UI must not be shipped in this package')
+        self.assertTrue((here / READONLY_PAGE).is_file())
+        with self.assertRaises(RuntimeError) as caught:
+            _make(self.auth, Policy(TENANT, OWNER, True), None, ORIGIN, drafts_enabled=True)
+        self.assertIn('not part of this release', str(caught.exception))
+        # And the read-only router still builds.
+        _make(self.auth, Policy(TENANT, OWNER, True), None, ORIGIN)
+
+
 def url_host():
     return 'private.example.test'
 

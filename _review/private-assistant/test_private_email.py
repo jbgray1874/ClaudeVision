@@ -103,7 +103,13 @@ class PrivateEmailTests(unittest.TestCase):
     def client(self, claims=OWNER):
         auth = Mock(current_user=Mock(return_value=claims),graph_token=Mock(return_value="test-token"))
         app = FastAPI()
-        app.include_router(make_router(auth,self.policy,Path(self.temp.name)/"api.db","https://private.example.test",drafts_enabled=True))
+        # The draft UI is not shipped (see test_a_server_without_the_draft_page_
+        # cannot_serve_drafts), so these draft tests supply their own stub page.
+        pages = Path(self.temp.name)/"pages"; pages.mkdir(exist_ok=True)
+        (pages/"private-email.html").write_text("<!doctype html><p>stub draft page", encoding="utf-8")
+        app.include_router(make_router(auth,self.policy,Path(self.temp.name)/"api.db",
+                                       "https://private.example.test",drafts_enabled=True,
+                                       page_dir=pages))
         return TestClient(app)
 
     def test_api_rejects_other_user(self):
