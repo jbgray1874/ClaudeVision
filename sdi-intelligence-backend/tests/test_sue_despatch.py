@@ -200,3 +200,81 @@ class ItReadsLikeEnglish(unittest.TestCase):
             with self.subTest(summary=summary):
                 before = self.PAGE.split(summary, 1)[0]
                 self.assertIn("have(", before.rsplit("el(\"summary\"", 1)[1])
+
+
+class AMisspeltMonth(unittest.TestCase):
+    """"FRI 6TH NIV TBC", order 15194, Nov 26 WK 41 row 64 - the one genuinely
+    unreadable line in the first live read of Sue's workbook. NIV is NOV.
+
+    This is not fuzzy month matching. MAR and MAY are one letter apart, as are
+    JAN and JUN, and correcting spellings in general would let a despatch slide
+    three months and read as confidently as a right one. Three things must line
+    up: the word is NOT a month, exactly one real month is one letter away, and
+    a weekday in the cell agrees with the date that produces.
+    """
+
+    def test_the_real_cell_resolves_and_says_it_was_corrected(self):
+        got = schedule_date("FRI 6TH NIV TBC", as_of=AS_OF)
+        self.assertEqual(got.value, date(2026, 11, 6))      # a Friday
+        self.assertIn("NIV", got.basis)
+        self.assertIn("Nov", got.basis)
+        self.assertTrue(got.tentative)                      # the TBC survives
+
+    def test_without_a_weekday_there_is_nothing_to_check_it_against(self):
+        self.assertIsNone(schedule_date("6TH NIV TBC", as_of=AS_OF).value)
+
+    def test_a_weekday_that_disagrees_refuses_the_correction(self):
+        self.assertIsNone(schedule_date("MON 6TH NIV", as_of=AS_OF).value)
+
+    def test_months_that_are_one_letter_from_each_other_are_never_touched(self):
+        """MAR, MAY, JAN and JUN are real months, so they never reach the
+        correction at all - they resolve, or fail the weekday, as themselves."""
+        from sue_despatch import _month_meant
+        for real, number in (("mar", 3), ("may", 5), ("jan", 1), ("jun", 6)):
+            with self.subTest(month=real):
+                self.assertEqual(_month_meant(real), number)
+
+    def test_a_word_near_two_months_is_refused(self):
+        from sue_despatch import _month_meant
+        self.assertIsNone(_month_meant("jbn"))     # jan and jun both one away
+        self.assertIsNone(_month_meant("zzz"))
+        self.assertIsNone(_month_meant(""))
+
+
+class TheFirstLiveReadOfSuesWorkbook(unittest.TestCase):
+    """Regression examples taken from the real workbook on 26 October 2026,
+    so a later change has to argue with what is actually in it."""
+
+    REAL = [
+        ("Oct 26 WK 40", 3, 16737, "Missing Parts for TTI Belgium Address", ""),
+        ("Oct 26 WK 40", 5, 16507, "1 X SANDER DEDMO 12515", "N/A"),
+        ("Oct 26 WK 40", 10, None, "1 x 12700-GA Line Trimmer Pallet Display", ""),
+        ("Nov 26 WK 41", 5, 16679, "DATA CAPTURE STAND", "TBC"),
+        ("Nov 26 WK 41", 6, 16679, "CARRIAAGE", "TBC"),
+        ("Nov 26 WK 41", 64, 15194, "Milwaukee Nord Gondola 90cm 1 Leg EMEA",
+         "FRI 6TH NIV TBC"),
+    ]
+
+    def rows(self):
+        return [SourceRow(sheet, row, {"SDI ORDER NO": order or "",
+                                       "DESCRIPTION": what,
+                                       "LORRY FROM SDI": cell})
+                for sheet, row, order, what, cell in self.REAL]
+
+    def test_the_blanks_are_ordinary_and_the_typo_resolves(self):
+        out = going_out(self.rows(), day=date(2026, 11, 6), as_of=AS_OF)
+        self.assertEqual(out["no_date_count"], 5)
+        self.assertEqual(out["unresolved_date_count"], 0)
+        self.assertEqual(out["line_count"], 1)
+        self.assertEqual(out["lines"][0]["source"], "Nov 26 WK 41!row 64")
+        self.assertIn("NIV", out["lines"][0]["date_basis"])
+
+    def test_a_row_without_an_order_number_is_still_a_line(self):
+        """"(no order number)" rows are real work on Sue's plan."""
+        out = going_out(self.rows(), day=date(2026, 11, 6), as_of=AS_OF)
+        kept = [l for l in out["no_date_lines"] if not l["order"]]
+        self.assertTrue(kept, "a described row with no order number was dropped")
+
+    def test_pallets_are_still_never_totalled(self):
+        out = going_out(self.rows(), day=date(2026, 11, 6), as_of=AS_OF)
+        self.assertIsNone(out["pallet_total"])

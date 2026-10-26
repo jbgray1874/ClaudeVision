@@ -31,6 +31,31 @@ BACKWARD_LIMIT = 180
 FORWARD_LIMIT = 270
 
 
+def _month_meant(word: str) -> int | None:
+    """A misspelt month - but only one it cannot be mistaken about.
+
+    "FRI 6TH NIV TBC", order 15194. NIV is NOV, and James confirmed it.
+
+    ── WHY THIS IS NOT FUZZY MONTH MATCHING ───────────────────────────────────
+    MAR and MAY are one letter apart. So are JAN and JUN. Correcting spellings
+    in general would let a despatch slide three months and read as confidently
+    as a right one. This only ever looks at a word that is NOT a month, and
+    only accepts it when exactly one real month is one letter away - so "mar"
+    and "may" never reach here, because both are already months.
+
+    The caller requires the second confirmation: a weekday in the cell that
+    agrees with the resulting date. Three things have to line up, and if any
+    one does not the line stays unresolved for a person to read.
+    """
+    three = str(word or "")[:3].lower()
+    if three in MONTHS:
+        return MONTHS[three]
+    near = [number for name, number in MONTHS.items()
+            if len(name) == len(three)
+            and sum(a != b for a, b in zip(three, name)) == 1]
+    return near[0] if len(near) == 1 else None
+
+
 def _infer_year(day: int, month: int, weekday: str | None, as_of: date) -> date | None:
     """Which year does a bare "Thurs 5th Nov" mean?
 
@@ -136,8 +161,14 @@ def schedule_date(raw: Any, *, as_of: date) -> ScheduleDate:
         if hit:
             weekday, day, month_word, year_word = hit.groups()
             month = MONTHS.get(month_word[:3].lower())
+            misspelt = ""
             if month is None:
-                raise ValueError("unknown month")
+                # A weekday is the second confirmation, and without one there
+                # is nothing to check a corrected spelling against.
+                month = _month_meant(month_word) if weekday else None
+                if month is None:
+                    raise ValueError("unknown month")
+                misspelt = _clean(month_word)
             if year_word:
                 year = int(year_word)
                 if year < 100:
@@ -145,7 +176,8 @@ def schedule_date(raw: Any, *, as_of: date) -> ScheduleDate:
                 result = date(year, month, int(day))
                 if weekday and result.strftime("%a").lower()[:3] != weekday.lower()[:3]:
                     return ScheduleDate(None, "weekday disagrees with date", tentative, text)
-                return ScheduleDate(result, "stated date", tentative, text)
+                return ScheduleDate(result, _said(misspelt, month, "stated date"),
+                                    tentative, text)
             inferred = _infer_year(int(day), month, weekday, as_of)
             if inferred is None:
                 return ScheduleDate(
@@ -153,10 +185,21 @@ def schedule_date(raw: Any, *, as_of: date) -> ScheduleDate:
                     "weekday disagrees with date" if weekday
                     else "no year near this snapshot fits the date",
                     tentative, text)
-            return ScheduleDate(inferred, "year inferred from snapshot", tentative, text)
+            return ScheduleDate(inferred,
+                                _said(misspelt, month, "year inferred from snapshot"),
+                                tentative, text)
     except ValueError:
         pass
     return ScheduleDate(None, "unreadable or non-specific date", tentative, text)
+
+
+def _said(misspelt: str, month: int, otherwise: str) -> str:
+    """A corrected spelling is never silent: the screen shows what was read
+    and what it was read as, so Sue can fix the cell rather than live with it."""
+    if not misspelt:
+        return otherwise
+    name = [k for k, v in MONTHS.items() if v == month][0].title()
+    return f"“{misspelt}” read as {name}, weekday agrees"
 
 
 def _business_row(row: SourceRow) -> bool:
