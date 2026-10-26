@@ -122,3 +122,31 @@ class DegradesRatherThanStopsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheOtherDeployScriptTests(unittest.TestCase):
+    """Two deploy scripts with different file sets, and nothing said which one
+    a change needed.
+
+    26 October 2026: the TTI despatch view deployed "successfully" through
+    Deploy-AMCRM.ps1, restarted cleanly, and was not mounted - because its
+    wiring is in app.py, which that script deliberately never copies. A green
+    deploy that silently omits the file holding your change is worse than a
+    failed one.
+    """
+
+    def test_the_deploy_says_when_app_py_differs(self):
+        self.assertIn("app.py differs from the server's copy", DEPLOY)
+        self.assertIn("push-to-server.ps1 -Apply", DEPLOY)
+
+    def test_it_still_does_not_copy_app_py(self):
+        """The warning is the fix, not a change of policy: the server's copy
+        has drifted before, and copying a whole file over drift is worse."""
+        self.assertNotIn('"app.py"', DEPLOY.split("$Files = @(", 1)[1].split(")", 1)[0])
+
+    def test_the_tti_modules_and_page_are_on_this_list(self):
+        for name in ("sue_despatch.py", "tracker_snapshot.py",
+                     "tti_despatch_routes.py", "tti_plan_source.py",
+                     "appportal/tti-despatch.html"):
+            with self.subTest(file=name):
+                self.assertIn(f'"{name}"', DEPLOY)

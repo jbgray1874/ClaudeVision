@@ -186,6 +186,28 @@ $bad = @($changed | Where-Object { (Get-Sha $_.Src) -ne (Get-Sha $_.Dst) })
 if ($bad.Count -gt 0) { Stop-Deploy ("These didn't arrive intact: " + (($bad | ForEach-Object { $_.Name }) -join ", ") + ". Run this again.") }
 Say ("Copied {0} file(s), checked byte for byte." -f $changed.Count) Green
 
+# -- app.py IS NOT COPIED, AND SILENCE ABOUT THAT COSTS A DEPLOY ---------------------------
+#
+# This script copies a named list and deliberately leaves app.py alone, because the server's
+# copy has drifted before. push-to-server.ps1 copies the whole folder and DOES replace it.
+# Two scripts, two file sets, and nothing said which one a change needed - so a change whose
+# wiring lives in app.py deployed "successfully", restarted, and did nothing at all. That is
+# exactly how the TTI despatch view landed on the server unmounted on 26 October 2026.
+#
+# It still does not copy it. It now says when that matters, which is the part that was free.
+$appSrc = Join-Path $src "app.py"
+$appDst = Join-Path $dest "app.py"
+if ((Get-Sha $appSrc) -ne (Get-Sha $appDst)) {
+    Write-Host ""
+    Say "app.py differs from the server's copy, and this script does not copy it." Yellow
+    Say "If your change mounts a router or adds a path to the public allow-list, it is" Yellow
+    Say "NOT live yet. Deploy app.py with:" Yellow
+    Write-Host ""
+    Write-Host "      .\tools\start\push-to-server.ps1 -Apply" -ForegroundColor White
+    Write-Host ""
+    Say "That copies the whole backend folder, app.py included, then restart the service." Yellow
+}
+
 # -- 5. Restart, if the server code changed ----------------------------------------------
 $toolChanged = @($changed | Where-Object { $_.Name -like "tools/*.py" })
 $pyChanged = @($changed | Where-Object { $_.Name -like "*.py" -and $_.Name -notlike "tools/*" })
