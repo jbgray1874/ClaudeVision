@@ -9,7 +9,34 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from private_email import OCTET, Denied, DraftStore, GraphMailbox
-import private_draft_writer as writer
+
+try:
+    import private_draft_writer as writer
+except Exception as _missing:                                      # noqa: BLE001
+    # ── A SIDE FEATURE MUST NEVER TAKE THE HOST DOWN ───────────────────────────
+    # app.py imports this module as the service starts, so an import error here
+    # stops the WHOLE portal - HR, estimating, the AM CRM, the app portal. On
+    # 26 October 2026 a new module was added here and left out of the deploy's
+    # file list, and App Proxy answered BadGateway for everything.
+    #
+    # Failing closed is right for anything that guards the mailbox; suggested
+    # wording guards nothing. So this one degrades: no suggestions, everything
+    # else as it was, and the reason in the log.
+    print(f"[private-email] suggestions unavailable - {type(_missing).__name__}: "
+          f"{_missing}. The mailbox still works; replies must be written by hand.",
+          flush=True)
+
+    class writer:                                                  # noqa: N801
+        """Stands in for the writer when it could not be imported."""
+        unavailable = True
+
+        @staticmethod
+        def available():
+            return False
+
+        @staticmethod
+        def compose(message, instruction="", client=None):
+            return {"summary": "", "asks": [], "draft": "", "gaps": []}
 
 
 class Proposal(BaseModel):
