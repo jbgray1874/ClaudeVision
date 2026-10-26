@@ -37,9 +37,11 @@ def _store() -> vx.ExcelStore:
 class _Graph:
     """Records every call, and answers the range GET with whatever the cell holds."""
 
-    def __init__(self, cell="old", patch_status=200, headers=None, get_status=200):
+    def __init__(self, cell="old", patch_status=200, headers=None, get_status=200,
+                 session="sess-1", saves=True):
         self.cell, self.patch_status, self.get_status = cell, patch_status, get_status
         self.headers = headers or {"request-id": "abc-123"}
+        self.session, self.saves = session, saves
         self.calls = []
 
     def __call__(self, *a, **kw):
@@ -51,9 +53,20 @@ class _Graph:
     def __exit__(self, *a):
         return False
 
+    def post(self, url, headers=None, json=None, **kw):
+        self.calls.append(("POST", url, json, headers))
+        if url.endswith("/createSession"):
+            if self.session is None:
+                return httpx.Response(403, json={"error": {"code": "accessDenied",
+                                                           "message": "no session"}},
+                                      headers={}, request=httpx.Request("POST", url))
+            return httpx.Response(201, json={"id": self.session, "persistChanges": True},
+                                  headers={}, request=httpx.Request("POST", url))
+        return httpx.Response(204, headers={}, request=httpx.Request("POST", url))
+
     def patch(self, url, headers=None, json=None, **kw):
         self.calls.append(("PATCH", url, json, headers))
-        if self.patch_status < 300:
+        if self.patch_status < 300 and self.saves:
             self.cell = json["values"][0][0]
         body = {} if self.patch_status < 300 else {
             "error": {"code": "accessDenied", "message": "Access denied."}}
@@ -77,10 +90,11 @@ def test_only_the_named_cell_is_written_and_the_file_is_never_replaced(monkeypat
     _, url, body, _ = patches[0]
     assert url.endswith(f"/worksheets('{SHEET}')/range(address='{ADDR}')"), url
     assert body == {"values": [["Presentation in with Morrisons"]]}
-    # Nothing that replaces or re-uploads the workbook.
+    # Nothing that replaces or re-uploads the workbook. A workbook session is fine
+    # and expected - it is an Excel conversation, not a file upload.
     for _, url, _, _ in graph.calls:
         assert "/content" not in url, f"the file itself was touched: {url}"
-        assert "createUploadSession" not in url and "createSession" not in url, url
+        assert "createUploadSession" not in url, url
 
 
 def test_the_cell_is_read_back_after_the_write(monkeypatch):
@@ -88,26 +102,53 @@ def test_the_cell_is_read_back_after_the_write(monkeypatch):
     monkeypatch.setattr(vx.httpx, "Client", graph)
     _store().apply("tok", ITEM, "Status", "Follow up January 2027")
     kinds = [c[0] for c in graph.calls]
-    assert kinds == ["PATCH", "GET"], kinds
-    assert graph.calls[1][1] == graph.calls[0][1], "it reads back the address it wrote"
+    assert kinds == ["POST", "PATCH", "GET", "POST"], kinds   # open, write, read, close
+    wrote = [c for c in graph.calls if c[0] == "PATCH"][0]
+    read = [c for c in graph.calls if c[0] == "GET"][0]
+    assert read[1] == wrote[1], "it reads back the address it wrote"
 
 
-def test_a_write_graph_accepted_but_did_not_save_is_reported_as_a_failure(monkeypatch):
-    """A 200 on the PATCH is not a saved cell. Telling somebody their change is
-    saved when it is not is the one outcome this whole path exists to prevent."""
+def test_the_write_and_the_read_back_share_one_persistent_session(monkeypatch):
+    """23 October 2026: without this, a cell written and read a moment later can be
+    answered from a copy of the workbook that has not caught up - and a change
+    safely in the file was reported to Nick Garrish as failed."""
     graph = _Graph()
+    monkeypatch.setattr(vx.httpx, "Client", graph)
+    _store().apply("tok", ITEM, "Status", "On hold")
 
-    def patch(url, headers=None, json=None, **kw):          # accepted, then discarded
-        graph.calls.append(("PATCH", url, json, headers))
-        return httpx.Response(200, json={}, headers={"request-id": "trace-me"},
-                              request=httpx.Request("PATCH", url))
+    opened = [c for c in graph.calls if c[0] == "POST" and c[1].endswith("/createSession")]
+    assert len(opened) == 1 and opened[0][2] == {"persistChanges": True}, graph.calls
+    for kind, url, _, headers in graph.calls:
+        if kind in ("PATCH", "GET"):
+            assert headers.get("workbook-session-id") == "sess-1", (kind, url, headers)
+    assert [c for c in graph.calls if c[0] == "POST" and c[1].endswith("/closeSession")], \
+        "the session is handed back"
+
+
+def test_a_successful_write_is_never_reported_as_a_failure(monkeypatch):
+    """THE BUG THIS FILE EXISTS FOR. The cell was written. The read-back disagreed
+    because it had no session to make it reliable. Reporting that as a failure sent
+    Nick looking for a broken integration that was working."""
+    graph = _Graph(session=None, saves=True)                  # no session available
+
+    def get(url, headers=None, params=None, **kw):            # a copy that is behind
+        graph.calls.append(("GET", url, params, headers))
+        return httpx.Response(200, json={"text": [["old"]], "values": [["old"]]},
+                              headers={}, request=httpx.Request("GET", url))
 
     monkeypatch.setattr(vx.httpx, "Client", graph)
-    monkeypatch.setattr(graph, "patch", patch)
+    monkeypatch.setattr(graph, "get", get)
+    assert _store().apply("tok", ITEM, "Status", "Presentation in with Morrisons") is None
+
+
+def test_with_a_session_a_cell_that_did_not_change_is_a_failure(monkeypatch):
+    """The one case where the read-back may overrule the write's own 200: a session
+    cannot be out of date with itself."""
+    graph = _Graph(saves=False)                               # accepted, then discarded
+    monkeypatch.setattr(vx.httpx, "Client", graph)
     err = _store().apply("tok", ITEM, "Status", "Follow up January 2027")
     assert err and err["state"] == "not_saved", err
-    assert "Nothing was saved" in err["detail"]
-    assert ADDR in err["detail"] and "trace-me" in err["detail"]
+    assert ADDR in err["detail"] and "Nothing was saved" in err["detail"]
 
 
 def test_excel_reformatting_the_value_is_not_a_failure(monkeypatch):
@@ -160,9 +201,19 @@ def test_the_write_carries_the_signed_in_persons_own_token(monkeypatch):
         assert headers["Authorization"] == "Bearer nicks-delegated-token", headers
 
 
-def test_no_workbook_session_is_opened():
-    """A non-persistent session accepts a write and discards it. We open no session,
-    and a range write with no session header is saved to the file."""
+def test_the_session_is_the_persistent_kind():
+    """A NON-persistent session accepts a write and discards it, which is the one
+    way to lose a change while being told it was saved. Never that one."""
     source = (BACKEND / "voicecrm_excel.py").read_text(encoding="utf-8")
-    assert "workbook-session-id" not in source
-    assert "createSession" not in source
+    assert '"persistChanges": True' in source
+    assert "persistChanges\": False" not in source and "persistChanges=False" not in source
+
+
+def test_the_write_still_happens_when_no_session_can_be_opened(monkeypatch):
+    """A session makes the read-back trustworthy; it is not what makes the write
+    save. Losing it must not lose the change."""
+    graph = _Graph(session=None)
+    monkeypatch.setattr(vx.httpx, "Client", graph)
+    assert _store().apply("tok", ITEM, "Status", "On hold") is None
+    patches = [c for c in graph.calls if c[0] == "PATCH"]
+    assert len(patches) == 1 and "workbook-session-id" not in patches[0][3]

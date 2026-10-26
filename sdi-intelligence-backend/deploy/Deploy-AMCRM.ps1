@@ -50,8 +50,18 @@ $Files = @(
     "appportal/voice-crm.html",
     "voicecrm_connector.py",
     "connector_cards.py",
-    "connector_oauth.py"
+    "connector_oauth.py",
+    "private_auth.py",
+    "private_email.py",
+    "private_email_routes.py",
+    "private_email_integration.py",
+    "private-email-readonly.html",
+    "private-email.html"
 )
+# app.py is deliberately NOT here. The server's copy has drifted from the repository
+# before, and this script copies whole files: adding it would silently overwrite
+# whatever is on the server with whatever is in the branch. Its two private-assistant
+# edits are applied in place - see PRIVATE_ASSISTANT_SETUP.md section 3.
 # The delivery-note splitter, which runs on the server as the SDISplitScan service. Paths
 # from the repository root; they land in C:\ClaudeVision\tools\logistics on the server.
 $ToolFiles = @(

@@ -209,6 +209,7 @@ _PUBLIC_ALLOW = (
     "/api/me",                 # who am I
     "/api/voicecrm",           # Nick's app
     "/api/hr/app",             # HRInventry Anywhere only - never the rest of /api/hr
+    "/api/private-email",      # separate private registration and owner gate
     "/favicon.ico",
 )
 
@@ -768,6 +769,11 @@ app.include_router(estimate_router)
 
 # ── Identity, and the apps that need it ──
 app.include_router(auth.router)
+
+# The private assistant: its own Entra registration, its own session store, its own
+# cookies. Mounts nothing unless SDI_PRIVATE_ENABLED=yes - see PRIVATE_ASSISTANT_SETUP.md.
+from private_email_integration import install as install_private_email
+install_private_email(app)
 
 from voicecrm import router as voicecrm_router
 app.include_router(voicecrm_router)
