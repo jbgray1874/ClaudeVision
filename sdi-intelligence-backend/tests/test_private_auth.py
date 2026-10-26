@@ -298,6 +298,45 @@ class AuthTests(unittest.TestCase):
             self.assertIsNone(self.auth.graph_token(request))
         self.assertIn('RuntimeError: offline', log.getvalue())
 
+    def test_every_refusal_says_which_one_it_was(self):
+        """26 October 2026: the code was right, the deploy was right, and the log
+        was empty - because an expired session returned None without a word. The
+        screen said "sign in again" and we spent the afternoon in Entra instead.
+        Each way out of graph_token now names itself."""
+        from starlette.requests import Request
+        import io, contextlib
+        self.login(); self.callback()
+        cookie = self.client.cookies[COOKIE]
+        request = Request({'type':'http','headers':[(b'host',url_host().encode()),
+                           (b'cookie',(COOKIE+'='+cookie).encode())]})
+
+        # 1. The session has gone: expired, or a different browser.
+        self.auth.store.delete(self.auth.key(cookie))
+        log = io.StringIO()
+        with contextlib.redirect_stdout(log):
+            self.assertIsNone(self.auth.graph_token(request))
+        self.assertIn('no usable session', log.getvalue())
+        self.assertIn('Signing in again', log.getvalue())
+
+        # 2. The cache holds no account for this owner.
+        self.login(); self.callback()
+        request = Request({'type':'http','headers':[(b'host',url_host().encode()),
+                           (b'cookie',(COOKIE+'='+self.client.cookies[COOKIE]).encode())]})
+        self.msal.get_accounts.return_value = [{'local_account_id':'someone-else',
+                                                'realm':TENANT}]
+        log = io.StringIO()
+        with contextlib.redirect_stdout(log):
+            self.assertIsNone(self.auth.graph_token(request))
+        self.assertIn('0 account(s)', log.getvalue())
+
+        # 3. MSAL itself fell over.
+        self.msal.get_accounts.return_value = [{'local_account_id':OWNER,'realm':TENANT}]
+        self.msal.acquire_token_silent.side_effect = RuntimeError("socket closed")
+        log = io.StringIO()
+        with contextlib.redirect_stdout(log):
+            self.assertIsNone(self.auth.graph_token(request))
+        self.assertIn('RuntimeError: socket closed', log.getvalue())
+
     def test_graph_cache_wrong_account_or_broad_scope_denied(self):
         from starlette.requests import Request
         self.login(); self.callback()

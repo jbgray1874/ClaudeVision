@@ -190,8 +190,15 @@ class PrivateAuth:
             " ".join(sorted(str(t.get("target", "")).split())) for t in tokens))
 
     def graph_token(self, request):
+        # Every way out of here is a 403 that reads like a consent problem, so
+        # each one says which it was. An expired session leaving no line at all
+        # sent an afternoon into Entra and MSAL, when the answer was "sign in
+        # again" - what the screen had been saying all along.
         row = self.session(request)
         if not row:
+            print("[private-email] no usable session: the sign-in has expired, "
+                  "or this is a different browser. Signing in again is the fix.",
+                  flush=True)
             return None
         data, expires = row
         cache = msal.SerializableTokenCache()
@@ -201,12 +208,17 @@ class PrivateAuth:
                     a.get("local_account_id") == self.settings.owner and
                     a.get("realm") == self.settings.tenant]
         if len(accounts) != 1:
+            print(f"[private-email] the session holds {len(accounts)} account(s) "
+                  f"for this owner and tenant, and exactly one is required. "
+                  f"The cache has {len(app.get_accounts())} in total.", flush=True)
             return None
         result = {}
         for asked in _both_forms(SCOPES):
             try:
                 answer = app.acquire_token_silent(asked, account=accounts[0]) or {}
-            except Exception:
+            except Exception as problem:
+                print(f"[private-email] asking MSAL for a token raised "
+                      f"{type(problem).__name__}: {problem}", flush=True)
                 return None
             if answer.get("access_token"):
                 result = answer
