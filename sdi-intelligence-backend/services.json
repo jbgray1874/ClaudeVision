@@ -42,6 +42,29 @@
       "app_category": "Apps"
     },
     {
+      "id": "private-assistant",
+      "name": "SDI Private Assistant",
+      "status": "Live · owner only",
+      "cls": "c-prog",
+      "category": "Co-worker agents",
+      "surface": "app",
+      "app_url": "/api/private-email/auth/login",
+      "desc": "Your own Outlook, read for the last seven days, summarised, with replies prepared into Drafts for you to amend and send by hand.",
+      "requires": "One mailbox only — James Gray's. It has its own Microsoft sign-in and MFA, separate from this portal, so signing in here does not sign you in to it.",
+      "detail": "A separate Entra registration from the rest of SDI Intelligence: its own application, its own credential, its own token store and its own cookies. The portal sign-in cannot reach it and it cannot reach the portal's data. <b>It holds <code>Mail.ReadWrite</code>, which writes a reply into the Drafts folder — it does not hold <code>Mail.Send</code></b>, so nothing it prepares can leave the mailbox without being sent by hand in Outlook. A token carrying a send permission, or any permission reaching another person's mailbox, is refused outright.",
+      "sections": [
+        {
+          "title": "What it does today",
+          "body": "Lists the last seven days with links back to the real message in Outlook. Opening one shows what it says, what it asks for, anything the reply needs that it was not told, and a suggested reply you amend before anything is saved. Attachments are listed and download rather than open in the page."
+        },
+        {
+          "title": "What it cannot do",
+          "body": "Send, delete or move anything, from the page or the API. Reach any mailbox but the one it is built for. Be opened by anyone else, on any device, with any key — the card is visible here, the mailbox is not."
+        }
+      ],
+      "next": "Search by sender and date; new emails as well as replies; then ChatGPT and the Claude app, so the same mailbox can be worked by speaking to it."
+    },
+    {
       "id": "hr-inventry",
       "name": "HRInventry Anywhere",
       "status": "Built · awaiting approval",
