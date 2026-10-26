@@ -257,3 +257,35 @@ class TwoAreasTests(unittest.TestCase):
                  patch.object(tools, "LIVE_ENQUIRY_ROOT", enquiries):
                 with self.assertRaises(ValueError):
                     tools.browse_briefs("Boots", "briefs")
+
+
+class FilesCanBeOpenedTests(unittest.TestCase):
+    """Listing the report and the quotation and then disabling them is half a
+    feature in the folder estimators go to for results."""
+
+    PAGE = (Path(__file__).resolve().parent.parent
+            / "sdi-estimating-intelligence.html").read_text(encoding="utf-8")
+
+    def test_a_file_is_a_link_not_a_dead_button(self):
+        self.assertNotIn("button.disabled = !item.is_dir", self.PAGE)
+        self.assertIn('link.href = "/api/file?path="', self.PAGE)
+        self.assertIn('link.rel = "noopener noreferrer"', self.PAGE)
+
+    def test_the_path_comes_from_the_server_not_from_the_browser(self):
+        """j.folder_path is what the server just reported for this folder. A
+        path typed in the page would be a file browser with no boundary."""
+        rendering = self.PAGE.split("for(const item of j.entries", 1)[1][:1200]
+        self.assertIn("j.folder_path", rendering)
+        self.assertIn("encodeURIComponent", rendering)
+
+    def test_the_folder_path_is_still_reported_for_the_link_to_use(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job = root / "Harrods" / "9439-07-04-GA"
+            job.mkdir(parents=True)
+            (job / "9439-07-04_report.html").write_bytes(b"x")
+            with patch.object(tools, "BRIEFS_ROOT", root):
+                result = tools.browse_briefs("Harrods/9439-07-04-GA")
+        self.assertEqual(result["folder_path"], str(job.resolve()))
+        self.assertEqual([e["name"] for e in result["entries"]],
+                         ["9439-07-04_report.html"])

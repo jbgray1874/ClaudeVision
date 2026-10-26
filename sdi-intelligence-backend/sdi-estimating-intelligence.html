@@ -4301,13 +4301,29 @@ async function loadBriefs(relative="", area=briefArea){
     $("briefUse").hidden = !j.can_select;
     for(const item of j.entries || []){
       const li = document.createElement("li");
-      const button = document.createElement("button");
-      button.type = "button";
-      button.textContent = (item.is_dir ? "📁 " : "📄 ") + item.name;
-      button.title = item.is_dir ? "Open folder" : "File in this folder";
-      button.disabled = !item.is_dir;
-      if(item.is_dir) button.onclick = () => loadBriefs(item.relative);
-      li.appendChild(button);
+      if(item.is_dir){
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = "📁 " + item.name;
+        button.title = "Open folder";
+        button.onclick = () => loadBriefs(item.relative);
+        li.appendChild(button);
+      }else{
+        // A FILE YOU CAN ACTUALLY OPEN. Listing the report and the quotation
+        // and then disabling them is half a feature in the folder estimators
+        // go to for results. The path is the one the SERVER just reported for
+        // this folder, never one typed here, and /api/file re-checks it
+        // against the allowed roots, the served extensions and the quote
+        // release gate - so a type it will not serve says so with a 415
+        // rather than being hidden from the list.
+        const link = document.createElement("a");
+        link.textContent = "📄 " + item.name;
+        link.href = "/api/file?path=" + encodeURIComponent(j.folder_path + "\\" + item.name);
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.title = "Open " + item.name;
+        li.appendChild(link);
+      }
       $("briefList").appendChild(li);
     }
     // "0 items" meant empty, all-filtered and all-unreadable alike. Say which.
