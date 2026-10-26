@@ -44,7 +44,9 @@ class Reply:
 class Graph:
     """Answers the two calls and records what was asked."""
 
-    def __init__(self, facts=None, content=b"PK-not-a-real-xlsx", status=200):
+    def __init__(self, facts=None, content=b"PK-not-a-real-xlsx", status=200,
+                 site_status=None):
+        self.site_status = site_status
         self.facts = facts if facts is not None else {
             "name": "TTI Delivery Schedule 2021 V3.xlsx", "size": 5120,
             "lastModifiedDateTime": "2026-10-23T14:05:00Z", "eTag": '"{ABC},7"'}
@@ -52,6 +54,8 @@ class Graph:
 
     def get(self, url, headers=None, params=None, **kw):
         self.calls.append((url, headers, params))
+        if "/drive/root:" not in url:                 # resolving the site
+            return Reply(self.site_status or self.status, body={"id": "site-abc"})
         if url.endswith("/content"):
             return Reply(self.status, content=self.content)
         return Reply(self.status, body=self.facts)
@@ -82,7 +86,7 @@ class ConfigurationTests(unittest.TestCase):
             self.assertNotIn(invented, SOURCE)
 
     def test_spaces_in_the_file_name_are_escaped_and_folders_are_not(self):
-        url = plan._item_url("/content")
+        url = plan._item_url("site-abc", "/content")
         self.assertIn("TTI%20Delivery%20Schedule%202021%20V3.xlsx", url)
         self.assertIn("/drive/root:/General/", url)
         self.assertTrue(url.endswith(":/content"))
@@ -125,6 +129,7 @@ class ReadAsThePersonTests(unittest.TestCase):
     def test_the_other_refusals_are_told_apart(self):
         for status, expected in ((404, "renamed or moved"),
                                  (401, "sign-in has expired"),
+                                 (400, "could not understand the request"),
                                  (500, "refused to supply")):
             with self.subTest(status=status):
                 with self.assertRaises(plan.PlanUnavailable) as caught:
@@ -181,3 +186,66 @@ class NothingTouchesTheDiskTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheSiteIsResolvedFirstTests(unittest.TestCase):
+    """The obvious URL chains two colon-paths and Graph answers 400.
+
+    26 October 2026, the first live read: "SharePoint refused to supply the
+    plan (400)." It had refused nothing - the colon form may appear once per
+    URL, and /sites/host:/sites/NAME: followed by /drive/root:/file: is two.
+    The word "refused" then sent the next look at SharePoint permissions that
+    were perfectly fine.
+    """
+
+    def setUp(self):
+        import os
+        plan._RESOLVED.clear()
+        self.addCleanup(plan._RESOLVED.clear)
+        for key, value in (("SDI_TTI_PLAN_SITE", SITE), ("SDI_TTI_PLAN_PATH", FILE)):
+            os.environ[key] = value
+            self.addCleanup(os.environ.pop, key, None)
+
+    def test_the_site_is_looked_up_before_the_file(self):
+        graph = Graph()
+        plan.fetch_plan("tok", client=graph)
+        first = graph.calls[0][0]
+        self.assertTrue(first.endswith("/sites/" + SITE), first)
+        for url, _, _ in graph.calls[1:]:
+            self.assertIn("/sites/site-abc/drive/root:/", url)
+
+    def test_no_url_addresses_the_site_and_the_file_by_colon_path_at_once(self):
+        """The thing that produced the 400, stated as a rule.
+
+        "root:/General/file.xlsx:/content" is ONE colon-path, opened and
+        closed, and is correct. What Graph will not parse is a site colon-path
+        AND a drive colon-path in the same URL."""
+        graph = Graph()
+        plan.fetch_plan("tok", client=graph)
+        for url, _, _ in graph.calls:
+            with self.subTest(url=url):
+                site_by_path = "sharepoint.com:" in url
+                file_by_path = "/drive/root:" in url
+                self.assertFalse(site_by_path and file_by_path, url)
+
+    def test_the_site_is_resolved_once_and_remembered(self):
+        graph = Graph()
+        plan.fetch_plan("tok", client=graph)
+        plan.fetch_plan("tok", client=graph)
+        lookups = [u for u, _, _ in graph.calls if "/drive/root:" not in u]
+        self.assertEqual(len(lookups), 1, "the site id does not change between questions")
+
+    def test_a_400_says_it_is_our_address_not_your_access(self):
+        with self.assertRaises(plan.PlanUnavailable) as caught:
+            plan.fetch_plan("tok", client=Graph(site_status=400))
+        said = str(caught.exception)
+        self.assertIn("not your access", said)
+        self.assertIn("SDI_TTI_PLAN_SITE", said)
+        self.assertNotIn("refused", said)
+
+    def test_an_unrecognised_site_names_the_setting_and_its_shape(self):
+        graph = Graph()
+        graph.get = lambda url, headers=None, params=None, **kw: Reply(200, body={})
+        with self.assertRaises(plan.PlanUnavailable) as caught:
+            plan.fetch_plan("tok", client=graph)
+        self.assertIn("sdidisplays.sharepoint.com:/sites/SUESOSOD", str(caught.exception))

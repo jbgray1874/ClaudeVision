@@ -49,9 +49,39 @@ def file_path() -> str:
     return (os.getenv("SDI_TTI_PLAN_PATH", "") or "").strip().lstrip("/")
 
 
-def _item_url(suffix: str = "") -> str:
+# The resolved site id, kept for the life of the process. It is an identifier,
+# not a credential, and resolving it on every question would be a second round
+# trip to Microsoft for an answer that does not change.
+_RESOLVED: dict = {}
+
+
+def _site_id(opened, headers) -> str:
+    """Resolve "host:/sites/NAME" to the site's id, once.
+
+    ── WHY THIS IS A SEPARATE CALL ────────────────────────────────────────────
+    The obvious URL chains two colon-paths - /sites/host:/sites/NAME: followed
+    by /drive/root:/file: - and Graph answers 400 Bad Request, because the
+    colon form may appear once per URL. A 400 reads like a refusal and sent the
+    first live attempt looking at SharePoint permissions that were fine.
+    """
+    known = _RESOLVED.get(site())
+    if known:
+        return known
+    answer = opened.get(f"{GRAPH}/sites/{site()}", headers=headers,
+                        params={"$select": "id"})
+    _complain(answer, "the SharePoint site")
+    found = str(answer.json().get("id") or "")
+    if not found:
+        raise PlanUnavailable("SharePoint did not recognise the configured site. "
+                              "SDI_TTI_PLAN_SITE should read like "
+                              "sdidisplays.sharepoint.com:/sites/SUESOSOD.")
+    _RESOLVED[site()] = found
+    return found
+
+
+def _item_url(site_id: str, suffix: str = "") -> str:
     # Spaces and the like are escaped; the slashes between folders are not.
-    return (f"{GRAPH}/sites/{site()}:/drive/root:/"
+    return (f"{GRAPH}/sites/{site_id}/drive/root:/"
             f"{quote(file_path(), safe='/')}:{suffix}")
 
 
@@ -75,7 +105,8 @@ def fetch_plan(token: str, client=None) -> tuple:
     headers = {"Authorization": "Bearer " + token}
     opened = client or httpx.Client(timeout=TIMEOUT)
     try:
-        facts = opened.get(_item_url(), headers=headers,
+        here = _site_id(opened, headers)
+        facts = opened.get(_item_url(here), headers=headers,
                            params={"$select": "name,size,lastModifiedDateTime,eTag"})
         _complain(facts, "the plan")
         about = facts.json()
@@ -84,7 +115,7 @@ def fetch_plan(token: str, client=None) -> tuple:
             raise PlanUnavailable(
                 f"The Despatch Plan is {size // (1024 * 1024)}MB, larger than this "
                 f"view will read. Open it in Excel.")
-        body = opened.get(_item_url("/content"), headers=headers,
+        body = opened.get(_item_url(here, "/content"), headers=headers,
                           follow_redirects=True)
         _complain(body, "the plan's contents")
         data = body.content
@@ -111,6 +142,13 @@ def _complain(response, what: str) -> None:
             f"not be read. The plan may have been renamed or moved.")
     if response.status_code == 401:
         raise PlanUnavailable("Microsoft sign-in has expired. Sign in again.")
+    if response.status_code == 400:
+        # Not a refusal. The request was built wrongly, and saying "refused"
+        # sends somebody to check permissions that are fine.
+        raise PlanUnavailable(
+            f"Microsoft could not understand the request for {what} (400). That is "
+            f"this app's address for the workbook, not your access - check "
+            f"SDI_TTI_PLAN_SITE and SDI_TTI_PLAN_PATH.")
     if response.status_code >= 300:
         raise PlanUnavailable(
             f"SharePoint refused to supply {what} ({response.status_code}).")
