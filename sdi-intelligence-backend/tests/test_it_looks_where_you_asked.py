@@ -19,12 +19,63 @@ import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
-
 BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND))
 
 from private_email import Denied, GraphMailbox, UK, window  # noqa: E402
+
+
+class UKClockTests(unittest.TestCase):
+    """The clock is written out rather than read from the system, because the
+    system does not have it on Windows. So it has to be right here.
+
+    Checked against the real British Summer Time dates: BST begins 01:00 UTC on
+    the last Sunday in March and ends 01:00 UTC on the last Sunday in October.
+    """
+
+    def offset(self, text):
+        return datetime.fromisoformat(text).replace(tzinfo=UK).utcoffset()
+
+    def test_the_transition_dates_for_several_years(self):
+        for year, march, october in ((2026, 29, 25), (2027, 28, 31),
+                                     (2028, 26, 29), (2025, 30, 26)):
+            with self.subTest(year=year):
+                # The minute before the spring change is still GMT.
+                self.assertEqual(self.offset(f"{year}-03-{march:02d} 00:59"),
+                                 timedelta(0))
+                # And at 01:00 local it becomes BST.
+                self.assertEqual(self.offset(f"{year}-03-{march:02d} 01:00"),
+                                 timedelta(hours=1))
+                # The minute before the autumn change is still BST.
+                self.assertEqual(self.offset(f"{year}-10-{october:02d} 01:59"),
+                                 timedelta(hours=1))
+                self.assertEqual(self.offset(f"{year}-10-{october:02d} 02:00"),
+                                 timedelta(0))
+
+    def test_midwinter_and_midsummer(self):
+        self.assertEqual(self.offset("2026-01-15 12:00"), timedelta(0))
+        self.assertEqual(self.offset("2026-07-15 12:00"), timedelta(hours=1))
+        self.assertEqual(self.offset("2026-12-25 12:00"), timedelta(0))
+
+    def test_it_is_named_for_what_it_is(self):
+        self.assertEqual(datetime(2026, 7, 1, tzinfo=UK).tzname(), "BST")
+        self.assertEqual(datetime(2026, 12, 1, tzinfo=UK).tzname(), "GMT")
+
+    def test_it_needs_no_timezone_database(self):
+        """The whole point. An import that works here and raises on Windows is
+        how the portal went down; this module must not reach for one."""
+        import ast
+        tree = ast.parse((BACKEND / "private_email.py").read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    self.assertNotEqual(alias.name.split(".")[0], "zoneinfo")
+                    self.assertNotEqual(alias.name.split(".")[0], "tzdata")
+            elif isinstance(node, ast.ImportFrom):
+                self.assertNotIn(str(node.module or "").split(".")[0],
+                                 ("zoneinfo", "tzdata", "pytz"))
+            elif isinstance(node, ast.Name):
+                self.assertNotEqual(node.id, "ZoneInfo")
 
 OWNER = "5acf6b37-147f-4468-bdb1-ecc3da1f1076"
 

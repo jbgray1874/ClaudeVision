@@ -4,9 +4,8 @@ Transport and verified identity are injected by the host. Disabled unless config
 """
 from dataclasses import dataclass
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from urllib.parse import quote, urlsplit
-from zoneinfo import ZoneInfo
 import base64
 import binascii
 import hashlib
@@ -17,9 +16,55 @@ import sqlite3
 import time
 
 OCTET = "application/octet-stream"
+
+
+def _last_sunday(year, month):
+    """The day of the month of its last Sunday. March and October both have 31."""
+    day = 31
+    while date(year, month, day).weekday() != 6:                   # 6 = Sunday
+        day -= 1
+    return day
+
+
+class _UKTime(tzinfo):
+    """UK civil time, without needing the IANA timezone database.
+
+    ── WHY NOT zoneinfo ───────────────────────────────────────────────────────
+    zoneinfo is in the standard library, but the DATA it reads is not shipped
+    with Windows: ZoneInfo("Europe/London") raises there unless the tzdata
+    package happens to be installed. At module level that stops the service
+    starting - which is how the portal went down on 26 October 2026, for the
+    second time that day, for the second thing that was true on the machine the
+    code was written on and not on the one it runs on.
+
+    The rule is small and fixed in law: British Summer Time runs from 01:00 UTC
+    on the last Sunday in March to 01:00 UTC on the last Sunday in October - in
+    local terms, 01:00 GMT to 02:00 BST. Written here, both machines give the
+    same answer and there is no package to remember.
+    """
+    _ZERO, _HOUR = timedelta(0), timedelta(hours=1)
+
+    def _summer(self, when):
+        if when is None:
+            return False
+        naive = when.replace(tzinfo=None)
+        year = naive.year
+        return (datetime(year, 3, _last_sunday(year, 3), 1, 0) <= naive
+                < datetime(year, 10, _last_sunday(year, 10), 2, 0))
+
+    def utcoffset(self, when):
+        return self._HOUR if self._summer(when) else self._ZERO
+
+    def dst(self, when):
+        return self._HOUR if self._summer(when) else self._ZERO
+
+    def tzname(self, when):
+        return "BST" if self._summer(when) else "GMT"
+
+
 # The clock the person asking is actually looking at. Not UTC: for seven months
 # of the year "this morning" starts an hour before UTC midnight.
-UK = ZoneInfo("Europe/London")
+UK = _UKTime()
 # Big enough for the drawings and spec sheets that actually arrive; small enough
 # that one request cannot hold the service's memory. Above it, Outlook.
 MAX_ATTACHMENT = 25 * 1024 * 1024
