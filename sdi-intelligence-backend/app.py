@@ -716,7 +716,27 @@ def api_services(request: Request,
         raise HTTPException(status_code=404, detail="services.json not found")
     import json as _json
     data = _json.loads(_SERVICES.read_text(encoding="utf-8"))
-    items = data.get("services", [])
+    items = list(data.get("services", []))
+    # Keep the private workspace out of the shared, static catalogue. The
+    # separate Entra registration gates the workspace again at its own routes.
+    # The shared portal's admin account is intentionally NOT the mailbox owner.
+    viewer = auth.current_user(request)
+    if (os.environ.get("SDI_PRIVATE_ENABLED", "").lower() == "yes"
+            and isinstance(viewer, dict) and viewer.get("kind") == "user"
+            and viewer.get("oid") == os.environ.get("SDI_PRIVATE_OWNER_ID", "")
+            and viewer.get("oid")):
+        items.append({
+            "id": "private-assistant-email",
+            "name": "SDI Private Assistant",
+            "status": "Private · available",
+            "cls": "c-prog",
+            "category": "Apps",
+            "app_category": "Co-worker agents",
+            "surface": "app",
+            "desc": "Your personal Outlook workspace: review recent mail and prepare replies as unsent drafts.",
+            "requires": "Visible only to James Gray. Separate Microsoft sign-in and MFA are required to open it.",
+            "app_url": "/api/private-email/auth/login",
+        })
     if surface:
         items = [x for x in items if x.get("surface") in (surface, "both")]
     return {"version": data.get("version"), "count": len(items), "services": items}
