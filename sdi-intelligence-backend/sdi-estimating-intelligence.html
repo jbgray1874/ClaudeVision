@@ -90,6 +90,14 @@
      no longer exists. */
   #extractCard{grid-column:2}
   @media(max-width:900px){#extractCard{grid-column:auto}}
+  #briefCard,#askCard{grid-column:2}
+  @media(max-width:900px){#briefCard,#askCard{grid-column:auto}}
+  .brief-list{list-style:none;padding:0;margin:10px 0;max-height:280px;overflow:auto}
+  .brief-list li{display:flex;justify-content:space-between;align-items:center;gap:8px;
+                 padding:8px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+  .brief-list button{flex:none}
+  .answer-box{white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid var(--line);
+              border-radius:8px;padding:12px;min-height:52px;margin-top:10px}
 
   .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:20px 22px}
   .card h2{font-family:var(--disp);font-size:15px;font-weight:600;margin:0 0 2px;letter-spacing:-.01em}
@@ -824,6 +832,32 @@
         Stop this job</button>
       <p class="note" id="selfStatus">Checking self-running…</p>
       <div id="selfOut" class="sub" style="margin-top:8px;font-size:13px"></div>
+    </section>
+
+    <section class="card" id="briefCard">
+      <h2>Completed AI briefs · job scanner</h2>
+      <p class="hint">Browse the approved estimating briefs on the server. Select a job folder to add it to this estimate; review the client, drawing number and quantities before running.</p>
+      <button type="button" id="briefOpen">Browse completed AI briefs</button>
+      <button type="button" id="briefUp" hidden>Up one folder</button>
+      <p class="note" id="briefWhere" aria-live="polite"></p>
+      <ul class="brief-list" id="briefList"></ul>
+      <button type="button" id="briefUse" hidden>Add this folder to Drawings</button>
+      <p class="note" id="briefStatus" role="status"></p>
+    </section>
+
+    <section class="card" id="askCard">
+      <h2>Ask about a saved estimate</h2>
+      <p class="hint">Choose the exact completed run. Answers are taken from its filed record, not from whichever job happens to be latest. No new drawing read or price change is made.</p>
+      <label for="askRun">Saved run</label>
+      <select id="askRun"><option value="">Select a completed run</option></select>
+      <button type="button" id="askRefresh">Refresh runs</button>
+      <button type="button" id="askCurrent">Use this page's run</button>
+      <button type="button" id="askLatest">Use latest completed run</button>
+      <label for="askQuestion" style="margin-top:12px">Question</label>
+      <textarea id="askQuestion" rows="3" maxlength="500" placeholder="What is the total? Which parts and routes were costed? Why is release held?"></textarea>
+      <button type="button" id="askSubmit">Ask about this run</button>
+      <div class="answer-box" id="askAnswer" role="status">Select a run and ask about its costs, BOM, routes or release checks.</div>
+      <p class="note" id="askSources"></p>
     </section>
 
     <!-- ══ DRAWINGS ═════════════════════════════════════════════════ -->
@@ -2236,12 +2270,24 @@ function renderFiles(){
     /* WHERE IT CAME FROM, because two sources can now supply the same drawing and the later
        one silently replaces the earlier. An override nobody can see is an override nobody can
        check. */
-    const src = f.source === "dm" ? '<span class="kind" style="border-color:var(--info);'
-                                  + 'color:var(--info)" title="From a Document Manager '
-                                  + 'extract">DM</span>' : "";
-    li.innerHTML = `<span class="kind">${f.is_dir?"folder":(f.name.split(".").pop()||"file").toUpperCase()}</span>`
-                 + src
-                 + `<span class="nm" title="${f.path}">${f.name}</span>`;
+    const kind = document.createElement("span");
+    kind.className = "kind";
+    kind.textContent = f.is_dir ? "folder" : (f.name.split(".").pop() || "file").toUpperCase();
+    li.appendChild(kind);
+    if(f.source === "dm"){
+      const src = document.createElement("span");
+      src.className = "kind";
+      src.style.borderColor = "var(--info)";
+      src.style.color = "var(--info)";
+      src.title = "From a Document Manager extract";
+      src.textContent = "DM";
+      li.appendChild(src);
+    }
+    const nm = document.createElement("span");
+    nm.className = "nm";
+    nm.title = f.path;
+    nm.textContent = f.name;
+    li.appendChild(nm);
     const x = document.createElement("button");
     x.className="x"; x.textContent="✕"; x.title="Remove";
     x.onclick = () => { drawings.splice(i,1); renderFiles(); refresh(); };
@@ -4226,6 +4272,124 @@ selfJobBtn.onclick = async () => {
 };
 refreshSelf();
 setInterval(refreshSelf, 20000);
+
+/* COMPLETED AI BRIEFS: one fixed server-side root, never an arbitrary path supplied
+   by the browser. A selected folder feeds the ordinary Drawings list and its
+   existing run checks; browsing alone does not start a cost estimate. */
+let briefRelative = "";
+let briefFolder = null;
+async function loadBriefs(relative=""){
+  $("briefStatus").textContent = "Reading the approved briefs folder…";
+  $("briefList").replaceChildren();
+  $("briefUse").hidden = true;
+  try{
+    const r = await api("/api/estimate/tools/briefs?relative=" + encodeURIComponent(relative));
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok) throw new Error(detailText(j, r, "Folder unavailable"));
+    briefRelative = j.relative || "";
+    briefFolder = j;
+    $("briefWhere").textContent = "Completed AI briefs" + (briefRelative ? " / " + briefRelative : "");
+    $("briefUp").hidden = !briefRelative;
+    $("briefUse").hidden = !j.can_select;
+    for(const item of j.entries || []){
+      const li = document.createElement("li");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = (item.is_dir ? "📁 " : "📄 ") + item.name;
+      button.title = item.is_dir ? "Open folder" : "File in this folder";
+      button.disabled = !item.is_dir;
+      if(item.is_dir) button.onclick = () => loadBriefs(item.relative);
+      li.appendChild(button);
+      $("briefList").appendChild(li);
+    }
+    $("briefStatus").textContent = (j.entries || []).length + " items"
+      + (j.truncated ? " · showing the first page only; narrow to a folder" : "")
+      + (j.can_select
+         ? ". " + j.drawing_count + " drawing file(s) here. Add this job folder to Drawings."
+         : ". Open a job folder containing drawings before adding it to Drawings.");
+  }catch(e){
+    briefFolder = null;
+    $("briefStatus").textContent = "Cannot browse completed briefs: " + e.message;
+  }
+}
+$("briefOpen").onclick = () => loadBriefs("");
+$("briefUp").onclick = () => {
+  if(briefFolder) loadBriefs(briefFolder.parent || "");
+};
+$("briefUse").onclick = () => {
+  if(!briefFolder || !briefFolder.can_select) return;
+  const folder = briefFolder.folder_path;
+  if(!drawings.some(f => f.path.toLowerCase() === folder.toLowerCase())){
+    drawings.push({path:folder, name:briefFolder.folder_name, is_dir:true, source:"briefs"});
+  }
+  renderFiles();
+  refresh();
+  $("briefStatus").textContent = "Added " + briefFolder.folder_name
+    + " to Drawings. Confirm the client, drawing number and quantities before running.";
+};
+
+/* QUESTIONS: the estimator chooses a specific completed in-memory run. The
+   service reads that run's filed record and returns a bounded, cited answer;
+   no question can trigger a model read, rerun, email or price change. */
+async function refreshAskRuns(selectId="", selectLatest=false){
+  const select = $("askRun");
+  const previous = selectId || select.value;
+  select.replaceChildren(new Option("Select a completed run", ""));
+  try{
+    const r = await api("/api/estimate?limit=100");
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok) throw new Error(detailText(j, r, "Run list unavailable"));
+    const completed = (j.runs || []).filter(x => x.status === "done");
+    for(const run of completed){
+      const label = [run.client || run.customer || "Client not stated",
+                     run.drawing_number || run.drawing || "Drawing not stated",
+                     run.queued_at || ""].join(" · ");
+      select.add(new Option(label, run.run_id || run.id));
+    }
+    if([...select.options].some(o => o.value === previous)) select.value = previous;
+    else if(selectLatest && completed.length) select.selectedIndex = 1;
+    $("askSources").textContent = completed.length
+      ? "Select the exact run above. The list includes this service's completed runs since its last restart."
+      : "No completed runs are held by this service since its last restart.";
+  }catch(e){
+    $("askSources").textContent = "Could not list saved runs: " + e.message;
+  }
+}
+$("askRefresh").onclick = () => refreshAskRuns();
+$("askLatest").onclick = () => refreshAskRuns("", true);
+$("askCurrent").onclick = () => {
+  if(!runId){
+    $("askAnswer").textContent = "This page has not started a run. Select a saved run above.";
+    return;
+  }
+  refreshAskRuns(runId);
+};
+$("askSubmit").onclick = async () => {
+  const id = $("askRun").value;
+  const question = $("askQuestion").value.trim();
+  if(!id || !question){
+    $("askAnswer").textContent = "Choose a completed run and type a question first.";
+    return;
+  }
+  $("askSubmit").disabled = true;
+  $("askAnswer").textContent = "Checking the selected run's filed evidence…";
+  $("askSources").textContent = "";
+  try{
+    const r = await api("/api/estimate/tools/ask", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({run_id:id, question})});
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok) throw new Error(detailText(j, r, "Question unavailable"));
+    $("askAnswer").textContent = j.answer || "No answer is present in this run's record.";
+    $("askSources").textContent = "Source: run " + j.run_id + " · " + j.record_name
+      + (j.sources && j.sources.length ? " · " + j.sources.join(" · ") : "");
+  }catch(e){
+    $("askAnswer").textContent = "Could not answer from this run: " + e.message;
+  }finally{
+    $("askSubmit").disabled = false;
+  }
+};
+refreshAskRuns();
 
 </script>
 

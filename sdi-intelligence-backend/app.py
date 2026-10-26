@@ -191,10 +191,11 @@ async def _stamp_version(request, call_next):
 
 # ── Public-surface guard ─────────────────────────────────────────────────────
 # When the portal is reached over the internet (via the tunnel / App Proxy),
-# ONLY the app portal and its own APIs are allowed. The file browser, the
-# database, the estimating pages and the architecture/server pages never leave
-# the network, whatever the edge is configured to forward. Internal access
-# (10.0.0.5, sdi-intelligence.sdi.local, localhost) is unaffected.
+# The app portal and its own APIs, plus the estimating screen for named
+# estimators. The database and the architecture/server pages never leave the
+# network, and the file browser leaves it only for ONE approved folder - see
+# the estimating block below. Internal access (10.0.0.5,
+# sdi-intelligence.sdi.local, localhost) is unaffected.
 #
 # Set SDI_PUBLIC_HOSTS in .env to the public hostname(s), comma separated, e.g.
 #   SDI_PUBLIC_HOSTS=apps.wearesdi.com
@@ -213,6 +214,34 @@ _PUBLIC_ALLOW = (
     "/favicon.ico",
 )
 
+# ── THE ESTIMATING SCREEN, FROM OUTSIDE THE OFFICE ──────────────────────────
+# Everything an estimator can reach here is reachable from the internet, so the
+# lists below are the whole boundary.
+#
+# READING AND DOING ARE DIFFERENT PERMISSIONS, AND THEY SHARE A URL PREFIX.
+# "Use the estimating screen on a phone" and "release a quotation to a
+# customer" both live under /api/estimate. Allowing the prefix allows both -
+# and also /release/withdraw, /{run}/email, /recipients (who quotes are emailed
+# to), /self-running/start and /logistics/split-scans. So reads are allowed by
+# method and writes by an explicit list: a POST this list does not name is
+# refused, including one added next month that nobody thought to review.
+_PUBLIC_ESTIMATING = ("/estimating", "/api/estimate", "/api/roots", "/api/files", "/api/file")
+_RUNNER_ONLY = ("/api/estimate/runner", "/api/estimate/self-running/heartbeat")
+
+# The POST allow-list and the briefs confinement live in public_surface.py so
+# they can be tested without starting the service - see that module for why
+# reads are allowed by method and writes only by name.
+from public_surface import post_allowed as _public_post_allowed, \
+    under_the_briefs as _under_the_briefs
+
+
+def _public_estimator(request) -> bool:
+    """An explicitly allowed Entra person, never a portal or runner key."""
+    owners = {v.strip().lower() for v in os.getenv("SDI_ESTIMATOR_OIDS", "").split(",") if v.strip()}
+    user = auth.current_user(request) if auth.ENABLED else None
+    return bool(owners and user and user.get("kind") == "user"
+                and str(user.get("oid") or "").lower() in owners)
+
 
 @app.middleware("http")
 async def _public_surface_guard(request, call_next):
@@ -221,6 +250,41 @@ async def _public_surface_guard(request, call_next):
         host = (request.headers.get("host", "").split(":")[0]).lower()
         if host in _PUBLIC_HOSTS:
             path = request.url.path
+            if any(path == a or path.startswith(a + "/") for a in _PUBLIC_ESTIMATING):
+                if any(path == a or path.startswith(a + "/") for a in _RUNNER_ONLY):
+                    return JSONResponse(status_code=404, content={"detail": "Not Found"})
+                if not _public_estimator(request):
+                    if path == "/estimating" and auth.ENABLED:
+                        return auth.login_redirect(request)
+                    return JSONResponse(status_code=403, content={"detail": "Estimator access required"})
+                if request.method not in ("GET", "HEAD", "OPTIONS"):
+                    origin = request.headers.get("origin", "").lower().rstrip("/")
+                    if origin != "https://" + host:
+                        return JSONResponse(status_code=403, content={"detail": "Same-origin request required"})
+                    # Reads are allowed by method; writes only where named.
+                    if not _public_post_allowed(path):
+                        return JSONResponse(status_code=403, content={
+                            "detail": "That action is only available on the office network. "
+                                      "Releasing, emailing and the self-running switch are not "
+                                      "remote controls."})
+                if path in ("/api/files", "/api/file") and not _under_the_briefs(
+                        request.query_params.get("path", "")):
+                    return JSONResponse(status_code=403, content={
+                        "detail": "Only the completed AI briefs folder can be browsed from "
+                                  "outside the office."})
+                if path == "/api/estimate" or path.startswith("/api/estimate/"):
+                    # Existing queue endpoints require a service key; translate the
+                    # authenticated user inside the service, never in browser JS.
+                    if not config.API_KEY:
+                        return JSONResponse(status_code=503, content={"detail": "Estimator API is not configured"})
+                    request.scope["headers"] = [(k, v) for k, v in request.scope["headers"]
+                                                if k.lower() != b"x-sdi-key"] + [
+                                                    (b"x-sdi-key", config.API_KEY.encode("utf-8"))]
+                    # Request.headers was already read above; refresh the cached
+                    # view after changing the ASGI header list.
+                    from starlette.datastructures import Headers
+                    request._headers = Headers(scope=request.scope)
+                return await call_next(request)
             if not any(path == a or path.startswith(a + "/") or path == a for a in _PUBLIC_ALLOW):
                 # Indistinguishable from a route that does not exist — the public
                 # surface simply has no file browser, DB or intranet pages.

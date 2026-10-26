@@ -78,6 +78,7 @@ import estimate_email
 import quote_release
 import self_running_switch
 import staging
+from estimating_job_tools import BRIEFS_ROOT, browse_briefs, answer_saved_record
 
 router = APIRouter(prefix="/api/estimate", tags=["estimate"])
 
@@ -3223,6 +3224,54 @@ def recent(x_sdi_key: Optional[str] = Header(default=None), limit: int = 25):
         runs = sorted(_RUNS.values(), key=lambda r: r.queued_at, reverse=True)[:limit]
         out = [{k: v for k, v in r.as_json().items() if k != "log"} for r in runs]
     return {"runs": out}
+
+
+@router.get("/tools/briefs")
+def completed_briefs(relative: str = "", x_sdi_key: Optional[str] = Header(default=None)):
+    """Browse only the approved completed AI briefs tree, one level at a time."""
+    _check_key(x_sdi_key)
+    if _within_a_root(str(BRIEFS_ROOT)) is None:
+        raise HTTPException(503, "The completed AI briefs folder must be added to SDI_FILE_ROOTS.")
+    try:
+        return browse_briefs(relative)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(503, "The completed AI briefs share is unavailable to this service.") from exc
+
+
+class SavedRunQuestion(BaseModel):
+    run_id: str
+    question: str
+
+
+@router.post("/tools/ask")
+def ask_saved_run(req: SavedRunQuestion, x_sdi_key: Optional[str] = Header(default=None)):
+    """Read an exact saved run record; never the mutable latest JSON for a job."""
+    _check_key(x_sdi_key)
+    with _LOCK:
+        run = _RUNS.get(req.run_id)
+        items = list(run.deliverables) if run else []
+    if run is None:
+        raise HTTPException(404, "Run not found. The service may have restarted.")
+    if run.status != "done":
+        raise HTTPException(409, "Questions need a completed, filed run.")
+    records = [d for d in items if str(d.get("name") or "").lower().endswith("_record.json")]
+    if len(records) != 1:
+        raise HTTPException(409, "This run has no single pinned estimate record. Open its report instead.")
+    record_path = Path(str(records[0].get("path") or ""))
+    folder = Path(run.output_path).resolve()
+    try:
+        path = record_path.resolve(strict=True)
+        if folder not in path.parents or path.stat().st_size > 30_000_000:
+            raise ValueError("Record is outside this run or too large.")
+        with path.open("r", encoding="utf-8") as stream:
+            record = json.load(stream)
+        result = answer_saved_record(record, req.question)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(409, "The saved run record cannot be safely read.") from exc
+    return {"run_id": run.run_id, "drawing_number": run.drawing_number,
+            "record_name": path.name, **result}
 
 
 # ══ EXTRACTS ════════════════════════════════════════════════════════════════════════════
