@@ -5,12 +5,15 @@ portal but authenticated entirely separately: its own Entra app registration, it
 credential, its own token cache, its own session database and its own cookies. The
 shared portal sign-in cannot reach it and it cannot reach the shared portal's data.
 
-Built and tested locally on 26 October 2026 (35 tests, Entra and Graph mocked).
+Built and tested on 26 October 2026: 40 tests, run on the service's own Python 3.10.
+Entra and Graph are mocked throughout.
 **Nothing here is proven against real sign-in, MFA or live mail until section 8.**
 
-Scope of this release: read the last seven days, with links. No drafting, sending,
-deleting or moving. No ChatGPT/MCP, no voice, no AI summaries. The installer mounts
-nothing at all unless `SDI_PRIVATE_ENABLED=yes`.
+Scope of this release: read the last seven days with links, and **write replies into
+your own Drafts folder** for you to amend and send by hand. It cannot send, delete or
+move anything — sending is a separate Microsoft permission this app never asks for and
+refuses to hold. No ChatGPT/MCP, no voice, no AI summaries yet. The installer mounts
+nothing unless `SDI_PRIVATE_ENABLED=yes`, and drafting is its own switch on top.
 
 ---
 
@@ -43,9 +46,15 @@ registration's `/auth/callback` here.
 
 Then, on the new registration:
 
-- **API permissions → Add → Microsoft Graph → Delegated**: `User.Read`, `Mail.Read`.
-  Grant admin consent, and read the consent prompt before you accept it rather than
-  clicking through.
+- **API permissions → Add → Microsoft Graph → Delegated**: `User.Read`,
+  `Mail.ReadWrite`. Grant admin consent, and read the consent prompt before accepting
+  rather than clicking through.
+
+  **Not `Mail.Send`.** `Mail.ReadWrite` writes a reply into your Drafts folder;
+  `Mail.Send` would post it, and that is the difference between an assistant that
+  writes for you and one that writes as you. The code refuses a token carrying it, and
+  any `.Shared` scope that would reach another mailbox — but it should never be granted
+  in the first place.
 - **Certificates & secrets → New client secret.** Copy the **Value** once. It goes into
   the server's `.env` in section 4 and nowhere else — never into chat, a ticket or git.
 - **Authentication**: no implicit grant, no public client flow.
@@ -70,9 +79,12 @@ private_email_integration.py
 private_email_routes.py
 private_email.py
 private-email-readonly.html
+private-email.html
 ```
 
-The earlier draft UI is not copied: this installer always disables drafts.
+Both pages ship: the reader when drafting is off, the drafting screen when it is on.
+The router checks for the right one as it is built, so a page left behind stops the
+service starting rather than failing later at a 404.
 
 So that later deploys carry them too, add the same five names to `$Files` in
 `deploy\Deploy-AMCRM.ps1`.
@@ -119,7 +131,15 @@ SDI_PRIVATE_CLIENT_ID=267fa0cc-38f7-4cc2-9a2d-7ecc436ad23b
 SDI_PRIVATE_OWNER_ID=5acf6b37-147f-4468-bdb1-ecc3da1f1076
 SDI_PRIVATE_ORIGIN=https://sdiintelligence-sdidisplays.msappproxy.net
 SDI_PRIVATE_SESSION_DB=C:\ClaudeVision\private-data\private-sessions.db
+SDI_PRIVATE_DRAFTS=yes
+SDI_PRIVATE_DRAFT_DB=C:\ClaudeVision\private-data\private-drafts.db
 ```
+
+`SDI_PRIVATE_DRAFTS=yes` turns on reply drafting; anything else and the assistant reads
+only, without the service being switched off. With it on, `SDI_PRIVATE_DRAFT_DB` is
+required — it holds pending reply text awaiting your confirmation, so it belongs in the
+same protected folder as the session database, never in a web root or on a share. Asked
+for without it, the service refuses to start.
 
 Leave `SDI_PRIVATE_ENABLED=no` until section 7.
 
@@ -215,28 +235,39 @@ Mocked tests prove the logic, not the tenant. Every line below needs doing for r
 5. The date window and any partial flags match Outlook. It is a preview reader: no full
    threads, no AI priority.
 
-**Writing — there should be none**
-6. No draft, send, delete or move is possible anywhere in the UI or the API.
+**Writing — drafts only, and only yours**
+6. Write a reply, confirm it, and find it in **Outlook → Drafts**: unsent, addressed as
+   the page showed you.
+7. Confirm the same approval twice — one draft, not two.
+8. Nothing can send, delete or move, from the page or the API.
+9. Change the message's reply-to between proposing and confirming: the write is refused
+   rather than going to the old address.
 
 **Sessions**
-7. Cross-origin logout fails. After expiry or logout, private reads are refused.
-8. Access logs contain no authorization codes or tokens.
+10. Cross-origin logout fails. After expiry or logout, private reads are refused.
+11. Access logs contain no authorization codes or tokens.
 
 **Reach**
-9. Works in a real browser through App Proxy, then again from outside the office with
-   the VPN off.
+12. Works in a real browser through App Proxy, then again from outside the office with
+    the VPN off.
 
 **No collateral damage**
-10. HR, the AM CRM, estimating and the existing portal sign-in all still work.
+13. HR, the AM CRM, estimating and the existing portal sign-in all still work.
 
 **Before it is relied on**
-11. Review dependency versions, reverse-proxy headers, TLS, rate limits, audit and
+14. Review dependency versions, reverse-proxy headers, TLS, rate limits, audit and
     retention.
 
 ---
 
 ## Rollback
 
+Drafting only, keeping the reader:
+```
+SDI_PRIVATE_DRAFTS=no
+```
+
+The whole assistant:
 ```
 SDI_PRIVATE_ENABLED=no
 ```
@@ -254,7 +285,7 @@ From the package folder, before any of the above:
 .test-env\Scripts\python.exe -m unittest -v test_private_email test_private_auth
 ```
 
-35 tests, one Starlette HTTPX deprecation warning, no failures. This exercises the
+40 tests, one Starlette HTTPX deprecation warning, no failures. This exercises the
 router composition, not the full production app — so run the real host tests on
 Windows as well before deploying.
 
@@ -262,8 +293,9 @@ Windows as well before deploying.
 
 ## Not in this release
 
-ChatGPT/MCP, voice, AI summaries, full threads, saved drafts, file shares, estimating
-tools, admin privileges. Each needs its own implementation and tests.
+ChatGPT/MCP, voice, AI summaries, full threads, file shares, estimating tools, admin
+privileges. Each needs its own implementation and tests. Drafting has left this list
+and is in the release, behind its own switch.
 
 Reference:
 <https://learn.microsoft.com/en-us/entra/msal/python/getting-started/acquiring-tokens>
