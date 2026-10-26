@@ -133,10 +133,15 @@ def make_router(auth, policy, database, origin, drafts_enabled=False, page_dir=N
         return FileResponse(page, headers={"Cache-Control": "no-store"})
 
     @router.get("/review")
-    def review(request: Request):
+    def review(request: Request, when: str = "", sender: str = "",
+               unread: bool = False, attachments: bool = False):
         _, mailbox = context(request)
         from fastapi.responses import JSONResponse
-        return JSONResponse(run(mailbox.review), headers={"Cache-Control": "no-store"})
+        return JSONResponse(
+            run(lambda: mailbox.review(when=when[:60], sender=sender[:200],
+                                       unread_only=unread,
+                                       with_attachments=attachments)),
+            headers={"Cache-Control": "no-store"})
 
     @router.post("/suggest")
     def suggest(request: Request, data: Suggestion):

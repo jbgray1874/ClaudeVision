@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urlsplit
+from zoneinfo import ZoneInfo
 import base64
 import binascii
 import hashlib
@@ -16,6 +17,9 @@ import sqlite3
 import time
 
 OCTET = "application/octet-stream"
+# The clock the person asking is actually looking at. Not UTC: for seven months
+# of the year "this morning" starts an hour before UTC midnight.
+UK = ZoneInfo("Europe/London")
 # Big enough for the drawings and spec sheets that actually arrive; small enough
 # that one request cannot hold the service's memory. Above it, Outlook.
 MAX_ATTACHMENT = 25 * 1024 * 1024
@@ -23,6 +27,74 @@ MAX_ATTACHMENT = 25 * 1024 * 1024
 
 class Denied(Exception):
     pass
+
+
+def _is_from(message, wanted):
+    """Does this message come from the person asked for?
+
+    An address Microsoft can match exactly, and does. A name - "charlotte" -
+    it cannot, so it is matched here against both the display name and the
+    address, on the messages already retrieved for the span. Nothing extra
+    leaves the mailbox to do it.
+    """
+    if not wanted:
+        return True
+    if "@" in wanted:
+        return True                        # already matched by the filter
+    who = (message.get("from") or {}).get("emailAddress") or {}
+    hay = f"{who.get('name', '')} {who.get('address', '')}".lower()
+    return wanted.lower() in hay
+
+
+def window(phrase, now=None):
+    """"this morning" -> an exact span, in UK time, and the words to show for it.
+
+    ── RESOLVED HERE, NOT BY A MODEL ──────────────────────────────────────────
+    A model asked what "this morning" means has to guess the date and the
+    timezone, and a wrong guess looks exactly like a right one: "nothing from
+    Charlotte this morning" when there was something is the worst answer this
+    app can give. So the words are resolved against a real clock in Europe/
+    London - which is not UTC for seven months of the year - and every answer
+    carries the span it actually searched, so a wrong reading is visible rather
+    than silent.
+
+    Anything not recognised falls back to the last seven days and SAYS so; it
+    never quietly searches a different week from the one that was asked for.
+    """
+    now = (now or datetime.now(timezone.utc)).astimezone(UK)
+    said = str(phrase or "").strip().lower()
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    noon = midnight + timedelta(hours=12)
+
+    if said in ("today", "today so far"):
+        start, end, words = midnight, now, "today"
+    elif said in ("this morning", "morning"):
+        # Still morning? Then up to now; past noon, the morning has ended.
+        start, end, words = midnight, min(noon, now), "this morning"
+    elif said in ("this afternoon", "afternoon"):
+        start, end, words = noon, now, "this afternoon"
+    elif said == "yesterday":
+        start, end, words = midnight - timedelta(days=1), midnight, "yesterday"
+    elif said in ("last 24 hours", "past 24 hours", "since yesterday"):
+        start, end, words = now - timedelta(hours=24), now, "the last 24 hours"
+    elif said in ("this week", "week"):
+        start = midnight - timedelta(days=now.weekday())      # Monday
+        start, end, words = start, now, "this week, since Monday"
+    elif said == "last week":
+        monday = midnight - timedelta(days=now.weekday())
+        start, end, words = monday - timedelta(days=7), monday, "last week"
+    elif said in ("this month", "month"):
+        start, end, words = midnight.replace(day=1), now, "this month"
+    elif said in ("last 30 days", "past 30 days", "30 days"):
+        start, end, words = now - timedelta(days=30), now, "the last 30 days"
+    elif said in ("last 7 days", "past 7 days", "7 days", "last week or so", ""):
+        start, end, words = now - timedelta(days=7), now, "the last seven days"
+    else:
+        start, end, words = (now - timedelta(days=7), now,
+                             f"the last seven days (“{phrase}” was not understood)")
+    if end <= start:                      # "this afternoon" asked before noon
+        start, end = end, end
+    return start.astimezone(timezone.utc), end.astimezone(timezone.utc), words
 
 
 def _file_name(name):
@@ -66,14 +138,42 @@ class GraphMailbox:
         if me.get("id") != self.owner:
             raise Denied("Graph mailbox does not match the permitted owner")
 
-    def review(self, now=None, max_pages=10):
+    def review(self, now=None, max_pages=10, when="", sender="",
+               unread_only=False, with_attachments=False):
+        """The messages in a span, narrowed before they leave the mailbox.
+
+        `when` is a phrase - "this morning", "yesterday", "last week" - resolved
+        by window() above, not by a model. `sender` is an address or part of a
+        name. Unread and has-attachments are asked of Microsoft, so a quiet
+        question stays a small answer.
+
+        The reply always states the span searched, the narrowing applied, and
+        whether the retrieval finished - because "nothing from Charlotte" is
+        only useful next to where it looked.
+        """
         self.verify()
         end = now or datetime.now(timezone.utc)
-        start = end - timedelta(days=7)
+        if when:
+            start, end, said = window(when, end)
+        else:
+            start, said = end - timedelta(days=7), "the last seven days"
         iso = lambda dt: dt.isoformat().replace("+00:00", "Z")
-        params = {"$filter": f"receivedDateTime ge {iso(start)} and receivedDateTime lt {iso(end)}",
+
+        # Asked of Microsoft, so the mailbox does the narrowing.
+        terms = [f"receivedDateTime ge {iso(start)}", f"receivedDateTime lt {iso(end)}"]
+        if unread_only:
+            terms.append("isRead eq false")
+        if with_attachments:
+            terms.append("hasAttachments eq true")
+        wanted = str(sender or "").strip()
+        if "@" in wanted:
+            # An address is exact, so Microsoft can match it. A quote inside it
+            # would end the literal, so it is doubled, as OData requires.
+            terms.append("from/emailAddress/address eq '"
+                         + wanted.lower().replace("'", "''") + "'")
+        params = {"$filter": " and ".join(terms),
                   "$select": "id,subject,from,receivedDateTime,bodyPreview,webLink,"
-                             "conversationId,hasAttachments",
+                             "conversationId,hasAttachments,isRead",
                   "$orderby": "receivedDateTime desc", "$top": 50}
         url = self.BASE + "/me/messages"
         messages, seen = [], set()
@@ -88,7 +188,7 @@ class GraphMailbox:
                     received = datetime.fromisoformat(message["receivedDateTime"].replace("Z", "+00:00"))
                 except (KeyError, ValueError):
                     raise Denied("Message date missing or invalid; review incomplete")
-                if start <= received < end:
+                if start <= received < end and _is_from(message, wanted):
                     messages.append(message)
             url = page.get("@odata.nextLink")
             if not url:
@@ -98,8 +198,19 @@ class GraphMailbox:
                     or parsed.path != "/v1.0/me/messages"):
                 raise Denied("Unexpected Graph pagination destination")
             params = None
+        narrowed = [bit for bit in (
+            f"from “{wanted}”" if wanted else "",
+            "unread only" if unread_only else "",
+            "with attachments" if with_attachments else "") if bit]
         return {"start": iso(start), "end": iso(end), "complete": not bool(url),
-                "messages": messages, "scope": "mailbox previews; not a full thread or attachment review",
+                "messages": messages, "searched": said, "narrowed": narrowed,
+                # Said whether or not anything matched: an empty answer means
+                # nothing HERE, and here is the part worth reading.
+                "looked_in": ("Searched " + said
+                              + (" — " + ", ".join(narrowed) if narrowed else "")
+                              + ("" if not url else
+                                 ", and there was more than could be read in one go")),
+                "scope": "mailbox previews; not a full thread or attachment review",
                 "ai_summary": "not connected"}
 
     def source(self, message_id):
