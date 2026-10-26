@@ -27,12 +27,11 @@ DRAFT_PAGE = "private-email.html"
 
 def make_router(auth, policy, database, origin, drafts_enabled=False, page_dir=None):
     router = APIRouter(prefix="/api/private-email")
-    # ── THE DRAFT UI IS NOT SHIPPED, AND SAYS SO AT STARTUP ─────────────────────
-    # This release has no write route, so private-email.html is deliberately left
-    # out of the deployable package. The flag below is the single thing standing
-    # between a read-only reader and a page with a Save Draft button, so a server
-    # that is asked for drafts without the page refuses to start rather than
-    # mounting half of a write path and failing later at a 404.
+    # ── THE PAGE IS CHECKED AT STARTUP, NOT AT THE FIRST REQUEST ────────────────
+    # Which page is served is the difference between a reader and a screen with a
+    # Save Draft button, so it is settled when the router is built: a page that was
+    # not deployed alongside the code stops the service starting, rather than
+    # mounting the routes and failing later at a 404 that looks like a bad URL.
     # page_dir exists so the draft tests can supply a stub page without one being
     # shipped. Production never passes it: the page lives beside this module.
     page = Path(page_dir or Path(__file__).parent) / (DRAFT_PAGE if drafts_enabled else READONLY_PAGE)

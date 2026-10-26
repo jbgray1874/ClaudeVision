@@ -30,7 +30,7 @@ class AuthTests(unittest.TestCase):
             "state":"one-use-state", "auth_uri":"https://login.microsoftonline.com/test"}
         self.msal.acquire_token_by_auth_code_flow.side_effect = lambda *a: {"id_token_claims":dict(self.claims)}
         self.msal.get_accounts.return_value = [{"local_account_id":OWNER,"realm":TENANT}]
-        self.msal.acquire_token_silent.return_value = {"access_token":"test-token", "scope":"User.Read Mail.Read"}
+        self.msal.acquire_token_silent.return_value = {"access_token":"test-token", "scope":"User.Read Mail.ReadWrite"}
         self.auth = PrivateAuth(self.settings, factory=lambda cache:self.msal)
         app = FastAPI()
         app.include_router(self.auth.router)
@@ -100,13 +100,56 @@ class AuthTests(unittest.TestCase):
         r = self.client.get('/api/private-email/workspace',headers={'Cookie':'sdi_session=old','X-SDI-Key':'key'})
         self.assertEqual(r.status_code,403)
 
-    def test_readonly_rejects_draft_endpoints(self):
+    def test_draft_routes_are_absent_until_drafts_are_switched_on(self):
+        """Drafting is its own switch. With it off the routes still refuse, so a
+        portal that has not been asked for drafts cannot be talked into one."""
         self.login(); self.callback()
         for path,payload in [('proposals',{'message_id':'x','body':'reply'}),('confirm',{'proposal_id':'x','digest':'y'})]:
             r = self.client.post('/api/private-email/'+path,json=payload,
                                  headers={'Origin':ORIGIN,'X-SDI-Private-Action':'1'})
             self.assertEqual(r.status_code,403)
             self.assertIn('disabled',r.text)
+
+    def test_the_app_asks_for_drafting_but_never_for_sending(self):
+        """Mail.ReadWrite puts a draft in the owner's Drafts folder. Mail.Send would
+        post it, and is the difference between an assistant that writes for you and
+        one that writes AS you. It is never requested, and a token carrying it is
+        refused however it came to be granted."""
+        from private_auth import NEVER
+        self.assertIn('Mail.ReadWrite', SCOPES)
+        self.assertNotIn('Mail.Send', SCOPES)
+        self.assertIn('Mail.Send', NEVER)
+        self.login()
+        self.assertEqual(self.msal.initiate_auth_code_flow.call_args.kwargs['scopes'], SCOPES)
+        # No route can send, whatever the token says.
+        from private_email import GraphMailbox
+        self.assertFalse([m for m in dir(GraphMailbox) if 'send' in m.lower()])
+
+    def test_drafts_need_somewhere_to_keep_pending_approvals(self):
+        """SDI_PRIVATE_DRAFTS=yes with nowhere to put them must stop the service
+        starting, not mount a write path whose approvals vanish on restart."""
+        env = {'SDI_PRIVATE_'+k: v for k, v in zip(
+            ('ENABLED','TENANT_ID','CLIENT_ID','OWNER_ID','ORIGIN','CLIENT_SECRET',
+             'ENCRYPTION_KEY','SESSION_DB'),
+            ('yes',TENANT,CLIENT,OWNER,ORIGIN,'test-secret',
+             self.settings.encryption_key,self.settings.database))}
+        env['SDI_PRIVATE_DRAFTS'] = 'yes'
+        with self.assertRaises(RuntimeError) as caught:
+            install(FastAPI(), env, factory=lambda cache: self.msal)
+        self.assertIn('SDI_PRIVATE_DRAFT_DB', str(caught.exception))
+        # With a path, it mounts, and the draft routes are there.
+        env['SDI_PRIVATE_DRAFT_DB'] = str(Path(self.temp.name)/'drafts.db')
+        app = FastAPI()
+        install(app, env, factory=lambda cache: self.msal)
+        with TestClient(app, base_url=ORIGIN, follow_redirects=False) as client:
+            client.get('/api/private-email/auth/login')
+            client.get(CALLBACK + '?state=one-use-state&code=x')
+            # Present now: refused for a reason about the request, not "disabled".
+            r = client.post('/api/private-email/proposals',
+                            json={'message_id': 'x', 'body': 'hello'},
+                            headers={'Origin': ORIGIN, 'X-SDI-Private-Action': '1'})
+            self.assertNotEqual(r.status_code, 404, 'the draft route is mounted')
+            self.assertNotIn('disabled', r.text)
 
     def test_expired_session_denied(self):
         self.login(); self.callback()
@@ -163,7 +206,7 @@ class AuthTests(unittest.TestCase):
         self.msal.get_accounts.return_value=[{'local_account_id':'other','realm':TENANT}]
         self.assertIsNone(self.auth.graph_token(request))
         self.msal.get_accounts.return_value=[{'local_account_id':OWNER,'realm':TENANT}]
-        self.msal.acquire_token_silent.return_value={'access_token':'too-broad','scope':'User.Read Mail.Read Mail.Send'}
+        self.msal.acquire_token_silent.return_value={'access_token':'too-broad','scope':'User.Read Mail.ReadWrite Mail.Send'}
         self.assertIsNone(self.auth.graph_token(request))
 
 
@@ -217,19 +260,21 @@ class AuthTests(unittest.TestCase):
                 # Graph's own body never reaches the browser.
                 self.assertNotIn('tenant-specific detail', r.text)
 
-    def test_a_server_without_the_draft_page_cannot_serve_drafts(self):
+    def test_a_page_that_was_not_deployed_stops_the_service_starting(self):
         """The draft UI is not in this release. The flag is the only thing between a
         reader and a page with a Save Draft button, so asking for drafts without the
         page must stop the service starting, not fail later at a 404."""
         from private_email_routes import make_router as _make, DRAFT_PAGE, READONLY_PAGE
         here = Path(__file__).parent
-        self.assertFalse((here / DRAFT_PAGE).exists(),
-                         'the draft UI must not be shipped in this package')
         self.assertTrue((here / READONLY_PAGE).is_file())
-        with self.assertRaises(RuntimeError) as caught:
-            _make(self.auth, Policy(TENANT, OWNER, True), None, ORIGIN, drafts_enabled=True)
-        self.assertIn('not part of this release', str(caught.exception))
-        # And the read-only router still builds.
+        self.assertTrue((here / DRAFT_PAGE).is_file(), 'the draft UI ships now that drafting does')
+        # A page that is not deployed alongside the code stops the service starting,
+        # rather than mounting the routes and failing later at a 404.
+        empty = Path(self.temp.name) / 'no-pages'; empty.mkdir()
+        for drafting in (True, False):
+            with self.assertRaises(RuntimeError):
+                _make(self.auth, Policy(TENANT, OWNER, True), None, ORIGIN,
+                      drafts_enabled=drafting, page_dir=empty)
         _make(self.auth, Policy(TENANT, OWNER, True), None, ORIGIN)
 
 

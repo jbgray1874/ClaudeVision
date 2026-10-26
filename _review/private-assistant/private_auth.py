@@ -18,7 +18,14 @@ PREFIX = "/api/private-email"
 CALLBACK = PREFIX + "/auth/callback"
 COOKIE = "__Host-sdi-private-session"
 FLOW_COOKIE = "__Host-sdi-private-flow"
-SCOPES = ["User.Read", "Mail.Read"]
+# Mail.ReadWrite is what createReply needs to put a draft in the Drafts folder.
+# It CANNOT send: sending is Mail.Send, a separate permission this app never asks
+# for and refuses to hold. See NEVER below and GraphMailbox.create_reply.
+SCOPES = ["User.Read", "Mail.ReadWrite"]
+# Scopes that would make this something other than a drafting assistant: posting
+# mail, or reaching a mailbox that is not the owner's own. A token carrying any of
+# them is refused outright, however it came to be granted.
+NEVER = ("Mail.Send", "Mail.Send.Shared", "Mail.ReadWrite.Shared", "Mail.Read.Shared")
 
 
 @dataclass(frozen=True)
@@ -148,9 +155,11 @@ class PrivateAuth:
             result = app.acquire_token_silent(SCOPES, account=accounts[0]) or {}
         except Exception:
             return None
-        # Do not accept a token acquired for a broader feature's permissions.
+        # Do not accept a token acquired for a broader feature's permissions. A
+        # consent granted elsewhere, or widened later in Entra, must not quietly
+        # arrive here as the ability to send mail or read somebody else's.
         scopes = set(result.get("scope", "").split())
-        if not set(SCOPES).issubset(scopes) or any(s.startswith("Mail.") and s != "Mail.Read" for s in scopes):
+        if not set(SCOPES).issubset(scopes) or any(s in NEVER for s in scopes):
             return None
         if cache.has_state_changed:
             data["cache"] = cache.serialize()
