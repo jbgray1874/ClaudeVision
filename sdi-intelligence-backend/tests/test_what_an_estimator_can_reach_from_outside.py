@@ -180,3 +180,32 @@ class BothApprovedAreasTests(unittest.TestCase):
         os.environ["SDI_LIVE_ENQUIRY_ROOT"] = r"\\other\share\enquiries"
         self.assertTrue(surface.under_the_briefs(r"\\other\share\enquiries\Boots"))
         self.assertFalse(surface.under_the_briefs(self.ENQUIRY + r"\Boots"))
+
+
+class NoLoginLoopTests(unittest.TestCase):
+    """"For estimating it keeps bringing up the wearesdi login screen."
+
+    26 October 2026, from a phone. The guard sent anyone who was not an
+    estimator to sign in - including people already signed in. They came back,
+    were still not on the list, and were sent again. Signing in cannot fix not
+    being on a list, and on a phone the loop reads as a broken app with nothing
+    to click and nothing to read.
+    """
+
+    GUARD = APP.split("async def _public_surface_guard", 1)[1].split("\n# ──", 1)[0]
+
+    def test_only_somebody_not_signed_in_is_sent_to_sign_in(self):
+        self.assertIn("signed_in is None", self.GUARD)
+        redirect = self.GUARD.index("auth.login_redirect(request)")
+        checked = self.GUARD.index("signed_in = auth.current_user")
+        self.assertLess(checked, redirect, "it must know who you are first")
+
+    def test_an_authenticated_outsider_is_told_why(self):
+        self.assertIn("You are signed in, but this account is not on the", self.GUARD)
+        self.assertIn("/api/me", self.GUARD)
+        self.assertIn("an admin account is a", self.GUARD)
+
+    def test_the_answer_is_still_403_and_not_a_redirect(self):
+        after = self.GUARD.split("signed_in is not None", 1)[1][:400]
+        self.assertIn("status_code=403", after)
+        self.assertNotIn("login_redirect", after)

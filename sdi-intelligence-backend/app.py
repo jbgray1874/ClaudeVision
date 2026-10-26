@@ -255,8 +255,22 @@ async def _public_surface_guard(request, call_next):
                 if any(path == a or path.startswith(a + "/") for a in _RUNNER_ONLY):
                     return JSONResponse(status_code=404, content={"detail": "Not Found"})
                 if not _public_estimator(request):
-                    if path == "/estimating" and auth.ENABLED:
+                    # ── SIGNING IN AGAIN CANNOT FIX NOT BEING ON A LIST ──────
+                    # Sending an authenticated person to sign in returns them
+                    # here, still not an estimator, and round again. On a phone
+                    # that reads as "the login screen keeps coming up" with
+                    # nothing to click and nothing to read. Only somebody who
+                    # is NOT signed in is sent to sign in.
+                    signed_in = auth.current_user(request) if auth.ENABLED else None
+                    if path == "/estimating" and auth.ENABLED and signed_in is None:
                         return auth.login_redirect(request)
+                    if signed_in is not None:
+                        return JSONResponse(status_code=403, content={"detail":
+                            "You are signed in, but this account is not on the "
+                            "estimator list. Remote estimating is limited to named "
+                            "people (SDI_ESTIMATOR_OIDS); an admin account is a "
+                            "different account from the ordinary one. Check which "
+                            "you are signed in as at /api/me, and ask IT to add it."})
                     return JSONResponse(status_code=403, content={"detail": "Estimator access required"})
                 if request.method not in ("GET", "HEAD", "OPTIONS"):
                     origin = request.headers.get("origin", "").lower().rstrip("/")
