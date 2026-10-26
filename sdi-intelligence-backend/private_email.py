@@ -107,6 +107,19 @@ class GraphMailbox:
         return self.request("GET", self.BASE + "/me/messages/" + quote(message_id, safe=""),
                             params={"$select": "id,subject,from,replyTo,webLink"})
 
+    def full(self, message_id):
+        """One message with its body - what a reply has to be written from.
+
+        The seven-day list carries previews only, which is enough to choose a
+        message and not enough to answer one. This is asked for when a message
+        is opened, not for every message in the list.
+        """
+        self.verify()
+        return self.request(
+            "GET", self.BASE + "/me/messages/" + quote(message_id, safe=""),
+            params={"$select": "id,subject,from,replyTo,receivedDateTime,body,"
+                               "webLink,hasAttachments"})
+
     def attachments(self, message_id):
         """What is attached: names, types and sizes. Never content.
 

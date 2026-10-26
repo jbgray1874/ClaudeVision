@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from private_email import OCTET, Denied, DraftStore, GraphMailbox
+import private_draft_writer as writer
 
 
 class Proposal(BaseModel):
@@ -19,6 +20,13 @@ class Proposal(BaseModel):
 class Confirmation(BaseModel):
     proposal_id: str
     digest: str
+
+
+class Suggestion(BaseModel):
+    message_id: str = Field(min_length=1, max_length=2048)
+    # "say yes but push the date to the 14th". Steers the wording; it is not a
+    # fact James has checked, so the no-invention rules still apply to it.
+    instruction: str = Field(default="", max_length=1000)
 
 
 READONLY_PAGE = "private-email-readonly.html"
@@ -102,6 +110,30 @@ def make_router(auth, policy, database, origin, drafts_enabled=False, page_dir=N
         _, mailbox = context(request)
         from fastapi.responses import JSONResponse
         return JSONResponse(run(mailbox.review), headers={"Cache-Control": "no-store"})
+
+    @router.post("/suggest")
+    def suggest(request: Request, data: Suggestion):
+        """What the message says, and a reply to it - for reading, not for saving.
+
+        Nothing is written anywhere by this route. It reads one message and
+        returns wording; putting wording into Drafts is still /proposals and
+        /confirm, which show it to you first. So a wrong suggestion costs the
+        time it takes to read it.
+        """
+        _, mailbox = context(request)
+        message = run(lambda: mailbox.full(data.message_id))
+        drafted = writer.compose(message, data.instruction)
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            {**drafted, "wrote_it": bool(drafted["draft"]),
+             # Said plainly, because an empty box with no explanation reads as a
+             # broken screen rather than a model that could not be reached.
+             "why_not": "" if drafted["draft"] else
+                        ("Suggestions are switched off for this app."
+                         if not writer.available() else
+                         "Claude could not be reached just now - write the reply "
+                         "yourself, or try again.")},
+            headers={"Cache-Control": "no-store"})
 
     @router.get("/attachments/{message_id}")
     def attachments(request: Request, message_id: str):
