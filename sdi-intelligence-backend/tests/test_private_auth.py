@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import time
@@ -297,6 +298,81 @@ class AuthTests(unittest.TestCase):
         with contextlib.redirect_stdout(log):
             self.assertIsNone(self.auth.graph_token(request))
         self.assertIn('RuntimeError: offline', log.getvalue())
+
+    def test_a_token_from_the_cache_carries_its_permissions_on_the_cache_entry(self):
+        """THE BUG THIS FILE EXISTS FOR, 26 October 2026.
+
+        MSAL leaves "scope" out of its answer when it serves a token from the
+        cache - that field echoes the identity provider, and nothing was issued.
+        Reading that as "no permissions" refused every good token and logged it
+        as "holds []", which reads like missing consent. Most of a day went into
+        Entra, into MSAL, and into two fixes for faults that were not there.
+
+        The permissions are on the cached entry, under "target". These use a real
+        msal.SerializableTokenCache, because the whole mistake was a mock that
+        agreed with me instead of with MSAL."""
+        import msal as real_msal
+        from private_auth import _granted
+
+        def cache_holding(target):
+            cache = real_msal.SerializableTokenCache()
+            cache.deserialize(json.dumps({"AccessToken": {"one": {
+                "credential_type": "AccessToken", "target": target,
+                "home_account_id": OWNER, "realm": TENANT,
+                "environment": "login.microsoftonline.com", "client_id": CLIENT,
+                "secret": "not-a-real-token", "cached_at": "0",
+                "expires_on": "99999999999", "extended_expires_on": "99999999999"}}}))
+            return cache
+
+        qualified = ('https://graph.microsoft.com/User.Read '
+                     'https://graph.microsoft.com/Mail.ReadWrite')
+        # No "scope" in the answer: the permissions come off the cache entry.
+        self.assertEqual(_granted({"access_token": "t"}, cache_holding(qualified)),
+                         {"User.Read", "Mail.ReadWrite"})
+        self.assertEqual(_granted({"access_token": "t"},
+                                  cache_holding("User.Read Mail.ReadWrite")),
+                         {"User.Read", "Mail.ReadWrite"})
+        # A "scope" that IS present still wins - it describes the token in hand.
+        self.assertEqual(_granted({"scope": "User.Read Mail.ReadWrite"},
+                                  cache_holding("User.Read Mail.Send")),
+                         {"User.Read", "Mail.ReadWrite"})
+        # And the refusal still bites: a send permission on the cache entry.
+        self.assertIn("Mail.Send", _granted({"access_token": "t"},
+                                            cache_holding(qualified + " Mail.Send")))
+        # An empty cache refuses, as it must - but now because it is really empty.
+        self.assertEqual(_granted({"access_token": "t"},
+                                  real_msal.SerializableTokenCache()), set())
+
+    def test_the_whole_path_accepts_a_cached_token_with_no_scope_field(self):
+        """End to end: what the server was actually doing, and now does."""
+        from starlette.requests import Request
+        import io, contextlib
+        import msal as real_msal
+        self.login(); self.callback()
+        cookie = self.client.cookies[COOKIE]
+
+        # Put a real cache, holding the granted permissions, into the session -
+        # exactly what a successful sign-in leaves behind.
+        payload, expires = self.auth.store.get(self.auth.key(cookie))
+        payload["cache"] = json.dumps({"AccessToken": {"one": {
+            "credential_type": "AccessToken",
+            "target": ('https://graph.microsoft.com/User.Read '
+                       'https://graph.microsoft.com/Mail.ReadWrite'),
+            "home_account_id": OWNER, "realm": TENANT, "client_id": CLIENT,
+            "environment": "login.microsoftonline.com", "secret": "not-a-real-token",
+            "cached_at": "0", "expires_on": "99999999999",
+            "extended_expires_on": "99999999999"}}})
+        self.auth.store.put(self.auth.key(cookie), payload, expires)
+
+        # MSAL answering from its cache: a token, and no "scope".
+        self.msal.acquire_token_silent.return_value = {"access_token": "cached-token"}
+        request = Request({'type':'http','headers':[(b'host',url_host().encode()),
+                           (b'cookie',(COOKIE+'='+cookie).encode())]})
+        log = io.StringIO()
+        with contextlib.redirect_stdout(log):
+            token = self.auth.graph_token(request)
+        self.assertEqual(token, 'cached-token', log.getvalue())
+        self.assertNotIn('token refused', log.getvalue())
 
     def test_every_refusal_says_which_one_it_was(self):
         """26 October 2026: the code was right, the deploy was right, and the log
