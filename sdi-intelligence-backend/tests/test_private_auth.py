@@ -202,6 +202,30 @@ class AuthTests(unittest.TestCase):
             self.assertIn('Read-only pilot',r.text)
             self.assertNotIn('Confirm — save',r.text)
 
+    def test_entra_may_return_a_scope_in_either_form(self):
+        """Entra returns a granted scope as "Mail.ReadWrite" or as the full
+        "https://graph.microsoft.com/Mail.ReadWrite", and which one is not ours to
+        decide. Comparing the long form against the short name we asked for made
+        every real token look like it lacked the permission - the first live
+        sign-in answered "Mailbox consent required" with the consent granted."""
+        from starlette.requests import Request
+        self.login(); self.callback()
+        request = Request({'type':'http','headers':[(b'host',url_host().encode()),
+                           (b'cookie',(COOKIE+'='+self.client.cookies[COOKIE]).encode())]})
+        for granted in ('User.Read Mail.ReadWrite',
+                        'https://graph.microsoft.com/User.Read '
+                        'https://graph.microsoft.com/Mail.ReadWrite',
+                        'https://graph.microsoft.com/Mail.ReadWrite User.Read'):
+            with self.subTest(granted=granted):
+                self.msal.acquire_token_silent.return_value = {
+                    'access_token':'test-token','scope':granted}
+                self.assertEqual(self.auth.graph_token(request), 'test-token')
+        # And the refusal still works in the long form.
+        self.msal.acquire_token_silent.return_value = {
+            'access_token':'x','scope':'https://graph.microsoft.com/Mail.ReadWrite '
+                                       'https://graph.microsoft.com/Mail.Send User.Read'}
+        self.assertIsNone(self.auth.graph_token(request))
+
     def test_graph_cache_wrong_account_or_broad_scope_denied(self):
         from starlette.requests import Request
         self.login(); self.callback()

@@ -28,6 +28,12 @@ SCOPES = ["User.Read", "Mail.ReadWrite"]
 NEVER = ("Mail.Send", "Mail.Send.Shared", "Mail.ReadWrite.Shared", "Mail.Read.Shared")
 
 
+def _short(scope: str) -> str:
+    """"https://graph.microsoft.com/Mail.ReadWrite" -> "Mail.ReadWrite"; a short
+    name is returned unchanged. Entra uses both forms for the same permission."""
+    return str(scope or "").rsplit("/", 1)[-1]
+
+
 @dataclass(frozen=True)
 class Settings:
     tenant: str
@@ -158,8 +164,18 @@ class PrivateAuth:
         # Do not accept a token acquired for a broader feature's permissions. A
         # consent granted elsewhere, or widened later in Entra, must not quietly
         # arrive here as the ability to send mail or read somebody else's.
-        scopes = set(result.get("scope", "").split())
-        if not set(SCOPES).issubset(scopes) or any(s in NEVER for s in scopes):
+        #
+        # ── COMPARED ON THE SHORT NAME, BECAUSE MICROSOFT USES BOTH ────────────
+        # Entra returns a granted scope as either "Mail.ReadWrite" or the full
+        # "https://graph.microsoft.com/Mail.ReadWrite", and which one you get is
+        # not something this code can decide. Comparing the full string against
+        # the short name we asked for made every real token look like it was
+        # missing the permission - and the mocked tests, written in short form,
+        # agreed with each other and not with Entra.
+        scopes = {_short(s) for s in result.get("scope", "").split()}
+        if not {_short(s) for s in SCOPES}.issubset(scopes) or scopes & {_short(n) for n in NEVER}:
+            print(f"[private-email] token refused: holds {sorted(scopes)}, "
+                  f"needs {sorted(_short(s) for s in SCOPES)}", flush=True)
             return None
         if cache.has_state_changed:
             data["cache"] = cache.serialize()
