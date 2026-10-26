@@ -59,6 +59,7 @@ $Files = @(
     "sue_despatch.py",
     "tracker_snapshot.py",
     "tti_despatch_routes.py",
+    "tti_plan_source.py",
     "appportal/tti-despatch.html",
     "private-email-readonly.html",
     "private-email.html",

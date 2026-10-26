@@ -23,8 +23,9 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 import auth
+import tti_plan_source as plan
 from sue_despatch import going_out
-from tracker_snapshot import load_schedule_snapshot
+from tracker_snapshot import load_schedule_snapshot, read_schedule_bytes
 
 PREFIX = "/api/tti"
 PAGE = "tti-despatch.html"
@@ -68,28 +69,41 @@ def make_router(page_dir=None):
             asked = date.fromisoformat(day)
         except ValueError:
             raise HTTPException(400, "A date is needed, as YYYY-MM-DD.")
+        # SharePoint is the verified source. A local snapshot path stays
+        # supported for a machine with no Graph access, and is never the
+        # default: a file of unknown freshness answering a despatch question
+        # is worse than no answer.
         where = plan_path()
-        if not where:
-            raise HTTPException(503, "The Despatch Plan has not been configured. "
-                                     "SDI_TTI_DESPATCH_PLAN needs the workbook's "
-                                     "full \\\\server\\share path.")
-        try:
-            digest, rows = load_schedule_snapshot(where)
-        except ValueError as exc:
-            raise HTTPException(409, f"The Despatch Plan could not be read: {exc}")
-        except OSError:
-            raise HTTPException(503, "The Despatch Plan is not reachable from this "
-                                     "service just now.")
-        # The workbook's own last-modified time, not the hour this ran: the
-        # answer is only as current as the copy it was read from, and saying
-        # "as of now" about a file saved last Tuesday is the lie that matters.
-        try:
-            saved = datetime.fromtimestamp(Path(where).stat().st_mtime, timezone.utc)
-        except OSError:
-            saved = datetime.now(timezone.utc)
+        if plan.configured():
+            try:
+                data, saved, version = plan.fetch_plan(auth.graph_token(request))
+            except plan.PlanUnavailable as exc:
+                raise HTTPException(503, str(exc))
+            try:
+                digest, rows = read_schedule_bytes(data)
+            except ValueError as exc:
+                raise HTTPException(409, f"The Despatch Plan could not be read: {exc}")
+        elif where:
+            try:
+                digest, rows = load_schedule_snapshot(where)
+            except ValueError as exc:
+                raise HTTPException(409, f"The Despatch Plan could not be read: {exc}")
+            except OSError:
+                raise HTTPException(503, "The Despatch Plan is not reachable from "
+                                         "this service just now.")
+            # The file's own last-modified time, not the hour this ran.
+            try:
+                saved = datetime.fromtimestamp(Path(where).stat().st_mtime, timezone.utc)
+            except OSError:
+                saved = datetime.now(timezone.utc)
+            version = ""
+        else:
+            raise HTTPException(503, "The Despatch Plan has not been configured. Set "
+                                     "SDI_TTI_PLAN_SITE and SDI_TTI_PLAN_PATH for the "
+                                     "SharePoint workbook.")
         answer = going_out(rows, day=asked, as_of=saved.date())
         answer["plan_saved"] = saved.isoformat()
-        answer["plan_version"] = digest[:12]
+        answer["plan_version"] = (version or digest)[:16]
         answer["rows_read"] = len(rows)
         return JSONResponse(answer, headers=_PAGE_HEADERS)
 

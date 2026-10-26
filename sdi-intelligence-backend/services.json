@@ -74,7 +74,7 @@
       "surface": "app",
       "app_url": "/api/tti/despatch",
       "desc": "Ask what is due to leave SDI on a day, answered from the TTI Despatch Plan with the sheet and row it came from.",
-      "requires": "Named Customer Services people only (SDI_TTI_OIDS), through Microsoft sign-in with MFA. It reads a live commercial tracker, so every read is attributable to a person.",
+      "requires": "Named Customer Services people only (SDI_TTI_OIDS), through Microsoft sign-in with MFA. The workbook is read from SharePoint as the person asking, so access is theirs and nobody inherits it from a service account.",
       "detail": "Phase one of Sue Rogers' request. It answers <b>\"what is due to leave SDI on Thursday?\"</b> from the Despatch Plan, citing the workbook sheet and row so the answer can be checked at source. It reads the <code>LORRY FROM SDI</code> column, not the customer due date - a date the customer wants is not a date a lorry leaves - and it says when a date is tentative, revised, or disagrees with the weekday beside it rather than guessing one.",
       "sections": [
         {
