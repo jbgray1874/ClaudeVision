@@ -651,6 +651,11 @@ class Portal:
     def status(self, run_id: str) -> Dict[str, Any]:
         return self._call("GET", f"/api/estimate/{run_id}")
 
+    def self_running(self, report: Dict[str, Any]) -> Dict[str, Any]:
+        """Report to the portal's AI Estimate Self-Running switch and hear whether it is on
+        (D-588). The answer is the only thing that lets the self-running watcher queue a job."""
+        return self._call("POST", "/api/estimate/self-running/heartbeat", report)
+
 
 def request_body(d: Decision) -> Dict[str, Any]:
     """What the page sends for a pack estimate. The client is the share's folder name — the
@@ -747,15 +752,22 @@ def run_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: Pa
 
 def run_ready(decisions: Sequence[Decision], portal: Portal, ledger: Dict[str, Any],
               ledger_path: Path, limit: Optional[int] = None,
-              say: Callable[[str], None] = print, **wait: Any) -> List[Dict[str, Any]]:
+              say: Callable[[str], None] = print,
+              before_each: Optional[Callable[[Decision], bool]] = None,
+              **wait: Any) -> List[Dict[str, Any]]:
     """Every ready row, one after another. Stops when no runner is connected or a run is
     still going at its time limit — a queue built behind work that is not moving helps no
-    one."""
+    one. `before_each` is asked before each row is queued (D-588): the self-running watcher
+    reports the row it is about to run and answers False once the portal's switch is off, so
+    the run in progress finishes and nothing more is queued."""
     done: List[Dict[str, Any]] = []
     for d in decisions:
         if d.status != "ready":
             continue
         if limit is not None and len(done) >= limit:
+            break
+        if before_each is not None and not before_each(d):
+            say("   stopped: AI Estimate Self-Running was switched off on the portal")
             break
         try:
             attempt = run_one(d, portal, ledger, ledger_path, say=say, **wait)

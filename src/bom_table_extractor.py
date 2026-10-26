@@ -31,6 +31,10 @@ HDR_DESC = {"DESCRIPTION", "DESC", "TITLE", "NAME", "PART DESCRIPTION"}
 HDR_QTY = {"QTY", "QTY.", "QUANTITY", "QUANT", "QTY REQD", "QTY REQ", "REQD",
            "NO OFF", "NOOFF", "OFF", "NO. OFF", "QTY OFF", "REQUIRED"}
 HDR_MATERIAL = {"MATERIAL", "MATL", "MAT", "MATERIAL SPEC", "SPEC"}
+# The stock column a customer prints beside the material ("30X30X2MM", "3 mm"): read as
+# its own cell so a profile is never folded into the part number (D-584).
+HDR_DIMENSION = {"DIMENSION", "DIMENSIONS", "DIM", "DIMS", "SIZE", "STOCK SIZE", "SECTION",
+                 "THICKNESS", "THK", "GAUGE"}
 # No bare "KG": as a lone word it appears in title blocks beside a printed weight, and
 # a family this weak could anchor a phantom weight column onto an SDI header row. A
 # header CELL printing "MASS (KG)" reaches "MASS KG" through bracket-stripping.
@@ -89,6 +93,20 @@ def _classify_part_ref(raw: str):
     'Clinch Nut' — is a commodity spec we keep verbatim for pricing."""
     s = _clean(raw)
     joined = re.sub(r"\s*-\s*", "-", s).strip("-")     # join hyphen spacing only
+    # THE ENGINE'S OWN SHAPE TEST, not a private one (D-584). A customer's letter-prefixed
+    # numbering (ROL2021-2466) is a drawing everywhere else; this regex called the rail,
+    # the base and every support a bought-in, and the builder stripped their welds. A bare
+    # standard prefix cut from its designation ("DIN" from "DIN 7991 - M3 x 10") is no code
+    # at all: the row's identity is its description, where the other reader's full
+    # designation meets it, rather than a chargeable line called DIN.
+    try:
+        import part_code_conventions as _pcc
+        if " " not in joined and _pcc.looks_like_a_drawing_number(joined):
+            return "drawing_ref", _normalize_bom_code(s)
+        if s.isalpha() and _pcc.is_supplier_article(s + "1"):
+            return "bought_in", ""
+    except Exception:                                                # noqa: BLE001
+        pass
     if " " not in joined and re.match(r"^\d{3,}(?:-[A-Z0-9]+)+$", joined, re.I):
         return "drawing_ref", _normalize_bom_code(s)
     return "bought_in", s

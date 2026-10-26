@@ -1,0 +1,16 @@
+{
+  "_comment": "Acceptance pins for the 12343-01J shelf, from the 14 Oct 2026 review (D-520/D-522/D-523): the board charge, the fractional edging quantity IN ITS CHARGE CELL, a stated per-metre basis on any edging money, and the charge reconciling to qty x rate x disclosed scrap — on the EXPORTED SHEET, not only in the record. Run after the next book: python tools\\check_book_against_brief.py output\\json\\12343-01J.json docs\\briefs\\12343-01J.facts.json --xlsx <the book.xlsx>",
+  "product_root": "12343-01J",
+  "not_set_aside": ["EDGE23X1ABS"],
+  "material_charged": ["12343-01J"],
+  "provisional_material": {"12343-01J": {"min_unit_material_gbp": 1.0}},
+  "quantities": {"EDGE23X1ABS": 3.192},
+  "unit_priced_in": {"EDGE23X1ABS": "m"},
+  "commercial_basis": ["PACKAGING", "DELIVERY"],
+  "quantity_breaks": [1, 20, 50, 100],
+  "book_rows": {
+    "KD V2 SHELF": {},
+    "EDGE23X1ABS": {"charge": true, "qty": 3.192, "row_without": ["catalog url"]},
+    "PACKING JOINERY": {"absent": true}
+  }
+}

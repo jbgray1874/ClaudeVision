@@ -25,6 +25,7 @@ from config import (
     LENGTH_BY_WIDTH_PATTERN,
     MATERIAL_PATTERN,
     MODIFIED_BY_PATTERN,
+    PART_NUMBER_PATTERN,
     PART_NUMBER_PATTERNS,
     PITCH_PATTERN,
     PROCESS_NOTE_PATTERNS,
@@ -48,6 +49,79 @@ from config import (
 
 def normalize_text(text: str) -> str:
     return " ".join((text or "").replace("\x00", " ").replace("\n", " ").replace("\r", " ").split())
+
+
+# ── THE REVISION TABLE IS THE DRAWING'S HISTORY, NOT ITS CONTENT (D-511) ─────────────────
+# 12340-01M's sheet prints "REVISION TABLE REV DRG NO DESCRIPTION DATE BY / A 12341-01M
+# INITIAL RELEASE 12/03/2026 GS / B 12340-01M PART / DRAWING NUMBER CORRECTED 13/05/2026 GS".
+# The old number in row A was read as the drawing's number: it took the page, acquired
+# folding and £12.90 of fabrication, pushed the page's role to "assembly" (two unique codes),
+# which fed the title to the prose recogniser (a £48 bought-in "Shelf Bracket"), and left the
+# real part a DXF orphan. The finish field swallowed the row's words whole.
+#
+# A number printed in a revision row is a PRIOR IDENTITY of this drawing — the last row's is
+# the current one — and a revision row's words belong to no field at all. So the table is
+# parsed once, kept as history, and struck from the text every field reader sees.
+#
+# THE HEADER IS "DWG NO" AS OFTEN AS "DRG NO", AND A ROW NEED NOT NAME A NUMBER (D-547).
+# 401918-01-GA prints "REV DWG NO DESCRIPTION DATE BY / A ALL COPY OF EXISING DESIGN + MINOR
+# UPDATES - NEW COLOUR 09/01/2026 IB / B - FIXINGS CHANGED TO STAINLESS 05/02/2026 IB", and
+# pdfplumber interleaves it with the specification block, so the text reads "MATERIAL: STEEL REV
+# DWG NO DESCRIPTION DATE BY" and "FINISH: POWDER COATED A ALL 09/01/2026 IB". With only DRG in
+# the header nothing was struck: every assembly and bought-in line took "STEEL REV" as its
+# material (a material no rate exists for) and the finish carried the row's date. A row whose
+# number column says ALL or "-" is still a row; it supersedes nothing.
+_REVISION_TABLE_CONTEXT = re.compile(
+    r"REVISION\s+TABLE|REV\s+D[RW]G\s*NO|D[RW]G\s*NO\s+DESCRIPTION\s+DATE", re.IGNORECASE)
+_REVISION_TABLE_HEADER = re.compile(
+    r"REVISION\s+TABLE|REV\s+D[RW]G\s*NO\s+DESCRIPTION\s+DATE(?:\s+BY)?"
+    r"|D[RW]G\s*NO\s+DESCRIPTION\s+DATE(?:\s+BY)?", re.IGNORECASE)
+# What a struck header or row leaves behind: a word every labelled-field reader stops at
+# (TITLE_BLOCK_STOP_LABELS), so a field the table was interleaved with ends where the table
+# began instead of running on into the description of a prior issue. Not a word any reader
+# takes as a value, a code or a revision letter.
+REVISION_TABLE_STOP = "ENDOFREVISIONTABLE"
+_NO_NUMBER = {"ALL", "-"}
+
+
+def _revision_row_re() -> "re.Pattern":
+    # rev letter · the drawing number of that issue (or ALL / -) · what changed · date · initials
+    from config import PART_NUMBER_PATTERN as _PN
+    return re.compile(
+        r"\b([A-Z]\d?)\s+(" + _PN + r"|ALL\b|-(?=\s))\s+"
+        r"((?:(?!\d{1,2}/\d{1,2}/\d{2,4}).){0,90}?)\s*"
+        r"(\d{1,2}/\d{1,2}/\d{2,4})\s+([A-Z]{1,3})\b")
+
+
+def parse_revision_table(text: str) -> Dict[str, Any]:
+    """The table's rows in print order, the current number (last row's), and which prior
+    numbers it supersedes. Empty when the text carries no revision-table header — a bare
+    code-date-initials run elsewhere is not treated as history."""
+    t = normalize_text(text or "")
+    if not _REVISION_TABLE_CONTEXT.search(t):
+        return {"rows": [], "current_number": "", "current_revision": "", "superseded": {}}
+    rows = [{"rev": m.group(1).upper(),
+             "number": "" if m.group(2).strip().upper() in _NO_NUMBER else m.group(2).strip(),
+             "description": " ".join(m.group(3).split()), "date": m.group(4),
+             "by": m.group(5)} for m in _revision_row_re().finditer(t)]
+    if not rows:
+        return {"rows": [], "current_number": "", "current_revision": "", "superseded": {}}
+    current = rows[-1]
+    superseded = {r["number"]: current["number"] for r in rows[:-1]
+                  if r["number"] and current["number"] and r["number"] != current["number"]}
+    return {"rows": rows, "current_number": current["number"],
+            "current_revision": current["rev"], "superseded": superseded}
+
+
+def strip_revision_table(text: str) -> str:
+    """The same text with the revision table's header and rows blanked, so no field reader
+    can take a prior issue's number for a part or its words for a finish. A text with no
+    revision-table header comes back untouched."""
+    t = normalize_text(text or "")
+    if not _REVISION_TABLE_CONTEXT.search(t):
+        return t
+    t = _revision_row_re().sub(f" {REVISION_TABLE_STOP} ", t)
+    return " ".join(_REVISION_TABLE_HEADER.sub(f" {REVISION_TABLE_STOP} ", t).split())
 
 
 # ── THE SPECIFICATION LEGEND IS NOT WORK — ONE READER FOR EVERY DOOR ─────────────────────
@@ -419,6 +493,10 @@ TITLE_BLOCK_STOP_LABELS = [
     "SHEET",
     "WEIGHT",
     "UNLESS OTHERWISE STATED",
+    # The border's tolerance block follows the specification fields on every sheet that
+    # prints one; without it "COLOUR: CHALKY WHITE POWDER 248" read on into it (D-547).
+    "GENERAL TOLERANCES",
+    REVISION_TABLE_STOP,
 ]
 
 
@@ -533,6 +611,15 @@ def _looks_like_part_number(value: str) -> bool:
     # one regex that happened to produce the fault.
     if parts and not any(ch.isdigit() for ch in parts[0]):
         return False
+    # A TAIL THAT IS A FINISH, COLOUR OR SPACING WORD IS PROSE (D-512). "ST7-PLATINUM" is
+    # the EGGER decor, "600-CENTRES" a hole-spacing note — both raised missing-drawing
+    # questions nobody could answer. Vocabulary in config (CODE_TAIL_NOISE_WORDS).
+    try:
+        from config import CODE_TAIL_NOISE_WORDS as _tail_noise
+        if parts and parts[-1].isalpha() and parts[-1] in _tail_noise:
+            return False
+    except Exception:                                                # noqa: BLE001
+        pass
     return bool(re.fullmatch(r"[A-Z0-9_]+(?:\s*-\s*[A-Z0-9_]+){1,4}", normalized))
 
 
@@ -639,8 +726,23 @@ def _extract_drawing_number_candidates(text: str) -> List[str]:
     if part_like:
         return _dedupe_strings(part_like)
 
-    context_matches: List[str] = []
+    # THE TITLE BLOCK'S OWN ROW: NUMBER, SCALE, REVISION (D-547). The SDI block prints the
+    # headings "DRAWING No SCALE REV" on one line and the values "401918-01-201 1:12 B" on
+    # another, so the labelled read finds the heading's neighbour (SCALE) and nothing else. A
+    # code followed by a scale ratio and a revision letter is that row whatever line it fell
+    # on; it outranks the first code a parts list happens to print, which named every
+    # assembly sheet of 401918-01-GA after its first member.
     normalized = normalize_text(text)
+    scale_row = [m.group(1) for m in re.finditer(
+        r"(" + PART_NUMBER_PATTERN + r")\s+\d+(?:\.\d+)?\s*:\s*\d+(?:\.\d+)?\s+[A-Z]\d?\b",
+        normalized, flags=re.IGNORECASE)]
+    scale_codes: List[str] = []
+    for value in scale_row:
+        scale_codes.extend(_extract_part_number_candidates(value))
+    if scale_codes:
+        return _dedupe_strings(scale_codes)
+
+    context_matches: List[str] = []
     for match in re.finditer(r"(?:PROJECT\s*TITLE\s*:?\s*)?.{0,120}?(" + DRAWING_NUMBER_PATTERN + r")\s+[A-Z0-9]{1,4}\b", normalized, flags=re.IGNORECASE):
         groups = [item for item in match.groups() if item]
         for group in groups:
@@ -818,11 +920,12 @@ def _extract_finish_candidates(text: str) -> List[str]:
 
 
 def _extract_colour_candidates(text: str) -> List[str]:
-    return _extract_labeled_value(
-        text,
-        r"(?:COLOUR|COLOR)\s*[:\-]?",
-        TITLE_BLOCK_STOP_LABELS,
-    )
+    # THE LABEL WITH ITS COLON FIRST (D-547). "NEW COLOUR COLOUR: CHALKY WHITE POWDER 248" is a
+    # revision row's "new colour" beside the field: read colon-less, the first COLOUR ran up
+    # to the second and the field came back as the word "COLOUR".
+    return (_extract_labeled_value(text, r"(?:COLOUR|COLOR)\s*:", TITLE_BLOCK_STOP_LABELS)
+            or _extract_labeled_value(text, r"(?:COLOUR|COLOR)\s*[:\-]?",
+                                      TITLE_BLOCK_STOP_LABELS))
 
 
 # Cross-reference / placeholder phrases a MATERIAL field may carry on GA / parent sheets
@@ -1233,14 +1336,20 @@ def material_field_states_something(text: str) -> bool:
     not run over it: 9598-02-02G's "MATERIAL: 400 MIC" was refused by the keyword list, the
     page was scanned instead, and the legend's TIMBER became the graphic's material. A
     pointer ("REFER TO INDIVIDUAL COMPONENT DRAWINGS") or a bare gauge ("2MM") names nothing."""
+    return bool(material_field_text(text))
+
+
+def material_field_text(text: str) -> str:
+    """The labelled MATERIAL field's words where it names something, else "" (D-598j): kept so
+    a material the book cannot resolve is still the sheet's own statement downstream."""
     for value in _extract_labeled_values(text or "", r"MATERIAL(?!\s*SPEC)\s*[:\-]",
                                          TITLE_BLOCK_STOP_LABELS):
         v = _strip_material_boilerplate(_truncate_at_drawing_note(normalize_text(value))).strip(" :;-,.")
         if not v or _MATERIAL_REF_NOTE_RE.search(v):
             continue
         if re.search(r"[A-Za-z]{3,}", v) and not re.fullmatch(r"[\d.\s]*MM\s*(?:THK|THICK)?", v, re.IGNORECASE):
-            return True
-    return False
+            return " ".join(v.split())
+    return ""
 
 
 def fold_note_count(text: str) -> Dict[str, Any]:
@@ -1264,7 +1373,11 @@ def fold_note_count(text: str) -> Dict[str, Any]:
 
 
 def extract_title_block_fields(text: str) -> Dict[str, Any]:
-    raw_text = text or ""
+    # THE REVISION TABLE FIRST (D-511): parsed as the drawing's history, then struck from
+    # the text every field below reads — a prior issue's number is not a part, and a
+    # revision row's words are not a finish, a colour or a description.
+    revision_table = parse_revision_table(text or "")
+    raw_text = strip_revision_table(text or "") if revision_table["rows"] else (text or "")
     normalized_text = normalize_text(raw_text)
     part_number_values = _extract_part_number_candidates(normalized_text)
     # Material is read PRIMARY from the labelled "MATERIAL:" field (authoritative, the
@@ -1278,9 +1391,11 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
     # collapses the blanked run of spaces and brings the removal verb within reach of the
     # labelled callout itself — "MATERIAL: MDF ... ALUMINIUM PANEL REMOVED" then lost MDF too.
     labelled_materials = _extract_material_candidates(raw_text)
+    material_unresolved = ""
     if labelled_materials:
         materials = [canonical_material(value) for value in labelled_materials]
     elif material_field_states_something(raw_text):
+        material_unresolved = material_field_text(raw_text)
         # THE FIELD NAMED SOMETHING THE READER COULD NOT RESOLVE (D-402). That is the sheet's
         # answer, recorded as unresolved by the readers downstream; the page is NOT scanned,
         # because the page's other material words are the legend's and another part's.
@@ -1292,7 +1407,20 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
         material_scan_text = _strip_material_boilerplate(strip_specification_legend(normalized_text))
         materials = [canonical_material(value) for value in _findall_unique(MATERIAL_PATTERN, material_scan_text, flags=re.IGNORECASE)]
     drawing_numbers = _extract_drawing_number_candidates(raw_text) or _findall_unique(DRAWING_NUMBER_PATTERN, normalized_text, flags=re.IGNORECASE)
+    # The revision table corroborates and corrects the number: a superseded issue's number
+    # maps onto the current one, and a sheet whose fields gave nothing still has the last
+    # row's number — the identity the correction row exists to state (D-511).
+    if revision_table["superseded"]:
+        drawing_numbers = _dedupe_strings(
+            [revision_table["superseded"].get(value, value) for value in drawing_numbers])
+        part_number_values = _dedupe_strings(
+            [revision_table["superseded"].get(value, value) for value in part_number_values])
+    if revision_table["current_number"] and not drawing_numbers:
+        drawing_numbers = [revision_table["current_number"]]
     revisions = _extract_revision_candidates(raw_text)
+    if revision_table["current_revision"]:
+        revisions = [revision_table["current_revision"]] + [
+            value for value in revisions if value != revision_table["current_revision"]]
     dates = _findall_unique(DATE_PATTERN, normalized_text, flags=re.IGNORECASE)
     material_values = [material for material in materials if material]
     finishes = _extract_finish_candidates(raw_text) or [_normalize_finish(value) for value in _findall_unique(FINISH_PATTERN, normalized_text, flags=re.IGNORECASE)]
@@ -1322,6 +1450,9 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
         "revisions": revisions,
         "dates": dates,
         "materials": material_values,
+        # THE SHEET'S MATERIAL AS PRINTED, WHERE THE BOOK CANNOT RESOLVE IT (D-598j): an
+        # answer, so nothing downstream hands this sheet's part another material instead.
+        "material_stated_unresolved": material_unresolved or None,
         "surface_finishes": finishes,
         "colours": colours,
         "weights": _findall_unique(WEIGHT_PATTERN, strip_weights_not_the_parts(text), flags=re.IGNORECASE),
@@ -1334,6 +1465,8 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
         "descriptions_refused": descriptions_refused,
         "clients": clients,
         "project_titles": project_titles,
+        "revision_table": revision_table["rows"],
+        "superseded_numbers": revision_table["superseded"],
         "quantities": _findall_unique(QUANTITY_PATTERN, normalized_text, flags=re.IGNORECASE),
         "thicknesses_mm": thicknesses,
         "normalized": {
@@ -1368,6 +1501,10 @@ def merge_title_block_fields(primary: Dict[str, Any], fallback: Dict[str, Any]) 
         "revisions": revisions,
         "dates": dates,
         "materials": materials,
+        # Carried only where neither read resolved a material (D-598j).
+        "material_stated_unresolved": (None if materials else
+                                       (primary.get("material_stated_unresolved")
+                                        or fallback.get("material_stated_unresolved"))),
         "surface_finishes": finishes,
         "colours": _pick_preferred(primary, fallback, "colours"),
         "weights": _pick_preferred(primary, fallback, "weights"),
@@ -1382,6 +1519,10 @@ def merge_title_block_fields(primary: Dict[str, Any], fallback: Dict[str, Any]) 
         "project_titles": _pick_preferred(primary, fallback, "project_titles"),
         "quantities": _pick_preferred(primary, fallback, "quantities"),
         "thicknesses_mm": thicknesses,
+        # The drawing's history travels whole from whichever read saw the table (D-511).
+        "revision_table": (primary.get("revision_table") or fallback.get("revision_table") or []),
+        "superseded_numbers": (primary.get("superseded_numbers")
+                               or fallback.get("superseded_numbers") or {}),
     }
     merged["normalized"] = {
         "primary_material": _prefer_best_scalar(primary.get("normalized", {}).get("primary_material"), fallback.get("normalized", {}).get("primary_material")),
@@ -1499,6 +1640,20 @@ def extract_bom_rows(text: str, *, source: str = "bom_table",
         return deduped_rows
 
 
+_CALLOUT_BEFORE = re.compile(r"(?:Ø|⌀|∅|⌵|⌴|↧|\bDIA\.?|\bR|\bM)\s*$", re.IGNORECASE)
+_CALLOUT_AFTER = re.compile(r"^\s*(?:°|º|DEG\b|\(\s*x\s*\d|x\s*\d+\s*\)|\bDEEP\b|\bTHRU\b|\bTHK\b)",
+                            re.IGNORECASE)
+
+
+def _is_a_feature_callout(text: str, start: int, end: int) -> bool:
+    """Is the "L x W" pair at text[start:end] a hole, thread, radius or angle callout rather
+    than a size? Led by a diameter, depth or radius mark ("Ø7 X 90°", "R12 x 2"), a thread
+    ("M8 x 16"), or followed by a degree sign or a count ("(x6)")."""
+    before = text[max(0, start - 6):start]
+    after = text[end:end + 8]
+    return bool(_CALLOUT_BEFORE.search(before) or _CALLOUT_AFTER.match(after))
+
+
 def classify_dimensions(text: str) -> Dict[str, Any]:
     text = normalize_text(text)
     if "GENERAL TOLERANCES" in text.upper():
@@ -1507,8 +1662,19 @@ def classify_dimensions(text: str) -> Dict[str, Any]:
         tolerance_noise_values = set()
     # A SIZE THAT NAMES A SECTION IS THE STOCK'S PROFILE, NOT A BLANK (D-406): "40 x 20mm
     # STAINLESS STEEL FLAT SIDED OVAL TUBE" gave 12675-01-02 a 40 x 20 blank.
+    # A DECIMAL COMMA IS A DECIMAL (D-584). European CAD prints 7,4 and 1435,2; read as "7"
+    # and "4" the top blank was 1290 x 2 and the downstand's stated flat never existed. One
+    # or two digits after a comma between digits is a decimal; "1,000" is left alone.
+    text = re.sub(r"(?<=\d),(?=\d{1,2}(?!\d))", ".", text)
+    # A SIZE THAT NAMES A SECTION IS THE STOCK'S PROFILE, NOT A BLANK (D-406): "40 x 20mm
+    # STAINLESS STEEL FLAT SIDED OVAL TUBE" gave 12675-01-02 a 40 x 20 blank.
+    # AND A HOLE CALLOUT IS NOT A SIZE (D-584): "Ø3,5 ⌵ Ø7 X 90° (x6)" is a countersink and
+    # "Ø9 ⌵3 (x3)" a counterbore; read as "L x W" they sized a 1293 mm strip at 90 x 7 and a
+    # 250 mm angle at 9 x 3. A pair led by a diameter or radius mark, or followed by a
+    # degree sign or a count, is a feature, and the part's size is elsewhere on the sheet.
     overall_sizes_raw = [m.groups() for m in re.finditer(LENGTH_BY_WIDTH_PATTERN, text, flags=re.IGNORECASE)
-                         if not names_a_section(text, m.start(), m.end())]
+                         if not names_a_section(text, m.start(), m.end())
+                         and not _is_a_feature_callout(text, m.start(), m.end())]
     overall_sizes = [f"{left} x {right}" for left, right in overall_sizes_raw]
     slot_sizes = [f"{left} x {right}" for left, right in re.findall(SLOT_SIZE_PATTERN, text, flags=re.IGNORECASE)]
 
@@ -1585,6 +1751,43 @@ def classify_dimensions(text: str) -> Dict[str, Any]:
             "slot_sizes_mm": _confidence(0.85 if slot_sizes else 0.0),
         },
     }
+
+
+# A STATED BORE CALLOUT: "2 x Ø8.5 ↧11" as the drawing writes it — and as the text layer
+# keeps it, which on 12343-01J is "2 x 8 11" and "2 x 6.5 10": the Ø and depth glyphs are
+# CAD symbols and do not survive extraction, so a Ø-anchored hole reader sees nothing while
+# the drawing states four bores. The count-x-diameter-depth SHAPE survives, and it is read
+# conservatively: a small count, a plausible drill diameter, a depth in proportion to it.
+# EVIDENCE ONLY — a callout read this way raises flags and questions and never charges time,
+# because "2 x 8 11" is a strong shape for a bore and not a proof of one (D-515).
+_STATED_BORE_RE = re.compile(
+    r"(?<![\dA-Z.,/:])([1-9]\d?)\s*[xX]\s*(?:Ø|⌀|O/|DIA\.?\s*)?"
+    r"(\d{1,2}(?:\.\d)?)\s+(\d{1,2}(?:\.\d)?)(?![\d.])")
+
+
+def extract_stated_bore_callouts(text: str) -> List[Dict[str, float]]:
+    """The bore callouts a sheet's text states, as evidence: [{count, diameter_mm,
+    depth_mm}], deduplicated (a drawing's text layers repeat the same callout). Bounds keep
+    sizes and member counts out: count 2-24, diameter 2-30 mm, depth 0.3-6x the diameter."""
+    out: List[Dict[str, float]] = []
+    seen = set()
+    for m in _STATED_BORE_RE.finditer(normalize_text(text)):
+        try:
+            n, dia, depth = int(m.group(1)), float(m.group(2)), float(m.group(3))
+        except (TypeError, ValueError):
+            continue
+        if not (2 <= n <= 24 and 2.0 <= dia <= 30.0 and 0.3 * dia <= depth <= 6.0 * dia):
+            continue
+        key = (n, round(dia, 2), round(depth, 2))
+        if key in seen:
+            continue
+        seen.add(key)
+        # basis says WHOSE numbers these are: the text layer's, with the Ø and depth glyphs
+        # already lost — a diameter here may be the drawing's Ø8.5 printed as 8. Evidence
+        # for comparison and questions, never a specification (D-516).
+        out.append({"count": float(n), "diameter_mm": dia, "depth_mm": depth,
+                    "basis": "text_layer_callout"})
+    return out
 
 
 def extract_feature_cues(text: str) -> Dict[str, Any]:
@@ -1771,12 +1974,13 @@ def infer_operations_from_text(
     if hole_cue and not is_sheet_steel:
         operations.append("hole_machining")
 
-    if (
-        "FOLD" in text
-        or "BEND" in text
-        or has_fold_geometry
-        or re.search(ANGLE_PATTERN, text, flags=re.IGNORECASE)
-    ):
+    # AN ANGLE IS NOT A FOLD (D-511). 12340-01M, a flat 4 mm bracket with zero detected bend
+    # lines, was given folding (and a fictitious flange allowance) because the page's angle
+    # callouts matched ANGLE_PATTERN — but a chamfer, a mitre, a tolerance block or an
+    # angled profile edge all print angles on parts that are never folded. Folding needs
+    # bend-specific evidence: the words FOLD/BEND, a bend callout, or bend geometry (bend
+    # lines, model bend features) — which has_fold_geometry carries.
+    if "FOLD" in text or "BEND" in text or has_fold_geometry:
         operations.append("folding")
 
     powder_text = "POWDER COAT" in text or "POWDER COATED" in text or "P/C" in text
@@ -1844,6 +2048,49 @@ def infer_operations_from_text(
     operations.append("handling")
 
     return list(dict.fromkeys(operations))
+
+
+# The words that make infer_operations_from_text (and json_normaliser's keyword map) name
+# each operation. operation_evidence_in_text re-reads them to QUOTE the sheet, so a decision
+# built from an inferred operation can carry the words it was read from.
+_OPERATION_CUE_WORDS: Dict[str, tuple] = {
+    "laser_cutting": ("FLAT PATTERN", "LASER", "PROFILE CUT"),
+    "hole_machining": ("DRILL", "PUNCH", "HOLE"),
+    "folding": ("FOLD", "BEND"),
+    "powder_coating": ("POWDER COAT", "P/C", "EPC"),
+    "welding": ("WELD", "TIG", "MIG"),
+    "dress_welds": ("DRESS",),
+    "wet_spray": ("WET SPRAY", "SPRAY PAINT", "LACQUER", "PAINT"),
+    "tapping": ("TAPPED", "TAP ", "M TAP"),
+    "countersinking": ("COUNTERSINK", "CSK", "C'SINK"),
+    "deburring": ("DEBURR", "SHARP CORNER", "SHARP EDGE", "REMOVE ANY SHARP"),
+    "diamond_polish": ("DIAMOND POLISH", "MATT POLISH", "MIRROR POLISH", "FLAME POLISH",
+                       "EDGE POLISH", "POLISH"),
+    "glue": ("GLUE", "BONDING", "BONDED"),
+    "cnc": ("CNC",),
+    "saw": ("SAW", "CUT TO LENGTH"),
+    "tube_cut": ("SAW", "CUT TO LENGTH"),
+}
+
+
+def operation_evidence_in_text(text: Any, operations: Any) -> Dict[str, str]:
+    """{operation: the sheet's own words it was read from} for each operation whose cue the
+    text (legend removed) actually prints. An operation with no cue in the text gets no
+    entry — REPEATING AN OPERATION IS NOT EVIDENCE OF IT (D-586): an op name that merely
+    sits on a record must not be re-quoted as a drawing instruction."""
+    cleaned = normalize_text(strip_specification_legend(str(text or ""))).upper()
+    out: Dict[str, str] = {}
+    if not cleaned.strip():
+        return out
+    for op in operations or []:
+        key = str(op or "").strip().lower()
+        for cue in _OPERATION_CUE_WORDS.get(key, ()):
+            idx = cleaned.find(cue)
+            if idx >= 0:
+                lo, hi = max(0, idx - 45), min(len(cleaned), idx + len(cue) + 45)
+                out[key] = re.sub(r"\s+", " ", cleaned[lo:hi]).strip()
+                break
+    return out
 
 
 def build_review_flags(

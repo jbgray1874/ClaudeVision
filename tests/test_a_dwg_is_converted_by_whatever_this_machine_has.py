@@ -470,14 +470,26 @@ def test_a_ga_whose_number_the_engine_cannot_read_claims_nothing_about_the_folde
     reads, so no PDF could be matched — and the skip said "No PDF of this sheet is in the
     folder" with the PDF sitting right there, then told the estimator to ask the customer for
     it. Not knowing and knowing-there-is-none are different facts."""
-    (tmp_path / "AC0706-02_BOOTS_GA-REVG.DWG").write_bytes(b"dwg")
-    (tmp_path / "AC0706-02_BOOTS_GA-REVG.PDF").write_bytes(b"%PDF")
+    (tmp_path / "BOOTS COFFRET GA-REVG.DWG").write_bytes(b"dwg")
+    (tmp_path / "BOOTS COFFRET GA-REVG.PDF").write_bytes(b"%PDF")
     out = cad_inputs.convert_dwgs(tmp_path, solidworks=_writes_dxf)
     rec = out["files"][0]
     assert "general arrangement" in rec["reason"]
     assert "not matched to a PDF" in rec["reason"] and "no drawing number" in rec["reason"]
     assert "No PDF of this sheet" not in rec["reason"]
     assert "which is in the folder" not in rec["reason"]
+
+
+def test_a_customers_letter_prefixed_number_is_read_and_its_pdf_matched(tmp_path):
+    """AC0706-02 was the example of a number the engine could not read; a letter prefix is a
+    drawing number since D-584, so the DWG's PDF is matched by number and said to be."""
+    (tmp_path / "AC0706-02_BOOTS_GA-REVG.DWG").write_bytes(b"dwg")
+    (tmp_path / "AC0706-02_BOOTS_GA-REVG.PDF").write_bytes(b"%PDF")
+    out = cad_inputs.convert_dwgs(tmp_path, solidworks=_writes_dxf)
+    rec = out["files"][0]
+    assert "general arrangement" in rec["reason"]
+    assert "AC0706-02_BOOTS_GA-REVG.PDF" in rec["reason"] and "which is in the folder" in rec["reason"]
+    assert "no drawing number" not in rec["reason"]
     assert "ask for the PDF" not in rec["reason"]
 
 
@@ -518,7 +530,10 @@ def test_a_folder_that_cannot_be_listed_is_not_reported_as_empty(tmp_path, monke
 
     def _boom(self):
         raise OSError(59, "An unexpected network error occurred")
-    monkeypatch.setattr(Path, "iterdir", _boom)
+    # THE CLASS THE FOLDER IS, NOT ITS BASE. A test that patches PosixPath.iterdir leaves, on
+    # undo, a copy of the inherited method on PosixPath itself, after which patching Path no
+    # longer reaches a real folder and this test passed or failed by the order it ran in.
+    monkeypatch.setattr(type(tmp_path), "iterdir", _boom)
     reason = cad_inputs._skipped_ga_reason(tmp_path / "12645-01GA V2.DWG", tmp_path)
     assert "could not be searched" in reason
     assert "No PDF of this sheet" not in reason and "ask for the PDF" not in reason

@@ -510,6 +510,12 @@ _SHEET_HEADER_KEYS = {
     "part length": "length_mm", "part width": "width_mm", "gauge": "gauge",
     "thickness": "thickness_mm", "qty per sheet": "qty_per_sheet", "scrap": "scrap_pct",
     "cost per part": "total_value_gbp",
+    # THE SHEET-PRICE BASIS, where the template's header carries it (D-582): the stock
+    # sheet's size and price are what the material contract needs to check the arithmetic of
+    # a blank's charge; where a header is absent the field is simply not read, and the
+    # contract reports the basis unverified rather than dividing the charge backwards.
+    "cost per sheet": "sheet_price_gbp", "sheet length": "sheet_length_mm",
+    "sheet width": "sheet_width_mm",
 }
 
 
@@ -590,6 +596,10 @@ def _read_block(com_ws, first_row: int, last_row: int, keys: Dict[str, str],
                  f"Its rows carry no cost and will not reconcile to the sheet total.",
                  header_row=hr, mapped=sorted(cols))
     out = []
+    try:
+        from openpyxl.utils import get_column_letter as _col_letter      # noqa: PLC0415
+    except Exception:                                                 # noqa: BLE001
+        _col_letter = None                                            # type: ignore[assignment]
     for r in range(first_row, last_row + 1):
         ident = _cell_value(com_ws, r, cols[id_field])
         if ident is None or not str(ident).strip():
@@ -608,10 +618,19 @@ def _read_block(com_ws, first_row: int, last_row: int, keys: Dict[str, str],
         # downstream would be guessing from a layout that has already moved once
         # ("header_row_not_found" exists because it did).
         _vc = cols.get(value_field) if value_field else None
-        if _vc:
+        if _vc and _col_letter is not None:
             try:
-                from openpyxl.utils import get_column_letter as _col_letter  # noqa: PLC0415
                 row["charged_cell"] = f"Estimate!{_col_letter(int(_vc))}{r}"
+            except Exception:                                         # noqa: BLE001
+                pass
+        # AND EVERY INPUT CELL THE SAME WAY (D-582): the located column of each field this
+        # row was read from, so the material contract can hold the saved file's own cached
+        # cell against the figure the read-back carried, field by field, instead of guessing
+        # a column letter later from a layout that has already moved once.
+        if _col_letter is not None:
+            try:
+                row["evidence_cells"] = {f: f"Estimate!{_col_letter(int(c))}{r}"
+                                         for f, c in cols.items()}
             except Exception:                                         # noqa: BLE001
                 pass
         for field, c in cols.items():

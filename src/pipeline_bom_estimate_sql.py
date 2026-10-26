@@ -79,7 +79,7 @@ _JSON_OVERLAY_KEYS: Set[str] = {
     "estimated_route_time_min",
 }
 
-_DEFAULT_DWG_STEM_REGEX = r"(?i)^(\d{4,5}-\d{2}(?:-[A-Z0-9_]+)+|\d{4,5}-\d{2}-[A-Z0-9_]+)$"
+_DEFAULT_DWG_STEM_REGEX = r"(?i)^(\d{4,6}-\d{2}(?:-[A-Z0-9_]+)+|\d{4,6}-\d{2}-[A-Z0-9_]+)$"
 
 # Drawing-style tokens inside BOM dwg_no / item_number (e.g. 9680-02-001, 12242-01-GA).
 _REFERENCE_TOKEN_RE = re.compile(

@@ -29,7 +29,7 @@ BOUGHT-IN INHERITANCE (added):
   generalises to any bought-in on any job — nothing part-number-specific.
 """
 from __future__ import annotations
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from collections import defaultdict
 import re
 
@@ -43,9 +43,86 @@ def _norm(code: Any) -> str:
 
 
 def _family(code: str) -> str:
-    """Number family prefix: '1448-01' -> '1448', '1455-C-101' -> '1455'."""
-    m = re.match(r"(\d{3,})", _norm(code))
+    """Number family prefix: '1448-01' -> '1448', '1455-C-101' -> '1455', 'ROL2021-2466' ->
+    'ROL2021'. Empty for anything that is not a drawing's numbering — a supplier's article
+    (651.02.909), a standard's designation (DIN 934 - M10), a purchasing family (FIXING49).
+
+    THE LEADING DIGIT RUN WAS THE WHOLE TEST, and it passed a Hafele foot (D-584): on a GA
+    numbered ROL2021-… the structural rows had no leading digits and were invisible, while
+    "651.02.909 x6" opened with digits and became the one family shown — six "arrangements",
+    and every fastener on the GA divided by six. The shape and the article test are the
+    engine's own (part_code_conventions); a letter-prefixed code must pass the shape, and a
+    digit-led code keeps the legacy reading so no earlier pack moves."""
+    text = _norm(code)
+    if not text:
+        return ""
+    try:
+        from part_code_conventions import drawing_family, is_supplier_article
+        if is_supplier_article(text):
+            return ""
+        if not text[0].isdigit():
+            return drawing_family(text)
+    except Exception:                                                # noqa: BLE001
+        pass
+    m = re.match(r"(\d{3,})", text)
     return m.group(1) if m else ""
+
+
+def _bought_in_row(row: Dict[str, Any]) -> bool:
+    """A row the drawing itself marks as bought: a bought-in flag or kind from the reader,
+    or a code that is a supplier's article. Such a row is never structure on a GA."""
+    if row.get("is_bought_in") or row.get("bought_in"):
+        return True
+    if str(row.get("kind") or "").lower() in ("bought_in", "purchased", "hardware"):
+        return True
+    try:
+        from part_code_conventions import is_supplier_article
+        return is_supplier_article(_norm(row.get("part_number")))
+    except Exception:                                                # noqa: BLE001
+        return False
+
+
+def _arrangement_family(bom_rows: List[Dict[str, Any]], main_ga: str) -> str:
+    """The numbering family the general arrangement ITSELF belongs to — read from its
+    drawing number as its file is named, or failing that from the numbers of the pack's
+    other sheets (the family they share). "" where neither says. This is the positive
+    evidence the arrangement rule needs: a code shown N times is an arrangement of the
+    product only when it is numbered as the product is."""
+    try:
+        from product_identity import drawing_of_file
+    except Exception:                                                # noqa: BLE001
+        def drawing_of_file(_n: Any) -> Dict[str, Any]:              # type: ignore
+            return {}
+    # 1. the GA's own drawing number, as its file is named
+    own = (drawing_of_file(main_ga) or {}).get("number") if main_ga else ""
+    fam = _family(own) if own else ""
+    if fam:
+        return fam
+    # 2. the parent the GA's own rows name — the title block the reader read them under
+    for r in bom_rows:
+        if str(r.get("source_pdf") or "") == main_ga:
+            fam = _family(_norm(r.get("bom_parent")))
+            if fam:
+                return fam
+    # 3. the numbering the pack's OTHER sheets' rows share — the job's own numbering as its
+    #    sub-sheets print it; a supplier's article never counts
+    counts: Dict[str, int] = defaultdict(int)
+    for r in bom_rows:
+        src = str(r.get("source_pdf") or "")
+        if not src or src == main_ga:
+            continue
+        f = _family(_norm(r.get("part_number")))
+        if f:
+            counts[f] += 1
+    if counts:
+        return max(counts, key=lambda k: counts[k])
+    # 4. the other sheets' own numbers, as their files are named
+    for src in {str(r.get("source_pdf") or "") for r in bom_rows}:
+        if src and src != main_ga:
+            f = _family((drawing_of_file(src) or {}).get("number") or "")
+            if f:
+                counts[f] += 1
+    return max(counts, key=lambda k: counts[k]) if counts else ""
 
 
 def _qty(row: Dict[str, Any]) -> int:
@@ -216,7 +293,9 @@ def _install_context(bom_rows: List[Dict[str, Any]],
         if str(r.get("source_pdf") or "") != main_ga:
             continue
         code = _norm(r.get("part_number"))
-        if code and _family(code):          # structural rows only; a fixing is not an assembly
+        # structural rows only; a fixing is not an assembly, and neither is a supplier's
+        # article or a row the reader marked bought-in (D-584)
+        if code and _family(code) and not _bought_in_row(r):
             codes[code] = max(codes.get(code, 0), _qty(r))
     _where = f"'{main_ga}'" if main_ga else "no drawing"
     if not codes:
@@ -225,11 +304,32 @@ def _install_context(bom_rows: List[Dict[str, Any]],
             f"and carries no structural parts-list row at all (of {len(bom_rows)} row(s) read "
             f"across the pack). Quantities stand as each drawing prints them")
     _listed = ", ".join(f"{c} x{q}" for c, q in sorted(codes.items()))
-    if len({_family(c) for c in codes}) != 1:
+    _fams = {_family(c) for c in codes}
+    if len(_fams) != 1:
         return set(), (
             f"install context: NOT recognised — {_where} lists more than one number family "
             f"({_listed}), which is a bay: several different articles in one composite, and the "
             f"parent quantities are real multipliers. Nothing reinterpreted")
+    # POSITIVE EVIDENCE, NOT THE LAST FAMILY STANDING (D-584). The codes shown must be
+    # numbered as the arrangement itself is: 12349-02-GA showing 3 x 12349-02-69-100 is three
+    # of its own module; a GA numbered ROL2021-2465-00 showing 6 x 651.02.909 is six feet.
+    # Where the drawing's own family cannot be read, the rule has no evidence and declines —
+    # the printed quantities stand and the question is asked.
+    _own = _arrangement_family(bom_rows, main_ga)
+    if _own and _fams != {_own}:
+        _foreign = ", ".join(f"{c} x{q}" for c, q in sorted(codes.items()) if _family(c) != _own)
+        return set(), (
+            f"install context: NOT recognised — {_where} is numbered {_own}, and the code(s) "
+            f"it shows more than once ({_foreign}) are not of that numbering, so they are "
+            f"components of the product, not arrangements of it. The printed quantities "
+            f"stand. If the drawing really shows several installations of one article, name "
+            f"the unit being quoted")
+    if not _own:
+        return set(), (
+            f"install context: NOT recognised — {_where} lists {_listed}, but its own drawing "
+            f"number could not be read from the pack, so nothing says those codes are "
+            f"arrangements of the product rather than components of it. The printed "
+            f"quantities stand; name the unit being quoted if this is an install arrangement")
     quantities = set(codes.values())
     if len(quantities) != 1:
         return set(), (
@@ -367,7 +467,22 @@ def resolve_effective_quantities(
         # drawing, and on 12349-02 that put the GA's own row into `effective` as a part.
         def _fam_count(s: str) -> int:
             return len({f for f in (_family(r.get("part_number")) for r in groups[s]) if f})
-        main_ga = max(groups, key=_fam_count) if groups else ""
+        # THE GENERAL ARRANGEMENT IS THE SHEET NO OTHER SHEET LISTS (D-584). On a pack of one
+        # numbering every sheet references one family, the count ties, and the first sheet
+        # read won — the base sub-assembly, on the day. A sub-assembly's number appears as a
+        # row on its parent's table; the arrangement's never does. Then the most families,
+        # and on a tie the first sheet read, as before.
+        _listed = {_norm(r.get("part_number")) for rows_ in groups.values() for r in rows_}
+
+        def _ga_key(s: str) -> tuple:
+            own = _norm(s)
+            try:
+                from product_identity import drawing_of_file
+                own = _norm((drawing_of_file(s) or {}).get("number") or s)
+            except Exception:                                        # noqa: BLE001
+                pass
+            return (0 if own and own in _listed else 1, _fam_count(s))
+        main_ga = max(groups, key=_ga_key) if groups else ""
 
     sub_families = {
         _family(r.get("part_number"))
@@ -494,16 +609,75 @@ def resolve_effective_quantities(
             })
         effective[code] = _qty(r)
 
+    # ── THE ASSEMBLY'S OWN COUNT, NOT ITS FAMILY'S FIRST ROW (D-552) ──────────────────────
+    # 401918-01-GA lists 401918-01-401 x2; 401's own table lists 07M x1 and 08M x2. Every code
+    # on the job is family "401918", and the family's multiplier was set by the FIRST GA row
+    # (01M x1) — so 401's leaves came out at 1 and 2 where the rail needs 2 and 4. A table is
+    # the table OF a code, and that code has a count on its parent's table: a leaf on it is
+    # its own quantity times that count, times the count's own parent's, up to the GA. The
+    # family multiplier is kept for a table whose code no parent's table lists (the legacy
+    # multi-family packs), and for the named unit (one of the thing you ran).
+    # A CODE'S ROWS, ONE PER TABLE THAT LISTS IT (D-561). The first version kept one row per
+    # code, so a sub-assembly listed under two parents took the first parent's count and its
+    # descendants were counted for one parent only — the same undercount D-552 closed for
+    # leaves, a level up. A table that lists the code twice keeps its first row, as before.
+    _rows_of: Dict[str, List[Tuple[Dict[str, Any], str]]] = {}
+    for _src, _rows in groups.items():
+        _seen_here: set = set()
+        for _r in _rows:
+            _c = _norm(_r.get("part_number"))
+            if _c and _c not in _seen_here:
+                _seen_here.add(_c)
+                _rows_of.setdefault(_c, []).append((_r, _src))
+    _main_key = _norm(main_ga)
+
+    def _node_count(code: str, _depth: int = 0) -> Optional[int]:
+        """How many of this assembly one unit holds: its row's quantity on each parent's table,
+        times that parent's count, summed over every parent that lists it. None where no
+        table lists it, or it is the unit itself."""
+        if not code or _depth > 12 or code == _main_key or code == _named:
+            return 1 if code in (_main_key, _named) and code else None
+        rows = _rows_of.get(code)
+        if not rows:
+            return None
+        total, counted = 0, False
+        for r, src in rows:
+            own = _qty(r)
+            if _norm(src) == _main_key:
+                if code in install_context:
+                    return 1
+                if _install_n > 1 and own % _install_n == 0:
+                    own = own // _install_n
+                total, counted = total + own, True
+                continue
+            up = _node_count(_norm(src), _depth + 1)
+            if up is None:
+                continue
+            total, counted = total + own * up, True
+        return total if counted else None
+
     # leaves from each sub-assembly drawing: own qty x parent's top-level multiplier
+    _summed_codes: set = set()
     for src, rows in groups.items():
         if src == main_ga:
             continue
+        _own_count = _node_count(_norm(src))
         for r in rows:
             code = _norm(r.get("part_number"))
             if not code:               # see the nameless-row note on the main-GA loop above
                 _nameless += 1
                 continue
             fam = _family(code)
+            if _own_count is not None:
+                # A CODE UNDER SEVERAL PARENTS TAKES EACH PARENT'S COUNT: FIXING105 is 2 on
+                # 201 (x1) and 2 on each 401 (x2) — six a rail, not whichever table came last.
+                _n_here = _qty(r) * _own_count
+                if code in _summed_codes:
+                    effective[code] = effective.get(code, 0) + _n_here
+                else:
+                    effective[code] = _n_here
+                    _summed_codes.add(code)
+                continue
 
             if fam:
                 # numeric fabricated part: multiply by its own family's top-level multiplier

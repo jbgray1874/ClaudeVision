@@ -112,6 +112,46 @@ def test_the_runner_treats_a_409_as_a_stop():
     assert "no longer ours" in RUNNER_SRC
 
 
+def test_a_service_restart_forgets_the_run_and_says_so_in_words_the_runner_reads(routes):
+    """Runs live in the service's memory. After a restart the heartbeat is answered 404."""
+    req = routes.ProgressRequest(runner_id="RUNNER-1", lines=[])
+    with pytest.raises(Exception) as exc:
+        routes.progress("gone", req)
+    assert getattr(exc.value, "status_code", None) == 404
+    assert "No such run" in str(getattr(exc.value, "detail", ""))
+
+
+def test_the_runner_treats_a_forgotten_run_as_a_stop():
+    """Otherwise the engine drives SOLIDWORKS and Excel to the end of a job whose result the
+    restarted service refuses, and the page's Stop answers "No such run"."""
+    assert 'resp.status_code == 404 and "No such run" in' in RUNNER_SRC
+
+
+def test_the_busy_runner_line_names_the_run_it_is_on(routes):
+    """So any tab can stop it, not only the one that started it."""
+    _running(routes)
+    seen = routes.runners()
+    assert seen["runners"][0]["running"]["run_id"] == "r1"
+
+
+def test_the_page_offers_stop_beside_the_busy_runner_for_a_run_it_did_not_start():
+    assert "sb.dataset.stopRun = busyRun" in PAGE and "busyRun !== runId" in PAGE
+    handler = PAGE[PAGE.index('runnerBox.addEventListener("click"'):]
+    handler = handler[:handler.index("checkRunners();")]
+    assert '"/abandon"' in handler
+
+
+def test_a_stopped_run_files_nothing_even_when_the_engine_finished_cleanly():
+    """A stop that lands as the engine exits 0 must not publish the book: the service is asked
+    once more after the engine ends, and a stop heard then files nothing."""
+    tail = RUNNER_SRC[RUNNER_SRC.index("code = proc.wait()"):]
+    ask, check, filing = (tail.index("flush(force=True)"), tail.index("if stop_asked:"),
+                          tail.index("collect("))
+    assert ask < check < filing
+    guard = tail[check:filing]
+    assert "return" in guard and "nothing was filed" in guard
+
+
 def test_the_runner_also_understands_an_explicit_cancel():
     assert '.get("cancel")' in RUNNER_SRC
 

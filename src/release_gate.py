@@ -173,6 +173,23 @@ def assess_release(lines: Any, *, job: Any = "") -> Dict[str, Any]:
                     if _gaps else "no price from any rung, and no ruling that it needs none"),
         })
 
+    # NO LINE IS NOT EVERY LINE ANSWERED (D-594). "Every required line is priced" was true of
+    # an estimate with no lines at all, so a pack nothing was read from passed. Nothing read is
+    # said as that, plainly, with where to look.
+    if not blocking and not answered:
+        return {
+            "schema": "estimate_release_gate.v1",
+            "job": _clean(job),
+            "releasable": False,
+            "lines_answered": 0,
+            "lines_blocking": 0,
+            "blocking": [],
+            "nothing_read": True,
+            "headline": "nothing was read: this estimate has no line to price",
+            "what_to_do": ("Check the drawing read. A page with no text layer is read only by "
+                           "the image reading; a pack with no parts list needs its parts read "
+                           "from the drawing itself."),
+        }
     releasable = not blocking
     return {
         "schema": "estimate_release_gate.v1",

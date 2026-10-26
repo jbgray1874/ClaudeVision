@@ -70,6 +70,8 @@ from typing import Any, Dict, List, Optional, Tuple
 __all__ = [
     "EDGE_LAYER_WORDS",
     "banded_length_mm",
+    "finish_states_banding",
+    "harvest_banding_statements",
     "is_banding_row",
     "layer_means_edging",
     "stated_edging_length_mm",
@@ -84,9 +86,13 @@ EDGE_LAYER_WORDS = (
 )
 
 # Words that name the WHOLE perimeter. A drawing that says this has made a decision, and
-# taking it at its word is not the same as assuming it in silence.
-_ALL_ROUND = ("ALL ROUND", "ALL EDGES", "ALL FOUR EDGES", "ALL SIDES", "ALLROUND",
-              "EDGED ALL ROUND", "BANDED ALL ROUND")
+# taking it at its word is not the same as assuming it in silence. Both spellings of
+# "ROUND"/"AROUND" (D-512): 12343-01J states "EDGED ALL AROUND" and the vocabulary knew only
+# "ALL ROUND", so a stated whole-perimeter instruction was read as extent-unknown and the
+# book called its own perimeter a CEILING while the drawing had answered the question.
+_ALL_ROUND = ("ALL ROUND", "ALL AROUND", "ALL EDGES", "ALL FOUR EDGES", "ALL SIDES",
+              "ALLROUND", "ALLAROUND", "EDGED ALL ROUND", "EDGED ALL AROUND",
+              "BANDED ALL ROUND", "BANDED ALL AROUND")
 
 # Words that name SOME edges. Each maps to how many of the blank's four sides it describes,
 # and which dimension those sides run along.
@@ -153,8 +159,11 @@ def _text_of(part: Dict[str, Any]) -> str:
         bits.append(_clean(part.get(key)))
     # stated_banding_rows: an edging row on the part's own parts list that gives no length
     # (D-383) — the drawing says the part is banded, and the extent is still to be stated.
+    # banding_statements: the sheet's own sentences about the edges, harvested from the
+    # part's pages by document_builder (harvest_banding_statements, D-513) — the path by
+    # which "EDGED ALL AROUND" written on the drawing reaches this reader.
     for key in ("drawing_notes", "textual_notes", "notes_text", "surface_finishes",
-                "callouts", "stated_banding_rows"):
+                "callouts", "stated_banding_rows", "banding_statements"):
         _v = part.get(key)
         if isinstance(_v, (list, tuple)):
             bits.extend(_clean(x) for x in _v)
@@ -171,6 +180,21 @@ def _blank(part: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
     _ng = part.get("normalized_geometry") or {}
     _l = part.get("blank_length_mm") or _ng.get("blank_length_mm")
     _w = part.get("blank_width_mm") or _ng.get("blank_width_mm")
+    # THE REBUILT RECORD'S OWN SPELLING (D-515). _interpret_part rebuilds
+    # normalized_geometry with the flat blank under bounding_box_flat_mm / developed_*,
+    # and blank_length_mm is gone — so on 12343-01J's SAVED record a stamped
+    # "EDGED ALL AROUND" reached this module, says_banding fired, and the all-round
+    # branch still returned extent-unknown: the statement needs the perimeter and this
+    # reader could not see a blank the record plainly holds. The estimator's own locals
+    # knew it (the CEILING flag printed 3192 mm); only this reader was blind.
+    if not (_l and _w):
+        _bb = _ng.get("bounding_box_flat_mm")
+        if isinstance(_bb, dict):
+            _l = _l or _bb.get("length")
+            _w = _w or _bb.get("width")
+    if not (_l and _w):
+        _l = _l or _ng.get("developed_length_mm")
+        _w = _w or _ng.get("developed_width_mm")
     try:
         _l = float(_l) if _l else None
         _w = float(_w) if _w else None
@@ -265,6 +289,189 @@ def stated_edging_length_mm(description: Any) -> Optional[float]:
     return v if v > 0 else None
 
 
+# THE SHEET'S OWN WORDS ABOUT THE EDGES, AS A STATEMENT ON THE RECORD (D-513). 12343-01J's
+# drawing says "EDGED ALL AROUND" and writes the bander's order "2S/SL" — and neither ever
+# reached a field this module reads. The finish box harvested "EDGED" alone, the note snippets
+# keep only deburr/weld/tap words, and so a stated whole-perimeter instruction arrived here as
+# extent-unknown: the labour was flagged a CEILING and no edging material line was built. The
+# fix is not another field reader guessing; it is carrying the sheet's own sentence. This
+# harvester takes the part's OWN page text (legend-stripped by the caller) and returns short
+# windows around each banding word or edging-order code, so "EDGED ALL AROUND" survives whole.
+# "2S/SL" is two short sides, then the long sides: the second leg of the code can be TWO
+# letters, which the first spelling of this pattern ([SL] alone, D-512) could never match —
+# the exact code 12343-01J writes was unreadable by the rule built for it. A leading digit is
+# required so "S/S" (a stainless shorthand) is never read as a banding order.
+_ORDER_CODE_RE = re.compile(r"\b\d{1,2}\s*[SL]{1,2}\s*/\s*\d{0,2}\s*[SL]{1,2}(?![A-Z])")
+_BANDING_WORD_RES = [
+    re.compile(r"(?<![A-Z])" + re.escape(w).replace(r"\ ", r"[\s]+") + r"(?![A-Z])")
+    for w in sorted(_BANDING_WORDS, key=len, reverse=True)
+]
+
+
+def harvest_banding_statements(text: Any, *, window: int = 40, cap: int = 8) -> List[str]:
+    """Short statements of banding found in a sheet's text, for the part record.
+
+    Each hit of a banding word or an edging-order code is kept with `window` characters of
+    its own context either side, so the extent words beside it ("ALL AROUND", "TWO LONG
+    EDGES", "2S/SL") travel with the word that makes them a banding statement. A window that
+    also names a bought trim (EDGE_BANDING_NOT_BANDING_WORDS) is a thing we buy, not this
+    part's banding, and is dropped — the same refusal is_banding_row makes for a row."""
+    t = " ".join(str(text or "").split()).upper().replace("-", " ")
+    if not t:
+        return []
+    spans: List[Tuple[int, int]] = []
+    for rx in _BANDING_WORD_RES:
+        spans.extend(m.span() for m in rx.finditer(t))
+    spans.extend(m.span() for m in _ORDER_CODE_RE.finditer(t))
+    if not spans:
+        return []
+    out: List[str] = []
+    last_end = -1
+    for s, e in sorted(spans):
+        if s < last_end:                       # overlapping hits share one window
+            continue
+        frag = t[max(0, s - window): min(len(t), e + window)].strip()
+        last_end = e + window
+        if not frag or _NOT_BANDING_RE.search(frag):
+            continue
+        if frag not in out:
+            out.append(frag)
+        if len(out) >= cap:
+            break
+    return out
+
+
+def stamp_banding_statements_from_pages(parts: Any, summary: Any) -> int:
+    """THE ESTIMATE-TIME CARRIER (D-514): banding statements read off the summary's own
+    pages, onto the parts the pages name — where the money is computed, not only where the
+    document was built.
+
+    D-513 stamped these during the document build, and on the 09:36 12343-01J run the
+    costed record still arrived without them while the page's own notes region holds
+    "EDGED ALL AROUND EDGING ORDER: 2S/SL" verbatim — the statement existed on the summary
+    and died somewhere between the build and the costing. This pass closes that class of
+    loss: it runs at the head of estimate_document, reads the pages as saved (so a REPLAY
+    of a saved record proves it), fills only a gap, and keys each page to the part whose
+    number its own title block states — a note stays on the sheet it is written on.
+    Detail pages only. Returns how many parts were stamped."""
+    try:
+        from extractor_patterns import strip_specification_legend as _strip_legend
+    except Exception:                                                # noqa: BLE001
+        def _strip_legend(t: Any) -> str:                            # type: ignore[misc]
+            return str(t or "")
+
+    def _norm_code(v: Any) -> str:
+        return "".join(ch for ch in str(v or "").upper() if ch.isalnum())
+
+    page_texts: List[Tuple[set, str]] = []
+    for pg in ((summary or {}).get("pages") or []):
+        if not isinstance(pg, dict):
+            continue
+        role = pg.get("page_role")
+        role = role.get("primary_role") if isinstance(role, dict) else role
+        if str(role or "") != "detail":
+            continue
+        pa = pg.get("page_analysis") or {}
+        tb = (pa.get("title_block") or {}) if isinstance(pa, dict) else {}
+        codes = {_norm_code(v) for v in (tb.get("drawing_numbers") or [])}
+        for k in ("current_number", "primary_drawing_number"):
+            codes.add(_norm_code(tb.get(k)))
+            if isinstance(pa, dict):
+                codes.add(_norm_code(pa.get(k)))
+        codes.discard("")
+        if not codes:
+            continue
+        bits: List[Any] = [pg.get("text_preview"), pg.get("pdfplumber_text"),
+                           pg.get("normalized_text"), pg.get("pypdf_text")]
+        rt = pg.get("region_text")
+        if isinstance(rt, dict):
+            bits.extend(rt.values())
+        text = " ".join(str(b) for b in bits if b)
+        if text.strip():
+            page_texts.append((codes, text))
+    if not page_texts:
+        return 0
+
+    # THE SAME CARRIER STAMPS THE BORE CALLOUTS (D-516). The 11:22 book proved the pattern:
+    # the build-time stamp does not reliably reach the costed record — the banding survived
+    # only because THIS pass re-reads the pages at estimate time, and the bores, which had
+    # no estimate-time carrier, arrived nowhere although the reader finds them in the same
+    # text. One carrier, both statements.
+    try:
+        from extractor_patterns import extract_stated_bore_callouts as _bores
+    except Exception:                                                # noqa: BLE001
+        _bores = None
+
+    stamped = 0
+    for p in (parts or []):
+        if not isinstance(p, dict):
+            continue
+        pn = _norm_code(p.get("part_number"))
+        if not pn:
+            continue
+        touched = False
+        if not p.get("banding_statements"):
+            stmts: List[str] = []
+            for codes, text in page_texts:
+                if pn not in codes:
+                    continue
+                for s in harvest_banding_statements(_strip_legend(text)):
+                    if s not in stmts:
+                        stmts.append(s)
+            if stmts:
+                p["banding_statements"] = stmts[:8]
+                touched = True
+        if _bores is not None and not p.get("stated_bore_callouts"):
+            calls: List[Dict[str, float]] = []
+            seen = set()
+            for codes, text in page_texts:
+                if pn not in codes:
+                    continue
+                for c in _bores(_strip_legend(text)):
+                    key = (c.get("count"), c.get("diameter_mm"), c.get("depth_mm"))
+                    if key not in seen:
+                        seen.add(key)
+                        calls.append(c)
+            if calls:
+                p["stated_bore_callouts"] = calls
+                touched = True
+        if touched:
+            stamped += 1
+    return stamped
+
+
+# The words an extent statement is allowed to add around the banding nouns — "ALL", "AROUND",
+# "TWO LONG EDGES" — plus the fillers a finish box writes. A finish made only of these and the
+# banding vocabulary states the edging the route charges; it is not an unknown process.
+_BANDING_FILLER_WORDS = {
+    "ALL", "ROUND", "AROUND", "EDGE", "EDGES", "SIDE", "SIDES", "FACE", "FACES",
+    "ONE", "TWO", "THREE", "FOUR", "BOTH", "LONG", "SHORT", "FRONT", "TOP", "LEADING",
+    "VISIBLE", "EXPOSED", "AND", "THE", "TO", "BE", "ABS", "PVC", "FINISH", "FINISHED",
+    "AS", "ORDER",
+}
+
+
+def finish_states_banding(text: Any) -> bool:
+    """Is this stated finish a statement of edge banding, and nothing else?
+
+    "EDGED", "EDGED ALL AROUND", "EDGE BANDED 2S/SL" — the work the route's Edge Banding row
+    already charges, stated in the finish box. Reported as "a finish this engine has no
+    vocabulary for" it tells an estimator to price work twice (D-513, 12343-01J's "EDGED
+    EDGED"). False as soon as any other word of substance remains ("EDGED & POWDER COATED"
+    still has its powder judged by the caller)."""
+    t = " ".join(str(text or "").split()).upper().replace("-", " ")
+    if not t:
+        return False
+    hit = any(rx.search(t) for rx in _BANDING_WORD_RES) or bool(_ORDER_CODE_RE.search(t))
+    if not hit:
+        return False
+    for rx in _BANDING_WORD_RES:
+        t = rx.sub(" ", t)
+    t = _ORDER_CODE_RE.sub(" ", t)
+    leftover = [w for w in re.findall(r"[A-Z]{2,}", t) if w not in _BANDING_FILLER_WORDS]
+    return not leftover
+
+
 def banded_length_mm(part: Any) -> Dict[str, Any]:
     """How many millimetres of this part take ABS, and on whose authority.
 
@@ -346,7 +553,11 @@ def banded_length_mm(part: Any) -> Dict[str, Any]:
         return out
 
     text = _text_of(part)
-    says_banding = any(w in text for w in _BANDING_WORDS)
+    # An EDGING ORDER code is a banding statement (D-512): "2S/SL" on 12343-01J names the
+    # sequence the bander runs (two short, then the long sides) — a drawing that writes one
+    # has decided the part is banded, whatever other words it used.
+    says_banding = (any(w in text for w in _BANDING_WORDS)
+                    or bool(_ORDER_CODE_RE.search(text)))
 
     # 2 ── A NOTE THAT NAMES THE EDGES. "All round" is a statement, not a default.
     if says_banding and any(w in text for w in _ALL_ROUND):

@@ -134,18 +134,67 @@ foreach ($candidate in @(8071, 8072, 8073)) {
     $listening = @(Get-NetTCPConnection -LocalPort $candidate -State Listen -ErrorAction SilentlyContinue)
     if ($listening.Count -gt 0) { $serving += $candidate }
 }
-if ($serving.Count -gt 0 -and ($serving -notcontains $Port)) {
+
+# THE PORT THE SCHEDULED TASK ITSELF STARTS ON. What is listening and what the task will
+# bring back are different facts, and the restart in step 3 obeys the second. The laptop's
+# task was installed for 8072 while a stray window held 8071, so "-Port 8071" -- the remedy
+# the refusal below offered -- ended the window, started the task on 8072, and reported
+# 8071 as down. 0 when there is no task (the server's NSSM service) or it names no port.
+$taskPort = 0
+$taskHere = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($taskHere) {
+    foreach ($action in @($taskHere.Actions)) {
+        if ("$($action.Arguments)" -match '-Port\s+(\d+)') { $taskPort = [int]$Matches[1] }
+    }
+}
+$whatIsOn = 'Get-NetTCPConnection -LocalPort {0} -State Listen | ForEach-Object {{ Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)" }} | Select-Object ProcessId, CreationDate, CommandLine'
+
+if ($serving.Count -gt 0 -and ($serving -notcontains $Port) -and ($taskPort -ne $Port)) {
     $me = [System.Net.Dns]::GetHostName()
     Write-Host ""
     Write-Host ("  STOP. {0} is not serving {1} - nothing is listening on it here." -f $me, $Port) -ForegroundColor Red
     Write-Host ("  This machine is listening on {0}." -f ($serving -join ", ")) -ForegroundColor Red
+    if ($taskPort -gt 0) {
+        Write-Host ("  Its scheduled task starts the service on {0}." -f $taskPort) -ForegroundColor Red
+    }
     Write-Host "  The estimating laptop serves 8072; SDI-APP01 serves 8071. Both have a" -ForegroundColor Red
     Write-Host "  C:\ClaudeVision, so the prompt looks the same on either." -ForegroundColor Red
     Write-Host ""
-    Write-Host ("  Either re-run here with -Port {0}, or run this ON the other machine." -f $serving[0]) -ForegroundColor Yellow
+    $offer = $serving[0]
+    if ($taskPort -gt 0) { $offer = $taskPort }
+    Write-Host ("  Either re-run here with -Port {0}, or run this ON the other machine." -f $offer) -ForegroundColor Yellow
     Write-Host "  Nothing has been stopped." -ForegroundColor Green
     Write-Host ""
     exit 2
+}
+
+# LISTENING ON THE PORT ASKED FOR, BUT NOT BY THE TASK. Restarting would end that listener
+# and bring the task back on its own port, then report this one as down -- a success read
+# as a failure, which is the fault this whole step exists to prevent.
+if ($taskPort -gt 0 -and $taskPort -ne $Port -and ($serving -contains $Port)) {
+    $me = [System.Net.Dns]::GetHostName()
+    Write-Host ""
+    Write-Host ("  STOP. Something on {0} is listening on {1}, but this machine's scheduled" -f $me, $Port) -ForegroundColor Red
+    Write-Host ("  task starts the service on {0}. Restarting would end the {1} listener, bring" -f $taskPort, $Port) -ForegroundColor Red
+    Write-Host ("  the service back on {0}, and then report {1} as down." -f $taskPort, $Port) -ForegroundColor Red
+    Write-Host ""
+    Write-Host ("  Restart the task's own service:      -Port {0}" -f $taskPort) -ForegroundColor Yellow
+    Write-Host ("  Or make {0} this machine's port:   .\tools\start\install-service-task.ps1 -Port {0}" -f $Port) -ForegroundColor Yellow
+    Write-Host ("  What is on {0}:" -f $Port) -ForegroundColor Yellow
+    Write-Host ("    " + ($whatIsOn -f $Port)) -ForegroundColor Yellow
+    Write-Host "  Nothing has been stopped." -ForegroundColor Green
+    Write-Host ""
+    exit 2
+}
+
+# ASKED FOR THE TASK'S PORT WHILE SOMETHING ELSE HOLDS ANOTHER. The restart goes ahead --
+# the task is what serves this port -- but the other listener is not this task, is left
+# alone, and is very likely still serving old code.
+if ($taskPort -eq $Port -and $serving.Count -gt 0 -and ($serving -notcontains $Port)) {
+    foreach ($other in $serving) {
+        Write-Host ("  note: {0} is also listening here and is not the scheduled task; it is left alone." -f $other) -ForegroundColor Yellow
+        Write-Host ("    find it:  " + ($whatIsOn -f $other)) -ForegroundColor Yellow
+    }
 }
 
 # -- 1. STOP WHATEVER SUPERVISES IT HERE ----------------------------------------------
@@ -222,14 +271,26 @@ if ($task) {
 }
 
 # uvicorn has to import the app before it listens; reporting failure while it is still
-# starting would be its own false alarm.
-Start-Sleep -Seconds 8
+# starting would be its own false alarm. POLLED, NOT A FIXED WAIT: eight seconds was the
+# whole allowance, and a slow start read as a dead service. Up to 60 seconds, every 2.
 
 # -- 4. IS IT SERVING THE CODE ON DISK? -------------------------------------------------
 #
 # The only question worth asking. git is on the PATH in THIS shell and not in the
 # virtualenv the service starts from, so the comparison can be made here and nowhere else.
 $head = Get-HeadCommit $Root
+
+$health = $null
+$deadline = (Get-Date).AddSeconds(60)
+while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Seconds 2
+    try {
+        $health = Invoke-RestMethod "http://localhost:$Port/api/health" -TimeoutSec 4
+        break
+    } catch {
+        if ($_.Exception.Response -and $_.Exception.Response.StatusCode.value__ -eq 401) { break }
+    }
+}
 
 try {
     $health = Invoke-RestMethod "http://localhost:$Port/api/health" -TimeoutSec 6
@@ -250,8 +311,68 @@ try {
         Write-Host "  answering on $Port (401 - key required, which is fine)" -ForegroundColor Green
     } else {
         Write-Host ""
-        Write-Host "  NOT answering on $Port." -ForegroundColor Red
-        Write-Host "  The reason is in $Root\output\logs\service-<date>.log" -ForegroundColor Yellow
+        Write-Host "  NOT answering on $Port after 60 seconds." -ForegroundColor Red
+
+        # -- 5. NOT ANSWERING: THE REASON, HERE ----------------------------------------
+        #
+        # The old message pointed at a dated log file and never printed its name, twice, while
+        # the service was up on another port. What is known is gathered and shown instead.
+
+        # FIRST: IS THE SERVICE UP ON ANOTHER PORT? Then the portal works now, on that port.
+        foreach ($other in @(8071, 8072, 8073)) {
+            if ($other -eq $Port) { continue }
+            try {
+                $h2 = Invoke-RestMethod "http://localhost:$other/api/health" -TimeoutSec 4
+                $c2 = "$($h2.commit)".Trim()
+                $tag = ""
+                if ($head -and $c2 -eq $head) { $tag = " - the code on disk" }
+                Write-Host ("  The service IS answering on {0}, serving {1}{2}." -f $other, $c2, $tag) -ForegroundColor Green
+                Write-Host ("  Use http://localhost:{0}/estimating now." -f $other) -ForegroundColor Green
+                # WHO RUNS IT, NAMED: the listener, the starter that launched it, and whatever
+                # launched that: a scheduled task, an NSSM service, or a window somebody opened.
+                foreach ($conn in @(Get-NetTCPConnection -LocalPort $other -State Listen -ErrorAction SilentlyContinue)) {
+                    $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($conn.OwningProcess)" -ErrorAction SilentlyContinue
+                    $hop = 0
+                    while ($proc -and $hop -lt 3) {
+                        Write-Host ("    pid {0} started {1}: {2}" -f $proc.ProcessId, $proc.CreationDate, $proc.CommandLine) -ForegroundColor Yellow
+                        $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.ParentProcessId)" -ErrorAction SilentlyContinue
+                        $hop++
+                    }
+                }
+                Write-Host ("  To restart that one instead:  .\tools\start\restart-service.ps1 -Port {0}" -f $other) -ForegroundColor Yellow
+            } catch { }
+        }
+
+        # SECOND: THE SCHEDULED TASK'S OWN LAST RESULT.
+        if ($task) {
+            $info = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
+            if ($info) {
+                Write-Host ("  scheduled task: last run {0}, result 0x{1:X}" -f $info.LastRunTime, $info.LastTaskResult) -ForegroundColor Yellow
+            }
+        }
+
+        # THIRD: THE LOG, NAMED AND QUOTED. Opened for read while a running starter may hold it;
+        # it mixes UTF-8 stamps with UTF-16 console output, so the NULs are dropped to read it.
+        $logDir = Join-Path $Root "output\logs"
+        $day = Get-Date -Format "yyyy-MM-dd"
+        $logs = @((Join-Path $logDir ("service-{0}-{1}.log" -f $Port, $day)),
+                  (Join-Path $logDir ("service-{0}.log" -f $day))) | Where-Object { Test-Path -LiteralPath $_ }
+        if (@($logs).Count -gt 0) {
+            $log = @($logs)[0]
+            Write-Host "  last lines of $log :" -ForegroundColor Yellow
+            try {
+                $fs = [System.IO.File]::Open($log, 'Open', 'Read', 'ReadWrite')
+                $sr = New-Object System.IO.StreamReader($fs)
+                $text = $sr.ReadToEnd()
+                $sr.Close()
+                ($text -replace "`0", "") -split "`r?`n" | Where-Object { $_.Trim() } |
+                    Select-Object -Last 25 | ForEach-Object { Write-Host "    $_" }
+            } catch {
+                Write-Host "    (could not read it: $($_.Exception.Message))" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "  no service log for today under $logDir" -ForegroundColor Yellow
+        }
         exit 1
     }
 }

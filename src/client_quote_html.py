@@ -179,8 +179,36 @@ def _title_material(m: str) -> str:
 
 
 # ── customer + logo ─────────────────────────────────────────────────────────
+def _brand_name(name: str) -> str:
+    """The name a customer's client-facing documents carry (config.CUSTOMER_LOGO_BRANDS).
+
+    "TTI is part of Milwaukee... on the client portal should say Milwaukee" — James Gray,
+    13 Oct 2026. So the table maps the NAME as well as the mark: a TTI job's quote and
+    report are headed Milwaukee and carry the Milwaukee logo. The job header, the folders
+    and every internal record keep the customer the estimator typed — only what the client
+    sees is branded. A customer not listed comes back exactly as given."""
+    try:
+        import config as _cfg
+        key = _normalise_key(_clean_customer_name(name))
+        if key:
+            for _cust, _brand in (getattr(_cfg, "CUSTOMER_LOGO_BRANDS", {}) or {}).items():
+                if _normalise_key(_cust) == key:
+                    return str(_brand)
+    except Exception:                                                # noqa: BLE001
+        pass
+    return name
+
+
 def _derive_customer(summary: Dict[str, Any], job_stem: str, manual_workbook: Optional[str] = None,
                      customer_override: Optional[str] = None) -> str:
+    """The display customer for the quote and report: the resolved name, branded
+    (_brand_name) — see _derive_customer_raw for the resolution chain itself."""
+    return _brand_name(_derive_customer_raw(summary, job_stem, manual_workbook=manual_workbook,
+                                            customer_override=customer_override))
+
+
+def _derive_customer_raw(summary: Dict[str, Any], job_stem: str, manual_workbook: Optional[str] = None,
+                         customer_override: Optional[str] = None) -> str:
     """Best-effort customer name for display + logo key. Uses folder/GA-path tokens.
     General fallback chain; when a real customer field exists in future JSONs it can be added here.
 
@@ -544,6 +572,18 @@ def _load_logo_markup(customer: str) -> str:
     list somebody has to maintain.
     """
     key = _normalise_key(customer)
+    # THE CUSTOMER'S DOCUMENTS CARRY A BRAND MARK (config.CUSTOMER_LOGO_BRANDS): TTI's
+    # quotes carry Milwaukee. Mapped HERE, at the file lookup, so every heading still
+    # prints the customer's own name — only the mark changes. Both sides normalised, so
+    # the config can say "TTI": "Milwaukee" in plain words.
+    try:
+        import config as _cfg
+        for _cust, _brand in (getattr(_cfg, "CUSTOMER_LOGO_BRANDS", {}) or {}).items():
+            if _normalise_key(_cust) == key:
+                key = _normalise_key(_brand)
+                break
+    except Exception:                                                # noqa: BLE001
+        pass
     if not key or not os.path.isdir(ASSETS_LOGOS):
         return ""
     # ── ONE KEY, TWO FILES, AND WHICHEVER THE FILESYSTEM HANDED BACK FIRST ──────────
@@ -643,8 +683,8 @@ def _sdi_logo_markup() -> str:
 
 
 # ── GA image ────────────────────────────────────────────────────────────────
-def _ga_image_data_uri(summary: Dict[str, Any]) -> Optional[str]:
-    """Render page 1 of the primary GA PDF to a PNG data URI via PyMuPDF. None if unavailable."""
+def _ga_png_bytes(summary: Dict[str, Any]) -> Optional[bytes]:
+    """Page 1 of the primary GA PDF rendered to PNG via PyMuPDF. None if unavailable."""
     pdf_path = _get(summary, "primary_pdf", "path")
     if not pdf_path or not os.path.exists(pdf_path):
         return None
@@ -657,10 +697,45 @@ def _ga_image_data_uri(summary: Dict[str, Any]) -> Optional[str]:
         pix = page.get_pixmap(matrix=fitz.Matrix(1.6, 1.6))  # modest DPI; keeps file reasonable
         png = pix.tobytes("png")
         doc.close()
-        return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+        return png
     except Exception as exc:
         print(f"   [quote] GA image render skipped ({type(exc).__name__}: {exc}).", flush=True)
         return None
+
+
+def _ga_image_data_uri(summary: Dict[str, Any]) -> Optional[str]:
+    """Render page 1 of the primary GA PDF to a PNG data URI via PyMuPDF. None if unavailable."""
+    png = _ga_png_bytes(summary)
+    return ("data:image/png;base64," + base64.b64encode(png).decode("ascii")) if png else None
+
+
+def _unit_view_block(summary: Dict[str, Any], parts: List[Dict[str, Any]], customer: str,
+                     product: str, job_number: str, rev: str, ga_png: Optional[bytes]) -> str:
+    """The unit's picture, first on the page (D-570): an artist's impression in the customer's
+    own setting where one can be had (D-571), labelled as what it is; else the general
+    arrangement as before; else nothing."""
+    try:
+        import quote_render
+        shot = quote_render.artist_impression(summary, parts, customer, ga_png=ga_png, product=product)
+    except Exception:                                                # noqa: BLE001
+        shot = None
+    if shot and shot.get("png"):
+        uri = "data:image/png;base64," + base64.b64encode(shot["png"]).decode("ascii")
+        basis = "from the general arrangement" if shot.get("from_drawing") else "from the specification"
+        return f"""
+      <div class="unit-view impression">
+        <img src="{uri}" alt="{_esc(product)} — artist's impression" />
+        <div class="unit-cap">Artist&#39;s impression {basis} of {_esc(product)}, {_esc(shot.get('scene') or '')} · for illustration — the drawing governs · {_esc(job_number)}{(' ' + _esc(rev)) if rev else ''}</div>
+      </div>"""
+    if ga_png:
+        uri = "data:image/png;base64," + base64.b64encode(ga_png).decode("ascii")
+        return f"""
+      <div class="unit-view">
+        <h3 class="ref-h">Drawing reference</h3>
+        <img src="{uri}" alt="{_esc(product)} — general arrangement" />
+        <div class="unit-cap">General arrangement · {_esc(job_number)}{(' ' + _esc(rev)) if rev else ''}</div>
+      </div>"""
+    return ""
 
 
 # ── content assembly ────────────────────────────────────────────────────────
@@ -777,13 +852,18 @@ def _materials_line(parts: List[Dict[str, Any]], *, concept: bool = False) -> st
     commercial line, a subcontract service, roll goods, and a bought-in wearing the assembly's
     reading.
     """
-    mats = []
+    # ONE MATERIAL, ONE NAME (D-587): "MILD STEEL" and "MILD_STEEL" are two spellings of
+    # one stock, and the 09:48 quotation told M&S "Mild Steel, Stainless Steel, Mild Steel".
+    # Compared as the customer reads them.
+    mats: List[str] = []
     for p in parts:
         m = describes_the_product(p)
-        if m and m not in mats:
-            mats.append(m)
+        if m:
+            shown = _title_material(m)
+            if shown not in mats:
+                mats.append(shown)
     if mats:
-        return ", ".join(_title_material(m) for m in mats)
+        return ", ".join(mats)
     # "As drawing" is a true sentence on a drawing pack and a false one on a render: there
     # is no drawing to be as. Said as what it is instead — see the lead line (D-186).
     return "Sighted from the visual" if concept else "As drawing"
@@ -1557,6 +1637,12 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     _release = _record.get("release") or {}
     _draft = bool(_release.get("draft"))  # retained: the fixtures assert it changes nothing
     ops = _collect_operations(parts, summary, packing_charged=(_packing != "unpriced"))
+    # NOTHING IS INCLUDED IN AN ESTIMATE THAT WAS NOT PRODUCED (D-598f). 0320730's 15:36 portal
+    # page, for a book with nothing on it, listed "Clean assembly and inspection" and
+    # "Individual packing for transport": a scope promised for a product nobody had costed.
+    _not_produced = bool(_state["price"].get("nothing_to_cost")) or not parts
+    if _not_produced:
+        ops = []
 
     # THE INVARIANT GATE, READ BY THE DOCUMENT THAT LEAVES THE BUILDING.
     # The checks ran and wrote their verdict onto the job, and the quote was generated
@@ -1610,11 +1696,12 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     cust_header = logo_markup if logo_markup else f'<div style="font-size:18px;font-weight:600;color:#282928;">{_esc(customer)}</div>'
     sdi_logo = _sdi_logo_markup()
 
-    ga_uri = _ga_image_data_uri(summary)
+    ga_png = _ga_png_bytes(summary)
     today = date.today().strftime("%d %B %Y")
 
     # operations -> two-column bullet list
-    inc_items = "\n".join(f"      <li>{_esc(o)}</li>" for o in ops)
+    inc_items = ("\n".join(f"      <li>{_esc(o)}</li>" for o in ops) if ops else
+                 "      <li>Nothing: no estimate was produced</li>")
 
     # THE GAP LIST IS INTERNAL, AND THAT IS A DELIBERATE COMMERCIAL CHOICE.
     #
@@ -1675,14 +1762,10 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     # workings. A test holds all four of those surfaces, so this cannot become silence.
     draft_block = ""  # retained for the fixture that asserts it stays empty
 
-    ga_block = ""
-    if ga_uri:
-        ga_block = f"""
-      <div class="unit-view">
-        <h3 class="ref-h">Drawing reference</h3>
-        <img src="{ga_uri}" alt="{_esc(product)} — general arrangement" />
-        <div class="unit-cap">General arrangement · {_esc(job_number)}{(' ' + _esc(rev)) if rev else ''}</div>
-      </div>"""
+    # THE UNIT FIRST, THE PRICE AFTER (D-570). James, 21 Oct 2026: "de-emphasise the price and
+    # put it below the image of the unit". The picture leads the body; the price box follows
+    # it, smaller, with every detail it carried.
+    unit_block = _unit_view_block(summary, parts, customer, product, job_number, rev, ga_png)
 
     # DRAWING NUMBER FIRST. It is the reference the customer and the shop both quote back,
     # and on the previous layout it appeared only as "Job <n>" beneath a headline naming
@@ -1750,7 +1833,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     # "to be priced" is the estimator's instruction, not the customer's business — the same
     # tell as the draft banner, in the packing row. What the customer needs is the scope:
     # this price does not cover packaging and delivery.
-    _packing_row = ("Not included in this price"
+    _packing_row = ("&mdash;" if _not_produced else "Not included in this price"
                     if _packing == "unpriced" else "Boxed for transport")
     # The run's own identity, so "which engine run produced this quote" is checkable.
     _run_foot = ""
@@ -1866,13 +1949,17 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
   .spec table {{ width:100%; border-collapse:collapse; font-size:13.5px; }}
   .spec td {{ padding:5px 0; border-bottom:1px solid var(--line); }}
   .spec td:last-child {{ text-align:right; font-weight:600; }}
-  .price-box {{ background:var(--sdi-ink); color:#fff; border-radius:6px; padding:22px 26px;
-                display:flex; align-items:center; justify-content:space-between; margin-bottom:26px; }}
-  .price-box .u {{ font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:#c9cac7; }}
-  .price-box .unit {{ font-size:34px; font-weight:700; color:var(--sdi-yellow); line-height:1; }}
-  .price-box .per {{ font-size:13px; color:#c9cac7; margin-top:4px; }}
+  /* THE PRICE FOLLOWS THE UNIT, SMALLER (D-570): 34px -> 22px, 20px -> 16px, and a light
+     panel in place of the dark band, so the picture above it is the thing the eye lands on.
+     Every detail stays — unit, order value, the captions. */
+  .price-box {{ background:#f5f5f1; color:var(--ink); border:1px solid var(--line); border-radius:6px;
+                padding:14px 20px; display:flex; align-items:center; justify-content:space-between;
+                gap:20px; margin:0 0 26px; break-inside:avoid; }}
+  .price-box .u {{ font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }}
+  .price-box .unit {{ font-size:22px; font-weight:600; color:var(--sdi-ink); line-height:1.25; }}
+  .price-box .per {{ font-size:11px; color:var(--muted); margin-top:3px; }}
   .price-box .right {{ text-align:right; }}
-  .price-box .right .ov {{ font-size:20px; font-weight:600; }}
+  .price-box .right .ov {{ font-size:16px; font-weight:600; }}
   .estimator-action {{ margin:-14px 0 26px; font-size:13px; color:var(--muted); }}
 {_print_block}
   .inc h3 {{ font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin:0 0 10px; }}
@@ -1880,12 +1967,22 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
   .inc li {{ padding:6px 0 6px 22px; position:relative; font-size:13.5px; break-inside:avoid; }}
   .inc li::before {{ content:""; position:absolute; left:0; top:12px; width:10px; height:10px;
                      background:var(--sdi-yellow); border-radius:2px; }}
-  .unit-view {{ text-align:center; padding:6px 40px 26px; border-top:1px solid var(--line); }}
+  /* THE UNIT LEADS THE BODY (D-570): inside the body now, above the price. */
+  .unit-view {{ text-align:center; padding:0 0 22px; break-inside:avoid; }}
   .unit-view .ref-h {{ font-size:11px; letter-spacing:.12em; text-transform:uppercase;
-                       color:var(--muted); margin:22px 0 12px; text-align:left; }}
+                       color:var(--muted); margin:0 0 12px; text-align:left; }}
   .unit-view img {{ max-width:100%; max-height:340px; object-fit:contain;
                     border:1px solid var(--line); border-radius:4px; background:#fff; padding:8px; }}
+  /* The impression is a 3:2 landscape picture (D-571): it takes the page's width. */
+  .unit-view.impression img {{ display:block; width:100%; height:auto; max-height:none; border:none;
+                               padding:0; border-radius:8px; box-shadow:0 10px 30px rgba(0,0,0,.12); }}
   .unit-cap {{ font-size:11px; color:var(--muted); margin-top:8px; letter-spacing:.04em; }}
+  @media (max-width:560px) {{
+    .body {{ padding:20px 16px; }}
+    .price-box {{ padding:14px; gap:12px; }}
+    .price-box .unit {{ font-size:20px; }}
+    .price-box .right .ov {{ font-size:15px; }}
+  }}
   .foot {{ padding:20px 40px 26px; border-top:1px solid var(--line); color:var(--muted);
            font-size:12px; display:flex; justify-content:space-between; gap:20px; flex-wrap:wrap; }}
   .foot .terms b {{ color:var(--ink); }}
@@ -1909,6 +2006,19 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     </div>
     <div class="body">
       <p class="lead">{_lead_open}{_esc(material)}{(', ' + _esc(finish.lower())) if finish and finish not in _NO_FINISH_STATED else ''}.</p>
+{unit_block}
+      <div class="price-box">
+        <div>
+          <div class="u">Unit price</div>
+          <div class="{_price_class}">{_unit_figure}</div>
+          <div class="per">{_unit_caption}</div>
+        </div>
+        <div class="right">
+          <div class="u">Order value</div>
+          <div class="{_order_class}">{_order_figure}</div>
+          <div class="per">{_order_caption}</div>
+        </div>
+      </div>{_pending_note}
       <div class="grid">
         <div class="spec">
           <h3>Specification</h3>
@@ -1929,25 +2039,13 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
           </table>
         </div>
       </div>
-      <div class="price-box">
-        <div>
-          <div class="u">Unit price</div>
-          <div class="{_price_class}">{_unit_figure}</div>
-          <div class="per">{_unit_caption}</div>
-        </div>
-        <div class="right">
-          <div class="u">Order value</div>
-          <div class="{_order_class}">{_order_figure}</div>
-          <div class="per">{_order_caption}</div>
-        </div>
-      </div>{_pending_note}
       <div class="inc">
         <h3>What's included</h3>
         <ul>
 {inc_items}
         </ul>
       </div>{exc_block}
-    </div>{ga_block}
+    </div>
     <div class="foot">
       <div class="terms">
         <b>we.are.sdi</b> · Design-led manufacturer · Loughborough, UK<br>

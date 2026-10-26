@@ -195,19 +195,20 @@ def _doc(tmp_path, name, pages):
     return str(pdf)
 
 
-def test_every_page_contributes_within_the_budget_and_the_cut_is_said(tmp_path, monkeypatch):
-    """D-466: over the cap, each page keeps a share, a cut is said, and the coverage line
-    closes the text — never again a sixteen-page brief silently sent as pages one to six."""
+def test_over_the_budget_pages_go_whole_and_the_ones_not_sent_are_named(tmp_path, monkeypatch):
+    """D-466 then D-597: over the cap a page is never trimmed to a share and called included —
+    whole pages go in order, a page that does not fit is NOT sent, and the coverage line closes
+    the text naming it, to the model and on the record."""
     long_line = "FOLDED SHEET STEEL POWDER COATED NEUTRAL " * 4
-    pdf = _doc(tmp_path, "brief.pdf", [[long_line] * 12 for _ in range(4)])
-    monkeypatch.setattr(cs, "SHEET_TEXT_MAX_CHARS", 1200)
+    pdf = _doc(tmp_path, "brief.pdf", [[long_line] * 4 for _ in range(4)])
+    monkeypatch.setattr(cs, "SHEET_TEXT_MAX_CHARS", 1500)
     text, cov = cs.sheet_text_with_coverage([pdf])
-    for n in (1, 2, 3):
-        assert f"[brief.pdf, page {n}]" in text          # early pages all present
-    assert "trimmed — the full page is in the images" in text
-    assert "[text coverage:" in text and "character budget" in text
-    assert cov["total"] > 1200 and cov["pages_trimmed"] >= 1
-    assert cov["sent"] <= 1200 + 500                      # budget plus markers and the tail
+    assert "[brief.pdf, page 1]" in text and "trimmed" not in text
+    assert cov["pages_trimmed"] == 0 and cov["pages_omitted"] >= 1
+    assert "[text coverage:" in text and "NOT SENT" in text and "character budget" in text
+    for label in cov["omitted_pages"]:
+        assert label in text
+    assert cov["total"] > 1500 and cov["sent"] <= 1500 + 500
     assert cs.sheet_text([pdf]) == text
 
     # Under the cap nothing changes and nothing is announced.
@@ -221,8 +222,8 @@ def test_a_thousand_tiny_pages_cannot_ride_the_floor_past_the_budget(tmp_path, m
     monkeypatch.setattr(cs, "SHEET_TEXT_MAX_CHARS", 800)
     text, cov = cs.sheet_text_with_coverage([pdf] * 10)   # 600 page blocks
     assert cov["sent"] <= 800 + 500
-    assert cov["pages_omitted"] > 0
-    assert "only in the images" in text
+    assert cov["pages_omitted"] > 0 and len(cov["omitted_pages"]) == cov["pages_omitted"]
+    assert "images only" in text and "more" in text, "eight named, the rest counted"
 
 
 def test_read_concept_reports_the_coverage_when_trimmed(tmp_path, monkeypatch):

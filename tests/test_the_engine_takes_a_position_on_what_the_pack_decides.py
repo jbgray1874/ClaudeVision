@@ -188,8 +188,12 @@ def test_the_researcher_asks_for_the_whole_order_with_the_question(monkeypatch):
     assert seen["description"] == "Protective packaging and a pallet", "the brief's question is composed by indicative_price, not repeated"
 
 
-def test_the_line_says_what_sdi_live_answered_or_why_nothing():
+def test_the_line_says_what_sdi_live_answered_or_why_nothing(monkeypatch):
     cl._LIVE_RATE_CACHE.clear(); cl._LIVE_RATE_STATUS.clear()
+    # The subject is the LADDER's status reporting, so the box calculator (which would
+    # price this one-panel unit before the ladder runs, D-521) is switched off for it.
+    import config as _cfg
+    monkeypatch.setitem(_cfg.BOX_COSTING, "enabled", False)
     parts = [{"part_number": "P1", "description": "PANEL", "quantity": 1,
               "normalized_material": "MILD STEEL", "blank_length_mm": 500.0,
               "blank_width_mm": 300.0, "normalized_thickness_mm": 2.0}]

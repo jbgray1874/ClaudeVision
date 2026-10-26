@@ -297,8 +297,17 @@ def test_dressing_is_not_welding_and_the_route_is_in_shop_order(tmp_path):
 
 
 def test_the_traced_part_is_the_sheets_own_sum(tmp_path):
+    # D-592: the worked example is a line with size, price and route evidence — a measured
+    # blank and a charged figure the read-back recorded. Without them there is no example.
     s = _summary(tmp_path)
-    s_facts = quote_story.job_facts(s, _PARTS, 50)
+    assert quote_story.trace_part(s, quote_story.job_facts(s, _PARTS, 50)) is None
+    s["final_estimate"]["totals"]["unit_gbp"] = UNIT
+    parts = [dict(p) for p in _PARTS]
+    for p in parts:
+        if p["part_number"] == "UNIT-01":
+            p.update(blank_length_mm=500.0, blank_width_mm=300.0,
+                     blank_length_mm_source="dxf_flat_pattern")
+    s_facts = quote_story.job_facts(s, parts, 50)
     tp = quote_story.trace_part(s, s_facts)
     assert tp["code"] == "UNIT-01", "the part with the longest route through the shop"
     assert tp["each"] * tp["qty"] * (1 + tp["scrap"]) == pytest.approx(tp["value"])
@@ -390,3 +399,35 @@ def test_without_stamped_rows_the_route_still_says_what_is_welded_and_coated(tmp
     assert ev["joints"]["concluded"].startswith("Welded")
     assert ev["finish"]["concluded"].startswith("Powder coated")
     assert "£" not in ev["joints"]["bill"], "no row was charged, so no figure is claimed"
+
+
+# ── D-575: the story counts what the run matched, and a made part's section is material ──
+
+def test_the_story_counts_matched_flats_and_the_model_not_file_names(tmp_path):
+    s = _summary(tmp_path)
+    assert quote_story.job_facts(s, _PARTS, 50)["dxf"] == 0
+    s["dxf_augmentation"] = {"matched": [{"part_number": "UNIT-01", "dxf": "a.dxf"},
+                                         {"part_number": "UNIT-02", "dxf": "b.dxf"}],
+                             "unmatched_dxf": []}
+    s["solidworks_native"] = {"found": True, "counts": {"parts": 5, "assemblies": 2}}
+    facts = quote_story.job_facts(s, _PARTS, 50)
+    assert facts["dxf"] == 2 and facts["models"] == 7
+    s["solidworks_native"] = {"found": False, "native_present_but_unread": True}
+    assert quote_story.job_facts(s, _PARTS, 50)["models"] == 0
+
+
+def test_a_made_parts_section_on_the_bom_block_is_sheet_and_section_material(tmp_path):
+    s = _summary(tmp_path)
+    parts = [dict(p) for p in _PARTS] + [
+        {"part_number": "UNIT-03M-CL1", "description": "15.00 x 30.00 x 2.00mm TUBE 1164", "quantity": 1,
+         "normalized_material": "MILD_STEEL", "concept_kind": "fabricated", "unit_total_cost_gbp": 11.36}]
+    s["final_estimate"]["material_rows"].insert(0, {
+        "block": "bom", "description": "UNIT-03M-CL1  15.00 x 30.00 x 2.00mm TUBE 1164",
+        "supplier": "SDI config section rate - verify", "qty_per_unit": 1, "total_value_gbp": 11.36})
+    s["estimate_summary"]["canonical_part_estimates"] = [dict(p) for p in parts]
+    facts = quote_story.job_facts(s, parts, 50)
+    facts["agree"], facts["markup"] = True, 1.0            # as the page builder sets them
+    ev = {e["topic"]: e for e in quote_story.evidence_items(s, facts)}
+    bill = ev["material"]["bill"]
+    # 10.4 + 20.8 sheet, 11.36 section; the bought-in fixings (3.0) stay out.
+    assert "£42.56" in bill or "42.56" in bill, bill

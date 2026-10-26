@@ -160,6 +160,9 @@ DXF_REASON_SENTENCES: Dict[str, str] = {
         "say which"),
     "numbered_piece_or_separate_item_unresolved": (
         "could be a numbered piece or a separate item — not attached; say which"),
+    "distinct_blanks_no_children_in_scope_pick_best": (
+        "a different view of a part whose flat was costed from another export — not costed "
+        "as a second blank"),
 }
 
 
@@ -1345,6 +1348,10 @@ _PLASTIC_SHEET_TOKENS = (
     # (the laser melts the polyethylene core). Brand names because that is what drawings write;
     # "COMPOSITE" is the generic. Dyson 10575-02-009 is DIBOND 3mm.
     "DIBOND", "ALUPANEL", "REYNOBOND", "ETALBOND", "COMPOSITE",
+    # Solid surface (D-598n) — a mineral-filled resin slab sold by the sheet (config holds its
+    # 3680 x 760); read as sheet metal it was nested by mass on the steel block and lasered on
+    # the metal laser. The makers' names resolve to this family before they reach here.
+    "SOLID SURFACE", "SOLID_SURFACE",
 )
 _BOARD_TIMBER_TOKENS = (
     "MDF", "BOARD", "MELAMINE", "MFC",
@@ -1598,6 +1605,162 @@ INDICATIVE_MARKET = "indicative_market" # an AI / market lookup, moves between r
 UNPRICED = "unpriced"                   # carries no money and somebody owes a figure
 NIL = "nil"                             # correctly nothing — an assembly, a cross-reference
 
+# Charge status — whether a line's money is IN the price, and how far it can be leaned on
+# (D-589). Firmness says what a figure is; this says what the workbook did with it. Four
+# words, the same on every surface that lists lines.
+CHARGED = "charged"            # on the Estimate sheet, on a firm basis
+PROVISIONAL = "provisional"    # on the Estimate sheet, on a basis still to confirm
+EXCLUDED = "excluded"          # not in the money: nothing to charge, or a figure the sheet left out
+NOT_VERIFIED = "not verified"  # no charged figure and nobody has checked one
+
+
+def charge_status(line: Optional[Mapping[str, Any]], part: Optional[Mapping[str, Any]] = None,
+                  *, sheet_read_back: bool = True, engine_ext: float = 0.0) -> Dict[str, str]:
+    """{status, why} for one costed line — one of CHARGED, PROVISIONAL, EXCLUDED, NOT_VERIFIED.
+
+    0351292's 09:48 provenance column summed £386.24 against the sheet's £347.34: the rail and
+    base were researched at £24.50 and £14.50 as if bought, the sheet charged neither (their
+    members are charged), and the column printed both as money. A figure the sheet did not
+    charge is EXCLUDED and says so; a charged figure resting on a researched price, a house
+    rate or a blank read off printed figures is PROVISIONAL; a line with no charged figure and
+    no ruling is NOT VERIFIED."""
+    line = line if isinstance(line, Mapping) else {}
+    part = part if isinstance(part, Mapping) else {}
+    origin = line.get("price_origin") if isinstance(line.get("price_origin"), Mapping) else {}
+    firmness = str(origin.get("firmness") or "")
+    label = str(origin.get("label") or "")
+    charged = line.get("charged_ext_gbp")
+    if not sheet_read_back:
+        return {"status": NOT_VERIFIED,
+                "why": "no Estimate sheet was read back — the engine's figure, unchecked"}
+    if charged is not None and _num(charged) > 0:
+        if firmness in (INDICATIVE_HOUSE, INDICATIVE_MARKET):
+            return {"status": PROVISIONAL, "why": label or "a price still to confirm"}
+        _prov_blank = part.get("_blank_provisional")
+        if isinstance(_prov_blank, Mapping) and _prov_blank:
+            return {"status": PROVISIONAL,
+                    "why": "the blank is read from figures printed on its own sheet — confirm "
+                           "the flat blank"}
+        return {"status": CHARGED, "why": label or "on the Estimate sheet"}
+    if firmness == NIL:
+        return {"status": EXCLUDED, "why": label or "nothing to charge on this line"}
+    if _num(engine_ext) > 0:
+        return {"status": EXCLUDED,
+                "why": (f"the engine's £{_num(engine_ext):,.2f} is not on the Estimate sheet, so "
+                        f"it is not in the price"
+                        + (" — an assembly's material is its members'"
+                           if str(line.get("kind") or "") == "assembly" else
+                           " — if SDI buys or makes this line separately, it is missing"))}
+    return {"status": NOT_VERIFIED, "why": label or "no charged figure on the Estimate sheet"}
+
+
+def operation_coverage(source: Any) -> Dict[str, Any]:
+    """Every required route operation against the rows the calculated sheet charged (D-589).
+
+    {charged, covered, uncovered, charged_twice, no_department} — each a list of
+    {decision_id, operation, target, rows, basis, department}. CHARGED: the decision is on
+    exactly one charged row. COVERED: no row carries its id, but a row of the same department
+    charges the target or a participant, or every part it names has the operation ruled out.
+    UNCOVERED: required, a department exists for it, and nothing charges it — work the route
+    says is done and the price leaves out. CHARGED_TWICE: one decision on two rows of one
+    department. Read only after Excel: before the sheet is calculated nothing is charged yet.
+    {} when there is no calculated sheet or no compiled route."""
+    if not isinstance(source, Mapping):
+        return {}
+    rows = _workbook_rows(source)
+    if not rows or not any(r.get("_calculated") for r in rows):
+        return {}
+    # A read-back that lost its join to the accepted rows names no decision and no part: it
+    # cannot say what is charged, so it judges nothing rather than calling everything missing.
+    if not any((r.get("decision_ids") or r.get("decision_id") or r.get("part_numbers"))
+               for r in rows):
+        return {}
+    shadow = ((source.get("estimate_summary") or {}).get("canonical_route_shadow") or {}) \
+        if isinstance(source.get("estimate_summary"), Mapping) else {}
+    decisions = [d for d in (shadow.get("decisions") or [])
+                 if isinstance(d, Mapping) and d.get("status") == "required"]
+    if not decisions:
+        return {}
+    try:
+        import wb_populate as _wb                                    # noqa: PLC0415
+        op_map = dict(getattr(_wb, "OP_NAME_MAP", {}) or {})
+    except Exception:                                                # noqa: BLE001
+        op_map = {}
+    out_of_scope: Set[str] = set()
+    try:
+        from route_compiler import outside_product_identities as _outside   # noqa: PLC0415
+        out_of_scope = {str(k).upper() for k in _outside(shadow.get("issues"))}
+    except Exception:                                                # noqa: BLE001
+        pass
+    out_of_scope |= {str(e.get("part_number") or "").upper()
+                     for e in (source.get("set_aside_outside_product") or [])
+                     if isinstance(e, Mapping)}
+    ruled: Dict[str, Set[str]] = {}
+    for p in list(job_parts(source)) + list(
+            (source.get("manufacturing_writeup") or {}).get("parts") or []):
+        if isinstance(p, Mapping) and p.get("part_number"):
+            ruled.setdefault(str(p["part_number"]).upper(), set()).update(
+                str(k).strip().lower() for k in (p.get("operations_ruled_out") or {}))
+    result: Dict[str, List[Dict[str, Any]]] = {
+        "charged": [], "covered": [], "uncovered": [], "charged_twice": [], "no_department": [],
+        "possible_stages": []}
+    for d in decisions:
+        did = str(d.get("decision_id") or "")
+        op = str(d.get("operation") or "").strip().lower()
+        tgt = str(d.get("target_id") or "").strip().upper()
+        if not did or not op or not tgt or tgt in out_of_scope:
+            continue
+        ids = {tgt} | {str(x).strip().upper() for x in (d.get("participants") or []) if x}
+        dept = op_map.get(op)
+        entry = {"decision_id": did, "operation": op, "target": tgt, "department": dept,
+                 "basis": str(d.get("source") or "unrecorded")}
+        on = [r for r in rows if did in (r.get("decision_ids") or []) or r.get("decision_id") == did]
+        if on:
+            entry["rows"] = [r.get("workbook_row") for r in on]
+            # THE SAME WORK ON THE SAME PARTS TWICE, NOT TWO ROWS (D-589, review). One
+            # requirement on two rows of a department can be two stages or two groups of
+            # parts. It is a double charge only when the rows carry the same operations for
+            # the same parts.
+            by_work: Dict[Tuple[str, Tuple[str, ...], Tuple[str, ...]], List[Dict[str, Any]]] = {}
+            for r in on:
+                by_work.setdefault(
+                    (str(r.get("wb_operation") or ""),
+                     tuple(sorted(str(o).lower() for o in _row_engine_ops(r))),
+                     tuple(sorted(str(x).strip().upper() for x in (r.get("part_numbers") or [])))),
+                    []).append(r)
+            twice = next((rs for rs in by_work.values() if len(rs) > 1), None)
+            # DIFFERENT ROWS ARE POSSIBLY SEPARATE STAGES, NOT VERIFIED ONES (D-589b). No row
+            # records the joint, hole group, bend or set-up it covers, so two rows that differ
+            # in what they list can still overlap; and two that match are possibly, not
+            # certainly, the same work. Both are asked; neither is passed.
+            if len(on) > 1 and not twice:
+                entry["stages"] = len(on)
+                result["possible_stages"].append(dict(entry))
+            if twice:
+                entry.update(rows=[r.get("workbook_row") for r in twice],
+                             gbp=round(sum(_num(r.get("total_value_gbp")) for r in twice), 2))
+                result["charged_twice"].append(entry)
+            else:
+                result["charged"].append(entry)
+            continue
+        same = [r for r in rows
+                if ids & {str(x).strip().upper() for x in (r.get("part_numbers") or [])}
+                and (op in {str(o).lower() for o in _row_engine_ops(r)}
+                     or (dept and str(r.get("wb_operation") or "") == dept))]
+        if same:
+            entry.update(rows=[r.get("workbook_row") for r in same],
+                         covered_by=f"Estimate row {', '.join(str(r.get('workbook_row')) for r in same)}")
+            result["covered"].append(entry)
+        elif ([i for i in ids if op in ruled.get(i, set())]
+              and all(op in ruled[i] for i in ids if i in ruled)):
+            entry["covered_by"] = "ruled out on the part"
+            result["covered"].append(entry)
+        elif not dept:
+            result["no_department"].append(entry)
+        else:
+            result["uncovered"].append(entry)
+    return result
+
 # ── ONE TABLE OF DECISION KINDS: its words, its tag, its place in the list ─────────────
 # 12173-02's report filed "1 stated row not carried" — money missing from the unit — under
 # the catch-all "Decision" and listed it after every manufacturing question, because the
@@ -1661,6 +1824,10 @@ PRICE_ORIGIN_LABELS: Dict[str, str] = {
 }
 
 _MARKET_AI_TOKENS = ("grok", "llm", "xai", "market")
+# The estimator's material cost methods whose money is a market lookup, wherever the line sits
+# on the sheet (D-598q).
+_MARKET_COST_METHODS = frozenset({"llm_market_sheet_rate", "last_resort_market_indication",
+                                  "board_rate_researched"})
 _CATALOGUE_TOKENS = ("udef", "pma", "erp", "bought_in_price", "price_book", "catalog",
                      "historical", "supplier_quote", "sheet_rate_live")
 # The fabricated block KEYS. The names are a fallback only: a block is named by
@@ -1961,8 +2128,10 @@ def _line_kind(part: Mapping[str, Any], node: Optional[Mapping[str, Any]]) -> st
     # from a service line). A -PLATE line is a service whatever path minted it.
     if part.get("_plating_placeholder") or "plating" in method or pn.endswith("-PLATE"):
         return "service"
-    if part.get("_commercial_placeholder") or str(part.get("source") or "") == \
-            "commercial_placeholder" or pn in ("PACKAGING", "DELIVERY"):
+    # The marks the mints leave are read by their owner (commercial_lines.is_commercial_line,
+    # D-582); the two code words stay as the fallback they always were.
+    from commercial_lines import is_commercial_line as _is_cl                # noqa: PLC0415
+    if _is_cl(part) or pn in ("PACKAGING", "DELIVERY"):
         return "commercial"
     if isinstance(node, Mapping) and node.get("kind"):
         return str(node["kind"])
@@ -2055,6 +2224,18 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
             label = f"costed by length on the {_name} block"
         if sheet_row:
             label += f" — Estimate!{int(sheet_row)}"
+        # THE NEST IS THE SHEET'S, THE SHEET PRICE MAY BE A MARKET GUESS (D-598q). 9287-10-005
+        # was nested 22 to a 3680 x 760 slab at £523.11 a sheet, and that sheet price was an AI
+        # market lookup; the line was called firm because it sat on a nested block, so the
+        # headline asked only for the bumpons' £1.16 to be replaced.
+        _flags = {str(f) for f in (me.get("reliability_flags") or [])}
+        if (str(me.get("cost_method") or "") in _MARKET_COST_METHODS
+                or _flags & {"llm_market_rate_not_a_supplier_price", "llm_indicative"}):
+            _sheet = _num(me.get("sheet_price_gbp"))
+            return {"class": "market_ai", "firmness": INDICATIVE_MARKET, "owner": "estimator",
+                    "label": (label + " at a market sheet price"
+                              + (f" of £{_sheet:,.2f}" if _sheet else "")
+                              + " — an AI lookup, not a supplier price; replace before quoting")}
         return {"class": f"nest_{block}", "firmness": FIRM, "owner": None, "label": label}
     if kind == "assembly" and not money:
         return {"class": "nil_by_design", "firmness": NIL, "owner": "nobody",
@@ -2186,6 +2367,14 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
     # system's, and the same run reproduces the same figure. INDICATIVE_HOUSE, for the
     # same reason as the plater freight and the roll: a real figure to verify or accept,
     # never one to "replace with a quote".
+    # THE BOX CALCULATOR IS ITS OWN BASIS (D-531): the estimators' stated carton sheet at
+    # held config rates — reproducible, provisional, and never a market figure to replace.
+    if "box_calculator" in tokens:
+        return {"class": "box_calculator", "firmness": INDICATIVE_HOUSE,
+                "owner": "estimator",
+                "label": ("priced by the box calculator — the estimators' stated carton "
+                          "arithmetic at held sheet rates, a provisional allowance; verify "
+                          "the carton size and count, not the arithmetic")}
     if "stated_method_system_priced" in tokens or "packing_method" in tokens:
         return {"class": "stated_method", "firmness": INDICATIVE_HOUSE,
                 "owner": "estimator",
@@ -3118,6 +3307,24 @@ def costed_job(source: Any) -> Dict[str, Any]:
             _qrow["operations"] = [str(o) for o in _asks if o]
         return _qrow
 
+    # A QUESTION STRONGER EVIDENCE HAS ANSWERED IS RETIRED, NOT ASKED (D-598t, SCRUM-100).
+    # 9439-07-04-03M, 25 Oct: the parts-list reader asked about a '5 x 5mm BAR' row "no
+    # cut-list reading took ... nothing is costed", beside the part's own cut list read as
+    # 5 x 5 x 290 bar and its line charged. Raised before that reading existed; it stands
+    # only where the owned reading does not cover the row.
+    try:
+        from owned_route_evidence import bar_covers_row as _bar_covers   # noqa: PLC0415
+    except Exception:                                                # pragma: no cover
+        _bar_covers = None
+    _pages_q = (source.get("pages") or []) if isinstance(source, Mapping) else []
+
+    def _answered(part: Mapping[str, Any], mq: Mapping[str, Any]) -> bool:
+        if _bar_covers is None or str(mq.get("source") or "") != \
+                "bom_pipeline.raise_unread_parts_list_rows":
+            return False
+        _row = re.search(r"section row, '([^']*)'", str(mq.get("issue") or ""))
+        return bool(_row and _bar_covers(part, _pages_q, _row.group(1)))
+
     def _questions_of(part: Mapping[str, Any]) -> None:
         _seen_q: Set[str] = set()
         for _mq in (part.get("manufacturing_questions") or []):
@@ -3125,6 +3332,8 @@ def costed_job(source: Any) -> Dict[str, Any]:
                 continue
             if str(_mq["issue"]) in _seen_q or any(
                     d.get("issue") == _mq["issue"] for d in decisions):
+                continue
+            if _answered(part, _mq):
                 continue
             _seen_q.add(str(_mq["issue"]))
             _dq = _question_decision(part, _mq)
@@ -3264,6 +3473,17 @@ def costed_job(source: Any) -> Dict[str, Any]:
                 if _k and _k.upper() not in _seen_b:
                     _seen_b.add(_k.upper())
                     _bonded.append(_k)
+    # A JOINT THE DRAWING STATES IS NOT ASKED (D-598t, SCRUM-105). 9439-07-04, 25 Oct: the GA
+    # prints "TOP BE SECURED USING HOLT MELT GLUE" and this asked how the top and the frame
+    # are joined, saying no drawing states the joint. Where the bond is printed on the part's
+    # own sheet or an assembly above it, how it is joined is answered; whether two glue rows
+    # are two stages is the owned-route ruling's question.
+    try:
+        from owned_route_evidence import stated_bond as _stated_bond   # noqa: PLC0415
+        if isinstance(source, Mapping):
+            _bonded = [_k for _k in _bonded if not _stated_bond(source, _k)]
+    except Exception:                                                # noqa: BLE001
+        pass
     if _bonded:
         decisions.append({
             "part": ", ".join(_bonded), "kind": "manufacturing_decision",
@@ -3310,9 +3530,26 @@ def costed_job(source: Any) -> Dict[str, Any]:
             if _k not in _ws_recs or (_ws_recs[_k].get("weld_symbols") is None
                                       and _wp.get("weld_symbols") is not None):
                 _ws_recs[_k] = _wp
+    # A WELD ITS OWN SHEET STATES IS DRAWN (D-598t, SCRUM-104). 9439-07-04-101, 25 Oct: the
+    # frame's sheet prints TIG, and this still asked whether the frame is welded at all, the
+    # TIG ruling netted underneath it in this question's words. The process is the drawing's
+    # statement; what stays open is its rate and runs, which the owned-route ruling asks.
+    try:
+        from owned_route_evidence import stated_weld_process as _stated_weld   # noqa: PLC0415
+    except Exception:                                                # pragma: no cover
+        _stated_weld = None
+    _pages_w = (source.get("pages") or []) if isinstance(source, Mapping) else []
+    _weld_stated = {str(_r.get("part_number")).upper()
+                    for _r in list(job_parts(source)) + list(
+                        ((source.get("manufacturing_writeup") or {}).get("parts") or [])
+                        if isinstance(source, Mapping) else [])
+                    if _stated_weld is not None and isinstance(_r, Mapping)
+                    and _r.get("part_number") and _stated_weld(_r, _pages_w)}
     for _tgt, _d in _guessed.items():
         if _tgt.upper() in _weld_asked:
             continue                      # its reader already asked, with the rows' money
+        if _tgt.upper() in _weld_stated:
+            continue
         _wrec = _ws_recs.get(_tgt.upper()) or {}
         _wsc = _wrec.get("weld_symbols")
         _drawn = (_describe_ws(_wsc if isinstance(_wsc, Mapping) else None,
@@ -3483,6 +3720,113 @@ def costed_job(source: Any) -> Dict[str, Any]:
                        "or once — strike the charge that is not real"),
             "owner": "estimator", "gbp_at_stake": _o_gbp or None})
 
+    # ── A WELD OR A FOLD CHARGED WITH NO RECORDED SOURCE IS ASKED, WITH ITS MONEY (D-587) ──
+    # D-586 stopped an operation with no source and no quoted words calling itself "a note on
+    # the drawing"; it is priced as "an unrecorded source". On 0351292's 09:48 book that left
+    # the anti-scratch strip welded, dressed and folded — £57.58 — with the question only in
+    # the confidence section, where nobody acts on it. A weld or a fold is physical work a
+    # drawing shows or does not: where one is charged on nobody's evidence it is a decision,
+    # priced by its own rows. Not where another question already covers that part's weld
+    # (an inferred weld, a joint charged twice, its reader's own question).
+    _covered_weld = ({str(d.get("part") or "").upper() for d in decisions
+                      if {"welding", "spot_welding", "dress_welds"}
+                      & {str(o) for o in (d.get("operations") or [d.get("operation")])}}
+                     | {m for (_a, m) in _joint_asked} | set(_weld_asked))
+    _unsourced: Dict[Tuple[str, str], Mapping[str, Any]] = {}
+    for _d in _shadow_d:
+        if not (isinstance(_d, Mapping) and _d.get("status") == "required"):
+            continue
+        _op_u = str(_d.get("operation") or "")
+        if _op_u not in ("welding", "spot_welding", "folding"):
+            continue
+        if str(_d.get("source") or "").strip().lower() != "unrecorded" \
+                or str(_d.get("evidence") or "").strip():
+            continue
+        _tgt_u = str(_d.get("target_id") or "")
+        if not _tgt_u or (_op_u != "folding" and _tgt_u.upper() in _covered_weld):
+            continue
+        _unsourced.setdefault((_tgt_u, _op_u), _d)
+    for (_tgt_u, _op_u), _d in sorted(_unsourced.items()):
+        _ops_u = {"folding": {"folding"}}.get(_op_u, {_op_u, "dress_welds"})
+        _urows = [r for r in (_workbook_rows(source) or [])
+                  if _ops_u & {str(o) for o in _row_engine_ops(r)}
+                  and _tgt_u.upper() in {str(pn).upper() for pn in (r.get("part_numbers") or [])}]
+        _u_gbp = round(sum(_num(r.get("total_value_gbp")) for r in _urows), 2)
+        _u_nums = [str(r.get("workbook_row")) for r in _urows if r.get("workbook_row")]
+        _word = {"folding": "Folding", "spot_welding": "Spot welding"}.get(_op_u, "Welding")
+        decisions.append({
+            "part": _tgt_u, "kind": "manufacturing_decision",
+            "operation": _op_u, "operations": sorted(_ops_u),
+            "issue": f"{_word} on {_tgt_u} has no recorded source",
+            "assumption": ((f"charged{' with its dressing' if _op_u != 'folding' else ''}"
+                            + (f" (£{_u_gbp:,.2f} a unit"
+                               + (f", Estimate row{'s' if len(_u_nums) > 1 else ''} "
+                                  f"{', '.join(_u_nums)}" if _u_nums else "") + ")"
+                               if _u_gbp else ""))
+                           + " — no reader recorded where it came from and the drawing's "
+                             "words for it were not found; it is priced so nothing is "
+                             "silently left out"),
+            "action": (f"read {_tgt_u}'s own sheet: if it is "
+                       f"{'folded' if _op_u == 'folding' else 'welded'}, confirm it; if not, "
+                       f"strike the {'Fold row' if _op_u == 'folding' else 'Weld and Dress rows'}"),
+            "owner": "estimator", "gbp_at_stake": _u_gbp or None})
+
+    # ── EVERY REQUIRED OPERATION IS CHARGED ONCE, COVERED BY A NAMED CHARGE, OR ASKED (D-589) ──
+    try:
+        _cov = operation_coverage(source)
+    except Exception:                                                # noqa: BLE001
+        _cov = {}
+    if isinstance(source, dict) and _cov:
+        source["operation_coverage"] = _cov
+    _asked_ops = {(str(d.get("part") or "").upper(), str(o))
+                  for d in decisions for o in (d.get("operations") or [d.get("operation")])}
+    for _u in (_cov.get("uncovered") or []):
+        _tgt_c, _op_c = str(_u.get("target") or ""), str(_u.get("operation") or "")
+        if (_tgt_c.upper(), _op_c) in _asked_ops:
+            continue
+        decisions.append({
+            "part": _tgt_c, "kind": "manufacturing_decision",
+            "operation": _op_c, "operations": [_op_c],
+            "issue": (f"{_op_c.replace('_', ' ').capitalize()} on {_tgt_c} is required by the "
+                      f"route and is on no charged row"),
+            "assumption": (f"not in the price — the route requires it ({_u.get('basis')}) "
+                           f"and no {_u.get('department') or 'workbook'} row charges it"),
+            "action": (f"price it on the {_u.get('department') or 'right'} row, or rule it out "
+                       f"on {_tgt_c} with the reason"),
+            "owner": "estimator", "gbp_at_stake": None})
+    for _t in (_cov.get("charged_twice") or []):
+        _tgt_c, _op_c = str(_t.get("target") or ""), str(_t.get("operation") or "")
+        if (_tgt_c.upper(), _op_c) in _asked_ops:
+            continue
+        decisions.append({
+            "part": _tgt_c, "kind": "manufacturing_decision",
+            "operation": _op_c, "operations": [_op_c],
+            "issue": (f"{_op_c.replace('_', ' ').capitalize()} on {_tgt_c} is charged on "
+                      f"{len(_t.get('rows') or [])} rows with the same department, operations "
+                      f"and parts — possibly the same work twice"),
+            "assumption": (f"Estimate rows {', '.join(str(r) for r in _t.get('rows') or [])} "
+                           f"all carry decision {_t.get('decision_id')}; no row records which "
+                           f"joint, hole group, bend or set-up it covers"),
+            "action": ("confirm whether the rows cover different work; if they are the same, "
+                       "strike one"),
+            "owner": "estimator", "gbp_at_stake": _t.get("gbp") or None})
+    for _t in (_cov.get("possible_stages") or []):
+        _tgt_c, _op_c = str(_t.get("target") or ""), str(_t.get("operation") or "")
+        if (_tgt_c.upper(), _op_c) in _asked_ops:
+            continue
+        decisions.append({
+            "part": _tgt_c, "kind": "manufacturing_decision",
+            "operation": _op_c, "operations": [_op_c],
+            "issue": (f"{_op_c.replace('_', ' ').capitalize()} on {_tgt_c} is on "
+                      f"{_t.get('stages')} rows — possibly separate stages, not verified"),
+            "assumption": (f"each of Estimate rows "
+                           f"{', '.join(str(r) for r in _t.get('rows') or [])} is charged; they "
+                           f"list different operations or parts, but no row records which "
+                           f"joint, hole group, bend or set-up it covers, so they may overlap"),
+            "action": ("confirm each row covers different work; where two cover the same, "
+                       "strike one"),
+            "owner": "estimator", "gbp_at_stake": None})
+
     # ── A LINE COSTED AT A QUANTITY ITS OWN BOM ROW DOES NOT STATE ────────────────
     # 12312-01-GA: the driver, LED tape, power cord and Y-splitter each stated 1 and were
     # costed at 2, reached once through the lighting assembly and once from the GA's table.
@@ -3650,6 +3994,12 @@ def costed_job(source: Any) -> Dict[str, Any]:
         _hit = (next((d for d in decisions if _row_covers(d, _asm.upper(), _op)), None)
                 or next((d for d in decisions
                          if _row_covers(d, _asm.upper(), _op, _kids)), None))
+        # A RULING THAT SAYS WHAT STANDS AND WHAT TO RULE IS ITS OWN ROW (D-598t). Netted onto
+        # a question on the same part and operation, its requirement was printed in that
+        # question's words: the TIG rate became "confirm it is welded" on 9439-07-04-101.
+        # Only a ruling with no words of its own (the overlap check's) is netted.
+        if det.get("assumption") and det.get("action"):
+            _hit = None
         if _hit is not None:
             _hit["also_ruled_by_check"] = str(v.get("code") or "")
             _ruling_netted += 1
@@ -3658,8 +4008,12 @@ def costed_job(source: Any) -> Dict[str, Any]:
             "part": _asm or str(v.get("code") or ""), "kind": "ruling",
             "operation": _op, "check_code": str(v.get("code") or ""),
             "issue": _first_sentence(v),
-            "assumption": "both levels stay charged as the route has them",
-            "action": "rule: two real events, or strike one of the charges",
+            # A check may say what stands and what to rule (D-598r); otherwise the overlap
+            # wording this row was written for.
+            "assumption": str(det.get("assumption")
+                              or "both levels stay charged as the route has them"),
+            "action": str(det.get("action")
+                          or "rule: two real events, or strike one of the charges"),
             "owner": "estimator", "gbp_at_stake": None})
 
     # A SIZE READ OFF A PICTURE IS A ROW (D-356 counted it beside the list, never in it).
@@ -3719,6 +4073,13 @@ def costed_job(source: Any) -> Dict[str, Any]:
         "checks_with_findings": len({str(v.get("check") or v.get("code") or "")
                                      for v in _blocking_v + _ruling_v + _not_run_v}),
     }
+    # THE READ LEDGER'S ROWS AMONG THE BLOCKING CHECKS (D-598), by the codes its invariant
+    # raises — counted on the release so a hold can be traced to the ledger, not inferred.
+    try:
+        from read_charge_contract import LEDGER_CHECK_CODES as _LEDGER_CODES  # noqa: PLC0415
+    except Exception:                                                # noqa: BLE001
+        _LEDGER_CODES = frozenset()
+    _ledger_rows = [d for d in _checks if str(d.get("check_code") or "") in _LEDGER_CODES]
     reasons: List[str] = []
     if _stop:
         reasons.append(_stop_sentence(_stop))
@@ -3736,6 +4097,14 @@ def costed_job(source: Any) -> Dict[str, Any]:
         _fc = _failing_checks_words(decisions, _checks_rec)
         if _fc["blocking_words"]:
             reasons.append(_fc["blocking_words"])
+        # WHICH OF THEM ARE THE READ LEDGER'S, SAID (D-598). A provisional status caused by
+        # other issues does not prove the ledger's hold worked: the release names the
+        # ledger's own findings among its blocking checks, item by item.
+        if _ledger_rows:
+            reasons.append(
+                f"{len(_ledger_rows)} of them from the read ledger: "
+                + "; ".join(str(d.get("issue") or d.get("check_code")) for d in _ledger_rows[:4])
+                + (f"; and {len(_ledger_rows) - 4} more" if len(_ledger_rows) > 4 else ""))
         if _fc["ruling_words"]:
             reasons.append(_fc["ruling_words"])
         if _fc["not_run_words"]:
@@ -3764,6 +4133,27 @@ def costed_job(source: Any) -> Dict[str, Any]:
     if _assumed:
         reasons.append(f"{len(_assumed)} size(s) assumed from a render: "
                        f"{', '.join(str(d['part']) for d in _assumed)}")
+    # WHAT THE HEADLINE RESTS ON THAT NOBODY HAS CONFIRMED (review of D-596). Holding the
+    # release is right, and not enough: a unit cost carrying hundreds of unconfirmed hours is
+    # not a budget at any quantity. How much of it rests on held engine allowances, the priced
+    # subtotal excluding them, and the work still unresolved (priced in neither) are said
+    # beside each other — the subtotal is not called a supported cost (review of D-596).
+    _rcr = source.get("read_charge_result") if isinstance(source.get("read_charge_result"), Mapping) else {}
+    _held = _rcr.get("held_allowances") if isinstance(_rcr.get("held_allowances"), Mapping) else {}
+    if _num(_held.get("gbp_per_unit")) > 0:
+        _hrs = _held.get("hours_at") or {}
+        _top = max(_hrs, key=lambda q: int(q)) if _hrs else ""
+        reasons.append(
+            f"£{_num(_held['gbp_per_unit']):.2f} a unit rests on engine allowances not confirmed "
+            f"for this job ({', '.join(list(_held.get('operations') or []) + list(_held.get('lines') or []))}"
+            + (f"; {_num(_hrs[_top]):g} h at {int(_top):,} off" if _top else "") + ")"
+            + (f" — the priced subtotal excluding them is "
+               f"£{_num(_held['unit_excluding_held_gbp']):.2f} a unit against "
+               f"£{_num(_held.get('unit_gbp')):.2f}"
+               if _held.get("unit_excluding_held_gbp") is not None else "")
+            + (f"; {len(_held['unresolved_work'])} item(s) of required work are unresolved and "
+               f"priced in neither figure" if _held.get("unresolved_work") else "")
+            + ". Not a budget until they are confirmed or taken off")
     unpriced_all = [d for d in decisions if d["kind"] == "missing_price"]
     status = ("provisional" if (unpriced_all or _stated or _off_sheet or market or _provisional
                                 or not calculated or _checks or _assumed or inv is None)
@@ -3779,7 +4169,7 @@ def costed_job(source: Any) -> Dict[str, Any]:
     if _stop:
         status = "provisional"
 
-    return {
+    _job = {
         "schema": COSTED_JOB_SCHEMA,
         # The stop travels on the record, so a reader given the record alone (the HTML
         # regeneration path, the quote's blocking list) still knows the book is empty by mode.
@@ -3804,12 +4194,28 @@ def costed_job(source: Any) -> Dict[str, Any]:
                     # WHAT THE BANNER LEFT OUT (D-356), NOW ROWS (v2). Both values are
                     # counts OF the rows above, kept for the readers that print them.
                     "blocking_checks": len(_checks),
+                    # Of those, the read ledger's own (D-598).
+                    "read_ledger_holds": len(_ledger_rows),
+                    "read_ledger_codes": sorted({str(d.get("check_code")) for d in _ledger_rows}),
                     "sizes_assumed": len(_assumed),
                     "rulings": len(_rulings),
                     **_checks_rec,
                     "prices_outstanding": len(unpriced) + len(market),
-                    "decisions_open": len(manufacturing)},
+                    "decisions_open": len(manufacturing),
+                    # The held engine allowances, apart from the supported cost (D-596).
+                    "held_allowances_gbp_per_unit": (_num(_held.get("gbp_per_unit"))
+                                                     if _held else 0.0),
+                    "unit_excluding_held_gbp": (_held.get("unit_excluding_held_gbp") if _held else None),
+                    "held_at_breaks": list(_held.get("at_breaks") or []) if _held else []},
     }
+    # THE ONE TALLY, ON THE RECORD ITSELF (D-580). `outstanding` is the rows that make the
+    # quotation a draft; the report's headline also lists the advisory items — an SDI house
+    # rate marked INDICATIVE to verify — so on the 22/10 10:34 book of 401918-01-GA the
+    # report said six and the saved release record five, and a reader could not tell why.
+    # The record now carries both numbers, and every surface that says "items to confirm"
+    # prints this one.
+    _job["release"]["to_confirm"] = int(outstanding_summary(_job).get("total") or 0)
+    return _job
 
 
 def costed_line(source: Any, part_number: Any) -> Optional[Dict[str, Any]]:
@@ -4125,8 +4531,11 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
     # AI Explanation tab are written before the checks run, and printed "25 to settle" with
     # no word of the eleven failing checks the report then added. Said, not counted: the
     # headline stays the sum of the phrase.
-    _unseen = ("; the consistency checks had not run when this was counted — the report's "
-               "total adds any check they raise" if _rel.get("checks_ran") is False and bits else "")
+    # AND IT NAMES ITSELF (D-580): a provisional count at workbook population, never a
+    # verdict — the report, built after the checks, carries the final release status.
+    _unseen = ("; a provisional count at workbook population — the consistency checks had not "
+               "run when this was counted; the report carries the final release status and "
+               "adds any check they raise" if _rel.get("checks_ran") is False and bits else "")
     # AND WHAT THEY ARE, NOT ONLY HOW MANY. "4 prices missing + 1 market figure to replace +
     # 2 manufacturing decisions" is a number an estimator cannot act on: he has to open the
     # workbook and hunt for which four. Every one of those rows already knows its own part,

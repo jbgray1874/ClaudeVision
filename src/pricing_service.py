@@ -100,6 +100,10 @@ _PURCHASE_SEARCH_MATERIAL_ADJECTIVES = (
     "STEEL", "MILD", "STAINLESS", "ALUMINIUM", "ALUMINUM", "PLASTIC", "ACRYLIC", "TIMBER",
     "METAL", "NYLON", "BRASS", "ZINTEC", "GALV", "GALVANISED", "GALVANIZED", "MDF", "PLY",
     "PLYWOOD", "PVC", "POLYCARBONATE", "PERSPEX", "RUBBER",
+    # The board families say what a thing is made of — or matched to ("to match Egger
+    # W1001 ST9 laminate") — never what it is. The edging line's longest word was
+    # LAMINATE, and LAMINATE led the search (D-520).
+    "LAMINATE", "LAMINATES", "LAMINATED", "MFC", "CHIPBOARD", "MELAMINE",
 )
 
 # Category words that name a STOCK FORM — a material bought by the sheet, board or length —
@@ -107,6 +111,12 @@ _PURCHASE_SEARCH_MATERIAL_ADJECTIVES = (
 _STOCK_FORM_CATEGORY_WORDS = (
     "SHEET", "SHEETS", "PLATE", "BOARD", "BOARDS", "SECTION", "SECTIONS", "BAR", "TUBE",
     "ROD", "MDF", "PLY", "PLYWOOD", "EXTRUSION", "EXTRUSIONS", "ANGLE", "CHANNEL", "MESH",
+    # THE LAMINATE FAMILY IS STOCK TOO (D-519). The edging line's own description says
+    # "to match Egger W1001 ST9 LAMINATE"; the purchase search's longest word hit a
+    # laminate row at £18 and charged a metre of 23 x 1 ABS as a laminate SHEET —
+    # £56.16 of edging on a £5.00 board. A row whose category names laminate or a faced
+    # board is a material's price, whatever word led to it; the search keeps looking.
+    "LAMINATE", "LAMINATES", "LAMINATED", "MFC", "CHIPBOARD", "MELAMINE",
 )
 
 
@@ -1449,6 +1459,37 @@ class PricingService:
             _is_purchase = bool(self._is_bought_in_heuristic(part))
         material_hint = str(part.get("normalized_material") or "").strip()
         desc = str(part.get("description") or "").strip()
+        # A PRICE WITH NO STATED BASIS CANNOT PRICE A LINE BOUGHT BY THE METRE (D-520).
+        # This table holds one figure per row and no unit column, so what the figure is
+        # PER — an each, a roll, a sheet, a metre — is unknowable from the row. On a
+        # counted purchase that ambiguity is survivable (a castor is an each); on a line
+        # whose quantity is metres or kilograms it is the whole price: the 12:45 book put
+        # £18 — a sheet figure — against each of 3.192 m of edging, £56.16 on a £5.00
+        # board. Refusing the rung is not refusing the obligation to estimate: the line
+        # falls to the sources that state their basis (SDI Live, stated_prices, the
+        # roll-goods arithmetic where a roll length is held, the researched rung whose
+        # contract demands a unit basis) or reaches the sheet explicitly unpriced and
+        # named for the estimator.
+        if _is_purchase and (part.get("_edging_line") or (
+                str(part.get("unit_of_measure") or "").strip().lower()
+                in getattr(config, "CONTINUOUS_UNITS_OF_MEASURE", ()))):
+            return None
+        # A STANDARD DESIGNATION NAMES ONE ARTICLE, AND A WORD IN ITS DESCRIPTION DOES NOT
+        # (D-587). This rung matches a category row by ANY single word of the description,
+        # longest first. On 0351292's 09:48 book "ISO 7380-1 - M8 x 16 Hexagon Socket Button
+        # Head Screw" took £10.00 each from whatever row "HEXAGON" or "PRODUCT" hit — twelve
+        # of them, £124.80, on a screw a researched rung had priced at £0.15. The line's code
+        # is a DIN / ISO / EN designation: an exact thread, length and head, which a category
+        # row reached by one shared word cannot be. Such a line skips this rung and falls to
+        # the researched one, which must name a listing, a date and a unit basis.
+        if _is_purchase:
+            try:
+                import part_code_conventions as _pcc
+                _code = str(part.get("part_number") or "").strip()
+                if _code and _pcc.is_standard_designation(_code):
+                    return None
+            except Exception:                                    # noqa: BLE001
+                pass
         if _is_purchase:
             # THE WORDS THAT NAME THE THING, NOT THE STUFF IT IS MADE OF. Asked by every word,
             # "PLASTIC END CAP" found PLASTIC SHEET and "STEEL BACKED MAGNET" found MILD STEEL
@@ -1915,6 +1956,21 @@ class PricingService:
                 "source": "historical_quote_operation",
             })
         return result
+
+    @staticmethod
+    def assembly_scope_exists(parts: Any) -> bool:
+        """A BAY RATE NEEDS A BAY (D-511). 12340-01M — one flat bracket, nothing to
+        assemble — was given £29.13/bay of historical assembly labour because the caller
+        never asked whether the job holds assembly work. It does when there is more than
+        one made part, or any record the pack calls an assembly; a single component's
+        packing is the commercial PACKAGING line, not a bay of bench work."""
+        rows = [p for p in (parts or []) if isinstance(p, dict)]
+        made = [p for p in rows
+                if "bought_in" not in (p.get("page_roles") or [])
+                and not str(p.get("part_number") or "").upper().startswith(("BI-", "P/P-"))]
+        return (len(made) > 1
+                or any(p.get("is_assembly_parent") or p.get("is_sub_assembly")
+                       or p.get("assembly_children") for p in rows))
 
     def estimate_assembly_pack_labour(self, quantity: int = 1) -> Dict[str, Any]:
         """E2: per-bay assembly/pack labour, learned from dbo.historical_quote_operation.

@@ -269,7 +269,7 @@ def main():
         stem=d.stem
         pn=None
         import re
-        m=re.match(r"(\d{3,5}[A-Z]?(?:-[A-Z0-9]+)*)", stem)
+        m=re.match(r"(\d{3,6}[A-Z]?(?:-[A-Z0-9]+)*)", stem)
         if m: pn=m.group(1)
         obs=obs_by_part.get(pn or "", [])
         route=implied_route(cur, obs)

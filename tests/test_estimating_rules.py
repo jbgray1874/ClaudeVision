@@ -2859,8 +2859,9 @@ def test_a_measured_zero_bend_count_outvotes_a_drawing_callout():
 
     # A zero from something that cannot see bends must STILL fall through — this is the
     # fold-shadowing fix, and breaking it would drop real folds off PDF-only parts.
+    # A stated fold on the PDF, not a bare angle (D-592a: an angle alone is asked, not costed).
     pdf_only = {"part_number": "09M", "normalized_material": "MILD_STEEL",
-                "angles_deg": ["90"], "normalized_thickness_mm": 1.5,
+                "angles_deg": ["90"], "fold_count_textual": 1, "normalized_thickness_mm": 1.5,
                 "manufacturing_features": {"bend_count": 0},
                 "textual_operations": ["laser_cutting"]}
     eq(_model_measured_zero_bends(pdf_only), False,
@@ -3480,7 +3481,8 @@ def test_transcription_and_inference_are_separate_passes():
     # BUILT IS NOT WIRED. Three times this session a capability went in with nothing calling
     # it. A capability nothing calls looks exactly like one that does not work.
     _fs = open(__import__("file_scan").__file__, encoding="utf-8").read()
-    ok("infer_missing_details(" in _fs, "the inference pass is actually called by the scan")
+    ok("infer_missing_details(" in _fs or "infer_missing_details_in_batches(" in _fs,
+       "the inference pass is actually called by the scan")
     ok("parts_missing_detail(" in _fs, "on the parts the first pass left empty")
     ok('_job["inferred_parts"]' in _fs, "and its result is kept on the job")
     # KEPT IS NOT MERGED. The line above passed while the pass was a no-op: the result was
@@ -4212,6 +4214,11 @@ def test_round_tube_is_a_section_too():
        "no wall callout, no section — an honest gap, not a guessed tube")
 
 
+def _sp_form_is_profile_form() -> bool:
+    import section_profile as _sp
+    return all(_sp.section_form({"profile_form": f}) == f for f in ("CHS", "RHS", "SHS", "OVAL", ""))
+
+
 def test_a_round_tube_does_not_weigh_what_a_square_one_weighs():
     """The section mass formula was A = outer - inner on the sides of a RECTANGLE, and it was
     the only formula. Round tube carries its outside diameter in a and b, so 12.7 x 1.2 CHS
@@ -4239,9 +4246,13 @@ def test_a_round_tube_does_not_weigh_what_a_square_one_weighs():
     # and the estimator weigh a section the same way; the estimator passes the form to it.
     _src = open(__import__("estimator").__file__, encoding="utf-8").read()
     _sec = open(__import__("section_profile").__file__, encoding="utf-8").read()
-    ok('str(profile_form or "").upper() == "CHS"' in _sec
-       and '_ss.get("profile_form"), density)' in _src,
+    # D-594: the form now reaches the formula through section_form(stock), which is the stock's
+    # profile_form for every section except a flat-sided oval (weighed as a stadium).
+    ok('form = str(profile_form or "").upper()' in _sec and 'form == "CHS"' in _sec
+       and ('_ss.get("profile_form"), density)' in _src
+            or '_section_form(_ss), density)' in _src),
        "the estimator actually branches on it — a formula nothing selects is not a fix")
+    ok(_sp_form_is_profile_form(), "section_form passes a non-oval stock's own profile_form")
     import section_profile as _sp_mod
     ok(abs(_sp_mod.section_kg_per_m(D, D, t, "CHS", 7850.0) * 1e6 / 7850.0 - round_) < 1e-6,
        "and the shared formula is the circular one for CHS")
@@ -6837,14 +6848,16 @@ def test_the_same_pack_produces_the_same_route():
        "the transcription key covers the pack text, the model AND the prompt — drop the text "
        "and a redrawn drawing silently keeps the old route; drop the prompt and a rule change "
        "is never re-asked")
-    ok("_cache_write(_key, obj)" in _src, "and the result is stored")
+    ok('_cache_write(_key, {**obj, "_raw_full": raw or ""})' in _src,
+       "and the result is stored, with the model's whole response (D-554)")
     ok('_ikey = _cache_key("infer", payload, model, SYSTEM_INFER, _INFER_PROMPT)' in _src,
        "the inference key covers its whole payload AND its prompt — the payload is where "
        "the weld came from, and the prompt is the question that produced it. The line two "
        "assertions above says drop the prompt and a rule change is never re-asked; this "
        "path was keyed on the system message alone, so it was the case that sentence "
        "describes")
-    ok("_cache_write(_ikey, _res)" in _src, "and it is stored too")
+    ok('_cache_write(_ikey, {**_res, "_raw_full": raw or ""})' in _src,
+       "and it is stored too, with the model's whole response (D-554)")
 
 
 def test_the_raw_model_response_is_kept():

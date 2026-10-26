@@ -115,6 +115,49 @@ def _footprint_fits(blank: List[float], footprint: List[float]) -> bool:
     return bl <= fl and bw <= fw
 
 
+def _plan_assembled(unit: Dict[str, Any], qty: int, lim: Dict[str, Any]) -> Dict[str, Any]:
+    """AN ASSEMBLED PRODUCT SHIPS AS ITSELF (D-530). A welded unit cannot be split into
+    25 kg cartons of loose parts: it is one pack per unit, the pack sized from the product's
+    own overall dimensions, and the pallets are how many of those packs a pallet footprint
+    takes, stacked to the height limit and inside the weight limit."""
+    env = [float(v) for v in (unit.get("envelope_mm") or []) if _num(v)]
+    if len(env) < 3:
+        return {"schema": SCHEMA, "order_quantity": qty, "carton_count": None,
+                "pallet_count": None, "flags": ["shipment_not_countable"],
+                "assumptions": ["The assembled product has no overall size to pack by."]}
+    L, B, H = env[:3]
+    w = _num(unit.get("unit_weight_kg")) or 0.0
+    pallet_fp = lim["pallet_footprint_mm"]
+    per_layer = _fit_per_layer(pallet_fp, [L, B])
+    flags: List[str] = ["ships_assembled"]
+    if per_layer == 0:
+        per_pallet = 1
+        flags.append("unit_exceeds_pallet")
+    else:
+        layers = max(1, int(math.floor(lim["pallet_max_height_mm"] / H))) if H else 1
+        per_pallet = per_layer * layers
+    if w and lim["pallet_max_weight_kg"]:
+        per_pallet = max(1, min(per_pallet, int(math.floor(lim["pallet_max_weight_kg"] / w))))
+    pallets = int(math.ceil(qty / per_pallet))
+    return {
+        "schema": SCHEMA, "order_quantity": qty, "parts_measured": 1,
+        "parts_without_a_blank": 0, "ships_assembled": True,
+        "order_weight_kg": round(w * qty, 2) if w else None,
+        "packing_factor": lim["packing_factor"],
+        "largest_blank_mm": [round(L, 1), round(B, 1)],
+        "carton_internal_mm": [L, B, H],
+        "carton_count": qty, "pallet_count": pallets, "units_per_pallet": per_pallet,
+        "assumptions": [
+            f"Ships assembled — {unit.get('basis') or 'a welded unit'}: one carton per unit, "
+            f"sized from the product's overall {L:g} x {B:g} x {H:g} mm, and "
+            f"{per_pallet} unit(s) to a {pallet_fp[0]:.0f} x {pallet_fp[1]:.0f} mm pallet"
+            + (" (the unit is larger than the pallet: one per pallet, oversize)"
+               if "unit_exceeds_pallet" in flags else "")
+            + ". A working count, not a packing plan — confirm with the packer."],
+        "flags": flags,
+    }
+
+
 def plan_shipment(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]:
     """The order as cartons and pallets, with the measured figures and the one assumption apart.
 
@@ -128,6 +171,10 @@ def plan_shipment(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]
         qty = max(1, int(order_qty))
     except (TypeError, ValueError):
         qty = 1
+    _unit = next((p for p in parts or () if isinstance(p, dict) and p.get("_assembled_unit")),
+                 None)
+    if _unit is not None:
+        return _plan_assembled(_unit, qty, lim)
 
     weight_kg = 0.0
     solid_vol_m3 = 0.0
@@ -156,7 +203,15 @@ def plan_shipment(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]
                 me = part.get("material_estimate") if isinstance(part.get("material_estimate"), dict) else {}
                 L, W = _num(me.get("blank_length_mm")), _num(me.get("blank_width_mm"))
         T = _num(part.get("normalized_thickness_mm"))
-        if not (L and W and T):
+        # SECTION AND WIRE WEIGH WHAT THEIR COSTING WEIGHED (D-528). Length x width x thickness
+        # is a plate's weight: a 25 x 25 box section 880 long counted as solid, or a mesh panel
+        # as a slab of its wire's gauge, put a tote trolley's order at over a tonne. The costing
+        # weighed the section by the metre and the mesh by its wire; that mass is the weight.
+        _me = part.get("material_estimate") if isinstance(part.get("material_estimate"), dict) else {}
+        _linear = str(_me.get("stock_form") or part.get("stock_form") or "").lower() in (
+            "tube", "wire", "section", "bar")
+        _mass = _num(_me.get("unit_material_mass_kg")) if _linear else None
+        if not (L and W and (T or _mass)):
             skipped += 1
             continue
         counted += 1
@@ -165,9 +220,9 @@ def plan_shipment(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]
         except (TypeError, ValueError):
             per = 1
         n = per * qty
-        vol = (L / 1000.0) * (W / 1000.0) * (T / 1000.0)
+        vol = (L / 1000.0) * (W / 1000.0) * ((T or 1.0) / 1000.0)
         solid_vol_m3 += vol * n
-        weight_kg += vol * _density_for(part.get("normalized_material")) * n
+        weight_kg += (_mass * n) if _mass else vol * _density_for(part.get("normalized_material")) * n
         longest, widest = max(longest, L), max(widest, W)
         if not _footprint_fits([L, W], carton_fp):
             oversize_for_carton += 1

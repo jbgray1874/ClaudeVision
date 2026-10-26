@@ -206,11 +206,26 @@ def reconciled_bom_rows_for_job(
             #     everything except the fields needed to retire the blanket-6mm
             #     assumption. Copied only when a reader actually stamped them, so an
             #     SDI row without the columns is byte-identical.
+            # THE DIMENSION CELL TOO (D-587). The words reader learned to read a parts
+            # list's DIMENSION column (D-584: "2 mm" for 0351292's top blank, "30X20X2MM"
+            # for its base rail), and this flatten copied every printed field but that one —
+            # so the stock-form guard downstream never saw the row that said "sheet", and
+            # the rail's tube callout priced the top blanks as tube on the 09:48 book.
             for _ev in ("material_text", "thickness_mm", "stated_weight_kg",
-                        "segmentation_uncertain", "code_token", "length_mm"):
+                        "segmentation_uncertain", "code_token", "length_mm", "dimension"):
                 _v = r.get(_ev)
                 if _v not in (None, ""):
                     _row_out[_ev] = _v
+            # THE LENGTH COLUMN UNDER ANY OF ITS NAMES (D-565). The vision reader's schema
+            # calls it cut_length_mm; a table reader may call it length. 401918-01-07M's
+            # page-11 rows ("50.00 x 20.00 x 2.00mm TUBE | 703 | 1") reached the cut-list
+            # applier with no length under the one name it read, and the frame had no stock.
+            if _row_out.get("length_mm") in (None, ""):
+                for _alt in ("cut_length_mm", "length", "cut_length", "piece_length_mm"):
+                    _lv = _row_length_value(r.get(_alt))
+                    if _lv:
+                        _row_out["length_mm"] = _lv
+                        break
             flat.append(_row_out)
     # A reader that did not run is the only failure this module cannot see in its output:
     # the rows simply are not there, and a job read by one path looks exactly like a job
@@ -331,6 +346,24 @@ def apply_stated_edging_to_parts(parts: Any, bom_rows: Any) -> int:
     return n
 
 
+def _row_length_value(raw: Any) -> float:
+    """A length column's figure in mm, from a number or a printed string ("703", "703 mm",
+    "703.0"), or 0.0 where it holds none (D-565)."""
+    if raw in (None, "", False):
+        return 0.0
+    try:
+        v = float(raw)
+        return v if v > 0 else 0.0
+    except (TypeError, ValueError):
+        pass
+    m = re.search(r"(\d+(?:\.\d+)?)", str(raw))
+    try:
+        v = float(m.group(1)) if m else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+    return v if v > 0 else 0.0
+
+
 def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
     """A part's own parts table that lists its section pieces IS its cut list (D-383).
 
@@ -356,7 +389,7 @@ def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
     import config
     import source_precedence as sp
     from part_code_conventions import bare_code
-    from section_profile import detect_section_stock, section_kg_per_m
+    from section_profile import detect_section_stock, section_kg_per_m, section_form
 
     pieces: Dict[str, Dict[tuple, List[float]]] = {}
     rows_of: Dict[str, List[Dict[str, Any]]] = {}
@@ -373,14 +406,19 @@ def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
         # THE TABLE'S OWN LENGTH COLUMN (D-429), where the description does not print one:
         # "ITEM QTY DESCRIPTION LENGTH" puts the piece's length beside the profile, not in it.
         if not s.get("length_mm"):
-            try:
-                _col_len = float(r.get("length_mm") or 0)
-            except (TypeError, ValueError):
-                _col_len = 0.0
+            # Under any of the column's names (D-565): length_mm, the vision schema's
+            # cut_length_mm, a table reader's length — a number or a printed string.
+            _col_len = 0.0
+            for _lk in ("length_mm", "cut_length_mm", "length", "cut_length", "piece_length_mm"):
+                _col_len = _row_length_value(r.get(_lk))
+                if _col_len:
+                    break
             if _col_len > 0:
                 s = dict(s, length_mm=_col_len)
+        # The form key is the formula's (D-594): a flat-sided oval keys apart from a plain
+        # oval of the same numbers, and is written back below as OVAL, flat-sided.
         key = (min(float(s["a"]), float(s["b"])), max(float(s["a"]), float(s["b"])),
-               float(s["t"]), str(s.get("profile_form") or ""))
+               float(s["t"]), section_form(s))
         if not s.get("length_mm"):
             no_len.setdefault(par, []).append((key, r))
             continue
@@ -409,6 +447,25 @@ def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
                 held = None
             if held is not None and all(abs(h - k) < 0.05 for h, k in zip(held, key[:3])):
                 r["row_role"], r["consumed"] = "parent_cut_list", True
+                # THE SHEET'S OWN CUT LIST STANDS IN FOR THE LENGTH THE ROWS LEFT OUT (D-574).
+                # 401918-01-07M's two table rows reached here from both readers as the
+                # profile alone, "50.00 x 20.00 x 2.00mm TUBE", no length under any name;
+                # the sheet's text had already given the part its pieces, 703, 154 and 154,
+                # of that same section. The rows were consumed as a confirmation and the
+                # part — an assembly parent by the model's tree — went on to no pieces, so
+                # the weldment rule below (D-557) never ran and the frame carried nothing.
+                # A row that confirms the section the sheet's own cut list already measures
+                # is one of those pieces: the held lengths are the pieces, and the rest of
+                # the rule proceeds as if the table had printed them.
+                _held_pcs = [float(x) for x in (ss.get("cut_lengths_mm") or [])
+                             if isinstance(x, (int, float)) or str(x).replace(".", "", 1).isdigit()]
+                if _held_pcs and pn not in pieces:
+                    pieces[pn] = {key: list(_held_pcs)}
+                    rows_of.setdefault(pn, []).append(r)
+                    p.setdefault("review_flags", []).append(
+                        f"{p.get('part_number')}'s parts table prints its section without "
+                        f"lengths; the pieces are the sheet's own cut list as read from its "
+                        f"text ({', '.join(f'{v:g}' for v in _held_pcs)} mm) (D-574)")
         prof = pieces.get(pn)
         if not prof:
             continue
@@ -429,6 +486,55 @@ def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
         # would put the tube on the bill beside whatever its members already carry.
         _asm = bool(p.get("is_assembly_parent") or p.get("is_sub_assembly")
                     or str(p.get("canonical_kind") or "").lower() == "assembly")
+        # A WELDMENT WITH NO MEMBERS BUT ITS OWN PIECES IS A PART (D-557). 401918-01-07M is a
+        # tube frame drawn on one sheet with a two-row cut list (50 x 20 x 2 TUBE); the model
+        # lists it as an assembly — a weldment's cut-list bodies read as structure — so the
+        # guard below declined its pieces, and with no coded member to carry the tube the
+        # frame went on the bill with no material and no saw ("an assembly's material is its
+        # members'"). An assembly is its members' when it HAS members: a parent the readers
+        # give no coded child, only the codeless section rows of its own table, is a weldment
+        # cut from those pieces, and the table is its cut list.
+        if _asm:
+            # A MEMBER IS A RECORD ON THE BILL. The model's tree can name a weldment's
+            # cut-list bodies as children; nothing on the bill answers to those names, so
+            # nothing carries the tube. Only a child that is a part record counts here.
+            _records = {bare_code(str(q.get("part_number") or "")).upper()
+                        for q in (parts or []) if isinstance(q, dict) and q.get("part_number")}
+            _own_cl = (bare_code(str(p.get("part_number") or "")) + "-CL").upper()
+            _coded_kids = [str(c).strip() for c in (p.get("assembly_children") or [])
+                           if str(c).strip()
+                           and bare_code(str(c)).upper() in _records
+                           and not str(c).strip().upper().startswith(_own_cl)]
+            _roles = {str(r).lower() for r in (p.get("page_roles") or [])}
+            try:
+                from finish_rules import states_only_a_process, stated_finish
+                _welded_sheet = states_only_a_process(stated_finish(p))
+            except Exception:                                        # noqa: BLE001
+                _welded_sheet = False
+            _weldment_sheet = (("detail" in _roles and "assembly" not in _roles)
+                               or bool(re.search(r"\bWELDMENT\b",
+                                                 str(p.get("description") or ""), re.I))
+                               or _welded_sheet)
+            if not _coded_kids and _weldment_sheet:
+                _asm = False
+                # AND THE RECORD SAYS SO. The decision was local to this function, so the
+                # costing still read the model's flags and charged nothing for "an
+                # assembly's material" (D-574). A weldment cut from its own pieces is a part
+                # on the bill: its section is costed, its saw cuts timed, its own weld kept.
+                p["is_assembly_parent"] = False
+                p["is_sub_assembly"] = False
+                if str(p.get("canonical_kind") or "").lower() == "assembly":
+                    p["canonical_kind"] = "part"
+                p["weldment_from_own_cut_list"] = True
+                # The model's "children" were its cut-list bodies, names no record answers
+                # to; kept for the record under their own name, not as members.
+                if p.get("assembly_children"):
+                    p["cut_list_bodies_named_by_model"] = list(p.get("assembly_children") or [])
+                    p["assembly_children"] = []
+                p.setdefault("review_flags", []).append(
+                    f"{p.get('part_number')} is listed as an assembly but names no member of "
+                    f"its own — only the uncoded section pieces of its own detail sheet's "
+                    f"table — so it is costed as a weldment cut from those pieces (D-557)")
         try:
             from bought_in_policy import has_fabrication_evidence as _measured
             _sheet = bool(_measured(p))
@@ -452,11 +558,15 @@ def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
                  if isinstance(x, (int, float)) or str(x).replace(".", "", 1).isdigit()]
         _held_by = sp.display_name(sp.source_of(p, "section_stock.cut_lengths_mm")
                                    or _ss_now.get("source") or "an earlier reading")
-        for field, value in (("a", lo), ("b", hi), ("t", t), ("profile_form", form or None),
+        _fso = form == section_form({"profile_form": "OVAL", "oval_shape": "flat_sided"})
+        for field, value in (("a", lo), ("b", hi), ("t", t),
+                             ("profile_form", ("OVAL" if _fso else form) or None),
                              ("cut_lengths_mm", list(pcs)), ("length_mm", max(pcs))):
             if value is not None:
                 sp.apply_field(p, f"section_stock.{field}", value, "drawing_deterministic")
         ss = p["section_stock"]
+        if _fso:
+            ss["oval_shape"] = "flat_sided"
         ss.setdefault("detection_path", "canonical_profile")
         if sp.source_of(p, "section_stock.cut_lengths_mm") != "drawing_deterministic":
             # A stronger reader (the model's own cut list) holds the section; apply_field has

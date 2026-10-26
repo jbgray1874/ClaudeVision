@@ -883,12 +883,105 @@ def merge_job_pdf_summaries(
     return merged, primary_pdf
 
 
+# The knobs the OCR/vision reader takes from the environment: part of what a reading depends on.
+_VISION_ENV_KNOBS = ("VISION_USE_OLLAMA", "VISION_OLLAMA_MODEL", "VISION_RENDER_DPI",
+                     "VISION_MAX_SIDE")
+_READER_LIBRARIES = ("PyMuPDF", "pdfplumber", "pypdf", "paddleocr", "ollama")
+
+
+def _pages_the_local_model_left_unanswered(vision_pages: Any) -> int:
+    """Pages that asked the local vision model and got nothing back — a server that was down,
+    not a page with nothing to say."""
+    return sum(1 for p in (vision_pages or [])
+               if isinstance(p, dict) and p.get("ollama_attempted") and not p.get("used_llava"))
+
+
+def _local_vision_model_reachable(skip_vision: bool) -> Optional[bool]:
+    """Whether the local vision model (Ollama) would answer this run — part of the reading's
+    SETTINGS (D-564), so a reading made without it and one made with it are two readings.
+
+    THE FIRST POLICY DEFEATED THE STORE. D-554 kept no reading whose pages had asked the local
+    model and got nothing back, so that a server that was down did not freeze a degraded read.
+    On a machine where that server is never running, every page is asked and unanswered on
+    every run, so no reading was ever kept and every run re-read every page — the 13:10
+    401918 book, the second of the day, read its PDF again. The reading is now kept either
+    way, keyed on whether the model was there to ask: when it comes up, the key changes and
+    the pages are read again with it. None where the question does not arise."""
+    if skip_vision:
+        return None
+    try:
+        import vision_extraction as _ve
+        if not _ve._use_ollama() or getattr(_ve, "ollama", None) is None:
+            return None
+        _client = _ve.ollama.Client(timeout=3)
+        _client.list()
+        return True
+    except Exception:                                                # noqa: BLE001
+        return False
+
+
+def _thin_readings(readings: Dict[str, Any]) -> Dict[str, Any]:
+    """What the store keeps: the readings without the vision pages' fitz drawings, which
+    geometry re-derives from the PDF itself every run (and which do not survive JSON)."""
+    thin = dict(readings)
+    thin["vision"] = [{k: v for k, v in p.items() if k != "drawings"} if isinstance(p, dict) else p
+                      for p in (readings.get("vision") or [])]
+    return thin
+
+
+def pdf_readings(pdf_path: Path) -> Dict[str, Any]:
+    """The three raw readings of one PDF — its text layer (pdfplumber), its pypdf text and its
+    OCR/vision pass — from the read store when these same bytes were last read by this same
+    reader code under these same settings, else made now and kept (D-554).
+
+    THE READING IS KEPT, THE INTERPRETATION IS NOT. summarise_document and the geometry pass
+    run on every job from these readings with whatever code is current, so a rule fixed in the
+    interpreter reaches a kept reading on its next use. 0359342 spent 3,002 s of a 3,775 s run
+    in this loop — OCR and a local vision model over every page — and every re-run spent it
+    again on bytes nothing had changed.
+    """
+    skip_vision = os.getenv("SKIP_VISION_EXTRACTION", "").lower() in {"1", "true", "yes"}
+    pdf_path = Path(pdf_path)
+
+    def _make() -> Dict[str, Any]:
+        return {"plumber": extract_with_pdfplumber(pdf_path),
+                "pypdf": extract_with_pypdf(pdf_path),
+                "vision": [] if skip_vision else extract_document_vision(pdf_path)}
+
+    try:
+        import read_store
+        import vision_extraction as _ve
+        _content = pdf_path.read_bytes()
+        _fp = read_store.fingerprint_code(extract_with_pdfplumber, extract_with_pypdf, _ve)
+        _ctx = {"skip_vision": skip_vision,
+                "env": {k: os.getenv(k) for k in _VISION_ENV_KNOBS},
+                "libraries": read_store.library_versions(*_READER_LIBRARIES),
+                "local_vision_model_reachable": _local_vision_model_reachable(skip_vision)}
+    except Exception as exc:                                     # noqa: BLE001
+        print(f"   [read-store] {pdf_path.name}: the store was not consulted "
+              f"({type(exc).__name__}: {exc}) — read afresh", flush=True)
+        return _make()
+    got = read_store.reuse("pdf_readings", content=_content, fingerprint=_fp, context=_ctx,
+                           compute=_make, source=pdf_path.name, thin=_thin_readings)
+    if got.get("hit"):
+        print(f"        reused the readings kept {got.get('created_utc')} — same bytes, same "
+              f"reader code, same settings; interpreted afresh", flush=True)
+    else:
+        _unanswered = _pages_the_local_model_left_unanswered((got.get("raw") or {}).get("vision"))
+        if _unanswered:
+            print(f"        the local vision model was asked on {_unanswered} page(s) and never "
+                  f"answered — read kept as made without it; it is read again with the model "
+                  f"the first run after that model is up (or set VISION_USE_OLLAMA=0 to stop "
+                  f"asking)", flush=True)
+    return got["raw"]
+
+
 def extract_pdf_summary(pdf_path: Path) -> Dict[str, Any]:
     """PDF extract + geometry only — no writeup, DXF merge, or estimate."""
-    skip_vision = os.getenv("SKIP_VISION_EXTRACTION", "").lower() in {"1", "true", "yes"}
-    plumber_pages = extract_with_pdfplumber(pdf_path)
-    pypdf_pages = extract_with_pypdf(pdf_path)
-    vision_pages = [] if skip_vision else extract_document_vision(pdf_path)
+    readings = pdf_readings(pdf_path)
+    plumber_pages = readings["plumber"]
+    pypdf_pages = readings["pypdf"]
+    vision_pages = readings["vision"]
     summary = summarise_document(pdf_path, plumber_pages, pypdf_pages, vision_pages=vision_pages)
     processed_pages = summary.get("pages", [])
     geometry_results = analyse_document_geometry(processed_pages, pdf_path=pdf_path)
@@ -1013,6 +1106,7 @@ def scan_folder_job(
     # and this loop is the first piece of it: the runner's only evidence was three "no output
     # for 130s" notices. run_timing's own advice when the unmeasured row is the biggest one is
     # to bracket more rather than optimise anything, so that is what these are.
+    run_timing.identify(stem=job_folder.name)
     run_timing.mark("start extract_pdf_summary")
     for pdf_path in sorted(pdfs, key=lambda p: p.name.lower()):
         print(f"      • Extracting {pdf_path.name}")
@@ -1059,6 +1153,44 @@ def scan_folder_job(
     )
 
 
+def job_documents(summary: Any, pdf_path: Any = None) -> List[str]:
+    """Every PDF of the job a whole-pack read must see (D-597): the anchor first, then each
+    other document the scan read, in order — never a declared reference document (those are
+    held out on purpose) and never the staged brief page (the brief rides as words)."""
+    out: List[str] = []
+    seen: set = set()
+    cands = ([str(pdf_path)] if pdf_path else []) + [
+        str(p) for p in ((summary or {}).get("scanned_documents") or [])
+        if isinstance(summary, dict)]
+    try:
+        from concept_scan import is_brief_page as _is_brief
+    except Exception:                                                # noqa: BLE001
+        _is_brief = lambda _p: False                                 # noqa: E731
+    for c in cands:
+        p = Path(c)
+        if p.suffix.lower() != ".pdf" or not p.exists() or _is_brief(str(p)):
+            continue
+        key = str(p.resolve()).lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(str(p))
+    return out
+
+
+def image_only_pages(summary: Any) -> List[str]:
+    """The pages with no text layer, as "<document> page <n>" (D-598g). A scanned drawing is
+    one: the text, vector and table readers cannot read it by construction, and the vision
+    read is the one reader that can."""
+    out: List[str] = []
+    for pg in ((summary or {}).get("pages") or []) if isinstance(summary, dict) else []:
+        if not isinstance(pg, dict) or str(pg.get("pdfplumber_text")
+                                           or pg.get("normalized_text") or "").strip():
+            continue
+        doc = re.split(r"[\\/]", str(pg.get("source_pdf_path") or ""))[-1] or "the pack"
+        out.append(f"{doc} page {pg.get('page_number')}")
+    return out
+
+
 def design_intent_pages(summary: Any) -> List[Any]:
     """The page numbers whose role is design_intent (D-406), in order."""
     out: List[Any] = []
@@ -1073,7 +1205,12 @@ def design_intent_pages(summary: Any) -> List[Any]:
 
 
 def _infer_page_role(page_text: str, bom_text: str, title_block_text: str) -> Dict[str, Any]:
-    full_text = normalize_text(f"{page_text} {bom_text} {title_block_text}")
+    # THE REVISION TABLE DOES NOT MAKE A SHEET AN ASSEMBLY (D-511). 12340-01M's table lists
+    # the superseded 12341-01M, which read as a second unique code and flipped this single
+    # bracket's sheet to "assembly" — the role that feeds its title to the prose recogniser.
+    # History is struck before anything here is counted.
+    from extractor_patterns import strip_revision_table as _strip_rev
+    full_text = _strip_rev(normalize_text(f"{page_text} {bom_text} {title_block_text}"))
     part_numbers = re.findall(config.PART_NUMBER_PATTERN, full_text, flags=re.IGNORECASE)
     _junk_sfx = (
         " - ALUMINIUM", " - ALUMINUM", " - STEEL", " - TIMBER", " - PLYWOOD",
@@ -1091,7 +1228,9 @@ def _infer_page_role(page_text: str, bom_text: str, title_block_text: str) -> Di
     unique_part_numbers = sorted(set(part_numbers))
     detail_cues = any(token in full_text.upper() for token in ["FLAT PATTERN", "DETAIL "])
     drawing_assembly_hint = "ASSEMBLY" in normalize_text(title_block_text).upper()
-    title_block_drawing_numbers = re.findall(config.DRAWING_NUMBER_PATTERN, normalize_text(title_block_text), flags=re.IGNORECASE)
+    title_block_drawing_numbers = re.findall(
+        config.DRAWING_NUMBER_PATTERN, _strip_rev(normalize_text(title_block_text)),
+        flags=re.IGNORECASE)
     title_block_drawing_number_count = len(title_block_drawing_numbers)
     page_text_upper = normalize_text(page_text).upper()
     bom_header_detected = all(token in page_text_upper for token in ["ITEM", "DWG NO", "QTY"])
@@ -1277,7 +1416,12 @@ def extract_patterns(text: str) -> Dict[str, Any]:
             return False
         return True
 
-    _raw_pns = re.findall(config.PART_NUMBER_PATTERN, normalized, flags=re.IGNORECASE)
+    # A SUPERSEDED NUMBER IS NOT A PART (D-511): codes are harvested with the revision
+    # table struck, so a prior issue's number never joins the job's part-number list —
+    # the current number still prints in the DRAWING No field and survives.
+    from extractor_patterns import strip_revision_table as _strip_rev
+    _raw_pns = re.findall(config.PART_NUMBER_PATTERN, _strip_rev(normalized),
+                          flags=re.IGNORECASE)
     return {
         "part_numbers": sorted(set(p for p in _raw_pns if _valid_pn(p))),
         "dates": sorted(set(re.findall(config.DATE_PATTERN, normalized, flags=re.IGNORECASE))),
@@ -1307,6 +1451,7 @@ def _is_revision_table_noise(text: str) -> bool:
         "CODES ADDED",
         "FIRST ISSUE",
         "DRG NO DESCRIPTION DATE",
+        "DWG NO DESCRIPTION DATE",
         "REVISION TABLE",
     ]
     return any(marker in upper for marker in noise_markers) or len(text) > 120
@@ -1906,9 +2051,24 @@ def _material_family(name: Any) -> str:
     return canon
 
 
+def _own_sheet_unresolved_material(part: Dict[str, Any], pages: Any) -> str:
+    """The material a part's OWN sheet prints and the book cannot resolve, or "" (D-598j)."""
+    bare = re.sub(r"[\s\-_]+", "", str(part.get("part_number") or "").upper())
+    if not bare:
+        return ""
+    for pg in pages or []:
+        pa = pg.get("page_analysis") if isinstance(pg, dict) else None
+        tb = (pa.get("title_block") or {}) if isinstance(pa, dict) else {}
+        own = {re.sub(r"[\s\-_]+", "", str(n).upper()) for n in (tb.get("drawing_numbers") or [])}
+        if bare in own and tb.get("material_stated_unresolved") and not tb.get("materials"):
+            return str(tb["material_stated_unresolved"])
+    return ""
+
+
 def _inherit_document_material_to_parts(
     parts: List[Dict[str, Any]],
     document_analysis: Dict[str, Any],
+    pages: Any = None,
 ) -> None:
     """
     Propagate document-level material to parts that have no material of their own.
@@ -1916,6 +2076,11 @@ def _inherit_document_material_to_parts(
     """
     if not parts:
         return
+    # Own-sheet evidence is independent of the document's majority material,
+    # and must be submitted before any already-populated/default early return.
+    from owned_specification import retain_own_material
+    for _part in parts:
+        retain_own_material(_part, pages, _apply_field)
     pf = document_analysis.get("primary_fields") or {}
     doc_mat_norm = (
         pf.get("normalized_material_majority")
@@ -1948,6 +2113,18 @@ def _inherit_document_material_to_parts(
         if existing and existing not in ("?", "", "None", "UNKNOWN"):
             continue
         if part.get("materials"):
+            continue
+        # A PART WHOSE OWN SHEET PRINTS A MATERIAL KEEPS IT, EVEN ONE THE BOOK CANNOT NAME
+        # (D-598j). 9287-10-005's sheet says "HANEX GAD-001", a solid surface; the GA's "HANEX,
+        # ACRYLIC" resolved to acrylic and the base inherited it. Unresolved, the base reaches
+        # the estimator as a visible gap; inherited, it reaches them as somebody else's sheet.
+        _printed = _own_sheet_unresolved_material(part, pages)
+        if _printed:
+            part["material_stated"] = _printed
+            part.setdefault("review_flags", []).append(
+                f"MATERIAL AS PRINTED: {part.get('part_number')}'s own sheet states "
+                f"'{_printed}', which the material book does not name — not taken from the "
+                f"document's '{doc_mat_norm or doc_mat_raw}'. Say its stock and its price.")
             continue
         if doc_mat_norm:
             # INHERITED from the document, not read from this part. Rank 60: better than a
@@ -2128,7 +2305,7 @@ def _build_additive_summary_sections(summary: Dict[str, Any]) -> None:
     document_analysis = summary.get("document_analysis", {})
     parts = manufacturing_writeup.get("parts", [])
 
-    _inherit_document_material_to_parts(parts, document_analysis)
+    _inherit_document_material_to_parts(parts, document_analysis, summary.get("pages"))
 
     summary["drawing_metadata"] = {
         "source_file": summary.get("source_file"),
@@ -2497,6 +2674,21 @@ def pre_costing_passes(summary: Dict[str, Any]) -> None:
               flush=True)
 
 
+    # A SECTION SCHEDULE ON A PART'S OWN SHEET REACHES ITS RECORD (D-576), after every
+    # pre-costing pass that could have lost it: the requirement is captured from the sheet's
+    # words, a record with no members and no pieces is given them, and the hand-off audit
+    # later checks they were priced. A failure here is a finding on the book, not a stop.
+    try:
+        from section_coverage_contract import prepare as _prepare_section_coverage
+        _changed = _prepare_section_coverage(summary)
+        if _changed:
+            print(f"   [section-coverage] schedule restored from the sheet on "
+                  f"{', '.join(_changed)}", flush=True)
+    except Exception as _sc_exc:                                     # noqa: BLE001
+        print(f"   [section-coverage] not prepared ({type(_sc_exc).__name__}: {_sc_exc})",
+              flush=True)
+
+
 def _finalize_scan_summary(
     summary: Dict[str, Any],
     started: float,
@@ -2599,9 +2791,21 @@ def _finalize_scan_summary(
                 # (part_identity.category_code_identities) — the reconciler below and every
                 # reader of bom_rows see the same identity per article.
                 try:
-                    from part_identity import (mint_uncoded_row_identities,
+                    from part_identity import (mint_cut_list_member_identities,
+                                               mint_uncoded_row_identities,
+                                               rejoin_dimension_split_rows,
                                                split_category_code_rows)
                     _n_split = split_category_code_rows(_dp["rows"])
+                    _n_rejoin = rejoin_dimension_split_rows(_dp["rows"])
+                    if _n_rejoin:
+                        print(f"   [bom-identity] {_n_rejoin} row(s) whose size was read as "
+                              f"a code rejoined (D-548)", flush=True)
+                    # A CUT LIST OF SEVERAL SECTIONS IS SEVERAL MEMBERS (D-548), named before
+                    # the bought-in minter sees the rows, so a tube piece is never a BI- line.
+                    _n_members = mint_cut_list_member_identities(_dp["rows"])
+                    if _n_members:
+                        print(f"   [bom-identity] {_n_members} cut-list piece(s) of several "
+                              f"sections made members of their weldment (D-548)", flush=True)
                     _n_mint = mint_uncoded_row_identities(_dp["rows"])
                     if _n_mint:
                         print(f"   [bom-identity] {_n_mint} uncoded parts-list row(s) named "
@@ -2987,6 +3191,18 @@ def _finalize_scan_summary(
             # (e.g. "Weld and Dress" callouts) are legitimate and must be kept.
             _clean_text = _strip_spec_boilerplate(" ".join(_clean_notes))
             _clean_ops = set(infer_operations(_clean_text))
+            # The note words each op was read from travel with it (D-586) — an op the notes
+            # genuinely state is a drawing note WITH its quote; one merely carried over from
+            # an earlier pass stays unsourced and is never promoted to one.
+            if _clean_ops:
+                try:
+                    from extractor_patterns import operation_evidence_in_text
+                    _op_ev = operation_evidence_in_text(_clean_text, sorted(_clean_ops))
+                except Exception:                                    # noqa: BLE001
+                    _op_ev = {}
+                for _op, _snip in _op_ev.items():
+                    _part.setdefault("operation_evidence", {}).setdefault(_op, _snip)
+                    _part.setdefault("operation_sources", {}).setdefault(_op, "drawing_notes")
             _existing_ops = list(_part.get("textual_operations") or [])
             # Merge: start from clean inference, add any upstream ops not in result
             _merged = list(_clean_ops)
@@ -3288,6 +3504,7 @@ def _finalize_scan_summary(
                     "reliability": 1.0,
                     "extract_path": _sw_job.meta.get("extract_path"),
                     "top_assembly": _sw_job.meta.get("top_assembly"),
+                    "top_assembly_bbox_mm": _sw_job.meta.get("top_assembly_bbox_mm"),
                     # CHOSEN, WHEN IT COULD NOT BE READ. The top assembly's full-depth BOM
                     # becomes the job's component list at rank 90; on a folder of fifteen
                     # assemblies the extract can rule out anything that is somebody's child
@@ -3459,18 +3676,23 @@ def _finalize_scan_summary(
                or (_llm_flag == "" and bool(_os_llm.getenv("XAI_API_KEY"))))
     if pdf_path and _llm_on and not _llm_off:
         try:
-            from llm_full_extract import extract_full_job
+            from llm_full_extract import extract_full_pack
             from source_connectors.llm_full_job import apply_full_job_to_pre_estimate, overlay_drawing_facts
+            # EVERY DOCUMENT OF THE JOB, NOT THE ANCHOR ALONE (D-597): the anchor first, then
+            # every other PDF the job read. A specification or a parts list in another file
+            # used to reach no whole-pack read at all.
+            _job_pdfs = job_documents(summary, pdf_path)
             run_timing.mark("start llm_full_extract")
-            _job = extract_full_job(str(pdf_path))
+            _job = extract_full_pack(_job_pdfs)
             run_timing.mark("done llm_full_extract")
+            summary["llm_full_extract_coverage"] = _job.get("_coverage") or {}
             if _job.get("found"):
                 # Overlay the DETERMINISTIC drawing_facts onto the LLM job: printed title-block
                 # values (per-part finish/thickness) fill the LLM's nulls, and the weld spec is
                 # combined (LLM 'set-down 20%' + deterministic 'ALL WELDS TO BE TIG'). Best of both.
                 try:
-                    from drawing_facts import extract_drawing_facts
-                    overlay_drawing_facts(_job, extract_drawing_facts(str(pdf_path)))
+                    from drawing_facts import extract_drawing_facts_for
+                    overlay_drawing_facts(_job, extract_drawing_facts_for(_job_pdfs))
                 except Exception as _e_ov:
                     print(f"   [llm-full-extract] overlay skipped ({_e_ov})", flush=True)
                 # SECOND PASS — what the drawing IMPLIES but does not print. The pass above
@@ -3484,13 +3706,17 @@ def _finalize_scan_summary(
                 # overwrite a printed or measured value. Failure-isolated: no model, no key,
                 # or a refusal all leave the job exactly as it is today.
                 try:
-                    from llm_full_extract import (build_document_context,
-                                                  infer_missing_details, merge_inference,
+                    from llm_full_extract import (INFER_BATCH_CHARS, context_batches,
+                                                  infer_missing_details_in_batches,
+                                                  merge_inference, pack_pages,
                                                   parts_missing_detail)
                     _missing = parts_missing_detail(_job.get("parts") or [])
                     if _missing:
-                        _inf = infer_missing_details(
-                            build_document_context(str(pdf_path)),
+                        # THE INFERENCE PASS SEES THE WHOLE PACK TOO (D-597), in whole-page
+                        # parts, where it saw the anchor's first 40,000 characters.
+                        _inf = infer_missing_details_in_batches(
+                            [b["text"] for b in context_batches(pack_pages(_job_pdfs),
+                                                                INFER_BATCH_CHARS)],
                             _job.get("bom") or [], _missing)
                         if _inf.get("found"):
                             _job["inferred_parts"] = _inf.get("parts")
@@ -3544,6 +3770,9 @@ def _finalize_scan_summary(
                     "from_cache": bool(_job.get("_from_cache")),
                     "inference_from_cache": bool(_job.get("_inference_from_cache")),
                     "counts": _c,
+                    # Which pages of which documents the read had, in which part (D-597).
+                    "coverage": _job.get("_coverage") or {},
+                    "batch_conflicts": _job.get("_batch_conflicts") or [],
                 }
                 print(f"   [llm-full-extract] drove tube+{_c['tube']} qty+{_c.get('qty', 0)} "
                       f"material+{_c['material']} weight+{_c['weight']} thickness+{_c['thickness']} "
@@ -3594,7 +3823,7 @@ def _finalize_scan_summary(
             # own part numbers sort first.
             def _ref_key(_r):
                 _pn = str(_r.get("part") or "")
-                return (0 if re.match(r"^\d{3,5}-", _pn) else 1, _pn)
+                return (0 if re.match(r"^\d{3,6}-", _pn) else 1, _pn)
 
             # A NAMELESS ROW STILL HAS TO BE FINDABLE. str(None) is "None", which names
             # nothing an estimator can look up; the description is what that row is known by
@@ -3770,9 +3999,19 @@ def _finalize_scan_summary(
         if _bt.get("install_context_decision"):
             print(f"   [bom_tree] {_bt['install_context_decision']}", flush=True)
         for _f in (_bt.get("flags") or []):
-            if _f.get("severity") == "info" and "install context" in str(_f.get("detail")):
+            if _f.get("severity") in ("info", "warning") and "install context" in str(_f.get("detail")):
                 print(f"   [bom_tree] {_f['detail']}", flush=True)
                 summary.setdefault("review_flags", []).append(_f)
+        # THE DECISION IS ON THE RECORD, NOT ONLY ON THE CONSOLE (D-584): a divided row must
+        # be able to point at the evidence that divided it.
+        summary["install_context"] = {
+            "recognised": bool(_bt.get("install_context")),
+            "codes": sorted(_bt.get("install_context") or {}),
+            "n": (next(iter(set((_bt.get("install_context") or {}).values())), 1)
+                  if _bt.get("install_context") else 1),
+            "general_arrangement": _bt.get("main_ga") or "",
+            "decision": _bt.get("install_context_decision") or "",
+        }
         if _effmap:
             _parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
             # THE CODES THE TREE AGREED WITH, NAMED. Agreement printed nothing, so once the tree
@@ -3799,9 +4038,17 @@ def _finalize_scan_summary(
                     # printed table. apply_field keeps the stronger value and records the
                     # disagreement so an estimator sees that two sources differed.
                     from source_precedence import apply_field as _apply_qty
+                    from source_precedence import source_of as _qty_src
                     _prev = _p.get("quantity")
-                    if _apply_qty(_p, "quantity", _eff, "bom_tree"):
-                        print(f"   [bom_tree] {_p.get('part_number')} qty {_prev} -> {_eff} (GA tree)", flush=True)
+                    # THE ROW'S OWN COUNT TIMES ITS ASSEMBLY'S (D-552): submitted as the
+                    # tree's per-unit reading, which outranks the row it multiplies and
+                    # nothing measured or modelled.
+                    _q_source = ("bom_tree_per_unit"
+                                 if str(_qty_src(_p, "quantity") or "") == "bom_tree"
+                                 else "bom_tree")
+                    if _apply_qty(_p, "quantity", _eff, _q_source):
+                        print(f"   [bom_tree] {_p.get('part_number')} qty {_prev} -> {_eff} "
+                              f"(GA tree: its own count times its assembly's)", flush=True)
                     else:
                         print(f"   [bom_tree] {_p.get('part_number')} qty {_prev} KEPT "
                               f"(GA tree said {_eff}) — stronger source, disagreement flagged",
@@ -3857,6 +4104,15 @@ def _finalize_scan_summary(
                             _row["quantity_note"] = (
                                 f"the general arrangement prints {_q}; it shows {_n} "
                                 f"arrangements, so one arrangement takes {_q // _n}")
+                            # THE EVIDENCE TRAVELS WITH THE ROW (D-584): which drawing was
+                            # taken as the arrangement, which codes of its own numbering it
+                            # showed N times, and the rule's own sentence. A divided row that
+                            # cannot point at this is a divided row with no reason, and the
+                            # invariant says so.
+                            _row["quantity_evidence"] = {
+                                "general_arrangement": _main, "divided_by": _n,
+                                "arrangement_codes": sorted(_ctx),
+                                "decision": _bt.get("install_context_decision") or ""}
                             # A BOM ROW IS A READING, NOT AN ARBITRATED PART RECORD.
                             # apply_field ranks competing CLAIMS about a part; this is
                             # arithmetic on the drawing's own row, correcting the child edge
@@ -4273,12 +4529,50 @@ def _finalize_scan_summary(
         if _n_iso:
             print(f"   [detail-geometry] {_n_iso} part(s) had dimension text dropped that was "
                   f"read off pages they are not bound to", flush=True)
+        # WHAT DEPENDS ON THE SHEET IS READ FROM THE PART'S OWN SHEET FIRST (D-591, D-592), so the
+        # blank, its flanges and its folds are developed from the part's own figures, weight and
+        # angles — not from the assembly sheet that also lists it.
+        from detail_page_geometry import revalidate_from_own_sheets
+        _reval = revalidate_from_own_sheets(_parts_dg, summary)
+        if _reval:
+            print(f"   [detail-geometry] {', '.join(_reval)} re-read from their own sheet — "
+                  f"weight, features and page geometry from the page that is theirs", flush=True)
         run_timing.mark("start detail_page_geometry")
         _n_dg = apply_detail_page_geometry(_parts_dg, summary)
         run_timing.mark("done detail_page_geometry")
         if _n_dg:
             print(f"   [detail-geometry] {_n_dg} part(s) sized from their own detail sheet "
                   f"(pdf_overall_dims rank — a measured blank still wins)", flush=True)
+        # THE OTHER HAND TAKES ITS BASE'S PROVISIONAL BLANK (D-508), now that the base has one,
+        # and THEN every part read off a drawing is held against the assembly it sits in.
+        from detail_page_geometry import (check_parts_against_their_assembly,
+                                          mirror_provisional_blanks)
+        _mirrored = mirror_provisional_blanks(_parts_dg)
+        if _mirrored:
+            print(f"   [detail-geometry] {', '.join(_mirrored)} take their other hand's "
+                  f"provisional blank — the same flat, labelled and asked", flush=True)
+        _capped = check_parts_against_their_assembly(_parts_dg, summary)
+        if _capped:
+            print(f"   [detail-geometry] {', '.join(_capped)} read larger than the assembly "
+                  f"each sits in — costed on that assembly's developed outline and asked",
+                  flush=True)
+        # A FOLD THE COUNTER CHARGES FROM THE DRAWING CARRIES THAT EVIDENCE (D-592), and cutting
+        # the blank cannot hold is not the part's (D-591) — before anything is costed from either.
+        from detail_page_geometry import bound_unmeasured_cut_path, settle_fold_evidence
+        _settled = settle_fold_evidence(_parts_dg)
+        if _settled:
+            print(f"   [detail-geometry] {', '.join(_settled)}: the fold the drawing states is "
+                  f"the fold the route charges — one verdict", flush=True)
+        _bounded = bound_unmeasured_cut_path(_parts_dg)
+        if _bounded:
+            print(f"   [detail-geometry] {', '.join(_bounded)}: cutting held to what the blank "
+                  f"can hold — the page's lines are not the part's", flush=True)
+        # A RADIUS ITS FLAT CANNOT HOLD IS ROLLED (D-589), read once every blank is known.
+        from detail_page_geometry import stamp_rolled_radii
+        _rolled = stamp_rolled_radii(_parts_dg, summary)
+        if _rolled:
+            print(f"   [detail-geometry] {', '.join(_rolled)} rolled to a radius their own "
+                  f"sheet prints — charged on the Roll row and asked", flush=True)
     except Exception as _dg_err:
         print(f"   [detail-geometry] not applied: "
               f"{type(_dg_err).__name__}: {_dg_err}", flush=True)
@@ -4351,6 +4645,9 @@ def _finalize_scan_summary(
                     decided_by=_ec_data.get("confirmed_by") or "an estimator",
                     decided_on=_ec_data.get("confirmed_on") or "",
                     decided_in=_ec_src)
+                from owned_specification import apply_role_counts
+                for _rq in apply_role_counts(summary):
+                    print(f"   [confirmed] NOT APPLIED — {_rq}", flush=True)
                 print(f"   [confirmed] {len(_dec)} estimator DECISION(S) from "
                       f"{_ec_src}: {', '.join(sorted(_dec))} — "
                       f"{_ec_data.get('confirmed_by') or 'an estimator'}'s call, applied as "
@@ -4376,6 +4673,30 @@ def _finalize_scan_summary(
                                   flush=True)
                     for _pc in sorted(set(_offs) - _seen_off):
                         print(f"   [confirmed] operations_off names {_pc}, but NO part of "
+                              f"this job carries that number — the line did nothing. Check "
+                              f"the code", flush=True)
+                # A PERSON'S INSTRUCTION TO OVERCOAT WINS OVER A FINISH IN THE MATERIAL
+                # (D-589b). A brushed, polished or anodised member normally stays out of its
+                # assembly's powder; "coat_with_assembly": ["<part>"] puts it back in, recorded
+                # as that person's call. Unmatched codes are reported, as above.
+                _coat_in = {str(x).strip().upper() for x in
+                            (_dec.get("coat_with_assembly") or []) if str(x).strip()}
+                if _coat_in:
+                    _seen_coat = set()
+                    for _p in (summary["manufacturing_writeup"]["parts"] or []):
+                        if not isinstance(_p, dict):
+                            continue
+                        _pc = str(_p.get("part_number") or "").strip().upper()
+                        if _pc in _coat_in:
+                            _p["_coat_with_assembly"] = {
+                                "by": _ec_data.get("confirmed_by") or "an estimator",
+                                "in": str(_ec_src or "")}
+                            _seen_coat.add(_pc)
+                            print(f"   [confirmed] {_pc}: coated with its assembly by "
+                                  f"{_ec_data.get('confirmed_by') or 'the estimator'}'s "
+                                  f"instruction, whatever its material states", flush=True)
+                    for _pc in sorted(_coat_in - _seen_coat):
+                        print(f"   [confirmed] coat_with_assembly names {_pc}, but NO part of "
                               f"this job carries that number — the line did nothing. Check "
                               f"the code", flush=True)
                 # MAKE OR BUY, ANSWERED (D-384): stamped on the part, where bought_in_policy
@@ -4563,6 +4884,27 @@ def _finalize_scan_summary(
               flush=True)
 
     try:
+        # THE RUN'S DELIVERY DECLARATION (D-524), beside the customer changes and under the
+        # same one-file-per-run rule: whether this order is delivered, and the postcode it
+        # goes to, declared on the portal's Run form. The estimator's DELIVERY line reads
+        # summary["delivery_declared"]; no file is the usual case and costs as before.
+        import commercial_lines as _dl
+        _dd = _dl.find_delivery_declaration(
+            [job_folder, summary.get("job_folder")]
+            + ([Path(str(pdf_path)).parent] if pdf_path is not None else []))
+        if _dd:
+            summary["delivery_declared"] = _dd
+            _dd_say = ("no delivery — collection" if _dd.get("requested") is False
+                       else ("delivery to " + _dd["postcode"] if _dd.get("postcode")
+                             else "delivery required, postcode not given"))
+            summary.setdefault("review_flags", []).append(
+                f"DELIVERY DECLARED on the Run: {_dd_say} — the DELIVERY line follows it")
+            print(f"   [delivery] declared on the Run: {_dd_say}", flush=True)
+    except Exception as _dd_err:                                       # noqa: BLE001
+        print(f"   [delivery] declaration not read: {type(_dd_err).__name__}: {_dd_err}",
+              flush=True)
+
+    try:
         from route_compiler import apply_canonical_evidence_to_parts, job_drawing_numbers
         # THE BOM'S OWN PARENT EDGES, at the point the classification still changes the
         # answer. This runs before costing, so a part the BOM parents is an assembly's child
@@ -4584,6 +4926,26 @@ def _finalize_scan_summary(
               f"{len(_canon_pre.get('nodes') or [])} node(s)"
               + (f"; {len(_roots)} assemblies ship on this enquiry ({', '.join(_roots)})"
                  if len(_roots) > 1 else ""), flush=True)
+        # A HANDED BOM ROW THE PACK NEVER DREW (D-509). Read off the RAW BOM ROWS, not the
+        # compiled graph: a row whose owner the graph refuses (12665-03-01M-H under the
+        # handed assembly 12665-03-GA-H) gets no edge and NO NODE, so the graph cannot name
+        # it — the printed row is the evidence. A row that is another part's hand is minted
+        # from that part HERE, while the mint can still be costed — and the mirror rule runs
+        # again so the new record takes its base's provisional blank like a drawn hand.
+        from detail_page_geometry import (mint_missing_hand_records,
+                                          mirror_provisional_blanks)
+        _minted_hands = mint_missing_hand_records(
+            summary["manufacturing_writeup"]["parts"],
+            (summary.get("document_analysis") or {}).get("bom_rows") or [])
+        if _minted_hands:
+            print(f"   [canonical-part-graph] {', '.join(_minted_hands)} minted as the other "
+                  f"hand of an existing part — a BOM row the pack never drew", flush=True)
+            _mirrored_late = mirror_provisional_blanks(
+                summary["manufacturing_writeup"]["parts"])
+            if _mirrored_late:
+                print(f"   [detail-geometry] {', '.join(_mirrored_late)} take their other "
+                      f"hand's provisional blank — the same flat, labelled and asked",
+                      flush=True)
     except Exception as _canon_pre_err:
         print(f"   [canonical-part-graph] pre-cost application skipped: "
               f"{type(_canon_pre_err).__name__}: {_canon_pre_err}", flush=True)
@@ -4753,7 +5115,36 @@ def _finalize_scan_summary(
                   "failing that, nothing to cost.", flush=True)
     # The concept read runs for an LLM-only run, and as the FALLBACK for a design-intent pack
     # the model could not answer (D-411) — "even if it's LLM pricing" (James Gray, 8 Oct 2026).
-    _sight_run = _llm_only_run or _design_intent_fallback
+    # A SCANNED DRAWING ON AN ENGINE RUN IS READ BY THE ONE READER THAT CAN READ IT (D-598g).
+    # 0320730 through the portal: an M&S pack whose only drawing is a page with no text layer,
+    # beside seven pages of forms. Every engine reader reads text, vectors, tables or flats, so
+    # none could read the picture; they found no part, correctly, and the book went out empty,
+    # while the same pack as LLM SCAN ONLY priced. With no part read, no design-intent sheet,
+    # and a page that is only an image, the engine run takes the concept read as its fallback,
+    # as a design-intent pack does (D-411). The measured-CAD guard below still refuses a pack
+    # with real geometry, and every part it gives is stamped as sighted.
+    _scanned_pages = image_only_pages(summary)
+    _scanned_drawing_fallback = bool(_no_parts and not _llm_only_run and not _is_render_pack
+                                     and not _design_intent_pages and not _design_intent_fallback
+                                     and _scanned_pages)
+    if _scanned_drawing_fallback:
+        summary["scanned_drawing_fallback"] = {
+            "pages": _scanned_pages[:20],
+            "why": ("no engine reader found a part, and the pack has page(s) with no text "
+                    "layer that only the vision read can read"),
+        }
+        # NO TEXT IS NOT PROOF OF A DRAWING (review of D-598g): a blank page, lettering drawn
+        # as outlines and an image-only form qualify too. The read establishes what is there,
+        # and the flag claims no more than the missing text layer.
+        summary.setdefault("review_flags", []).append(
+            "PRICED FROM THE VISION READ: no engine reader found a part, and "
+            f"{', '.join(_scanned_pages[:6])} carr{'y' if len(_scanned_pages) > 1 else 'ies'} "
+            "no text layer, which only the vision read can read. The parts below were sighted "
+            "by the vision model, not measured; every size and count is for the estimator to "
+            "confirm.")
+        print(f"   [concept] no engine reader found a part, and {', '.join(_scanned_pages[:6])} "
+              f"has no text layer — the vision read is the fallback", flush=True)
+    _sight_run = _llm_only_run or _design_intent_fallback or _scanned_drawing_fallback
     # ── MEASURED CAD IS NEVER SIGHTED OVER ──────────────────────────────────────────
     #
     # The condition below is "--llm-only AND (a render pack OR nothing came out)", and the
@@ -4905,8 +5296,7 @@ def _finalize_scan_summary(
                         "the standards document and run again")
                     print(f"   [concept] {_why} — declaration set aside", flush=True)
             # THE ENQUIRY BRIEF FILED WITH THE PACK (D-360): stated facts for the model.
-            _brief, _brief_file = concept_scan.find_brief(
-                [job_folder, summary.get("job_folder")]
+            _run_folders = ([job_folder, summary.get("job_folder")]
             + [_render_source_dir(p) for p in
                (list(summary.get("scanned_documents") or [])
                 + list(summary.get("staged_inputs") or [])
@@ -4917,6 +5307,7 @@ def _finalize_scan_summary(
                 + [Path(str(p)).parent for p in (summary.get("staged_inputs") or [])]
                 + [Path(str(p)).parent for p in (summary.get("scanned_documents") or [])]
                 + ([Path(str(pdf_path)).parent] if pdf_path is not None else []))
+            _brief, _brief_file = concept_scan.find_brief(_run_folders)
             if _brief:
                 summary["enquiry_brief"] = {"text": _brief, "file": _brief_file}
                 summary.setdefault("review_flags", []).append(
@@ -4951,7 +5342,35 @@ def _finalize_scan_summary(
                 print(f"   [concept] the previous read's bill ({len(_prev_bill.get('parts') or [])} "
                       f"line(s), prompt {_prev_bill.get('prompt_version') or '?'}) goes with any "
                       f"new read, to keep unless the pages say otherwise", flush=True)
-            if _sheet_read:
+            # AN ACCEPTED CONSTRUCTION IS PRICED, NOT RE-READ (D-534): a member schedule a person
+            # checked against the drawing, filed beside the pack, is the read — in its shape, so
+            # everything downstream prices it as it would the model's; the model is not asked.
+            _acc, _acc_file, _acc_problems = concept_scan.find_accepted_construction(
+                _run_folders, job=_bill_job)
+            if _acc_file and not _acc:
+                _acc_note = ("ACCEPTED CONSTRUCTION REFUSED — " + _acc_file + ": "
+                             + "; ".join(_acc_problems) + " — the drawing was read by the model "
+                             "instead")
+                summary.setdefault("review_flags", []).append(_acc_note)
+                print(f"   [concept] {_acc_note}", flush=True)
+            if _acc:
+                _ac = _acc["accepted_construction"]
+                _answer = _acc
+                _read = {"parsed": _acc, "accepted_construction": _acc_file}
+                _sr = {"read": _read, "answer": _acc, "check": {}, "set_aside": [],
+                       "base_key": "accepted:" + Path(_acc_file).name}
+                summary["accepted_construction"] = dict(_ac)
+                _acc_note = (f"ACCEPTED CONSTRUCTION — {len(_acc.get('parts') or [])} line(s) from "
+                             f"{Path(_acc_file).name}, accepted by {_ac.get('accepted_by')}"
+                             + (f" on {_ac['accepted_on']}" if _ac.get("accepted_on") else "")
+                             + " — the member schedule checked against the drawing is priced; "
+                               "the model was not asked to read the pack")
+                summary.setdefault("review_flags", []).append(_acc_note)
+                for _ex in _ac.get("excluded") or []:
+                    summary.setdefault("review_flags", []).append(
+                        f"ACCEPTED CONSTRUCTION — not part of the product: {_ex}")
+                print(f"   [concept] {_acc_note}", flush=True)
+            elif _sheet_read:
                 _door_rec = (summary.get("model_takeoff_door")
                              if isinstance(summary.get("model_takeoff_door"), dict) else {})
                 # THE STANDARDS RIDE ON A SHEET READ TOO (D-483): the manual's requirements
@@ -4973,6 +5392,8 @@ def _finalize_scan_summary(
                     previous_base_key=str(_prev_bill.get("base_key") or ""),
                     previous_read_key=str(_prev_bill.get("read_key") or ""))
                 _answer = _read.get("parsed") or {}
+            if (_read or {}).get("cache_hit"):
+                run_timing.count("vision read", cache_hit=True)     # a partner run only (D-529)
             # WHAT THIS READ CHANGED, SAID (D-492): parts added or dropped, counts and sizes
             # moved against the previous read — on the book, not only in the log.
             _changes = concept_scan.bill_changes(_prev_bill, _answer) if _answer else []
@@ -4985,6 +5406,14 @@ def _finalize_scan_summary(
                 print("   [concept] the bill is unchanged from the previous read", flush=True)
             if _read.get("baseline"):
                 print(f"   [concept] baseline: {_read['baseline']}", flush=True)
+            if _read.get("replayed_from"):
+                # A REPLAYED READ IS SAID (D-595): this book prices a saved answer, not a read
+                # of these pages today.
+                _rp_note = (f"CONCEPT READ REPLAYED from {Path(str(_read['replayed_from'])).name} "
+                            f"({concept_scan.CONCEPT_REPLAY_ENV}) — no model was asked; "
+                            f"this book prices the saved answer")
+                summary.setdefault("review_flags", []).append(_rp_note)
+                print(f"   [concept] {_rp_note}", flush=True)
             _bill_base_key = str((_sr.get("base_key") if _sheet_read else _read.get("base_key"))
                                  or "")
             if _ref_pack and not _read.get("standards_text_chars"):
@@ -5027,12 +5456,16 @@ def _finalize_scan_summary(
             _tc = (_read.get("text_coverage")
                    if isinstance(_read.get("text_coverage"), dict) else None)
             if _tc:
-                # EVERY PAGE WENT IN, AND THE CUT IS SAID (D-466) — never again a sixteen-page
-                # brief silently reaching the model as pages one to six.
-                _tc_note = (f"DOCUMENT TEXT TRIMMED TO FIT — {_tc.get('sent')} of "
-                            f"{_tc.get('total')} extracted character(s) went to the model, "
-                            f"every page included, {_tc.get('pages_trimmed')} page(s) "
-                            f"trimmed; the page images carry the full pages")
+                # WHAT DID NOT GO IS NAMED (D-466, D-597): whole pages only, and a page that
+                # did not fit is said by name — never trimmed and called included.
+                _tc_note = (f"DOCUMENT TEXT NOT SENT WHOLE — {_tc.get('sent')} of "
+                            f"{_tc.get('total')} extracted character(s) went to the model"
+                            + (f"; pages NOT sent as text: "
+                               f"{', '.join(_tc.get('omitted_pages') or [])}"
+                               if _tc.get("omitted_pages") else "")
+                            + (f"; cut: {', '.join(_tc.get('cut_pages') or [])}"
+                               if _tc.get("cut_pages") else "")
+                            + " — those pages were read from their images only")
                 summary.setdefault("review_flags", []).append(_tc_note)
                 print(f"   [concept] {_tc_note}", flush=True)
             # THE JOB'S NAME, NOT THE WRAPPER'S. A render is scanned as a content-keyed PDF
@@ -5041,7 +5474,26 @@ def _finalize_scan_summary(
             # into a confirmations file and nobody can match to a job by eye.
             _job_name = (Path(job_folder).name if job_folder else "") or (
                 Path(_pack[0]).stem if _pack else "CONCEPT")
-            _sighted = concept_scan.parts_from_concept(_answer, _job_name, sheet=_sheet_read)
+            # THE RESPONSE'S IDENTITY, TAKEN ONCE AT THE READ (D-598): every record's read ID
+            # names it, and the ledger holds each record to it.
+            try:
+                from read_charge_contract import response_id as _response_id
+                _resp_id = _response_id((_read or {}).get("parsed") or _answer)
+            except Exception:                                        # noqa: BLE001
+                _resp_id = ""
+            _sighted = concept_scan.parts_from_concept(_answer, _job_name, sheet=_sheet_read,
+                                                          brief=_brief or "",
+                                                          source_answer=(_read or {}).get("parsed"),
+                                                          source_response=_resp_id)
+            if _acc:
+                # EVERY LINE SAYS WHOSE SCHEDULE IT CAME FROM (D-534).
+                for _rec in _sighted:
+                    _rec["accepted_construction"] = Path(_acc_file).name
+                    _rec.setdefault("review_flags", []).append(
+                        f"ACCEPTED CONSTRUCTION: this line is from {Path(_acc_file).name}, "
+                        f"accepted by {_acc['accepted_construction'].get('accepted_by')} — its "
+                        f"sizes are the schedule's; anything the schedule marks CONFIRM is "
+                        f"still an assumption")
             _unit_ops = concept_scan.unit_operations(_answer)
             # ── THE ANSWERS FILE, APPLIED TO THE PARTS IT WAS WRITTEN ABOUT ──────────
             #
@@ -5170,6 +5622,43 @@ def _finalize_scan_summary(
                 # channel the book's "to settle" count already reads.
                 concept_scan.raise_sheet_questions(([_unit] if _unit else []) + _sighted,
                                                    _sheet_check, _set_aside)
+            # FAITHFUL TRANSFER (D-595): what the read and the brief state reaches the records
+            # — the finish, the polish, the weld process — and what the engine cannot charge
+            # is asked. Every such change is listed on the record beside the raw answer.
+            _transfer: List[Dict[str, Any]] = []
+            try:
+                _transfer += concept_scan.carry_stated_finish(_unit, _sighted, _answer,
+                                                              _brief or "")
+                _transfer += concept_scan.carry_weld_process(_unit, _sighted, _answer,
+                                                             _brief or "")
+                for _sp_d in _sighted:
+                    if _sp_d.get("concept_dropped_operations"):
+                        _transfer.append({
+                            "kind": "dropped",
+                            "item": ", ".join(_sp_d["concept_dropped_operations"]),
+                            "to": [str(_sp_d.get("part_number") or "")],
+                            "why": "the rate card has no operation for it — asked, not priced"})
+                _du = concept_scan.dropped_unit_operations(_answer)
+                _du_host = _unit or (_sighted[0] if _sighted else None)
+                if _du and _du_host is not None:
+                    from source_precedence import raise_manufacturing_question as _ask_du
+                    _ask_du(_du_host,
+                            f"Work on {_du_host.get('part_number')} the engine cannot charge: "
+                            + ", ".join(_du),
+                            "the read named it for the unit and the rate card has no operation "
+                            "for it, so it is NOT in the price",
+                            "say which department does it and how long it takes, or confirm it "
+                            "is not needed", "file_scan.concept_read")
+                    _transfer.append({"kind": "dropped", "item": ", ".join(_du),
+                                      "to": [str(_du_host.get("part_number") or "")],
+                                      "why": "unit work the rate card has no operation for — "
+                                             "asked, not priced"})
+            except Exception as _tr_exc:                             # noqa: BLE001
+                print(f"   [transfer] the read's finish and weld process could not be carried "
+                      f"({type(_tr_exc).__name__}: {_tr_exc})", flush=True)
+            for _t in _transfer:
+                print(f"   [transfer] {_t['kind']}: {_t['item']} -> "
+                      f"{', '.join(_t.get('to') or []) or 'the job'} ({_t['why']})", flush=True)
             _assumed = concept_scan.assumption_register(_sighted)
             _answers_path = concept_scan.write_assumptions_file(
                 _sighted, folder=job_folder, job=_job_name)
@@ -5189,6 +5678,19 @@ def _finalize_scan_summary(
                                            document_text_chars=int(
                                                _read.get("document_text_chars") or 0),
                                            client_document=bool(_client_document))
+            # THE READ AS THE MODEL GAVE IT, AND WHAT THE ENGINE MADE OF IT (D-595): kept on the
+            # record so a book can be traced back to the answer without another model call.
+            # WHOLE, NOT CUT (D-596): the read ledger's sha256 is of these exact words, so the
+            # record can always be checked against what the model sent.
+            summary["concept_read"].update(
+                raw_response=str(_read.get("raw_response") or ""),
+                read_key=str(_read.get("read_key") or ""),
+                read_changes=list(_transfer),
+                stated_finish=concept_scan.stated_finish(_answer, _brief or "").get("plate", ""),
+                replayed_from=str(_read.get("replayed_from") or ""),
+                # WHICH PAGES WENT AS IMAGES AND AS TEXT (D-597), for the page coverage record.
+                pages_rendered=list(_read.get("pages_rendered") or []),
+                text_coverage=dict(_read.get("text_coverage") or {}))
             if _sheet_read:
                 summary["concept_read"].update(
                     sheet_read=True, sheet_check=_sheet_check, set_aside_undrawn=_set_aside,
@@ -5241,23 +5743,35 @@ def _finalize_scan_summary(
                 summary.setdefault("review_flags", []).append(
                     f"NOT VISIBLE — SHIPMENT SCOPE: {_s} — carried by the commercial "
                     f"PACKAGING/DELIVERY lines, not duplicated as a parts line")
-            _mech = concept_scan.mechanically_fitted(_sighted)
+            # A WELD ON THE UNIT IS NOT EVIDENCE FOR EACH PIECE (review of D-595): a piece is
+            # welded on its own words or a brief sentence naming its weld, else it is counted
+            # and its fixings are asked.
+            _mech = concept_scan.mechanically_fitted(_sighted, brief=_brief or "")
             _nv_lines = concept_scan.consumable_lines(
                 _nv_cons, _job_name,
                 pieces_fitted=int((_unit or {}).get("pieces_fitted") or 0),
                 fixed_pieces=(_mech["pieces"] if _unit else None),
                 components=((_unit or {}).get("components_labelled") if _unit else None))
-            # THE FIXINGS THE READ DID NOT NAME (D-499): a unit with pieces fitted by hand gets
-            # a provisional fixings line counted per mechanically fitted piece — never a silent
-            # £0, and never a fixing for a welded or hung joint.
-            if _unit and not concept_scan.read_names_fixings(_nv_cons, _sighted):
-                _fx = concept_scan.fixings_allowance_line(_sighted, _job_name,
-                                                          len(_nv_lines) + 1)
-                if _fx:
-                    _nv_lines = list(_nv_lines) + [_fx]
-                    print(f"   [concept] the read named no fixings — a provisional allowance "
-                          f"of {_fx.get('quantity')} × the reference fixing for "
-                          f"{_mech['pieces']} mechanically fitted piece(s)", flush=True)
+            # THE FIXINGS THE READ DID NOT NAME ARE ASKED, NOT BOUGHT (D-595, replacing D-499's
+            # automatic allowance). Four M6 screws were bought for 0320730's welded bar on no
+            # evidence at all; a fixing the read or the brief names is still priced as named.
+            if (_unit and _mech.get("pieces")
+                    and not concept_scan.read_names_fixings(_nv_cons, _sighted)):
+                from source_precedence import raise_manufacturing_question as _ask_fx
+                _fx_pcs = ", ".join(sorted((_mech.get("counted") or {}).keys()))
+                _ask_fx(_unit,
+                        f"Fixings for {_unit.get('part_number')}: {_mech['pieces']} piece(s) "
+                        f"fitted by hand and the read names no fixings",
+                        f"no fixings are charged — an allowance is not added without evidence "
+                        f"({_fx_pcs})",
+                        "name the fixings and how many, or confirm the pieces need none",
+                        "file_scan.concept_read")
+                summary.setdefault("concept_read", {}).setdefault("read_changes", []).append(
+                    {"kind": "asked", "item": "fixings", "to": [str(_unit.get("part_number"))],
+                     "why": f"{_mech['pieces']} piece(s) fitted by hand, none named — asked, "
+                            f"not bought"})
+                print(f"   [concept] the read named no fixings for {_mech['pieces']} piece(s) "
+                      f"fitted by hand — asked, not bought", flush=True)
             # A BONDED JOINT IS PRICED TOO (D-501): its adhesive, not screws, by a method
             # suited to the joint (D-502).
             if _unit:
@@ -5281,10 +5795,23 @@ def _finalize_scan_summary(
                 print(f"   [concept] {len(_nv_lines)} provisional consumable line(s) minted "
                       f"from the read's not-visible list — priced by the ordinary bought-in "
                       f"chain, flagged for confirmation", flush=True)
+            _nv_host = _unit or (_sighted[0] if _sighted else None)
             for _u in _nv_unknown:
                 summary.setdefault("review_flags", []).append(
                     f"NOT VISIBLE ON THE RENDER — NOT PRICED: {_u} — a design unknown, not "
                     f"a consumable; name it as a part and it prices itself")
+                # AN UNRESOLVED REQUIREMENT IS A DECISION (D-595), not only a flag: a thing the
+                # product receives or is used with is asked whether SDI supplies it, never bought.
+                if _nv_host is not None:
+                    from source_precedence import raise_manufacturing_question as _ask_nv
+                    _ask_nv(_nv_host, f"Named by the read, not shown: {_u}",
+                            "not priced — nothing shows SDI supplies it",
+                            "say whether SDI supplies it; name it as a part and it is priced",
+                            "file_scan.concept_read")
+                summary.setdefault("concept_read", {}).setdefault("read_changes", []).append(
+                    {"kind": "asked", "item": str(_u), "to": [str((_nv_host or {}).get(
+                        "part_number") or "")], "why": "not visible and not a named consumable — "
+                                                       "asked, not bought"})
             if _design_intent_fallback and _fallback_pick and _fallback_pick.get("design"):
                 # THE BOOK SAYS WHAT IT IS, IN THE TAKE-OFF'S OWN WORDS (D-411, D-413): the
                 # report's callout, the sheet's banner and the quote's gate all read this.
@@ -5310,6 +5837,30 @@ def _finalize_scan_summary(
                     + (f" Other designs in the pack, not read: "
                        f"{', '.join(_fallback_pick.get('other_designs') or [])} — run with "
                        f"SDI_PRODUCT=<name> for each." if _fallback_pick.get("other_designs") else ""))
+            # THE READ LEDGER (D-596): every item the read returned, with an identity and the
+            # record it became, captured once every line is minted. After Excel,
+            # read_charge_contract holds each to charged, covered, excluded or unresolved.
+            try:
+                import read_charge_contract as _rcc
+                summary["read_ledger"] = _rcc.capture(
+                    (_read or {}).get("parsed") or _answer,
+                    records=([_unit] if _unit else []) + list(_sighted) + list(_nv_lines or []),
+                    raw_response=str((_read or {}).get("raw_response") or ""),
+                    read_key=str((_read or {}).get("read_key") or ""),
+                    said_by=("accepted_construction" if _acc else "llm_read"),
+                    brief=_brief or "", set_aside=_set_aside,
+                    replayed_from=str((_read or {}).get("replayed_from") or ""),
+                    response=_resp_id)
+                _led = summary["read_ledger"]
+                print(f"   [read-ledger] {sum(1 for _i in _led['items'] if _i.get('work'))} "
+                      f"item(s) of work and {sum(1 for _i in _led['items'] if not _i.get('work'))} "
+                      f"fact(s) from the read, each to be charged, covered, excluded or held",
+                      flush=True)
+            except Exception as _rl_exc:                             # noqa: BLE001
+                summary["read_ledger"] = {"schema": "read_ledger.v1", "items": [],
+                                          "error": f"{type(_rl_exc).__name__}: {_rl_exc}"}
+                print(f"   [read-ledger] NOT CAPTURED ({type(_rl_exc).__name__}: {_rl_exc}) — "
+                      f"the read cannot be held to the sheet on this run", flush=True)
             print("")
             print("   " + "=" * 68)
             print("   CONCEPT READ. This pack is a visual, not a drawing pack, so the")
@@ -5365,6 +5916,32 @@ def _finalize_scan_summary(
                 f"because the read failed, not because the pack has no parts")
             print(f"   !! concept read failed: {type(_ce).__name__}: {_ce}", flush=True)
 
+    # THE PAGE COVERAGE RECORD (D-597): every page of every document, what read it, and what
+    # nothing read — built once the whole-pack read and any concept read have run.
+    try:
+        import page_coverage as _pcov
+        _pc_pages = None
+        if not (summary.get("llm_full_extract_coverage") or {}).get("pages"):
+            from llm_full_extract import pack_pages as _pack_pages
+            _pc_pages = [{k: p.get(k) for k in ("document", "page", "chars", "has_text",
+                                                 "width_pt", "height_pt")}
+                         for p in _pack_pages(job_documents(summary, pdf_path))]
+        summary["page_coverage"] = _pcov.build(summary, _pc_pages)
+        _pcg = summary["page_coverage"]["gaps"]
+        print(f"   [page-coverage] {len(summary['page_coverage']['pages'])} page(s) across "
+              f"{len(summary['page_coverage']['documents'])} document(s), content read on "
+              f"{summary['page_coverage'].get('pages_content_read', 0)}; "
+              + ("NO LLM READING RAN — the rule-based readers alone saw these pages"
+                 + (f"; {len(_pcg)} gap(s)" if _pcg else "")
+                 if not summary["page_coverage"].get("llm_read") else
+                 f"{len(_pcg)} gap(s): " + "; ".join(
+                     f"{g['document']} page {g['page']} {g['kind']}" for g in _pcg[:6])
+                 if _pcg else "every page reached an LLM reading"), flush=True)
+    except Exception as _pc_exc:                                     # noqa: BLE001
+        summary["page_coverage"] = {"schema": "page_coverage.v1", "pages": [], "gaps": [],
+                                    "error": f"{type(_pc_exc).__name__}: {_pc_exc}"}
+        print(f"   [page-coverage] NOT BUILT ({type(_pc_exc).__name__}: {_pc_exc})", flush=True)
+
     # A DESIGN-INTENT PACK THAT NEITHER THE MODEL NOR THE CONCEPT READ COULD PRICE STOPS HERE,
     # as the fact on the record (D-409), with the reasons both doors gave (D-411).
     if _di_pending and not summary["manufacturing_writeup"]["parts"]:
@@ -5379,6 +5956,40 @@ def _finalize_scan_summary(
                                        or "the concept read produced no part")))
         print("   !! this pack is design-intent sheets on an ENGINE run — nothing to cost. "
               "Take the chosen design off from its own model, or have Design detail it.", flush=True)
+    # A PACK THAT GAVE NO PART AT ALL STOPS HERE TOO (D-598e), whatever the reason none of the
+    # stops above named. 0320730's 15:36 engine run read an eight-page drawing with no parts
+    # list, costed nothing, and its book said "0 item(s) to confirm: nothing outstanding" beside
+    # a unit cost of 0, while the refusal note blamed the read-back. No part is added after
+    # this point, so the stop is a fact about the finished record.
+    if not summary["manufacturing_writeup"]["parts"] and not summary.get("run_stop"):
+        from run_stop import record as _record_stop
+        _cr = summary.get("concept_read") if isinstance(summary.get("concept_read"), dict) else {}
+        _why_none = ((f"the drawing read was refused: {str(_cr['refused']).rstrip('.')}"
+                      if _cr.get("refused") else
+                      f"the drawing read was tried and did not answer: "
+                      f"{str(_cr['error']).rstrip('.')}" if _cr.get("error") else
+                      "the drawing read ran and gave no part either")
+                     if _sight_run else
+                     "this was an engine run, and the drawing read that takes parts off a pack "
+                     "with no parts list runs only on an LLM-only run")
+        # THE PAGES NOTHING READ ARE NAMED (D-598f): 0320730's drawing was its one page with no
+        # text layer, and the only LLM reading that ran was of text. An empty book beside an
+        # unread page is a reading failure until shown otherwise.
+        _unread = [f"{g.get('document')} page {g.get('page')}"
+                   for g in ((summary.get("page_coverage") or {}).get("gaps") or [])
+                   if isinstance(g, dict) and g.get("kind") == "image_only"]
+        _record_stop(summary, "no_parts_read",
+                     f"NOTHING TO COST: no reader found a part in this pack — {_why_none}"
+                     + (f"; no reading took the content of {', '.join(_unread[:6])}, which has "
+                        f"no text layer" if _unread else "") + ".",
+                     next_step=("Check the pack is the right one and carries a parts list or "
+                                "part drawings. A pack with neither is priced by an LLM-only "
+                                "run with the enquiry brief, or from a parts list supplied "
+                                "with it."),
+                     pages_not_read=_unread[:20],
+                     concept_read="" if _sight_run else _why_none)
+        print(f"   !! no part was read from this pack — nothing to cost ({_why_none}).",
+              flush=True)
     # EVERY READING THAT MUST LAND BEFORE A PRICE, in one function the replay runs too (D-454).
     pre_costing_passes(summary)
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)

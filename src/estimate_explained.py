@@ -267,10 +267,22 @@ def _estimate_bom(wb) -> List[Dict[str, Any]]:
             break
     if header_row is None:
         return []
+
+    def _column_headings(r: int) -> bool:
+        return any(str(ws.cell(r, c).value or "").strip().lower() == "part description"
+                   for c in (3, 4))
+
     out = []
     for r in range(header_row + 1, ws.max_row + 1):
         code = ws.cell(r, 8).value           # "Part code"
         text = ws.cell(r, 3).value           # the description column
+        # THE NEXT BLOCK IS NOT THIS ONE'S LINES (D-598f). An empty bill has no line to end on,
+        # so the walk ran on into the wire block and listed its title "Wire" and its column
+        # headings "Part Description … Kgs" as two unpriced lines on 0320730's 15:36 book. A
+        # row of column headings, or a lone title above one, starts the next block.
+        if _column_headings(r) or (not code and str(text or "").strip()
+                                   and _column_headings(r + 1)):
+            break
         if not code and not text:
             if out:
                 break                        # the block has ended
@@ -937,7 +949,16 @@ def _tracing_failures(scan: Dict[str, Dict[str, Any]], pack: List[str],
                        "could not be bound to a part in the BOM")
         if geom in _UNTRACED_GEOMETRY:
             why.append(_UNTRACED_GEOMETRY[geom])
-        if not pages and not str(rec.get("dxf_source_file") or "").strip():
+        if not pages and not str(rec.get("dxf_source_file") or "").strip() and rec.get("concept"):
+            # DRAWN IN THE PACK, READ BY THE MODEL (D-598). 0320730's note said nothing in the
+            # pack draws the tube and bracket; page 2 draws both. What is missing is a measured
+            # link from the drawing to the size, not the drawing.
+            _drawn = str(rec.get("concept_drawn") or rec.get("concept_seen") or "").strip()
+            why.append("read by the vision model off the pack's sheet"
+                       + (f" ({_drawn})" if _drawn else "")
+                       + " — no detail sheet or DXF of its own, so its size is the read's, "
+                         "not a measured dimension")
+        elif not pages and not str(rec.get("dxf_source_file") or "").strip():
             why.append("no sheet of its own in the pack and no DXF — nothing in the pack "
                        "draws this part")
         if not why:
@@ -1015,6 +1036,19 @@ def _split_by_firmness(bom: List[Dict[str, Any]], record: Optional[Dict[str, Dic
             market.append(r)
         elif code in house_codes:
             house.append(r)
+    # A NESTED LINE IS A LINE (D-598t, SCRUM-76). The solid-surface top costed on the Other
+    # Sheet Material block has no Bill of Materials row, so the walk above never met it, and
+    # "What must be replaced?" said no line rests on a market price beside the record's own
+    # "1 market figure to replace (£8.24)". The record classes it; it is named from the record.
+    met = {str((_record_line(record, r) or {}).get("part_number") or r.get("code") or "").upper()
+           for r in house + market}
+    for codes, into in ((market_codes, market), (house_codes, house)):
+        for code in sorted(codes - met):
+            line = (record or {}).get(code) or {}
+            into.append({"code": code, "text": f"{code} {line.get('description') or ''}".strip(),
+                         "price": line.get("charged_unit_gbp"),
+                         "qty": line.get("qty_per_unit"), "supplier": "",
+                         "nested_block": line.get("block") or ""})
     return house, market
 
 
@@ -2593,6 +2627,295 @@ def _table(headers: List[str], rows: List[List[Any]], numeric: Optional[set] = N
             f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
 
 
+def _box_source_html(src: Dict[str, Any], _P: str, _e: Any) -> List[str]:
+    """'Where the calculation came from' for the box (D-542): the sheet calculating in Excel,
+    the engine's copy of its formulas on the sheet's figures, or the figures in config — the
+    file, when it was saved, its checksum, why not the sheet where it was not, and anything
+    on the sheet itself a reader should know."""
+    kind = str(src.get("kind") or "config")
+    where = ""
+    if src.get("file"):
+        where = (f"<b>{_e(src.get('file'))}</b>, saved {_e(src.get('modified'))}"
+                 + (f" (checksum {_e(src.get('sha256'))})" if src.get("sha256") else "")
+                 + f", at <code>{_e(src.get('path'))}</code> &mdash; the file named by "
+                   f"<code>SDI_BOX_CALCULATOR_XLSX</code> in the engine&rsquo;s "
+                   f"<code>.env</code>")
+    if kind == "sheet_excel":
+        body = (f"The sheet itself calculated this box. The engine copied {where}, entered "
+                "this job&rsquo;s box size and quantity into its Length, Breadth, Height and "
+                "Qty cells, let Excel calculate, and read back its TOTAL and each pair&rsquo;s "
+                "count and cost. The estimators&rsquo; own file is never written to. Whatever "
+                "estimating changes in that sheet is what the next run charges.")
+        if src.get("agrees") is False:
+            body += (" The engine&rsquo;s own copy of the sheet&rsquo;s formulas came to "
+                     f"&pound;{float(src.get('engine_copy_gbp') or 0):.4f} a carton, so the "
+                     "sheet holds a change the steps below do not show; the sheet&rsquo;s "
+                     "figure is the one charged.")
+    elif kind == "sheet_engine":
+        body = (f"The figures were read from {where}. {_e(src.get('reason'))}. The steps below "
+                "are that copy, so they are exactly what was charged.")
+    elif kind == "given":
+        body = _e(src.get("reason") or "")
+    else:
+        body = (_e(src.get("reason") or "the figures held in src/config.py (BOX_COSTING)")
+                + ". To have the sheet itself price every box, set "
+                  "<code>SDI_BOX_CALCULATOR_XLSX</code> in the engine&rsquo;s <code>.env</code> "
+                  "to the sheet&rsquo;s path.")
+    out = [_P + f"<b>Where the calculation comes from.</b> {body}</p>"]
+    notes = [n for n in (src.get("notes") or []) if n]
+    if notes:
+        out.append(_P + "<b>On the sheet itself.</b> " + "; ".join(_e(n) for n in notes)
+                   + ".</p>")
+    return out
+
+
+def calculator_inputs_html(commercial_lines: Any) -> str:
+    """THE 'AI ESTIMATOR CALCULATOR INPUTS' SECTION (D-538, D-539).
+
+    James Gray, 15 Oct 2026: "a new section at the bottom called AI Estimator Calculator
+    Inputs ... the first is the boxing work we did. so we show the full details of the
+    calculation for the job so estimating can check it" — and then: "are we able to
+    thoroughly explain for estimating also. So that anyone reading it will understand the
+    working. Otherwise, I'll have questions galore."
+
+    So each calculator is EXPLAINED, not just tabulated: what it is and where its figures
+    come from, why each input exists, then every step in plain words with this job's own
+    numbers, what it assumes, and how to challenge it. Nothing is priced here — every number
+    is the calculator's own result carried on the commercial line (calculator_inputs). No
+    calculator ran, no section."""
+    calcs: List[Dict[str, Any]] = []
+    for line in commercial_lines or []:
+        if not isinstance(line, dict):
+            continue
+        for c in line.get("calculator_inputs") or []:
+            if isinstance(c, dict) and c.get("calculator"):
+                calcs.append(dict(c, _line=str(line.get("code") or "")))
+    if not calcs:
+        return ""
+
+    def g(v: Any, unit: str = "") -> str:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return "—"
+        return f"{f:.6f}".rstrip("0").rstrip(".") + unit
+
+    def money(v: Any, dp: int = 2) -> str:
+        try:
+            return f"£{float(v):,.{dp}f}"
+        except (TypeError, ValueError):
+            return "—"
+
+    def num(v: Any, default: float = 0.0) -> float:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return default
+
+    _P = '<p style="margin:8px 0">'
+    _STEP = '<p style="margin:14px 0 4px"><b>'
+    _WORK = ('<p style="margin:4px 0 8px;padding:6px 10px;background:#f4f6f8;'
+             'border-left:3px solid #9aa8b6;font-family:Consolas,monospace;font-size:13px">')
+    out: List[str] = [
+        "<h3>AI Estimator Calculator Inputs</h3>",
+        _P + "Some lines on this estimate are worked out by a <b>calculator</b>: a fixed method "
+        "the estimating team has given us, with their own figures, which the engine runs on "
+        "this job&rsquo;s sizes and quantities. This section shows each one in full &mdash; what "
+        "it is, where every figure comes from, and each step of the sum with this job&rsquo;s "
+        "numbers in it &mdash; so you can follow it, check it by hand, and challenge any figure. "
+        "Nothing here is a supplier&rsquo;s quotation.</p>"]
+    for c in calcs:
+        if c.get("calculator") != "box":
+            continue
+        i = c.get("inputs") or {}
+        box = [num(v) for v in (c.get("box_mm") or [])]
+        L, B, H = (box + [0, 0, 0])[:3]
+        cartons = int(c.get("cartons") or 1)
+        qty = int(c.get("order_qty") or 1)
+        ov, gap, trim = num(i.get("panel_oversize_mm")), num(i.get("nest_gap_mm")), \
+            num(i.get("sheet_edge_trim_mm"))
+        sl, sw = num(i.get("sheet_length_mm")), num(i.get("sheet_width_mm"))
+        sheet, scrap = num(i.get("sheet_cost_gbp")), num(i.get("scrap_fraction"))
+        rate, setup = num(i.get("running_rate_gbp_per_mm")), num(i.get("setup_cost_gbp"))
+        board = str(i.get("stock_board") or "the stock board")
+        panels = [p for p in (c.get("panels") or []) if isinstance(p, dict)]
+        n_charged = int(c.get("pairs_charged") or 3)
+        use_sheet = str(c.get("formula") or "sheet") == "sheet"
+
+        out.append(f"<h4>Box calculator &mdash; the {_e(c.get('_line') or 'PACKAGING')} line "
+                   f"({money(c.get('order_gbp'))} for the order)</h4>")
+        # ── what it is ────────────────────────────────────────────────────────────────
+        out.append(
+            _P + "<b>What it is.</b> The cost of a plain corrugated cardboard box (a regular "
+            "slotted carton, style 0201), worked out from the box&rsquo;s outside size the way "
+            f"the <b>AI BOX CALCULATOR</b> sheet does it ({_e(c.get('source'))}). The sheet "
+            "treats a box as <b>six flat panels in three pairs</b> &mdash; top and bottom, two "
+            "sides, two ends &mdash; cut from large sheets of board. It works out how many of "
+            "each panel fit on one sheet, shares the sheet&rsquo;s price between them, adds a "
+            "scrap allowance, then adds a running cost for making the box and a share of the "
+            "set-up cost for the order.</p>")
+        # ── where the calculation came from (D-542) ───────────────────────────────────
+        src = c.get("calculation_source") if isinstance(c.get("calculation_source"), dict) \
+            else {}
+        out.extend(_box_source_html(src, _P, _e))
+        # ── the sheet applied to this drawing (D-540) ─────────────────────────────────
+        ap = c.get("applied") if isinstance(c.get("applied"), dict) else {}
+        if ap:
+            out.append(_P + "<b>How the sheet is applied to this drawing.</b> The sheet needs "
+                       "two things: the box&rsquo;s outside size and how many boxes. The "
+                       "drawing gives neither directly, so this is how they were taken from "
+                       "it:</p>")
+            out.append(_P + f"<b>What is packed.</b> {_e(ap.get('packed'))} &mdash; "
+                       f"{_e(ap.get('why'))}.</p>")
+            out.append(_table(["Box size", "mm", "Taken from"], [
+                [_e(d.get("box")), g(d.get("mm")), _e(d.get("from"))]
+                for d in (ap.get("dims") or []) if isinstance(d, dict)]))
+            out.append(_P + f"<b>The fit.</b> {_e(ap.get('fit'))} (+{g(ov)} mm on each "
+                       "panel, step 1) &mdash; no foam, corners or other protection is "
+                       "added.</p>")
+            out.append(_P + f"<b>How many cartons.</b> {_e(ap.get('count'))}. Order quantity "
+                       f"{qty}.</p>")
+        else:
+            out.append(_P + f"<b>What was boxed on this job.</b> {_e(c.get('sized_as'))}. "
+                       f"Order quantity {qty}; {cartons} carton{'s' if cartons != 1 else ''} "
+                       "in all.</p>")
+        # ── the inputs ────────────────────────────────────────────────────────────────
+        _from_sheet = str(src.get("kind") or "").startswith("sheet")
+        out.append(_P + "<b>The figures it uses.</b> The box size is this job&rsquo;s (above); "
+                   + ("the rest were read from the sheet named above, as it was saved. Change "
+                      "one in the sheet and the next run uses it."
+                      if _from_sheet else
+                      "the rest are held in <code>src/config.py</code> under "
+                      "<code>BOX_COSTING</code>, copied from the sheet with their source.")
+                   + "</p>")
+        out.append(_table(["Figure", "Value", "What it is for"], [
+            ["Box outside size L x B x H", f"{g(L)} x {g(B)} x {g(H)} mm",
+             "length, breadth and height of the box this job needs"],
+            ["Board", board, "the corrugated board the panels are cut from"],
+            ["Sheet size", f"{g(sl)} x {g(sw)} mm", "the size of one sheet of that board"],
+            ["Sheet price", money(sheet), "what one sheet of board costs"],
+            ["Panel oversize", f"+{g(ov)} mm", "added to every panel's length and breadth for "
+                                               "folds, flaps and joints"],
+            ["Gap between panels", f"{g(gap)} mm each side", "space left round each panel when "
+                                                             "they are laid out on the sheet"],
+            ["Sheet edge trim", f"{g(trim)} mm", "taken off the sheet's width before laying out"],
+            ["Scrap allowance", f"{scrap:.0%}", "added to the board cost for offcuts and spoils"],
+            ["Running rate", f"£{g(rate)} per mm", "making cost, charged on L + B + H"],
+            ["Set-up", money(setup), "a one-off cost for the order, shared across its cartons"],
+        ]))
+        # ── the steps ─────────────────────────────────────────────────────────────────
+        out.append(_STEP + "Step 1 &mdash; the size of each panel.</b> Each pair of panels is "
+                   f"two of the box&rsquo;s sides; each is cut {g(ov)} mm bigger each way than the "
+                   "finished box:</p>")
+        _faces = {"Length/Breadth": "top and bottom", "Height/Breadth": "the two sides",
+                  "Height/Length": "the two ends"}
+        rows = []
+        for p in panels:
+            rows.append([f"{p.get('pair')} ({_faces.get(str(p.get('pair')), '')})",
+                         f"{g(p.get('cut_length_mm'))} x {g(p.get('cut_breadth_mm'))} mm"])
+        out.append(_table(["Pair", "Cut size of each panel (finished size + "
+                                   f"{g(ov)} mm)"], rows))
+        out.append(_STEP + "Step 2 &mdash; how many panels fit on one sheet.</b> The panels are "
+                   f"laid out in a grid on a {g(sl)} x {g(sw)} mm sheet, each panel taking its "
+                   f"own size plus {g(gap)} mm each side ({g(2 * gap)} mm in all), with "
+                   f"{g(trim)} mm trimmed off the sheet&rsquo;s width first. Panels are not "
+                   "turned round to squeeze more in &mdash; the sheet does not, so neither do we. "
+                   "Whole panels only (INT means round down):</p>")
+        for p in panels:
+            pl, pb = num(p.get("cut_length_mm")), num(p.get("cut_breadth_mm"))
+            out.append(_WORK + _e(
+                f"{p.get('pair')}: across the width INT(({g(sw)} - {g(trim)}) / ({g(pb)} + "
+                f"{g(2 * gap)})) = {p.get('across')}  x  along the length INT({g(sl)} / "
+                f"({g(pl)} + {g(2 * gap)})) = {p.get('along')}  =  {p.get('per_sheet')} "
+                f"panels a sheet") + "</p>")
+        out.append(_STEP + "Step 3 &mdash; the board cost of each pair.</b> One panel&rsquo;s "
+                   f"share of a sheet is the sheet price divided by how many fit; the {scrap:.0%} "
+                   f"scrap allowance is added; and a pair is two panels:</p>")
+        for k, p in enumerate(panels):
+            out.append(_WORK + _e(
+                f"{p.get('pair')}: {money(sheet)} / {p.get('per_sheet')} x {1 + scrap:g} x 2 "
+                f"= {money(p.get('pair_cost_gbp'), 4)}"
+                + ("" if k < n_charged else "   (not in the total charged — see step 6)"))
+                + "</p>")
+        out.append(_STEP + "Step 4 &mdash; the running cost.</b> A making cost that grows with "
+                   "the size of the box, charged per millimetre of length + breadth + height:</p>")
+        out.append(_WORK + _e(f"({g(L)} + {g(B)} + {g(H)}) mm x £{g(rate)} = "
+                              f"{money(c.get('running_gbp'), 4)} a carton") + "</p>")
+        out.append(_STEP + "Step 5 &mdash; the set-up share.</b> The set-up is paid once for "
+                   "the order, so it is divided across all the cartons in it. This is the only "
+                   "part of the price that changes with quantity:</p>")
+        out.append(_WORK + _e(f"{money(setup)} / {cartons} carton{'s' if cartons != 1 else ''} "
+                              f"= {money(c.get('setup_share_gbp'), 4)} a carton") + "</p>")
+        _pairs_sum = sum(num(p.get("pair_cost_gbp")) for p in panels[:n_charged])
+        out.append(_STEP + "Step 6 &mdash; the price of one carton.</b> Running + set-up share "
+                   + ("+ the <b>first two</b> pairs. This is exactly how the sheet totals it "
+                      "(its total cell adds the top/bottom and side pairs, not the ends)"
+                      if use_sheet else "+ <b>all three</b> pairs")
+                   + ":</p>")
+        out.append(_WORK + _e(
+            f"{money(c.get('running_gbp'), 4)} + {money(c.get('setup_share_gbp'), 4)} + "
+            f"{' + '.join(money(p.get('pair_cost_gbp'), 4) for p in panels[:n_charged])} = "
+            f"{money(c.get('per_carton_gbp'), 4)} a carton") + "</p>")
+        _alt = (c.get("three_pair_gbp") if use_sheet else c.get("sheet_total_gbp"))
+        out.append(_P + ("<b>Why the ends are left out.</b> " if use_sheet else
+                         "<b>Why all three pairs.</b> ")
+                   + ("Adding the ends as well would make the carton "
+                      if use_sheet else "The sheet&rsquo;s own total, without the ends, would be ")
+                   + f"{money(_alt, 4)}. The engine is set to "
+                   + ("follow the sheet&rsquo;s own total" if use_sheet else "add all six panels")
+                   + (f" because it was {_e(i.get('formula_evidence'))}."
+                      if i.get("formula_evidence") else ".")
+                   + " A real 0201 carton is one folded piece of board rather than six "
+                   "separate panels, which may be why. The choice is one setting "
+                   "(BOX_COSTING &lsquo;formula&rsquo;) and can be changed.</p>")
+        out.append(_STEP + "Step 7 &mdash; the order, and the price per unit.</b></p>")
+        out.append(_WORK + _e(
+            f"{money(c.get('per_carton_gbp'), 4)} x {cartons} carton{'s' if cartons != 1 else ''} "
+            f"= {money(c.get('order_gbp'))} for the order; / {qty} unit{'s' if qty != 1 else ''} "
+            f"= {money(num(c.get('order_gbp')) / max(qty, 1), 4)} a unit") + "</p>")
+        _at = c.get("order_gbp_at_breaks") or {}
+        if _at:
+            _brk = sorted((int(q), float(v)) for q, v in _at.items())
+            out.append(_P + "<b>At other quantities.</b> The same sum at each quantity break. "
+                       "The board and running cost of each carton stay the same; the set-up is "
+                       "shared over more cartons, which is why the price per unit falls:</p>")
+            out.append(_table(["Units ordered", "Packaging for the order", "Per unit"],
+                              [[q, money(v), money(v / q, 4)] for q, v in _brk],
+                              numeric={0, 1, 2}))
+        # ── how the figure reaches the estimate workbook (D-542) ──────────────────────
+        _line = _e(c.get("_line") or "PACKAGING")
+        out.append(_P + f"<b>How it reaches the estimate workbook.</b> The order&rsquo;s "
+                   f"{money(c.get('order_gbp'))} is entered on the <b>{_line}</b> line of the "
+                   f"Estimate sheet&rsquo;s bill of materials as a price per unit &mdash; "
+                   f"{money(c.get('order_gbp'))} / {qty} unit{'s' if qty != 1 else ''} = "
+                   f"{money(num(c.get('order_gbp')) / max(qty, 1), 4)}, quantity per unit 1 "
+                   f"&mdash; with the supplier column reading <i>"
+                   + ("AI BOX CALCULATOR sheet" if _from_sheet else "Box calculator config rates")
+                   + "</i>. The Material Price Break tab carries the same line at each quantity "
+                   "(the order&rsquo;s packaging at that quantity divided by it), and the "
+                   "Quantity Breaks tab reads those back. Nothing on the workbook re-prices "
+                   "it: the figure is the calculator&rsquo;s, typed in.</p>")
+        # ── what it assumes, and how to challenge it ──────────────────────────────────
+        out.append(_P + "<b>What it assumes.</b> One unit per carton; a plain 0201 carton in "
+                   f"{_e(board)}; the {g(ov)} mm oversize is the only room left inside &mdash; no "
+                   "foam, corners, bags or other protection, and no particular way up. The board "
+                   "price is a held figure, not today&rsquo;s price from the supplier.</p>")
+        out.append(_P + "<b>How to check or change it.</b> If the carton should be a different "
+                   "size, a different board, hold more than one unit, or needs protection, say so "
+                   "on the job and the line is re-priced. If a figure in the table above is out "
+                   "of date (sheet price, running rate, set-up), "
+                   + ("change it in the AI BOX CALCULATOR sheet named above and save it: the "
+                      "next run reads it. "
+                      if _from_sheet else
+                      "change it in the AI BOX CALCULATOR sheet and point "
+                      "<code>SDI_BOX_CALCULATOR_XLSX</code> in the engine&rsquo;s "
+                      "<code>.env</code> at that file, so the engine reads the sheet; until "
+                      "then it uses the copy in <code>src/config.py</code>. ")
+                   + "To check the arithmetic, put the box size and quantity into the sheet: "
+                   "it gives the same panel counts, pair costs and TOTAL.</p>")
+    return "\n".join(out)
+
+
 def _setup_and_run(labour_rows: List[Dict[str, Any]], order_qty: Any = 1) -> Dict[str, Any]:
     """How much of the labour is set-up, which is the whole of the quantity story.
 
@@ -2679,6 +3002,17 @@ _REFUSAL_BY_CAUSE: Dict[str, Dict[str, Any]] = {
             "stop the total.",
             "Send that list to the engine team (the usual cause is a labour row with no "
             "throughput) and re-run the job once it is fixed.",
+        ),
+    },
+    # THE RUN COSTED NOTHING (D-598d). 0320730's 15:36 run read no part, and this note told
+    # the estimator to look for a #DIV/0! in a workbook with nothing on it.
+    "nothing_to_cost": {
+        "headline": "no estimate produced, nothing to cost",
+        "happened": "No part reached the bill, so no estimate was produced: {detail}.",
+        "default_detail": "no reader found a part in this pack",
+        "means": "The workbook's 0.00 is not a price. Nothing in it is costed.",
+        "steps": (
+            "Do what the reason above says, then re-run the job.",
         ),
     },
 }
@@ -2810,6 +3144,17 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     def _reads_as_free(row) -> bool:
         if "costed in" in str(row.get("text") or "").lower():
             return False          # its money is in a fabricated block, not missing
+        # CORRECTLY NOTHING IS NOT MISSING (D-568). The 13:10 401918 note led with "1 line
+        # carries no price. It sums as free" — the line was DELIVERY, held at £0 because the
+        # Run declared the order collected, which the report beside it explained correctly.
+        # The record classes such a line nil; the Explanation tab already reads that.
+        try:
+            _l = _record_line(record_lines, row)
+            if _l is not None and str(((_l.get("price_origin") or {})
+                                        ).get("firmness") or "") == "nil":
+                return False
+        except Exception:                                            # noqa: BLE001
+            pass
         price = _money(row.get("price"))
         return price is None or price == 0
     _unpriced = [r for r in bom if _reads_as_free(r)]
@@ -2871,8 +3216,11 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                        f"drawing pack attached.")
         return {"subject": _empty_subject, "html": _empty_html, "text": _empty_text}
 
+    # A RULING IS A DECISION THAT NEEDS YOU TOO (D-598t). 9439-07-04's 09:10 note listed the
+    # manufacturing decisions only, so the TIG rate, the glue stages, the bar's purchase basis
+    # and the coating allowance the report asked for reached the e-mail as nothing.
     _mfg = [d for d in ((record or {}).get("decisions_required") or [])
-            if isinstance(d, dict) and d.get("kind") == "manufacturing_decision"]
+            if isinstance(d, dict) and d.get("kind") in ("manufacturing_decision", "ruling")]
     _state = "PROVISIONAL. " if provisional else ""
     # THE ONE TALLY in the subject line too — the same phrase as the report banner, the
     # explanation and the quote's draft strip, so the e-mail cannot count the same open
@@ -3194,8 +3542,19 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     # it weighed, the density it used, what it came to, and whether that made it a parcel or
     # a pallet. A description that says "about 49 kg" for a 2.3 kg tray then names the part
     # carrying the other 46 kg, instead of hiding it in a total.
-    _commercial = [c for c in (g["scan_doc"] or {}).get("commercial_lines", [])
-                   if isinstance(c, dict)] if isinstance(g["scan_doc"], dict) else []
+    # FROM THE PART RECORDS, NOT ONLY THE STORED LIST (D-543). summary["commercial_lines"] is
+    # filled by the quantity sweep, after the run JSON this note reads was written — so the
+    # key was empty on every saved job, and with it this section and the calculator working
+    # below. The lines live on their part stubs in that JSON; collect_lines is the one
+    # harvester the workbook and the sweep already use.
+    _commercial: List[Dict[str, Any]] = []
+    if isinstance(g["scan_doc"], dict):
+        try:
+            from commercial_lines import collect_lines as _collect_lines
+            _commercial = [c for c in _collect_lines(g["scan_doc"]) if isinstance(c, dict)]
+        except Exception:                                            # noqa: BLE001
+            _commercial = [c for c in (g["scan_doc"].get("commercial_lines") or [])
+                           if isinstance(c, dict)]
     if _commercial:
         add("<h4>How packaging and delivery were worked out</h4>")
         _basis = next((c.get("basis") for c in _commercial
@@ -3222,7 +3581,8 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             + (f"; <b>{_plural(_phantom, 'part')} were left out because the blank recorded "
                f"for them fits no sheet the material is stocked in</b> — that is a defect "
                f"upstream, not a gap in the drawings" if _phantom else "")
-            + ". Weight is blank area × gauge × the material's density, times how many are "
+            + ". Weight uses each recorded stock basis: section kg/m × cut length for sections, "
+              "or blank area × gauge × density for sheet, times how many are "
               "made. It decides the next line.</p>")
         # WHAT WAS LEFT OUT, BY NAME. A unit weight that comes up short against the title
         # block is a part that was not weighed, and a tally of "2 parts had no blank" cannot
@@ -3356,7 +3716,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         if not needs_a_person:
             add(f"<h3>5. {_plural(len(_mfg), 'decision')} that need you</h3>")
         else:
-            add(f"<h4>And {_plural(len(_mfg), 'manufacturing decision')} still open</h4>")
+            add(f"<h4>And {_plural(len(_mfg), 'decision')} still open</h4>")
         add(_table(["Decision", "Part", "Current assumption", "Action", "£ at stake"],
                    [[str(d.get("issue") or ""), str(d.get("part") or "—"),
                      str(d.get("assumption") or ""), str(d.get("action") or ""),
@@ -3539,6 +3899,17 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             "fix — nothing here needs anything from you:</p>")
         add("<ul>" + "".join(f"<li>{_e(o)}</li>" for o in _ours) + "</ul>")
 
+    # 9. THE RELEASE RECORD AND THE READ LEDGER (D-598), as the record states them: the final
+    # status and its reasons, what rests on held allowances at each quantity, and every finding
+    # of the read ledger with what the read said. The e-mail repeats; it does not decide.
+    add(release_section_html(record, g.get("scan_doc") or {}))
+
+    # AI ESTIMATOR CALCULATOR INPUTS — at the bottom, the full working of each calculator the
+    # engine ran on the estimators' own figures (the box calculator first).
+    _calc_html = calculator_inputs_html(_commercial)
+    if _calc_html:
+        add(_calc_html)
+
     _scan_doc_rid = g.get("scan_doc") if isinstance(g.get("scan_doc"), dict) else {}
     _rid = str(_scan_doc_rid.get("run_id") or "")
     if _rid:
@@ -3570,6 +3941,12 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     # It says so when there is nothing, too. "Nothing here needs you" is a finding, and an
     # absent panel reads as an unwritten one.
     _focus: List[tuple] = []                                 # (£ at stake, html)
+    # THE RELEASE RECORD AND THE READ LEDGER LEAD (D-598): read from the persisted records,
+    # never decided here, each line pointing at §9 where the reasons and findings are listed.
+    # The 12:51 0320730 note left the ledger's findings out altogether.
+    from robust_ownership import release_focus_lines as _release_focus
+    for _n, _message in enumerate(_release_focus(record, g.get("scan_doc") or {})):
+        _focus.append((30_000_000.0 - _n, _e(_message)))
 
     # WHAT WAS PRICED COMES BEFORE HOW MUCH. A run given the wrong Drawing Number prices a
     # different product in full confidence (11650-02, 23 Sep 2026: the cabinet top, with the
@@ -3659,6 +4036,67 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     add("</div>")
     html = "\n".join(h)
     return {"subject": subject, "html": html, "text": _as_text(html)}
+
+
+def release_section_html(record: Any, summary: Any) -> str:
+    """§9 of the covering note: the final release record, the held allowances apart from the
+    priced subtotal, and the read ledger's findings (D-598). A missing record is said, never
+    left out: the panel points here either way."""
+    rel = (record or {}).get("release") if isinstance(record, Mapping) else None
+    res = summary.get("read_charge_result") if isinstance(summary, Mapping) else None
+    res = res if isinstance(res, Mapping) and res.get("applicable") else None
+    out = ["<h3>9. The release record and the read ledger</h3>"]
+    if not isinstance(rel, Mapping):
+        out.append("<p><b>The final release record is not available</b>, so this e-mail is not "
+                   "release evidence: the price above has not been held to the release "
+                   "authority.</p>")
+    else:
+        out.append(f"<p>The final release record says <b>{_e(str(rel.get('status') or 'status unknown'))}"
+                   f"{'' if rel.get('draft') is False else ', a draft'}</b>, with "
+                   f"{_e(str(rel.get('to_confirm', rel.get('outstanding', 'unknown'))))} to confirm. "
+                   f"This note repeats that record; it does not decide release. Its reasons:</p>")
+        reasons = [str(r) for r in (rel.get("reasons") or []) if str(r).strip()]
+        if reasons:
+            out.append("<ul>" + "".join(f"<li>{_e(r)}</li>" for r in reasons) + "</ul>")
+        # The opening panel links here for details. Repeat recorded blocking
+        # findings, not a second release decision, and escape source text.
+        findings = ((summary.get("invariants") or {}).get("violations") or []) if isinstance(summary, Mapping) else []
+        blocking = list(dict.fromkeys(str(v.get("message") or v.get("code"))
+                        for v in findings if isinstance(v, Mapping)
+                        and str(v.get("severity") or "").lower() == "blocking"))
+        if blocking:
+            out.append("<p><b>Recorded blocking findings</b></p><ul>"
+                       + "".join(f"<li>{_e(message)}</li>" for message in blocking) + "</ul>")
+        breaks = [b for b in (rel.get("held_at_breaks") or []) if isinstance(b, Mapping)]
+        if breaks:
+            out.append("<p><b>What rests on held allowances</b> — engine allowances calibrated "
+                       "on another product and not confirmed for this job, apart from the rest "
+                       "of the price. The work still unresolved is priced in neither column.</p>")
+            out.append("<table><tr><th>Quantity</th><th>Unit £</th><th>Held allowances £/unit</th>"
+                       "<th>Priced subtotal excluding them £/unit</th></tr>"
+                       + "".join(f"<tr><td>{int(_money(b.get('quantity')) or 0):,}</td>"
+                                 f"<td>{_gbp(_money(b.get('unit_gbp')))}</td>"
+                                 f"<td>{_gbp(_money(b.get('held_gbp_per_unit')))}</td>"
+                                 f"<td>{_gbp(_money(b.get('unit_excluding_held_gbp')))}</td></tr>"
+                                 for b in breaks) + "</table>")
+    if res is not None:
+        c = res.get("counts") or {}
+        out.append(f"<p><b>The read ledger</b> holds every item the model read to the calculated "
+                   f"sheet: {c.get('charged', 0)} charged, {c.get('covered', 0)} covered by a "
+                   f"named charge, {c.get('excluded', 0)} ruled out, {c.get('unresolved', 0)} "
+                   f"unresolved — "
+                   + ("it passes.</p>" if res.get("passed") else "it holds the release.</p>"))
+        labels = {str(e.get("id")): e.get("label") for e in (res.get("items") or [])
+                  if isinstance(e, Mapping)}
+        issues = [i for i in (res.get("issues") or []) if isinstance(i, Mapping)]
+        if issues:
+            out.append("<table><tr><th>Item</th><th>What the read said</th><th>Why it holds"
+                       "</th></tr>" + "".join(
+                           f"<tr><td>{_e(str(i.get('item') or i.get('part') or i.get('code')))}</td>"
+                           f"<td>{_e(str(labels.get(str(i.get('item'))) or i.get('label') or ''))}</td>"
+                           f"<td>{_e(str(i.get('why') or i.get('basis') or i.get('code')))}</td></tr>"
+                           for i in issues) + "</table>")
+    return "\n".join(out)
 
 
 _TAG = re.compile(r"<[^>]+>")

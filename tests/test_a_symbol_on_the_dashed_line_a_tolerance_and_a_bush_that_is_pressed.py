@@ -140,7 +140,10 @@ def test_a_blank_that_weighs_twice_its_sheets_weight_names_the_gauge_the_weight_
             "normalized_thickness_mm": 2.0, "stated_weight_g": 60.0,
             "normalized_geometry": {"blank_length_mm": 102.7, "blank_width_mm": 76.0}}
     msg = estimator._blank_weight_check(part)
-    assert msg and "weighs 0.123 kg" in msg and "states 0.060 kg" in msg and "fits 0.98 mm" in msg
+    # D-514: the reference is NAMED — "the sheet's stated weight is", not a bare "states",
+    # so a model's mass can never read as the drawing's figure.
+    assert msg and "weighs 0.123 kg" in msg and "stated weight is 0.060 kg" in msg \
+        and "fits 0.98 mm" in msg
     # 02M at 2 mm weighs what its sheet says: nothing to say
     ok = {"part_number": "X-02M", "normalized_material": "MILD_STEEL",
           "normalized_thickness_mm": 2.0, "stated_weight_g": 40.0,

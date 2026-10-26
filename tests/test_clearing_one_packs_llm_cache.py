@@ -138,5 +138,30 @@ def test_it_will_not_delete_outside_a_cache_directory(tmp_path):
     assert failed and "refused" in failed[0]
 
 
-def test_the_allowed_directories_are_the_two_caches():
-    assert tool._ALLOWED_DIR_NAMES == {"vision_bom", "llm_extract"}
+def test_the_allowed_directories_are_the_three_stores():
+    assert tool._ALLOWED_DIR_NAMES == {"vision_bom", "llm_extract", "pdf_readings"}
+
+
+def test_it_takes_this_packs_kept_readings_and_leaves_the_other_jobs(tmp_path, monkeypatch, pack):
+    """The read store's entries (D-554) record their source file's name, and are matched on it
+    exactly as the vision entries are — only the head of each file is read for it."""
+    import read_store
+    monkeypatch.setenv("SDI_READ_STORE_DIR", str(tmp_path / "cache"))
+    d = read_store.store_dir("pdf_readings")
+    d.mkdir(parents=True)
+    for i, source in enumerate(["10575-01-GA - V1 Cordless Vacuum Display [Rev D].PDF",
+                                "10412-01-GA - Somebody Else's Job.PDF",
+                                "10575-02-GA - V2 Upright Vacuum Display [Rev D].PDF"]):
+        (d / f"{i:064x}.json").write_text(json.dumps(
+            {"schema": read_store.SCHEMA, "store": "pdf_readings", "key": f"{i:064x}",
+             "created_utc": "2026-10-20T12:00:00Z", "build": None, "source": source,
+             "components": {}, "raw": {"plumber": ["x" * 5000], "pypdf": [], "vision": []}}),
+            encoding="utf-8")
+    (d / "corrupt.json").write_text("{not json", encoding="utf-8")
+    names = {p.name.lower() for p in tool._pack_pdfs(pack)}
+    hits, total, note = tool._read_store_entries(names)
+    assert total == 4 and note == ""
+    assert sorted(h.name for h in hits) == [f"{0:064x}.json", f"{2:064x}.json"]
+    gone, failed = tool._delete(hits)
+    assert gone == 2 and failed == []
+    assert sorted(f.name for f in d.glob("*.json")) == [f"{1:064x}.json", "corrupt.json"]
