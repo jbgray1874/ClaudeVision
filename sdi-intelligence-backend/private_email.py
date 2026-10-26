@@ -6,15 +6,36 @@ from dataclasses import dataclass
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urlsplit
+import base64
+import binascii
 import hashlib
 import json
+import re
 import secrets
 import sqlite3
 import time
 
+OCTET = "application/octet-stream"
+# Big enough for the drawings and spec sheets that actually arrive; small enough
+# that one request cannot hold the service's memory. Above it, Outlook.
+MAX_ATTACHMENT = 25 * 1024 * 1024
+
 
 class Denied(Exception):
     pass
+
+
+def _file_name(name):
+    """A sender's file name, reduced to a name.
+
+    It arrives from outside and ends up in a download header and, wherever the
+    person saves it, on a disk. So: no directory separators, no traversal, no
+    control characters, and never empty.
+    """
+    cleaned = re.sub(r"[\x00-\x1f\x7f]", "", str(name or "")).strip()
+    cleaned = cleaned.replace("\\", "/").rsplit("/", 1)[-1].strip(" .")
+    cleaned = re.sub(r'[<>:"|?*]', "_", cleaned)
+    return cleaned[:160] or "attachment"
 
 
 @dataclass(frozen=True)
@@ -51,7 +72,8 @@ class GraphMailbox:
         start = end - timedelta(days=7)
         iso = lambda dt: dt.isoformat().replace("+00:00", "Z")
         params = {"$filter": f"receivedDateTime ge {iso(start)} and receivedDateTime lt {iso(end)}",
-                  "$select": "id,subject,from,receivedDateTime,bodyPreview,webLink,conversationId",
+                  "$select": "id,subject,from,receivedDateTime,bodyPreview,webLink,"
+                             "conversationId,hasAttachments",
                   "$orderby": "receivedDateTime desc", "$top": 50}
         url = self.BASE + "/me/messages"
         messages, seen = [], set()
@@ -84,6 +106,60 @@ class GraphMailbox:
         self.verify()
         return self.request("GET", self.BASE + "/me/messages/" + quote(message_id, safe=""),
                             params={"$select": "id,subject,from,replyTo,webLink"})
+
+    def attachments(self, message_id):
+        """What is attached: names, types and sizes. Never content.
+
+        The list is cheap and safe to show beside every message. Content costs a
+        second, deliberate request for one named attachment, so nothing is pulled
+        out of the mailbox because a page happened to render.
+        """
+        self.verify()
+        page = self.request(
+            "GET", self.BASE + "/me/messages/" + quote(message_id, safe="") + "/attachments",
+            params={"$select": "id,name,contentType,size,isInline"})
+        listed = []
+        for item in page.get("value", []):
+            listed.append({
+                "id": str(item.get("id") or ""),
+                "name": _file_name(item.get("name")),
+                "contentType": str(item.get("contentType") or OCTET),
+                "size": int(item.get("size") or 0),
+                "isInline": bool(item.get("isInline")),
+                # A file is downloadable here. A forwarded email or a link to a
+                # file on a share is not, and says so rather than failing later.
+                "kind": str(item.get("@odata.type") or "").rsplit(".", 1)[-1],
+            })
+        return {"message_id": message_id, "attachments": listed}
+
+    def attachment(self, message_id, attachment_id):
+        """One attachment's bytes, by name and id, with its stated type.
+
+        The type is what the sender claimed. It decides nothing here: the route
+        serves these bytes as a download, never as a page on this origin, so an
+        HTML or SVG attachment cannot run as though it came from us.
+        """
+        self.verify()
+        item = self.request(
+            "GET", self.BASE + "/me/messages/" + quote(message_id, safe="")
+            + "/attachments/" + quote(attachment_id, safe=""))
+        kind = str(item.get("@odata.type") or "").rsplit(".", 1)[-1]
+        if kind != "fileAttachment":
+            raise Denied("That is an attached email or a link to a file, not a file. "
+                         "Open the message in Outlook to see it.")
+        raw = item.get("contentBytes")
+        if not isinstance(raw, str) or not raw:
+            raise Denied("Microsoft returned no content for that attachment")
+        try:
+            content = base64.b64decode(raw, validate=True)
+        except (ValueError, binascii.Error):
+            raise Denied("That attachment's content could not be read")
+        if len(content) > MAX_ATTACHMENT:
+            raise Denied(f"That attachment is larger than "
+                         f"{MAX_ATTACHMENT // (1024 * 1024)}MB. Open it in Outlook.")
+        return {"name": _file_name(item.get("name")),
+                "contentType": str(item.get("contentType") or OCTET),
+                "content": content}
 
     def create_reply(self, message_id, body):
         self.verify()

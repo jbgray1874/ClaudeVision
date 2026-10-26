@@ -3,12 +3,12 @@
 Uses only the host's verified session; never accepts user identity from JSON.
 """
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from private_email import Denied, DraftStore, GraphMailbox
+from private_email import OCTET, Denied, DraftStore, GraphMailbox
 
 
 class Proposal(BaseModel):
@@ -100,6 +100,47 @@ def make_router(auth, policy, database, origin, drafts_enabled=False, page_dir=N
         _, mailbox = context(request)
         from fastapi.responses import JSONResponse
         return JSONResponse(run(mailbox.review), headers={"Cache-Control": "no-store"})
+
+    @router.get("/attachments/{message_id}")
+    def attachments(request: Request, message_id: str):
+        _, mailbox = context(request)
+        from fastapi.responses import JSONResponse
+        return JSONResponse(run(lambda: mailbox.attachments(message_id)),
+                            headers={"Cache-Control": "no-store"})
+
+    @router.get("/attachments/{message_id}/{attachment_id}")
+    def attachment(request: Request, message_id: str, attachment_id: str):
+        """One attachment, as a download.
+
+        ── NEVER RENDERED ON THIS ORIGIN ──────────────────────────────────────
+        The sender chose the file and the content type. Serving it inline would
+        let an HTML or SVG attachment run as a page on the address that holds
+        the mailbox session. So every attachment leaves as a download, with the
+        sender's type replaced by a neutral one, sniffing turned off and scripts
+        forbidden - a picture is opened by the viewer's own device, not by us.
+        The cost is a click; the alternative is a mailbox that opens whatever it
+        is sent.
+        """
+        from fastapi.responses import Response
+        _, mailbox = context(request)
+        got = run(lambda: mailbox.attachment(message_id, attachment_id))
+        # RFC 6266: a plain filename for anything ASCII, filename* for the rest.
+        name = got["name"]
+        ascii_name = name.encode("ascii", "replace").decode().replace('"', "_")
+        return Response(
+            content=got["content"],
+            media_type=OCTET,
+            headers={
+                "Content-Disposition":
+                    f'attachment; filename="{ascii_name}"; '
+                    f"filename*=UTF-8''{quote(name, safe='')}",
+                "X-Content-Type-Options": "nosniff",
+                "Content-Security-Policy": "default-src 'none'; sandbox",
+                "Cache-Control": "no-store",
+                # What the sender claimed it was, for the page to show. It is a
+                # label, never a decision.
+                "X-Sdi-Stated-Type": got["contentType"][:120],
+            })
 
     @router.post("/proposals")
     def propose(request: Request, data: Proposal):
