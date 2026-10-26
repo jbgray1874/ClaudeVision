@@ -212,6 +212,7 @@ _PUBLIC_ALLOW = (
     "/api/hr/app",             # HRInventry Anywhere only - never the rest of /api/hr
     "/api/private-email",      # separate private registration and owner gate
     "/api/tti",                # Sue's TTI despatch view - named people, read only
+    "/api/ops",                # SDI Remote Control Intelligence - named people, read only
     "/favicon.ico",
 )
 
@@ -858,6 +859,11 @@ install_private_email(app)
 # mounted only when SDI_TTI_ENABLED=yes.
 from tti_despatch_routes import install as install_tti
 install_tti(app)
+
+# SDI Remote Control Intelligence: the service's own state, from a phone.
+# Read only - no restart, no command, no path a caller can name.
+from sdi_ops_routes import install as install_ops
+install_ops(app)
 
 from voicecrm import router as voicecrm_router
 app.include_router(voicecrm_router)

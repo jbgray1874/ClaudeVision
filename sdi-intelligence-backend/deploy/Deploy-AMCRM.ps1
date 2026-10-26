@@ -61,6 +61,8 @@ $Files = @(
     "tti_despatch_routes.py",
     "tti_plan_source.py",
     "appportal/tti-despatch.html",
+    "sdi_ops_routes.py",
+    "appportal/sdi-remote-control.html",
     "private-email-readonly.html",
     "private-email.html",
     # The app portal's catalogue. Not Python, so it copies without a restart -

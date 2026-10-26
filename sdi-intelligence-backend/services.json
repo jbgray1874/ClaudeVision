@@ -996,6 +996,30 @@
       "surface": "intranet",
       "desc": "The full delivery plan — Phase 1 live, Phases 2–6 mapped through Q3 2027.",
       "view": "roadmap"
+    },
+    {
+      "id": "remote-control",
+      "name": "SDI Remote Control Intelligence",
+      "status": "Phase one · read only",
+      "cls": "c-prog",
+      "category": "Apps",
+      "app_category": "Meta",
+      "surface": "app",
+      "app_url": "/api/ops",
+      "desc": "What the SDI Intelligence service is doing, from your phone — running version, uptime, which apps mounted, which shares it can reach, and the log.",
+      "requires": "Named people only (SDI_OPS_OIDS), through Microsoft sign-in with MFA.",
+      "detail": "Every one of these checks was a trip to the laptop. None of them needs a shell, so none is given one. <b>It is read only: it cannot restart anything, run a command, or change a setting.</b> An authenticated \"run anything\" route on the public address would be the highest-value target in the estate and would undo the boundaries the rest of the service spends its time holding. For a real shell on the server, Remote Desktop is already gated and already audited.",
+      "sections": [
+        {
+          "title": "What it shows",
+          "body": "The running commit and how long the service has been up; which apps actually mounted, as opposed to which are configured — the difference was an afternoon when app.py had not reached the server; whether each setting is present, never its value; the shares and the database with reachable flags; and the tail of the log, searchable."
+        },
+        {
+          "title": "The log is redacted before it leaves the machine",
+          "body": "The access log records whole request lines, and the private assistant's sign-in callback carries an OAuth authorization code in its query string. Single-use and short-lived, and still no business on a web page. Query strings are stripped and anything token-shaped is replaced, on the server, before the text is sent."
+        }
+      ],
+      "next": "A small, fixed set of named actions — restart this one service, and nothing else — once it is designed and agreed. Absent until then rather than half-present."
     }
   ]
 }
