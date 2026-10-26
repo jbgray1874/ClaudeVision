@@ -1,0 +1,17 @@
+diff --git a/sdi-intelligence-backend/app.py b/sdi-intelligence-backend/app.py
+--- a/sdi-intelligence-backend/app.py
++++ b/sdi-intelligence-backend/app.py
+@@ -212,4 +212,5 @@
+     "/api/hr/app",             # HRInventry Anywhere only - never the rest of /api/hr
++    "/api/private-email",      # separate private registration and owner gate
+     "/favicon.ico",
+ )
+ 
+@@ -770,4 +771,7 @@
+ app.include_router(auth.router)
+ 
++from private_email_integration import install as install_private_email
++install_private_email(app)  # disabled unless SDI_PRIVATE_ENABLED=yes
++
+ from voicecrm import router as voicecrm_router
+ app.include_router(voicecrm_router)
