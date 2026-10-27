@@ -224,6 +224,29 @@ other is held back. **SDI to decide which product keeps each code.**
   Finance, and HCL02, which is already in X3 as HOT100. Within a 3-letter group, codes already
   given to Customer Services go first, then the most recently invoiced. **Codes promised to Sue:
   TIE02E = TEC103, TIE02POL = TEC104.** Don't let a rerun change them (they're in `PROMISED`).
+- **A missing account isn't just a missing customer row.** The order and invoice views
+  inner-join to the cross-reference, so an account with no Sage code silently loses its rows.
+  The 27 Oct extract dropped:
+
+  | File | Rows dropped (no Sage account) | Fix |
+  |---|---|---|
+  | YA004BPC customers | the 87 accounts themselves | new rows in the customer spreadsheet |
+  | YA004BPCDL delivery addresses | their addresses | new rows from SL_ADDRESSES |
+  | YA004BICX open sales invoices | 255 items, about GBP 4.48m (loaded: 587, GBP 5.25m) | rebuild after the xref |
+  | YA004SOHPJ open sales orders | 1,428 lines | rebuild after the xref |
+  | YA004BPS suppliers | to be measured: `sql/suppliers_missing_from_x3.sql` | new rows in the supplier spreadsheet |
+  | YA004BISX open purchase invoices | 241 items | rebuild after the xref |
+  | YA004POH open purchase orders | 124 lines | rebuild after the xref |
+  | ZSDIITMSUP product-suppliers | links to the missing suppliers | rebuild after the xref |
+
+  Products, BOMs, routes, costs, stock (SMR) and works orders carry no customer or supplier
+  code and aren't affected. The "Held back" tabs in POH and SOHPJ are a separate issue:
+  products not in the item load.
+- `scripts/build_customer_mapping.py` builds the customer mapping table (all 304 live customers:
+  217 in X3, plus 86 new, plus IBS01 once it has an address) and `sql/xref_new_customer_accounts.sql`,
+  which adds the 86 new pairs to XREF_SAGE_BPC as MATCHED_BY = 'new account'. Accounts that share
+  a name (Techtronic, Boots, Kurt Geiger ...) can't be matched by name, so these pairs are fixed by
+  code. Load order: the customer import (which creates the accounts) before BICX and SOHPJ.
 - The supplier and customer names aren't kept in git. `scripts/make_xref_inserts.py` rebuilds
   the full SQL from the **loaded** V4 supplier and V7 customer files. Don't use the V8 files:
   V8 rewrote `&` as AND, which breaks the name match.
@@ -469,7 +492,8 @@ There is no data dictionary for Access; everything below was found by querying t
    1; product_suppliers_v3.sql grid 2; works_orders_extract.sql grid 2; plus the cleansed
    product, BOM, route and cost source files.
 2. **Cross-reference:** rebuild `xref_sage_codes.sql` with `scripts/make_xref_inserts.py`
-   (V4 suppliers, V7 customers) and run it, then `views_v2.sql`.
+   (V4 suppliers, V7 customers) and run it, then `xref_new_customer_accounts.sql` (the new
+  accounts; xref_sage_codes.sql drops them), then `views_v2.sql`.
 3. **Product side:** `standardise_v3.py` aligns routes, costs and BOMs to the product file
    and splits BOMs into loadable and held back. Then `build_v7_fixes.py` applies the code
    rule, supplier VAT, customer fixes, product-suppliers and delivery addresses.
