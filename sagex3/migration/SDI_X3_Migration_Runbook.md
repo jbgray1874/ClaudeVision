@@ -551,6 +551,14 @@ There is no data dictionary for Access; everything below was found by querying t
 - **Queries on SDILive:** read-only against Access (`dbo`), and narrow to the codes needed
   before joining or totalling. Two queries on 27 Oct ran far too long because they totalled whole
   tables first. Check brackets and REPLACE arguments before sending.
+- **Don't start a dependent import while the one before it is still running.** On 27 Oct
+  YA004BPCDL was loaded while the customer import (over an hour) was still going:
+  - TES101 gave "Table modification in progress", because the customer import had the record open;
+  - TEC100, DRE100 and MAR101 gave "BCGCOD / BPCPYR mandatory" and "Address code does not
+    exist". Those customers weren't in X3 yet, so X3 tried to create them from the three
+    delivery-address fields.
+
+  Wait for each import to finish, read its log, then load the next. Reloading BPCDL afterwards is safe.
 - **Supplier rejections cascade:** a rejected supplier takes its product-supplier rows, open
   items and purchase orders with it. Load suppliers first and read the log.
 
