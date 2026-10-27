@@ -279,6 +279,16 @@ other is held back. **SDI to decide which product keeps each code.**
     Access says GB, and UK postcodes fixed.
   - **Cross-reference:** it also writes `sql/xref_new_supplier_accounts.sql` (codes only). Run it
     after `xref_sage_codes.sql`, as for customers.
+- **Orders and invoices of the new accounts (27 Oct).** `sql/export_new_accounts_orders_invoices.sql`
+  is read-only, with the new codes written in, so no cross-reference change is needed. It returns
+  only those rows. `populate_guides.py` takes them as `EXTRA_EXPORT`, with `CUSTOMER_FILE` and
+  `SUPPLIER_FILE` pointing at the final customer and supplier files. Then run `recode_ledgers_v7.py`
+  and the Track 1 part of `build_sheets.py`. The rebuild without EXTRA reproduces the earlier load
+  files byte for byte; with it, every existing row is unchanged and these rows are added:
+  - SOHPJ: 1,149 lines (222 more held back for products not in the item load);
+  - POH: 100 lines;
+  - BICX: 230 items, GBP 3.54m;
+  - BISX: 253 items, GBP 0.84m.
 - The supplier and customer names aren't kept in git. `scripts/make_xref_inserts.py` rebuilds
   the full SQL from the **loaded** V4 supplier and V7 customer files. Don't use the V8 files:
   V8 rewrote `&` as AND, which breaks the name match.

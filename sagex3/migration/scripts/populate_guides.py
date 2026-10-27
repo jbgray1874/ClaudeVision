@@ -44,6 +44,12 @@ def read_semi(p):
 
 
 # --- the export grids -------------------------------------------------------
+# EXTRA: an export of rows to add to the same files (export_new_accounts_orders_invoices.sql,
+# four grids: SOH, POH, BICX, BISX). Its rows are cut to the columns of the original export
+# (the views also return REF_ columns) and go through exactly the same rules.
+EXTRA = os.environ.get("EXTRA_EXPORT")
+CUSTOMER_FILE = os.environ.get("CUSTOMER_FILE", f"{BASE}/upl2/bpc.txt")
+SUPPLIER_FILE = os.environ.get("SUPPLIER_FILE", f"{BASE}/upl2/bps.txt")
 blocks, cur = [], []
 for line in open(f"{BASE}/run1/out.txt", encoding="utf-8", errors="replace").read().split("\n"):
     if line.strip() == "":
@@ -61,6 +67,14 @@ DATA = {
     "YA004BICX": [r.split("\t") for r in blocks[9]],
     "YA004BISX": [r.split("\t") for r in blocks[10]],
 }
+if EXTRA:
+    extra = [[l.split("\t") for l in b.strip("\n").splitlines()]
+             for b in open(EXTRA, encoding="utf-8", errors="replace").read().replace("\r\n", "\n").split("\n\n")
+             if b.strip()]
+    for name, rows in zip(("YA004SOH", "YA004POH", "YA004BICX", "YA004BISX"), extra):
+        width = len(DATA[name][0])
+        assert all(len(r) >= width for r in rows), name
+        DATA[name] += [r[:width] for r in rows]
 
 # --- what the rows have to agree with --------------------------------------
 items = {}
@@ -68,8 +82,8 @@ for r in read_semi(f"{BASE}/uploads_final/ZSDIITM_Cleansing.txt"):
     code = r[1].strip().upper()
     d = next((x.strip() for x in (r[2], r[4], r[3]) if x.strip()), "")
     items.setdefault(code, d[:30])
-customers = {r[1].strip() for r in read_semi(f"{BASE}/upl2/bpc.txt")}
-suppliers = {r[1].strip() for r in read_semi(f"{BASE}/upl2/bps.txt")}
+customers = {r[1].strip() for r in read_semi(CUSTOMER_FILE)}
+suppliers = {r[1].strip() for r in read_semi(SUPPLIER_FILE)}
 
 # template layout: header rows, columns that are numbers, and where the codes sit
 SPEC = {
