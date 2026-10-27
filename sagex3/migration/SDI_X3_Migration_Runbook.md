@@ -332,8 +332,12 @@ codes, descriptions, names, addresses, operation descriptions, comments.
   graded OLD and dropped. **Extract on load day.**
 - 137 in-use products (GOOD or INCOMPLETE, on orders or in stock) were missing from the first
   load and have been added since V6 (`items_to_append.sql`).
-- **The same gap as the customers (27 Oct): live products graded OLD are left out.** The OLD
-  grade doesn't look at stock or open orders. The clean-run held-back tabs show:
+- **How vw_DQ_ITM grades.** Last activity is the latest of the product's last sales order, its
+  last works order, or, for a BOM component, the last sales or works order of any product it's
+  used in. OLD means no activity or more than 5 years ago. REVIEW is 2–5 years, INCOMPLETE is
+  current with no description, GOOD is current. **It ignores purchase orders, goods received and
+  stock on hand**, so a bought-in material that's in stock but not on a recently active BOM is OLD.
+- **The same gap as the customers (27 Oct): live products graded OLD are left out.** The clean-run held-back tabs show:
   - 1,473 products holding stock, worth GBP 603,151 (2,176 SMR lots). Most are real materials:
     mild steel (MS) GBP 85k, fixings GBP 30k, powder GBP 27k, sub-assemblies, sheet metal,
     electrical, plastics, MDF.
@@ -540,6 +544,13 @@ There is no data dictionary for Access; everything below was found by querying t
   removed). The cross-reference must reproduce that.
 - **Snapshot timing:** products graded by last activity against today's date.
 - **Macro:** skips two heading rows. BICX and BISX have one.
+- **Missing accounts drop rows silently.** The order and invoice views inner-join to the
+  cross-reference, so an account with no Sage code loses its orders and invoices from the export.
+  The data-quality grades (customers: GOOD only; products: OLD) left live accounts and products
+  out. Every live record is migrated; a grade only says what to fix. See the section 9 STOP check.
+- **Queries on SDILive:** read-only against Access (`dbo`), and narrow to the codes needed
+  before joining or totalling. Two queries on 27 Oct ran far too long because they totalled whole
+  tables first. Check brackets and REPLACE arguments before sending.
 - **Supplier rejections cascade:** a rejected supplier takes its product-supplier rows, open
   items and purchase orders with it. Load suppliers first and read the log.
 
@@ -549,10 +560,17 @@ There is no data dictionary for Access; everything below was found by querying t
 
 1. **Fresh extract** (all on one day): views_v2.sql export grids; bins_and_delivery.sql grid
    1; product_suppliers_v3.sql grid 2; works_orders_extract.sql grid 2; plus the cleansed
-   product, BOM, route and cost source files.
+   product, BOM, route and cost source files. For the product-suppliers, `product_suppliers_v4.sql`
+   (v3 with the new supplier codes inline, read-only). `product_suppliers_new_only.sql` gives just
+   the products bought from the new suppliers, and `scripts/build_itmsup_new_suppliers.py` merges
+   that into an existing ZSDIITMSUP file.
 2. **Cross-reference:** rebuild `xref_sage_codes.sql` with `scripts/make_xref_inserts.py`
-   (V4 suppliers, V7 customers) and run it, then `xref_new_customer_accounts.sql` and
-  `xref_new_supplier_accounts.sql` (the new accounts; xref_sage_codes.sql drops them), then `views_v2.sql`.
+   (V4 suppliers, V7 customers) and run it. Then run `add_new_accounts_to_xref.sql` (the 86 + 83
+   new accounts, which xref_sage_codes.sql drops; only migration tables change), then `views_v2.sql`.
+   Check the first grid of `export_orders_and_invoices.sql`: 86 and 83 new accounts, and the
+   "still dropped" counts only for accounts left out on purpose (27 Oct: 56 SO lines, 1 BICX item).
+   Then export its four grids. On 27 Oct the xref update had not gone in, so the new accounts'
+   rows came from the read-only `export_new_accounts_orders_invoices.sql` instead (section 4.2).
 3. **Product side:** `standardise_v3.py` aligns routes, costs and BOMs to the product file
    and splits BOMs into loadable and held back. Then `build_v7_fixes.py` applies the code
    rule, supplier VAT, customer fixes, product-suppliers and delivery addresses.
@@ -576,24 +594,39 @@ are. They need Python 3 with openpyxl.
 
 | Spreadsheet | Rows |
 |---|---|
-| YA004BPS_suppliers_MAPPED | 623 |
-| YA004BPC_customers_MAPPED | 2,268 (217 customers) |
-| YA004BPCDL_delivery_addresses_MAPPED | 2,268 |
+| YA004BPS_suppliers_MAPPED | 706 (623 + 83 new) |
+| YA004BPC_customers_MAPPED | 6,169 rows (217 + 86 new customers) |
+| YA004BPCDL_delivery_addresses_MAPPED | 6,169 |
 | ZSDIITM_products_MAPPED | 16,499 |
-| ZSDIITMSUP_product_suppliers_MAPPED | 7,679 |
+| ZSDIITMSUP_product_suppliers_MAPPED | 8,644 (965 added, 54 changed for the new suppliers) |
 | YA00408BOM_boms_MAPPED | 30,131 |
 | ZSDIROU2_routes_MAPPED | 31,255 |
 | YITC_product_costs_MAPPED | 9,597 |
 | YA004MFG_works_orders_MAPPED_clean_run | 638 |
 | YA004SMR_guide_MAPPED_clean_run | 6,303 lots, £3,437,532.29 |
-| YA004POH_guide_MAPPED_clean_run | 479 lines, 168 orders |
-| YA004SOHPJ_guide_MAPPED_clean_run | 2,012 lines, 558 orders |
-| YA004BICX_guide_MAPPED | 587 items, £5,249,157.38 |
-| YA004BISX_guide_MAPPED | 2,027 items, £6,113,728.04 |
+| YA004POH_guide_MAPPED_clean_run | 579 lines (479 + 100 new suppliers') |
+| YA004SOHPJ_guide_MAPPED_clean_run | 3,161 lines (2,012 + 1,149 new customers') |
+| YA004BICX_guide_MAPPED | 817 items, £8,788,291.72 (+230, £3.54m) |
+| YA004BISX_guide_MAPPED | 2,280 items, £6,953,942.83 (+253, £0.84m) |
+
+Data: everything from the 21 Oct export, except the new accounts' rows, which are from 27 Oct.
+The real load needs one fresh extract of everything, on one day.
+
+**Known gaps. Nothing else is known to be missing; these are:**
+
+| Gap | Size | Where it shows | Status |
+|---|---|---|---|
+| Live products graded OLD (section 6.1) | 1,681 products: 1,473 with stock, 250 on open orders | SMR Held back: 2,176 lots, £603,151. SOHPJ Held back: 418 lines. POH Held back: 204 lines | Parked by James 27 Oct: products are loaded. Needs a top-up product load, or SDI / Finance sign-off on the stock difference |
+| Order lines with a negative value (a credit on an order) | 4 SO lines, 1 PO line | SOHPJ / POH Held back | X3 needs a credit note. SDI to decide |
+| Accounts left out on purpose | Customers: 4 intercompany, ESD01, FSC01, IBS01 (no address). Suppliers: 72 employee expense accounts, 6 non-suppliers | Customers_to_add.xlsx, Suppliers_to_add.xlsx. Their 56 open sales order lines and 1 customer item are not loaded | Finance to confirm |
+| Product-supplier links for products not in the product file | 575 products (106 bought in 2026; products_bought_2026_not_loaded.sql has their grades) | not loaded | Follows the OLD products decision |
+| Alternative suppliers | 3,150 | not loaded: the template has no priority column | Ethan: a PIO column |
+| VAT numbers blank for Finance to supply | 21 new customers, 4 new suppliers, plus the earlier blanked ones | Check tabs of the customer / supplier files | Finance |
+| Rows held in Track 2 | 33 shared product codes, 12 BOM lines, 71 route lines, 28 costs | V8_track2_report.xlsx | SDI decisions below |
 
 **Waiting on Marc:** whether October is open in UAT; the go-live date; carriage as lines or
 invoice element; the ship-to field on SOHPJ; static data (999100, 999200, 18L, payment terms,
-EUR/USD); M&S plc to MAR100; the 27 suggested bins, A001 and the racking; whether YA004ITM
+EUR/USD); the 27 suggested bins, A001 and the racking; whether YA004ITM
 replaces ZSDIITM.
 
 **Waiting on Ethan:** DIE/CCE field names; CURLED in the X3 BISX definition; the X3 lot
@@ -603,8 +636,8 @@ works order questions; clean-run error logs.
 
 **SDI decisions:** which product keeps each of the 33 shared codes; the 14,304 products BOMs
 use but the load leaves out; real VAT numbers and EU tax rules (finance); credits on sales
-orders; the multi-drop store allocation; the 2,377 bought-in products with no supplier; the
-110 suppliers with no Sage code.
+orders; the multi-drop store allocation; the bought-in products with no supplier (fewer now: 965 were the new suppliers' products);
+the live products graded OLD; the employee expense and intercompany accounts left out.
 
 **Confidentiality:** when emailing suppliers, email yourself and put the recipients in BCC,
 never CC (Claire Newall). Supplier and customer lists are not kept in git.
