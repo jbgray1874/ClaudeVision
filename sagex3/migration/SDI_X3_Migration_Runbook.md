@@ -15,6 +15,13 @@ an old file. Read section 1 before every run.
 
 ## 1. Golden rules – how not to reintroduce old data
 
+0. **SDILive is production. Nothing may change in it, under any circumstances (James, 27 Oct).**
+   Every query sent to run there must be read-only: SELECT only, and #temp tables at most, which
+   live in tempdb. No CREATE, ALTER, DROP, INSERT, UPDATE or DELETE, and that includes the
+   `migration` schema. Code mapping for new accounts is done in the build scripts, not in a table.
+   The scripts that wrote to SDILive (`xref_new_*_accounts.sql`, `add_new_accounts_to_xref.sql`)
+   were withdrawn. `views_v2.sql` and `xref_sage_codes.sql` also create objects in the `migration`
+   schema: don't rerun them on SDILive. Use read-only versions, or a copy of the database.
 1. **Extract everything fresh, on the same day, at a fixed as-at time.** Stock moved £21k in an
    hour while we worked. Products are selected by last activity against today's date (see 6.1),
    so an old product extract misses new products that are on live orders. Every file in a run
