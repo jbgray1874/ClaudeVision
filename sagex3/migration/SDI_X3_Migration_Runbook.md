@@ -212,6 +212,18 @@ other is held back. **SDI to decide which product keeps each code.**
   is added as rows in the YA004BPC / YA004BPS file, with a new code in the same pattern:
   3 letters of the name + 100 for customers or 500 for suppliers, the next number within a
   group (TEC100-102 exist, so Techtronic ELC would be TEC103).
+- **Why live customers were missing (27 Oct):** the customer import took only accounts graded
+  GOOD in `migration.vw_DQ_BPC`. 98 accounts not graded OLD were left out: 55 "possible
+  duplicates" (same name, really per-country or per-currency accounts, 20 of them Techtronic),
+  16 overseas accounts flagged because category and tax rule disagree, 12 "UK with no postcode"
+  (mostly overseas), 3 with no address, 4 intercompany, and 8 GOOD ones newer than the file.
+  On every rerun, select on "not OLD", not "GOOD only".
+- `scripts/build_customers_to_add.py` turns that list into `Customers_to_add.xlsx` with an action
+  and a proposed code per account: 86 to add, 1 to add once it has an address (IBS01), 4
+  intercompany and 2 ledger accounts (ESD01 discount, FSC01 fuel scale charge) left out for
+  Finance, and HCL02, which is already in X3 as HOT100. Within a 3-letter group, codes already
+  given to Customer Services go first, then the most recently invoiced. **Codes promised to Sue:
+  TIE02E = TEC103, TIE02POL = TEC104.** Don't let a rerun change them (they're in `PROMISED`).
 - The supplier and customer names aren't kept in git. `scripts/make_xref_inserts.py` rebuilds
   the full SQL from the **loaded** V4 supplier and V7 customer files. Don't use the V8 files:
   V8 rewrote `&` as AND, which breaks the name match.
