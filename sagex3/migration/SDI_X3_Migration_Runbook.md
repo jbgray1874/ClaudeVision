@@ -502,3 +502,67 @@ orders; the multi-drop store allocation; the 2,377 bought-in products with no su
 
 **Confidentiality:** when emailing suppliers, email yourself and put the recipients in BCC,
 never CC (Claire Newall). Supplier and customer lists are not kept in git.
+
+---
+
+## 14. Fixes applied – both tracks, file by file
+
+Counts are from the 21–27 October build. They will move with each fresh extract, but the
+fixes themselves are what every rerun must repeat.
+
+### Track 1 – opening transactions
+
+| File | Fixes applied |
+|---|---|
+| **YA004SMR** opening stock | Mapped column for column to the template. Full lot cost (material + labour) from the lot records. Product codes as loaded. **Locations:** every Access bin mapped to Marc's list (437 exact, 253 by rule, 27 suggested, 1,213 to A001); 2,317 lots on a real location, 3,986 in A001. **Supplier lots:** 232 cleaned, spaces to hyphens. Held back 2,176 lots (£603,150.76) whose product is not in the product load. Clean run: 131 product codes changed to the V7 codes. |
+| **YA004SOH → YA004SOHPJ** open sales orders | New template: Dim Code (DIE) = D02 and Dimension (CCE) = P00003 added between Header text and Line (22 columns). **Dates:** 293 lines with a ship or delivery date before 2025 moved to 20261031; 64 lines shipping before their order date given the requested delivery date; order dates unchanged; header dates the same on every line of an order (253 lines). **Text:** 145 cells cleaned to Ethan's rule; 878 blank descriptions filled from the product file. Lines renumbered from 1000 per order (271); 30 orders rearranged so identical headers are never adjacent. Units to EA, £ to GBP, outstanding quantity, discounted price. Held back 200 lines, including the credits on orders (£93,241.98). Clean run: 47 product codes changed. |
+| **YA004POH** open purchase orders | Mapped to the template. **Text:** 36 descriptions cleaned (M&S-TOOLING → M AND S-TOOLING). 272 blank descriptions filled. Lines renumbered (33), 26 orders rearranged. Held back 193 lines. Clean run: 5 product codes changed. |
+| **YA004BICX** customer open items | Mapped to the template. Outstanding balances, positive values, £ to GBP, Sage customer codes via the cross-reference, repeated references suffixed. Reconciles to Access to the penny. The character rule found nothing to change. |
+| **YA004BISX** supplier open items | As BICX, plus CURLED = GBP. **References:** 84 document references with spaces or / cleaned (2026158/77 → 2026158-77), still unique. 3,134 text cells tidied (dashes, double spaces). A 23-column version without CURLED exists in case X3 rejects it. |
+| **YA004MFG** works orders (new) | 638 of the 744 open Access works orders, one line each. Quantity = ordered less made. Start = created date. End = scheduled date (13 that ended before they started now end on the start date). Held back 106: 36 with nothing left to make, 42 with no BOM, 25 not a product (all 16 prototypes), 3 with no route. Clean run: 42 codes changed. |
+
+### Track 2 – master data
+
+| File | Fixes applied |
+|---|---|
+| **YA004BPS** suppliers | **VAT:** 186 dummy numbers blanked. These were two Polish numbers copied across 117 suppliers, TEMPJAF placeholders, and GB numbers on overseas companies; they were the cause of the 180 rejections in UAT. **Tax rule:** 28 suppliers on EU set to ROWS. **Text:** 211 name and address cells cleaned. Address flag 2 on all (already right). A reload file of the 179 rejected suppliers was made for UAT. |
+| **YA004BPC** customers | **Tax rule:** the 10 EU customers (56 address rows) set to ROW / ROWC, as UNI100. **VAT:** ROL100's 8-digit number blanked. **TEC100:** postcodes moved out of the address lines (POSCOD error). **Two rows** split by a semicolon between emails put back to 34 fields. **Text:** 367 cells cleaned. Address flag (AG) checked: 001 = 2, others = 1. |
+| **YA004BPCDL** delivery addresses (new) | 2,268 rows, one per customer address. For customers with several addresses the name is built from company + store line + postcode, within 30 characters. Built from the cleaned customer file. |
+| **ZSDIITM** products | **Codes (V7):** 451 changed, 160 because of a symbol, 291 only to upper case, with no new duplicates. **Descriptions (V8):** 4,426 cells cleaned (Dowel£s → Dowels, £ per 1000 → GBP per 1000, 50° → 50 deg, & → AND). 68 blank descriptions filled. 137 missing in-use products added (V6). Held back 33 rows: a code on two products. |
+| **ZSDIITMSUP** product-suppliers (new) | 7,679 products with their main supplier, from purchase history since Sept 2022. 3,150 alternatives held for a priority column. The cause of the blank suppliers in planning: 2,143 rows belonged to the 179 suppliers rejected on VAT. |
+| **YA00408BOM** BOMs | **V6:** every code rewritten to the product file's spelling, Excel damage repaired, lines split into loadable and held back. 33,596 held: parent or component not in the product load (14,304 products). **V7:** 10 recovered by the code rule. **V8:** 11 lines on bought-in FGSL products held, 1 exact duplicate dropped, 1 clashing sequence moved on. 92 BOMs load with a component missing (listed). |
+| **ZSDIROU2** routes | Work centres checked against X3's list: all 31 used are X3 codes, and each operation is on the right type of centre. 4,607 operation descriptions cleaned (P/C → P-C). 71 lines on 36 bought-in products held. Use status 1 kept (guide example; asked Ethan). |
+| **YITC** product costs | Codes aligned to the product file and Excel damage repaired (V6). Confirmed all under material (cost type 1). 28 second costs held, for codes that were on two products. |
+
+### Mapping and cross-reference work behind both tracks
+- **Customer and supplier codes:** the cross-reference was rebuilt by name against the loaded
+  files: 623/623 suppliers, 217/217 customers. The old CUS1001/SUP1001 numbering was dropped.
+- **Product codes:** one rule everywhere (section 4.1). V6 aligned all product-side files to
+  the product master; V7 removed every symbol; V8 cleaned descriptions.
+- **Stock locations:** Access bins to Marc's 2,470 X3 locations (section 7).
+- **Work centres:** checked against X3's 33 (section 8).
+- **The old migration views** were rewritten (views_v2.sql): price-per divisor, order filter,
+  site, date format, stock cost source, currency rule.
+
+---
+
+## 15. Templates and files received from Acuity
+
+| Received | From, when | What it is | What we did with it |
+|---|---|---|---|
+| Five Track 1 guides: YA004SMR, SOH, POH, BICX, BISX | Ethan, 20 Oct zip | The opening transaction templates. Confirmed latest: BICX 10/06/2026, BISX 29/01/2026, others 23/10/2025 | Mapped column for column; field counts 19 / 20 (now 22) / 15 / 23 / 24 |
+| Answers on the five files | Marc, 22 Oct | S01A only site; X3 bin codes to map; accounting date = last day of the previous period; positive values with currency in its own field; Invoice Element 1 = carriage; CURLED yes; carrier blank OK; X3 numbers orders; outstanding qty and discounted price correct; X3 calculates status; FOC lines OK; ship-to column can be added | Built into the files |
+| **Location_List.xlsx** | Marc, 22 Oct | 2,470 X3 locations in 5 types (section 7) | Every Access bin mapped; stock file rebuilt |
+| **Import_Error_Troubleshooting_Guide.xlsx** | Ethan, 20 Oct (sent again 27 Oct, identical) | The UAT errors: 180 supplier codes (VAT), 11 customer errors (10 VACBPR, 1 POSCOD) | Root causes found and fixed (dummy VAT numbers, no EU tax rule, TEC100 postcodes). S500 queried |
+| **Import errors email** | Ethan, 20 Oct | Product, BOM, route and cost errors are missing products from stray symbols, mainly % and ?; clean every symbol | Done (V7). Also found most BOM errors are products missing from the load, and 33 shared codes |
+| **YA004ITM_guide.xlsx** + macro email | Marc, 23 Oct (sent again, identical) | Macro version of an import template: a cover sheet with defaults and a button that writes the .txt from "Data with Headings", skipping 2 rows; sheet names hard-coded. Product layout of 19 columns (statistical groups, expiry, shelf life, serial, tax level GSR, back-to-back) | The macro didn't survive email (plain .xlsx, empty cover sheet). We use spreadsheets with the same sheet naming. Whether YA004ITM replaces ZSDIITM is asked |
+| **SDI_Data_Migration_-_Import_Notes.docx** | Ethan, 23 Oct | Per-template fixes: allowed characters; BP tax rule table (no EU); AG address flag rule; GB and EU VAT formats; products and descriptions more thoroughly; BOMs need loaded products; work centre mapping; costs under material; SOH dates (2024) and DIE/CCE; SMR lots must be X3 lots; BICX/BISX "worked", missing accounts; IME column on BISX to come | Every point applied or asked (sections 5, 6, 14). The X3 lot export is still needed |
+| **YA004SOHPJ** (instructions) | Ethan, 23 Oct | SOH + Dim Code (D02) and Dimension (P00003) between columns M and N | Built as YA004SOHPJ (22 columns), DIE/CCE to confirm |
+| **YA004BPCDL_guide.xlsx** | Ethan, 23 Oct (sent twice) | Customer delivery addresses: BPCNUM, BPAADD, BPDNAM. Load after customers | Built, 2,268 rows |
+| **ZSDIITMSUP_Guide_V2.xlsx** | Ethan, 23 Oct (sent twice) | Product-suppliers: ITMREF, BPSNUM, ITMREFBPS (= product code) | Built, 7,679 rows; PIO asked |
+| **YA004MFG_Guide.xlsx** | Ethan, 27 Oct | Works orders: 11 columns, BOM code and routing code 10, update code C, status 1. Example rows are illustrative, not live orders. Standard spreadsheet tools can't read its styles; it was read from the XML | Built, 638 orders; 6 questions asked |
+| **X3 work centre list** (screenshot) | James, 27 Oct | 33 X3 work centres with group, type and title (section 8) | Routes checked against it: all match |
+
+**Still to receive:** the X3 lot export (SMR); the X3 import definition for YA004BISX
+(CURLED); the field names for SOHPJ's two new columns; the IME column for BISX; clean-run
+error logs; the original BPC and BPS template workbooks, to keep with this runbook.
