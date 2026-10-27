@@ -201,6 +201,17 @@ other is held back. **SDI to decide which product keeps each code.**
   3. Then manual pairs: KVT01 to KOV500 (Kovotvar), HCL02 to HOT100 (the load file misspells
      Hotel Chocolat).
 - Result: 623 of 623 suppliers and 217 of 217 customers.
+- **Check which version is in SDILive before every extract.** On 27 Oct the table in the database
+  was still version 2 (215 of 217): WCP02 pointed at WCP100 instead of WCP101, and HCL02 / HOT100
+  was missing. Run version 3 first. A quick check: `SELECT COUNT(DISTINCT SAGE_CODE) FROM
+  migration.XREF_SAGE_BPC` must be 217.
+- The old-to-new customer list for Customer Services (Sue Rogers) is built from this table:
+  `SELECT ACCESS_CODE, ACCESS_NAME, SAGE_CODE, SAGE_NAME FROM SDILive.migration.XREF_SAGE_BPC`.
+- **Creating new customer and supplier accounts is done by the import, not by Acuity.** An
+  account missing from X3 (Techtronic ELC GmbH TIE02E/TIE02POL, M&S plc MAR002, Boots UK BOT01 ...)
+  is added as rows in the YA004BPC / YA004BPS file, with a new code in the same pattern:
+  3 letters of the name + 100 for customers or 500 for suppliers, the next number within a
+  group (TEC100-102 exist, so Techtronic ELC would be TEC103).
 - The supplier and customer names aren't kept in git. `scripts/make_xref_inserts.py` rebuilds
   the full SQL from the **loaded** V4 supplier and V7 customer files. Don't use the V8 files:
   V8 rewrote `&` as AND, which breaks the name match.
