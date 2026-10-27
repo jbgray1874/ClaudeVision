@@ -28,30 +28,30 @@ INSERT INTO #p (code) VALUES
     ('TOOLINGCOST'), ('Y86-266');
 
 WITH dq AS (
-    SELECT CAST(UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ITMREF))), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-')) AS varchar(60)) COLLATE DATABASE_DEFAULT AS code,
+    SELECT CAST(UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ITMREF)), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-')) AS varchar(60)) COLLATE DATABASE_DEFAULT AS code,
            MAX(LTRIM(RTRIM(ITMREF))) AS access_code, MAX(DQ_STATUS) AS dq_status,
            MAX(LEFT(LTRIM(RTRIM(ISNULL(ITMDES1, ''))), 40)) AS description
     FROM migration.vw_DQ_ITM
-    GROUP BY UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ITMREF))), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-'))
+    GROUP BY UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ITMREF)), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-'))
 ), po AS (
-    SELECT CAST(UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(POR_PART_ONLY))), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-')) AS varchar(60)) COLLATE DATABASE_DEFAULT AS code,
+    SELECT CAST(UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(POR_PART_ONLY)), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-')) AS varchar(60)) COLLATE DATABASE_DEFAULT AS code,
            SUM(CASE WHEN ISNULL(POR_QTY_ORDERED, 0) - ISNULL(POR_QTY_DELIVERED, 0) - ISNULL(POR_QTY_REJECTED, 0) > 0
                     THEN 1 ELSE 0 END) AS open_po_lines,
            MIN(POR_ORDER_DATE) AS first_bought, MAX(POR_ORDER_DATE) AS last_bought
     FROM dbo.ASC_POR_TBL
-    GROUP BY UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(POR_PART_ONLY))), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-'))
+    GROUP BY UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(POR_PART_ONLY)), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-'))
 ), so AS (
-    SELECT CAST(UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(COR_PART_ONLY))), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-')) AS varchar(60)) COLLATE DATABASE_DEFAULT AS code,
+    SELECT CAST(UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(COR_PART_ONLY)), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-')) AS varchar(60)) COLLATE DATABASE_DEFAULT AS code,
            SUM(CASE WHEN ISNULL(COR_QTY_ORDERED, 0) > ISNULL(COR_QTY_DELIVERED, 0)
                      AND ISNULL(COR_ORDER_STATUS, '') IN ('', 'B', 'H') THEN 1 ELSE 0 END) AS open_so_lines,
            MAX(COR_ORDER_DATE) AS last_sold
     FROM dbo.ASC_COR_TBL
-    GROUP BY UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(COR_PART_ONLY))), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-'))
+    GROUP BY UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(COR_PART_ONLY)), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-'))
 ), stock AS (
-    SELECT CAST(UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ITMREF))), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-')) AS varchar(60)) COLLATE DATABASE_DEFAULT AS code,
+    SELECT CAST(UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ITMREF)), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-')) AS varchar(60)) COLLATE DATABASE_DEFAULT AS code,
            CAST(SUM(QTYSTU) AS decimal(18, 2)) AS stock_qty
     FROM migration.vw_SMR_V2
-    GROUP BY UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ITMREF))), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-'))
+    GROUP BY UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ITMREF)), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-'))
 )
 SELECT p.code,
        ISNULL(d.access_code, '')                     AS access_code,
