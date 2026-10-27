@@ -55,7 +55,7 @@ SUPPLIER = [
 ]
 
 
-def build(name, title, layout, rows, before, changes):
+def build(name, title, layout, rows, before, changes, path=None, extra=()):
     assert all(len(r) == len(layout) for r in rows), (name, set(len(r) for r in rows), len(layout))
     wb = Workbook()
     ws = wb.active
@@ -96,6 +96,17 @@ def build(name, title, layout, rows, before, changes):
         ch.column_dimensions[col].width = w
     ch.freeze_panes = "A2"
 
+    for title_, head, data in extra:              # extra tabs, e.g. what to check
+        ex = wb.create_sheet(title_)
+        ex.append(head)
+        for c in ex[1]:
+            c.font, c.fill = HF, FILL
+        for r in data:
+            ex.append(list(r))
+        for i in range(1, len(head) + 1):
+            ex.column_dimensions[get_column_letter(i)].width = 22
+        ex.freeze_panes = "A2"
+
     nt = wb.create_sheet("Notes")
     for l in [[f"{name} - {title}, clean run"], [], ["Rows", len(rows)], ["Changes from the file loaded in UAT", n]] \
             + changes + [[], ["Headings",
@@ -106,7 +117,7 @@ def build(name, title, layout, rows, before, changes):
     nt["A1"].font = Font(bold=True, size=13)
     nt.column_dimensions["A"].width = 40
     nt.column_dimensions["B"].width = 100
-    path = f"{OUT}/{name}_{title.lower()}_MAPPED.xlsx"
+    path = path or f"{OUT}/{name}_{title.lower()}_MAPPED.xlsx"
     wb.save(path)
 
     # read back: every cell must equal the load data
@@ -118,16 +129,17 @@ def build(name, title, layout, rows, before, changes):
     print(path.split("/")[-1], len(rows), "rows checked,", n, "changes listed")
 
 
-bps = read(f"{BASE}/out_v8/YA004BPS_load6_suppliers.txt")
-build("YA004BPS", "Suppliers", SUPPLIER, bps, read(f"{BASE}/upl2/bps.txt"), [
-    ["VAT numbers", "Dummy numbers removed - the PL numbers copied across 117 suppliers, TEMPJAF placeholders, GB "
-                    "numbers on overseas companies. 185 suppliers. UK suppliers load with a blank"],
-    ["Tax rule", "28 suppliers on EU set to ROWS - X3 has no EU tax rule. Finance to confirm"],
-    ["Names and addresses", "Ethan's character rule. Emails, phones and websites untouched"]])
-bpc = read(f"{BASE}/out_v8/YA004BPC_load6_customers.txt")
-build("YA004BPC", "Customers", CUSTOMER, bpc, read(f"{BASE}/upl2/bpc.txt"), [
-    ["Tax rule", "10 EU customers (56 address rows) set to ROW / ROWC, as UNI100 which loaded. Finance to confirm"],
-    ["VAT number", "ROL100's GB76361992 is 8 digits - blanked. Finance to supply the real one"],
-    ["TEC100", "Postcodes moved out of the address lines (28823, 4785-598) for the POSCOD error"],
-    ["Two rows", "A second email after a ';' had pushed every later field along by one - first email kept"],
-    ["Names and addresses", "Ethan's character rule. Emails and phones untouched"]])
+if __name__ == "__main__":
+    bps = read(f"{BASE}/out_v8/YA004BPS_load6_suppliers.txt")
+    build("YA004BPS", "Suppliers", SUPPLIER, bps, read(f"{BASE}/upl2/bps.txt"), [
+        ["VAT numbers", "Dummy numbers removed - the PL numbers copied across 117 suppliers, TEMPJAF placeholders, GB "
+                        "numbers on overseas companies. 185 suppliers. UK suppliers load with a blank"],
+        ["Tax rule", "28 suppliers on EU set to ROWS - X3 has no EU tax rule. Finance to confirm"],
+        ["Names and addresses", "Ethan's character rule. Emails, phones and websites untouched"]])
+    bpc = read(f"{BASE}/out_v8/YA004BPC_load6_customers.txt")
+    build("YA004BPC", "Customers", CUSTOMER, bpc, read(f"{BASE}/upl2/bpc.txt"), [
+        ["Tax rule", "10 EU customers (56 address rows) set to ROW / ROWC, as UNI100 which loaded. Finance to confirm"],
+        ["VAT number", "ROL100's GB76361992 is 8 digits - blanked. Finance to supply the real one"],
+        ["TEC100", "Postcodes moved out of the address lines (28823, 4785-598) for the POSCOD error"],
+        ["Two rows", "A second email after a ';' had pushed every later field along by one - first email kept"],
+        ["Names and addresses", "Ethan's character rule. Emails and phones untouched"]])

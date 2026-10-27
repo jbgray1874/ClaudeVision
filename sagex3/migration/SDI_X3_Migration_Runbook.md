@@ -247,6 +247,19 @@ other is held back. **SDI to decide which product keeps each code.**
   which adds the 86 new pairs to XREF_SAGE_BPC as MATCHED_BY = 'new account'. Accounts that share
   a name (Techtronic, Boots, Kurt Geiger ...) can't be matched by name, so these pairs are fixed by
   code. Load order: the customer import (which creates the accounts) before BICX and SOHPJ.
+- `scripts/build_new_customers.py` turns the output of `sql/new_customer_details.sql` (vw_BPC
+  plus SL_ADDRESSES) into customer rows and delivery addresses for the new accounts (27 Oct: 86
+  customers, 3,901 addresses). It writes `YA004BPC_customers_NEW_ACCOUNTS_MAPPED.xlsx` and
+  `YA004BPCDL_delivery_addresses_NEW_ACCOUNTS_MAPPED.xlsx` for UAT now, plus the full clean-run
+  files with the new rows after the existing 2,268, which are left unchanged. Its rules:
+  - the address code is the Access AD_CODE (three digits); the address Access flags as main is the default;
+  - one SL_ADDRESSES field can hold several lines, padded to 30 or run together, so it's split;
+    anything past three lines is folded into line 3 or 2, or listed if it doesn't fit;
+  - the tax rule comes from the Access VAT code (DOM → DOM/DOM, EU → ROW/ROWC), with conflicts
+    against the address country listed for Finance;
+  - where Access says GB but the address names another country, the named country is used (994 addresses);
+  - VAT numbers without a country prefix are blanked, with a suggested prefix on the Check tab;
+  - blank addresses are left out, and duplicate delivery descriptions get the address code added.
 - The supplier and customer names aren't kept in git. `scripts/make_xref_inserts.py` rebuilds
   the full SQL from the **loaded** V4 supplier and V7 customer files. Don't use the V8 files:
   V8 rewrote `&` as AND, which breaks the name match.
