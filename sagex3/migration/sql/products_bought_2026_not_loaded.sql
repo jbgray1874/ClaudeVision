@@ -1,9 +1,12 @@
 -- products_bought_2026_not_loaded.sql  -  READ ONLY, changes nothing (temporary tables only, in tempdb)
 --
--- 106 products bought in 2026 from the suppliers that were missing from X3, that are not in
--- the product file (ZSDIITM). For each: its grade in migration.vw_DQ_ITM (the rule that picked the
--- product file), and whether it is live - open PO lines, open sales order lines, stock.
--- One grid. Results To File, tab delimited, and send it back.
+-- The 106 products bought in 2026 from the suppliers that were missing from X3, that are not in the
+-- product file (ZSDIITM): their grade in migration.vw_DQ_ITM, and whether they are live (open PO
+-- lines, open sales order lines, stock).
+--
+-- Built to be quick: one pass over the purchase order lines finds the 106 products and their
+-- Access codes; every other lookup is then by those codes only. Nothing is totalled for products
+-- outside the 106. One grid. Results To File, tab delimited, and send it back.
 USE SDILive;
 GO
 SET NOCOUNT ON;
@@ -27,46 +30,55 @@ INSERT INTO #p (code) VALUES
     ('PRINT11784-05A'), ('PRINT11784-05B'), ('PRINT11784-06-01'), ('PRINT12345'), ('PRINT127'), ('PROTOPRINT'), ('TESCO-PROTO'), ('TESTRANSPORT'),
     ('TOOLINGCOST'), ('Y86-266');
 
-WITH dq AS (
-    SELECT CAST(UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ITMREF)), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-')) AS varchar(60)) COLLATE DATABASE_DEFAULT AS code,
-           MAX(LTRIM(RTRIM(ITMREF))) AS access_code, MAX(DQ_STATUS) AS dq_status,
-           MAX(LEFT(LTRIM(RTRIM(ISNULL(ITMDES1, ''))), 40)) AS description
-    FROM migration.vw_DQ_ITM
-    GROUP BY UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ITMREF)), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-'))
-), po AS (
-    SELECT CAST(UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(POR_PART_ONLY)), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-')) AS varchar(60)) COLLATE DATABASE_DEFAULT AS code,
-           SUM(CASE WHEN ISNULL(POR_QTY_ORDERED, 0) - ISNULL(POR_QTY_DELIVERED, 0) - ISNULL(POR_QTY_REJECTED, 0) > 0
-                    THEN 1 ELSE 0 END) AS open_po_lines,
-           MIN(POR_ORDER_DATE) AS first_bought, MAX(POR_ORDER_DATE) AS last_bought
-    FROM dbo.ASC_POR_TBL
-    GROUP BY UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(POR_PART_ONLY)), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-'))
-), so AS (
-    SELECT CAST(UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(COR_PART_ONLY)), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-')) AS varchar(60)) COLLATE DATABASE_DEFAULT AS code,
-           SUM(CASE WHEN ISNULL(COR_QTY_ORDERED, 0) > ISNULL(COR_QTY_DELIVERED, 0)
-                     AND ISNULL(COR_ORDER_STATUS, '') IN ('', 'B', 'H') THEN 1 ELSE 0 END) AS open_so_lines,
-           MAX(COR_ORDER_DATE) AS last_sold
-    FROM dbo.ASC_COR_TBL
-    GROUP BY UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(COR_PART_ONLY)), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-'))
-), stock AS (
-    SELECT CAST(UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ITMREF)), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-')) AS varchar(60)) COLLATE DATABASE_DEFAULT AS code,
-           CAST(SUM(QTYSTU) AS decimal(18, 2)) AS stock_qty
-    FROM migration.vw_SMR_V2
-    GROUP BY UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ITMREF)), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-'))
-)
+-- 1. The purchase order lines for the 106 (one pass over ASC_POR_TBL, 2026 orders and earlier)
+IF OBJECT_ID('tempdb..#po') IS NOT NULL DROP TABLE #po;
+SELECT CAST(UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(POR_PART_ONLY)), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-')) AS varchar(60)) COLLATE DATABASE_DEFAULT AS code,
+       CAST(LTRIM(RTRIM(POR_PART_ONLY)) AS varchar(60)) COLLATE DATABASE_DEFAULT AS access_code,
+       POR_ORDER_DATE AS order_date,
+       CASE WHEN ISNULL(POR_QTY_ORDERED, 0) - ISNULL(POR_QTY_DELIVERED, 0) - ISNULL(POR_QTY_REJECTED, 0) > 0
+            THEN 1 ELSE 0 END AS is_open
+INTO   #po
+FROM   dbo.ASC_POR_TBL
+WHERE  UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(POR_PART_ONLY)), ' ', ''), '&', ''), '(', ''), ')', ''), '.', '-')) COLLATE DATABASE_DEFAULT IN (SELECT code FROM #p);
+
+-- 2. Their Access codes as spelled in Access (a few differ from the cleaned code)
+IF OBJECT_ID('tempdb..#raw') IS NOT NULL DROP TABLE #raw;
+SELECT DISTINCT code, access_code INTO #raw FROM #po;
+
+-- 3. Open sales order lines for those codes only
+IF OBJECT_ID('tempdb..#so') IS NOT NULL DROP TABLE #so;
+SELECT r.code,
+       SUM(CASE WHEN ISNULL(c.COR_QTY_ORDERED, 0) > ISNULL(c.COR_QTY_DELIVERED, 0)
+                 AND ISNULL(c.COR_ORDER_STATUS, '') IN ('', 'B', 'H') THEN 1 ELSE 0 END) AS open_so_lines,
+       MAX(c.COR_ORDER_DATE) AS last_sold
+INTO   #so
+FROM   dbo.ASC_COR_TBL c
+JOIN   #raw r ON r.access_code = c.COR_PART_ONLY COLLATE DATABASE_DEFAULT
+GROUP BY r.code;
+
+-- 4. Grade, from the product rule, for those codes only
+IF OBJECT_ID('tempdb..#dq') IS NOT NULL DROP TABLE #dq;
+SELECT r.code, MAX(d.DQ_STATUS) AS dq_status, MAX(LEFT(LTRIM(RTRIM(ISNULL(d.ITMDES1, ''))), 40)) AS description
+INTO   #dq
+FROM   migration.vw_DQ_ITM d
+JOIN   #raw r ON r.access_code = d.ITMREF COLLATE DATABASE_DEFAULT
+GROUP BY r.code;
+
+-- 5. The grid
 SELECT p.code,
-       ISNULL(d.access_code, '')                     AS access_code,
-       ISNULL(d.dq_status, 'NOT IN vw_DQ_ITM')        AS dq_status,
-       ISNULL(d.description, '')                     AS description,
-       ISNULL(po.open_po_lines, 0)                   AS open_po_lines,
-       ISNULL(so.open_so_lines, 0)                   AS open_so_lines,
-       ISNULL(st.stock_qty, 0)                       AS stock_qty,
-       CONVERT(varchar(10), po.first_bought, 23)     AS first_bought,
-       CONVERT(varchar(10), po.last_bought, 23)      AS last_bought,
-       CONVERT(varchar(10), so.last_sold, 23)        AS last_sold
+       ISNULL((SELECT MAX(access_code) FROM #raw r WHERE r.code = p.code), '') AS access_code,
+       ISNULL(d.dq_status, 'NOT IN vw_DQ_ITM')                                AS dq_status,
+       ISNULL(d.description, '')                                              AS description,
+       ISNULL(po.open_po_lines, 0)                                            AS open_po_lines,
+       ISNULL(so.open_so_lines, 0)                                            AS open_so_lines,
+       CONVERT(varchar(10), po.first_bought, 23)                              AS first_bought,
+       CONVERT(varchar(10), po.last_bought, 23)                               AS last_bought,
+       CONVERT(varchar(10), so.last_sold, 23)                                 AS last_sold
 FROM #p p
-LEFT JOIN dq d     ON d.code  = p.code
-LEFT JOIN po       ON po.code = p.code
-LEFT JOIN so       ON so.code = p.code
-LEFT JOIN stock st ON st.code = p.code
+LEFT JOIN (SELECT code, SUM(is_open) AS open_po_lines, MIN(order_date) AS first_bought,
+                  MAX(order_date) AS last_bought
+           FROM #po GROUP BY code) po ON po.code = p.code
+LEFT JOIN #so so ON so.code = p.code
+LEFT JOIN #dq d  ON d.code  = p.code
 ORDER BY ISNULL(po.open_po_lines, 0) + ISNULL(so.open_so_lines, 0) DESC, p.code;
 GO
