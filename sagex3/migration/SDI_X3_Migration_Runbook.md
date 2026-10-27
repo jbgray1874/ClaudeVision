@@ -616,12 +616,12 @@ The real load needs one fresh extract of everything, on one day.
 
 | Gap | Size | Where it shows | Status |
 |---|---|---|---|
-| Live products graded OLD (section 6.1) | 1,681 products: 1,473 with stock, 250 on open orders | SMR Held back: 2,176 lots, £603,151. SOHPJ Held back: 418 lines. POH Held back: 204 lines | Parked by James 27 Oct: products are loaded. Needs a top-up product load, or SDI / Finance sign-off on the stock difference |
+| Live products graded OLD (section 6.1) | 1,681 products: 1,473 with stock, 250 on open orders | SMR Held back: 2,176 lots, £603,151. SOHPJ Held back: 418 lines. POH Held back: 204 lines | **Must be fixed before go-live (James, 27 Oct).** Products are already loaded in UAT, so add them as a top-up product load wherever they hold stock, and make sure their stock comes through in SMR. Stock in X3 has to match Access |
 | Order lines with a negative value (a credit on an order) | 4 SO lines, 1 PO line | SOHPJ / POH Held back | X3 needs a credit note. SDI to decide |
 | Accounts left out on purpose | Customers: 4 intercompany, ESD01, FSC01, IBS01 (no address). Suppliers: 72 employee expense accounts, 6 non-suppliers | Customers_to_add.xlsx, Suppliers_to_add.xlsx. Their 56 open sales order lines and 1 customer item are not loaded | Finance to confirm |
 | Product-supplier links for products not in the product file | 575 products (106 bought in 2026; products_bought_2026_not_loaded.sql has their grades) | not loaded | Follows the OLD products decision |
 | Alternative suppliers | 3,150 | not loaded: the template has no priority column | Ethan: a PIO column |
-| VAT numbers blank for Finance to supply | 21 new customers, 4 new suppliers, plus the earlier blanked ones | Check tabs of the customer / supplier files | Finance |
+| VAT numbers missing | 221 accounts: 194 suppliers (185 dummy numbers removed), 27 customers | `VAT_numbers_needed.xlsx` (out_sue), with a column for the correct number | **Push back on the users / Finance for the real numbers** (27 Oct). Don't load dummies again |
 | Rows held in Track 2 | 33 shared product codes, 12 BOM lines, 71 route lines, 28 costs | V8_track2_report.xlsx | SDI decisions below |
 
 **Waiting on Marc:** whether October is open in UAT; the go-live date; carriage as lines or
@@ -739,7 +739,7 @@ error logs; the original BPC and BPS template workbooks, to keep with this runbo
 - **The main open gap:** live products graded OLD (section 13, Known gaps).
 
 ### Fixes to make before the next run, most important first
-1. **Product selection: migrate every live product.** Change the OLD rule in
+1. **Product selection: migrate every live product. Required, not optional: every product with stock must be in the product file, and its stock must come through in SMR.** Change the OLD rule in
    `migration.vw_DQ_ITM` (our view, so allowed) so that stock on hand, an open PO or sales
    order, or a purchase in the last 24 months counts as activity. That brings in the 1,681
    products, the £603k of stock and about 620 order lines. Then their stock, orders, BOM lines and
@@ -768,10 +768,20 @@ error logs; the original BPC and BPS template workbooks, to keep with this runbo
    - VAT numbers only with a valid country prefix.
 
    This is `build_new_customers.py` / `build_new_suppliers.py` logic, to run on the whole file.
-7. **Decisions to get before the run:**
-   - Finance: employee expense accounts and intercompany; VAT numbers; EU tax rules.
+7. **VAT numbers: push back on the users.** Send `VAT_numbers_needed.xlsx` (221 accounts) to
+   Finance or the account owners and load their answers. Never put a placeholder in a VAT field.
+   A blank loads; a dummy is rejected or, worse, accepted as wrong.
+8. **Load time.** The full customer file (6,169 rows, one per address: Marks & Spencer plc alone
+   has 1,207) took over an hour in UAT on 27 Oct. Records were being created; X3 builds every
+   address. For go-live:
+   - allow the time in the cut-over plan;
+   - load only new rows on a top-up (the NEW_ACCOUNTS files);
+   - ask Marc whether rows for existing customers are skipped or updated, and whether the import
+     can run faster (for example without the address checks).
+9. **Decisions to get before the run:**
+   - Finance: employee expense accounts and intercompany; EU tax rules.
    - SDI: the 33 shared product codes; credits on orders; the OLD-product stock if rule 1 isn't adopted.
    - Ethan: a PIO column for alternative suppliers.
    - Marc: service items (installation, delivery, tooling) and the multi-drop ship-to.
-8. **Queries:** read-only against Access; narrow to the codes needed before any join or total;
+10. **Queries:** read-only against Access; narrow to the codes needed before any join or total;
    check brackets and REPLACE arguments; say what a query changes at the top.
