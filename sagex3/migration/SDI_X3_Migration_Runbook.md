@@ -682,6 +682,10 @@ fixes themselves are what every rerun must repeat.
 - **Work centres:** checked against X3's 33 (section 8).
 - **The old migration views** were rewritten (views_v2.sql): price-per divisor, order filter,
   site, date format, stock cost source, currency rule.
+- **Missing live accounts (27 Oct):**
+  - 86 customers and 83 suppliers added, with their addresses, product links, open orders and invoices (section 4.2);
+  - existing rows unchanged in every file;
+  - left out on purpose, for Finance to confirm: intercompany, ledger and employee expense accounts.
 
 ---
 
@@ -705,3 +709,69 @@ fixes themselves are what every rerun must repeat.
 **Still to receive:** the X3 lot export (SMR); the X3 import definition for YA004BISX
 (CURLED); the field names for SOHPJ's two new columns; the IME column for BISX; clean-run
 error logs; the original BPC and BPS template workbooks, to keep with this runbook.
+
+---
+
+## 16. Where the data stands, and the fixes for the next run (27 Oct)
+
+### Better than where we started
+- **Rejections fixed at the root:** the dummy VAT numbers (180 supplier rejections), the missing
+  EU tax rule (10 customers), the postcode error, and the symbols in product codes that broke
+  products, BOMs, routes and costs.
+- **The extract is right:** the old views had a wrong price divisor, a filter that dropped most
+  live orders, the wrong site and date format, stock at standard cost, and 97% of supplier items
+  at zero. All of that was replaced by views_v2.sql, and BICX reconciles to Access to the penny.
+- **One product code rule in every file.** Every file is checked against the product, customer
+  and supplier files before hand-over.
+- **Every file is a mapped spreadsheet on the template**, read back cell by cell.
+- **The live accounts that were missing are in:**
+
+  | | Before | Now |
+  |---|---|---|
+  | Customers | 217 | 303 |
+  | Suppliers | 623 | 706 |
+  | Customer open items | £5.25m | £8.79m |
+  | Supplier open items | £6.11m | £6.95m |
+  | Open sales order lines | 2,012 | 3,161 |
+  | Open PO lines | 479 | 579 |
+  | Product-supplier links | 7,679 | 8,644 |
+
+- **The main open gap:** live products graded OLD (section 13, Known gaps).
+
+### Fixes to make before the next run, most important first
+1. **Product selection: migrate every live product.** Change the OLD rule in
+   `migration.vw_DQ_ITM` (our view, so allowed) so that stock on hand, an open PO or sales
+   order, or a purchase in the last 24 months counts as activity. That brings in the 1,681
+   products, the £603k of stock and about 620 order lines. Then their stock, orders, BOM lines and
+   product-supplier links come through with no extra steps.
+2. **Customer and supplier selection: migrate every live account,** whatever the grade.
+   - Build the new accounts into the base customer and supplier files, not as an add-on.
+   - Make the new account pairs manual pairs in `xref_sage_codes_TEMPLATE.sql`, so the separate
+     `add_new_accounts_to_xref.sql` step goes away.
+   - Keep the codes already given out: TIE02E = TEC103, TIE02POL = TEC104.
+3. **Views: never drop a row without saying so.** Change the four order and invoice views from
+   JOIN to LEFT JOIN on the cross-reference and return the Access code. `populate_guides.py`
+   already holds back "Account is not in the customer/supplier load", so missing accounts show
+   on the Held back tab, not vanish. Keep the section 9 STOP check.
+4. **Check Track 1 against the clean-run files.** `populate_guides.py` checks products against
+   the UAT product file (`uploads_final/ZSDIITM_Cleansing.txt`), and accounts against the loaded
+   files unless `CUSTOMER_FILE` / `SUPPLIER_FILE` are set. Point all three at the final clean-run
+   files.
+5. **One extract, one day, for everything.** Today's files mix 21 Oct and 27 Oct data. Also make
+   the "Data exported ..." date in the guides' Notes a parameter, not fixed text.
+6. **Apply the new-account address rules to all customers and suppliers:**
+   - split run-together Access address lines (the first customer file has
+     "OAKWOOD DISTRIBUTION LTDGREAT BANK ROAD");
+   - take the country from the address where Access says GB (994 addresses on the new customers alone);
+   - move UK postcodes out of the address lines;
+   - make delivery descriptions unique;
+   - VAT numbers only with a valid country prefix.
+
+   This is `build_new_customers.py` / `build_new_suppliers.py` logic, to run on the whole file.
+7. **Decisions to get before the run:**
+   - Finance: employee expense accounts and intercompany; VAT numbers; EU tax rules.
+   - SDI: the 33 shared product codes; credits on orders; the OLD-product stock if rule 1 isn't adopted.
+   - Ethan: a PIO column for alternative suppliers.
+   - Marc: service items (installation, delivery, tooling) and the multi-drop ship-to.
+8. **Queries:** read-only against Access; narrow to the codes needed before any join or total;
+   check brackets and REPLACE arguments; say what a query changes at the top.
