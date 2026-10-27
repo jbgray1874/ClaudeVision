@@ -462,6 +462,13 @@ Access bin to X3 location (`scripts/map_bins.py`):
 
 ## 9. Checks before handing files over
 
+- [ ] **STOP if anything was dropped for want of an account.** The "rows dropped - no Sage
+  account" check in `views_v2.sql` must read 0 for SOH, POH, BICX and BISX. On 27 Oct it read
+  1,428 / 124 / 255 / 241. It was reported but not acted on, and live customers and suppliers
+  with open invoices and orders were missing from X3. A non-zero count blocks the hand-over.
+- [ ] Every live account (open items, open orders, or traded in 24 months) is in the customer or
+  supplier file, whatever its data-quality grade. A grade decides what has to be fixed, never
+  whether the account is migrated.
 - [ ] Every file: field count equals the template's; headings equal the template.
 - [ ] No disallowed characters in code and text fields (emails, phones and websites excepted).
 - [ ] Product codes unique in the product file.
