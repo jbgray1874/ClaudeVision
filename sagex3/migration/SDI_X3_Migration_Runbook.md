@@ -322,6 +322,16 @@ codes, descriptions, names, addresses, operation descriptions, comments.
   graded OLD and dropped. **Extract on load day.**
 - 137 in-use products (GOOD or INCOMPLETE, on orders or in stock) were missing from the first
   load and have been added since V6 (`items_to_append.sql`).
+- **The same gap as the customers (27 Oct): live products graded OLD are left out.** The OLD
+  grade doesn't look at stock or open orders. The clean-run held-back tabs show:
+  - 1,473 products holding stock, worth GBP 603,151 (2,176 SMR lots). Most are real materials:
+    mild steel (MS) GBP 85k, fixings GBP 30k, powder GBP 27k, sub-assemblies, sheet metal,
+    electrical, plastics, MDF.
+  - 250 products on open orders (192 PO and 196 SO lines).
+  - 271 of the stocked products are BOM components.
+
+  Rule from now on: **any product with stock or an open order is migrated, whatever its grade.**
+  The grade only decides what has to be fixed.
 - Descriptions: Access STKNAME is often blank or repeats the code; the real text is in
   ITMDES3 / PMA_DESC_3. A blank first description takes description 3, then 2, then the code.
 
