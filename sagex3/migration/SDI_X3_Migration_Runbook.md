@@ -260,6 +260,20 @@ other is held back. **SDI to decide which product keeps each code.**
   - where Access says GB but the address names another country, the named country is used (994 addresses);
   - VAT numbers without a country prefix are blanked, with a suggested prefix on the Check tab;
   - blank addresses are left out, and duplicate delivery descriptions get the address code added.
+- **Suppliers, the same.** `sql/new_supplier_details.sql` lists the live suppliers with no Sage
+  code and their vw_BPS rows in one run (27 Oct: 161). `scripts/build_new_suppliers.py` decides
+  and builds:
+  - **Added (83):** every supplier with open invoices or PO lines (35 suppliers, about GBP 840k,
+    110 PO lines), plus companies that traded in the last 24 months.
+  - **Left out for Finance to confirm:** 72 employee expense accounts with nothing open (the first
+    supplier load had none either), and 6 accounts that aren't suppliers (petty cash, HMRC, Lloyds
+    Cardnet, "Joinery", two marked do not use).
+  - **Codes:** next free from 500.
+  - **Rows:** the 33-column supplier layout, with the character rule, EU → ROWS, no dummy or
+    unprefixed VAT numbers (suggestions on the Check tab), the country taken from the address when
+    Access says GB, and UK postcodes fixed.
+  - **Cross-reference:** it also writes `sql/xref_new_supplier_accounts.sql` (codes only). Run it
+    after `xref_sage_codes.sql`, as for customers.
 - The supplier and customer names aren't kept in git. `scripts/make_xref_inserts.py` rebuilds
   the full SQL from the **loaded** V4 supplier and V7 customer files. Don't use the V8 files:
   V8 rewrote `&` as AND, which breaks the name match.
@@ -505,8 +519,8 @@ There is no data dictionary for Access; everything below was found by querying t
    1; product_suppliers_v3.sql grid 2; works_orders_extract.sql grid 2; plus the cleansed
    product, BOM, route and cost source files.
 2. **Cross-reference:** rebuild `xref_sage_codes.sql` with `scripts/make_xref_inserts.py`
-   (V4 suppliers, V7 customers) and run it, then `xref_new_customer_accounts.sql` (the new
-  accounts; xref_sage_codes.sql drops them), then `views_v2.sql`.
+   (V4 suppliers, V7 customers) and run it, then `xref_new_customer_accounts.sql` and
+  `xref_new_supplier_accounts.sql` (the new accounts; xref_sage_codes.sql drops them), then `views_v2.sql`.
 3. **Product side:** `standardise_v3.py` aligns routes, costs and BOMs to the product file
    and splits BOMs into loadable and held back. Then `build_v7_fixes.py` applies the code
    rule, supplier VAT, customer fixes, product-suppliers and delivery addresses.
