@@ -11,8 +11,9 @@
          where Claude pushes - when the laptop has it, otherwise from origin).
       3. Copies only the AM CRM files that differ from the server's copies.
       4. Restarts the SDIIntelligence service if a Python file changed, and waits for it;
-         also the SDITrackerConnector service (ChatGPT / Claude connector) once it exists,
-         and the SDISplitScan service (delivery-note splitter) if its code changed.
+         also the SDITrackerConnector service (AM CRM connector for ChatGPT / Claude) and
+         the SDITTIConnector service (TTI despatch connector) once they exist, and the
+         SDISplitScan service (delivery-note splitter) if its code changed.
       5. Checks the server's files now match the laptop's, byte for byte.
 
     Why: deploying by hand went wrong in the ways hands do - a dropped VPN left robocopy
@@ -29,6 +30,7 @@ param(
     [string]$Branch = "claude/app-portal-main-2026",
     [string]$Service = "SDIIntelligence",
     [string]$ConnectorService = "SDITrackerConnector",
+    [string]$TtiConnectorService = "SDITTIConnector",
     [string]$SplitScanService = "SDISplitScan",
     # Which git remote to pull from. Default: "jbg" if the laptop has it, else "origin".
     [string]$Remote = "",
@@ -60,6 +62,10 @@ $Files = @(
     "tracker_snapshot.py",
     "tti_despatch_routes.py",
     "tti_plan_source.py",
+    "tti_data.py",
+    "tti_search.py",
+    "tti_connector.py",
+    "connector_identity.py",
     "appportal/tti-despatch.html",
     "sdi_ops_routes.py",
     "appportal/sdi-remote-control.html",
@@ -233,6 +239,17 @@ if ($pyChanged.Count -gt 0) {
         else { $restarted = $false }
     } elseif ($cState -ne "MISSING") {
         Say "$ConnectorService is $cState - left as it is." Gray
+    }
+    # The TTI connector (ChatGPT / Claude, chat and voice) runs the same TTI code as
+    # the web view: restart it too, once it is installed. Not installed is normal
+    # until it goes live.
+    $tState = Get-ServiceState $TtiConnectorService
+    if ($tState -eq "RUNNING") {
+        Say "Restarting $TtiConnectorService..."
+        if (Restart-One $TtiConnectorService) { Say "$TtiConnectorService is running the new code." Green }
+        else { $restarted = $false }
+    } elseif ($tState -ne "MISSING") {
+        Say "$TtiConnectorService is $tState - left as it is." Gray
     }
 } elseif ($toolChanged.Count -eq 0) {
     Say "Only the page changed: no restart needed." Green

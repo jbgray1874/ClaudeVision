@@ -29,6 +29,8 @@ sys.path.insert(0, str(BACKEND))
 ROUTES = (BACKEND / "tti_despatch_routes.py").read_text(encoding="utf-8")
 LOGIC = (BACKEND / "sue_despatch.py").read_text(encoding="utf-8")
 READER = (BACKEND / "tracker_snapshot.py").read_text(encoding="utf-8")
+LOADER = (BACKEND / "tti_data.py").read_text(encoding="utf-8")
+SEARCH = (BACKEND / "tti_search.py").read_text(encoding="utf-8")
 PAGE = (BACKEND / "appportal" / "tti-despatch.html").read_text(encoding="utf-8")
 APP = (BACKEND / "app.py").read_text(encoding="utf-8")
 DEPLOY = (BACKEND / "deploy" / "Deploy-AMCRM.ps1").read_text(encoding="utf-8")
@@ -72,10 +74,12 @@ class NoWriterTests(unittest.TestCase):
 
     def test_nothing_in_the_logic_can_write_or_send(self):
         for module, source in (("sue_despatch", LOGIC), ("tracker_snapshot", READER),
+                               ("tti_search", SEARCH), ("tti_data", LOADER),
                                ("tti_despatch_routes", ROUTES)):
             with self.subTest(module=module):
                 for forbidden in ("sendMail", "createReply", ".save(", "shutil",
-                                  "open(" if module == "sue_despatch" else "\0"):
+                                  "open(" if module in ("sue_despatch", "tti_search")
+                                  else "\0"):
                     self.assertNotIn(forbidden, source)
 
     def test_the_workbook_is_opened_read_only(self):
@@ -84,20 +88,29 @@ class NoWriterTests(unittest.TestCase):
 
 
 class TheCallerNeverNamesAFileTests(unittest.TestCase):
-    def test_the_only_thing_a_request_carries_is_a_date(self):
-        handler = ROUTES.split("def leaving_on(", 1)[1].split("\n    return router", 1)[0]
+    def test_a_request_carries_a_date_or_words_and_never_a_location(self):
+        """Six views now, and not one of them takes a path, a URL or a sheet
+        name. The workbook is configuration; the search box takes words."""
         self.assertIn("day: str = Query(", ROUTES)
-        self.assertIn("date.fromisoformat(day)", handler)
-        # The path comes from configuration, not from the request.
-        self.assertIn("plan_path()", handler)
-        self.assertNotIn("Query(..., max_length=512)", handler)
+        self.assertIn("date.fromisoformat(day)", ROUTES)
+        for handler in ("def leaving_on(", "def search(", "def chase_list(",
+                        "def overdue(", "def morning_summary(", "def quality("):
+            body = ROUTES.split(handler, 1)[1].split("\n    @router", 1)[0]
+            with self.subTest(handler=handler):
+                for location in ("path", "file", "url", "site", "sheet", "root"):
+                    self.assertNotIn(f"{location}: str = Query", body)
+        # The search term is bounded, so nobody pastes a file into it.
+        self.assertIn("q: str = Query(..., max_length=MAX_QUERY)", ROUTES)
+
+    def test_the_workbook_is_configuration_in_the_one_module_that_opens_it(self):
+        self.assertIn("SDI_TTI_PLAN_SITE", LOADER)
+        self.assertIn("SDI_TTI_DESPATCH_PLAN", LOADER)
+        self.assertIn("has not been configured", LOADER)
 
     def test_an_unparseable_date_is_refused_rather_than_guessed(self):
         self.assertIn("A date is needed, as YYYY-MM-DD", ROUTES)
 
-    def test_an_unconfigured_plan_says_so_instead_of_failing_obscurely(self):
-        self.assertIn("SDI_TTI_DESPATCH_PLAN", ROUTES)
-        self.assertIn("has not been configured", ROUTES)
+
 
 
 class NamedPeopleTests(unittest.TestCase):
@@ -115,8 +128,10 @@ class NamedPeopleTests(unittest.TestCase):
         os.environ.pop("SDI_TTI_OIDS", None)
         self.assertFalse(routes.allowed(object()))
 
-    def test_both_routes_are_gated(self):
-        for handler in ("def despatch(", "def leaving_on("):
+    def test_every_route_is_gated(self):
+        for handler in ("def despatch(", "def leaving_on(", "def search(",
+                        "def chase_list(", "def overdue(", "def morning_summary(",
+                        "def morning_as_text(", "def quality("):
             body = ROUTES.split(handler, 1)[1][:400]
             with self.subTest(handler=handler):
                 self.assertIn("who(request)", body)
@@ -129,16 +144,36 @@ class NamedPeopleTests(unittest.TestCase):
 
 class TheAnswerIsHonestTests(unittest.TestCase):
     def test_it_reports_which_save_of_the_plan_it_read(self):
-        self.assertIn("plan_saved", ROUTES)
-        self.assertIn("plan_version", ROUTES)
+        """Six views, one provenance. It is attached by the loader rather than
+        by each route, so a seventh view cannot be added without it."""
+        self.assertIn("plan_saved", LOADER)
+        self.assertIn("plan_version", LOADER)
+        self.assertIn("rows_read", LOADER)
+        self.assertIn("plan.provenance()", ROUTES)
         self.assertIn("only as current as that save", PAGE)
+
+    def test_no_json_view_answers_without_the_provenance(self):
+        """Every JSON answer leaves through answered(), which is where the
+        plan's save time is attached. A route that returned JSONResponse
+        directly would answer without saying how old the reading is."""
+        for handler in ("def leaving_on(", "def search(", "def chase_list(",
+                        "def overdue(", "def morning_summary(", "def quality("):
+            body = ROUTES.split(handler, 1)[1].split("\n    @router", 1)[0]
+            with self.subTest(handler=handler):
+                self.assertIn("answered(plan,", body)
+                self.assertNotIn("return JSONResponse", body)
 
     def test_the_plans_own_save_time_is_used_not_the_hour_it_ran(self):
         """An answer dated "now" about a file saved last Tuesday is the lie
-        that matters here."""
-        handler = ROUTES.split("def leaving_on(", 1)[1]
-        self.assertIn("st_mtime", handler)
-        self.assertIn("as_of=saved.date()", handler)
+        that matters here. Every view reads as_of the plan's save date."""
+        self.assertIn("st_mtime", LOADER)
+        for handler in ("def leaving_on(", "def search(", "def chase_list(",
+                        "def overdue(", "def morning_summary(", "def quality("):
+            body = ROUTES.split(handler, 1)[1].split("\n    @router", 1)[0]
+            with self.subTest(handler=handler):
+                self.assertIn("as_of=plan.saved.date()", body)
+        self.assertNotIn("as_of=date.today()", ROUTES)
+        self.assertNotIn("as_of=datetime.now", ROUTES)
 
     def test_the_screen_carries_the_caveat_and_refuses_a_pallet_total(self):
         self.assertIn("j.caveat", PAGE)
@@ -161,7 +196,8 @@ class ItReachesTheServerTests(unittest.TestCase):
 
     def test_everything_the_service_imports_is_on_the_deploy(self):
         for name in ("sue_despatch.py", "tracker_snapshot.py",
-                     "tti_despatch_routes.py", "appportal/tti-despatch.html"):
+                     "tti_despatch_routes.py", "tti_plan_source.py", "tti_data.py",
+                     "tti_search.py", "appportal/tti-despatch.html"):
             with self.subTest(file=name):
                 self.assertIn(f'"{name}"', DEPLOY)
 

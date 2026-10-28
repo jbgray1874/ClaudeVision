@@ -85,12 +85,18 @@ def _item_url(site_id: str, suffix: str = "") -> str:
             f"{quote(file_path(), safe='/')}:{suffix}")
 
 
-def fetch_plan(token: str, client=None) -> tuple:
+def fetch_plan(token: str, client=None, known_version: str = "") -> tuple:
     """(bytes, saved_at, version) for the configured workbook.
 
     `saved_at` is SharePoint's own lastModifiedDateTime - when the plan was
     last saved, not when this ran. An answer dated "now" about a workbook saved
     last Tuesday is the lie that matters in a despatch question.
+
+    `known_version` is an eTag the caller already has a parsed copy of. When it
+    still matches, the bytes are returned as None and the download is skipped.
+    The metadata request happens either way and is made with THIS person's
+    token, so it is still their access that decides whether they get an answer
+    - the saving is a download and a parse, never a permission check.
     """
     if not configured():
         raise PlanUnavailable(
@@ -110,6 +116,9 @@ def fetch_plan(token: str, client=None) -> tuple:
                            params={"$select": "name,size,lastModifiedDateTime,eTag"})
         _complain(facts, "the plan")
         about = facts.json()
+        version = str(about.get("eTag") or "")[:40]
+        if known_version and version and version == known_version:
+            return None, _when(about.get("lastModifiedDateTime")), version
         size = int(about.get("size") or 0)
         if size > MAX_BYTES:
             raise PlanUnavailable(
@@ -127,7 +136,7 @@ def fetch_plan(token: str, client=None) -> tuple:
     finally:
         if client is None:
             opened.close()
-    return data, _when(about.get("lastModifiedDateTime")), str(about.get("eTag") or "")[:40]
+    return data, _when(about.get("lastModifiedDateTime")), version
 
 
 def _complain(response, what: str) -> None:

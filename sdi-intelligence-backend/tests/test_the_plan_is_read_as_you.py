@@ -28,6 +28,7 @@ import tti_plan_source as plan  # noqa: E402
 
 SOURCE = (BACKEND / "tti_plan_source.py").read_text(encoding="utf-8")
 ROUTES = (BACKEND / "tti_despatch_routes.py").read_text(encoding="utf-8")
+LOADER = (BACKEND / "tti_data.py").read_text(encoding="utf-8")
 
 SITE = "sdidisplays.sharepoint.com:/sites/SUESOSOD"
 FILE = "General/TTI Delivery Schedule 2021 V3.xlsx"
@@ -163,19 +164,47 @@ class TheSaveTimeIsSharePointsTests(unittest.TestCase):
         self.assertAlmostEqual(saved.timestamp(),
                                datetime.now(timezone.utc).timestamp(), delta=10)
 
-    def test_the_route_reads_the_plan_as_of_its_save_not_todays_date(self):
-        handler = ROUTES.split("def leaving_on(", 1)[1]
-        self.assertIn("as_of=saved.date()", handler)
-        self.assertIn("auth.graph_token(request)", handler)
+    def test_an_unchanged_file_is_not_downloaded_again(self):
+        """Six views now ask the same workbook six questions, and a voice
+        assistant will ask two or three in a row. The metadata request still
+        happens with THIS person's token every time - so their access still
+        decides - and only the download and the parse are skipped."""
+        graph = Graph()
+        _, _, version = plan.fetch_plan("tok", client=graph)
+        data, saved, same = plan.fetch_plan("tok", client=graph,
+                                            known_version=version)
+        self.assertIsNone(data, "the content was fetched although nothing changed")
+        self.assertEqual(same, version)
+        self.assertEqual(saved, datetime(2026, 10, 23, 14, 5, tzinfo=timezone.utc))
+
+    def test_a_changed_file_is_downloaded(self):
+        graph = Graph()
+        data, _, _ = plan.fetch_plan("tok", client=graph,
+                                     known_version='"OLD-ETAG"')
+        self.assertIsNotNone(data)
+
+    def test_every_route_reads_the_plan_as_of_its_save_not_todays_date(self):
+        self.assertIn("auth.graph_token(request)", ROUTES)
+        self.assertIn("st_mtime", LOADER)
+        for handler in ("def leaving_on(", "def search(", "def chase_list(",
+                        "def overdue(", "def morning_summary(", "def quality("):
+            body = ROUTES.split(handler, 1)[1].split("\n    @router", 1)[0]
+            with self.subTest(handler=handler):
+                self.assertIn("as_of=plan.saved.date()", body)
 
 
 class NothingTouchesTheDiskTests(unittest.TestCase):
     def test_the_workbook_is_parsed_from_memory(self):
         reader = (BACKEND / "tracker_snapshot.py").read_text(encoding="utf-8")
         self.assertIn("io.BytesIO(data)", reader)
-        self.assertIn("read_schedule_bytes", ROUTES)
+        self.assertIn("read_schedule_bytes", LOADER)
         for writing in ("open(", "write_bytes", "write_text", "NamedTemporary"):
             self.assertNotIn(writing, SOURCE)
+        # The loader holds the parsed rows in memory and writes nothing. The
+        # one open() it has is the local-snapshot fallback, through
+        # tracker_snapshot, which reads.
+        for writing in ("write_bytes", "write_text", "NamedTemporary", '", "w"'):
+            self.assertNotIn(writing, LOADER)
 
     def test_a_file_that_is_not_a_workbook_is_refused_with_a_reason(self):
         from tracker_snapshot import read_schedule_bytes

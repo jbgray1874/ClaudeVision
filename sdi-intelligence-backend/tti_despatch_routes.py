@@ -1,7 +1,9 @@
-"""Sue's TTI despatch question, read-only, for named Customer Services people.
+"""The TTI tracker's six questions, read-only, for named Customer Services people.
 
-Phase one of the TTI app: "what is due to leave SDI on Thursday?", answered
-from the Despatch Plan with the sheet and row it came from.
+Phase one answered one: "what is due to leave SDI on Thursday?". This adds the
+five Selina Kuddus, Lee Merril and Sue Rogers asked for next - search, the
+chase list, overdue-undated rows, the morning summary and data quality - all
+from the same workbook, with no ERP integration behind any of them.
 
 ── WHAT THIS CANNOT DO, BY CONSTRUCTION ─────────────────────────────────────
 There is no writer here. Nothing in this module opens Completed Orders, sends
@@ -9,31 +11,35 @@ mail, or changes a cell in either tracker. The transfer half of the pilot
 (sue_despatch.propose_completed_transfer) is deliberately not mounted: it can
 only describe a transfer, Completed Orders could not even be read when the
 pilot was written, and what counts as "dispatched" is still Sue's to define.
+The morning summary is produced as text and is NOT emailed: which mailbox it
+leaves from, and who is on it, is Sue and Selina's decision, not this code's.
 
 ── THE CALLER NEVER NAMES A FILE ────────────────────────────────────────────
-The workbook is configuration (SDI_TTI_DESPATCH_PLAN), not a parameter. A
-request carries a date and nothing else, so this is one question about one
-known workbook rather than a spreadsheet reader pointed wherever a URL says.
+The workbook is configuration (SDI_TTI_PLAN_SITE / SDI_TTI_PLAN_PATH), not a
+parameter. A request carries a date, or words to search for, and nothing that
+is a location - so this is six questions about one known workbook rather than
+a spreadsheet reader pointed wherever a URL says.
 """
 import os
-from datetime import date, datetime, timezone
+from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 import auth
-import tti_plan_source as plan
+import tti_data
 from sue_despatch import going_out
-from tracker_snapshot import load_schedule_snapshot, read_schedule_bytes
+from tti_search import (chase, data_quality, find, morning, overdue_undated,
+                        summary_text)
 
 PREFIX = "/api/tti"
 PAGE = "tti-despatch.html"
 _PAGE_HEADERS = {"Cache-Control": "no-store"}
 
-
-def plan_path() -> str:
-    return (os.getenv("SDI_TTI_DESPATCH_PLAN", "") or "").strip()
+# A search term is words, not a path. Long enough for an order number and a
+# part code together, short enough that nobody pastes a file into it.
+MAX_QUERY = 80
 
 
 def allowed(request) -> bool:
@@ -57,6 +63,24 @@ def make_router(page_dir=None):
             raise HTTPException(403, "The TTI despatch view is for named Customer "
                                      "Services people. Ask IT to be added.")
 
+    def read(request) -> tti_data.Plan:
+        """One reading of the plan, as the person asking. Their access decides."""
+        try:
+            return tti_data.rows_for(auth.graph_token(request))
+        except tti_data.Unavailable as exc:
+            raise HTTPException(503, str(exc))
+
+    def day_asked(day: str) -> date:
+        try:
+            return date.fromisoformat(day)
+        except ValueError:
+            raise HTTPException(400, "A date is needed, as YYYY-MM-DD.")
+
+    def answered(plan: tti_data.Plan, answer: dict) -> JSONResponse:
+        answer.update(plan.provenance())
+        answer["source_version_date"] = plan.saved.date().isoformat()
+        return JSONResponse(answer, headers=_PAGE_HEADERS)
+
     @router.get("/despatch")
     def despatch(request: Request):
         who(request)
@@ -65,47 +89,60 @@ def make_router(page_dir=None):
     @router.get("/despatch/day")
     def leaving_on(request: Request, day: str = Query(..., max_length=10)):
         who(request)
-        try:
-            asked = date.fromisoformat(day)
-        except ValueError:
-            raise HTTPException(400, "A date is needed, as YYYY-MM-DD.")
-        # SharePoint is the verified source. A local snapshot path stays
-        # supported for a machine with no Graph access, and is never the
-        # default: a file of unknown freshness answering a despatch question
-        # is worse than no answer.
-        where = plan_path()
-        if plan.configured():
-            try:
-                data, saved, version = plan.fetch_plan(auth.graph_token(request))
-            except plan.PlanUnavailable as exc:
-                raise HTTPException(503, str(exc))
-            try:
-                digest, rows = read_schedule_bytes(data)
-            except ValueError as exc:
-                raise HTTPException(409, f"The Despatch Plan could not be read: {exc}")
-        elif where:
-            try:
-                digest, rows = load_schedule_snapshot(where)
-            except ValueError as exc:
-                raise HTTPException(409, f"The Despatch Plan could not be read: {exc}")
-            except OSError:
-                raise HTTPException(503, "The Despatch Plan is not reachable from "
-                                         "this service just now.")
-            # The file's own last-modified time, not the hour this ran.
-            try:
-                saved = datetime.fromtimestamp(Path(where).stat().st_mtime, timezone.utc)
-            except OSError:
-                saved = datetime.now(timezone.utc)
-            version = ""
-        else:
-            raise HTTPException(503, "The Despatch Plan has not been configured. Set "
-                                     "SDI_TTI_PLAN_SITE and SDI_TTI_PLAN_PATH for the "
-                                     "SharePoint workbook.")
-        answer = going_out(rows, day=asked, as_of=saved.date())
-        answer["plan_saved"] = saved.isoformat()
-        answer["plan_version"] = (version or digest)[:16]
-        answer["rows_read"] = len(rows)
-        return JSONResponse(answer, headers=_PAGE_HEADERS)
+        asked = day_asked(day)
+        plan = read(request)
+        return answered(plan, going_out(plan.rows, day=asked, as_of=plan.saved.date()))
+
+    @router.get("/despatch/search")
+    def search(request: Request, q: str = Query(..., max_length=MAX_QUERY)):
+        who(request)
+        if not q.strip():
+            raise HTTPException(400, "Type an order number, customer PO, part code "
+                                     "or TTI account to search for.")
+        plan = read(request)
+        return answered(plan, find(plan.rows, q, as_of=plan.saved.date()))
+
+    @router.get("/despatch/chase")
+    def chase_list(request: Request, horizon: int = Query(7, ge=0, le=90)):
+        who(request)
+        plan = read(request)
+        return answered(plan, chase(plan.rows, as_of=plan.saved.date(),
+                                    horizon=horizon))
+
+    @router.get("/despatch/overdue")
+    def overdue(request: Request):
+        who(request)
+        plan = read(request)
+        return answered(plan, overdue_undated(plan.rows, as_of=plan.saved.date()))
+
+    @router.get("/despatch/morning")
+    def morning_summary(request: Request, day: str = Query("", max_length=10)):
+        who(request)
+        plan = read(request)
+        asked = day_asked(day) if day.strip() else plan.saved.date()
+        answer = morning(plan.rows, day=asked, as_of=plan.saved.date())
+        answer["as_text"] = summary_text(answer)
+        return answered(plan, answer)
+
+    @router.get("/despatch/morning.txt", response_class=PlainTextResponse)
+    def morning_as_text(request: Request, day: str = Query("", max_length=10)):
+        """The same summary as plain text, to paste into an email.
+
+        Deliberately not sent from here. The decision about which mailbox a
+        daily despatch email leaves from, and who is on it, belongs to Sue and
+        Selina - so this hands them the words and stops.
+        """
+        who(request)
+        plan = read(request)
+        asked = day_asked(day) if day.strip() else plan.saved.date()
+        answer = morning(plan.rows, day=asked, as_of=plan.saved.date())
+        return PlainTextResponse(summary_text(answer), headers=_PAGE_HEADERS)
+
+    @router.get("/despatch/quality")
+    def quality(request: Request):
+        who(request)
+        plan = read(request)
+        return answered(plan, data_quality(plan.rows, as_of=plan.saved.date()))
 
     return router
 
