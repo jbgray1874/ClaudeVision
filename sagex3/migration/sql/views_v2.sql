@@ -39,7 +39,7 @@ GO
 -- ===========================================================================
 --  The accounting date. One value, used by all five. Change it in ONE place.
 --     UAT      20261031
---     Go-live  20270103   (the day before go-live on 4 January 2027)
+--     Go-live  20261231   (31 December 2026 - the go-live run, James 28 Oct)
 --  A view cannot take a parameter, so it is a literal in each one below and the
 --  comment -- ACCOUNTING DATE marks every occurrence.
 -- ===========================================================================

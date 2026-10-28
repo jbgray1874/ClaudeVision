@@ -25,7 +25,7 @@ HARD = PatternFill("solid", fgColor="E2EFDA")
 DONE = PatternFill("solid", fgColor="DEEBF7")
 THIN = Border(*[Side(style="thin", color="BFBFBF")] * 4)
 
-UAT, GOLIVE = "20261031", "20270103"
+UAT, GOLIVE = "20261031", "20261231"     # go-live run is for 31 Dec 2026 (James, 28 Oct)
 CLEANSE = ("cleansed to the Sage code: uppercase, no spaces, no ampersands, no brackets, "
            "full stops to hyphens - done inside the view")
 ACCT = f'"{UAT}" for UAT, "{GOLIVE}" for go-live. One literal, the same in all five views'

@@ -430,8 +430,15 @@ codes, descriptions, names, addresses, operation descriptions, comments.
   on load day (James, 28 Oct), not the accounting date.** Set `STOCK_DATE` (yyyymmdd) when running
   `populate_guides.py`. It's a fixed value, not the system date, so a rebuild gives the same file.
   The view's 20261031 is replaced, on the Held back tab too. UAT file of 28 Oct: 20261028.
-- Go-live: the last day of the previous financial period (31 Dec 2026 if periods are calendar
-  months; to confirm with Marc).
+  **Go-live run: 20261231.**
+- **Go-live run: dated 31 December 2026 (James, 28 Oct).** For that run:
+  - the accounting date is **20261231**. Change the three `-- ACCOUNTING DATE` literals in
+    `views_v2.sql` (vw_SMR_V2, vw_BICX_V2, vw_BISX_V2), and `ACCOUNTING_DATE` in `populate_guides.py`,
+    which it uses to move SOH dates;
+  - the stock posted date is `STOCK_DATE=20261231`;
+  - the extract is taken at the 31 Dec close, all files on the same day (golden rule 1).
+
+  An older note said 20270103 (the day before go-live, 4 Jan). That's replaced.
 - S01A is the only site, for every site field.
 
 ---
