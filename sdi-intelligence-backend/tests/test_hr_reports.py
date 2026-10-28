@@ -182,3 +182,35 @@ import probe_blip_bulk as bulk          # noqa: E402
 ])
 def test_employee_id_of(item, expected):
     assert bulk.employee_id_of(item) == expected
+
+
+# ── the fire roll call's merge ────────────────────────────────────────────────
+
+import hr_rollcall                      # noqa: E402
+
+
+def test_namesakes_stay_two_people():
+    on = [{"name": "Chris Same", "since": "", "by": "reception"},
+          {"name": "Chris Same", "since": "", "by": "sync"}]
+    snap = {"on_site": [{"first_name": "Chris", "surname": "Same",
+                         "clocking": {"start": "2026-10-28T08:00:00Z"}}]}
+    people, _ = hr_rollcall.build(on, snap, now=NOW, max_age_hours=20)
+    assert len(people) == 2                                     # never merged into one
+    assert sum("brighthr" in p for p in people) == 1
+
+
+def test_brighthr_alone_when_inventry_is_down():
+    snap = {"on_site": [{"first_name": "Zoe", "surname": "Test",
+                         "clocking": {"start": "2026-10-28T08:00:00Z"}}]}
+    people, forgotten = hr_rollcall.build(None, snap, now=NOW, max_age_hours=20)
+    assert [p["name"] for p in people] == ["Zoe Test"] and forgotten == 0
+
+
+def test_ticks_are_kept_and_cleared(tmp_path, monkeypatch):
+    monkeypatch.setattr(cfg, "HR_SNAPSHOT_DIR", str(tmp_path))
+    hr_rollcall.tick("zoe test#0", True, "Marshal One")
+    hr_rollcall.tick("ann desk#0", True, "Marshal Two")
+    hr_rollcall.tick("ann desk#0", False, "Marshal Two")
+    assert set(hr_rollcall.state()["ticks"]) == {"zoe test#0"}
+    hr_rollcall.start_new("Marshal One")
+    assert hr_rollcall.state()["ticks"] == {}

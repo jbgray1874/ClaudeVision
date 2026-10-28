@@ -14,7 +14,7 @@ Endpoints (all require header  X-SDI-Key: <SDI_API_KEY>):
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Body, Header, HTTPException, Request
 
 import config
 try:
@@ -315,25 +315,67 @@ def app_issues(request: Request):
     return _start_app_job("issues", _app_user(request))
 
 
-@router.get("/app/onsite")
-def app_onsite(request: Request):
-    """The roll call: who InVentry shows on site now, straight from InVentry.
-
-    One read, a few seconds, so it answers directly rather than as a job: in an
-    evacuation nobody should wait for a BrightHR check. Read-only.
-    """
-    _app_user(request)
+def _inventry_on_site():
+    """Who InVentry shows on site now, or (None, reason) if it is not answering."""
     import hr_inventry_api as api
     try:
         people = api.InVentryAPI().get_personnel()
     except api.InVentryAPIError as exc:
-        raise HTTPException(status_code=502, detail=f"InVentry did not answer: {exc}")
-    on = [{"name": f"{api._field(r, 'FirstName')} {api._field(r, 'Surname')}".strip() or "?",
-           "since": str(api._field(r, "LastActivityDate") or ""),
-           "by": "sync" if api.signed_in_by_us(r) else "reception"}
-          for r in people if api.is_on_site(r)]
-    on.sort(key=lambda x: x["name"].lower())
-    return {"time": _now_iso(), "count": len(on), "people": on}
+        return None, f"InVentry did not answer ({exc}), so this list is from BrightHR only."
+    return [{"name": f"{api._field(r, 'FirstName')} {api._field(r, 'Surname')}".strip() or "?",
+             "since": str(api._field(r, "LastActivityDate") or ""),
+             "by": "sync" if api.signed_in_by_us(r) else "reception"}
+            for r in people if api.is_on_site(r)], None
+
+
+def _rollcall_payload() -> dict:
+    import hr_rollcall
+    on_site, inventry_problem = _inventry_on_site()
+    try:
+        snap = json.loads((Path(cfg.HR_SNAPSHOT_DIR) / "blip_latest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        snap = None
+    people, forgotten = hr_rollcall.build(on_site, snap)
+    st = hr_rollcall.state()
+    for p in people:
+        p["ticked"] = st["ticks"].get(p["key"])
+    return {"time": _now_iso(), "people": people, "count": len(people),
+            "accounted": sum(1 for p in people if p["ticked"]),
+            "started": st.get("started"), "started_by": st.get("started_by"),
+            "inventry_problem": inventry_problem,
+            "brighthr_checked": ((snap or {}).get("summary") or {}).get("timestamp"),
+            "forgotten_left_out": forgotten}
+
+
+@router.get("/app/rollcall")
+def app_rollcall(request: Request):
+    """The fire roll call: InVentry's on-site list and BrightHR's clocked-in
+    list merged, with the shared ticks. Answers directly, in seconds: in an
+    evacuation nobody waits for a job. Read-only towards InVentry and BrightHR."""
+    _app_user(request)
+    return _rollcall_payload()
+
+
+@router.post("/app/rollcall/tick")
+def app_rollcall_tick(request: Request, payload: dict = Body(...)):
+    """Tick (or untick) one person as accounted for. Shared by every phone."""
+    user = _app_user(request)
+    import hr_rollcall
+    key = str(payload.get("key") or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="Which person? No key was sent.")
+    st = hr_rollcall.tick(key, bool(payload.get("ticked")), user.get("name") or user.get("email", ""))
+    return {"key": key, "ticked": st["ticks"].get(key)}
+
+
+@router.post("/app/rollcall/new")
+def app_rollcall_new(request: Request):
+    """Clear every tick and start a new roll call."""
+    user = _app_user(request)
+    import hr_rollcall
+    hr_rollcall.start_new(user.get("name") or user.get("email", ""))
+    hr_blip._log(f"APP roll call started by {user.get('email') or user.get('name')}")
+    return _rollcall_payload()
 
 
 @router.get("/app/history")

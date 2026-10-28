@@ -7,6 +7,8 @@ the screen polls it. Who is in the building is personal data and an update
 writes to the fire roll call, so only a signed-in person on SDI_HR_APP_USERS
 gets in: not the shared key, not the office network's unsigned access.
 """
+import datetime
+import json
 import sys
 import time
 from pathlib import Path
@@ -122,7 +124,7 @@ def test_only_a_signed_in_person_on_the_list_gets_in(app, user, code):
     app.who["user"] = user
     for method, path in (("get", "/api/hr/app/status"), ("post", "/api/hr/app/check"),
                          ("post", "/api/hr/app/update"), ("post", "/api/hr/app/issues"),
-                         ("get", "/api/hr/app/onsite"), ("get", "/api/hr/app/history")):
+                         ("get", "/api/hr/app/rollcall"), ("post", "/api/hr/app/rollcall/new"), ("get", "/api/hr/app/history")):
         assert getattr(app, method)(path).status_code == code
     assert app.calls == []
 
@@ -151,16 +153,31 @@ class FakeInVentry:
         ]
 
 
-def test_the_roll_call_is_who_inventry_shows_on_site_now(app, monkeypatch):
+def _snapshot(tmp_path, *people):
+    (tmp_path / "blip_latest.json").write_text(json.dumps({
+        "summary": {"timestamp": "2026-10-28T07:30:00+00:00"},
+        "on_site": [{"first_name": f, "surname": l, "clocking": {"start": t}} for f, l, t in people]}),
+        encoding="utf-8")
+
+
+def test_the_roll_call_merges_inventry_and_brighthr(app, monkeypatch, tmp_path):
     import hr_inventry_api as api
     monkeypatch.setattr(cfg, "INVENTRY_ACTION_LOCATION", "BRIGHTHR SYNC")
     monkeypatch.setattr(api, "InVentryAPI", FakeInVentry)
-    r = app.get("/api/hr/app/onsite").json()
-    assert r["count"] == 2
-    assert [(p["name"], p["by"]) for p in r["people"]] == [("Ann Desk", "reception"), ("Zoe Test", "sync")]
+    now = datetime.datetime.now(datetime.timezone.utc)
+    _snapshot(tmp_path, ("Zoe", "Test", (now - datetime.timedelta(hours=2)).isoformat()),
+              ("New", "Starter", (now - datetime.timedelta(hours=1)).isoformat()),      # not on InVentry
+              ("Sam", "Forgot", (now - datetime.timedelta(days=80)).isoformat()))       # left out
+    r = app.get("/api/hr/app/rollcall").json()
+    by_name = {p["name"]: p for p in r["people"]}
+    assert set(by_name) == {"Ann Desk", "New Starter", "Zoe Test"}
+    assert "inventry" in by_name["Zoe Test"] and "brighthr" in by_name["Zoe Test"]  # one entry, both
+    assert "inventry" not in by_name["New Starter"]
+    assert by_name["Ann Desk"]["inventry"]["by"] == "reception"
+    assert r["forgotten_left_out"] == 1 and r["inventry_problem"] is None
 
 
-def test_the_roll_call_says_when_inventry_does_not_answer(app, monkeypatch):
+def test_the_roll_call_still_works_when_inventry_is_down(app, monkeypatch, tmp_path):
     import hr_inventry_api as api
 
     class Down:
@@ -170,8 +187,30 @@ def test_the_roll_call_says_when_inventry_does_not_answer(app, monkeypatch):
         def get_personnel(self):
             raise api.InVentryAPIError("InVentry rejected the credentials (401)")
     monkeypatch.setattr(api, "InVentryAPI", Down)
-    r = app.get("/api/hr/app/onsite")
-    assert r.status_code == 502 and "401" in r.json()["detail"]
+    _snapshot(tmp_path, ("Zoe", "Test", datetime.datetime.now(datetime.timezone.utc).isoformat()))
+    r = app.get("/api/hr/app/rollcall")
+    assert r.status_code == 200
+    assert [p["name"] for p in r.json()["people"]] == ["Zoe Test"]
+    assert "401" in r.json()["inventry_problem"] and "BrightHR only" in r.json()["inventry_problem"]
+
+
+def test_a_tick_is_shared_and_a_new_roll_call_clears_it(app, monkeypatch, tmp_path):
+    import hr_inventry_api as api
+    monkeypatch.setattr(api, "InVentryAPI", FakeInVentry)
+    key = next(p["key"] for p in app.get("/api/hr/app/rollcall").json()["people"] if p["name"] == "Ann Desk")
+
+    r = app.post("/api/hr/app/rollcall/tick", json={"key": key, "ticked": True})
+    assert r.json()["ticked"]["by"] == "Pat Example"
+    # Another marshal's phone sees it.
+    seen = {p["name"]: p["ticked"] for p in app.get("/api/hr/app/rollcall").json()["people"]}
+    assert seen["Ann Desk"]["by"] == "Pat Example" and seen["Zoe Test"] is None
+
+    after = app.post("/api/hr/app/rollcall/new").json()
+    assert after["accounted"] == 0 and after["started_by"] == "Pat Example"
+
+
+def test_a_tick_needs_a_person(app):
+    assert app.post("/api/hr/app/rollcall/tick", json={"ticked": True}).status_code == 400
 
 
 def test_the_data_check_reports_without_changing_anything(app, monkeypatch):
