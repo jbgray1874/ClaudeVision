@@ -831,9 +831,20 @@ error logs; the original BPC and BPS template workbooks, to keep with this runbo
    - 138 aren't a component of any migrated BOM.
 
    **Ask Marc / Ethan what PHANT does in X3.** If it's a true phantom (not stocked, exploded into
-   the parent's works order), those products need to be FGML. Rule for the next run: PHANT only
-   when the product is a component of a *migrated* BOM and isn't itself sold, stocked or made on
-   its own works order.
+   the parent's works order), those products need to be FGML.
+
+   **The test (28 Oct, `PHANT_review.xlsx` in out_sue lists all 3,427):**
+
+   | Group | Test | Count | Category |
+   |---|---|---|---|
+   | A | Part in its own right: on an open sales order, or not used in any migrated BOM | 165 | FGML |
+   | B | Stocked / made sub-assembly: used in a migrated BOM, but holds stock (£24k) or has its own open works order (292) | 367 | not PHANT: FGML, or a sub-assembly category if X3 has one (Marc) |
+   | C | Used only inside BOMs, nothing on hand or on order, but has a supplier | 13 | check: RAWML / FGSL |
+   | D | True phantom: used only inside migrated BOMs; not sold, stocked, made on its own or bought | 2,882 | PHANT |
+
+   Rule for the next run: set the category from this test in the product build, not from
+   "parent and component anywhere in Access". The files have no sales history beyond open
+   orders, so a product sold in the past but not now falls to B or D; add last-sold to the extract.
 10. **Decisions to get before the run:**
    - Finance: employee expense accounts and intercompany; EU tax rules.
    - SDI: the 33 shared product codes; credits on orders; the OLD-product stock if rule 1 isn't adopted.
