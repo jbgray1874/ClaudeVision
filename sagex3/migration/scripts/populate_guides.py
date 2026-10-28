@@ -17,6 +17,8 @@ Fixes applied on the way through, each one counted on the Notes sheet:
     Ethan's log shows the 2024 dates rejected
   * SOH written as YA004SOHPJ: Dim Code D02 and Dimension P00003 added between Header
     text and Line
+  * SMR Description (VCRDES, column E) carries the product code - it is the product key on
+    each line (James, 28 Oct). It was "OPENING STOCK" on every line
 """
 import csv
 import json
@@ -29,7 +31,7 @@ from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
 BASE = "/tmp/claude-0/-home-user-ClaudeVision/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dadea/scratchpad"
-OUT = f"{BASE}/out_mapped"
+OUT = os.environ.get("OUT_DIR", f"{BASE}/out_mapped")
 LOADS = f"{OUT}/load_files"
 os.makedirs(LOADS, exist_ok=True)
 HF = Font(name="Arial", bold=True, size=10, color="FFFFFF")
@@ -175,6 +177,8 @@ for tmpl, rows in DATA.items():
             reason = (reason + "; " if reason else "") + \
                 "Negative value - a credit on an order, which X3 needs as a credit note instead"
         if reason:
+            if tmpl == "YA004SMR":
+                r[4] = r[s["item"]]
             held.append(r + [reason])
             continue
         if s["desc"] is not None and not r[s["desc"]].strip():
@@ -214,6 +218,8 @@ for tmpl, rows in DATA.items():
                     fixes["references: spaces and characters X3 does not allow removed" if ref else
                           "text: characters X3 does not allow replaced or removed"] += 1
                     r[c] = v
+        if tmpl == "YA004SMR":                 # Description = the product key (column E)
+            r[4] = r[s["item"]]
         good.append(r)
         good_oid.append(this_oid)
 

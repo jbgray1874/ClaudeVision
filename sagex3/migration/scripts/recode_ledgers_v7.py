@@ -1,7 +1,8 @@
 """Clean-run copies of the stock and order load files on V7 product codes.
 
 The load1 files stay on the codes loaded in UAT. These copies change only the product
-code column: SMR col 8, SOHPJ col 17, POH col 8.
+code column: SMR col 8, SOHPJ col 17, POH col 8. SMR's Description (col 5) is the product
+code, so it follows.
 """
 import csv
 import zipfile
@@ -29,6 +30,8 @@ for name, col in (("YA004SMR", 7), ("YA004SOHPJ", 16), ("YA004POH", 7)):
         if code.get(r[col], r[col]) != r[col]:
             r[col] = code[r[col]]
             n += 1
+        if name == "YA004SMR":                 # Description (col E) is the product key
+            r[4] = r[col]
     write(f"{BASE}/out_v7/{name}_load7_clean_run.txt", rows)
     with zipfile.ZipFile(f"{BASE}/out_v7/V7_load_files.zip", "a", zipfile.ZIP_DEFLATED) as z:
         if f"{name}_load7_clean_run.txt" not in z.namelist():

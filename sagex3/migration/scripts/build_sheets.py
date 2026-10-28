@@ -118,6 +118,8 @@ for name, col, src in (("YA004SMR", 7, "YA004SMR_load7_clean_run.txt"), ("YA004P
         if c.value != r[col]:
             c.value = r[col]
             changed += 1
+        if name == "YA004SMR":                # Description (column E) is the product key
+            ws.cell(3 + i, 5).value = r[4]
     n = wb["Notes"]
     n.insert_rows(3, 2)
     n.cell(3, 1, "Clean run").font = Font(bold=True)

@@ -13,7 +13,7 @@ from openpyxl.utils import get_column_letter
 
 BASE = "/tmp/claude-0/-home-user-ClaudeVision/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dadea/scratchpad"
 SRC = f"{BASE}/uploads_tmpl5"
-OUT = f"{BASE}/out_mapped"
+OUT = os.environ.get("OUT_DIR", f"{BASE}/out_mapped")
 
 HF = Font(name="Arial", bold=True, size=10, color="FFFFFF")
 BF = Font(name="Arial", size=10)
