@@ -46,6 +46,7 @@ from pathlib import Path
 
 import hr_blip_inventry as source_loader
 import hr_config as cfg
+import hr_history
 import hr_inventry_api as api
 
 
@@ -243,8 +244,67 @@ def _match(person, by_person_id, by_email, by_name):
     return None, "; ".join(problems) if problems else "no match"
 
 
+def data_issues(staff, people):
+    """What stands between BrightHR and InVentry, for whoever tidies the data.
+
+    staff: BrightHR's current employees (id, first_name, surname, email).
+    people: InVentry's staff records.
+
+    The same matching the push uses, run over everyone rather than only those
+    on site, so the list is complete on any day. Read-only: it only reports.
+    """
+    by_person_id, by_email, by_name = _index_personnel(people)
+    duplicates, conflicts = _shared_identifiers(by_person_id, by_email)
+
+    def last_seen(r):
+        return str(api._field(r, "LastActivityDate") or "")
+
+    duplicate_copies = set()
+    report = {"duplicates": [], "shared_identifiers": [], "unmatched": [],
+              "name_checks": [], "inventry_only": [],
+              "matched_by": {"PersonID": 0, "email": 0, "name": 0},
+              "brighthr_staff": len(staff), "inventry_records": len(people)}
+    for what, group in duplicates:
+        kept = _pick(group)
+        report["duplicates"].append({
+            "name": _display(group[0]), "shared": what,
+            "records": [{"id": api.inventry_id(r), "last_seen": last_seen(r),
+                         "used": r is kept} for r in group]})
+        duplicate_copies |= {api.inventry_id(r) for r in group if r is not kept}
+    for what, group in conflicts:
+        report["shared_identifiers"].append(
+            {"shared": what, "names": sorted({_display(r) for r in group})})
+
+    matched = set()
+    for e in staff:
+        person = {"brighthr_id": e.get("id", ""), "first_name": e.get("first_name", ""),
+                  "surname": e.get("surname", ""), "email": e.get("email", "")}
+        label = f"{person['first_name']} {person['surname']}".strip() or "?"
+        record, how = _match(person, by_person_id, by_email, by_name)
+        if record is None:
+            report["unmatched"].append({"name": label, "reason": how})
+            continue
+        report["matched_by"][how] = report["matched_by"].get(how, 0) + 1
+        matched.add(api.inventry_id(record))
+        if how != "name" and _record_name(record) != source_loader._name_key(
+                person["first_name"], person["surname"]):
+            report["name_checks"].append({"brighthr": label, "inventry": _display(record), "by": how})
+
+    for r in people:
+        ident = api.inventry_id(r)
+        if ident not in matched:
+            report["inventry_only"].append({
+                "name": _display(r), "last_seen": last_seen(r),
+                "why": "the unused copy of a duplicate" if ident in duplicate_copies
+                       else "no current BrightHR employee matches it"})
+    for key in ("unmatched", "name_checks", "inventry_only"):
+        report[key].sort(key=lambda x: str(x.get("name") or x.get("brighthr") or "").lower())
+    report["duplicates"].sort(key=lambda x: x["name"].lower())
+    return report
+
+
 def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
-             client=None, enable_sign_out=None, now=None):
+             client=None, enable_sign_out=None, now=None, by="command line"):
     """Reconcile InVentry's on-site register against BrightHR."""
     if enable_sign_out is None:
         enable_sign_out = cfg.INVENTRY_ENABLE_SIGN_OUT
@@ -293,6 +353,7 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
         summary["status"] = "aborted"
         summary["warnings"].append(reason)
         _write_status(summary)
+        hr_history.record(hr_history.from_push(summary, by))
         _log(f"PUSH aborted: {reason}")
         return summary
 
@@ -541,6 +602,7 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
         )
 
     _write_status(summary)
+    hr_history.record(hr_history.from_push(summary, by))
     _log(f"PUSH {'(dry run) ' if not apply else ''}{summary['status']}: "
          f"signed in {len(summary['signed_in'])}, signed out {len(summary['signed_out'])}, "
          f"failures {len(summary['failures'])}")
@@ -565,6 +627,7 @@ if __name__ == "__main__":
             apply="--apply" in sys.argv,
             force="--force" in sys.argv,
             source=_arg("--source", source_loader.SOURCE_LATEST),
+            by=_arg("--by", "command line"),
         )
         sys.exit(0 if s["status"] == "ok" else 2)
     except Exception as exc:  # noqa: BLE001

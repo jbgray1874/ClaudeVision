@@ -170,7 +170,11 @@ INVENTRY_ONLY_SIGN_OUT_OUR_OWN = _opt("INVENTRY_ONLY_SIGN_OUT_OUR_OWN", "true").
 
 # Cap on sign-outs in a single push, as a backstop against a bad on-site list
 # emptying InVentry's register. Exceeding it suppresses the sign-outs.
-INVENTRY_MAX_SIGN_OUTS_PER_RUN = int(_opt("INVENTRY_MAX_SIGN_OUTS_PER_RUN", "25"))
+# 170, not 25: the 5pm finish signs out more than 25 at once, and an exceeded cap
+# holds back every sign-out, so 25 left the roll call wrong every evening. Only
+# people the sync signed in can be signed out, and that is fewer than 170; the
+# failed-lookup and empty-building guards cover the bad-list case.
+INVENTRY_MAX_SIGN_OUTS_PER_RUN = int(_opt("INVENTRY_MAX_SIGN_OUTS_PER_RUN", "170"))
 
 # A BrightHR point-in-time query returns anyone whose clocking is still open,
 # so someone who forgot to clock out stays "on site" indefinitely. Real data
@@ -188,3 +192,7 @@ BLIP_MAX_CLOCKIN_AGE_HOURS = float(_opt("BLIP_MAX_CLOCKIN_AGE_HOURS", "20"))
 # who is in the building and writes to the fire roll call, so it is a named
 # list rather than "anyone in the tenant". Empty means nobody.
 HR_APP_USERS = {e.strip().lower() for e in _opt("SDI_HR_APP_USERS").split(",") if e.strip()}
+
+# Who gets the weekly forgotten clock-outs report (tools/forgotten_clockouts.py
+# --send). Email addresses, comma separated. Empty means it is not sent.
+HR_REPORT_TO = {e.strip() for e in _opt("SDI_HR_REPORT_TO").split(",") if e.strip()}
