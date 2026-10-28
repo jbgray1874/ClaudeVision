@@ -123,7 +123,7 @@ if ($blip -eq 2) {
 }
 
 # ── 2. InVentry ──────────────────────────────────────────────────────────
-$pushArgs = @((Join-Path $BackendDir "hr_onsite_push.py"))
+$pushArgs = @((Join-Path $BackendDir "hr_onsite_push.py"), "--by", "scheduled task")
 if ($Apply) { $pushArgs += "--apply" }
 
 $pushOut = & $Python @pushArgs 2>&1
