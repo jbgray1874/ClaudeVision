@@ -129,11 +129,13 @@
 
     <div class="view" id="v-roll">
       <div class="panel">
-        <h4>Who InVentry shows on site <span class="chip c-off" id="rollcount"></span></h4>
+        <h4>Fire roll call <span class="chip c-off" id="rollcount"></span></h4>
         <div class="btns"><button class="btn ghost" id="rollload">Refresh</button>
-          <button class="btn ghost" id="rollclear">Clear ticks</button></div>
-        <p class="muted" style="margin-top:10px" id="rollmeta">Straight from InVentry, in a few seconds. Tick
-        people off as they are accounted for: the ticks are kept on this device only.</p>
+          <button class="btn ghost" id="rollnew">Start a new roll call</button></div>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:14px;color:var(--ink-dim)">
+          <input type="checkbox" id="rollhide" style="width:18px;height:18px"> Show only people not yet accounted for</label>
+        <p class="muted" style="margin-top:10px" id="rollmeta">Everyone InVentry shows on site, plus anyone clocked in on
+        BrightHR. Tick people off as they are accounted for: every marshal's phone sees the same ticks.</p>
         <div class="err" id="rollerr"></div>
         <ul class="roll" id="roll" style="margin-top:8px"></ul>
       </div>
@@ -202,7 +204,7 @@ const quiet=e=>e.message==='signin'||e.message==='forbidden';
 document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{
   document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===b));
   document.querySelectorAll('.view').forEach(v=>v.classList.toggle('on',v.id==='v-'+b.dataset.v));
-  if(b.dataset.v==='roll' && !$('roll').children.length) loadRoll();
+  if(b.dataset.v==='roll') loadRoll(); else clearTimeout(rollTimer);
   if(b.dataset.v==='hist') loadHistory();
   if(b.dataset.v==='forgot') renderForgotten();
 }));
@@ -279,30 +281,67 @@ function renderLatest(){
   $('out').innerHTML=h;
 }
 
-/* ── roll call (InVentry, now) ── */
-function rollKey(){ return 'sdi.roll.'+new Date().toISOString().slice(0,10); }
-function ticks(){ try{ return JSON.parse(localStorage.getItem(rollKey())||'{}'); }catch(e){ return {}; } }
-function saveTicks(t){ try{ localStorage.setItem(rollKey(),JSON.stringify(t)); }catch(e){} }
+/* ── fire roll call: InVentry and BrightHR merged, ticks shared by every phone ── */
+let ROLL=null, rollTimer=null;
+const PENDING={};                    // ticks not yet saved: kept and resent, never dropped
+function whereFrom(p){
+  const bits=[];
+  if(p.inventry) bits.push('InVentry since '+(when(p.inventry.since)||'?')+(p.inventry.by==='sync'?'':' (reception)'));
+  if(p.brighthr) bits.push('clocked in '+(when(p.brighthr.since)||'?'));
+  if(p.brighthr && !p.inventry) bits.push('not on InVentry');
+  if(p.inventry && !p.brighthr) bits.push('not clocked in on BrightHR');
+  return bits.join(' · ');
+}
+function isTicked(p){ return p.key in PENDING ? PENDING[p.key] : !!p.ticked; }
+function renderRoll(){
+  if(!ROLL) return;
+  const hide=$('rollhide').checked;
+  const done=ROLL.people.filter(isTicked).length;
+  $('rollcount').textContent=done+' of '+ROLL.count+' accounted for';
+  $('rollcount').className='chip '+(ROLL.count&&done===ROLL.count?'c-ok':'c-warn');
+  const notes=['Updated '+when(ROLL.time)+'.'];
+  if(ROLL.started) notes.push('Roll call started '+when(ROLL.started)+(ROLL.started_by?' by '+ROLL.started_by:'')+'.');
+  if(ROLL.inventry_problem) notes.push(ROLL.inventry_problem);
+  if(ROLL.brighthr_checked){ const h=ago(ROLL.brighthr_checked);
+    notes.push('BrightHR checked '+when(ROLL.brighthr_checked)+(h>0.5?': press Check who\'s clocked in for an up-to-date list.':'.')); }
+  else notes.push('No BrightHR check yet: press Check who\'s clocked in.');
+  if(ROLL.forgotten_left_out) notes.push(ROLL.forgotten_left_out+' forgotten clock-outs are left out.');
+  if(Object.keys(PENDING).length) notes.push(Object.keys(PENDING).length+' tick(s) not saved yet; they will be sent when the signal allows.');
+  $('rollmeta').textContent=notes.join(' ');
+  const rows=ROLL.people.filter(p=>!(hide&&isTicked(p)));
+  $('roll').innerHTML=rows.map(p=>{ const t=isTicked(p);
+    const who=p.key in PENDING?'saving…':(p.ticked?'ticked by '+p.ticked.by+' at '+when(p.ticked.at):'');
+    return '<li'+(t?' class="done"':'')+'><input type="checkbox" data-k="'+esc(p.key)+'"'+(t?' checked':'')
+      +' aria-label="Accounted for: '+esc(p.name)+'"><span class="n">'+esc(p.name)+'<small>'+esc(whereFrom(p))+'</small>'
+      +(who?'<small>'+esc(who)+'</small>':'')+'</span></li>'; }).join('')
+    || '<li><span class="muted">'+(hide&&ROLL.count?'Everyone is accounted for.':'Nobody is shown on site.')+'</span></li>';
+}
+async function sendPending(){
+  for(const key of Object.keys(PENDING)){
+    try{ await fetch(API+'/rollcall/tick',{method:'POST',headers:{'Content-Type':'application/json'},
+           body:JSON.stringify({key, ticked:PENDING[key]})}).then(r=>{ if(!r.ok) throw new Error(r.status); });
+         delete PENDING[key]; }
+    catch(e){ /* kept; resent on the next refresh */ }
+  }
+}
 async function loadRoll(){
-  $('rollerr').textContent=''; $('rollload').disabled=true;
-  try{
-    const j=await call('/onsite'); const t=ticks();
-    $('rollcount').textContent=j.count+' on site';
-    $('rollmeta').textContent='Read from InVentry at '+when(j.time)+'. Tick people off as they are accounted for: the ticks are kept on this device only.';
-    $('roll').innerHTML=j.people.map((p,i)=>'<li'+(t[p.name]?' class="done"':'')+'><input type="checkbox" data-n="'+esc(p.name)+'"'
-      +(t[p.name]?' checked':'')+' aria-label="Accounted for: '+esc(p.name)+'"><span class="n">'+esc(p.name)
-      +'<small>since '+esc(when(p.since)||p.since)+' · '+(p.by==='sync'?'from BrightHR':'signed in at reception')+'</small></span></li>').join('')
-      || '<li><span class="muted">InVentry shows nobody on site.</span></li>';
-  }catch(e){ if(!quiet(e)) $('rollerr').textContent=e.message; }
-  finally{ $('rollload').disabled=false; }
+  clearTimeout(rollTimer); $('rollerr').textContent='';
+  try{ await sendPending(); ROLL=await call('/rollcall'); renderRoll(); }
+  catch(e){ if(!quiet(e)) $('rollerr').textContent=e.message+(Object.keys(PENDING).length?' Your ticks are kept on this phone and will be sent.':''); }
+  // While the roll call is open, keep every marshal's phone in step.
+  if($('v-roll').classList.contains('on')) rollTimer=setTimeout(loadRoll,5000);
 }
 $('roll').addEventListener('change',e=>{
-  const cb=e.target.closest('input[data-n]'); if(!cb) return;
-  const t=ticks(); if(cb.checked) t[cb.dataset.n]=1; else delete t[cb.dataset.n]; saveTicks(t);
-  cb.parentElement.classList.toggle('done',cb.checked);
+  const cb=e.target.closest('input[data-k]'); if(!cb) return;
+  PENDING[cb.dataset.k]=cb.checked; renderRoll(); sendPending().then(loadRoll);
 });
+$('rollhide').addEventListener('change',renderRoll);
 $('rollload').addEventListener('click',loadRoll);
-$('rollclear').addEventListener('click',()=>{ if(confirm('Clear all ticks on this device?')){ saveTicks({}); loadRoll(); } });
+$('rollnew').addEventListener('click',async()=>{
+  if(!confirm('Start a new roll call?\n\nThis clears every tick, on every phone.')) return;
+  try{ for(const k in PENDING) delete PENDING[k]; ROLL=await call('/rollcall/new','POST'); renderRoll(); }
+  catch(e){ if(!quiet(e)) $('rollerr').textContent=e.message; }
+});
 
 /* ── data issues ── */
 function table(title, cls, head, rows, explain){
