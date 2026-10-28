@@ -48,6 +48,7 @@ an old file. Read section 1 before every run.
 | # | Template | What it is | Track |
 |---|---|---|---|
 | 1 | YA004BPS | Suppliers | 2 |
+| 1a | YA004BPSC | Supplier bank details (after suppliers; new 28 Oct) | 2 |
 | 2 | YA004BPC | Customers | 2 |
 | 3 | YA004BPCDL | Customer delivery addresses (after customers, never before) | 2 |
 | 4 | ZSDIITM | Products | 2 |
@@ -129,6 +130,30 @@ Document, Supplier, **Company**, Site, Accounting Date, Currency, GBP Amount, ..
   macro skips two, so it would drop the first item.
 
 ### Track 2
+
+**YA004BPSC – supplier bank details (9 columns, two heading rows; new from Ethan, 28 Oct)**
+`BPSNUM, BPAADD, CRY, BIDNUM, PAB1, BICCOD, PAB2, CUR, BIDNUMFLG`
+
+| X3 field | Heading | Mapped from | Rule |
+|---|---|---|---|
+| BPSNUM | Supplier | Sage supplier code: `migration.XREF_SAGE_BPS`, plus the 83 new pairs written into the query | |
+| BPAADD | Address | `001` | the supplier's only address in YA004BPS |
+| CRY | Country | the final supplier file (column 19), so the corrected country | |
+| BIDNUM | Bank acct. number | `PL_ACCOUNTS.SU_BANK_SORT` + `SU_BANK_AC_NO` | `XXXX` + 6-digit sort code + 8-digit account number, digits only. 7-digit accounts padded with a leading 0. Access holds no bank identifier (BIC), so XXXX stays, as Ethan's note says |
+| PAB1 / BICCOD / PAB2 | Domicile / BIC / Paying bank 2 | | blank |
+| CUR | Currency | the final supplier file (column 5) | |
+| BIDNUMFLG | By Default | `2` | Yes |
+
+- **Only suppliers paid by BACS** (payment terms BAC_..., 662 of the 706). That's the template's
+  note: "Bank details only needed for suppliers paid by BACs at this stage".
+- Not loaded, and listed on the Check tab: a BACS supplier with no bank details in Access, and
+  anything that isn't 6 + 8 digits. Access also holds `SU_BANK_AC_NAME`, `SU_BANK_BANKNAME` and
+  `SU_BANK_BACSREF`; the template has no field for them.
+- **Build:** run `sql/supplier_bank_details.sql` (read-only, one grid), then
+  `scripts/build_bpsc.py <grid> YA004BPSC_bank_details_MAPPED.xlsx`. The tabs are renamed from
+  Sheet1 / Sheet2 to "Data with Headings" / "Guide" because the macro looks for that name.
+- **Confidential:** bank account details. The spreadsheet and the query output stay out of git
+  and inside SDI.
 
 **YA004BPS – suppliers (33 columns).** Only the first 14 codes of the template were recorded:
 `BSGCOD, BPSNUM, BPSNAM, CRY, CUR, CRN, EECNUM, VACBPR, PTE, ACCCOD, BPAADD, BPADES, BPAADDLIG(0), BPAADDLIG(1)`
@@ -740,6 +765,7 @@ fixes themselves are what every rerun must repeat.
 | **YA004ITM_guide.xlsx** + macro email | Marc, 23 Oct (sent again, identical) | Macro version of an import template: a cover sheet with defaults and a button that writes the .txt from "Data with Headings", skipping 2 rows; sheet names hard-coded. Product layout of 19 columns (statistical groups, expiry, shelf life, serial, tax level GSR, back-to-back) | The macro didn't survive email (plain .xlsx, empty cover sheet). We use spreadsheets with the same sheet naming. Whether YA004ITM replaces ZSDIITM is asked |
 | **SDI_Data_Migration_-_Import_Notes.docx** | Ethan, 23 Oct | Per-template fixes: allowed characters; BP tax rule table (no EU); AG address flag rule; GB and EU VAT formats; products and descriptions more thoroughly; BOMs need loaded products; work centre mapping; costs under material; SOH dates (2024) and DIE/CCE; SMR lots must be X3 lots; BICX/BISX "worked", missing accounts; IME column on BISX to come | Every point applied or asked (sections 5, 6, 14). The X3 lot export is still needed |
 | **YA004SOHPJ** (instructions) | Ethan, 23 Oct | SOH + Dim Code (D02) and Dimension (P00003) between columns M and N | Built as YA004SOHPJ (22 columns), DIE/CCE to confirm |
+| **YA004BPSC_guide.xlsx** | Ethan, 28 Oct | Supplier bank details: BPSNUM, BPAADD, CRY, BIDNUM (XXXX + sort code + account), PAB1, BICCOD, PAB2 blank, CUR, BIDNUMFLG 2. BACS suppliers only | Mapped (section 3); `supplier_bank_details.sql` + `build_bpsc.py`. Waiting on the query output |
 | **BICY / BISY layout** | James, 28 Oct | BICX and BISX renamed YA004BICY and YA004BISY; CURLED removed from BISY; new column Company between C (Customer / Supplier) and D (Site) in both | Built (`build_bicy_bisy.py`). Company = S01A (James, 28 Oct) |
 | **YA004BPCDL_guide.xlsx** | Ethan, 23 Oct (sent twice) | Customer delivery addresses: BPCNUM, BPAADD, BPDNAM. Load after customers | Built, 2,268 rows |
 | **ZSDIITMSUP_Guide_V2.xlsx** | Ethan, 23 Oct (sent twice) | Product-suppliers: ITMREF, BPSNUM, ITMREFBPS (= product code) | Built, 7,679 rows; PIO asked |
