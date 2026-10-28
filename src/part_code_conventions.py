@@ -142,7 +142,7 @@ def purchased_suffix(identity: str) -> str:
     SDI-fabricated: they carry no saw/glue/CNC/laser/weld fab labour" — and, having decided,
     appends "bought_in" to page_roles. But that runs at COSTING, and it is the only thing on
     a code like "12552-01-01X" that ever sets the role: document_builder's retag deliberately
-    excludes anything matching ^\\d{3,5}- as an SDI drawing reference, which was written to
+    excludes anything matching ^\\d{3,6}- as an SDI drawing reference, which was written to
     protect the parts we cut and protected the purchases with them.
 
     So every earlier stage saw page_roles ['assembly'] and concluded "not bought-in".
@@ -177,16 +177,97 @@ def purchased_suffix(identity: str) -> str:
 # Three digits minimum. Every job number here is four or five (1282, 2085, 3886, 11350,
 # 12120, 12392), so this costs nothing real and refuses "1-WIDE", "2-OFF", "4-WAY" and
 # every other dimension or count that opens a description.
-_DRAWING_NUMBER_SHAPE = re.compile(r"^[0-9]{3,}[0-9A-Z]*(?:-[0-9A-Z]+)+$", re.IGNORECASE)
+# A CUSTOMER'S NUMBERING MAY OPEN WITH LETTERS (D-584). ROL's "ROL2021-2465-00" and its
+# sheets "ROL2021-2466" … failed this shape on every reader at once: the words reader found
+# no title block and parsed no rows, the arrangement rule saw no structure on the GA and
+# took a Hafele article number for the one family shown, and the product resolver matched
+# nothing. A short run of letters before the digits is admitted — up to four, so a word is
+# still a word — and a prefix that names a STANDARD, a FINISH or a THREAD (DIN, ISO, RAL …)
+# is refused by config.CODE_PREFIXES_THAT_ARE_NOT_DRAWINGS: "ISO7380-1-M8X16" is a bolt,
+# not a drawing, and must stay on the bill as one.
+_DRAWING_NUMBER_SHAPE = re.compile(r"^(?:[A-Z]{1,4})?[0-9]{3,}[0-9A-Z]*(?:-[0-9A-Z]+)+$",
+                                   re.IGNORECASE)
+_LETTER_PREFIX = re.compile(r"^([A-Z]{1,4})(?=[0-9])", re.IGNORECASE)
+# A supplier's article number: dotted numeric groups (Hafele 651.02.909), or a standard's
+# designation with its size. Never a drawing SDI holds, so never structure on a GA.
+_DOTTED_ARTICLE = re.compile(r"^\d+(?:\.\d+){1,}[A-Z]?$", re.IGNORECASE)
+
+
+def _refused_prefixes() -> "frozenset":
+    try:
+        from config import CODE_PREFIXES_THAT_ARE_NOT_DRAWINGS as _p
+        return frozenset(str(x).upper() for x in _p)
+    except Exception:                                                # noqa: BLE001
+        return frozenset({"DIN", "ISO", "EN", "BS", "ANSI", "ASTM", "JIS", "RAL", "UNC",
+                          "UNF", "SAE", "NPT", "BSP", "AWG", "DN", "M"})
 
 
 def looks_like_a_drawing_number(text: str) -> bool:
     """True when a token has the shape of an SDI or customer drawing number.
 
     Shape only. It says a token COULD name a drawing, never that this drawing exists —
-    the direction of safety this module keeps everywhere else.
+    the direction of safety this module keeps everywhere else. A tail that is a finish,
+    colour or spacing word is prose, not a drawing (D-512): "600-CENTRES" fits the shape
+    and is a hole-spacing note, and its missing-drawing question was unanswerable. A
+    letter prefix that is a standard, finish or thread word is a designation, not a
+    drawing (D-584): "DIN7991-M3X10", "RAL7024-SATIN".
     """
-    return bool(_DRAWING_NUMBER_SHAPE.match(str(text or "").strip()))
+    token = str(text or "").strip()
+    if not _DRAWING_NUMBER_SHAPE.match(token):
+        return False
+    _pre = _LETTER_PREFIX.match(token)
+    if _pre and _pre.group(1).upper() in _refused_prefixes():
+        return False
+    try:
+        from config import CODE_TAIL_NOISE_WORDS as _tail_noise
+        _tail = token.rsplit("-", 1)[-1].upper()
+        if _tail.isalpha() and _tail in _tail_noise:
+            return False
+    except Exception:                                                # noqa: BLE001
+        pass
+    return True
+
+
+def is_supplier_article(text: str) -> bool:
+    """A number that names something BOUGHT, whatever shape it has (D-584): a dotted
+    article number (Hafele 651.02.909), or a standard's designation with its size (DIN
+    7991 - M3 x 10, ISO 7380-1 - M8 x 16). It stays on the bill as a bought item; it is
+    never structure on a general arrangement and never the unit being quoted."""
+    token = re.sub(r"\s+", "", str(text or "").strip()).upper()
+    if not token:
+        return False
+    if _DOTTED_ARTICLE.match(token):
+        return True
+    _pre = _LETTER_PREFIX.match(token)
+    return bool(_pre and _pre.group(1).upper() in _refused_prefixes())
+
+
+def is_standard_designation(text: str) -> bool:
+    """True when a code is a standards body's designation of one article: a prefix from
+    config.STANDARDS_BODY_PREFIXES followed by its number ("DIN 7980 - 8", "ISO 7380-1 -
+    M8 x 16", "DIN7991-M3X10"). Spacing is ignored. A bare prefix ("DIN") is no
+    designation — it names no number — and nor is a colour or thread word (D-587)."""
+    token = re.sub(r"\s+", "", str(text or "").strip()).upper()
+    _pre = _LETTER_PREFIX.match(token)
+    if not _pre:
+        return False
+    try:
+        from config import STANDARDS_BODY_PREFIXES as _bodies
+        bodies = {str(b).upper() for b in _bodies}
+    except Exception:                                                # noqa: BLE001
+        bodies = {"DIN", "ISO", "EN", "BS", "ANSI", "ASTM", "JIS", "SAE"}
+    return _pre.group(1).upper() in bodies
+
+
+def drawing_family(text: str) -> str:
+    """The numbering family of a drawing-number-shaped code: the letters and the leading
+    digits ("ROL2021-2466" -> "ROL2021", "12349-02-69-100" -> "12349"); "" for anything
+    that is not a drawing number, a supplier's article included."""
+    token = re.sub(r"\s+", "", str(text or "").strip()).upper()
+    if not token or is_supplier_article(token) or not looks_like_a_drawing_number(token):
+        return ""
+    m = re.match(r"^([A-Z]{0,4}[0-9]{3,})", token)
+    return m.group(1) if m else ""
 
 
 def bare_code(identity: str) -> str:

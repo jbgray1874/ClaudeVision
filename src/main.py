@@ -341,8 +341,13 @@ def _rewrite_estimate_banner(xlsx_path, summary) -> None:
                 for _bcell in _brow:
                     if isinstance(_bcell.value, str) and _bcell.value.startswith(
                             ("PROVISIONAL —", "DRAFT —")):
+                        # A PROVISIONAL COUNT, SAID SO (D-580): the cell is written before the
+                        # checks run and is never rewritten after (D-361); the final release
+                        # status lives on the report, and this says where.
                         _bcell.value = (f"DRAFT — {_total_b} item(s) to confirm: {_phrase_b} "
-                                        f"(each is listed on the AI Explanation tab)")
+                                        f"(a provisional count at workbook population — the "
+                                        f"final release status is on the report; each is "
+                                        f"listed on the AI Explanation tab)")
                         _bhits += 1
                     elif (isinstance(_bcell.value, str)
                           and _bcell.value.startswith("OUTSTANDING ESTIMATOR INPUTS (")
@@ -427,6 +432,25 @@ def main() -> None:
     # quantity; everything downstream reads what it decided.
     if getattr(args, "order_qty", None):
         os.environ["SDI_ORDER_QTY"] = str(int(args.order_qty))
+    # WHO THIS TIMING BELONGS TO (D-553), said before anything is timed.
+    try:
+        import run_timing as _rt_id
+        _rt_id.identify(product=str(getattr(args, "product", None) or "").strip() or None,
+                        customer=str(getattr(args, "customer", None) or "").strip() or None,
+                        units=getattr(args, "order_qty", None),
+                        breaks=",".join(str(q) for q in (getattr(args, "quantity_breaks", None) or []))
+                        or None)
+    except Exception:                                        # noqa: BLE001
+        pass
+    # THE BREAKS TOO (D-550). A per-order line (packaging, delivery) is priced at a fixed list
+    # of breaks and the run's own break was not among them: 401918's 150-off column divided the
+    # 1-off pallet by 150. The lines price every break the run asks for.
+    try:
+        _qb = sorted({int(q) for q in (getattr(args, "quantity_breaks", None) or []) if int(q) >= 1})
+        if _qb:
+            os.environ["SDI_QUANTITY_BREAKS"] = ",".join(str(q) for q in _qb)
+    except (TypeError, ValueError):
+        pass
     # THE PRODUCT, THE SAME WAY AND FOR THE SAME REASON. The portal's Drawing Number names
     # the one assembly that ships; route_compiler.declared_product_of reads it, and the scan
     # stamps it on the summary so a saved summary replays the same roots.
@@ -673,6 +697,15 @@ def main() -> None:
         args.search_root = str(_job_root)
         args.folder_as_job = True
         args.no_folder_as_job = False
+        # A PARTNER RUN SAYS WHERE IT IS AND WHERE ITS TIME WENT (D-529). Only a run Muhammad's
+        # endpoint queued carries this marker; every other run is untouched.
+        if (_job_root / "PARTNER_API_RUN.json").is_file():
+            try:
+                import run_timing as _rt_api
+                _rt_api.enable_detail()
+                _rt_api.stage("reading")
+            except Exception:                                    # noqa: BLE001
+                pass
 
     drawing_arg = args.pdf or args.drawing
     dxf_from_cli = [Path(d) for d in (args.dxf or [])] + [Path(p) for p in (args.attach_dxf or [])]
@@ -763,10 +796,11 @@ def main() -> None:
     if getattr(args, "fresh_read", False):
         os.environ["SDI_VISION_REFRESH"] = "1"
         os.environ["SDI_LLM_EXTRACT_REFRESH"] = "1"
-        print("   [fresh-read] both LLM caches bypassed — every page goes to the model and "
-              "the whole-pack read is re-driven. The answer may differ from the last run: "
-              "that is what is being measured, and it is why a normal estimate does not do "
-              "this.", flush=True)
+        os.environ["SDI_READ_REFRESH"] = "1"      # the read store too (D-554): nothing kept is consulted
+        print("   [fresh-read] both LLM caches and the read store bypassed — every page goes "
+              "to the model, every document is read again and the whole-pack read is "
+              "re-driven. The answer may differ from the last run: that is what is being "
+              "measured, and it is why a normal estimate does not do this.", flush=True)
     dxf_only_primary = bool(dxf_from_cli and not drawing_arg)
     job_cfg = getattr(config, "DRAWING_JOB_DISCOVERY", {}) or {}
     folder_as_job = bool(job_cfg.get("folder_as_job", False))
@@ -970,6 +1004,7 @@ def main() -> None:
         # Stamped here, immediately after the scan, so there is no window in which a
         # deliverable can be built by something that does not know what kind of run it is.
         summary["llm_only"] = bool(getattr(args, "llm_only", False))
+        _time_stage("enrichment_reader_provenance", True)
         summary["fresh_read"] = bool(getattr(args, "fresh_read", False))
         try:
             from run_readers import readers_that_ran as _readers
@@ -983,6 +1018,7 @@ def main() -> None:
                   f"the job report will describe the run from the flag alone.", flush=True)
 
         # SDI Intelligence — Learning Engine
+        _time_stage("enrichment_reader_provenance", False)
         _time_stage("learning_engine", True)
         try:
             from learning_engine import get_engine
@@ -1018,6 +1054,7 @@ def main() -> None:
         # already fill these, so nothing is overwritten). For no-DXF customer tender drawings it
         # is the trustworthy backbone. Off by default so proven jobs (12120/1282) are untouched.
         import os as _os_df
+        _time_stage("enrichment_drawing_facts", True)
         if _os_df.getenv("SDI_APPLY_DRAWING_FACTS", "").lower() in {"1", "true", "yes"}:
             try:
                 from drawing_facts import extract_drawing_facts
@@ -1037,6 +1074,7 @@ def main() -> None:
                 print(f"  [drawing-facts] skipped ({_exc})")
 
         # ── Job-level additions: assembly labour (history) + bought-in materials (Tim BOM) ──
+        _time_stage("enrichment_drawing_facts", False)
         # Computed AFTER the scan, then folded into BOTH the bay estimate AND the canonical
         # estimate_summary (workbook_equivalent_pricing / cost_breakdown / document total). The
         # saved JSON is then RE-WRITTEN, so the spreadsheet, JSON and parity report all agree.
@@ -1050,13 +1088,26 @@ def main() -> None:
         _bay = summary.get("bay_estimate")
         try:
             from pricing_service import PricingService as _PS
-            _qty = int(summary.get("quantity") or _es.get("assumed_job_quantity") or 1)
-            _asm = _PS().estimate_assembly_pack_labour(quantity=_qty)
-            _assembly_cost = float(_asm.get("cost_per_bay_gbp") or 0.0)
-            if isinstance(_bay, dict):
-                _bay["assembly_pack_labour"] = _asm
-            print(f"  Assembly/pack labour: \u00a3{_assembly_cost:.2f}/bay ({_asm.get('basis')})"
-                  + (f" \u2014 {_asm['flag']}" if _asm.get("flag") else ""))
+            # A BAY RATE NEEDS A BAY (D-511). 12340-01M \u2014 one flat bracket, nothing to
+            # assemble \u2014 was given \u00a329.13/bay of historical assembly labour because this
+            # call was never gated: the historical median describes assembling and packing
+            # a BAY of parts, and a job with nothing to assemble has no claim on it. There
+            # is assembly work when the job holds more than one made part, or any record
+            # the graph calls an assembly. Packing a single component is the carton the
+            # commercial PACKAGING line already carries, not a bay of bench work.
+            _has_assembly = _PS.assembly_scope_exists(
+                (summary.get("manufacturing_writeup") or {}).get("parts"))
+            if _has_assembly:
+                _qty = int(summary.get("quantity") or _es.get("assumed_job_quantity") or 1)
+                _asm = _PS().estimate_assembly_pack_labour(quantity=_qty)
+                _assembly_cost = float(_asm.get("cost_per_bay_gbp") or 0.0)
+                if isinstance(_bay, dict):
+                    _bay["assembly_pack_labour"] = _asm
+                print(f"  Assembly/pack labour: \u00a3{_assembly_cost:.2f}/bay ({_asm.get('basis')})"
+                      + (f" \u2014 {_asm['flag']}" if _asm.get("flag") else ""))
+            else:
+                print("  Assembly/pack labour: none \u2014 a single made part with nothing to "
+                      "assemble takes no per-bay assembly rate (packing is the PACKAGING line)")
         except Exception as _exc:
             print(f"  (assembly labour estimate skipped: {_exc})")
         # FIX 3: prefer Tim's INGESTED per-drawing assemble/pack labour over the E2 median.
@@ -1169,6 +1220,9 @@ def main() -> None:
                 print(f"  (totals reconciliation skipped: {_exc_rc})")
 
         _time_stage("job_level_pricing_and_rewrite", False)
+        # Printing includes formatting potentially large geometry dictionaries and pipe
+        # back-pressure from the runner. Measure it; do not assume all enrichment is AI.
+        _time_stage("enrichment_console_summary", True)
         print(f"Page count: {summary['page_count']}")
         print("Detected labels:", ", ".join(summary["detected_labels"]) or "None")
         print("Part numbers:", ", ".join(summary["pattern_summary"]["part_numbers"]) or "None")
@@ -1186,6 +1240,8 @@ def main() -> None:
             print(f"  - {output}")
 
         print("\nPart summaries:\n")
+        _time_stage("enrichment_console_summary", False)
+        _time_stage("enrichment_console_parts", True)
         estimate_lookup = {
             item["part_number"]: item for item in summary.get("estimate_summary", {}).get("part_estimates", [])
         }
@@ -1213,6 +1269,8 @@ def main() -> None:
             print()
 
         print("Manufacturing observations:")
+        _time_stage("enrichment_console_parts", False)
+        _time_stage("enrichment_console_observations", True)
         for observation in summary["manufacturing_writeup"]["manufacturing_observations"]:
             print(f"  - {observation}")
 
@@ -1243,6 +1301,7 @@ def main() -> None:
             print(f"\nEstimated document total: {total}")
 
         if getattr(args, "generate_ai_spreadsheet", False):
+            _time_stage("enrichment_console_observations", False)
             _time_stage("ai_spreadsheet", True)
             try:
                 tpl = Path(args.ai_spreadsheet_template) if args.ai_spreadsheet_template else None
@@ -1261,6 +1320,8 @@ def main() -> None:
         # unreachable (e.g. share unavailable), so a network blip doesn't
         # stop the run.
         xlsx_path = None
+        if not getattr(args, "generate_ai_spreadsheet", False):
+            _time_stage("enrichment_console_observations", False)
         _time_stage("post_scan_enrichment", False)
         _time_stage("populate_workbook", True)
         try:
@@ -1759,6 +1820,7 @@ def main() -> None:
                               "carries every quantity, so no per-quantity copies are filed.",
                               flush=True)
                     _order_freight: Dict[str, float] = {}
+                    _order_freight_at: Dict[str, Dict[int, float]] = {}
                     try:
                         from commercial_lines import collect_lines as _collect_cl
                         summary["commercial_lines"] = _collect_cl(summary)
@@ -1766,8 +1828,16 @@ def main() -> None:
                         pass
                     for _cl in (summary.get("commercial_lines") or []):
                         if isinstance(_cl, dict) and _cl.get("order_gbp"):
-                            _order_freight[str(_cl.get("code") or "").upper()] = float(
-                                _cl["order_gbp"])
+                            _code_cl = str(_cl.get("code") or "").upper()
+                            _order_freight[_code_cl] = float(_cl["order_gbp"])
+                            # EACH BREAK'S OWN ORDER FIGURE (D-550): the boxes are a step, not
+                            # a rate, so a variant takes the order cost priced AT its quantity.
+                            try:
+                                _order_freight_at[_code_cl] = {
+                                    int(q): float(v) for q, v in
+                                    (_cl.get("order_gbp_at_breaks") or {}).items()}
+                            except (TypeError, ValueError):
+                                pass
                     # THE BREAK TABLE IS FILLED BEFORE THE SWEEP RECALCULATES. The
                     # 19:02 book had the sheet perfectly right and the Quantity Breaks
                     # comparison flat at £4.09 material: the sweep set D6 to each
@@ -1817,8 +1887,10 @@ def main() -> None:
                                 # table is shorter than the BOM block; a material past
                                 # its last row is absent from the table, and an absent
                                 # row reads as one that does not move with quantity.
-                                print("   [price-break] BELOW THE TABLE, so not priced "
-                                      "across the breaks — the Material Price Break tab "
+                                print("   [price-break] NOT IN THE PRICE TABLE — this "
+                                      "does not establish whether the workbook charges "
+                                      "the line at each break. Check calculated rows. "
+                                      "The Material Price Break tab "
                                       "stops at Estimate row "
                                       f"{_mpb.get('last_bom_row')}: "
                                       + ", ".join(_res["outside_table"]), flush=True)
@@ -1850,7 +1922,8 @@ def main() -> None:
                               "will read flatter than the truth. The tab says so on its "
                               "face.", flush=True)
                     _swept = _sweep(xlsx_path, _breaks, save_variants=_save,
-                                    order_freight=_order_freight or None)
+                                    order_freight=_order_freight or None,
+                                    order_freight_at=_order_freight_at or None)
                     if _swept:
                         (summary.setdefault("saved_output_paths", {}))["quantity_variants"] = \
                             list(_swept.get("variants") or [])
@@ -2070,6 +2143,62 @@ def main() -> None:
                     _val = summary.get(_carry)
                     if _val and not _target.get(_carry):
                         _target[_carry] = list(_val) if isinstance(_val, list) else _val
+            # THE CHARGED CELLS THEMSELVES (D-578): after Excel has calculated the book and
+            # the quantity sweep has read it, before the checks and the quotation. Every
+            # captured section requirement must be on the sheet at its quantity, charged,
+            # cut, and the saved file's own cached cells must agree. Always recomputed —
+            # a verdict kept from an earlier workbook is not this one's — and a failure of
+            # the checker is a finding, never a pass.
+            try:
+                from final_charge_contract import record as _record_final_charges
+                _record_final_charges(_target, xlsx_path)
+                summary["final_charge_result"] = _target.get("final_charge_result")
+            except Exception as _fc_exc:                                 # noqa: BLE001
+                _target["final_charge_result"] = summary["final_charge_result"] = {
+                    "schema": "final_charge_contract.v1", "applicable": True, "passed": False,
+                    "trace": [], "issues": [{"code": "final_charge_audit_failed", "part": "",
+                                             "text": f"{type(_fc_exc).__name__}: {_fc_exc}"}]}
+            # THE SHEET BLANKS AND THE BOUGHT ITEMS (D-582), at the same calculated-book
+            # boundary: one row each at the graph's quantity, in its block, charged, the
+            # arithmetic holding, the saved cells agreeing, and every quantity multiplied along
+            # its edges once. Shadow by default (config.ACCURACY_CONTRACT): the result is on
+            # the record and the console, and the release is untouched until enforcement is
+            # switched on. A failure of the checker is a finding, never a pass.
+            try:
+                from material_charge_contract import record as _record_material_charges
+                _record_material_charges(_target, xlsx_path)
+                summary["material_charge_result"] = _target.get("material_charge_result")
+            except Exception as _mc_exc:                                 # noqa: BLE001
+                _target["material_charge_result"] = summary["material_charge_result"] = {
+                    "schema": "material_charge_contract.v1", "passed": False, "mode": "enforce",
+                    "unverified": [], "trace": [],
+                    "issues": [{"code": "material_contract_failed", "part": "",
+                                "detail": f"{type(_mc_exc).__name__}: {_mc_exc}"}]}
+            # WHAT THE READ RETURNED (D-596), at the same boundary: every item of an LLM read
+            # charged, covered, excluded with a reason, or unresolved with the release held,
+            # and every engine allowance listed apart with its basis. Always recomputed; a
+            # failure of the checker is a finding, never a pass.
+            try:
+                from read_charge_contract import record as _record_read_charges
+                _record_read_charges(_target, xlsx_path)
+                summary["read_charge_result"] = _target.get("read_charge_result")
+            except Exception as _rc_exc:                                 # noqa: BLE001
+                _target["read_charge_result"] = summary["read_charge_result"] = {
+                    "schema": "read_charge_contract.v1", "applicable": True, "passed": False,
+                    "items": [], "allowances": [], "engine_lines": [],
+                    "issues": [{"code": "read_charge_audit_failed", "item": "", "part": "",
+                                "text": f"{type(_rc_exc).__name__}: {_rc_exc}"}]}
+            # THE NORMAL-PACK AUDIT, IN SHADOW (D-598b): the retained raw BOM held to the costed
+            # parts and the saved charged cells, missing source and basis named. It decides no
+            # release, and a checker that fails is recorded, never a stop.
+            try:
+                from normal_pdf_audit import record as _normal_pdf_record
+                summary["normal_pdf_audit"] = _normal_pdf_record(_target, xlsx_path)
+            except Exception as _np_exc:                                 # noqa: BLE001
+                _target["normal_pdf_audit"] = summary["normal_pdf_audit"] = {
+                    "mode": "shadow", "applicable": True, "passed": False,
+                    "coverage": "incomplete",
+                    "findings": [f"checker_failed:{type(_np_exc).__name__}:{_np_exc}"]}
             _inv = _check_job(_target)
             summary["invariants"] = _inv          # so anything reading `summary` agrees
             # NOT REWRITTEN HERE (D-361). D-359 wrote the banner again at this point, after
@@ -2363,6 +2492,24 @@ def main() -> None:
             # gets the cause and the plain reason, and whether Excel calculated the book later
             # in the run, so it can say what to do.
             _mp_ev = (_mp_block or {}).get("evidence") or {}
+            # A RUN THAT STOPPED WITH NOTHING TO COST SAYS SO (D-598d), in the note's place,
+            # with the stop's own reason, not the read-back's repair.
+            try:
+                from run_stop import nothing_to_cost as _ntc_note, doors as _stop_doors
+                _stop_note = _ntc_note(summary)
+            except Exception:                                    # noqa: BLE001
+                _stop_note = None
+            if _stop_note:
+                _provisional = True
+                _money_refused = True
+                _mp_block = dict(_mp_block or {}, cause="nothing_to_cost")
+                _mp_ev = {"workbook_stage_skipped_because": (
+                    "; ".join(x for x in (str(_stop_note.get("short") or "").rstrip("."),
+                                          _stop_doors(_stop_note)) if x)
+                    + f". {str(_stop_note.get('next_step') or '')}").strip().rstrip(".")}
+                print(f"   [covering-note] DO NOT SEND — nothing to cost: "
+                      f"{_stop_note.get('short')}; the covering email is replaced by a "
+                      f"refusal and the quote is held", flush=True)
             _dns_args = {
                 "why": str((_mp_block or {}).get("why") or "") if _money_refused else "",
                 "cause": str((_mp_block or {}).get("cause") or "") if _money_refused else "",
@@ -2435,6 +2582,26 @@ def main() -> None:
 
         _time_stage("deliverables", False)
 
+        # ── THE RUN'S OWN RECORD, PINNED TO ITS WORKBOOK (D-598d) ──────────────────────
+        # output/json/<job>.json is the job's LATEST record: the next run of the same job
+        # overwrites it. Twice on 24 Oct the record collected as one run's evidence was a later
+        # run's — a 15:36 record beside the 15:26 book. The copy beside the workbook, named
+        # after it and taken after the last write above, is this run's record, and no later
+        # run touches it. Its hash is in the log so the copy can be shown unchanged.
+        _canon_pin = (summary.get("saved_output_paths") or {}).get("json")
+        if xlsx_path and _canon_pin and Path(str(_canon_pin)).is_file():
+            try:
+                import hashlib as _hl_pin
+                _pin = Path(str(xlsx_path)).with_name(f"{Path(str(xlsx_path)).stem}_record.json")
+                _pin_bytes = Path(str(_canon_pin)).read_bytes()
+                _pin.write_bytes(_pin_bytes)
+                print(f"   [record] pinned to its workbook: {_pin.name} sha256 "
+                      f"{_hl_pin.sha256(_pin_bytes).hexdigest()}", flush=True)
+            except Exception as _pin_exc:                            # noqa: BLE001
+                print(f"   [record] NOT pinned ({_pin_exc}) — {Path(str(_canon_pin)).name} is "
+                      f"the job's latest record and the next run of it will overwrite it.",
+                      flush=True)
+
         print("\nPage text preview:\n")
         for page in summary["pages"]:
             preview = (page["pdfplumber_text"] or "[NO TEXT EXTRACTED]").replace("\n", " ")
@@ -2455,6 +2622,20 @@ if __name__ == "__main__":
             _report = _rt.report()
             if _report:
                 print("\n" + _report, flush=True)
+            if _rt.detail_on():
+                import json as _json_api
+                print("[api-timing] " + _json_api.dumps(_rt.report_json()), flush=True)
+            # KEPT, NOT ONLY PRINTED (D-553): the record beside the run's log, and a row per
+            # phase on the machine's history, so the next speed step is decided across jobs.
+            try:
+                import config as _cfg_rt
+                import engine_build as _eb_rt
+                _rt.identify(build=(_eb_rt.describe() or {}).get("commit"))
+                _written = _rt.write(_cfg_rt.LOG_DIR, _cfg_rt.OUTPUT_DIR / "timing_history.csv")
+                if _written.get("json"):
+                    print(f"   [timing] record: {_written['json']}", flush=True)
+            except Exception:                                    # noqa: BLE001
+                pass
         except Exception:                                        # noqa: BLE001
             # Never let instrumentation take down a run that otherwise finished.
             pass

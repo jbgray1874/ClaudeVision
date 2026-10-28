@@ -158,6 +158,29 @@ SOURCE_RANK: Dict[str, int] = {
     # the sheet beats a parser looking at the sheet — and below every measurement. An
     # estimator who knows a DXF is stale says so explicitly and gets rank 100 for it.
     "estimator_read_drawing": 72,
+    # A PART READ LARGER THAN THE ASSEMBLY IT SITS IN (D-508), costed on that assembly's
+    # outline developed for its folds. Above the drawing readings the assembly contradicts
+    # (title block 70, printed overall 65), below a person reading the sheet (72) and
+    # everything measured — so the part's own blank, a DXF or a model displaces it at once.
+    "assembly_envelope_allowance": 71,
+    # AN ASSEMBLY IS MADE OF ITS MEMBERS (D-589). Offered only for a record the compiled graph
+    # gives made members that all agree on one material. Above a title-block read of the
+    # assembly's own sheet (70) — 0351292's support assembly sheet says "SEE DWGS", and the
+    # page's boilerplate "304 - STAINLESS STEEL" was read in its place, so its weld and powder
+    # rows said STAINLESS on a mild-steel weldment — below a person (72) and every measurement.
+    "assembly_members": 71,
+    # THE PART'S OWN SHEET OVER A SHEET THAT LISTS IT (D-592). A title block read on an assembly
+    # sheet is the deterministic read of THAT sheet; its parts-list column put 0351292's top
+    # blank at 5 mm (the T arm's gauge) while the top blank's own sheet says 2 mm. Offered only by
+    # detail_page_geometry.revalidate_from_own_sheets, for a part bound to its own sheet and to
+    # others, when its own sheet states one value. Above the page reads (70), below a person
+    # (72) and every measurement.
+    "own_sheet_title_block": 71,
+    # A SECTION'S WALL AS ITS OWN SHEET PRINTS THE SECTION (D-592a). 0351292's cross rail kept
+    # the support assembly's 3 mm while its own sheet reads RECT TUBE 50X20X2MM. Offered only by
+    # revalidate_from_own_sheets, when its own sheets name exactly one section. Same footing as
+    # the own sheet's title block: above the page reads, below a person and every measurement.
+    "own_sheet_section": 71,
     # ── AN OPEN QUESTION, DELIBERATELY NOT SETTLED HERE (raised 11 Sep 2026) ──────────
     #
     # The order below is MODEL FIRST: solidworks_api 90, dxf 80. The review position is the
@@ -282,6 +305,12 @@ SOURCE_RANK: Dict[str, int] = {
     # priced at all, which is why it exists; it is not a substitute for a flat pattern.
     "pdf_overall_dims": 65,
     "bom_tree": 60,
+    # THE TREE'S PER-UNIT COUNT OUTRANKS THE ROW'S OWN (D-552). A parts-list row states how
+    # many of a part its assembly holds; the tree multiplies that by how many of the assembly
+    # one unit holds. Both are the bill of materials, and submitted under one name the second
+    # read as "one reader, two readings" and was refused — 401's members stayed at 1 and 2.
+    # A measured or modelled count (the SolidWorks tree) still outranks both.
+    "bom_tree_per_unit": 61,
     "override_rule": 50,
     "llm_extract": 40,
     "llm_full_extract": 40,
@@ -292,6 +321,10 @@ SOURCE_RANK: Dict[str, int] = {
     # (which knows nothing about this part) and below the printed overall (which names the
     # overall). A provisional blank, labelled as one wherever it is shown.
     "printed_extents_provisional": 30,
+    # A FLAT BOARD'S GAUGE FROM ITS MODEL'S SMALLEST EXTENT (D-512): a labelled fallback
+    # for a verified flat, constant-thickness board whose model carries no cut list — below
+    # every stated gauge (drawing callout, DXF filename, cut list), above a bare inference.
+    "model_extents_board_gauge": 30,
     # SIGHTED FROM A RENDER, NOT READ FROM A DRAWING. The concept read (concept_scan.py)
     # looks at a customer's visual — a photoreal render with no dimensions, no title block,
     # no BOM — and names what it can SEE: a carcass, a header, castors, a printed panel, a
@@ -518,6 +551,7 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "vision":                 "the parts table, read from the image by the vision model",
     "pdf_overall_dims":       "the drawing's overall dimensions",
     "bom_tree":               "the bill of materials",
+    "bom_tree_per_unit":      "the bill of materials, times its assembly's own count",
     "override_rule":          "an SDI override rule",
     "llm_extract":            "Grok (xAI)",
     "llm_full_extract":       "Grok (xAI)",
@@ -525,6 +559,12 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "inference":              "engine inference",
     "geometry_inference":     "engine inference from geometry",
     "printed_extents_provisional": "the largest dimensions printed on its own sheet (provisional)",
+    "model_extents_board_gauge": "the model's smallest extent — a flat board's gauge (provisional)",
+    "assembly_envelope_allowance": "the outline of the assembly it sits in (provisional — the part read larger)",
+    "assembly_members": "its members' material — the parts the compiled hierarchy gives it",
+    "own_sheet_title_block": "its own sheet's title block",
+    "own_sheet_section":      "the section its own sheet names",
+    "mirror_of_provisional":  "its other hand's provisional reading",
     "compiler_default":       "an engine default",
     # A NAME FOR THE THING THAT WAS CALLED NOTHING.
     #
@@ -544,6 +584,11 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     # inference is a real question and it needs a parity run, not a commit message.
     "drawing_notes":          "a note on the drawing",
     "unknown":                "an unrecorded source",
+    # A textual op with no recorded source and no quoted words (D-586): rank 0 like unknown
+    # (absent from SOURCE_RANK), but a distinct key so the demotion is a LABELLING change —
+    # the stranded-assembly status rule keys on "unknown" and must not start firing on every
+    # op this demotes; whether it should is a parity-run question, not a side effect.
+    "unrecorded":             "an unrecorded source",
 }
 
 # Sources that MEASURED the part rather than reasoned about it. Reports mark these
@@ -802,6 +847,7 @@ EVIDENCE_FAMILY: Dict[str, str] = {
     "drawn_on_sheet": "the drawing",
     "bom_table": "the drawing",
     "bom_tree": "the drawing",
+    "bom_tree_per_unit": "the drawing",
     "pdf_overall_dims": "the drawing",
     "llm_extract": "the drawing",
     "llm_full_extract": "the drawing",
@@ -927,7 +973,11 @@ _DECISION_RANK = 100
 # Nor is a confirmed production rule: it does not dispute what was drawn, it states what is
 # bought. Named by kind, not by rank, so the exemption is a decision rather than a number.
 _NOT_A_READING = frozenset({"estimator_confirmed", "knowledge_base", "production_substitution",
-                            "customer_change"})
+                            "customer_change",
+                            # An assembly's material IS its members' (D-589): a derivation
+                            # from the parts, not a reading of its sheet, so readers of that
+                            # sheet's boilerplate do not outvote it. A person still outranks it.
+                            "assembly_members"})
 
 
 def corroboration_defends(part: Dict[str, Any], field: str, new_value: Any,

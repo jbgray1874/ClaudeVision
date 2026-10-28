@@ -54,7 +54,7 @@ _RE_WEIGHT = re.compile(r"WEIGHT[:\s]*([\d,]+(?:\.\d+)?)\s*g\b", re.I)
 # sheets pooled under a key that is no part, and a hand's sheet folded into its base. Every
 # "own sheet" rule (FINISH, weld symbols, the per-part facts below) keys on this read. Up to two
 # trailing segments are taken — a member of a sub-drawing (07-2-01M) and its hand (-H).
-_RE_DWGNO = re.compile(r"\b(\d{3,5}-\d{2}-[A-Z0-9]{1,4}(?:-[A-Z0-9]{1,4}){0,2})\b")
+_RE_DWGNO = re.compile(r"\b(\d{3,6}-\d{2}-[A-Z0-9]{1,4}(?:-[A-Z0-9]{1,4}){0,2})\b")
 # tube/section: "30.00 x 30.00 x 1.50mm TUBE" or "30 x 30 x 1.5mm" (RHS/SHS/tube)
 _RE_TUBE = re.compile(
     r"(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*mm?\b", re.I)
@@ -311,6 +311,29 @@ def extract_drawing_facts(pdf_path: str | Path) -> Dict[str, Any]:
             if v is not None and slot.get(k) in (None, ""):
                 slot[k] = v
     return result
+
+
+def extract_drawing_facts_for(pdf_paths: Any) -> Dict[str, Any]:
+    """The printed facts of EVERY document of the job, rolled up the same way (D-597): the
+    overlay read the anchor PDF alone, so a detail sheet in another file never filled a gap.
+    A part's facts come from the first document that prints them; a spec value likewise."""
+    out: Dict[str, Any] = {"pages": [], "by_part": {}, "spec_block": {},
+                           "source": "drawing_pdf_deterministic", "documents": []}
+    for pdf in (pdf_paths or []):
+        facts = extract_drawing_facts(pdf)
+        out["documents"].append({"document": Path(str(pdf)).name,
+                                 "error": facts.get("error") or ""})
+        for rec in facts.get("pages") or []:
+            out["pages"].append(dict(rec, document=Path(str(pdf)).name))
+        for pn, d in (facts.get("by_part") or {}).items():
+            slot = out["by_part"].setdefault(pn, {})
+            for k, v in (d or {}).items():
+                if v not in (None, "") and slot.get(k) in (None, ""):
+                    slot[k] = v
+        for k, v in (facts.get("spec_block") or {}).items():
+            if v not in (None, "", [], {}) and out["spec_block"].get(k) in (None, "", [], {}):
+                out["spec_block"][k] = v
+    return out
 
 
 if __name__ == "__main__":

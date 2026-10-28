@@ -55,7 +55,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
@@ -63,10 +63,22 @@ from starlette.background import BackgroundTask
 from pydantic import BaseModel
 
 import config
+try:
+    from service_config import the_service_config
+except ImportError:                    # loaded by path, without this folder on sys.path
+    import importlib.util as _ilu
+    import pathlib as _pl
+    _scs = _ilu.spec_from_file_location("service_config", _pl.Path(__file__).with_name("service_config.py"))
+    _scm = _ilu.module_from_spec(_scs)
+    _scs.loader.exec_module(_scm)
+    the_service_config = _scm.the_service_config
+config = the_service_config(config)   # this service's, even where the engine's holds the name
 import docmgr
 import estimate_email
 import quote_release
+import self_running_switch
 import staging
+from estimating_job_tools import areas, browse_briefs, answer_saved_record
 
 router = APIRouter(prefix="/api/estimate", tags=["estimate"])
 
@@ -561,6 +573,22 @@ class EstimateRequest(BaseModel):
     # was not used. Checked before staging and written into the staged folder as
     # `<drawing>_customer_changes.json` — src/customer_changes.build_changes_file, never a price.
     customer_changes: Optional[Dict[str, Any]] = None
+    # THE MEMBER SCHEDULE, CHECKED AGAINST THE DRAWING (D-535). LLM read only. None: whatever is
+    # on file for the job stands (and the log says which). {"set_aside": true}: the schedule on
+    # file is renamed, so the model reads the drawing again. Otherwise the panel's table,
+    # checked before staging by src/accepted_construction.build_file and filed beside the pack
+    # as `<drawing>_construction.json` — priced in place of the model's read. Never a price.
+    construction: Optional[Dict[str, Any]] = None
+    # THE DELIVERY DECLARATION (D-524): {"requested": bool, "postcode": "LE19 ..."} from the
+    # Run form's checkbox and postcode box. None means the form predates the field or the
+    # caller never heard of it — the run costs exactly as before. Written into the staged
+    # folder as DELIVERY_DECLARED.json (the concept-marker pattern: reset every run); the
+    # engine's DELIVERY line honours it, and the postcode is what the per-mile delivery
+    # calculator will price from when it lands.
+    delivery: Optional[Dict[str, Any]] = None
+    # SET ONLY BY THE PARTNER ENDPOINT (D-529). The estimating page never sends it, so its runs
+    # are exactly as they were; a partner run reports its stage and where its time went.
+    partner_api: bool = False
 
 
 class RecipientsRequest(BaseModel):
@@ -677,6 +705,7 @@ def runners(request: Request = None, x_sdi_key: Optional[str] = Header(default=N
         for entry in listed:
             run = _RUNS.get(entry.get("run_id") or "")
             entry["running"] = None if run is None or run.status != "running" else {
+                "run_id": run.run_id,
                 "drawing_number": run.drawing_number, "client": run.client,
                 "seconds": round(time.time() - (run.started_at or time.time())),
             }
@@ -1204,6 +1233,51 @@ def release_withdraw(req: ReleaseRequest, x_sdi_key: Optional[str] = Header(defa
     return {"ok": True, "withdrawn": quote_release.clear_release_record(folder, req.stem)}
 
 
+# ── AI ESTIMATE SELF-RUNNING (D-588) ─────────────────────────────────────────────────
+# The page's button is a switch held here; the watcher on the estimating machine
+# (src/self_running.py) asks it on every beat and does the work. Defined BEFORE the
+# catch-all GET /{run_id} below, so "self-running" is never read as a run id.
+
+class SelfRunningSwitch(BaseModel):
+    by: str = ""
+
+
+@router.get("/self-running")
+def self_running_view(x_sdi_key: Optional[str] = Header(default=None)):
+    """The switch and the watcher as last heard from — what the page shows."""
+    _check_key(x_sdi_key)
+    return self_running_switch.view()
+
+
+@router.post("/self-running/start")
+def self_running_start(req: SelfRunningSwitch, x_sdi_key: Optional[str] = Header(default=None)):
+    """Switch self-running on, and ask the watcher to read the sheet at once. Switching on
+    with no watcher connected is allowed — it starts as soon as one reports — and says so."""
+    who = _check_key(x_sdi_key)
+    out = self_running_switch.switch(True, by=req.by or who)
+    if not out["watcher"].get("connected"):
+        out["note"] = ("Switched on, but no self-running watcher is connected: nothing will run "
+                       "until it is started on the estimating machine "
+                       "(tools\\start\\install-self-running-task.ps1).")
+    return out
+
+
+@router.post("/self-running/stop")
+def self_running_stop(req: SelfRunningSwitch, x_sdi_key: Optional[str] = Header(default=None)):
+    """Switch self-running off. The job in progress finishes on the portal; nothing more is
+    queued."""
+    who = _check_key(x_sdi_key)
+    return self_running_switch.switch(False, by=req.by or who)
+
+
+@router.post("/self-running/heartbeat")
+def self_running_heartbeat(report: Dict[str, Any],
+                           x_sdi_key: Optional[str] = Header(default=None)):
+    """The watcher's beat. Answers {enabled, run_now}; keeps what it reported."""
+    _check_key(x_sdi_key)
+    return self_running_switch.heartbeat(report or {})
+
+
 @router.get("/recipients")
 def recipients_get(x_sdi_key: Optional[str] = Header(default=None)):
     """The list the estimating page pre-fills its box with."""
@@ -1493,6 +1567,81 @@ def changes_check(req: ChangesCheckRequest, x_sdi_key: Optional[str] = Header(de
             "questions": len((data or {}).get("questions") or [])}
 
 
+# ── THE MEMBER SCHEDULE, CHECKED AGAINST THE DRAWING (D-535) ────────────────────────────
+#
+# "Verify the member schedule against the PDF, then replay that accepted construction through
+# pricing — not repeatedly ask Grok for another fresh design." The first way to file one was a
+# JSON file edited in Notepad and copied onto the share by hand, which a re-run's staging then
+# deleted. So it is made here, like the materials and the customer's changes: the last read
+# (or the schedule already on file) loads into a table, the estimator corrects it against the
+# drawing, ticks and names it, and the Run files it beside the pack. Never a price.
+
+def _construction_module():
+    """src/accepted_construction, loaded by path like the other steps — pure python, so this
+    service checks a schedule by the run's own rules without carrying the engine."""
+    import importlib.util
+    src = Path(__file__).resolve().parents[1] / "src"
+    spec = importlib.util.spec_from_file_location("sdi_accepted_construction",
+                                                  src / "accepted_construction.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)                                     # type: ignore[union-attr]
+    return mod
+
+
+class ConstructionReadRequest(BaseModel):
+    client: str = ""
+    drawing_number: str = ""
+    # A schedule file the estimator opened in the browser: shown as the table's rows and its
+    # refusals, never filed — only a Run files a schedule.
+    schedule: Optional[Dict[str, Any]] = None
+
+
+@router.post("/construction/read")
+def construction_read(req: ConstructionReadRequest,
+                      x_sdi_key: Optional[str] = Header(default=None)):
+    """For this client and job: the schedule the next LLM run would price, one set aside, and
+    the last read's lines to start from. Reads the staged job folder; writes nothing."""
+    _check_key(x_sdi_key)
+    mod = _construction_module()
+    if req.schedule is not None:
+        return {"status": "ok", "opened": mod.schedule_view(req.schedule or {}),
+                "vocabulary": mod.vocabulary()}
+    client, drawing = safe_segment(req.client), safe_segment(req.drawing_number)
+    if not client or not drawing:
+        return {"status": "empty", "message": "Enter the client and the drawing number first.",
+                "vocabulary": mod.vocabulary()}
+    try:
+        folder = staging.job_folder_for(client, drawing)
+    except staging.StagingError as exc:
+        return {"status": "unavailable", "message": str(exc), "vocabulary": mod.vocabulary()}
+    if _within_a_root(str(folder)) is None:
+        raise HTTPException(403, f"The staged job folder {folder} is outside the shares this "
+                                 f"service may read.")
+    if not Path(folder).is_dir():
+        return {"status": "no_job", "folder": str(folder), "vocabulary": mod.vocabulary(),
+                "message": "This job has not been run yet, so there is no read to start from — "
+                           "run the LLM read once, or build the schedule line by line."}
+    out = mod.on_file(folder, drawing)
+    out.update({"status": "ok", "vocabulary": mod.vocabulary()})
+    return out
+
+
+class ConstructionCheckRequest(BaseModel):
+    drawing_number: str = ""
+    construction: Dict[str, Any] = {}
+
+
+@router.post("/construction/check")
+def construction_check(req: ConstructionCheckRequest,
+                       x_sdi_key: Optional[str] = Header(default=None)):
+    """The schedule as the run would take it, or every reason it would be refused — so the
+    page shows a missing size or name before Run. The Run checks again."""
+    _check_key(x_sdi_key)
+    data, errors = _construction_module().build_file(req.construction or {},
+                                                     safe_segment(req.drawing_number))
+    return {"ok": not errors, "errors": errors, "lines": len((data or {}).get("parts") or [])}
+
+
 class BriefRequest(BaseModel):
     """A run queued from a typed brief with no drawings (D-401) — the shape another site
     posts. `reference` is the enquiry or drawing number the job is filed under."""
@@ -1559,6 +1708,8 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                  if str(f or "").strip()]
     if _ref_docs and method != "llm":
         raise HTTPException(400, "Reference/standards documents ride on the LLM read method.")
+    if req.construction and method != "llm":
+        raise HTTPException(400, "A member schedule rides on the LLM read method only.")
     if _ref_docs and req.files:
         _file_names = {Path(str(f)).name for f in req.files if str(f or "").strip()}
         _unknown = sorted(set(_ref_docs) - _file_names)
@@ -1654,6 +1805,20 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             raise HTTPException(400, "Customer changes not accepted: " + "; ".join(_cerrs))
         _changes_file = _cfile or None
 
+    # THE MEMBER SCHEDULE (D-535), CHECKED BEFORE STAGING by the rules the run applies: a line
+    # with no section size or no name is refused while nothing has moved. LLM read only — a
+    # drawing pack's readers measure the parts themselves.
+    _construction_file: Optional[Dict[str, Any]] = None
+    _construction_set_aside = False
+    if req.construction:
+        if req.construction.get("set_aside"):
+            _construction_set_aside = True
+        else:
+            _kfile, _kerrs = _construction_module().build_file(req.construction, drawing)
+            if _kerrs:
+                raise HTTPException(400, "Member schedule not accepted: " + "; ".join(_kerrs))
+            _construction_file = _kfile
+
     try:
         if _brief_only:
             staged = staging.stage_brief_only(client=client, drawing=drawing,
@@ -1691,6 +1856,35 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     except OSError as exc:
         raise HTTPException(502, f"Could not file the reference-document declaration: {exc}. "
                                  f"Nothing queued.")
+    # The delivery declaration (D-524), under the same reset-every-run rule: the checkbox
+    # and postcode from the Run form, written beside the drawings for the engine's DELIVERY
+    # line and, when it lands, the per-mile delivery calculator.
+    _delivery_marker = Path(folder) / "DELIVERY_DECLARED.json"
+    try:
+        if req.delivery and isinstance(req.delivery, dict) and \
+                isinstance(req.delivery.get("requested"), bool):
+            _delivery_marker.write_text(json.dumps({
+                "requested": bool(req.delivery.get("requested")),
+                "postcode": str(req.delivery.get("postcode") or "").strip().upper()[:16],
+                "declared_on": "run_form",
+            }) + "\n", encoding="utf-8")
+        elif _delivery_marker.exists():
+            _delivery_marker.unlink()
+    except OSError as exc:
+        raise HTTPException(502, f"Could not file the delivery declaration: {exc}. "
+                                 f"Nothing queued.")
+    # The partner marker (D-529), reset every run: only a run the partner endpoint queued
+    # carries it, so a folder an API run once used gives a later portal run nothing extra.
+    _partner_marker = Path(folder) / "PARTNER_API_RUN.json"
+    try:
+        if req.partner_api:
+            _partner_marker.write_text(json.dumps({"queued_by": "partner_api"}) + "\n",
+                                       encoding="utf-8")
+        elif _partner_marker.exists():
+            _partner_marker.unlink()
+    except OSError as exc:
+        raise HTTPException(502, f"Could not file the partner-run marker: {exc}. "
+                                 f"Nothing queued.")
     # Written AFTER staging, because staging clears the folder. With no confirmation this run,
     # a file the portal wrote on an earlier run is removed, so an old answer cannot govern
     # a new job; a file somebody wrote by hand is left alone.
@@ -1710,6 +1904,27 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             raise HTTPException(
                 502, f"The drawings were staged but the customer changes could not be "
                      f"written beside them ({type(exc).__name__}: {exc}). Nothing was queued.")
+    # The member schedule, after staging (which keeps one already on file as the job's own
+    # data): filed, set aside, or — with neither asked — whatever is on file stands, and the
+    # run's log says which below.
+    _construction_status = "not_an_llm_read" if method != "llm" else "none"
+    _construction_on_file: Optional[Dict[str, Any]] = None
+    if method == "llm":
+        _kmod = _construction_module()
+        try:
+            if _construction_file:
+                _kmod.write(folder, drawing, _construction_file)
+                _construction_status = "filed"
+            elif _construction_set_aside:
+                _construction_status = ("set_aside" if _kmod.set_aside(folder, drawing)
+                                        else "none")
+            _construction_on_file = (_kmod.on_file(folder, drawing) or {}).get("on_file")
+            if _construction_on_file and _construction_status == "none":
+                _construction_status = "on_file"
+        except OSError as exc:
+            raise HTTPException(
+                502, f"The drawings were staged but the member schedule could not be filed "
+                     f"beside them ({type(exc).__name__}: {exc}). Nothing was queued.")
 
     job = _within_a_root(folder)
     if job is None:
@@ -1793,6 +2008,27 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                  "quoted or compared with a normal run's.")
     _brief_status = (_file_enquiry_brief(run, job, req.enquiry_brief)
                      if run.llm_only else "not_an_llm_read")
+    # WHICH CONSTRUCTION THIS RUN PRICES, said where the estimator is looking (D-535): a
+    # schedule on file changes what the run is, and a run that silently priced last week's
+    # schedule — or silently asked the model again — is the failure this panel exists to end.
+    if _construction_status == "set_aside":
+        run.line("MEMBER SCHEDULE set aside — the model reads the drawing this run; the "
+                 "schedule is kept beside the pack to start from again.")
+    elif _construction_on_file and not _construction_on_file.get("problems"):
+        _k = _construction_on_file
+        run.line(f"MEMBER SCHEDULE {'filed' if _construction_status == 'filed' else 'on file'} "
+                 f"— {len(_k.get('rows') or [])} line(s) accepted by {_k.get('accepted_by')}"
+                 + (f" on {_k['accepted_on']}" if _k.get("accepted_on") else "")
+                 + ". This run prices the schedule; the model is NOT asked to read the pack "
+                   "(Fresh read does not change that). Set it aside in the Member schedule "
+                   "panel to have the model read the drawing.")
+        for _x in (_k.get("excluded") or [])[:4]:
+            run.line(f"  not part of the product: {_x}")
+    elif _construction_on_file:
+        run.line("WARNING — a member schedule is on file but would be refused: "
+                 + "; ".join(_construction_on_file.get("problems") or [])
+                 + ". The model reads the drawing instead. Correct it in the Member "
+                   "schedule panel.")
     if req.concept_document:
         run.line("CLIENT DOCUMENT: read extracted PDF text, all page images and the enquiry "
                  "brief together; infer a provisional BOM and route for ordinary costing.")
@@ -1862,8 +2098,176 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             "drawing_folder": str(drawing_folder),
             "waiting_behind": busy.run_id if busy is not None else None,
             "enquiry_brief": _brief_status,
+            "construction": _construction_status,
             "reference_documents": list(_ref_docs),
             "concept_document": bool(req.concept_document)}
+
+
+@router.post("/llm")
+async def start_llm_estimate(
+    prompt: str = Form(...),
+    image: Optional[UploadFile] = File(default=None),
+    client: str = Form(default="SDI"),
+    reference: str = Form(default=""),
+    quantities: str = Form(default="1"),
+    delivery_postcode: str = Form(default=""),
+    x_sdi_key: Optional[str] = Header(default=None),
+):
+    """ONE CALL FOR A CONCEPT ESTIMATE (D-526): a prompt and an image in, a queued LLM run out.
+
+    Built for a partner page (Muhammad's portal): the full /api/estimate endpoint wants file
+    paths this service can already see, which a remote caller does not have. This one takes
+    the image AS AN UPLOAD and the prompt AS THE ENQUIRY BRIEF, stages them, and queues the
+    same LLM-only run the estimating page queues — nothing new is costed here, and every
+    rule of that path holds: the figure is a MEASUREMENT of the model, not an estimate, the
+    workbook says DRAFT, and the customer quotation stays behind the release gate. The
+    caller polls GET /api/estimate/{run_id}, reads GET /{run_id}/summary, and downloads the
+    deliverables by name — the covering-note HTML is the summarised estimate, ready to embed.
+    """
+    _check_key(x_sdi_key)
+    _prompt = " ".join(str(prompt or "").split())
+    if len(_prompt) < 10:
+        raise HTTPException(400, "The prompt is the enquiry brief — say what the product is, "
+                                 "its size, its materials and anything the image cannot show. "
+                                 "A few words is not enough to estimate from.")
+    if image is None or not (image.filename or "").strip():
+        raise HTTPException(400, "An image of the product is required: PNG, JPG, WEBP or a "
+                                 "PDF sheet, as multipart field 'image'.")
+    _suffix = Path(str(image.filename)).suffix.lower()
+    if _suffix not in {".png", ".jpg", ".jpeg", ".webp", ".pdf"}:
+        raise HTTPException(400, f"{_suffix or 'that file'} is not an image the read accepts "
+                                 f"— send PNG, JPG, WEBP or PDF.")
+    _data = await image.read()
+    if not _data:
+        raise HTTPException(400, "The image upload is empty.")
+    if len(_data) > 40 * 1024 * 1024:
+        raise HTTPException(400, "The image is over 40 MB — send the sheet or render, not "
+                                 "the whole pack archive.")
+    _qs: List[int] = []
+    for _t in re.split(r"[^0-9]+", str(quantities or "")):
+        if _t:
+            _n = int(_t)
+            if not 1 <= _n <= 100000:
+                raise HTTPException(400, f"Quantity {_n} is outside 1..100000.")
+            _qs.append(_n)
+    if not _qs:
+        _qs = [1]
+    # The reference is the folder and workbook name. A caller with an enquiry number gives
+    # it; one without gets a timestamped one rather than a refusal — this path exists so a
+    # person with nothing but a picture can still ask.
+    _ref = safe_segment(reference) or time.strftime("ENQ-LLM-%d%H%M%S", time.gmtime())
+    import tempfile
+    _inbox = Path(tempfile.mkdtemp(prefix="llm_api_"))
+    _img_name = (safe_segment(Path(str(image.filename)).stem) or "enquiry") + _suffix
+    _img_path = _inbox / _img_name
+    _img_path.write_bytes(_data)
+    req = EstimateRequest(
+        client=safe_segment(client) or "SDI", drawing_number=_ref,
+        units=_qs[0], quantity_breaks=_qs[1:],
+        files=[str(_img_path)], method="llm", fresh_read=False,
+        enquiry_brief=_prompt, deliverables=True,
+        delivery=({"requested": True, "postcode": str(delivery_postcode).strip()}
+                  if str(delivery_postcode or "").strip() else None),
+        partner_api=True,
+    )
+    try:
+        out = dict(start(req, x_sdi_key))
+    finally:
+        # stage() copied the upload into the job folder; the temp inbox has done its job.
+        import shutil
+        shutil.rmtree(_inbox, ignore_errors=True)
+    _rid = str(out.get("run_id") or "")
+    out.update({
+        "reference": _ref,
+        "poll": f"/api/estimate/{_rid}",
+        "summary": f"/api/estimate/{_rid}/summary",
+        "note": ("Queued as an LLM-only concept read. Poll until status is 'done', then read "
+                 "/summary for the figure, the embeddable covering note and the workbook "
+                 "download. The figure is a measurement of the vision model, not a "
+                 "quotation, and the workbook says so."),
+    })
+    return out
+
+
+@router.get("/{run_id}/summary")
+def run_summary(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """A finished run reduced to what a partner page renders (D-526): the figure, the
+    caveats, and each deliverable as a download URL — never a disk path. The covering-note
+    HTML is the summarised estimate itself, written for a reader, self-contained and safe
+    to embed; the workbook is the SDI estimate sheet."""
+    _check_key(x_sdi_key)
+    with _LOCK:
+        run = _RUNS.get(run_id)
+        items = list(run.deliverables) if run is not None else []
+        log = list(run.log) if run is not None else []
+    if run is None:
+        raise HTTPException(404, "No such run. The service may have restarted.")
+    stage, stages, timing = _partner_progress(run.status, log)
+    delivs = []
+    for d in items:
+        _n = str((d or {}).get("name") or "")
+        if _n:
+            delivs.append({"name": _n,
+                           "download": f"/api/estimate/{run_id}/deliverables/{_n}"})
+
+    def _first(pred) -> Optional[str]:
+        return next((d["download"] for d in delivs if pred(d["name"].lower())), None)
+
+    return {
+        "run_id": run_id,
+        "status": run.status,
+        "client": run.client,
+        "drawing_number": run.drawing_number,
+        "units": run.units,
+        "unit_cost_gbp": run.engine_price_gbp,
+        "provisional": _looks_provisional(run),
+        "error": run.error or None,
+        # Where the run is (reading → checking → pricing → workbook → filing → done), each
+        # stage with the seconds since the engine started; and, once done, where the time
+        # went: the phase table and every model call — count, seconds, cache hits, failures.
+        "stage": stage,
+        "stages": stages,
+        "timing": timing,
+        # The covering note is the summary a person wrote nothing for: the run's own
+        # figure, open items and workings as one self-contained HTML page.
+        "summary_html": _first(lambda n: "covering" in n and n.endswith(".html")),
+        "workbook_xlsx": _first(lambda n: n.endswith(".xlsx")),
+        "report_html": _first(lambda n: n.endswith(".html") and "covering" not in n),
+        "deliverables": delivs,
+        "caution": ("An LLM-only read is a measurement of the vision model, not an "
+                    "estimate: it prices the work it can see and is silently short of "
+                    "what it cannot. The total must not be quoted. The customer "
+                    "quotation is withheld until an estimator releases it."),
+    }
+
+
+_API_STAGE_RE = re.compile(r"\[api-stage\]\s+(.+?)\s+\+(\d+)s\s*$")
+
+
+def _partner_progress(status: str, log: List[str]) -> Tuple[str, List[Dict[str, Any]], Any]:
+    """A partner run's stage, the stages it has passed with their elapsed seconds, and the
+    timing data its engine printed at the end (D-529) — read from the run's own log lines."""
+    stages: List[Dict[str, Any]] = []
+    timing: Any = None
+    for text in log or []:
+        line = str(text or "")
+        m = _API_STAGE_RE.search(line)
+        if m:
+            stages.append({"stage": m.group(1), "elapsed_s": int(m.group(2))})
+            continue
+        at = line.find("[api-timing] ")
+        if at >= 0:
+            try:
+                timing = json.loads(line[at + len("[api-timing] "):])
+            except ValueError:
+                timing = None
+    if status in ("done", "error", "cancelled"):
+        current = status
+    elif status == "queued" or not stages:
+        current = "queued" if status == "queued" else "starting"
+    else:
+        current = stages[-1]["stage"]
+    return current, stages, timing
 
 
 @router.post("/override")
@@ -2820,6 +3224,60 @@ def recent(x_sdi_key: Optional[str] = Header(default=None), limit: int = 25):
         runs = sorted(_RUNS.values(), key=lambda r: r.queued_at, reverse=True)[:limit]
         out = [{k: v for k, v in r.as_json().items() if k != "log"} for r in runs]
     return {"runs": out}
+
+
+@router.get("/tools/briefs")
+def completed_briefs(relative: str = "", area: str = "briefs",
+                     x_sdi_key: Optional[str] = Header(default=None)):
+    """Browse one approved tree, one level at a time: the completed estimates,
+    or the live enquiry drawings. Nothing else, and never an absolute path."""
+    _check_key(x_sdi_key)
+    known = areas()
+    if area not in known:
+        raise HTTPException(400, "Unknown area.")
+    if _within_a_root(str(known[area])) is None:
+        raise HTTPException(503, f"The {area} folder ({known[area]}) must be added "
+                                 f"to SDI_FILE_ROOTS.")
+    try:
+        return browse_briefs(relative, area)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(503, "The completed AI briefs share is unavailable to this service.") from exc
+
+
+class SavedRunQuestion(BaseModel):
+    run_id: str
+    question: str
+
+
+@router.post("/tools/ask")
+def ask_saved_run(req: SavedRunQuestion, x_sdi_key: Optional[str] = Header(default=None)):
+    """Read an exact saved run record; never the mutable latest JSON for a job."""
+    _check_key(x_sdi_key)
+    with _LOCK:
+        run = _RUNS.get(req.run_id)
+        items = list(run.deliverables) if run else []
+    if run is None:
+        raise HTTPException(404, "Run not found. The service may have restarted.")
+    if run.status != "done":
+        raise HTTPException(409, "Questions need a completed, filed run.")
+    records = [d for d in items if str(d.get("name") or "").lower().endswith("_record.json")]
+    if len(records) != 1:
+        raise HTTPException(409, "This run has no single pinned estimate record. Open its report instead.")
+    record_path = Path(str(records[0].get("path") or ""))
+    folder = Path(run.output_path).resolve()
+    try:
+        path = record_path.resolve(strict=True)
+        if folder not in path.parents or path.stat().st_size > 30_000_000:
+            raise ValueError("Record is outside this run or too large.")
+        with path.open("r", encoding="utf-8") as stream:
+            record = json.load(stream)
+        result = answer_saved_record(record, req.question)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(409, "The saved run record cannot be safely read.") from exc
+    return {"run_id": run.run_id, "drawing_number": run.drawing_number,
+            "record_name": path.name, **result}
 
 
 # ══ EXTRACTS ════════════════════════════════════════════════════════════════════════════

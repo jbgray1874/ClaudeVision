@@ -23,7 +23,7 @@ outputs to each other, so a drawing nobody has seen yet is held to the same stan
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
 # The one place that decides what a price source IS. Shared with the estimator and the
 # pricing service so a writer and a checker cannot reach different verdicts about the same
@@ -1490,10 +1490,24 @@ def check_uncorroborated_route_operations(summary: Any) -> List[Dict[str, Any]]:
         if _v <= 0:
             continue
         _op = str(row.get("operation") or "").strip().lower().replace(" ", "_")
-        for (_dop, _dtgt), _d in decisions.items():
+        # THE ROW'S OWN PART FIRST (D-598t). Matched on operation alone, both 9439-07-04 glue
+        # rows took the top's decision, so the top was listed twice and the frame not at all.
+        _row_pns = {str(x).strip().upper() for x in (
+            re.split(r"[,;\s]+", row["part_numbers"]) if isinstance(row.get("part_numbers"), str)
+            else (row.get("part_numbers") or [])) if str(x).strip()}
+        _cands = sorted(decisions.items(),
+                        key=lambda kv: kv[0][1] not in _row_pns)
+        for (_dop, _dtgt), _d in _cands:
             if _dop != _op and _dop not in _op:
                 continue
-            if _d.get("corroborated") is False:
+            # OWNED DRAWING EVIDENCE IS A READING. The bar's own cut list is why it is sawn,
+            # and a GA's printed hot-melt note is why its members are glued.
+            try:
+                from owned_route_evidence import corroborates as _owned_ev   # noqa: PLC0415
+                _owned = _owned_ev(summary, _dop, _dtgt)
+            except Exception:                                        # noqa: BLE001
+                _owned = ""
+            if _d.get("corroborated") is False and not _owned:
                 flagged.append({"operation": row.get("operation"), "target": _dtgt,
                                 "value_gbp": round(_v, 2),
                                 "sources": _d.get("source"),
@@ -1763,9 +1777,14 @@ def check_a_material_we_cannot_price_is_declared(summary: Any) -> List[Dict[str,
         # job cannot go out firm on it -- check_prices_are_firm sees the stamp and says so.
         # What remains is the thing an estimator has to know: this figure is not a supplier
         # price and nobody has agreed to it.
-        indication = part.get("material_market_indication")
+        # ASKED OF THE COSTED ROW (D-598q): the raw record carries no material estimate, so on
+        # 9287-10-005 this looked at a part with no cost method and stayed silent over a sheet
+        # price that was an AI lookup.
+        _priced = _costed_rows.get(str(part.get("part_number") or "").strip().upper()) or part
+        indication = (_priced.get("material_market_indication")
+                      or part.get("material_market_indication"))
         if isinstance(indication, dict) and indication.get("gbp_per_m2") and \
-                str((part.get("material_estimate") or {}).get("cost_method") or "") == \
+                str((_priced.get("material_estimate") or {}).get("cost_method") or "") == \
                 "llm_market_sheet_rate":
             indicated.append({
                 "part_number": part.get("part_number"),
@@ -1774,7 +1793,7 @@ def check_a_material_we_cannot_price_is_declared(summary: Any) -> List[Dict[str,
                 "source": indication.get("source"),
             })
             continue
-        conflict = part.get("material_priced_as")
+        conflict = part.get("material_priced_as") or _priced.get("material_priced_as")
         if isinstance(conflict, dict) and conflict.get("priced_material"):
             substituted.append({
                 "part_number": part.get("part_number"),
@@ -1814,6 +1833,15 @@ def check_a_material_we_cannot_price_is_declared(summary: Any) -> List[Dict[str,
         # costed row for the same part number is where a purchase price or a rescue lives.
         _costed = _costed_rows.get(str(part.get("part_number") or "").strip().upper()) or {}
         if _line_carries_money(part) or _line_carries_money(_costed):
+            continue
+        # AN ASSEMBLY'S MATERIAL IS ITS MEMBERS' (D-547). 401918-01-201/301/401 take the GA's
+        # "MATERIAL: STEEL" and cost nothing of their own, by design — their tube and sheet are
+        # costed on the parts they are welded from. Nothing is under-charged, so nothing is
+        # reported; the members' own materials are checked on their own lines.
+        _cm = str(((_costed.get("material_estimate") or {}) if isinstance(
+            _costed.get("material_estimate"), dict) else {}).get("cost_method") or "")
+        if _cm == "weldment_parent_material_in_children" or str(
+                (_me or {}).get("cost_method") or "") == "weldment_parent_material_in_children":
             continue
         # And a pointer is not a material. "SEE INDIVIDUAL DRAWINGS" names no substance for
         # anyone to find a rate for, so demanding one is asking for the impossible.
@@ -2127,6 +2155,509 @@ def check_an_assembly_is_not_charged_as_a_blank(summary: Any) -> List[Dict[str, 
                     for o in offenders[:6])
         + ". Each is counted twice — once here and once on the parts it is made from.",
         parts=offenders[:10], count=len(offenders), material_gbp=round(_money, 2))]
+
+
+def _compiled_children(summary: Any) -> Dict[str, set]:
+    """parent -> members, from the compiled hierarchy the BOM tab and the report print (D-591).
+
+    0351292's records carry the product root as owning_assembly on every part and no
+    assembly_children, so a check reading only those called the rail, base and supports
+    memberless while the report listed 6, 2 and 4 members under them. One hierarchy, read the
+    same way by the page and by the checks on it."""
+    out: Dict[str, set] = {}
+    if not isinstance(summary, dict):
+        return out
+    shadow = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow") or {}) \
+        if isinstance(summary.get("estimate_summary"), dict) else {}
+    for node in (shadow.get("nodes") or []) if isinstance(shadow, dict) else []:
+        if not isinstance(node, dict):
+            continue
+        kid = str(node.get("part_number") or "").strip().upper()
+        for par in (node.get("parents") or []):
+            par_u = str(par or "").strip().upper()
+            if kid and par_u and par_u != kid:
+                out.setdefault(par_u, set()).add(kid)
+    return out
+
+
+def check_a_memberless_assembly_carries_nothing(summary: Any) -> List[Dict[str, Any]]:
+    """A record the hierarchy calls a parent, with no member to carry its material, and none
+    of its own (D-560).
+
+    "An assembly's material is its members'" is true only when it has members. 401918-01-07M
+    BASE FRAME - WELDMENT (x2) reached the 21 Oct 2026 book as an assembly with no children and
+    no material, and the report said exactly that sentence about it — in the soft voice, below
+    a £0.75 fixing flagged in bold. Fifty-odd pounds of tube per rail at 150 off, missing, and
+    the review list pointed the other way. Here it is the blocker it is.
+
+    A parent that names no member (no assembly_children, no part owned by it, no cut-list
+    piece of it) must carry its own money by some road: material on its own line, a section
+    cut list (D-557 costs a memberless weldment as a part), a measured flat, or a bought-in
+    price. One that carries none of these holds nothing and is held by nothing.
+    """
+    if not isinstance(summary, dict):
+        return _unevaluated("memberless_assembly", "This job is not a readable structure.")
+    parts = _parts(summary)
+    if len(parts) < 2:
+        return []
+    try:
+        import bought_in_policy
+    except Exception as exc:                                        # noqa: BLE001
+        return _unevaluated("memberless_assembly",
+                            f"The assembly predicate could not be imported ({exc}).")
+    _pn = lambda p: str(p.get("part_number") or "").strip().upper()      # noqa: E731
+    owned: Dict[str, set] = {}
+    for p in parts:
+        if not isinstance(p, dict):
+            continue
+        for key in ("owning_assembly", "bom_parent", "cut_list_member_of"):
+            owner = str(p.get(key) or "").strip().upper()
+            if owner and owner != _pn(p):
+                owned.setdefault(owner, set()).add(_pn(p))
+    _compiled = _compiled_children(summary)
+    offenders: List[Dict[str, Any]] = []
+    for part in parts:
+        if not isinstance(part, dict) or not bought_in_policy.is_assembly(part):
+            continue
+        members = ({str(c).strip().upper() for c in (part.get("assembly_children") or [])
+                    if str(c).strip()} | owned.get(_pn(part), set())
+                   | _compiled.get(_pn(part), set()))
+        members.discard(_pn(part))
+        if members:
+            continue
+        money = (_num(part.get("unit_material_cost_gbp"))
+                 or _num((part.get("material_estimate") or {}).get("cost_per_part_gbp"))
+                 or _num((part.get("material_estimate") or {}).get("unit_material_cost_gbp"))
+                 or 0.0)
+        # A STORED LENGTH IS NOT MONEY. The first cut counted a section length as coverage;
+        # 401918-01-07M carried one (the model's envelope) and still cost nothing, because the
+        # assembly flag suppressed its material — so the check passed over the very record
+        # it exists for. Coverage is a priced material, a measured flat, or a bought-in price.
+        has_road = bool(
+            money > 0.005
+            or part.get("dxf_measured_outline") or part.get("native_flat_pattern")
+            or part.get("flat_pattern_detected")
+            or bought_in_policy.is_bought_in(part))
+        if has_road:
+            continue
+        offenders.append({
+            "part_number": part.get("part_number"),
+            "description": str(part.get("description") or "")[:60],
+            "reason_it_is_a_parent": bought_in_policy.assembly_reason(part),
+            "quantity": part.get("quantity"),
+        })
+    if not offenders:
+        return []
+    return [_violation(
+        "memberless_assembly_carries_nothing", BLOCKING,
+        f"{len(offenders)} record(s) the hierarchy calls a parent name no member and carry no "
+        f"material of their own: "
+        + "; ".join(f"{o['part_number']} {o['description']} ({o['reason_it_is_a_parent']})"
+                    for o in offenders[:6])
+        + ". An assembly's material is its members' only when it has members — nothing on this "
+          "bill holds what these are made of. Give each a cut list or members, or cost it as a "
+          "part.",
+        parts=offenders[:10], count=len(offenders))]
+
+
+def check_a_section_schedule_reaches_the_sheet(summary: Any) -> List[Dict[str, Any]]:
+    """A cut list a part's own sheet prints is priced, in full, with its cut (D-576).
+
+    The contract (section_coverage_contract) captures the schedule from the sheet's words
+    before costing and audits the priced lengths at the hand-off to the workbook. Its
+    findings are raised here, BLOCKING, as the memberless check is: the book is made and
+    the release is held, and the first line of the decisions list says which sheet's steel
+    is not on the bill. Where the hand-off did not run (no workbook), the audit runs here
+    over the canonical estimates."""
+    if not isinstance(summary, dict):
+        return []
+    result = summary.get("section_coverage_result")
+    if not isinstance(result, dict):
+        try:
+            import section_coverage_contract as scc
+            ests = ((summary.get("estimate_summary") or {}).get("canonical_part_estimates")
+                    or (summary.get("estimate_summary") or {}).get("part_estimates") or [])
+            if not (summary.get("section_coverage_contract") or scc.capture(summary)["requirements"]):
+                return []
+            result = {"issues": scc.audit(dict(summary), list(ests))}
+        except Exception:                                            # noqa: BLE001
+            return []
+    issues = [i for i in (result.get("issues") or []) if isinstance(i, dict)]
+    # THE SECOND STAGE: the rows the sheet wrote, read back (D-577). The hand-off can pass
+    # and the writer still leave the line off; the read-back is the authority.
+    try:
+        import section_coverage_contract as scc
+        issues = issues + scc.audit_sheet(dict(summary))
+    except Exception as exc:                                         # noqa: BLE001
+        issues.append({"part": "", "code": "section_sheet_audit_failed", "text": str(exc)})
+    # THE THIRD STAGE: the charged cells themselves (D-578). The read-back record proves the
+    # engine's inputs reached rows; final_charge_contract proves the rows carry this
+    # quantity, a calculated positive charge whose arithmetic holds, a cut with hours on
+    # it, and that the saved file's own cached cells say the same. Always recomputed in
+    # main after Excel: a verdict kept from an earlier workbook is not this one's. Where a
+    # read-back exists and the check did not run, that is a finding — a missing check is
+    # never a pass; where no workbook was read back there is nothing to verify, and the
+    # price is already untraceable to the release gate.
+    final_charge = summary.get("final_charge_result")
+    if (summary.get("section_coverage_contract") or {}).get("requirements"):
+        if isinstance(final_charge, dict):
+            issues.extend(i for i in (final_charge.get("issues") or []) if isinstance(i, dict))
+        elif isinstance(summary.get("final_estimate"), dict) and summary["final_estimate"]:
+            issues.append({"part": "", "code": "final_charge_check_not_run"})
+    if not issues:
+        return []
+    said = []
+    for i in issues[:6]:
+        src = i.get("source") or {}
+        where = f" (sheet {src.get('page')})" if src.get("page") else ""
+        if i.get("code") == "section_material_coverage_mismatch":
+            said.append(f"{i.get('part')}{where}: {i.get('expected_mm_per_product', 0):g} mm of "
+                        f"{'x'.join(f'{v:g}' for v in (i.get('profile_mm') or []))} section a "
+                        f"product on the sheet, {i.get('priced_mm_per_product', 0):g} mm priced")
+        elif i.get("code") == "section_not_on_the_sheet":
+            said.append(f"{i.get('part')}{where}: {i.get('expected_mm_per_owner', 0):g} mm of "
+                        f"section on its sheet, and the workbook wrote no material row for it "
+                        f"or its pieces")
+        elif i.get("code") == "section_material_row_missing_or_duplicate":
+            said.append(f"{i.get('part')}{where}: {i.get('matches', 0)} material row(s) on the "
+                        f"calculated sheet where one is required")
+        elif i.get("code") == "section_charged_quantity_mismatch":
+            said.append(f"{i.get('part')}{where}: the sheet charges {i.get('charged')} of this "
+                        f"section against {i.get('expected')} a product on the record")
+        elif i.get("code") == "section_cut_not_charged":
+            said.append(f"{i.get('part')}{where}: no cutting row with hours on it names this piece")
+        elif i.get("code") == "final_charge_check_not_run":
+            said.append("the workbook was read back but the charged-cell check did not run")
+        else:
+            said.append(f"{i.get('part') or 'the audit'}{where}: {i.get('code')}"
+                        + (f" — {i['text']}" if i.get("text") else ""))
+    return [_violation(
+        "section_schedule_not_priced", BLOCKING,
+        f"{len(issues)} section schedule finding(s): " + "; ".join(said)
+        + ". A cut list printed on a part's own sheet is that part's steel; it is priced in "
+          "full, its cut on the route, or this says why not.",
+        issues=issues[:10], count=len(issues))]
+
+
+def check_a_printed_quantity_is_not_divided_without_evidence(summary: Any) -> List[Dict[str, Any]]:
+    """A parts-list row's quantity is what the sheet printed, unless a recognised arrangement
+    of the product's own numbering says why it is less (D-584).
+
+    The arrangement rule took a Hafele article shown six times on a GA for six arrangements
+    and divided every fastener on that sheet by six: feet 6 -> 1, washers 12 -> 2. The rule
+    now needs positive evidence, and this check holds the rows to it after the fact: a row
+    whose `quantity` differs from its `quantity_as_printed` must carry the evidence the rule
+    stamped and the record must say the arrangement was recognised. BLOCKING, as a quantity
+    the sheet contradicts is not a firm price."""
+    if not isinstance(summary, dict):
+        return []
+    rows = [r for r in (((summary.get("document_analysis") or {}).get("bom_rows")) or [])
+            if isinstance(r, dict)]
+    ctx = summary.get("install_context") if isinstance(summary.get("install_context"), dict) else {}
+    bad = []
+    for r in rows:
+        try:
+            q, qp = float(r.get("quantity")), float(r.get("quantity_as_printed"))
+        except (TypeError, ValueError):
+            continue
+        if abs(q - qp) < 1e-9:
+            continue
+        ev = r.get("quantity_evidence") if isinstance(r.get("quantity_evidence"), dict) else {}
+        if ctx.get("recognised") and ev.get("divided_by"):
+            continue
+        bad.append(f"{r.get('part_number')}: the sheet prints {qp:g}, the record carries {q:g}")
+    if not bad:
+        return []
+    return [_violation(
+        "printed_quantity_divided_without_evidence", BLOCKING,
+        f"{len(bad)} parts-list row(s) carry less than the sheet prints and no recognised "
+        f"arrangement of the product's own numbering says why: " + "; ".join(bad[:6])
+        + ". A printed quantity stands until the drawing's own structure says it is an "
+          "arrangement.",
+        rows=bad, count=len(bad))]
+
+
+def check_a_charged_identity_is_whole_and_charged_once(summary: Any) -> List[Dict[str, Any]]:
+    """A charged bought item carries its whole identity, and one article is one line (D-584).
+
+    The words reader cut "ISO 7380-1 - M8 x 16" to "ISO" at a table's right edge, and the
+    bare prefix became a chargeable line at £10 each beside the full designation the other
+    reader read at 15p: twelve screws charged twice, under two names. Two findings, both
+    BLOCKING: an identity that is a bare standard prefix (DIN, ISO …) with no designation
+    behind it; and two charged lines that are one article — the same description under two
+    codes, or one code a prefix of the other. The reader is fixed; this holds the book to it."""
+    if not isinstance(summary, dict):
+        return []
+    try:
+        from part_code_conventions import is_supplier_article
+    except Exception:                                                # noqa: BLE001
+        return []
+    rows: List[Dict[str, Any]] = []
+    final = summary.get("final_estimate") if isinstance(summary.get("final_estimate"), dict) else {}
+    for r in (final.get("material_rows") or []):
+        if isinstance(r, dict) and (r.get("part_code") or r.get("description")):
+            rows.append({"code": str(r.get("part_code") or "").strip(),
+                         "desc": str(r.get("description") or ""), "money": r.get("total_value_gbp")})
+    if not rows:
+        es = summary.get("estimate_summary") or {}
+        for p in (es.get("canonical_part_estimates") or es.get("part_estimates") or []):
+            if not isinstance(p, dict):
+                continue
+            me = p.get("material_estimate") if isinstance(p.get("material_estimate"), dict) else {}
+            money = me.get("extended_material_cost_gbp") or me.get("unit_material_cost_gbp")
+            if money:
+                rows.append({"code": str(p.get("part_number") or "").strip(),
+                             "desc": str(p.get("description") or ""), "money": money})
+
+    def _flat(s: str) -> str:
+        return re.sub(r"[^A-Z0-9]", "", str(s or "").upper())
+
+    out: List[str] = []
+    seen_desc: Dict[str, str] = {}
+    codes = [(_flat(r["code"]), r) for r in rows if r["code"]]
+    for code, r in codes:
+        raw = r["code"]
+        if raw.isalpha() and is_supplier_article(raw + "1"):
+            out.append(f"'{raw}' ({r['desc'][:40]}) is a standard's prefix with no designation behind it")
+        d = _flat(r["desc"])
+        if d and len(d) >= 6:
+            if d in seen_desc and seen_desc[d] != code:
+                out.append(f"'{seen_desc[d]}' and '{raw}' are both charged for {r['desc'][:40]!r}")
+            seen_desc.setdefault(d, code)
+    for a, ra in codes:
+        for b, rb in codes:
+            if a and b and a != b and b.startswith(a) and len(a) >= 2 and ra["code"].isalpha():
+                out.append(f"'{ra['code']}' is charged beside '{rb['code']}', of which it is the prefix")
+    out = list(dict.fromkeys(out))
+    if not out:
+        return []
+    return [_violation(
+        "charged_identity_collision", BLOCKING,
+        f"{len(out)} charged line(s) carry an incomplete identity or charge one article twice: "
+        + "; ".join(out[:6])
+        + ". One article is one line, under its whole designation.",
+        lines=out, count=len(out))]
+
+
+def check_what_the_read_returned_is_accounted_for(summary: Any) -> List[Dict[str, Any]]:
+    """Every item an LLM read returned is charged, covered by a named charge, excluded by a
+    person with a reason, or unresolved — and unresolved holds the release (D-596). Every
+    engine allowance no read item explains is listed apart; one the shop stated for another
+    product, a purchase nothing names, or one with no stated basis holds the release too, with
+    its minutes a unit and the hours at each quantity asked for.
+
+    The contract (read_charge_contract) runs in main after Excel, beside the section and
+    material contracts. Where a ledger exists and its result does not, the audit runs here over
+    the record — with no calculated workbook every item is unresolved, which is right: nothing
+    has been shown to reach a charged cell. BLOCKING throughout."""
+    if not isinstance(summary, dict):
+        return []
+    ledger = summary.get("read_ledger")
+    if not isinstance(ledger, dict) or not (ledger.get("items") or ledger.get("error")):
+        return []
+    result = summary.get("read_charge_result")
+    if not isinstance(result, dict):
+        try:
+            import read_charge_contract as rcc
+            result = rcc.audit(summary)
+        except Exception as exc:                                     # noqa: BLE001
+            return [_violation("read_charge_check_failed", BLOCKING,
+                               f"The read contract could not run ({type(exc).__name__}: {exc}). "
+                               f"A check that did not run is not a pass.")]
+    issues = [i for i in (result.get("issues") or []) if isinstance(i, dict)]
+    if not issues and result.get("passed") is True:
+        return []
+    out: List[Dict[str, Any]] = []
+    unresolved = [i for i in issues if i.get("code") == "read_item_unresolved"]
+    if unresolved:
+        said = "; ".join(f"{i.get('item')} {i.get('label') or ''} "
+                         f"({str(i.get('why') or '').split(' — ')[0]})" for i in unresolved[:6])
+        more = f"; and {len(unresolved) - 6} more" if len(unresolved) > 6 else ""
+        out.append(_violation(
+            "read_item_unresolved", BLOCKING,
+            f"{len(unresolved)} item(s) the read returned reach no charge and no ruling: "
+            f"{said}{more}. Charge each, name the charge that covers it, or rule it out with "
+            f"the reason (answers file estimator_decisions.read_rulings).",
+            identities=sorted({str(i["part"]) for i in unresolved if i.get("part")}),
+            items=[str(i.get("item")) for i in unresolved], count=len(unresolved)))
+    by_op: Dict[str, List[Dict[str, Any]]] = {}
+    for i in issues:
+        if i.get("code") == "engine_allowance_unconfirmed":
+            by_op.setdefault(str(i.get("item")), []).append(i)
+    for item, group in by_op.items():
+        op = item.split(":", 1)[-1]
+        minutes = round(sum(float(g.get("minutes_per_product") or 0) for g in group), 2)
+        hours: Dict[str, float] = {}
+        for g in group:
+            for q, h in (g.get("hours_at") or {}).items():
+                hours[str(q)] = round(hours.get(str(q), 0.0) + float(h or 0), 1)
+        at = ", ".join(f"{h:g} h at {int(q):,} off"
+                       for q, h in sorted(hours.items(), key=lambda kv: int(kv[0])))
+        parts = sorted({str(g["part"]) for g in group if g.get("part")})
+        gbp = round(sum(float(g.get("gbp_per_unit") or 0) for g in group), 2)
+        out.append(_violation(
+            "engine_allowance_unconfirmed", BLOCKING,
+            f"Engine allowance not confirmed for this job: {op.replace('_', ' ')}, {minutes:g} "
+            f"min a unit on {', '.join(parts) or 'the job'}"
+            + (f", £{gbp:.2f} a unit" if gbp else "") + (f" ({at})" if at else "")
+            + f". Basis: {group[0].get('basis')}. Confirm it for this job with the reason "
+              f"(read_rulings 'allowance:{op}'), or take it off (operations_off).",
+            target_id=(parts[0] if len(parts) == 1 else ""), identities=parts, operation=op,
+            minutes_per_unit=minutes, hours_at=hours, gbp_per_unit=gbp,
+            allowance_class=str(group[0].get("class") or "")))
+    lines = [i for i in issues if i.get("code") == "engine_line_unconfirmed"]
+    if lines:
+        out.append(_violation(
+            "engine_line_unconfirmed", BLOCKING,
+            f"{len(lines)} line(s) the engine added that no read item names: "
+            + "; ".join(f"{i.get('part')} ({i.get('class')}: {i.get('basis')})" for i in lines[:6])
+            + ". Confirm each for this job (read_rulings 'line:<code>') or remove it.",
+            identities=[str(i.get("part")) for i in lines], count=len(lines)))
+    stale = [i for i in issues if i.get("code") == "read_id_stale"]
+    if stale:
+        out.append(_violation(
+            "read_id_stale", BLOCKING,
+            f"{len(stale)} record(s) carry a read ID that is not this response's: "
+            + "; ".join(str(i.get("why")) for i in stale[:6])
+            + ". Audit the record against the response it was minted from, or re-mint it.",
+            identities=sorted({str(i["part"]) for i in stale if i.get("part")}),
+            count=len(stale)))
+    known = ("read_item_unresolved", "engine_allowance_unconfirmed", "engine_line_unconfirmed",
+             "read_id_stale")
+    other = [i for i in issues if i.get("code") not in known]
+    if other:
+        out.append(_violation(
+            "read_charge_unverified", BLOCKING,
+            "The read could not be held to the calculated sheet: "
+            + "; ".join(str(i.get("code")) + (f" ({i.get('why') or i.get('text')})"
+                                              if (i.get("why") or i.get("text")) else "")
+                        for i in other[:6])
+            + ". Until it is, nothing the read returned is shown to reach a charged cell.",
+            count=len(other)))
+    return out
+
+
+def check_every_page_reached_a_read(summary: Any) -> List[Dict[str, Any]]:
+    """Every page of every document reached a reading, or the gap is named (D-597).
+
+    A page whose text went to no reading in full — a whole-pack part that failed, a page the
+    concept read could not send whole — holds the release: the engine had the words and did
+    not read them. A page read only from an image with no LLM reading of it, or from an image
+    too coarse for small notes, needs a ruling until page transcription and detail crops read
+    it (D-597b): nothing on it can be said to have been read."""
+    if not isinstance(summary, dict):
+        return []
+    pc = summary.get("page_coverage")
+    if not isinstance(pc, dict):
+        return []
+    if pc.get("error"):
+        return [_violation("page_coverage_not_built", BLOCKING,
+                           f"The page coverage record could not be built ({pc['error']}), so "
+                           f"no page can be said to have reached a reading.")]
+    gaps = [g for g in (pc.get("gaps") or []) if isinstance(g, dict)]
+
+    def _where(g: Mapping[str, Any]) -> str:
+        return (f"{g.get('document')} page {g.get('page')}" if g.get("page") is not None
+                else f"{g.get('document') or 'the pack'}")
+    out: List[Dict[str, Any]] = []
+    # A DOCUMENT THAT COULD NOT BE OPENED IS UNREAD TEXT; A PAGE RENDERED WITH NO RESPONSE
+    # KEPT, OR WHOSE IMAGE DETAIL CANNOT BE CHECKED, IS AN IMAGE NOT READ RELIABLY (D-598).
+    hard = [g for g in gaps if g.get("kind") in ("text_not_read", "text_not_sent",
+                                                  "document_unread")]
+    soft = [g for g in gaps if g.get("kind") in ("image_only", "image_coarse",
+                                                  "image_response_unverified",
+                                                  "image_detail_unknown",
+                                                  "text_llm_read_failed")]
+    if hard:
+        out.append(_violation(
+            "page_text_not_read", BLOCKING,
+            f"{len(hard)} page(s) whose text reached no reading in full: "
+            + "; ".join(f"{_where(g)} ({g.get('kind')})" for g in hard[:6])
+            + ". Read them, or rule them out of scope; until then nothing on them is known.",
+            pages=hard[:20], count=len(hard)))
+    if soft:
+        out.append(_violation(
+            "page_image_not_read_reliably", WARNING,
+            f"{len(soft)} page(s) read only from an image, or from a coarse one: "
+            + "; ".join(f"{_where(g)} ({g.get('kind')})" for g in soft[:6])
+            + ". Confirm nothing on them is missed — page transcription and detail crops are "
+              "not yet built (D-597b).",
+            pages=soft[:20], count=len(soft), needs_ruling=True))
+    # AN EMPTY BOOK BESIDE A PAGE NOTHING READ IS A READING FAILURE (D-598f). 0320730's 15:36
+    # run costed nothing, and its drawing was the one page no reading took; that is not proof
+    # the pack is empty. Held until the page is read or ruled out.
+    _wu = summary.get("manufacturing_writeup") if isinstance(summary.get("manufacturing_writeup"), dict) else {}
+    unread = [str(x) for x in (pc.get("content_not_read") or []) if str(x).strip()]
+    if unread and not (_wu.get("parts") or []):
+        out.append(_violation(
+            "page_content_not_read", BLOCKING,
+            f"No part was costed, and {len(unread)} page(s) carry content no reading took: "
+            + "; ".join(unread[:6])
+            + ". The empty book may be a reading failure, not an empty pack. Read the page(s), "
+              "or rule them out of scope.",
+            pages=unread[:20], count=len(unread)))
+    return out
+
+
+def check_a_sheet_blank_and_a_bought_item_reach_the_charged_cells(summary: Any) -> List[Dict[str, Any]]:
+    """Every canonical blank and bought item is on the calculated sheet at its quantity, in
+    its block, charged, with the arithmetic holding and the saved cells agreeing — and every
+    quantity was multiplied along its own edges once (D-582).
+
+    The contract (material_charge_contract, with quantity_flow_contract inside it) runs in
+    main after Excel has calculated the book, beside the final-charge check. Its findings are
+    raised here, BLOCKING, as the section check's are — but only in `enforce` mode. In
+    `shadow` (the shipped default) the result is on the record and the console and this
+    returns nothing, because the engine's records do not yet carry the sheet-price and
+    purchase bases the contract asks for and the gaps would hold every release. In enforce,
+    a missing result is itself a finding: a check that did not run is never a pass."""
+    if not isinstance(summary, dict):
+        return []
+    try:
+        import material_charge_contract as mcc
+        requested = mcc.mode()
+    except Exception:                                                # noqa: BLE001
+        requested = "shadow"
+    result = summary.get("material_charge_result")
+    if requested == "shadow" and (not isinstance(result, dict) or result.get("mode", "shadow") == "shadow"):
+        return []
+    if not isinstance(result, dict):
+        return [_violation("material_quantity_charge_unverified", BLOCKING,
+                           "The sheet-blank and bought-item contract did not run on this book, and "
+                           "enforcement is on: a check that did not run is not a pass.", count=0)]
+    findings = ([i for i in (result.get("issues") or []) if isinstance(i, dict)]
+                + [i for i in (result.get("unverified") or []) if isinstance(i, dict)])
+    if not findings and result.get("passed") is True:
+        return []
+    said = []
+    for i in findings[:6]:
+        part = i.get("part") or "the book"
+        code = i.get("code") or ""
+        if code == "material_row_missing_or_duplicate":
+            said.append(f"{part}: {i.get('count', 0)} material row(s) on the calculated sheet "
+                        f"where one {i.get('category') or 'material'} row is required")
+        elif code == "material_quantity_mismatch":
+            said.append(f"{part}: the sheet charges {i.get('actual')} against "
+                        f"{i.get('expected')} a product on the record")
+        elif code == "quantity_rollup_mismatch":
+            said.append(f"{part}: the {i.get('stage')} quantity is {i.get('actual')} where the "
+                        f"edges multiply to {i.get('expected')}")
+        elif code == "parent_contribution_mismatch":
+            said.append(f"{part}: under {i.get('parent')} the compiler holds "
+                        f"{i.get('actual')} where the edge gives {i.get('expected')}")
+        elif code in ("sheet_price_basis_missing", "purchase_unit_basis_missing",
+                      "sheet_stock_dimensions_missing", "sheet_charge_policy_missing"):
+            said.append(f"{part}: {code.replace('_', ' ')} — the record does not carry it")
+        elif code == "saved_workbook_not_verified":
+            said.append("no saved workbook was read, so the cells could not be checked")
+        else:
+            said.append(f"{part}: {code}" + (f" — {i['detail']}" if i.get("detail") else ""))
+    return [_violation(
+        "material_quantity_charge_unverified", BLOCKING,
+        f"{len(findings)} sheet-blank/bought-item finding(s): " + "; ".join(said)
+        + ". A blank the engine measured and an item it buys are each one charged row at the "
+          "quantity the graph reaches, or this says why not.",
+        issues=findings[:20], count=len(findings))]
 
 
 def check_prices_are_firm(summary: Any) -> List[Dict[str, Any]]:
@@ -2826,6 +3357,12 @@ def check_the_pack_contains_the_drawings_its_bom_names(summary: Any) -> List[Dic
                 _quarantined.add(_bare(_f))
     _quarantined.discard("")
 
+    # AN ASSEMBLY WHOSE MEMBERS THIS PACK READ IS NOT AN UNREAD LINE (D-591). The check exists
+    # because a missing child is missing MONEY; 0351292's rail and base were called drawings
+    # "not in this pack" while the hierarchy hung six and two members under them, every one
+    # read and costed from its own sheet. Where the compiled hierarchy gives a line members
+    # that the pack contains, its money is on them and nothing is missing.
+    _compiled = _compiled_children(summary)
     missing = []
     for row in rows:
         if not isinstance(row, dict):
@@ -2836,6 +3373,8 @@ def check_the_pack_contains_the_drawings_its_bom_names(summary: Any) -> List[Dic
         if code.upper() in _quarantined or _bare(code) in _quarantined:
             continue
         if _bare(code) in present:
+            continue
+        if any(_bare(k) in present for k in _compiled.get(code.upper(), set())):
             continue
         # A MIRROR HAS NO DRAWING OF ITS OWN. "11350-01-02 MIR" and 11650's
         # "11650-04-01A-HANDED" are the other hand of a part detailed on ONE sheet; the
@@ -3087,21 +3626,19 @@ assert not (set(_NO_FINISH_WORDS) & set(_FINISH_PROCESS_WORDS)), \
 # "FILM SIDE DENOTES WHICH HAND", which is about the protective film's orientation -- and a
 # check that cries wolf on garbled text is a check estimators learn to ignore. And the
 # numbers in it are the more interesting half: see check_a_finish_field_holds_drawing_text.
-_DIM_CALLOUT = re.compile(r"\d+\s*[Xx]\s*\d|\bTHRU\b|\bR\d|\bDIA\b|\u00f8")
-_VIEW_LABEL = re.compile(r"(?:\b[A-E]\b[\s]+){4,}")
-
-
 def _looks_like_raw_drawing_text(text: str) -> bool:
-    """True when a finish field holds scraped drawing text rather than a finish."""
-    t = str(text or "").upper()
-    if not t.strip():
-        return False
-    if _DIM_CALLOUT.search(t):
-        return True
-    if _VIEW_LABEL.search(t):
-        return True
-    # Three or more bare numbers in a finish field is a dimension list, not a finish.
-    return len(re.findall(r"\b\d{2,4}\b", t)) >= 3
+    """True when a finish field holds scraped drawing text rather than a finish.
+
+    THE DETECTOR LIVES WITH THE GATES NOW (D-586). The census here reported the misread
+    while finish_rules' gates kept READING the same blob \u2014 0351292-2468's field held several
+    parts-list rows and another part's BRUSHED ruled the support's powder coat off. One
+    reader: finish_rules.holds_drawing_text, asked by the gates and by this census alike."""
+    try:
+        from finish_rules import holds_drawing_text
+        return holds_drawing_text(text)
+    except Exception:                                                # noqa: BLE001
+        t = str(text or "").upper()
+        return bool(t.strip()) and len(re.findall(r"\b\d{2,4}\b", t)) >= 3
 
 
 def _laminate_is_in_the_board(part: Any, summary: Any) -> bool:
@@ -3327,6 +3864,23 @@ def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
         # Spray row on the part.
         if (_ff(text) - {"bare"}) & _ch:
             continue
+        # A FINISH THAT STATES THE EDGING THE ROUTE CHARGES IS NOT UNKNOWN VOCABULARY
+        # (D-513). 12343-01J's finish box reads "EDGED" — the work its Edge Banding row
+        # already prices — and this check called it "a finish this engine has no vocabulary
+        # for", telling an estimator to consider pricing charged work a second time. Only a
+        # finish made WHOLLY of banding words is excused, and only where the part's route
+        # actually bands it; "EDGED & POWDER COATED" still has its powder judged above, and
+        # EDGED on a part nobody bands still fires.
+        try:
+            from edge_banding import finish_states_banding as _fsb
+            if _fsb(text):
+                _band_ops = {str(o).strip().lower() for f in (
+                    "operations", "textual_operations", "inferred_operations")
+                    for o in (part.get(f) or []) if isinstance(o, str)}
+                if "edge_banding" in _band_ops or _statement_covered(_pn, {"edge_banding"}):
+                    continue
+        except Exception:                                            # noqa: BLE001
+            pass
         unrecognised.append({"part_number": part.get("part_number"), "finish": text[:80]})
     if not uncosted and not unrecognised and not unstated:
         return []
@@ -4604,7 +5158,171 @@ def check_two_roots_do_not_price_the_same_members(summary: Any) -> List[Dict[str
         pairs=hits)]
 
 
+def check_a_banded_board_buys_its_edging(summary: Any) -> List[Dict[str, Any]]:
+    """A part whose banded metres are KNOWN must not pass without edging material (D-515).
+
+    Three 12343-01J books charged £22.77 of edge-banding labour and bought no ABS. The first
+    two could not know the metres (the statement never resolved); the moment it resolves,
+    "labour without material" is a checkable contradiction — the same shape as D-509's
+    labour-without-steel. Fires only where a part's own banding evidence resolves an extent
+    (never on the perimeter fallback) and the bill carries no edging line, so a job with no
+    banding, or banding whose extent is still a question, is untouched."""
+    try:
+        parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
+    except AttributeError:
+        return []
+    parts = [p for p in parts if isinstance(p, dict)]
+    if not parts:
+        return []
+    try:
+        import config as _cfg
+        _code = str(getattr(_cfg, "FACED_BOARD_EDGING_CODE", "") or "").strip().upper()
+    except Exception:                                                # noqa: BLE001
+        _code = ""
+    if any(p.get("_edging_line")
+           or (_code and str(p.get("part_number") or "").strip().upper() == _code)
+           for p in parts):
+        return []
+    try:
+        from edge_banding import banded_length_mm as _banded
+    except Exception:                                                # noqa: BLE001
+        return []
+    offenders: List[Dict[str, Any]] = []
+    for p in parts:
+        _ops = {str(o).strip().lower() for f in (
+            "operations", "textual_operations", "inferred_operations")
+            for o in (p.get(f) or []) if isinstance(o, str)}
+        if "edge_banding" not in _ops:
+            continue
+        try:
+            v = _banded(p) or {}
+        except Exception:                                            # noqa: BLE001
+            continue
+        if (v.get("mm") or 0) > 0:
+            offenders.append({"part_number": p.get("part_number"),
+                              "banded_mm": v.get("mm"), "basis": v.get("basis")})
+    if not offenders:
+        return []
+    listed = "; ".join(f"{o['part_number']} ({o['banded_mm']:g} mm, {o['basis']})"
+                       for o in offenders[:4])
+    return [_violation(
+        "edging_material_missing", WARNING,
+        f"{len(offenders)} banded part(s) resolve a stated banded length and the bill "
+        f"carries no edging material line: {listed}. The banding labour may be timed, but "
+        f"nobody has bought the edging — the metres are known, so the line should exist, "
+        f"priced or visibly unpriced. ESTIMATOR TO ADD OR CONFIRM THE EDGING MATERIAL.",
+        count=len(offenders), parts=offenders[:20])]
+
+
+def check_stated_bores_reach_the_inventory(summary: Any) -> List[Dict[str, Any]]:
+    """Four stated bores must not pass with two recorded (D-515).
+
+    The drawing's own callouts (stated_bore_callouts — count x diameter x depth, read from
+    the sheet's text) against the hole inventory the record actually holds. A shortfall is
+    work the drawing states and nothing demonstrates: said as a WARNING, no time added."""
+    try:
+        parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
+    except AttributeError:
+        return []
+    offenders: List[Dict[str, Any]] = []
+    for p in parts:
+        if not isinstance(p, dict):
+            continue
+        calls = [c for c in (p.get("stated_bore_callouts") or []) if isinstance(c, dict)]
+        if not calls:
+            continue
+        try:
+            stated = int(sum(float(c.get("count") or 0) for c in calls))
+        except (TypeError, ValueError):
+            continue
+        ng = p.get("normalized_geometry") if isinstance(p.get("normalized_geometry"),
+                                                        dict) else {}
+        gr = p.get("geometry_rollup") if isinstance(p.get("geometry_rollup"), dict) else {}
+        try:
+            recorded = max(int(ng.get("estimated_hole_count") or 0),
+                           int(gr.get("estimated_hole_count") or 0),
+                           len(p.get("hole_sizes_mm") or []))
+        except (TypeError, ValueError):
+            recorded = len(p.get("hole_sizes_mm") or [])
+        if stated > recorded:
+            offenders.append({"part_number": p.get("part_number"),
+                              "stated": stated, "recorded": recorded,
+                              "callouts": calls[:6]})
+    if not offenders:
+        return []
+    listed = "; ".join(f"{o['part_number']} (states {o['stated']}, holds {o['recorded']})"
+                       for o in offenders[:4])
+    return [_violation(
+        "stated_bores_not_in_inventory", WARNING,
+        f"{len(offenders)} part(s) state more bores on the drawing than the record holds: "
+        f"{listed}. The missing bores sit on faces no measured view shows. Nothing is "
+        f"charged for them beyond the routing's allowance — confirm they are in the CNC "
+        f"program, or add the machining once. ESTIMATOR TO CONFIRM THE BORING.",
+        count=len(offenders), parts=offenders[:20])]
+
+
+
+def check_a_callout_weld_is_assigned(summary: Any) -> List[Dict[str, Any]]:
+    """A route keyed to a materials-list item number that names no part (D-533).
+
+    0356455's list reads "6. 2MM U-CHANNEL BAR CONNECTOR OTHER SIDE WELDED TO UPRIGHT", and the
+    extract keyed that weld to "6". The route no longer charges a part that does not exist;
+    where the line resolves to a part the work is charged there (or on the welded assembly
+    whose joints it is). Where it resolves to nothing, the work it states is not lost: it is
+    asked here, under Decisions required, until a person assigns it."""
+    if not isinstance(summary, dict):
+        return []
+    shadow = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+              or summary.get("canonical_route_shadow") or {})
+    out: List[Dict[str, Any]] = []
+    for iss in (shadow.get("issues") or []) if isinstance(shadow, dict) else []:
+        if not isinstance(iss, dict) or iss.get("code") != "route_participant_is_a_callout_number":
+            continue
+        _ids = ", ".join(str(i) for i in (iss.get("identities") or []))
+        out.append(_violation(
+            "route_participant_is_a_callout_number", WARNING,
+            f"{iss.get('operation') or 'An operation'} is stated against materials-list item "
+            f"{_ids}, which names no part in this job — not charged. Assign it to the part it "
+            f"belongs to, or confirm it is already covered.",
+            operation=iss.get("operation"), callout=_ids, needs_ruling=True))
+    return out
+
+def check_owned_specifications_survive(summary: Any) -> List[Dict[str, Any]]:
+    """A library default and a one-file count cannot masquerade as a specification.
+
+    Narrow release protection only. The broader material and normal-pack contracts
+    remain in their configured shadow mode. Exceptions use check_job's existing
+    failure handling, never a silent pass.
+    """
+    from owned_specification import audit_owned_specifications
+    return [_violation("owned_specification_not_preserved", BLOCKING, message)
+            for message in audit_owned_specifications(summary)]
+
+
+def check_owned_route_scope_is_ruled(summary: Any) -> List[Dict[str, Any]]:
+    """Unresolved stock, process, coating and bonding scope is put to a person (D-598r).
+
+    The money stays on the sheet as a disclosed allowance; the finding is a ruling, so the
+    firm price is held without the working estimate being withdrawn. A confirmed
+    contradiction is not here: it blocks through check_owned_specifications_survive.
+    """
+    from owned_route_evidence import not_evaluated, unresolved
+    # WITH NO READ-BACK THE ROW CHECKS VERIFIED NOTHING (D-598s): unverified, so no firm price,
+    # and never read as a pass.
+    return ([_violation("owned_route_scope_unresolved", WARNING, f["message"],
+                        assembly=f["part"], operation=f["operation"], needs_ruling=True,
+                        assumption=f["assumption"], action=f["action"])
+             for f in unresolved(summary)]
+            + [_violation("owned_route_rows_not_evaluated", UNVERIFIED, f["message"],
+                          part_number=f["part"], operation=f["operation"])
+               for f in not_evaluated(summary)])
+
+
 CHECKS = (
+    check_owned_specifications_survive,
+    check_owned_route_scope_is_ruled,
+    check_a_banded_board_buys_its_edging,
+    check_stated_bores_reach_the_inventory,
     check_the_identity_gate_actually_ran,
     check_the_sheet_carries_only_the_graphs_identities,
     check_every_reached_bom_item_is_accounted_for,
@@ -4642,6 +5360,13 @@ CHECKS = (
     check_canonical_route_shadow,
     check_bom_lines_survive_the_merge,
     check_an_assembly_is_not_charged_as_a_blank,
+    check_a_memberless_assembly_carries_nothing,
+    check_a_section_schedule_reaches_the_sheet,
+    check_a_printed_quantity_is_not_divided_without_evidence,
+    check_a_charged_identity_is_whole_and_charged_once,
+    check_a_sheet_blank_and_a_bought_item_reach_the_charged_cells,
+    check_what_the_read_returned_is_accounted_for,
+    check_every_page_reached_a_read,
     check_a_blank_and_its_cut_path_can_both_be_true,
     check_prices_are_firm,
     check_an_unresolved_reading_blocks_the_quote,
@@ -4651,6 +5376,7 @@ CHECKS = (
     check_uncorroborated_route_operations,
     check_the_quantity_costed_is_the_quantity_ordered,
     check_an_operation_is_not_charged_on_a_parent_and_its_child,
+    check_a_callout_weld_is_assigned,
     check_the_pack_contains_the_drawings_its_bom_names,
 )
 

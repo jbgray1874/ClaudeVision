@@ -42,6 +42,57 @@
       "app_category": "Apps"
     },
     {
+      "id": "private-assistant",
+      "name": "SDI Private Assistant",
+      "status": "Live · owner only",
+      "cls": "c-prog",
+      "category": "Co-worker agents",
+      "surface": "app",
+      "app_url": "/api/private-email/auth/login",
+      "desc": "Your own Outlook, read for the last seven days, summarised, with replies prepared into Drafts for you to amend and send by hand.",
+      "requires": "One mailbox only — James Gray's. It has its own Microsoft sign-in and MFA, separate from this portal, so signing in here does not sign you in to it.",
+      "detail": "A separate Entra registration from the rest of SDI Intelligence: its own application, its own credential, its own token store and its own cookies. The portal sign-in cannot reach it and it cannot reach the portal's data. <b>It holds <code>Mail.ReadWrite</code>, which writes a reply into the Drafts folder — it does not hold <code>Mail.Send</code></b>, so nothing it prepares can leave the mailbox without being sent by hand in Outlook. A token carrying a send permission, or any permission reaching another person's mailbox, is refused outright.",
+      "sections": [
+        {
+          "title": "What it does today",
+          "body": "Lists the last seven days with links back to the real message in Outlook. Opening one shows what it says, what it asks for, anything the reply needs that it was not told, and a suggested reply you amend before anything is saved. Attachments are listed and download rather than open in the page."
+        },
+        {
+          "title": "What it cannot do",
+          "body": "Send, delete or move anything, from the page or the API. Reach any mailbox but the one it is built for. Be opened by anyone else, on any device, with any key — the card is visible here, the mailbox is not."
+        }
+      ],
+      "next": "Search by sender and date; new emails as well as replies; then ChatGPT and the Claude app, so the same mailbox can be worked by speaking to it."
+    },
+    {
+      "id": "tti-despatch",
+      "name": "TTI Despatch",
+      "status": "Live · read only",
+      "cls": "c-prog",
+      "category": "Apps",
+      "app_category": "Co-worker agents",
+      "surface": "app",
+      "app_url": "/api/tti/despatch",
+      "desc": "Six questions of the TTI Despatch Plan — search every week at once, the chase list, overdue rows nobody updated, what is leaving on a day, the morning summary, and the cells that cannot be read. On the web and in ChatGPT, by chat and by voice.",
+      "requires": "Named Customer Services people only (SDI_TTI_OIDS), through Microsoft sign-in with MFA — the same list on the web app and in ChatGPT, checked inside every tool rather than on this card. The workbook is read from SharePoint as the person asking, so access is theirs and nobody inherits it from a service account.",
+      "detail": "Sue Rogers asked whether AI could help with four trackers; Selina Kuddus asked for order tracking across the weekly sheets. This answers <b>six questions</b> from the Despatch Plan, citing the workbook sheet and row every time so any answer can be checked at source:<br><br><b>1. Search every week at once</b> by SDI order number, customer PO, part code or TTI account — seventeen weekly sheets, one search box. An exact match on an identifying column is separated from a line that merely <i>mentions</i> the number in its comments, because both are sometimes what was wanted and mixing them makes the reader do the sorting.<br><br><b>2. Pick notes and delivery notes</b> read out of the free-text <code>COMMENTS</code> column, where the real state of an order lives in sentences. <code>“Del Note -”</code> is a dash, not a number: the field has been filled in to say there is no delivery note yet. Reading that as a delivery note would turn the one line that needs chasing into the one that looks finished.<br><br><b>3. The chase list</b>, grouped by what is blocking each line: no customer PO, picked with no delivery note, planned departure passed and not invoiced, not booked in with TTI, labels and batch not done, no proof of export, and leaving later than the customer due date. Paperwork is only chased for departures within a week — an empty invoice column three weeks out is not a problem, and a list that says it is, is a list nobody reads twice.<br><br><b>4. Overdue with no departure planned.</b> The workbook has 114 rows with no departure date and almost all are normal — a plan running seventeen weeks out is meant to have blanks at the far end. The ones that matter are the rows whose customer due date has already gone by, which usually means nobody updated the row rather than nobody planned it. Those are invisible in a count of blanks.<br><br><b>5. The morning despatch summary</b> — what is due out, what was planned to have left and is still not invoiced, and what is going today with information missing — as the plain sentences it would be emailed as. <b>It does not send it.</b> Which mailbox a daily summary leaves from, and who is on it, is Sue and Selina's decision.<br><br><b>6. Data quality</b>: dates that cannot be read, pallet counts and quantities stored as text, order lines with no order number, the same order and part on more than one row, and month spellings that were corrected and used. Each one is a place where another answer goes quiet rather than wrong.<br><br><b>In ChatGPT, by chat and by voice.</b> The same six, as six read-only tools over the same code — so there is one set of rules about what the workbook means rather than two. It is a separate connector from the AM CRM tracker's, because a connector's tool list is the same for everyone who connects it and a refused tool is still a tool somebody was shown.",
+      "sections": [
+        {
+          "title": "What it will not do",
+          "body": "Write to the Despatch Plan or to Completed Orders. Send email — the morning summary is handed over as words. Book anything in with TTI. Total pallets across repeated order lines, because an order line is not an evidenced shipment and the same pallet count appears on several. Treat a planned departure as proof that goods went out."
+        },
+        {
+          "title": "Where it hedges, and why",
+          "body": "A date it cannot read is never silently excluded: “nothing is leaving on Thursday” is only said when there is nothing unreadable to rule out, and the spoken answer carries the same caveat inside the sentence because a voice answer has no footer. A month spelling it corrects (“FRI 6TH NIV TBC” is November) is used only when the word is not a month, exactly one real month is one letter away, and the weekday in the cell agrees — and it is reported either way, so the cell gets fixed rather than relied on."
+        },
+        {
+          "title": "Still to agree with Sue",
+          "body": "The Despatch Plan to Completed Orders transfer is written and <b>deliberately not switched on</b>: Completed Orders could not be read when this was built, and what counts as “dispatched”, the duplicate check and the destination columns are Sue's to confirm. Whether the morning summary should be sent, and to whom. The Cat Forms reader is not in this phase."
+        }
+      ],
+      "next": "Agree with Sue and Selina whether the morning summary should be sent and to whom. Read Completed Orders, agree the dispatch rule and the duplicate check, then a reviewable transfer. What Sage will add is the half the spreadsheet does not know — stock, works-order progress, and the invoice as finance posted it — which is a separate conversation with Marc and does not block any of the above."
+    },
+    {
       "id": "hr-inventry",
       "name": "HRInventry Anywhere",
       "status": "Built · awaiting approval",
@@ -949,6 +1000,30 @@
       "surface": "intranet",
       "desc": "The full delivery plan — Phase 1 live, Phases 2–6 mapped through Q3 2027.",
       "view": "roadmap"
+    },
+    {
+      "id": "remote-control",
+      "name": "SDI Remote Control Intelligence",
+      "status": "Phase one · read only",
+      "cls": "c-prog",
+      "category": "Apps",
+      "app_category": "Meta",
+      "surface": "app",
+      "app_url": "/api/ops",
+      "desc": "What the SDI Intelligence service is doing, from your phone — running version, uptime, which apps mounted, which shares it can reach, and the log.",
+      "requires": "Named people only (SDI_OPS_OIDS), through Microsoft sign-in with MFA.",
+      "detail": "Every one of these checks was a trip to the laptop. None of them needs a shell, so none is given one. <b>It is read only: it cannot restart anything, run a command, or change a setting.</b> An authenticated \"run anything\" route on the public address would be the highest-value target in the estate and would undo the boundaries the rest of the service spends its time holding. For a real shell on the server, Remote Desktop is already gated and already audited.",
+      "sections": [
+        {
+          "title": "What it shows",
+          "body": "The running commit and how long the service has been up; which apps actually mounted, as opposed to which are configured — the difference was an afternoon when app.py had not reached the server; whether each setting is present, never its value; the shares and the database with reachable flags; and the tail of the log, searchable."
+        },
+        {
+          "title": "The log is redacted before it leaves the machine",
+          "body": "The access log records whole request lines, and the private assistant's sign-in callback carries an OAuth authorization code in its query string. Single-use and short-lived, and still no business on a web page. Query strings are stripped and anything token-shaped is replaced, on the server, before the text is sent."
+        }
+      ],
+      "next": "A small, fixed set of named actions — restart this one service, and nothing else — once it is designed and agreed. Absent until then rather than half-present."
     }
   ]
 }

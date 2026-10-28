@@ -59,17 +59,63 @@ def _key(text: Any) -> str:
 # "12645 - DRS External Shelter V2 REVA.PDF": the drawing number IS the job number, followed by
 # the product's name. Numbered sub-sheets ("12645-01GA") continue with a digit, a title with a
 # word of three or more letters — which is how the two are told apart.
-_BARE_JOB_NUMBER = re.compile(r"^\d{4,6}$")
+# Four to six digits is SDI's own job numbering (12645, 401918); seven is a customer's enquiry
+# reference, the UPC an M&S pack is filed under ("0351292-UNIVERSAL MIDFLOOR 1200 RAIL-…"),
+# which names the job the same way (D-583).
+_BARE_JOB_NUMBER = re.compile(r"^\d{4,7}$")
 _TITLE_AFTER_NUMBER = re.compile(r"^\s*[-_\s]\s*([A-Z]{3,})\b", re.IGNORECASE)
 
 
 def _job_number_with_title(identity: Any) -> str:
-    """The bare job number when an identity is "<job number> <separator> <title words>", else ""."""
+    """The bare job number when an identity is "<job number> <separator> <title words>", else "".
+    A role token is not a title: "12345-ASSY" is a drawing number, not job 12345 titled ASSY."""
     text = str(identity or "").strip()
-    m = re.match(r"^(\d{4,6})(.*)$", text)
-    if not m or not _TITLE_AFTER_NUMBER.match(m.group(2) or ""):
+    m = re.match(r"^(\d{4,7})(.*)$", text)
+    if not m:
+        return ""
+    t = _TITLE_AFTER_NUMBER.match(m.group(2) or "")
+    if not t or t.group(1).upper() in ASSEMBLY_ROLE_TOKENS:
         return ""
     return m.group(1)
+
+
+def customer_filing(stem: Any) -> Dict[str, str]:
+    """A pack filed under the customer's own reference, the title, then the customer's
+    drawing number, with hyphens or spaces between (D-583): M&S's
+    "0351292-UNIVERSAL MIDFLOOR 1200 RAIL-ROL2021-2465-00". Read number-first that was a
+    drawing numbered "0351292-UNIVERSAL", which nothing an estimator types can name.
+
+    Returns {"reference", "title", "number"} — `number` the trailing drawing number where
+    the name carries one, else the reference itself (a job's top sheet filed
+    "<job number> - <title>", 12645's shelter) — or {} where the name is not this shape.
+    The split falls at whitespace, underscores and at a hyphen that FOLLOWS A WORD, so a
+    hyphen inside a drawing number (ROL2021-2465-00) never splits it."""
+    text = str(stem or "").strip()
+    ref = _job_number_with_title(text)
+    rest = text[len(ref):].strip(" -_") if ref else ""
+    if not ref:
+        # The reference with a role token glued on, "0351292-GA-UNIVERSAL …": the estimator's
+        # own filing of the same pack. The role says assembly; the title follows it.
+        m = re.match(r"^(\d{4,7})[\s_\-]+([A-Za-z]{2,10})(?=[\s_\-])(.*)$", text)
+        if not (m and m.group(2).upper() in ASSEMBLY_ROLE_TOKENS
+                and _TITLE_AFTER_NUMBER.match(m.group(3) or "")):
+            return {}
+        ref, rest = m.group(1), m.group(3).strip(" -_")
+    tokens = [t for t in re.split(r"(?<=[A-Za-z])[\s_\-]+|[\s_]+", rest) if t]
+    last = tokens[-1] if tokens else ""
+    if (len(tokens) >= 2 and _CUSTOMER_DRAWING_NUMBER.match(last)
+            and not last.isdigit() and last != ref
+            and not _REV_TAIL.fullmatch(" " + last)
+            and re.search(r"[A-Za-z]{3,}", " ".join(tokens[:-1]))):
+        return {"reference": ref, "title": " ".join(tokens[:-1]), "number": last}
+    return {"reference": ref, "title": rest, "number": ref}
+
+
+# A CUSTOMER'S DRAWING NUMBER MAY OPEN WITH LETTERS. ROL's "ROL2021-2465-00" fails the engine's
+# shape test, which asks for a leading run of digits (part_code_conventions, for the reasons
+# written there). In the one place a file name puts the customer's number — after the
+# reference and the title — a short letter prefix is allowed; nowhere else is the shape widened.
+_CUSTOMER_DRAWING_NUMBER = re.compile(r"^[A-Z]{0,4}[0-9]{3,}[0-9A-Z]*(?:-[0-9A-Z]+)+$", re.IGNORECASE)
 
 
 def names_the_product(declared: Any, identity: Any) -> bool:
@@ -200,9 +246,21 @@ def drawing_of_file(name: Any) -> Dict[str, Any]:
                      and not _REV_TAIL.fullmatch("_" + s) and not re.fullmatch(
                          r"(?i)rev\.?\s*[A-Z0-9]{1,3}", s)]
             number, parts = hit, [hit, " ".join(words)]
-    if not looks_like_a_drawing_number(number):
-        # A job's own top sheet is filed "<job number> - <title>" (12645's shelter). The bare
-        # number is accepted only with a title after it; a lone number is not a drawing.
+    # THE SAME FILING WITH HYPHENS, AND A JOB'S OWN TOP SHEET (D-583, D-311). The customer's
+    # reference, the title, then the customer's drawing number: "0351292-UNIVERSAL MIDFLOOR
+    # 1200 RAIL-ROL2021-2465-00.pdf" is drawing ROL2021-2465-00, filed under enquiry 0351292.
+    # Read number-first it was a drawing numbered "0351292-UNIVERSAL", and the portal refused
+    # the drawing number, the reference and the whole name alike. Where the name carries no
+    # drawing number after the title it is the job's top sheet, "<job number> - <title>".
+    reference = ""
+    filing = customer_filing(stem) if not top_sheet else {}
+    _opens_with_ref = bool(filing) and bool(
+        re.match(rf"^{re.escape(filing['reference'])}(?:[\s_\-]|$)", number))
+    if filing and (not looks_like_a_drawing_number(number) or _opens_with_ref):
+        number, parts, top_sheet = filing["number"], [filing["number"], filing["title"]], True
+        reference = filing["reference"] if filing["number"] != filing["reference"] else ""
+    elif not looks_like_a_drawing_number(number):
+        # A lone number is not a drawing; the bare job number is accepted only with a title.
         if not (_BARE_JOB_NUMBER.match(number)
                 and _TITLE_AFTER_NUMBER.match(parts[1] if len(parts) > 1 else "")):
             return {}
@@ -218,10 +276,17 @@ def drawing_of_file(name: Any) -> Dict[str, Any]:
                    or bool(re.search(r"(?:^|[\s_\-])(GA\d?|ASSY|ASSEMBLY)(?:$|[\s_\-])",
                                      stem.upper()))
                    # "12645-01GA": the role glued to the sheet number, no separator.
-                   or bool(re.search(r"\d(GA|ASSY)$", number.upper())))
-    return {"number": number, "title": title,
-            "revision": rev_m.group(1) if rev_m else "",
-            "is_assembly": is_assembly, "file": base, "top_sheet": top_sheet}
+                   or bool(re.search(r"\d(GA|ASSY)$", number.upper()))
+                   # An enquiry pack filed under the customer's reference with its own drawing
+                   # number is the product's sheet: the pack is filed as the thing enquired
+                   # about, whatever role token its drawing number lacks (D-583).
+                   or bool(reference))
+    out = {"number": number, "title": title,
+           "revision": rev_m.group(1) if rev_m else "",
+           "is_assembly": is_assembly, "file": base, "top_sheet": top_sheet}
+    if reference:
+        out["reference"] = reference
+    return out
 
 
 def _mention(number: Any) -> "re.Pattern[str]":
@@ -347,7 +412,12 @@ def resolve_product(declared: Any, file_names: Sequence[Any],
                 "matches": [], "others": [],
                 "message": "No file name here carries a drawing number, so the Drawing "
                            "Number cannot be checked before the run."}
-    matches = [d for k, d in drawings.items() if names_the_product(declared_s, d["number"])]
+    # The customer's reference names the pack filed under it (D-583): "0351292" and
+    # "ROL2021-2465-00" both name the Midfloor rail.
+    # "0351292-GA" typed is the reference with a role: the same pack.
+    matches = [d for k, d in drawings.items()
+               if names_the_product(declared_s, d["number"])
+               or (d.get("reference") and _key(declared_s) == _key(d["reference"]))]
     assemblies = sorted((d for d in drawings.values() if d["is_assembly"]),
                         key=lambda d: d["number"])
 
@@ -456,6 +526,8 @@ def product_sheets(product: Any, file_names: Sequence[Any]) -> List[Dict[str, An
         ids = [d["number"]]
         if d.get("top_sheet") and d.get("title"):
             ids.append(f"{d['number']} {d['title']}")
+        if d.get("reference"):
+            ids.append(d["reference"])
         if any(names_the_product(product, i) for i in ids):
             out.append(d)
     return out

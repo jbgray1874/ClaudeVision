@@ -35,6 +35,9 @@ KINDS: Dict[str, str] = {
     "concept_read_refused":
         "the pack has measurable geometry that produced no parts, so the concept read was "
         "refused rather than guess from pictures",
+    # THE BACKSTOP (D-598e): no part, and none of the kinds above said why.
+    "no_parts_read":
+        "no reader found a part in this pack",
 }
 
 
@@ -67,7 +70,10 @@ def nothing_to_cost(summary: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-HEADLINE = "NO PRICE — NOTHING TO COST"
+# "NO ESTIMATE PRODUCED" (review of the 0320730 15:36 run, D-598f): "no price" read as a price
+# still to come; an empty population produced no estimate at all, and every surface says so.
+HEADLINE = "NO ESTIMATE PRODUCED — NOTHING TO COST"
+_LEAD = "No estimate produced"
 
 
 def sentence(stop: Mapping[str, Any]) -> str:
@@ -76,7 +82,7 @@ def sentence(stop: Mapping[str, Any]) -> str:
     why the book is empty."""
     short = str(stop.get("short") or stop.get("kind") or "the run stopped").strip().rstrip(".")
     nxt = str(stop.get("next_step") or "").strip()
-    return f"No price — nothing to cost: {short}." + (f" {nxt}" if nxt else "")
+    return f"{_LEAD} — nothing to cost: {short}." + (f" {nxt}" if nxt else "")
 
 
 def doors(stop: Mapping[str, Any]) -> str:
@@ -92,10 +98,15 @@ def doors(stop: Mapping[str, Any]) -> str:
         bits.append(f"the model take-off did not run: {m}")
     if c:
         bits.append(f"the concept read did not run: {c}")
+    # THE PAGES NO READING TOOK (D-598f), so an empty book beside an unread page says which.
+    unread = [str(p) for p in (stop.get("pages_not_read") or []) if str(p).strip()]
+    if unread:
+        bits.append(f"no reading took the content of {', '.join(unread[:6])}, which has no "
+                    f"text layer")
     return "; ".join(bits)
 
 
 def banner(stop: Mapping[str, Any]) -> str:
     """The cell beside Unit Cost and Sell Price. Upper-case lead so it reads as the status it
     is, and never "PROVISIONAL —": that word promises a figure somebody can finish."""
-    return "NO PRICE — " + sentence(stop)[len("No price — "):]
+    return _LEAD.upper() + sentence(stop)[len(_LEAD):]

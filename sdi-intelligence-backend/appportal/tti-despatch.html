@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0d0d0f">
+<title>TTI Despatch · SDI Intelligence</title>
+<style>
+:root{--bg:#0d0d0f;--panel:#17171b;--line:#303037;--text:#f3f2ee;--muted:#a3a3aa;
+      --yellow:#ffd400;--green:#62d694;--amber:#ffd77a;--red:#ff7777;
+      font-family:Arial,Helvetica,sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);line-height:1.5}
+button,input,select,textarea{font:inherit}a{color:var(--yellow)}button{cursor:pointer}
+button:disabled{cursor:wait;opacity:.55}
+.top{border-bottom:1px solid var(--line);background:#101013;
+     padding:15px max(22px,calc((100vw - 1100px)/2));display:flex;align-items:center;
+     gap:14px;flex-wrap:wrap}
+.logo{background:var(--yellow);color:#080808;font-weight:900;width:38px;height:38px;
+      display:grid;place-items:center;border-radius:4px;font-size:22px}
+.brand{font-size:13px;font-weight:800;letter-spacing:.14em}
+.subbrand{font-size:10px;letter-spacing:.25em;color:var(--muted)}
+.topnav{margin-left:auto;display:flex;gap:10px}
+.topnav a{border:1px solid var(--line);color:var(--text);border-radius:4px;
+          padding:9px 12px;text-decoration:none;font-size:13px}
+.topnav a:hover{border-color:var(--yellow)}
+main{max-width:1100px;margin:0 auto;padding:22px 22px 70px}
+.eyebrow{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--yellow);
+         font-weight:700}
+h1{font-size:clamp(24px,4vw,38px);line-height:1.1;letter-spacing:-.04em;margin:8px 0 6px}
+p{margin:0}.hint{color:var(--muted);font-size:14px;margin-top:6px}
+.tabs{display:flex;gap:6px;margin:20px 0 14px;flex-wrap:wrap;
+      border-bottom:1px solid var(--line);padding-bottom:0}
+.tab{background:transparent;border:1px solid transparent;border-bottom:none;color:var(--muted);
+     padding:10px 13px;border-radius:4px 4px 0 0;font-size:14px;margin-bottom:-1px}
+.tab:hover{color:var(--text)}
+.tab[aria-selected=true]{color:var(--text);background:var(--panel);
+     border-color:var(--line);font-weight:700;box-shadow:inset 0 2px 0 var(--yellow)}
+.tools{display:flex;gap:10px;align-items:center;margin:0 0 16px;flex-wrap:wrap}
+input[type=date],input[type=search],input[type=number],select{background:#101013;
+     border:1px solid var(--line);color:var(--text);border-radius:4px;padding:11px 12px}
+input:focus{outline:none;border-color:var(--yellow)}
+input[type=search]{flex:1 1 220px;min-width:0}
+.primary{background:var(--yellow);color:#111;border:1px solid var(--yellow);font-weight:800;
+         padding:11px 16px;border-radius:4px}
+.primary:hover{background:#ffe659}
+.secondary{background:#202026;color:var(--text);border:1px solid var(--line);
+           padding:11px 16px;border-radius:4px}
+.status{min-height:48px;padding:13px 16px;border:1px solid var(--line);background:var(--panel);
+        border-radius:4px;color:var(--muted);margin-bottom:16px}
+.status.ok{border-color:#315f43;color:#b5edc9}.status.error{border-color:#8d4545;color:#ffd1d1}
+.card{border:1px solid var(--line);background:var(--panel);border-radius:5px;padding:14px 16px;
+      margin-bottom:10px}
+.card h3{margin:0 0 4px;font-size:16px}
+.meta{color:var(--muted);font-size:13px;font-family:ui-monospace,Consolas,monospace;
+      word-break:break-word}
+.because{color:var(--amber);font-size:14px;margin-top:4px}
+.flag{display:inline-block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+      border:1px solid var(--amber);color:var(--amber);border-radius:3px;padding:1px 6px;
+      margin-left:8px}
+.flag.bad{border-color:var(--red);color:var(--red)}
+.flag.good{border-color:var(--green);color:var(--green)}
+.caveat{border-left:3px solid var(--amber);background:#1c1c22;padding:12px 14px;
+        margin:16px 0;border-radius:0 4px 4px 0}
+.unresolved{border-left:3px solid var(--red)}
+h2{font-size:15px;letter-spacing:.04em;margin:22px 0 8px}
+h2 .n{color:var(--muted);font-weight:400}
+details{margin-top:12px}summary{cursor:pointer;color:var(--amber);padding:4px 0}
+pre{background:#0a0a0c;border:1px solid var(--line);border-radius:4px;padding:14px;
+    overflow:auto;font-size:13px;line-height:1.5;white-space:pre-wrap;margin:0}
+.foot{color:var(--muted);font-size:12px;margin-top:24px;border-top:1px solid var(--line);
+      padding-top:14px}
+@media(max-width:700px){.top{padding:14px 16px}main{padding:16px 14px 60px}
+  .topnav{margin-left:0;width:100%}.tabs{gap:4px}.tab{padding:9px 10px;font-size:13px}}
+</style></head>
+<body>
+<header class="top">
+  <div class="logo" aria-hidden="true">S</div>
+  <div><div class="brand">SDI INTELLIGENCE</div><div class="subbrand">TTI DESPATCH</div></div>
+  <nav class="topnav" aria-label="Workspace"><a href="/app/">← App portal</a></nav>
+</header>
+<main>
+  <div class="eyebrow">Customer services · TTI</div>
+  <h1>The TTI Despatch Plan, asked questions</h1>
+  <p class="hint">Every answer says which sheet and row it came from, so you can check it in
+    the workbook. Nothing here changes either tracker, and nothing here sends email.</p>
+
+  <div class="tabs" role="tablist" id="tabs"></div>
+  <div class="tools" id="tools"></div>
+  <div id="status" class="status" role="status" aria-live="polite">Loading…</div>
+  <div id="out"></div>
+  <p class="foot" id="foot"></p>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const el = (tag, text, parent, cls) => { const n = document.createElement(tag);
+  if(text != null) n.textContent = text; if(cls) n.className = cls;
+  if(parent) parent.append(n); return n; };
+const some = n => n + (n === 1 ? " line" : " lines");
+const have = n => n === 1 ? " has" : " have";
+const iso = d => new Date(d.getTime() - d.getTimezoneOffset()*60000)
+                 .toISOString().slice(0,10);
+const pretty = s => { const d = new Date(s + "T00:00:00");
+  return isNaN(d) ? s : d.toLocaleDateString("en-GB",
+    {weekday:"long", day:"numeric", month:"long", year:"numeric"}); };
+
+function setStatus(text, kind=""){ const box = $("status");
+  box.className = "status " + kind; box.textContent = text; }
+
+async function get(path){
+  const r = await fetch(path, {cache:"no-store", credentials:"same-origin"});
+  let j = {}; try{ j = await r.json(); }catch(e){}
+  if(!r.ok) throw new Error(typeof j.detail === "string" ? j.detail
+                            : "Could not read the plan (" + r.status + ").");
+  return j;
+}
+
+// ── One order line, drawn the same way in every view ────────────────────────
+// Including the citation, always. A despatch answer somebody cannot check at
+// source is an answer they have to take on trust, and they should not have to.
+function card(line, parent, cls){
+  const c = el("div", null, parent, "card" + (cls ? " " + cls : ""));
+  const h = el("h3", (line.order ? "Order " + line.order : "(no order number)")
+                   + (line.customer_po ? "  ·  PO " + line.customer_po : ""), c);
+  if(line.departs_tentative) el("span", "tentative", h, "flag");
+  if(line.overdue_by_days) el("span", line.overdue_by_days + " days overdue", h, "flag bad");
+  if(line.slipped_by_days) el("span", line.slipped_by_days + " days ago", h, "flag bad");
+  if(line.part || line.description)
+    el("p", [line.part, line.description].filter(Boolean).join(" — "), c);
+  if(line.because) el("p", line.because, c, "because");
+  if(line.missing && line.missing.length)
+    el("p", "Missing: " + line.missing.join("; "), c, "because");
+
+  const bits = [];
+  if(line.departs_cell || line.departs_basis)
+    bits.push("Lorry from SDI: " + (line.departs_cell || "(blank)")
+              + " — " + line.departs_basis);
+  if(line.due_cell) bits.push("Customer due: " + line.due_cell);
+  if(line.qty) bits.push("qty " + line.qty);
+  if(line.pallets_as_recorded != null && line.pallets_as_recorded !== "")
+    bits.push("pallets as recorded: " + line.pallets_as_recorded);
+  if(line.tti_account) bits.push("TTI " + line.tti_account);
+  if(bits.length) el("p", bits.join("  ·  "), c, "meta");
+
+  const paper = [];
+  if(line.pick_note) paper.push("pick note " + line.pick_note);
+  if(line.delivery_note) paper.push("delivery note " + line.delivery_note);
+  if(line.invoice_number) paper.push("invoice " + line.invoice_number);
+  if(line.booked_in_with_tti) paper.push("booked in: " + line.booked_in_with_tti);
+  if(line.proof_of_export) paper.push("proof of export: " + line.proof_of_export);
+  if(paper.length) el("p", paper.join("  ·  "), c, "meta");
+
+  if(line.comments) el("p", "Comments: " + line.comments, c, "meta");
+  el("p", line.source, c, "meta");
+  return c;
+}
+
+function lines(list, parent, cls){ for(const l of list || []) card(l, parent, cls); }
+
+function foldaway(parent, label, list, truncated, cls, open){
+  if(!list || !list.length) return;
+  const d = el("details", null, parent); d.open = !!open;
+  el("summary", label, d);
+  lines(list, d, cls);
+  if(truncated) el("p", "Only the first few are shown.", d, "hint");
+}
+
+function provenance(j){
+  $("foot").textContent = "Plan last saved "
+    + new Date(j.plan_saved).toLocaleString("en-GB")
+    + "  ·  version " + j.plan_version + "  ·  " + j.rows_read + " rows read"
+    + (j.plan_reused_from_cache ? " (reusing this save's reading)" : "")
+    + ".  This answer is only as current as that save.";
+}
+
+// ── The six views ───────────────────────────────────────────────────────────
+const VIEWS = {
+
+day: {
+  label: "Leaving on a day",
+  tools: `<input id="day" type="date" aria-label="Day to look at">
+          <button class="primary" data-run>What is leaving that day?</button>
+          <button class="secondary" id="today">Today</button>
+          <button class="secondary" id="thursday">Next Thursday</button>`,
+  ready(){ $("day").value = iso(new Date());
+    $("today").onclick = () => { $("day").value = iso(new Date()); run(); };
+    $("thursday").onclick = () => { const d = new Date();
+      d.setDate(d.getDate() + ((4 - d.getDay() + 7) % 7 || 7));
+      $("day").value = iso(d); run(); };
+    return true; },
+  url(){ return "/api/tti/despatch/day?day=" + encodeURIComponent($("day").value); },
+  guard(){ return $("day").value ? "" : "Pick a day first."; },
+  draw(j){
+    // ── "NOTHING IS LEAVING" IS ONLY SAFE WHEN NOTHING IS UNREADABLE ───────
+    // A line whose date could not be interpreted cannot be ruled OUT of the
+    // day being asked about. Saying "nothing is set to leave" over the top of
+    // six such lines is an unqualified claim resting on the ones it could not
+    // read - and that is the sentence somebody would act on.
+    const unread = j.unresolved_date_count || 0;
+    const day = $("day").value;
+    setStatus(
+      j.line_count
+        ? some(j.line_count) + (j.line_count === 1 ? " is" : " are")
+          + " planned to leave on " + pretty(day) + "."
+          + (unread ? "  " + some(unread) + " could not be read, so this may not"
+                      + " be all of them." : "")
+        : unread
+          ? "No confirmed matches for " + pretty(day) + ". " + some(unread)
+            + " could not be read and cannot be ruled out — check those below"
+            + " before relying on this."
+          : "Nothing in the plan is set to leave on " + pretty(day) + ".",
+      j.line_count && !unread ? "ok" : unread ? "error" : "");
+    lines(j.lines, $("out"));
+    const note = el("div", null, $("out"), "caveat");
+    el("p", j.caveat, note);
+    el("p", "Pallets are not totalled: " + j.pallet_total_reason, note, "hint");
+    foldaway($("out"), some(unread) + have(unread)
+      + " a date this cannot read — check these in the workbook",
+      j.unresolved_date_lines, j.unresolved_date_truncated, "unresolved", !j.line_count);
+    foldaway($("out"), some(j.no_date_count) + have(j.no_date_count)
+      + " no departure date set yet (N/A, TBC, blank) — normal for work not yet planned",
+      j.no_date_lines, j.no_date_truncated);
+  }},
+
+search: {
+  label: "Search all weeks",
+  tools: `<input id="q" type="search" maxlength="80"
+            placeholder="Order number, customer PO, part code or TTI account"
+            aria-label="Search the plan">
+          <button class="primary" data-run>Search</button>`,
+  ready(){ $("q").addEventListener("keydown", e => { if(e.key === "Enter") run(); });
+    $("q").focus(); return false; },
+  url(){ return "/api/tti/despatch/search?q=" + encodeURIComponent($("q").value.trim()); },
+  guard(){ return $("q").value.trim() ? "" : "Type something to search for."; },
+  draw(j){
+    setStatus(j.match_count
+      ? some(j.match_count) + " across the weekly sheets match “" + j.searched_for + "”."
+        + (j.mention_count ? "  " + j.mention_count + " more mention it." : "")
+      : j.mention_count
+        ? "No line's order number, PO, part code or account is “" + j.searched_for
+          + "”, but " + some(j.mention_count) + " mention it — usually in the comments."
+        : "Nothing in any of the weekly sheets matches “" + j.searched_for + "”.",
+      j.match_count ? "ok" : "");
+    lines(j.matches, $("out"));
+    if(j.matches_truncated) el("p", "Only the first 60 are shown.", $("out"), "hint");
+    foldaway($("out"), some(j.mention_count) + " mention it elsewhere on the line"
+      + " (usually the comments)", j.mentions, j.mentions_truncated, null, !j.match_count);
+    el("p", j.note, $("out"), "hint");
+  }},
+
+chase: {
+  label: "Chase list",
+  tools: `<button class="primary" data-run>What is blocked?</button>
+          <label class="hint" for="horizon">Chase paperwork for departures within</label>
+          <input id="horizon" type="number" min="0" max="90" value="7" style="width:76px">
+          <span class="hint">days</span>`,
+  ready(){ $("horizon").addEventListener("change", run); return true; },
+  url(){ return "/api/tti/despatch/chase?horizon="
+                + encodeURIComponent($("horizon").value || 7); },
+  draw(j){
+    setStatus(j.line_count
+      ? j.line_count + " item(s) to chase, under " + j.group_count + " heading(s)."
+      : "Nothing is blocked on the measures this checks.",
+      j.line_count ? "error" : "ok");
+    for(const g of j.groups || []){
+      el("h2", g.heading, $("out")).append(
+        Object.assign(document.createElement("span"),
+                      {className:"n", textContent:"  ·  " + g.count}));
+      lines(g.lines, $("out"), "unresolved");
+    }
+    el("p", j.note, $("out"), "hint");
+  }},
+
+overdue: {
+  label: "Overdue, no departure",
+  tools: `<button class="primary" data-run>Which were never updated?</button>`,
+  url(){ return "/api/tti/despatch/overdue"; },
+  draw(j){
+    setStatus(j.line_count
+      ? some(j.line_count) + " have a customer due date in the past and no planned"
+        + " departure — these are the ones nobody updated."
+      : "No line has a customer due date in the past with the departure cell empty.",
+      j.line_count ? "error" : "ok");
+    lines(j.lines, $("out"), "unresolved");
+    if(j.truncated) el("p", "Only the first 100 are shown.", $("out"), "hint");
+    const note = el("div", null, $("out"), "caveat");
+    el("p", j.note, note);
+    if(j.unreadable_due_date_count)
+      el("p", j.unreadable_due_date_count + " further line(s) have no planned departure"
+        + " AND a due date this cannot read, so they are neither included nor ruled"
+        + " out here. They are in Data quality.", note, "hint");
+  }},
+
+morning: {
+  label: "Morning summary",
+  tools: `<input id="mday" type="date" aria-label="Day to summarise">
+          <button class="primary" data-run>Build the summary</button>
+          <button class="secondary" id="copy" type="button">Copy as text</button>`,
+  ready(){ $("mday").value = iso(new Date());
+    $("copy").onclick = async () => {
+      const text = window._summaryText || "";
+      if(!text){ setStatus("Build the summary first."); return; }
+      try{ await navigator.clipboard.writeText(text);
+           setStatus("Copied. Paste it into an email.", "ok"); }
+      catch(e){ setStatus("This browser would not let the page copy. Select the text"
+                          + " below and copy it by hand."); }
+    };
+    return true; },
+  url(){ return "/api/tti/despatch/morning?day=" + encodeURIComponent($("mday").value); },
+  guard(){ return $("mday").value ? "" : "Pick a day first."; },
+  draw(j){
+    window._summaryText = j.as_text || "";
+    setStatus(j.due_out_count
+      ? some(j.due_out_count) + " due out on " + pretty(j.day)
+        + (j.incomplete_count ? ", " + j.incomplete_count + " of them with something"
+                                + " missing" : "")
+        + (j.slipped_count ? ", and " + some(j.slipped_count) + " planned to have"
+                             + " left earlier and not invoiced." : ".")
+      : "Nothing is due out on " + pretty(j.day) + "."
+        + (j.slipped_count ? "  " + some(j.slipped_count) + " planned to have left"
+                             + " earlier and not invoiced." : ""),
+      j.slipped_count || j.incomplete_count ? "error" : j.due_out_count ? "ok" : "");
+
+    // ── THE TEXT IS THE PRODUCT, NOT A FOOTNOTE ──────────────────────────
+    // Sue asked for an email. Nothing here sends it, so the words have to be
+    // right in front of her, ready to paste, rather than reassembled by eye
+    // out of three lists further down the page.
+    el("h2", "As it would be emailed", $("out"));
+    el("pre", j.as_text, $("out"));
+    el("p", "Nothing here sends email. Which mailbox a daily despatch summary leaves"
+       + " from, and who is on it, is yours to decide — this gives you the words.",
+       $("out"), "hint");
+
+    if(j.due_out_count){ el("h2", "Due out", $("out")); lines(j.due_out, $("out")); }
+    if(j.slipped_count){
+      el("h2", "Planned to have left, not invoiced", $("out"));
+      lines(j.slipped, $("out"), "unresolved"); }
+    foldaway($("out"), some(j.unreadable_date_count) + have(j.unreadable_date_count)
+      + " a departure date this cannot read", j.unreadable_date_lines, false, "unresolved");
+    el("p", j.note, $("out"), "hint");
+  }},
+
+quality: {
+  label: "Data quality",
+  tools: `<button class="primary" data-run>Check the workbook</button>`,
+  url(){ return "/api/tti/despatch/quality"; },
+  draw(j){
+    setStatus(j.problem_count
+      ? j.problem_count + " cell(s) cannot be read or disagree with each other."
+      : "Nothing in the workbook is unreadable on the checks this makes.",
+      j.problem_count ? "error" : "ok");
+    for(const g of j.groups || []){
+      el("h2", g.heading, $("out")).append(
+        Object.assign(document.createElement("span"),
+                      {className:"n", textContent:"  ·  " + g.count}));
+      for(const item of g.lines){
+        const c = el("div", null, $("out"), "card unresolved");
+        el("h3", (item.order ? "Order " + item.order : "(no order number)")
+               + (item.part ? "  ·  " + item.part : ""), c);
+        el("p", item.what, c, "because");
+        el("p", item.source, c, "meta");
+      }
+      if(g.truncated) el("p", "Only the first 40 are shown.", $("out"), "hint");
+    }
+    if(j.duplicate_count){
+      el("h2", "The same order and part on more than one row", $("out")).append(
+        Object.assign(document.createElement("span"),
+                      {className:"n", textContent:"  ·  " + j.duplicate_count}));
+      for(const d of j.duplicate_order_lines){
+        const c = el("div", null, $("out"), "card");
+        el("h3", "Order " + d.order + "  ·  part " + d.part, c);
+        el("p", d.count + " rows: " + d.sources.join(", "), c, "meta");
+      }
+    }
+    if(j.spelling_correction_count){
+      el("h2", "Month spellings this corrected and used", $("out")).append(
+        Object.assign(document.createElement("span"),
+                      {className:"n", textContent:"  ·  "
+                       + j.spelling_correction_count}));
+      for(const s of j.spelling_corrections){
+        const c = el("div", null, $("out"), "card");
+        el("h3", (s.order ? "Order " + s.order : "(no order number)"), c);
+        el("p", s.column + " reads “" + s.cell + "” and was read as " + s.read_as
+              + " — " + s.basis + ". Fix the cell rather than relying on this.",
+           c, "because");
+        el("p", s.source, c, "meta");
+      }
+    }
+    el("p", j.note, $("out"), "hint");
+  }}
+};
+
+let current = "day";
+
+async function run(){
+  const view = VIEWS[current];
+  const stop = view.guard ? view.guard() : "";
+  if(stop){ setStatus(stop); return; }
+  for(const b of document.querySelectorAll("[data-run]")) b.disabled = true;
+  $("out").replaceChildren(); $("foot").textContent = "";
+  setStatus("Reading the Despatch Plan…");
+  try{
+    const j = await get(view.url());
+    view.draw(j);
+    provenance(j);
+  }catch(e){
+    setStatus(e.message, "error");
+  }finally{
+    for(const b of document.querySelectorAll("[data-run]")) b.disabled = false;
+  }
+}
+
+function show(name){
+  current = name;
+  for(const b of $("tabs").children)
+    b.setAttribute("aria-selected", String(b.dataset.view === name));
+  $("tools").innerHTML = VIEWS[name].tools;
+  for(const b of document.querySelectorAll("[data-run]")) b.onclick = run;
+  $("out").replaceChildren(); $("foot").textContent = "";
+  const auto = VIEWS[name].ready ? VIEWS[name].ready() : true;
+  if(auto) run(); else setStatus("Ready.");
+}
+
+for(const [name, view] of Object.entries(VIEWS)){
+  const b = el("button", view.label, $("tabs"), "tab");
+  b.type = "button"; b.dataset.view = name;
+  b.setAttribute("role", "tab"); b.setAttribute("aria-selected", "false");
+  b.onclick = () => show(name);
+}
+show("day");
+</script>
+</body>
+</html>

@@ -393,9 +393,16 @@ def _is_line_item(p: Dict[str, Any]) -> bool:
 
 
 def _is_assembly(p: Dict[str, Any]) -> bool:
-    return (str(p.get("_canonical_kind") or "").lower() == "assembly"
-            or "assembly" in {str(r).lower() for r in (p.get("page_roles") or [])}
-            and not _num(p.get("blank_length_mm")))
+    """An assembly by the canonical graph's word, or by its sheet's role where the graph
+    said nothing. A BOUGHT ARTICLE LISTED ON AN ASSEMBLY SHEET IS A BOUGHT LINE (D-587):
+    0351292's five fasteners are bound to the GA, so its role read "assembly", and the
+    quote told the customer "11 parts SDI makes, 0 bought in" beside five bought lines."""
+    if str(p.get("_canonical_kind") or "").lower() == "assembly":
+        return True
+    if "assembly" not in {str(r).lower() for r in (p.get("page_roles") or [])} \
+            or _num(p.get("blank_length_mm")):
+        return False
+    return not _is_bought(p)
 
 
 def _qty(p: Dict[str, Any]) -> float:
@@ -484,8 +491,20 @@ def job_facts(summary: Dict[str, Any], parts: List[Dict[str, Any]],
     srcs = _pdf_sources(summary)
     names = [n.lower() for n, _ in srcs] + [str(x).lower() for x in
                                             (summary.get("scanned_documents") or [])]
-    dxf = sum(1 for n in names if n.endswith(".dxf"))
-    models = sum(1 for n in names if n.endswith((".sldprt", ".sldasm", ".step", ".stp")))
+    # WHAT THE RUN MATCHED, NOT WHAT THE FILE LIST WAS CALLED (D-575). The file names the
+    # record lists are the PDFs; the flats and the model are read from their own folders and
+    # recorded where they were applied. A pack with six matched DXFs and a SolidWorks tree
+    # applied read "0 flat patterns or 3D models" on the client's page.
+    _aug = summary.get("dxf_augmentation") if isinstance(summary.get("dxf_augmentation"), dict) else {}
+    dxf = (len([m for m in (_aug.get("matched") or []) if isinstance(m, dict)])
+           or sum(1 for n in names if n.endswith(".dxf")))
+    _sw = summary.get("solidworks_native") if isinstance(summary.get("solidworks_native"), dict) else {}
+    _swc = _sw.get("counts") if isinstance(_sw.get("counts"), dict) else {}
+    models = ((sum(int(_num(v) or 0) for k, v in _swc.items()
+                   if str(k).lower() in ("parts", "assemblies", "models", "part", "assembly"))
+               or (1 if _sw.get("found") else 0))
+              if _sw.get("found") else
+              sum(1 for n in names if n.endswith((".sldprt", ".sldasm", ".step", ".stp"))))
     bom_rows = ((summary.get("document_analysis") or {}).get("bom_rows") or [])
     concept = summary.get("concept_read") if isinstance(summary.get("concept_read"), dict) else {}
     labour = _labour_rows(summary)
@@ -583,6 +602,33 @@ def _rows_value(rows: List[Dict[str, Any]]) -> float:
     return sum(_num(r.get("total_value_gbp")) or 0.0 for r in rows)
 
 
+def _stated_finishes(summary: Dict[str, Any]) -> List[str]:
+    """The finishes the job's records state that put a finish ON the part — a coat, a plate,
+    a polish, an anodise, a brushed grain — never an explicit RAW / self colour. Read from
+    every record, assemblies included (a plated weldment carries the plate for its members),
+    and from what the concept read carried from the brief. Empty when nothing states one."""
+    try:
+        from finish_rules import finish_families
+    except Exception:                                                # noqa: BLE001
+        return []
+    texts: List[str] = []
+    _mw = summary.get("manufacturing_writeup") if isinstance(
+        summary.get("manufacturing_writeup"), dict) else {}
+    for p in (_mw.get("parts") or []):
+        if not isinstance(p, dict):
+            continue
+        for v in (p.get("normalized_finish"), p.get("finish"), *(p.get("surface_finishes") or [])):
+            texts.append(str(v or "").strip())
+    _cr = summary.get("concept_read") if isinstance(summary.get("concept_read"), dict) else {}
+    texts.append(str(_cr.get("stated_finish") or "").strip())
+    out: List[str] = []
+    for t in texts:
+        fams = finish_families(t) if t else set()
+        if fams and fams - {"bare"} and t.upper() not in {o.upper() for o in out}:
+            out.append(t)
+    return out[:3]
+
+
 def evidence_items(summary: Dict[str, Any], facts: Dict[str, Any]) -> List[Dict[str, Any]]:
     """The pack's own words → what was concluded → where it landed on the bill. A topic the pack
     says nothing about gets no quote box; its conclusion still stands, said as SDI's."""
@@ -618,8 +664,21 @@ def evidence_items(summary: Dict[str, Any], facts: Dict[str, Any]) -> List[Dict[
                            if w in " ".join(_material_name(p).lower() for p in made)],
                    avoid=[w for w in _MATERIAL_WORDS if w not in on_bill])
     groups = sorted(facts["by_material"].items(), key=lambda kv: -kv[1]["pieces"])
+    # A MADE PART'S SECTION IS MATERIAL TOO (D-575). A frame's tube pieces are charged on the
+    # Bill of Materials block at the section rate, not on a sheet block, so "sheet and
+    # section material" summed the sheet blocks and left the section out: £20.64 against
+    # £81.83 on a pack whose tubes were the larger part of its steel. A BOM-block row that
+    # belongs to a made part is that part's stock; a bought-in's row is not.
+    _made_codes = {str(p.get("part_number") or "").strip().upper() for p in made}
+
+    def _row_code(r: Dict[str, Any]) -> str:
+        c = str(r.get("part_code") or r.get("part_number") or "").strip()
+        if not c:   # the sheet's own description leads with the code: "X-03M-CL1  15.00 x 30 ..."
+            c = str(r.get("description") or "").split()[0] if str(r.get("description") or "").split() else ""
+        return c.upper()
     sheet_val = sum(_num(r.get("total_value_gbp")) or 0 for r in mats
-                    if str(r.get("block") or "") in ("steel", "other_sheet", "tube"))
+                    if str(r.get("block") or "") in ("steel", "other_sheet", "tube")
+                    or (str(r.get("block") or "bom") == "bom" and _row_code(r) in _made_codes))
     out.append({
         "topic": "material", "title": _TOPICS["material"]["title"], "saw": q,
         "concluded": ("Made from " + "; ".join(
@@ -641,7 +700,10 @@ def evidence_items(summary: Dict[str, Any], facts: Dict[str, Any]) -> List[Dict[
                        for m in re.finditer(fix_rx, str(p.get("description") or ""), re.I)}))
     welded = sorted(facts["parts_by_dept"].get("Weld") or ())
     if welded:
-        concl = (f"Welded where the pack calls for it — {len(welded)} part line"
+        # A bonding quotation is not evidence of welding, even on the same page.
+        if not re.search(r"\b(?:weld\w*|TIG|MIG)\b", str((q or {}).get('text') or ''), re.I):
+            q = None
+        concl = (f"Welded work is included on {len(welded)} part line"
                  f"{'s' if len(welded) != 1 else ''} — and dressed after welding"
                  + (f"; {len(fix)} fixing line{'s' if len(fix) != 1 else ''} bought in" if fix else "")
                  + ".")
@@ -672,18 +734,35 @@ def evidence_items(summary: Dict[str, Any], facts: Dict[str, Any]) -> List[Dict[
                    + [c.lower() for c in colours])
     if coated:
         how = "Powder coated" if "Powder coat" in coat_kinds else "Painted"
-        concl = (f"{how}, priced by the area actually coated, across {len(coated)} "
+        concl = (f"{how}, priced on the recorded coating-area basis, across {len(coated)} "
                  f"part line{'s' if len(coated) != 1 else ''}"
                  + (f" in {len(colours)} colour{'s' if len(colours) != 1 else ''} "
                     f"({', '.join(c.upper() for c in colours)})" if colours else "")
-                 + "; bought-in parts are not coated.")
+                 + "; confirm any area allowance and coating exclusions before the price is final.")
         bill = (_money(facts, _rows_value(coat) + sum(_num(r.get('total_value_gbp')) or 0
                                                       for r in powder),
                        "Coating {} a unit", "Coating rows on the bill")
                 if coat else "Coating on the route")
     else:
-        concl = "No coating is charged — the parts are supplied as made."
-        bill = "No finish line"
+        # "SUPPLIED AS MADE" IS A SCOPE CLAIM, AND ONLY TRUE WHEN NOTHING STATES A FINISH (D-595).
+        # 0320730's quote said it of a bar its drawing specifies as polished nickel-chrome —
+        # the finish was not priced, and the page told the customer there was none. A stated
+        # finish with no charge on the bill is said as not yet priced, never as absent.
+        _stated = _stated_finishes(summary)
+        _plating = [r for r in mats if re.search(r"\bplating\b", str(r.get("description") or ""),
+                                                 re.I)]
+        _plating_value = sum(_num(r.get("total_value_gbp")) or 0 for r in _plating)
+        if _stated and _plating_value > 0:
+            concl = (f"Finish specified: {'; '.join(_stated)} — plated by a subcontract "
+                     f"plater and priced on the plating line.")
+            bill = _money(facts, _plating_value, "Plating {} a unit", "Plating line on the bill")
+        elif _stated:
+            concl = (f"Finish specified: {'; '.join(_stated)}. It is not yet priced and is not "
+                     f"in this figure — the finisher's price is awaited.")
+            bill = "Finish not yet priced"
+        else:
+            concl = "No coating is charged — the parts are supplied as made."
+            bill = "No finish line"
     out.append({"topic": "finish", "title": _TOPICS["finish"]["title"], "saw": q,
                 "concluded": concl, "bill": bill})
     n = int(_cfg().get("evidence_cards") or 4)
@@ -712,6 +791,50 @@ def _pack_words_for(description: str, pages: List[Dict[str, Any]]) -> Optional[D
     return best
 
 
+def _line_is_supported(summary: Dict[str, Any], facts: Dict[str, Any], code: str) -> bool:
+    """Size, price and route evidence enough to show this line as the worked example (D-592)."""
+    rec = next((p for p in facts.get("made") or []
+                if str(p.get("part_number") or "").strip().upper() == code), None)
+    if not isinstance(rec, dict):
+        return False
+    try:
+        from blank_credibility import blank_is_measured
+        sized = bool(blank_is_measured(rec)) or bool(
+            (rec.get("_blank_provisional") or {}).get("weight_agrees"))
+    except Exception:                                                # noqa: BLE001
+        sized = False
+    if not sized:
+        return False
+    # ITS MACHINING MEASURED, AND NOTHING ASKED OF IT (D-592a, review of D-592). A blank that
+    # is measured says nothing about which circles on the PDF are holes: a laser or punch line
+    # whose cutting was read off the drawing's lines is not walked through, and neither is a
+    # line carrying any open manufacturing question.
+    try:
+        from detail_page_geometry import machining_is_measured
+        _ops = {str(o).lower() for k in ("textual_operations", "inferred_operations")
+                for o in (rec.get(k) or [])}
+        if _ops & {"laser_cutting", "punch"} and not machining_is_measured(rec):
+            return False
+    except Exception:                                                # noqa: BLE001
+        return False
+    if any(isinstance(q, dict) for q in (rec.get("manufacturing_questions") or [])):
+        return False
+    try:
+        from costed_facts import FIRM, record_lines
+        line = (record_lines(summary) or {}).get(code) or {}
+        if str((line.get("price_origin") or {}).get("firmness") or "") != FIRM:
+            return False
+    except Exception:                                                # noqa: BLE001
+        return False
+    shadow = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow") or {})
+    for d in (shadow.get("decisions") or []) if isinstance(shadow, dict) else []:
+        if (isinstance(d, dict) and d.get("status") == "required"
+                and str(d.get("target_id") or "").strip().upper() == code
+                and str(d.get("source") or "").strip().lower() in ("", "unrecorded", "unknown")):
+            return False
+    return True
+
+
 def trace_part(summary: Dict[str, Any], facts: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The nested made part that travels through most departments (then the largest material
     line), followed from the pack to its priced line, in the workbook's own figures."""
@@ -726,6 +849,31 @@ def trace_part(summary: Dict[str, Any], facts: Dict[str, Any]) -> Optional[Dict[
         c = _code_in(r.get("description"))
         return len({_dept_label(l.get("operation"))[1] for l in facts["labour"]
                     if c and c in _parts_on(l)})
+
+    # THE WORKED EXAMPLE IS A SETTLED LINE (D-591). 0351292's quote walked the customer through
+    # the anti-scratch strip — a provisional blank and an unproven weld and fold, three open
+    # questions on the estimator's list. A line no open decision names comes first; only
+    # when every line has one is the best of them shown.
+    try:
+        from costed_facts import costed_job as _cj
+        _open = {str(d.get("part") or "").strip().upper()
+                 for d in (_cj(summary).get("decisions_required") or [])
+                 if isinstance(d, dict)}
+    except Exception:                                                # noqa: BLE001
+        # UNREAD DECISIONS ARE NOT A SETTLED LINE (D-592a): with the list unreadable, no line
+        # can be shown to have none open, so no example is shown.
+        return None
+    # AND IT MUST BE SUPPORTED, NOT ONLY UNQUESTIONED (D-592). A line nobody has asked about yet
+    # can still rest on a guess. The example is shown only for a line whose size is measured or
+    # read from its own sheet with the weight agreeing, whose price is firm, and whose charged
+    # operations each have a recorded source. With none such, no example is shown — the page
+    # says what was costed without walking through a figure it cannot stand behind.
+    _supported = {c for c in (_code_in(r.get("description")).upper() for r in rows)
+                  if c and c not in _open and _line_is_supported(summary, facts, c)}
+    rows = [r for r in rows if _code_in(r.get("description")).upper() in _supported
+            and _route_len(r) > 0]   # a line no charged department touches walks through nothing
+    if not rows:
+        return None
     row = max(rows, key=lambda r: (_route_len(r), _num(r.get("total_value_gbp")) or 0))
     code = _code_in(row.get("description"))
     rec = next((p for p in facts["made"] if str(p.get("part_number") or "") == code), {})
@@ -924,6 +1072,79 @@ def _head(sdi_logo: str, cust_header: str, middle: str) -> str:
             f'<div class="cust">{cust_header}</div></div>')
 
 
+def open_items(summary: Dict[str, Any]) -> int:
+    """How many items the costed record says still need a person — the ONE TALLY the report's
+    headline prints (costed_facts.outstanding_summary), never a count of this page's own
+    (D-580). It is the record's `release.outstanding` (the rows that make the quotation a
+    draft) plus the advisory items the report also lists — an SDI house rate marked
+    INDICATIVE to verify — so the quotation and the report say the same number.
+
+    -1 MEANS UNKNOWN, NOT NOUGHT (D-581): a reporting failure cannot assert that nothing is
+    open, and a count that is not a whole number is not a count. The page then says the
+    number could not be read rather than claiming a settled estimate."""
+    try:
+        from costed_facts import outstanding_summary
+        count = outstanding_summary(summary)["total"]
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            return -1
+        return count
+    except Exception:                                                # noqa: BLE001
+        return -1
+
+
+def _sourced_words(facts: Dict[str, Any]) -> str:
+    """What the costing page may claim (D-580). "Every line sourced" was claimed whatever the
+    record held open, and "nothing open" would not have proved it either: a requirement
+    the engine never captured leaves no open item. So the page says what is true of every
+    estimate — the sources and assumptions are recorded in it — and, on a draft, how many
+    items are being confirmed, in a customer's words."""
+    n = int(facts.get("open_items") or 0)
+    if n < 0:
+        return ("Nested sheets and departmental rates; sources and assumptions recorded in the "
+                "estimate. The number of items still being confirmed could not be read.")
+    if n <= 0:
+        return "Nested sheets and departmental rates; sources and assumptions recorded in the estimate."
+    return (f"Nested sheets and departmental rates; {_g(n)} item{'s' if n != 1 else ''} "
+            f"{'are' if n != 1 else 'is'} being confirmed before the price is final.")
+
+
+def _traced_words(facts: Dict[str, Any]) -> str:
+    n = int(facts.get("open_items") or 0)
+    if n < 0:
+        return ("kept its working, with its sources and assumptions recorded in the estimate; the "
+                "number of items still being confirmed could not be read.")
+    if n <= 0:
+        return "kept its working, with its sources and assumptions recorded in the estimate."
+    return (f"kept its working, with its sources and assumptions recorded in the estimate; "
+            f"{_g(n)} item{'s' if n != 1 else ''} {'are' if n != 1 else 'is'} still being confirmed.")
+
+
+def _route_claim(facts: Dict[str, Any]) -> str:
+    """"All 9 made parts given a blank, a gauge and a path…" — COUNTED, never asserted (D-589).
+    The sentence was fixed text: 0351292's page said every made part had a blank while the
+    top blanks had none and the base angle's was unresolved. A part counts when it has a blank
+    or cut length, a gauge or section, and sits on a charged department row."""
+    made = facts.get("made") or []
+    if not made:
+        return "Each part's path through SDI's departments recorded in the estimate."
+    on_route = {str(x).strip().upper() for xs in (facts.get("parts_by_dept") or {}).values()
+                for x in xs}
+
+    def _complete(p: Dict[str, Any]) -> bool:
+        me = p.get("material_estimate") if isinstance(p.get("material_estimate"), dict) else {}
+        sized = bool(_num(me.get("blank_length_mm")) or _num(p.get("blank_length_mm")))
+        gauged = bool(_num(p.get("normalized_thickness_mm")) or _num(me.get("thickness_mm"))
+                      or me.get("section_profile_mm") or me.get("section_stock"))
+        return sized and gauged and str(p.get("part_number") or "").strip().upper() in on_route
+
+    n, m = sum(1 for p in made if _complete(p)), len(made)
+    if n == m:
+        return (f"All {_g(m)} made part{'s' if m != 1 else ''} given a blank, a gauge and a "
+                f"path through SDI's departments.")
+    return (f"{_g(n)} of {_g(m)} made parts given a blank, a gauge and a path through SDI's "
+            f"departments; {_g(m - n)} {'are' if m - n != 1 else 'is'} still being confirmed.")
+
+
 def reading_page(summary: Dict[str, Any], facts: Dict[str, Any], *, customer: str,
                  product: str, job_number: str, unit_price: Optional[float], qty: int,
                  sdi_logo: str, cust_header: str, page_no: str) -> str:
@@ -964,9 +1185,8 @@ def reading_page(summary: Dict[str, Any], facts: Dict[str, Any], *, customer: st
          f"Materials, gauges and joints — {len(facts['made'])} parts SDI makes, "
          f"{len(facts['bought'])} bought in."),
         ("03 · CONNECTED", "Turned the design into a route", chain_route,
-         "Every made part given a blank, a gauge and a path through SDI's departments."),
-        ("04 · COSTED", "Priced it in SDI's workbook", costed,
-         "Nested sheets, departmental rates and every line sourced."),
+         _route_claim(facts)),
+        ("04 · COSTED", "Priced it in SDI's workbook", costed, _sourced_words(facts)),
     ]
     chain_html = "".join(
         f'<div><div class="qs-k">{_esc(k)}</div><h3>{_esc(h)}</h3>'
@@ -1001,7 +1221,7 @@ def reading_page(summary: Dict[str, Any], facts: Dict[str, Any], *, customer: st
       <h2>We read your {_esc(pack_kind)} the way an engineer would.</h2>
       <p style="margin:0;color:#d9dcd6;font-size:13.5px;line-height:1.45">SDI Intelligence worked
       out what the product is made of, how SDI would make each part and what it costs — and
-      kept its working, so every line on the price can be traced back to your own pages.</p>
+      {_esc(_traced_words(facts))}</p>
       <div class="qs-io">
         <div class="qs-in"><div class="qs-lbl">What we were given</div><ul>{li(given)}</ul></div>
         <div class="qs-out"><div class="qs-lbl">What we produced</div><ul>{li(produced)}</ul></div>
@@ -1185,6 +1405,7 @@ def story_pages(summary: Dict[str, Any], parts: List[Dict[str, Any]], *, custome
         return "", ""
     facts["markup"] = markup
     facts["agree"] = figures_agree(summary, facts, unit_price, markup)
+    facts["open_items"] = open_items(summary)                        # the record's, not ours
     pages = []
     try:
         pages.append(reading_page(summary, facts, customer=customer, product=product,

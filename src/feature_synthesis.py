@@ -119,7 +119,10 @@ def infer_bend_count(part: Dict[str, Any], geometry_confidence: float) -> int:
             _stamp("inferred_mirrored_return_flange")
             return 2
 
-    text_signal = max(angle_count, fold_value_count, fold_text_count)
+    # A BARE ANGLE IS NOT A FOLD (D-592a): the angle list is every angle the sheet prints, so
+    # it no longer counts here either — the resolver refused it, and this fallback brought it
+    # back. A stated fold count or fold dimensions still do.
+    text_signal = max(fold_value_count, fold_text_count)
     if text_signal and geometry_bends:
         _stamp("drawing_text_bounded_by_geometry")
         return min(max(text_signal, 1) + 1, geometry_bends)

@@ -28,6 +28,7 @@ from typing import Mapping, Any, Dict, List, Optional
 # gates upstream of this one, which is exactly how a part gets refused a blank in one pass
 # and given a laser in the next.
 from bought_in_policy import (FABRICATION_OPS as _FABRICATION_OPS,
+                              LEAF_ONLY_OPS as _LEAF_ONLY_OPS,
                               bought_in_reason as _bought_in_reason,
                               is_bought_in as _is_bought_in)
 
@@ -614,6 +615,17 @@ def apply_routes_to_parts(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> i
                     f"({_bought_in_reason(part) or 'purchased'}), and we do not "
                     f"{op.replace('_', ' ')} something we buy. If SDI does make this part, "
                     f"its part number or its page role is wrong.")
+                continue
+            # AN ASSEMBLY IS NOT CUT (D-598l). Its pieces carry their own cutting; the read sees
+            # the assembled object on its sheet and proposes the cut there. 9287-10-002's box,
+            # already the assembly of a SIDE and a TOP panel each lasered, took a CNC row of
+            # its own at 3 mm from this read. The same refusal as the bought-in one above.
+            if op in _LEAF_ONLY_OPS and (part.get("is_assembly_parent")
+                                         or part.get("assembly_children")):
+                part.setdefault("review_flags", []).append(
+                    f"operation '{op}' was read from the drawing pack but NOT applied to "
+                    f"{part.get('part_number') or 'this line'}: it is an assembly, and its "
+                    f"pieces carry their own {op.replace('_', ' ')}")
                 continue
             # THE NAME IS NOT THE DECISION.
             #

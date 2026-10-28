@@ -74,8 +74,8 @@ def part_number_from_dxf_path(path: Path) -> Optional[str]:
         # exist in the wild — 10975-02's whole pack is lettered, and with only the first
         # pattern the run staged two DXFs and matched zero: the flat's own code parsed as
         # nothing, and the 2 mm token and the BENDLINES count died with it.
-        [r"(?P<pn>\d{4,5}-\d{2}-\d{3}[A-Z]?)",
-         r"(?P<pn>\d{4,5}-\d{2}-[A-Z]{1,2}\d{1,3})"],
+        [r"(?P<pn>(?<!\d)\d{4,6}-\d{2}-\d{3}[A-Z]?)",
+         r"(?P<pn>(?<!\d)\d{4,6}-\d{2}-[A-Z]{1,2}\d{1,3})"],
     )
     for pattern in patterns:
         match = re.search(pattern, stem, flags=re.IGNORECASE)
@@ -86,7 +86,7 @@ def part_number_from_dxf_path(path: Path) -> Optional[str]:
 
 def job_prefix_from_path(path: Path) -> Optional[str]:
     """Job family prefix such as 9376-01 from drawing or DXF names."""
-    match = re.search(r"(\d{4,5}-\d{2})\b", path.stem, flags=re.IGNORECASE)
+    match = re.search(r"(?<!\d)(\d{4,6}-\d{2})\b", path.stem, flags=re.IGNORECASE)
     return match.group(1).upper() if match else None
 
 
@@ -310,6 +310,14 @@ _DXF_MATERIAL_TOKENS: List[Tuple[str, str]] = [
     # its own live UDEF sheet price (labour still routes acrylic-like in the estimator).
     (r"\bHIPS\b|POLYSTYRENE", "HIPS"),
     (r"HI\s*ACR|HIGH\s*IMPACT\s*ACR", "HIGH IMPACT ACRYLIC"),
+    # SOLID SURFACE, BY ITS NAME OR ITS MAKER'S (D-598l). 9287-10-005's flat is named "12mm SOLID
+    # SURFACE" and nothing here could say it, so the material entered only as an inference and
+    # the SolidWorks model's appearance default ("Steel") took the base for 12 mm mild steel
+    # plate, lasered. Read here, it carries the drawing office's own word at the filename's
+    # rank, which the model's library appearance does not outrank. No rate is implied: the
+    # material stays unpriced until a sheet or supplier price is given.
+    (r"SOLID\s*SURFACE|\bHANEX\b|\bCORIAN\b|\bHI\s*-?\s*MACS\b|\bSTARON\b|\bKRION\b|\bAVONITE\b",
+     "SOLID SURFACE"),
     (r"\bACRYLIC\b|\bACR\b|\bPERSPEX\b|\bPMMA\b", "ACRYLIC"),
     (r"POLYCARB|\bPC\b", "POLYCARBONATE"),
     (r"\bCARD\b|GREYBOARD|GREY\s*BOARD", "CARD"),
@@ -350,7 +358,15 @@ def material_from_dxf_filename(path: Path) -> Optional[str]:
     — and anything else falls through to the engine's own vocabulary. Adding a material to
     costed_facts now teaches this reader too, and the guard fails the suite if it does not.
     """
-    stem = path.stem.upper().replace("_", " ")
+    return material_from_drawing_text(path.stem)
+
+
+def material_from_drawing_text(text: str) -> Optional[str]:
+    """One vocabulary for a filename and an owned title-block material callout.
+
+    Classifies only: callers retain the exact grade and the original evidence source.
+    """
+    stem = str(text).upper().replace("_", " ")
     for pat, mat in _DXF_MATERIAL_TOKENS:
         if re.search(pat, stem):
             return mat
@@ -381,6 +397,43 @@ def build_geometry_summary_for_dxf(dxf_path: Path) -> Tuple[Dict[str, Any], Dict
     )
     raw = extract_dxf_geometry(dxf_path)
     return geometry, raw, reliability
+
+
+def _nested_outline_question(part: Dict[str, Any], flat: Dict[str, Any]) -> None:
+    """An outline inside the outline, filling most of the blank, is a frame or a step (D-598o).
+
+    9287-10-005's flat holds its 303 mm square and a 287 mm square inside it, and no holes. Read
+    as a frame, the inner square is cut through and the part is 9,440 mm2 of band; the drawing
+    draws a solid base with a step, whose band is machined to a depth, not cut. A flat cannot
+    say which, so it is asked, and the step's machining is named as not charged.
+    """
+    try:
+        length = float(flat.get("blank_length_mm") or 0)
+        width = float(flat.get("blank_width_mm") or 0)
+        band = float(flat.get("blank_area_mm2") or 0)
+    except (TypeError, ValueError):
+        return
+    import config as _cfg
+    share = float(getattr(_cfg, "NESTED_OUTLINE_INNER_SHARE", 0.75))
+    if not (flat.get("closed_contour_count") == 2 and not flat.get("hole_count")
+            and length > 0 and width > 0 and 0 < band <= (1.0 - share) * length * width):
+        return
+    pn = part.get("part_number")
+    questions = part.setdefault("manufacturing_questions", [])
+    if any(isinstance(q, dict) and q.get("subject") == "nested_outline_frame_or_step"
+           for q in questions):
+        return
+    questions.append({
+        "issue": f"Is the outline inside {pn}'s outer profile cut through, or is it a step?",
+        "assumption": (f"read as a frame: the inner outline is cut through and the part is the "
+                       f"{band:,.0f} mm2 band between the two. A solid part with a step or "
+                       f"rebate machines that band to a depth instead, and that machining is "
+                       f"not charged"),
+        "action": ("say which; for a step, give its depth and add its machining to the "
+                   "route: the engine does not cost a step from a flat"),
+        "source": "drawing_job_merge.augment_summary_with_dxf",
+        "subject": "nested_outline_frame_or_step",
+    })
 
 
 def _pierce_fields(verdict: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -611,6 +664,7 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
                 "DXF outline has segments that could not be chained into closed loops, so "
                 "some cut-outs may not have been counted. The pierce count is a FLOOR — "
                 "check the drawing for cut-outs the laser has not been charged for")
+        _nested_outline_question(part, flat)
     else:
         extents = raw.get("drawing_extents_mm") or []
         if isinstance(extents, (list, tuple)) and len(extents) >= 2:
@@ -863,7 +917,7 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
 def _loose_part_key(part_number: str) -> Tuple[str, str]:
     """Leading numeric block + trailing letter: '1449C' / '1449-01C' -> ('1449','C')."""
     k = _normalize_part_key(part_number)
-    m = re.match(r"^(\d{3,5})", k)
+    m = re.match(r"^(\d{3,6})", k)
     lead = m.group(1) if m else ""
     tail = k[-1] if k and k[-1].isalpha() else ""
     return lead, tail
@@ -1369,6 +1423,83 @@ def flats_are_different_pieces(paths: Sequence[Path]) -> bool:
 
 
 _MEMBER_SUFFIX = re.compile(r"_-(\d{1,2})(?:[_.]|$)")
+
+
+def _role_of_flat(path: Path) -> Optional[str]:
+    """The piece role a flat's own name gives it — "SIDE", "TOP" — or None (D-598j)."""
+    words = set(getattr(config, "DXF_PIECE_ROLE_WORDS", ()) or ())
+    tokens = re.findall(r"[A-Z]+", Path(str(getattr(path, "name", path))).stem.upper())
+    return " ".join(dict.fromkeys(t for t in tokens if t in words)) or None
+
+
+def _promote_role_pieces(summary: Dict[str, Any], part: Dict[str, Any], paths: Sequence[Path],
+                         parts: List[Dict[str, Any]], parts_by_key: Dict[str, Dict[str, Any]],
+                         report: Dict[str, Any], matched_keys: set) -> None:
+    """Each flat a piece of `part`, named by its role, hung on the part, and the count asked.
+
+    A NAME SAYS WHAT A PIECE IS, NOT HOW MANY (D-598j). 9287-10-002's box is a top and four
+    sides from one SIDE flat and one TOP flat; the files cannot say four. Each is costed once,
+    the part becomes the assembly of its pieces, and the part asks how many of each it takes."""
+    pn = str(part.get("part_number") or "")
+    parent_key = _normalize_part_key(pn) or "PART"
+    taken = {_normalize_part_key(p.get("part_number", "")) for p in parts}
+    taken.discard("")
+    minted: List[Tuple[str, str, str]] = []
+    for path in paths:
+        if not dxf_may_mint_a_part(path, report):
+            continue                      # a drawing of a part is not a part (D-406)
+        role = _role_of_flat(path) or "PIECE"
+        # Numbered, because the key normaliser reads a bare trailing word as a descriptor and
+        # "<part>-SIDE" would collapse back onto the part itself.
+        n = 1
+        name = f"{parent_key}-{role.replace(' ', '-')}-{n:02d}"
+        while _normalize_part_key(name) in taken:
+            n += 1
+            name = f"{parent_key}-{role.replace(' ', '-')}-{n:02d}"
+        taken.add(_normalize_part_key(name))
+        piece = _create_orphan_dxf_part(summary, name, path)
+        piece["part_number"] = name
+        piece["description"] = f"{part.get('description') or pn} — {role}"
+        piece["dxf_minted_piece_of"] = pn
+        piece["dxf_piece_role"] = role
+        piece.setdefault("review_flags", []).append(
+            f"piece {role} of {pn}, read from its DXF name {path.name} — see {pn}")
+        # THE PART'S OWN SHEET STATES THE FINISH OF ITS PIECES: "POLISHED EDGES" on the box's
+        # sheet is every panel's edge, and a piece minted from a flat carries no finish of its own.
+        _fin = str(part.get("normalized_finish") or "").strip()
+        if _fin and not piece.get("normalized_finish"):
+            if _apply_field(piece, "normalized_finish", _fin, "drawing_deterministic"):
+                piece["surface_finishes"] = list(part.get("surface_finishes") or [_fin])
+                piece["normalized_finish_inherited_from"] = pn
+        parts.append(piece)
+        parts_by_key[_normalize_part_key(name)] = piece
+        summary.setdefault("manufacturing_writeup", {})["parts"] = parts
+        _apply_and_report(piece, path, report, matched_keys, reason="role_piece_promoted")
+        report["orphan_dxf_promoted"].append({"part_number": name, "dxf": str(path.resolve()),
+                                              "reason": "role_piece_of_a_part"})
+        kids = part.setdefault("assembly_children", [])
+        if isinstance(kids, list) and name not in kids:
+            kids.append(name)
+        minted.append((role, name, path.name))
+    if not minted:
+        return
+    part["is_assembly_parent"] = True
+    part["dxf_pieces"] = [{"dxf": f, "piece": r, "costed_as": c} for r, c, f in minted]
+    said = ", ".join(f"{r} ({f})" for r, _c, f in minted)
+    q = {"issue": f"How many of each piece does one {pn} take: {said}?",
+         "assumption": (f"each piece is costed once — the files name what each piece is, not "
+                        f"how many; a count has not been captured from the drawing"),
+         "action": f"state the count of each per {pn}, and each piece is costed at it",
+         "source": "drawing_job_merge.augment_summary_with_dxf",
+         "subject": "dxf_piece_count",
+         "gbp_parts": [c for _r, c, _f in minted]}
+    qs = part.setdefault("manufacturing_questions", [])
+    if isinstance(qs, list) and not any(isinstance(x, dict) and x.get("issue") == q["issue"]
+                                        for x in qs):
+        qs.append(q)
+    part.setdefault("review_flags", []).append(
+        f"PIECES BY ROLE: {pn} is made of {said}; each is costed once. A file names a piece, "
+        f"not a count — confirm how many of each one {pn} takes")
 
 
 def _member_suffix_of_flat(path: Path) -> Optional[str]:
@@ -2298,7 +2429,9 @@ _CUT_OPS = ("laser_cutting", "cnc_routing", "waterjet_cutting", "plasma_cutting"
 _METHOD_TO_OP = {"laser": "laser_cutting", "router": "cnc_routing", "punch": "punching"}
 # Stock a router cuts when the shop has not said otherwise: board, foam board and plastic sheet.
 _ROUTED_STOCK = ("FOAM", "PVC", "ACRYLIC", "PERSPEX", "PMMA", "PETG", "HIPS", "ABS",
-                 "POLYCARBONATE", "POLYPROP", "DIBOND", "ACM", "MDF", "PLY", "BOARD", "TIMBER")
+                 "POLYCARBONATE", "POLYPROP", "DIBOND", "ACM", "MDF", "PLY", "BOARD", "TIMBER",
+                 # Solid surface is routed, never lasered (D-598l); proposed and asked.
+                 "SOLID SURFACE")
 # Stock whose cutting method the flat does not tell us (a graphic may arrive cut to shape).
 _UNSAID_STOCK = ("CARD", "PAPER", "VINYL", "FABRIC", "BOOK", "LABEL", "FILM")
 # Other names for a material the shop table already rules on. 12633-10's files say PMMA and its
@@ -3495,6 +3628,21 @@ def augment_summary_with_dxf(
     for pid, paths in by_part.items():
         part = part_by_id[pid]
         _as_pieces = [p for p in paths if str(p) in piece_files]
+        # PIECES BY ROLE (D-598j): every flat names a different role and the part has no child
+        # in scope to bind them to. Same blank and same stock no longer read as revisions.
+        _roles = [_role_of_flat(p) for p in paths]
+        _pkey = _normalize_part_key(part.get("part_number", ""))
+        if (len(paths) > 1 and not _as_pieces and None not in _roles
+                and len(set(_roles)) == len(paths)
+                and not any(k != _pkey and k.startswith(_pkey + "-") and not k.endswith("-GA")
+                            for k in parts_by_key)):
+            report["ambiguous_dxf"].append({
+                "part_number": part.get("part_number"),
+                "candidates": [str(p) for p in paths],
+                "reason": "role_pieces_promoted", "roles": list(_roles)})
+            _promote_role_pieces(summary, part, paths, parts, parts_by_key, report,
+                                 matched_keys)
+            continue
         if len(paths) == 1:
             _apply_and_report(part, paths[0], report, matched_keys)
             if _as_pieces:
@@ -3586,6 +3734,71 @@ def augment_summary_with_dxf(
                     }
                 )
                 _apply_and_report(part, chosen, report, matched_keys)
+                # A SECOND VIEW'S HOLES ARE EVIDENCE, NOT A SECOND BLANK (D-513).
+                # 12343-01J's pack carries UNDERSIDE and REAR exports of one shelf; the
+                # blanks differ so this branch rightly costs ONE of them — and then dropped
+                # the other whole, bores and all. The REAR view held the part's four drilled
+                # holes, the record reached costing with NO hole inventory, and the book
+                # could only say "nothing here demonstrates the bores reached the program".
+                # Where the costed record holds no hole inventory of its own, the unchosen
+                # views' measured circles are read as that inventory — labelled with the
+                # file they came from, never re-measuring the blank, and only into a gap
+                # (a flat that measured its own holes is not second-guessed).
+                _own_holes = (int((part.get("geometry_rollup") or {})
+                                  .get("estimated_hole_count") or 0)
+                              or int((part.get("dxf_raw_geometry") or {})
+                                     .get("estimated_hole_count") or 0)
+                              or bool(part.get("hole_sizes_mm")))
+                if not _own_holes:
+                    _sv_total, _sv_dias, _sv_files = 0, [], []
+                    for _p2 in paths:
+                        if _p2 == chosen:
+                            continue
+                        try:
+                            _g2 = extract_dxf_geometry(_p2) or {}
+                        except Exception:                            # noqa: BLE001
+                            continue
+                        _n2 = int(_g2.get("estimated_hole_count") or 0)
+                        if _n2 <= 0:
+                            continue
+                        _sv_total += _n2
+                        _sv_dias.extend(float(d) for d in
+                                        (_g2.get("hole_diameters_mm") or []))
+                        _sv_files.append(_p2.name)
+                        report.setdefault("secondary_view_holes", []).append(
+                            {"part_number": part.get("part_number"),
+                             "dxf": str(_p2.resolve()),
+                             "hole_count": _n2,
+                             "hole_diameters_mm": sorted(set(
+                                 round(float(d), 3)
+                                 for d in (_g2.get("hole_diameters_mm") or [])))})
+                    if _sv_total > 0:
+                        _dias = sorted(set(round(d, 3) for d in _sv_dias if d > 0))
+                        # Into the rollup and the part's own hole list — the fields that
+                        # survive _interpret_part rebuilding normalized_geometry — never
+                        # into the blank, the cut length or the pierce count, which stay
+                        # the CHOSEN flat's measurements.
+                        _gr = part.get("geometry_rollup")
+                        if isinstance(_gr, dict):
+                            _gr["estimated_hole_count"] = max(
+                                int(_gr.get("estimated_hole_count") or 0), _sv_total)
+                        if _dias:
+                            _hs = [float(h) for h in (part.get("hole_sizes_mm") or [])
+                                   if h is not None]
+                            part["hole_sizes_mm"] = sorted(set(_hs + _dias))
+                        part["secondary_view_hole_inventory"] = {
+                            "files": list(_sv_files), "hole_count": _sv_total,
+                            "hole_diameters_mm": _dias}
+                        part.setdefault("review_flags", []).append(
+                            f"HOLE INVENTORY FROM A SECOND VIEW: the costed flat "
+                            f"({chosen.name}) measured no holes; "
+                            f"{', '.join(_sv_files)} — a different view of this part, not "
+                            f"costed as a blank — measures {_sv_total} hole(s)"
+                            + (f" (Ø{', Ø'.join(f'{d:g}' for d in _dias)} mm)"
+                               if _dias else "")
+                            + ". The count is a view's reading, not the program's: confirm "
+                              "the bores, their faces and depths against the drawing.")
+                        _interpret_part(part)   # the rollup changed; re-derive the features
 
     for key, part in parts_by_key.items():
         if key not in matched_keys and part.get("geometry_rollup", {}).get("confidence", {}).get(

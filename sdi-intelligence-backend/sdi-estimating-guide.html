@@ -285,6 +285,7 @@
     <a href="#start"><b>Start here</b><span>The one rule</span></a>
     <a href="#ninety"><b>90 seconds</b><span>Three questions, three places</span></a>
     <a href="#run"><b>Running a job</b><span>Units, drawings, go</span></a>
+    <a href="#overrides"><b>Telling it more</b><span>Materials, customer changes, brief</span></a>
     <a href="#tabs"><b>The five tabs</b><span>What lives where now</span></a>
     <a href="#estimate"><b>Estimate sheet</b><span>The workbook you edit</span></a>
     <a href="#explanation"><b>AI Explanation tab</b><span>The answers, decisions first</span></a>
@@ -389,6 +390,25 @@
       working.</td></tr>
     <tr><td class="k">Output folder</td><td>Written to the estimating share, in a dated sub-folder,
       so re-running never overwrites an earlier estimate.</td></tr>
+    <tr><td class="k">Running the same pack again</td><td><b>The first run of a pack is the slow
+      one.</b> Reading a drawing — the text layer, OCR and the local vision model over every page,
+      the paid model over the pack — is what takes the minutes, and from 21 Oct 2026 every one of
+      those readings is <b>kept on the runner</b>, keyed on the drawing's actual bytes, the reader
+      code and its settings. Run the same drawings again and they are given back rather than read
+      again; the engine still makes sense of them afresh, so a rule fixed since last time shows on
+      the new book. A redrawn sheet under the same filename is read again by itself; so is every
+      drawing after the engine's own reading code changes. Nothing to press — it is how a run
+      works now.</td></tr>
+    <tr><td class="k">Fresh read</td><td>The tick on the Run page. It makes the run <b>ask every
+      model and read every drawing again</b>, keeping the new answers; it deletes nothing. Use it to
+      measure the model, not to estimate — the same drawings can come back with a different route,
+      which is the thing the kept readings exist to prevent. A material you confirmed on the Set the
+      material step is not a reading and Fresh read does not touch it.</td></tr>
+    <tr><td class="k">Quantity and packing</td><td>Every quantity break you ask for is priced <b>at
+      its own quantity</b> — 150 off is 150 cartons, not one pallet divided by 150 — and the product
+      is taken to <b>ship assembled</b>, one carton sized around the model's overall size (or an
+      overall stated on the drawing) per unit, because SDI assembles, so packs and boxes. The
+      Explanation tab says which it did and from what size.</td></tr>
   </table>
 
   <div class="panel">
@@ -401,6 +421,117 @@
     — so a drawing you took off the list cannot come back and be priced a second time. It also means
     the folder is a permanent record of exactly which drawings produced a given estimate, which is
     what you want when somebody asks about a number six weeks later.</p>
+  </div>
+
+  <h2 id="overrides">Telling the engine more than the drawings say</h2>
+  <p class="lead">These optional inputs sit on the estimating page between the drawing list and
+  the run button. All of them exist for the same reason: sometimes you know something the pack
+  does not say, and typing it here beats hand-editing the sheet afterwards — because what you
+  type travels with the run, lands on the book with your name on it, and shows up in the
+  provenance like any other piece of evidence. None of them is ever a price.</p>
+  <table>
+    <tr><th>Panel</th><th>What it is for</th><th>When</th></tr>
+    <tr><td class="k">Materials — confirm before the run</td>
+      <td>Press <b>Read materials from the drawings</b> and the engine lists what each part's
+      sheet and DXF name state — material, thickness, finish — with the questions the wording
+      raises. You answer from lists, put your name in <b>Confirmed by</b>, tick
+      <b>Use this confirmation</b>, and the answers become this job's answers file.
+      The <b>job default</b> fills only parts whose drawings state nothing; a part whose sheet
+      states a material keeps it unless you change that part's own row.</td>
+      <td>The pack's wording is ambiguous — "ZINTEC?", a DXF named one thing and a sheet
+      another — and you can settle it before the run instead of on the decisions list
+      after.</td></tr>
+    <tr><td class="k">Customer changes since the drawings</td>
+      <td>Paste the customer's e-mail and press <b>Read the changes from the e-mail</b>, or
+      <b>Add a change by hand</b> (a hand-typed row needs a reason — who asked, and how). Each
+      proposed change shows the drawn value, the new value and the e-mail's own words. Only the
+      rows you <b>tick</b> are costed, under the name in <b>Accepted by</b>. See the panel
+      below for exactly what it can and cannot change.</td>
+      <td>The customer asks for a different thickness, finish, size or quantity and there is
+      no time to revise the drawing pack.</td></tr>
+    <tr><td class="k">Enquiry brief</td>
+      <td>Free text put to the model as stated facts that outrank what a picture suggests:
+      overall sizes, material, construction, parts not visible. <b>LLM reads only</b> — on a
+      drawing-pack run the drawings are the facts and this box is not read. One option per
+      run: for "plywood <i>or</i> steel", run twice with each brief. Prices typed here are
+      ignored.</td>
+      <td>Pricing from a render, a concept PDF or a written enquiry rather than a measured
+      pack.</td></tr>
+    <tr><td class="k">Reference / standards tick</td>
+      <td>Tick any added file that states <b>requirements rather than the product</b> — a
+      design-standards manual, a test specification. Its words reach the model under their own
+      section; none of its illustrated examples can become a part on the bill. Applicable
+      requirements come back as named allowances to price separately. A run where <em>every</em>
+      file is ticked reference is refused — there would be no product to cost.</td>
+      <td>The pack includes a customer's standards manual or spec alongside the product
+      drawings.</td></tr>
+    <tr><td class="k">Delivery — we are delivering this order</td>
+      <td>Whether an order is delivered, and where to, is the <b>enquiry's</b> fact — no drawing
+      can say it — so the Run page asks. The box opens <b>unticked</b>: a collection job prices
+      no haulage. Tick it and give the <b>delivery postcode</b>, and the DELIVERY line is priced
+      to that postcode at every quantity break and says so on the book; the quote carries the
+      same. Before this, every job priced a delivery nobody had asked for.</td>
+      <td>The customer wants it delivered. Leave it unticked for collection or ex-works.</td></tr>
+    <tr><td class="k">Member schedule — checked against the drawing</td>
+      <td><b>LLM reads only.</b> Press <b>Load this job's schedule or last read</b> and the
+      model's last read of this job fills a table — one line per thing cut or bought, with its
+      count, stock (sheet, tube, oval, angle, channel, flat or round bar, wire, mesh), section,
+      cut length, holes, folds and work. Check every line against the drawing: add the line the
+      read missed, remove the one it invented, say what each is cut from. Tick <b>I checked
+      every line against the drawing</b>, put your name in, tick <b>File this schedule and price
+      it</b>, and press the LLM read. The schedule is filed beside the pack and priced by every
+      rule the model's read would be — <b>the model is not asked again</b>, and Fresh read does
+      not change that. It stays with the job (a re-run keeps it) until you tick <b>Set the
+      schedule on file aside</b>; the run's log says which construction it priced.</td>
+      <td>The model's read got the construction wrong — a missing member, an invented one, a
+      wire read as a bar — and you want the price of the construction you checked, not another
+      fresh guess.</td></tr>
+  </table>
+
+  <div class="panel">
+    <p style="margin:0 0 6px 0"><b>What a customer change actually overrides — and what it
+    cannot.</b></p>
+    <p style="margin:0">A ticked change outranks every reading from the drawings, including a
+    confirmed materials answer — it is the customer's instruction, dated after the pack. It can
+    change: <b>material, thickness, finish, quantity per assembly, overall size, blank length
+    and width, an operation taken off, make or buy, and the order quantity</b>. It matches
+    against <b>all parts the pack produces</b> — it is independent of the Materials panel, and
+    does not need a materials read first.</p>
+    <p style="margin:6px 0 0 0">The drawings are never altered. The book shows the drawn value
+    <em>beside</em> what was costed, with the e-mail's words or your reason, in a
+    "Changes the customer asked for since the drawings" block at the top of the job report —
+    marked <b>COSTED</b>, <b>already as drawn</b>, <b>NOT APPLIED</b> (with why) or
+    <b>declined by the estimator</b>. A request the engine cannot carry out — "make it look
+    more premium" — is never silently dropped: it becomes a question on the decisions list, so
+    the customer's ask is answered by a person, not lost.</p>
+    <p style="margin:6px 0 0 0"><span class="muted">The <b>Read the changes</b> and
+    <b>Read materials</b> buttons work only on the machine that runs estimates — the server
+    queues jobs but has no engine, so there it says so and you add changes by hand
+    instead.</span></p>
+  </div>
+
+  <div class="panel warn">
+    <p style="margin:0 0 6px 0"><b>New questions you may see on the book.</b> Recent checks
+    hold a doubtful figure for a person rather than letting it reach the sheet — so a few new
+    wordings appear on the decisions list:</p>
+    <p style="margin:0"><b>"Catalogue match held for review (£…)"</b> — a catalogue row matched
+    a bought-in line at a price above the plausibility ceiling. It is held, not charged, by
+    every pricing pass; the line is priced from the next source, or asked. The held figure is
+    a review trigger, never a cost.<br>
+    <b>A handed pair priced very differently</b> — a left and right hand of the same item
+    whose prices diverge by more than 3× are flagged: same spec and unit of sale should mean
+    similar money, so one of the two readings is probably wrong.<br>
+    <b>"Provisional — mirrored from its other hand"</b> — a handed part with no geometry of
+    its own borrows its mirror's provisional blank rather than going unpriced; the borrowing
+    is named on the line.<br>
+    <b>A part read larger than the assembly it sits in</b> — its size is replaced by a
+    labelled allowance from the assembly's own outline, flagged provisional, and asked.<br>
+    <b>"One code, two items"</b> — the same part code describing two incompatible things
+    (a stop lock and a pin, say) is not summed into one line; both stay separate and the clash
+    is asked.<br>
+    <b>A stated weight that disagrees with the blank</b> — the title-block weight checks the
+    blank: far too light refuses it, heavier than expected keeps it and asks. The weight is a
+    check on the reading, not a price — nested sheet steel is still charged by the nest.</p>
   </div>
 
     <h2 id="tabs">The workbook is five tabs — what lives where now</h2>
@@ -528,6 +659,13 @@
   action</b>: what was used, where it came from, how firm it is, and what — if anything — you
   are being asked to do about it. You open it when a figure looks wrong; you do not read it
   top to bottom.</p>
+  <p>Its second line names the <b>build</b> that costed the book — compare it with the log's if a
+  number looks like older code — and, since 21 Oct 2026, what the engine's stores gave back on the
+  way: <span class="mono">Reads: pdf_readings 11 reused / 0 made; vision_bom 11 reused / 0
+  made</span>. "Reused" is a drawing given back from a previous run of the same bytes; "made" is
+  one read this run. A first run shows everything made; a re-run of an unchanged pack shows
+  everything reused. If a re-run shows pages <i>made</i>, something changed — the drawing, the
+  settings or the engine's reading code — and the line is how you know.</p>
 
   <h3>The strength words</h3>
   <table>
@@ -543,6 +681,21 @@
     <tr><td class="k">UNKNOWN</td><td>Nothing supplied it. On a price this means nobody has
       priced it yet.</td><td><span class="tag bad">gap</span></td></tr>
   </table>
+
+  <div class="panel">
+    <p style="margin:0 0 6px 0"><b>Two reads worth knowing about when a row surprises you.</b></p>
+    <p style="margin:0"><b>The revision table is not the title block</b> (since 13 Oct 2026). A
+    sheet's revision table — <span class="mono">A 12341-01M INITIAL RELEASE · B 12340-01M PART
+    NUMBER CORRECTED</span> — names old drawing numbers and past changes. The engine now reads
+    it as history: an old number there never becomes the drawing's number, its words never
+    become the finish, and a struck-through row is left alone. If a part appears under a number
+    you recognise as superseded, that is the row to check.</p>
+    <p style="margin:6px 0 0 0"><b>Sheet notes reach the record</b> (since 14 Oct 2026). A note
+    such as <span class="mono">EDGED ALL AROUND</span> or an order code like
+    <span class="mono">2S/SL</span> is read whole and lands on the part it belongs to, so the
+    edging material and labour build from the drawn perimeter rather than standing as a flagged
+    ceiling. The Provenance row names the note it came from.</p>
+  </div>
 
   <h3>The blocks below the part table</h3>
   <table>
@@ -632,6 +785,13 @@
       included — to be priced before issue"</i> — never as a silent £0 promise of a box.</li>
     <li>The finish it promises is the finish that is charged: on 7332-01, plated and diamond
       polished. Internal reasoning never appears on it.</li>
+    <li><b>Two pages follow the price page</b> (since 13 Oct 2026). <i>How we read your
+      enquiry</i>: what the pack held and what the run made of it, the chain read → concluded →
+      connected → costed, and four evidence cards quoting the pack's own words with their page.
+      <i>From drawing to price</i>: the made part with the longest route, followed end to end
+      from the drawing to its lines on the sheet. Both are written from the same record as the
+      book, so they cannot disagree with it; both quote only what the pack actually says — a
+      topic the pack is silent on gets no box.</li>
   </ul>
 
   <h2 id="email">7 · The covering e-mail — the note the engine wrote</h2>
@@ -649,6 +809,23 @@
     <tr><td class="k">What is attached</td><td>The workbook and the report. The client quote is
       attached only when nothing blocks it — a missing attachment is the engine being careful,
       not a fault.</td></tr>
+    <tr><td class="k">How packaging and delivery were worked out</td><td>Since 15 Oct 2026 the
+      note carries this section whenever either line was priced by a calculator: which drawing
+      dimension became the box's length, breadth and height and where that size came from (the
+      model's overall size, a stated overall, or the parts' measured blanks), whether the product
+      was boxed <b>whole</b> or as <b>parts</b> and why, and how the cartons were counted at
+      each break.</td></tr>
+    <tr><td class="k">AI Estimator Calculator Inputs</td><td>The box calculator's working in
+      full — the estimators' own <b>AI BOX CALCULATOR</b> sheet, read by the engine — so you can
+      re-do the box by hand: the cut sizes, the nests on the stock sheet, each panel pair's cost,
+      the running and set-up steps and the total. Written in plain words, not config keys. Put the
+      same box size and quantity into the sheet and it gives the same panel counts, pair costs
+      and TOTAL. (The sheet's own K10 sum drops one panel pair; the engine charges the complete
+      box and says so.)</td></tr>
+    <tr><td class="k">Who it comes from</td><td>Since 16 Oct 2026 every estimate e-mail is sent
+      <b>as the SDI Intelligence mailbox</b> through Microsoft Graph — the same sender as the
+      morning review — not over SMTP from whichever account the machine had. Reply to it and the
+      reply lands in that mailbox.</td></tr>
   </table>
 
 <h2 id="regen">8 · Re-issuing a quote after you have edited the sheet</h2>

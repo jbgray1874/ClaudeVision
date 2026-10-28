@@ -104,6 +104,61 @@ def test_the_breaks_are_read_off_the_book(tmp_path, monkeypatch):
     assert _by(_run({"quantity_breaks": [1]}, monkeypatch), "quantity_breaks") == {"[1]": False}
 
 
+def _estimate_book(tmp_path, name, rows):
+    """A minimal book whose first sheet is the Estimate, with BOM-block rows: the engine's
+    columns (CELL_MAP bom: C desc, J price, K qty, L scrap) and M the extended value."""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Estimate"
+    for desc, price, qty, scrap, ext in rows:
+        ws.append(["", "", desc, "", "", "", "", "", "", price, qty, scrap, ext])
+    path = tmp_path / name
+    wb.save(path)
+    return path
+
+
+def test_the_charge_cell_is_checked_not_a_number_somewhere(tmp_path, monkeypatch):
+    """D-523: '3.192 in the edging quantity cell actually used by its charge, not
+    elsewhere on the sheet' — and the money reconciling to qty x rate x disclosed scrap."""
+    facts = {"book_rows": {"EDGE23X1ABS": {"charge": True, "qty": 3.192}}}
+    good = _estimate_book(tmp_path, "good.xlsx", [
+        ("EDGE23X1ABS 23 x 1 mm ABS edging", 0.35, 3.192, 0.04, 1.16)])
+    assert _by(_run(facts, monkeypatch, good), "book_rows") == {"EDGE23X1ABS": True}
+    # 3.192 sitting in ANOTHER cell while the charged qty column holds 3 must FAIL
+    wrong_cell = _estimate_book(tmp_path, "wrong_cell.xlsx", [
+        ("EDGE23X1ABS edging", 0.35, 3, 0.04, 1.09), ("note", None, 3.192, None, None)])
+    assert _by(_run(facts, monkeypatch, wrong_cell), "book_rows") == {"EDGE23X1ABS": False}
+    # the 12:45 book's shape — a qty-3 charge (£18 x 3 x 1.04 = £56.16) beside a 3.192
+    # cell would be a qty mismatch; here the qty cell is right but the money is not
+    # qty x rate x scrap (18.0 x 3.192 x 1.04 = 59.75, the cell says 56.16): FAIL
+    bad_money = _estimate_book(tmp_path, "bad_money.xlsx", [
+        ("EDGE23X1ABS edging", 18.0, 3.192, 0.04, 56.16)])
+    assert _by(_run(facts, monkeypatch, bad_money), "book_rows") == {"EDGE23X1ABS": False}
+    # explicitly unpriced (blank price) passes with its state named — the honest zero
+    unpriced = _estimate_book(tmp_path, "unpriced.xlsx", [
+        ("EDGE23X1ABS edging", None, 3.192, None, None)])
+    assert _by(_run(facts, monkeypatch, unpriced), "book_rows") == {"EDGE23X1ABS": True}
+
+
+def test_a_charged_line_must_state_what_its_rate_is_per(monkeypatch):
+    """D-523: 'a verified £/m basis, including any roll conversion — not merely absence
+    of catalog url'."""
+    summary = {"estimate_summary": {"part_estimates": [
+        {"part_number": "EDGE1", "unit_cost_gbp": 0.35, "unit_of_measure": "m",
+         "price_source": {"source_name": "sdi_live",
+                          "provenance": "rate £0.35 per m, SDI Live"}},
+        {"part_number": "EDGE2", "unit_cost_gbp": 18.0,
+         "price_source": {"source_name": "catalogue",
+                          "provenance": "a figure with no unit basis"}},
+        {"part_number": "EDGE3", "material_estimate": {}},
+    ]}}
+    res = cb.check(summary, {"unit_priced_in": {"EDGE1": "m", "EDGE2": "m",
+                                                "EDGE3": "m"}})
+    got = _by(res, "unit_priced_in")
+    assert got == {"EDGE1": True, "EDGE2": False, "EDGE3": True}, res.rows
+
+
 def test_the_card_spinner_brief_is_well_formed():
     facts = json.loads((ROOT / "docs" / "briefs" / "12173-02.facts.json").read_text("utf-8"))
     assert facts["product_root"] == "12173-02-GA"

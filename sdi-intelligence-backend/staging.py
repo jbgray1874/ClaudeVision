@@ -33,6 +33,16 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import config
+try:
+    from service_config import the_service_config
+except ImportError:                    # loaded by path, without this folder on sys.path
+    import importlib.util as _ilu
+    import pathlib as _pl
+    _scs = _ilu.spec_from_file_location("service_config", _pl.Path(__file__).with_name("service_config.py"))
+    _scm = _ilu.module_from_spec(_scs)
+    _scs.loader.exec_module(_scm)
+    the_service_config = _scm.the_service_config
+config = the_service_config(config)   # this service's, even where the engine's holds the name
 
 # What the engine can actually read. Copying a .docx into the pack would not break anything, but
 # it would sit in the folder implying it was considered, and the folder is meant to be the
@@ -74,8 +84,13 @@ SIDECAR_NAMES = ("_sw_native_extract.json",)
 # saved bill (the baseline the next read keeps). A re-stage deleted both, so every submission
 # started without the estimator's approvals and without the previous read. Carried across the
 # clear exactly as the SolidWorks extract is; a file of the same name in the new selection wins.
-JOB_DATA_SUFFIXES = ("_estimator_dimensions.json", "_confirmed.json", "_concept_bill.json")
-JOB_DATA_NAMES = ("estimator_dimensions.json",)
+# The member schedule a person accepted (D-535) is the job's own data too: the first one, filed
+# by hand, was deleted by the next run's staging before the engine could look for it. Its
+# set-aside copy is kept as well, so the panel can start from it again.
+JOB_DATA_SUFFIXES = ("_estimator_dimensions.json", "_confirmed.json", "_concept_bill.json",
+                     "_construction.json", "_construction_set_aside.json")
+JOB_DATA_NAMES = ("estimator_dimensions.json", "construction.json",
+                  "construction_set_aside.json")
 
 
 def _is_job_data(name: str) -> bool:
@@ -367,6 +382,15 @@ def stage_brief_only(*, client: str, drawing: str, brief: str) -> Dict[str, Any]
         raise StagingError("A run with no drawings needs an enquiry brief to read.")
     folder = job_folder_for(client, drawing)
     folder.mkdir(parents=True, exist_ok=True)
+    # The job's own data survives a brief-only re-stage too (D-535): the estimator's answers,
+    # the read's saved bill and an accepted member schedule are not drawings.
+    _job_data: Dict[str, bytes] = {}
+    for _entry in folder.iterdir():
+        if _entry.is_file() and _is_job_data(_entry.name):
+            try:
+                _job_data[_entry.name] = _entry.read_bytes()
+            except OSError:
+                continue
     try:
         replaced = _clear_folder(folder)
         _render_brief_page(text, folder / BRIEF_PAGE_NAME)
@@ -375,10 +399,20 @@ def stage_brief_only(*, client: str, drawing: str, brief: str) -> Dict[str, Any]
             f"The staged pack for {drawing} ({folder}) is still open in another program, so "
             f"it cannot be replaced: {Path(str(getattr(exc, 'filename', '') or exc)).name}. "
             f"Let the run of this job finish or abandon it, then press again.") from exc
+    job_data_kept: List[str] = []
+    skipped: List[Dict[str, str]] = []
+    for _name, _data in sorted(_job_data.items()):
+        try:
+            (folder / _name).write_bytes(_data)
+            job_data_kept.append(_name)
+        except OSError:
+            skipped.append({"path": _name,
+                            "reason": "the job's own data file could not be carried across"})
     return {"folder": str(folder), "copied": [BRIEF_PAGE_NAME], "copied_count": 1,
-            "replaced_count": replaced, "skipped": [], "sidecars": [],
+            "replaced_count": replaced, "skipped": skipped, "sidecars": [],
             "native_staged": [], "native_unselected_count": 0, "native_unselected_folders": [],
-            "extract_carried_forward": False, "brief_only": True}
+            "extract_carried_forward": False, "brief_only": True,
+            "job_data_kept": job_data_kept}
 
 
 def _render_brief_page(text: str, out: Path) -> None:

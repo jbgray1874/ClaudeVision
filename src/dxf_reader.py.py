@@ -389,7 +389,7 @@ def extract_dxf_pages(dxf_path: Path) -> List[Dict[str, Any]]:
         pass
 
     part_numbers = re.findall(
-        r"\b(?:\d{4,5}[A-Z]?|[A-Z]{1,6}\d{0,4})\s*(?:-\s*[A-Z0-9_]{1,12}){1,4}\b",
+        r"\b(?:\d{4,6}[A-Z]?|[A-Z]{1,6}\d{0,4})\s*(?:-\s*[A-Z0-9_]{1,12}){1,4}\b",
         normalized,
         flags=re.IGNORECASE,
     )
@@ -613,7 +613,7 @@ def _parse_filename(path: Path) -> Dict[str, Any]:
 
     # ── M&S convention: detail part number after the LAST underscore ──────────
     # Matches: 4002-01, 4083-102, 4005-18, 4002-02M — NOT revL/MS/1.5mm/words.
-    _MS_PART_RE = re.compile(r'^(\d{4,5}-\d{2,4}[A-Z]?)$', re.IGNORECASE)
+    _MS_PART_RE = re.compile(r'^(\d{4,6}-\d{2,4}[A-Z]?)$', re.IGNORECASE)
     raw_segments = stem.split('_')
     if len(raw_segments) >= 2:
         last_seg = raw_segments[-1].strip()
@@ -649,7 +649,7 @@ def _parse_filename(path: Path) -> Dict[str, Any]:
     # Part number — first token(s) matching  NNNN-NN-NNN  or  NNNN-NN-GA  etc.
     pn_tokens: List[str] = []
     for t in tokens:
-        if re.match(r"^\d{4,5}([A-Z]|\-[A-Z0-9]+)*$", t, re.IGNORECASE) or \
+        if re.match(r"^\d{4,6}([A-Z]|\-[A-Z0-9]+)*$", t, re.IGNORECASE) or \
            re.match(r"^[A-Z]{1,4}\d{2,5}$", t, re.IGNORECASE):
             pn_tokens.append(t)
         elif pn_tokens and re.match(r"^[A-Z0-9]{1,8}$", t) and not any(
@@ -1389,6 +1389,22 @@ def _exact_perimeter_and_area(
     blank_length = max(blank_l, blank_w)
     blank_width  = min(blank_l, blank_w)
 
+    # A FLAT DRAWN AT AN ANGLE IS MEASURED ALONG ITSELF (D-567). 401918-01-06M's outline is
+    # about 370 x 25 mm, drawn rotated on its DXF; the drawing-axis box around it read
+    # 356 x 150 — 5.8 times the area the model's flat pattern gave, so the part nested, cut
+    # and coated as a plate it is not. The minimum-area rectangle around the outline's
+    # convex hull is the blank; the drawing-axis box is kept beside it. Taken only where it
+    # is materially smaller, so a square-on part, rounded corners and all, reads as before.
+    _oriented: Dict[str, Any] = {}
+    # Never for a disc: its points above are the circle's extents, not its outline.
+    _mar = _min_area_rect(xs, ys) if _disc_r == 0 else None
+    if _mar and blank_length * blank_width > 0 \
+            and _mar[0] * _mar[1] < 0.9 * blank_length * blank_width:
+        _oriented = {"blank_oriented": True,
+                     "blank_rotation_deg": round(_mar[2], 2),
+                     "axis_aligned_blank_mm": [blank_length, blank_width]}
+        blank_length, blank_width = round(_mar[0], 3), round(_mar[1], 3)
+
     bbox_area = blank_length * blank_width
 
     # Net area via shapely polygonize (outer contour minus holes). Replaces the
@@ -1415,9 +1431,47 @@ def _exact_perimeter_and_area(
         "blank_width_mm":  blank_width,
         "bbox_fill_pct":   fill_pct,
         "area_method":     _area_method,
+        **_oriented,
         **({"outline_shape": "circle", "outline_diameter_mm": round(2.0 * _disc_r, 3)}
            if _disc_r > 0 else {}),
     }
+
+
+def _min_area_rect(xs: List[float], ys: List[float]) -> Optional[Tuple[float, float, float]]:
+    """(long, short, angle_deg) of the minimum-area rectangle around the points' convex hull
+    — the blank of a flat drawn at an angle (D-567). None for fewer than three distinct
+    points. The best rectangle has a side along a hull edge, so each hull edge is tried."""
+    pts = sorted(set(zip(xs, ys)))
+    if len(pts) < 3:
+        return None
+
+    def _cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower: List[Tuple[float, float]] = []
+    for p in pts:
+        while len(lower) >= 2 and _cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper: List[Tuple[float, float]] = []
+    for p in reversed(pts):
+        while len(upper) >= 2 and _cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    hull = lower[:-1] + upper[:-1]
+    if len(hull) < 3:
+        return None
+    best: Optional[Tuple[float, float, float]] = None
+    for i in range(len(hull)):
+        (x1, y1), (x2, y2) = hull[i], hull[(i + 1) % len(hull)]
+        ang = math.atan2(y2 - y1, x2 - x1)
+        c, s = math.cos(-ang), math.sin(-ang)
+        rx = [x * c - y * s for x, y in hull]
+        ry = [x * s + y * c for x, y in hull]
+        ln, wd = max(rx) - min(rx), max(ry) - min(ry)
+        if best is None or ln * wd < best[0] * best[1]:
+            best = (max(ln, wd), min(ln, wd), math.degrees(ang) % 180.0)
+    return best
 
 
 def _extract_bend_data(

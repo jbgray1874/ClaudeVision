@@ -63,8 +63,9 @@ def test_a_non_dxf_flat_part_is_untouched_by_this_rule():
     the proxy logic and is not reached by bend_count_dxf."""
     text_part = {"flat_pattern_detected": False, "geometry_source": "drawing_text",
                  "geometry_rollup": {"estimated_bend_line_count": 0},
-                 "angles_deg": [90, 90], "fold_values_mm": [], "fold_count_textual": 0}
-    # two text angles -> the proxy path returns a text signal, not anything from bend_count_dxf
+                 "angles_deg": [90, 90], "fold_values_mm": [25, 25], "fold_count_textual": 0}
+    # two stated fold dimensions -> the proxy path returns a text signal, not anything from
+    # bend_count_dxf (two bare angles no longer are one: D-592a)
     assert infer_bend_count(text_part, 0.0) == 2
 
 

@@ -148,12 +148,12 @@ DRAWING_JOB_DISCOVERY = {
     "ignore_dxf_name_tokens": ["-GA_", "_GA_", "-GA.", "_GA."],
     "part_number_from_dxf_patterns": [
         # 2–3 digit suffix, optional letter  e.g. 9376-01-001  12242-01-01M  11367-09-08A
-        r"(?P<pn>\d{4,5}-\d{2}-\d{2,3}[A-Z]?)",
+        r"(?P<pn>(?<!\d)\d{4,6}-\d{2}-\d{2,3}[A-Z]?)",
         # LETTER-FIRST detail  e.g. 10975-02-A01 / -G01 / -X01 — a whole pack can be
         # lettered, and without this the run staged two DXFs and matched zero.
-        r"(?P<pn>\d{4,5}-\d{2}-[A-Z]{1,2}\d{1,3})",
+        r"(?P<pn>(?<!\d)\d{4,6}-\d{2}-[A-Z]{1,2}\d{1,3})",
         # GA / sub-assembly  e.g. 9376-01-GA (ignored downstream for geometry merge)
-        r"(?P<pn>\d{4,5}-\d{2}-[A-Z]{2,4})",
+        r"(?P<pn>(?<!\d)\d{4,6}-\d{2}-[A-Z]{2,4})",
     ],
 }
 SPREADSHEET_EXTENSIONS = {".xlsx", ".xls", ".csv", ".tsv"}
@@ -191,7 +191,7 @@ TITLE_BLOCK_LABELS = [
 # Every real SDI code has a digit up front: 10575-02, BE2030-10, 12173-02-GA. The alpha-led
 # catalogue codes — FIXING591, VINYL03, SUBPLAS72 — attach their digits directly and never take
 # the hyphenated shape this pattern reads, so nothing legitimate is lost by requiring one.
-PART_NUMBER_PATTERN = r"\b(?:\d{4,5}[A-Z]?|[A-Z]{1,6}\d{1,4}|FIXING\d*)(?:-[A-Z0-9_]{1,12}|\s-\s[A-Z0-9_]{1,12}){1,4}\b"
+PART_NUMBER_PATTERN = r"\b(?:\d{4,6}[A-Z]?|[A-Z]{1,6}\d{1,4}|FIXING\d*)(?:-[A-Z0-9_]{1,12}|\s-\s[A-Z0-9_]{1,12}){1,4}\b"
 PART_NUMBER_PATTERNS = [
     PART_NUMBER_PATTERN,
     r"\b[A-Z]{1,4}\s*-\s*\d{2,}\b",
@@ -486,6 +486,83 @@ PACKING_METHOD = {
     },
 }
 
+# ── THE BOX CALCULATOR (D-521; OPT-IN per the 14 Oct review, D-522) ─────────────────────
+# James's AI BOX CALCULATOR sheet (chatgptdropoff/AICalculator, 14 Oct 2026): a plain
+# corrugated carton allowance from the box's outside dimensions — six panels in three
+# pairs, each cut oversize, grid-nested onto the stock sheet, plus a running cost over
+# the three dimensions and the set-up spread over the order. These are the sheet's own
+# figures, attributed and dated. TWO TOTALS EXIST AND BOTH ARE REPORTED: the sheet's own
+# total sums two of the three panel pairs (K10 = SUM(K7:K8), £1.82 on its worked
+# example); summing all three gives £2.82. tools/check_box_calculator.py compared BOTH
+# against the 101 comparable 0201 orders in the Harley's extract (BOX TEST SHEET),
+# difference defined as (paid − calculator) / paid: the sheet's own two-pair total reads
+# median +0.4% (71% within ±25%; by quantity band −14.6% at 1-9 off, −1.8% at 10-49,
+# +8.0% at 50-199, −0.4% at 200+), the three-pair sum median −22% (45% within ±25%) —
+# the sheet's K7:K8 tracks what Harleys actually charged, plausibly because a real 0201
+# is one folded blank, not six separate panels, though WHY is not established. The
+# method stays DISABLED until James judges that comparison. Enabled, it prices the
+# PACKAGING line as a provisional panel-based allowance using the formula below, with
+# its assumptions stated on the line (one unit per carton, 0201 style, +20 mm the only
+# clearance, no protection or orientation modelled); disabled, the proven ladder
+# (SDI Live, history, the counted shipment) runs unchanged.
+# ENABLED ON JAMES'S INSTRUCTION, 14 Oct 2026: "our boxing calculation needs to be in the
+# calculation of the estimate and written back to the s/sheet." The two-formula comparison
+# above sits beside the switch; "sheet" is the formula that tracked the Harley's history.
+BOX_COSTING = {
+    "enabled": True,
+    "formula": "sheet",      # "sheet" = the sheet's own K7:K8 total; "three_pair" = all six panels
+    # WHY THAT FORMULA, in words an estimator reads on the e-mail (D-538). Change it with the
+    # formula — it is quoted as the reason for the choice.
+    "formula_evidence": ("checked against 101 comparable 0201 cartons bought from Harley's: "
+                         "the sheet's own two-pair total came out a median 0.4% from what "
+                         "Harley's charged (71% of orders within 25%); adding the third pair "
+                         "came out a median 22% above it (45% within 25%)"),
+    "stated_by": "James Gray (SDI), AI BOX CALCULATOR.xlsx",
+    "stated_on": "14 Oct 2026",
+    "stock_board": "BC 150KT",
+    # The sheet's own headers: Sheet Length 2300, Sheet Width 3200 ("2300x3200").
+    "sheet_length_mm": 2300.0,
+    "sheet_width_mm": 3200.0,
+    "sheet_cost_gbp": 8.0,
+    "setup_cost_gbp": 55.0,
+    "running_rate_gbp_per_mm": 0.00035,     # x (L + B + H) per box
+    "panel_oversize_mm": 20.0,              # each finished dimension + 20
+    "nest_gap_mm": 10.0,                    # 10 each side -> +20 in the nest divisor
+    "sheet_edge_trim_mm": 5.0,              # taken off the sheet width only, as the sheet does
+    "scrap_fraction": 0.5,                  # 50% on the sheet cost per part
+    # Which box styles the plain six-panel model prices. 0201 is a regular slotted carton;
+    # everything else on the Harley's extract (0409 folders, 0300 base-and-lid, sleeves,
+    # caps, pads, fittings, scored boards) is more than six panels and declines by name.
+    "styles_priced": ("0201",),
+}
+
+# THE SHEET ITSELF, WHERE THE ESTIMATORS KEEP IT (D-542). James, 15 Oct 2026: "can we change it
+# ... so that it's reading from the s/sheet and using the s/sheet for the calculation in case
+# estimating tweak it ... we should make the file a .env variable". SDI_BOX_CALCULATOR_XLSX is
+# the path to AI BOX CALCULATOR.xlsx. Set, the engine reads the sheet's own figures and
+# formulas from it at run time and, on a machine with Excel, enters the box size and quantity
+# into a copy and lets Excel calculate the TOTAL — so a change estimating saves into the sheet
+# is the price on the next run. Without Excel it runs its copy of the sheet's formulas on the
+# figures read from the sheet. Unset, unreadable, or laid out differently from the cells below,
+# it prices from BOX_COSTING above and the e-mail says which source priced the box and why.
+# The cells are the sheet's own; a moved input is a change to make here, not a guess.
+BOX_CALCULATOR_SHEET = {
+    "path": os.getenv("SDI_BOX_CALCULATOR_XLSX", "").strip().strip('"') or None,
+    "use_excel": os.getenv("SDI_BOX_CALCULATOR_EXCEL", "1").strip().lower()
+                 not in ("0", "false", "no", "off"),
+    # Where the sheet takes its inputs and gives its answer, checked against its labels.
+    "inputs": {"length": "G2", "breadth": "G3", "height": "G4", "qty": "H2"},
+    "labels": {"F2": "Length", "F3": "Breadth", "F4": "Height", "H1": "Qty", "I1": "TOTAL",
+               "A2": "Stock board"},
+    "total": "I2",                 # the sheet's own TOTAL for one carton
+    "running": "E3", "setup_share": "H3",
+    "figures": {"stock_board": "A3", "sheet_cost_gbp": "C3", "setup_cost_gbp": "D3"},
+    # One row per panel pair: name A, panels B, cut length C, cut breadth D, sheet length F,
+    # sheet width G, qty per sheet H, scrap I, sheet cost J, pair cost K.
+    "pair_rows": (7, 8, 9),
+    "pairs_total": "K10",          # what the TOTAL adds of the pairs (SUM(K7:K8) today)
+}
+
 # ONE WORKBOOK, OR ONE PER QUANTITY.
 #
 #   "Let's look at collapsing all the s/sheets into one when we have multiple unit
@@ -530,6 +607,55 @@ QUOTE_DOCUMENT = {
     "page_thumbnails": True,
     "thumbnail_zoom": 0.55,
     "max_pages_read": 60,
+}
+
+# ── THE UNIT PICTURED IN THE CLIENT'S OWN SETTING (D-571) ───────────────────────────────
+# James Gray, 21 Oct 2026: "take the unit in the GA and turn it into a rendered image with a
+# suitable backdrop depending on the client — if it's Tesco, put it into a Tesco store — with a
+# small amount of landscaping and some space around it." The first page of the quotation shows
+# an artist's impression drawn by the image model from WORDS — the record's description of the
+# unit and, where a GA render is to hand, the vision model's description of its appearance —
+# placed in the customer's scene. No drawing reaches the image model. Made once per prompt and
+# model (the read store), labelled an artist's impression on the page, and the general
+# arrangement stands in whenever a picture cannot be had.
+QUOTE_RENDER = {
+    "enabled": True,                  # SDI_QUOTE_RENDER_ENABLED=0 switches one machine off
+    # THE DRAWING IS THE REFERENCE: the GA's first sheet goes to the image model as an image
+    # EDIT, so the picture is of THIS unit. These are the edit model and its picture shape.
+    "model": "grok-imagine-image-2.0",
+    "aspect_ratio": "3:2",
+    "resolution": "2k",
+    "quality": "medium",
+    # When the edit endpoint refuses, the unit is drawn from its description instead.
+    "text_model": "grok-2-image",
+    # The scene for a customer the table below does not name: their own store.
+    "scene_template": "inside a {customer} store, on the shop floor",
+    "default_scene": "on a bright, modern retail shop floor",
+    "dressing": ("restrained planting in separate planters at the edges of the scene, a hint of "
+                 "the store beyond, and a clean, uncluttered floor"),
+    "style": "Soft natural daylight, subtle shadows, a calm backdrop, shallow depth of field.",
+}
+
+# A CUSTOMER WHOSE SETTING IS NOT SIMPLY ITS OWN STORE. A brand sold through other retailers, a
+# maker with no shop floor of its own. Keyed on the customer's name as the run resolves it; the
+# template above is the rule and this table holds the exceptions.
+CUSTOMER_QUOTE_SCENES = {
+    "TTI": "on the power-tool wall of a Milwaukee tool retailer",
+    "TECHTRONIC INDUSTRIES": "on the power-tool wall of a Milwaukee tool retailer",
+    "DYSON": "in a Dyson demo store, among the brand's machines",
+}
+
+# ── THE SHEET-BLANK AND BOUGHT-ITEM CONTRACT IS WATCHED BEFORE IT IS ENFORCED (D-582) ────
+# material_charge_contract audits every canonical blank and bought item against the charged
+# cells of the calculated book after each run. "shadow" records the result and counts it on
+# the console; the release is untouched. "enforce" sends mismatches AND unverified evidence
+# through the BLOCKING invariant and the existing release gate. The engine's own records do
+# not yet carry the sheet-price basis or a bought item's purchase basis forward, so enforce
+# would hold every release today; it is promoted class by class after replay review.
+# SDI_ACCURACY_CONTRACT_MODE overrides this on one machine. Any other word is enforce, with
+# a finding — a misspelling never switches the check off.
+ACCURACY_CONTRACT = {
+    "mode": "shadow",
 }
 
 MATERIAL_PRICE_BREAK = {
@@ -618,6 +744,13 @@ ESTIMATOR_STATED_PRICES: dict = {}
 #   EDGE23X1ABS  the SPEC is below; drawn-edge metreage is measured, the BANDED metreage
 #                is the estimator's judgement (only visible edges band); the RATE is
 #                asked of SDI Live / the Ostermann catalogue, else explicitly unpriced.
+# A LINE BOUGHT IN A CONTINUOUS UNIT KEEPS ITS FRACTION, EVERYWHERE (D-518/D-520). The
+# estimator's quantity sanitiser guards counts against parser noise, and the workbook
+# writer floors on its own account — both read this one vocabulary, so 3.192 m of edging
+# is 3.192 on the record AND in the cell. A unit absent here is a discrete count.
+CONTINUOUS_UNITS_OF_MEASURE = frozenset(
+    {"m", "lm", "m2", "m²", "sqm", "kg", "g", "l", "litre", "litres"})
+
 FACED_BOARD_EDGING_CODE = "EDGE23X1ABS"
 FACED_BOARD_EDGING_SPEC = {
     "code": "EDGE23X1ABS",
@@ -672,6 +805,21 @@ CUT_METHOD_BY_MATERIAL: list = [
      "source": "SDI shop default, James Gray, 14 Sep 2026"},
 ]
 
+# A CUTTER PROPOSED WHERE NO SHOP RULE SPEAKS (D-598n). Fabrication practice, NOT an SDI rule:
+# read only where CUT_METHOD_BY_MATERIAL holds nothing for the material and gauge, and applied
+# as a proposal that is put to the estimator. A shop rule above for the same material replaces
+# it. Same keys as the table above.
+CUT_METHOD_PROPOSED_BY_MATERIAL: list = [
+    {"material": "SOLID SURFACE", "method": "router",
+     "source": "proposed from fabrication practice, not an SDI shop rule: solid surface is "
+               "cut and edged with router tooling, and a laser chars it"},
+]
+
+# A FRAME OR A STEP (D-598o, drawing_job_merge._nested_outline_question). A flat whose only
+# other outline is an inner one covering at least this share of the blank, with no holes, is
+# asked whether that outline is cut through (a frame) or a step machined to a depth.
+NESTED_OUTLINE_INNER_SHARE = 0.75
+
 # THE DRAWING'S OWN WORDS FOR THE CUTTER (D-440, cut_method_reader): read off the sheets that
 # draw a part, legend removed; one method named stamps it, two named put the question on the
 # part and the rule above prices the working figure.
@@ -707,6 +855,29 @@ CONCEPT_CONSUMABLE_WORDS = [
 # never a time: the minutes come from LABOUR_RULES["folding"]. Without it the run time was 0
 # and the workbook's per-part fold rate was pieces over set-up alone (36,036/hr).
 FOLDS_ASSUMED_WHEN_UNCOUNTED = 1
+# A FORMED SHAPE NAMES ITS FOLDS (D-589). A sheet part whose description names one of these
+# shapes, and whose own sheet names no section (no a x b x t, no "RECT TUBE"/"ANGLE" in its
+# material), is folded from sheet: an angle is one fold, a channel two, a top hat four. Charged
+# as an allowance from the shape — never a count — flagged, and asked; a count from a flat
+# pattern, a fold callout or the model replaces it. Longest word first when two match.
+FORMED_SHEET_SHAPE_FOLDS = {
+    "ANGLE": 1, "L BRACKET": 1, "L-BRACKET": 1,
+    "CHANNEL": 2, "U CHANNEL": 2, "U-CHANNEL": 2,
+    "Z BRACKET": 2, "Z-BRACKET": 2, "ZED": 2,
+    "TOP HAT": 4, "TOP-HAT": 4,
+}
+# A RADIUS A FLAT CANNOT HOLD IS ROLLED (D-589). A sheet part whose sheet prints a radius at
+# least `min_radius_mm` and at least `min_radius_to_gauge` times its gauge, LARGER than the
+# smaller side of its own blank (so it cannot be a corner or an edge of the flat), and which
+# is formed (folded, or drawn with a flat pattern) is rolled to that radius. Charged on the
+# Roll row: the template's ROLL set-up and an allowance per piece — an allowance, flagged and
+# asked, until the shop states a rolling time.
+ROLL_FROM_RADIUS = {
+    "min_radius_mm": 50.0,
+    "min_radius_to_gauge": 20.0,
+    "setup_min": 45.0,
+    "run_sec_per_piece": 60.0,
+}
 # A consumable the read says is PER COMPONENT is counted once per piece the unit fits
 # (D-487) — "QR component labels" on a unit of forty pieces is forty labels, not one.
 # Vocabulary, not logic.
@@ -742,12 +913,72 @@ CONCEPT_CONSUMABLE_ALLOWANCE = {
 # them), and words that say a piece needs none. Vocabulary, not logic.
 CONCEPT_FIXING_WORDS = ["fixing", "fixings", "fastener", "fasteners", "screw", "screws",
                         "bolt", "bolts", "rivet", "rivets", "nut", "nuts", "washer"]
-CONCEPT_FIXING_FREE_WORDS = ["hook", "hooked", "hooks", "hang", "hangs", "hung", "hanging",
-                             "clip", "clips", "clip-in", "clip-on", "slot-in", "push-fit",
-                             "snap", "magnet", "magnetic", "tool-free"]
+# A brief sentence that says something is fixed mechanically. With a weld word beside it, the
+# sentence does not say which piece is welded, so it excuses no piece's fixings (D-596a).
+CONCEPT_FIXED_WITH_WORDS = ["bolted", "screwed", "riveted", "fastened", "fixed with",
+                            "fixed by"]
+# Words of a part's name that say nothing about WHICH part it is, so a brief sentence using
+# one does not name that part (review of D-595): "MAIN TUBE" is named by "tube", never "main".
+CONCEPT_NAME_GENERIC_WORDS = ["main", "part", "piece", "item", "unit", "assembly", "with",
+                              "from", "steel", "mild", "metal", "sheet", "front", "back",
+                              "left", "right", "side", "upper", "lower", "inner", "outer",
+                              "large", "small", "plain", "standard"]
+# A PART'S REFERENCE, AS A BRIEF OR A READ LINE STATES IT (D-598). A code is an item's own only
+# where one of these stands in the few words before it, in a sentence naming that item and no
+# other part: "2 chrome end caps per bar, drawing reference CA070092". Vocabulary, not logic.
+STATED_REFERENCE_WORDS = ["reference", "ref", "part no", "part number", "part code", "code",
+                          "cat no", "catalogue no", "catalogue number", "item no",
+                          "supplier code", "drawing no"]
+# A SIZE BELONGS TO THE COMPONENT IT STANDS BESIDE (D-596e). A brief's "A x B" size is a bought
+# item's own only where nothing but these words separates it from the item's name: "UPC ID
+# plate (20 x 10 mm)" and "a 20 x 10 mm UPC ID plate" are the plate's, while "30 x 15 tube
+# with an ID label fitted" is the tube's — "tube" and "with" stand between. Articles, units,
+# size words and the material, colour and finish adjectives that name no other component.
+STATED_SIZE_FILLER_WORDS = ["a", "an", "the", "one", "of", "at", "is", "mm", "cm", "size",
+                            "sized", "measuring", "approx", "approximately", "nominal",
+                            "overall", "thick", "x", "clear", "transparent", "stainless",
+                            "steel", "mild", "aluminium", "aluminum", "acrylic", "brass",
+                            "plastic", "pvc", "vinyl", "polycarbonate", "printed", "self",
+                            "adhesive", "black", "white", "silver", "chrome", "matt", "gloss"]
+# BOUGHT HARDWARE IS FIXED TOO (D-532). 0356453's hanging rail welded every made piece, so the
+# per-piece count found nothing to fix — and its four bolted castors and its ID plate went on
+# with no fixings at all. A bought item whose words name hardware that is screwed or bolted on
+# takes this many fixings each (the same reference fixing, priced down the ordinary chain). An
+# ASSUMPTION TO CONFIRM, named on the line with every item it counted; vocabulary, not logic.
+CONCEPT_FASTENED_BOUGHT_ITEMS = (
+    (("castor", "castors", "caster", "casters", "wheel", "wheels"), 4),
+    (("id plate", "name plate", "nameplate", "badge", "label plate"), 2),
+    (("handle", "handles"), 2),
+    (("hinge", "hinges"), 4),
+    (("lock", "latch", "catch"), 2),
+    (("foot", "feet", "leveller", "levellers", "leveler", "glide", "glides"), 1),
+)
+# HOW A PIECE IS FITTED, NOT WHAT IT IS CALLED (review of D-596a). "HOOK BRACKET" names a
+# bracket the product hangs by; it says nothing about how the bracket joins its parent, and
+# the bare nouns "hook" and "clip" excused 0320730's brackets from the fixings question on
+# their name alone. A piece is fitted without fixings only where its words state the fitting.
+CONCEPT_FIXING_FREE_WORDS = ["hangs on", "hung on", "hanging on", "hangs from", "hung from",
+                             "hangs over", "hooks on", "hooks over", "hooks onto", "hooked on",
+                             "hooked over", "hooked onto", "clips on", "clipped on",
+                             "clips into", "clipped into", "clip-in", "clip-on", "slot-in",
+                             "slots in", "slots into", "push-fit", "snap-fit", "snaps on",
+                             "snaps into", "drop-in", "drops in", "lift-off", "magnetic",
+                             "tool-free"]
+# A HOOK WELDED TO A HOST MAKES THE HOST HANG (D-499): "HOOKED BRACKET (WELDED TO TRAY)" — the
+# trays hang on their brackets, so the trays take no fixings. The hook's own joint is its weld.
+CONCEPT_HANGING_HARDWARE_WORDS = ["hook", "hooks", "hooked", "hanger", "hangers"]
 # A PIECE JOINED BY ADHESIVE TAKES NO SCREWS (D-500): bonded, taped or glued — its adhesive is a
 # different consumable, named on the line as not in the fixings allowance.
 CONCEPT_BONDED_WORDS = ["bonded", "bond", "adhesive", "glued", "taped", "tape", "vhb"]
+
+# THE ROLE A FLAT'S NAME GIVES ITS PIECE (D-598j). Two flats on one part number with the same
+# blank and the same stock were read as revisions and one was dropped: "SIDE" and "TOP" are two
+# pieces of one bonded box, not two issues of one panel. A word from this list in every file's
+# name, different in each, makes the files pieces. Words that name a layer, a view or a marking
+# (TEXT, ENGRAVE, ETCH, VIEW, UNDERSIDE, REAR) are deliberately absent: those stay one part.
+DXF_PIECE_ROLE_WORDS = ("TOP", "SIDE", "BASE", "BOTTOM", "BACK", "FRONT", "END", "LID", "LEFT",
+                        "RIGHT", "SHELF", "DIVIDER", "PLINTH", "HEADER", "FASCIA", "DOOR",
+                        "UPRIGHT", "RAIL", "SKIRT", "FLOOR", "ROOF", "INNER", "OUTER")
 # THE ADHESIVE A BONDED PIECE NEEDS, SO EXCLUDING ITS SCREWS NEVER LEAVES IT UNPRICED (D-501),
 # BY A METHOD SUITED TO THE JOINT (D-502): "bonded" is not always tape. The read's own words
 # choose the method (taped/VHB -> tape; glued/epoxy/structural -> structural adhesive); where
@@ -827,7 +1058,15 @@ CONCEPT_FLANGE_ALLOWANCE_MM = 25
 # through the mass-implied allowance instead).
 PROVISIONAL_BLANK_FROM_SHEET = {
     "flange_allowance_mm": 25,
-    "weight_ratio_bounds": (0.6, 1.6),
+    # THE WEIGHT CHECKS, IT DOES NOT DECIDE (D-508). A blank lighter than this fraction of the
+    # finished part's stated weight is impossible and refused; one heavier than the upper
+    # figure is kept and the gauge/blank asked (cut-outs make a blank legitimately heavier).
+    "min_blank_to_part_weight_ratio": 0.9,
+    "weight_question_above_ratio": 1.6,
+    # A part read larger than the assembly it sits in (D-508): beyond the assembly's sheet
+    # envelope developed for the part's own folds at the flange allowance, by more than this
+    # fraction, it is asked and costed on that developed envelope, labelled.
+    "assembly_envelope_tolerance": 0.10,
     "density_kg_m3": {"STEEL": 7850, "MILD": 7850, "STAINLESS": 8000, "GALV": 7850,
                       "ZINTEC": 7850, "CR4": 7850, "ALUMIN": 2700, "ACRYLIC": 1190,
                       "PERSPEX": 1190, "POLYCARBONATE": 1200},
@@ -1616,6 +1855,25 @@ CUSTOMER_FINISH_STANDARDS = {
             "statement": "TTI none (no weld dressing)"},
 }
 
+# ── THE BRAND MARK A CUSTOMER'S DOCUMENTS CARRY ──────────────────────────────────────────
+#
+# "The TTI job should use the Milwaukee logo … TTI is part of Milwaukee... on the client
+# portal should say Milwaukee" — James Gray, 13 Oct 2026. TTI (Techtronic Industries) is
+# the customer SDI invoices; Milwaukee is the brand the client-facing documents carry —
+# the NAME on the heading and the MARK beside it. A fact about the CUSTOMER, not about any
+# one job, so it lives here beside CUSTOMER_FINISH_STANDARDS and never in logic.
+#
+# Key: the customer name the job header resolves. Value: the brand name printed on the
+# quote and report, which is also the logo file stem looked up in assets/customer_logos
+# (whatever format is saved there). Both sides are matched normalised — case, spaces and
+# punctuation ignored — so "TTI" and "T.T.I." are one key. Only the client-facing documents
+# are branded: the job header, folders and internal records keep the customer as typed. A
+# customer not listed keeps today's behaviour exactly (own name, own logo file, else text).
+CUSTOMER_LOGO_BRANDS = {
+    "TTI": "Milwaukee",
+    "TECHTRONIC INDUSTRIES": "Milwaukee",
+}
+
 # ── PRODUCTION SUBSTITUTES A GAUGE THE SHOP DOES NOT STOCK ──────────────────────────────
 #
 # "Line 67 / Line 100 – 0.9mm Steel Production use 1mm in Lieu" — raised as TBC on 9 Sep
@@ -1869,6 +2127,19 @@ def dot_env_path() -> str:
 # is packing_factor (how much void a protective pack is) — declared on every plan, tuned here
 # for every job at once. Leave empty to accept the module defaults.
 #   e.g. {"pallet_max_weight_kg": 1000.0, "carton_internal_mm": [1150, 750, 550]}
+# ── HOW THE PRODUCT SHIPS (D-551) ─────────────────────────────────────────────────────────
+# James Gray, 20 Oct 2026: "we always assume assembly, and therefore packing and boxing". A
+# product of several made parts leaves SDI assembled, one pack per unit, the box sized from
+# the product's own overall size (the model's bounding box, else the GA's stated overall), and
+# the box calculator prices that box. Set ships_assembled_default False to pack loose parts
+# into standard cartons by volume and weight instead (the pre-D-551 behaviour); an estimator's
+# customer-change answer on a job overrides either way.
+PACKAGING_POLICY = {
+    "ships_assembled_default": True,
+    "stated_by": "James Gray",
+    "stated_on": "20 Oct 2026",
+}
+
 PALLETISING_CONFIG = {
     # "packing_factor": 0.8,               # a pack treated as ~20% void
     # "carton_internal_mm": [1200, 800, 600],
@@ -1885,6 +2156,43 @@ JUNK_PART_TOKENS = [
     "DO NOT", "PLEASE", "TYPICAL", "ALL DIMENSIONS", "REF ONLY", "SEE NOTE",
     "THIS DRAWING", "TOLERANCE", "UNLESS STATED", "REMOVE BURRS",
 ]
+
+# ── A CODE WHOSE TAIL IS A FINISH, COLOUR OR SPACING WORD IS NOT A PART (D-512) ──────────
+#
+# 12343-01J minted "ST7-PLATINUM" (the EGGER W980 ST7 Platinum White decor) and
+# "600-CENTRES" (a hole-spacing note) as part codes: both were excluded from costing but
+# raised missing-drawing questions nobody could answer. A real code's last segment is a
+# role or an index (GA, 01M, 02); a decor colour, a finish participle or a layout word in
+# the tail says the token is prose that happens to carry a hyphen. Vocabulary, not logic —
+# extend it as the packs teach new ones.
+# ── A LETTER PREFIX THAT IS A STANDARD, A FINISH OR A THREAD IS NOT A DRAWING (D-584) ─────
+# A customer's drawing number may open with letters (ROL2021-2465-00), so the shape test
+# admits a short prefix. These prefixes name something else — a fastener standard with its
+# size, a paint shade, a thread form — and a code opening with one is a bought article or a
+# note, kept on the bill as such and never read as structure. Words only; the digits after
+# them are the designation.
+CODE_PREFIXES_THAT_ARE_NOT_DRAWINGS = {
+    "DIN", "ISO", "EN", "BS", "BSI", "ANSI", "ASTM", "ASME", "JIS", "GB", "UNI", "NF",
+    "SAE", "AS", "NZS", "RAL", "NCS", "UNC", "UNF", "BSP", "BSPT", "NPT", "BSW", "BA",
+    "PG", "AWG", "DN", "NB", "IP", "M",
+}
+
+# The subset of those prefixes that are STANDARDS BODIES (D-587): a code led by one of
+# these and a number ("DIN 7991 - M3 x 10", "ISO 7380-1 - M8 x 16") designates one exact
+# article — thread, length, head — so a price found for it by a single shared word of its
+# description is not its price. Colour (RAL, NCS), thread (UNC, M) and pipe words are not
+# here: they qualify a thing, they do not name one.
+STANDARDS_BODY_PREFIXES = {
+    "DIN", "ISO", "EN", "BS", "BSI", "ANSI", "ASTM", "ASME", "JIS", "GB", "UNI", "NF",
+    "SAE", "AS", "NZS",
+}
+
+CODE_TAIL_NOISE_WORDS = {
+    "PLATINUM", "CENTRES", "CENTERS", "CTRS", "GLOSS", "MATT", "MATTE", "SATIN",
+    "WHITE", "BLACK", "GREY", "GRAY", "CLEAR", "CHROME", "ZINC", "NICKEL", "SILVER",
+    "GOLD", "OAK", "WALNUT", "BIRCH", "BEECH", "COATED", "PLATED", "BRUSHED",
+    "POLISHED", "ANODISED", "ANODIZED", "EDGED", "PITCH", "MICRON", "THICK",
+}
 
 # E3: optional overhead/downtime uplift. Default OFF so the engine reports true
 # manufacturing cost; toggle on for an FD "sell" view. Inheritable.
@@ -1984,7 +2292,7 @@ DESIGN_INTENT_MARKERS = [
 # A size that names a SECTION is the stock's profile, never a blank and never a gauge:
 # "40 x 20mm … OVAL TUBE", "30 x 30 x 2mm SHS", "25 x 3 FLAT BAR".
 SECTION_CALLOUT_WORDS = [
-    r"TUBE", r"SECTION", r"OVAL", r"SHS", r"RHS", r"CHS", r"BOX", r"ANGLE", r"CHANNEL",
+    r"TUBE", r"SECTION", r"OVAL", r"FSO", r"SHS", r"RHS", r"CHS", r"BOX", r"ANGLE", r"CHANNEL",
     r"FLAT\s+BAR", r"BAR", r"ROD", r"UPRIGHT", r"POST",
 ]
 # A weight the sheet qualifies as somebody else's — the customer's goods, a load, an estimate
@@ -2098,6 +2406,9 @@ STANDARD_SHEET_SIZES_MM = {
     "REYNOBOND": [(3050, 1500), (2050, 3050)],
     "ETALBOND": [(3050, 1500), (2050, 3050)],
     "COMPOSITE": [(3050, 1500)],
+    # Solid surface (Hanex, Corian, HI-MACS), stocked as 3680 x 760 and 3658 x 760 slabs
+    # (D-598l). A stock fact; its price is NOT here and stays asked.
+    "SOLID_SURFACE": [(3680, 760), (3658, 760)],
     "POLYPROPYLENE": [(2050, 1520)],
     "POLYSTYRENE": [(2050, 1520)],
     "PMMA": [(2050, 1520), (3050, 2050)],
@@ -2191,6 +2502,44 @@ CONCEPT_SHEET_WEIGHT_BAND = (0.8, 2.0)
 # the sheet's envelope.
 CONCEPT_SHEET_ENVELOPE_TOLERANCE_MM = 5.0
 
+# ── STOCK THAT IS NOT SHEET KEEPS ITS OWN SIZES (D-528) ─────────────────────────────────────
+#
+# 0356456 tote trolley, 14 Oct 2026: the read had three numbers per part — length, width,
+# thickness — and a 25 x 25 box section, a 60 x 40 angle and a 25 x 25 mesh each went into
+# them as a 25, 40 and 25 mm plate. The engine then lasered plate, nested 25 mm steel for the
+# mesh at £2,870 and weighed the order at over a tonne. The read now names the stock form and
+# keeps a section's outside size, wall, a mesh's aperture and wire in fields of their own.
+#
+# The words that name a form, longest first within each form; checked in this order, so
+# "WIRE MESH" is mesh before it is wire and "BOX SECTION" is a box before it is a tube.
+CONCEPT_STOCK_FORM_WORDS = (
+    ("mesh", ("WELDED MESH", "WELDMESH", "WELD MESH", "WIRE MESH", "MESH")),
+    # Oval before any tube word: "40 X 20 OVAL" is neither a box nor a round (D-531).
+    # FSO is a flat-sided oval (D-594); "F.S.O." reads as "F S O" once punctuation is spaced.
+    ("oval_tube", ("FLAT SIDED OVAL", "OVAL TUBE", "OVALTUBE", "OVAL", "FSO", "F S O")),
+    ("box_section", ("BOX SECTION", "SQUARE TUBE", "RECTANGULAR TUBE", "BOX TUBE", "SHS", "RHS")),
+    ("angle", ("ANGLE IRON", "ANGLE")),
+    ("channel", ("CHANNEL",)),
+    # Sheets print these run together ("50MM FLATBAR 10MM THICK", "19MM ROUNDTUBE").
+    ("flat_bar", ("FLAT BAR", "FLATBAR")),
+    ("round_bar", ("ROUND BAR", "ROUNDBAR", "ROD")),
+    ("tube", ("ROUND TUBE", "ROUNDTUBE", "CHS", "TUBE", "PIPE")),
+    ("wire", ("WIRE",)),
+)
+# A section's wall where the pack states none: a working figure, costed and SAID on the line as
+# assumed, never presented as read. Light-gauge display stock.
+CONCEPT_SECTION_DEFAULT_WALL_MM = {"box_section": 1.5, "tube": 1.5, "oval_tube": 1.5,
+                                   "angle": 3.0, "channel": 3.0}
+# A mesh's wire where the pack states none, and its grid where neither the read nor the words
+# give one — light welded mesh, costed as assumed.
+CONCEPT_MESH_DEFAULT_WIRE_MM = 3.0
+CONCEPT_MESH_DEFAULT_APERTURE_MM = 25.0
+# A made metal part sighted thicker than this is not costed as plate on the read's word alone:
+# display work is cut from sheet, and a plate figure this heavy from a picture is far more often
+# a section's size or a mesh's grid written into the thickness. Above it, the line is costed as
+# the section its own size describes, or held and asked.
+CONCEPT_PLATE_THICKNESS_LIMIT_MM = 12.0
+
 # What a design sheet LABELS must be on the bill (D-417). A callout of at most
 # CONCEPT_LABEL_MAX_WORDS words on its own line that names one of these components is a part the
 # product has ("ADJUSTABLE FEET", "CENTRAL SOLID DIVIDER" on 12675-01's GA); a bill with no line
@@ -2227,10 +2576,115 @@ CONCEPT_SHEET_MATERIAL_WORDS = {
     "ACRYLIC": "ACRYLIC", "MDF": "MDF", "MFMDF": "MFMDF", "PLYWOOD": "PLYWOOD",
 }
 
+# WORK A READ NAMES THAT THE ENGINE CHARGES ANOTHER WAY (D-595). Outside the read's
+# vocabulary, so dropped from its operations, but never lost: handling and fitting are the
+# unit's bench rules, packing is the PACKAGING line, inspection sits in the pack time. Any
+# OTHER unknown operation is asked on the decisions list.
+CONCEPT_OPERATIONS_COVERED_ELSEWHERE = (
+    "handling", "handle", "packing", "pack", "packaging", "inspection", "inspect", "qc",
+    "quality_check", "cleaning", "clean", "fitting", "fit", "assemble", "film_removal",
+    "protective_film",
+)
+
+# ── WHAT THE READ RETURNED, AND WHAT CHARGES IT (D-596) ──────────────────────────────────
+#
+# read_charge_contract holds every item a read returned to one final state on the calculated
+# workbook: charged, covered by a named charge, excluded by a person with a reason, or
+# unresolved with the release held. These tables are its vocabulary, not its logic.
+#
+# The engine operations whose calculated labour row charges a read's operation word. A row
+# carrying any of them, naming the part, with hours and money on it, is the charge.
+READ_OPERATION_CHARGED_BY = {
+    "saw": ("saw", "tube", "tube_laser", "guillotine"),
+    "cnc_routing": ("cnc_routing", "cnc", "cnc_joinery", "pin_router", "machines_joinery"),
+    "deburring": ("deburring", "linisher"),
+    "edge_banding": ("edge_banding",),
+    "folding": ("folding", "linebend", "salvagnini"),
+    "glue": ("glue",),
+    "laminating": ("laminating", "glue"),
+    "hole_machining": ("hole_machining", "drilling", "punch"),
+    "laser_cutting": ("laser_cutting", "laser_cutting_acrylic", "tube", "tube_laser"),
+    "powder_coating": ("powder_coating", "oven"),
+    "wet_spray": ("wet_spray",),
+    "welding": ("welding", "spot_welding", "resistance_welding"),
+    "assembly": ("assembly", "assembly_acrylic", "bench_work"),
+    "bench_work": ("bench_work", "assembly", "assembly_acrylic"),
+    # A POLISHING SEQUENCE IS CHARGED ONLY BY POLISHING. Brushing before plating is a
+    # different job: it does not satisfy a stated 160-400 grit sequence (review of D-595).
+    "polishing": ("polishing", "diamond_polish"),
+    # A subcontract finish: the plating line carries it, never a labour row.
+    "plating": (),
+}
+# The profile cuts that cut a part's holes and cut-outs with its outline. A hole on a part one
+# of these charges is covered by that row; a hole on a sawn section is drilled, or unresolved.
+READ_PROFILE_CUTS = ("laser_cutting", "laser_cutting_acrylic", "tube", "tube_laser",
+                     "cnc_routing", "cnc", "cnc_joinery", "pin_router", "punch", "salvagnini")
+# The unit's own bench and pack work, which covers the handling, fitting and packing a read
+# names for a piece (CONCEPT_OPERATIONS_COVERED_ELSEWHERE).
+READ_UNIT_WORK_CHARGES = ("assembly", "assembly_acrylic", "bench_work", "handling",
+                          "packing_joinery", "manual_labour_metal", "manual_labour_acrylic")
+
+# EVERY CHARGE NO READ ITEM EXPLAINS IS AN ENGINE ALLOWANCE, listed apart with its basis. The
+# class says whether it may stand on its basis or holds the release until a person confirms it
+# for this job (estimator_decisions.read_rulings, "allowance:<operation>"):
+#   derived              follows from a charged read item by a stated rule — disclosed
+#   shop_standard        the shop's general rule for any job of this kind — disclosed
+#   calibrated_elsewhere a time the shop stated for ANOTHER product — holds the release: a
+#                        flag does not make it this job's time
+#   inferred_purchase    a purchase no read item and no brief names — holds the release
+#   (an engine charge with no entry here is unclassified, and holds the release)
+ENGINE_ALLOWANCE_BASIS = {
+    "handling": {"class": "shop_standard",
+                 "basis": "the shop's handling minutes a piece, from the rate card"},
+    "assembly": {"class": "shop_standard",
+                 "basis": "the shop's bench rule for a unit of fitted pieces"},
+    "assembly_acrylic": {"class": "shop_standard",
+                         "basis": "the shop's bench rule for a unit of fitted pieces"},
+    "bench_work": {"class": "shop_standard",
+                   "basis": "the shop's bench rule for a unit of fitted pieces"},
+    "packing_joinery": {"class": "shop_standard", "basis": "the shop's pack rule"},
+    "dress_welds": {"class": "derived", "from": "welding",
+                    "basis": "dressing follows the charged weld"},
+    "deburring": {"class": "derived", "from": "cut",
+                  "basis": "a cut edge is deburred — follows the charged cut"},
+    "saw": {"class": "derived", "from": "part", "basis": "the read part's own cut"},
+    "tube": {"class": "derived", "from": "part", "basis": "the read part's own cut"},
+    "tube_laser": {"class": "derived", "from": "part", "basis": "the read part's own cut"},
+    "guillotine": {"class": "derived", "from": "part", "basis": "the read part's own cut"},
+    "laser_cutting": {"class": "derived", "from": "part", "basis": "the read part's own cut"},
+    "laser_cutting_acrylic": {"class": "derived", "from": "part",
+                              "basis": "the read part's own cut"},
+    "cnc_routing": {"class": "derived", "from": "part", "basis": "the read part's own cut"},
+    "cnc": {"class": "derived", "from": "part", "basis": "the read part's own cut"},
+    "punch": {"class": "derived", "from": "part", "basis": "the read part's own cut"},
+    "brush_before_plate": {
+        "class": "calibrated_elsewhere", "shop_stated": "brush_before_plate_min",
+        "basis": "brushing before plating, stated by the shop for one plated stand per unit "
+                 "of similar size — not this product's time, and not a polishing sequence"},
+    "plater_pack": {"class": "calibrated_elsewhere", "shop_stated": "plater_pack_min",
+                    "basis": "packing out to the plater, stated by the shop for one plated "
+                             "stand"},
+    "plater_final_pack": {"class": "calibrated_elsewhere",
+                          "shop_stated": "plater_final_pack_min",
+                          "basis": "packing again on the way back, stated by the shop for "
+                                   "one plated stand"},
+}
+# The classes that hold the release until a person rules on them for this job.
+ENGINE_ALLOWANCE_HOLDING_CLASSES = ("calibrated_elsewhere", "inferred_purchase",
+                                    "unclassified")
+
+# A PAGE IMAGE COARSER THAN THIS ON ITS PRINTED PAGE IS A NAMED RISK (D-597). Page images go
+# to the model at most 2,000 px on the long side: an A4 sheet gets about 171 dpi, an A3 about
+# 121, an A1 about 60 — at which small notes and dimensions are not reliably legible.
+PAGE_IMAGE_MIN_DPI = 150
+
 # A finish the sheet states, and the operation the bill must then carry somewhere (D-417).
 CONCEPT_FINISH_OPERATIONS = (
     (r"POWDER", "powder_coating"),
     (r"\bSPRAY|\bPAINT|LACQUER", "wet_spray"),
+    # A plate and a polish are stated finishes too (D-595).
+    (r"\bPLAT|\bCHROME|\bNICKEL|\bZINC\b|\bGALVAN", "plating"),
+    (r"\bPOLISH|\bGRIT\b|\bLINISH", "polishing"),
 )
 
 # The route operations that cut a part out of stock. A costed line whose route carries one of
@@ -2286,6 +2740,8 @@ MATERIAL_DENSITY_KG_PER_M3 = {
     "REYNOBOND": 1500,
     "ETALBOND": 1500,
     "COMPOSITE": 1500,
+    # Solid surface: acrylic resin and alumina trihydrate, about 1.7 g/cm3 (D-598l).
+    "SOLID_SURFACE": 1700,
     "POLYPROPYLENE": 905,
     "POLYSTYRENE": 1050,
     "PMMA": 1190,
@@ -2296,6 +2752,22 @@ MATERIAL_DENSITY_KG_PER_M3 = {
     "NYLON": 1140,
     "PET": 1380,
     "UHMW": 940,
+}
+
+# ── WEIGHING ONLY, NEVER PRICING (D-513) ────────────────────────────────────────────────
+# A faced board is deliberately ABSENT from MATERIAL_DENSITY_KG_PER_M3: a density there
+# routes a part to mass-based costing, and a board is bought by the sheet, not by the kilo
+# (test_estimating_rules holds that precondition). But the WEIGHT CHECK also read that table,
+# so a 12343-01J shelf with a stated 5,573 g and a costed 1198 x 398 x 18 blank could not be
+# weighed against it — on the one record whose gauge the engine itself had proposed. These
+# figures exist so the check can run; nothing prices from them. Chipboard core per
+# BS EN 312 P2 (~650-720 kg/m3); melamine facing adds nothing a density can see.
+BOARD_WEIGHT_DENSITY_KG_PER_M3 = {
+    "MFC": 720,
+    "CHIPBOARD": 680,
+    "MELAMINE FACED CHIPBOARD": 720,
+    "MELAMINE": 720,
+    "MFMDF": 750,
 }
 
 MATERIAL_PRICE_GBP_PER_KG = {
@@ -3179,6 +3651,13 @@ def hourly_rate(op: str):
 # Max unit cost applied silently to auto-detected bought-in lines (fuzzy catalogue match).
 # Above this → reject match and flag for manual pricing (prevents "BRACKET" -> £13k hits).
 BOUGHT_IN_MAX_PLAUSIBLE_GBP = 750.0
+# The ceiling is a REVIEW TRIGGER, not a verdict (D-508): a held figure is never charged by any
+# later pricing pass — the line is priced from the next source, or asked — and the question
+# names the row and the figure so a person can confirm it.
+# Two hands of one item priced more than this factor apart are asked about (both lines, both
+# figures, both sources). Never aligned automatically: the hands may differ in specification
+# or unit of sale.
+HANDED_PRICE_DIVERGENCE_FACTOR = 3.0
 
 # Bench fitting added to a bought-in's buy price, in minutes at the handling rate. 0 turns it
 # off everywhere. It applies to every bought-in charged at its bought-in price EXCEPT where the
@@ -4117,6 +4596,26 @@ WELD_PROCESS_STATEMENT_PATTERNS = [
     r"ALLWELDS(?:TOBE|ARE|:)?({proc})",
     r"WELD(?:ING)?SPEC(?:IFICATION)?S?:?(?:ALLWELDS(?:TOBE|ARE)?)?({proc})",
 ]
+# THE PROCESSES ONE WELD RATE IS A RATE FOR (D-596e). A charged weld row is a rate for the
+# process its own rate-card title or engine operation names — never its description, which
+# names a stated process beside the rate it rides on. A CO2 row is the shop's MIG/MAG rate (CO2
+# is that process's shielding gas). A title naming two processes this table does not make
+# equivalent ("Welding (MIG/TIG)") is a shared rate, and is evidence for neither.
+#   process named on the row -> the processes that rate is a rate for
+WELD_RATE_EQUIVALENT_PROCESSES = {"CO2": ("CO2", "MIG"), "MIG": ("MIG", "CO2"),
+                                  "TIG": ("TIG",), "MMA": ("MMA",)}
+# THE DOCUMENTED RATE FOR A STATED PROCESS (D-598, D-598a). A charged row titled for the
+# process is a verified charge only at this £/h, and only with the source named: a title and a
+# positive rate are not a verified TIG price (review of D-598). With no entry, only an
+# estimator's evidenced ruling (read_rulings S.weld_process with "evidence") covers the process.
+# Empty until the estimators give a TIG rate.
+#   process -> {"gbp_per_hour": £/h, "source": "who stated it, where, when"}
+WELD_PROCESS_RATES_GBP: dict = {}
+# READ ITEMS A "COVERED" RULING MUST EVIDENCE (D-598, D-598b). A stated weld process charged at
+# a shared or substitute rate, and a welded piece whose joint sides and runs the sheet does not
+# count, are covered only where the ruling names who confirmed it, and where
+# (read_rulings {..., "evidence": "..."}). Item ids, or their prefixes or suffixes.
+READ_RULINGS_NEEDING_EVIDENCE = ("S.weld_process", ".joint")
 
 # ── OPERATIONS THAT LEGITIMATELY RECUR AT EVERY LEVEL OF A TREE ───────────────────────────
 # An assembly event on 12173-03-GA over 201, and another on 201 over its frames, is two
@@ -4331,6 +4830,15 @@ MATERIAL_PRICE_BREAK_HEADERS = {
 }
 
 # Manual Estimate-tab inputs (override via env or extract_workbook_constants.py).
+# ── WHICH SHEET METALS ARE L5's STEEL (D-559) ─────────────────────────────────────────────
+# The Estimate sheet's Sheet Steel block costs every row from one figure, L5 "Sheet Steel Cost
+# Per Tonne". A metal whose MATERIAL_PRICE_GBP_PER_KG sits within this fraction of L5's £/kg
+# (mild steel, zintec, galvanised) is costed there; one that does not (stainless at £3.10,
+# aluminium at £2.75) is costed in Other Sheet Material at its own cost per sheet, because the
+# sheet would otherwise silently re-price it as mild steel. 401918-01-01M, 3 mm stainless, was
+# costed at £900/t on the 21 Oct 2026 book.
+SHEET_STEEL_RATE_FAMILY_TOLERANCE = 0.5
+
 WORKBOOK_INPUT_DEFAULTS = {
     "default_job_quantity": DEFAULT_JOB_QUANTITY,
     # L3 in workbook: Wire Cost Per Tonne. Blank sheet = £1600. Override via env or workbook scan.
@@ -4951,6 +5459,9 @@ LIVE_ENQUIRY_LEDGER = os.getenv("SDI_LIVE_ENQUIRY_LEDGER",
 # The design area, through the endpoint James will provide. Unset: the share is the only
 # source of a pack.
 DESIGN_AREA_ENDPOINT = os.getenv("SDI_DESIGN_AREA_ENDPOINT", "")
+# AI Estimate Self-Running (D-588): a row whose drawings were searched for in Production and
+# not found is searched again after this many hours, not on every read of the sheet.
+LIVE_ENQUIRY_COLLECT_RETRY_HOURS = float(os.getenv("SDI_LIVE_ENQUIRY_COLLECT_RETRY_HOURS", "6"))
 
 # The longest run of letters a title block's drawing number carries: GA, SA05, 01M, ASSY. A
 # code-shaped token with a longer run is words joined across spaces — the M&S border's

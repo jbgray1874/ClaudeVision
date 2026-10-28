@@ -15,9 +15,10 @@ tube came to be weighed as a square one in one place and not the other.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
-__all__ = ["detect_section_stock", "section_kg_per_m"]
+__all__ = ["detect_section_stock", "section_kg_per_m", "section_outer_perimeter_mm",
+           "section_form", "is_flat_sided_oval", "section_description"]
 
 # The hollow-section keywords PATH 1 needs. Config (SECTION_HOLLOW_KEYWORDS) since this list
 # also decides which parts-list rows are a frame's cut list; this is the default.
@@ -28,12 +29,58 @@ try:
         getattr(_cfg, "SECTION_HOLLOW_KEYWORDS", None) or _SECTION_HOLLOW_KW_DEFAULT))
 except Exception:                                                # noqa: BLE001
     _SECTION_HOLLOW_KW = _SECTION_HOLLOW_KW_DEFAULT
+# AN OVAL IS NAMED, NOT MEASURED (D-594). A sheet says "30x15x1.5MM TH'K FSO TUBE" — FSO is a
+# flat-sided oval — and the a x b x t reading alone cannot tell it from a rectangle, so it was
+# weighed and priced as 30 x 15 RHS. The word decides the form: OVAL, FSO, F.S.O., FLAT SIDED
+# OVAL. Word-bounded, so "FSO" inside another word is not an oval.
+_OVAL_WORDS_RE = re.compile(
+    r"(?<![A-Z0-9])(?:FLAT[\s-]*SIDED[\s-]+OVAL|F\.?\s?S\.?\s?O\.?|OVAL)(?![A-Z0-9])")
+_FLAT_SIDED_RE = re.compile(r"(?<![A-Z0-9])(?:FLAT[\s-]*SIDED|F\.?\s?S\.?\s?O\.?)(?![A-Z0-9])")
 _SECTION_PROFILE_RE = re.compile(
     r"(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)(?:\s*MM)?",
     re.IGNORECASE,
 )
 
 _PI = 3.141592653589793
+
+
+_NOT_A_FIGURE = (
+    # a drawing number or an article code, with or without a letter prefix
+    re.compile(r"\b[A-Z]{0,4}\d{3,}[0-9A-Z]*(?:-[0-9A-Z]+)+\b"),
+    # a dotted article number (651.02.909) and a date (27/09/2021, 2021-09-27)
+    re.compile(r"\b\d+(?:\.\d+){2,}\b"),
+    re.compile(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b"),
+    # a tolerance phrase and a tolerance value
+    re.compile(r"\b(?:OVER|UP\s*TO|FROM|BETWEEN)\s*\d+(?:\.\d+)?\s*(?:MM)?"),
+    re.compile(r"[±\+\-]\s*\d+(?:\.\d+)?\s*(?:MM|°)"),
+    # a copyright or title-block year
+    re.compile(r"\b(?:PLC|©|COPYRIGHT|\(C\))\s*\d{4}\b"),
+    # a standard's designation (BS 6323-4, EN 10219-2, DIN 7991)
+    re.compile(r"\b(?:BS|EN|ISO|DIN|ASTM|ANSI|JIS)\s*\d+(?:[-/]\d+)*\b"),
+)
+
+
+def _figures_in(up: str) -> list:
+    """The numbers in this text that stand as figures: not the number in a name ("1200
+    RAIL", "2.4 KG"), which a word follows. A figure is followed by another number, a unit,
+    a symbol or the end — "1395 30", "@ 1395mm", "TUBE 1125"."""
+    # A dash and a word is a designation ("304 - STAINLESS STEEL", "6063 - T6"); a dash and a
+    # number is a range ("80 - 120 MICRON"), on either side of the dash. Neither is a figure.
+    return [mm.group(1) for mm in re.finditer(
+        r"(?<![\d.])(?<![-–] )(?<![-–])(\d+(?:\.\d+)?)(?![\d.])"
+        r"(?!\s*[-–]\s*(?!\d+\s*OFF\b)[A-Z0-9])"
+        r"(?!\s*(?!MM\b|LONG\b|LENGTH\b|LG\b)[A-Z])"
+        r"(?!\s*MM\b\s*(?!LONG\b|LENGTH\b|LG\b|CUT\b)[A-Z])", up)]
+
+
+def _prose_free(up: str) -> str:
+    """The text with everything that is a number but not a figure blanked to spaces, same
+    length as the input so match offsets still apply."""
+    # A decimal comma is a decimal (154,5 is 154.5, not 154 and 5).
+    out = re.sub(r"(?<=\d),(?=\d{1,2}(?!\d))", ".", up)
+    for rx in _NOT_A_FIGURE:
+        out = rx.sub(lambda mm: " " * (mm.end() - mm.start()), out)
+    return out
 
 
 def detect_section_stock(text: str) -> Optional[Dict[str, Any]]:
@@ -62,28 +109,47 @@ def detect_section_stock(text: str) -> Optional[Dict[str, Any]]:
     up = str(text).upper()
 
     # ── PATH 1: canonical 'AxBxC <keyword>' ─────────────────────────────────
-    if any(kw in up for kw in _SECTION_HOLLOW_KW):
+    # A named oval is a hollow-section word in its own right (D-594): "30X15X1.5 FSO" with no
+    # TUBE still reads, but only with a whole a x b x t beside it.
+    _oval = _OVAL_WORDS_RE.search(up)
+    if any(kw in up for kw in _SECTION_HOLLOW_KW) or _oval:
         m = _SECTION_PROFILE_RE.search(up)
         if m:
             dims = sorted(float(m.group(i)) for i in (1, 2, 3))
             wall, side_a, side_b = dims[0], dims[1], dims[2]
             if not (wall <= 0 or wall > 12 or side_a <= wall * 2 or side_b <= wall * 2):
-                tail_nums = [float(n) for n in re.findall(r"\d+(?:\.\d+)?", up[m.end():])]
+                # A CUT LENGTH IS A DIMENSION, NOT THE NEXT NUMBER ON THE PAGE (D-584). After
+                # "30X20X2MM" on a parts-list row comes the drawing number, ROL2021-2405, and
+                # 2021 was taken for the length; on a sheet come the tolerance note "OVER
+                # 120mm UP TO 1000mm", the date and the copyright year, and 120 was. Codes,
+                # dates, tolerance phrases and the title-block years are blanked before any
+                # number is read; what is left is the sheet's own figures.
+                _clean = _prose_free(up)
+                tail_nums = [float(n) for n in _figures_in(_clean[m.end():])]
                 length = next((n for n in tail_nums if n >= max(side_a, side_b) * 2), None)
                 if length is None:
-                    all_nums = [float(n) for n in re.findall(r"\d+(?:\.\d+)?", up)]
+                    all_nums = [float(n) for n in _figures_in(_clean)]
                     cand = [n for n in all_nums if n >= max(side_a, side_b) * 3]
                     length = max(cand) if cand else None
-                return {
+                out = {
                     "a": side_a,
                     "b": side_b,
                     "t": wall,
                     "length_mm": length,
                     "profile_form": "SHS" if abs(side_a - side_b) < 1e-6 else "RHS",
-                    "keyword": next(kw for kw in _SECTION_HOLLOW_KW if kw in up),
+                    "keyword": next((kw for kw in _SECTION_HOLLOW_KW if kw in up),
+                                    _oval.group(0) if _oval else ""),
                     "detection_path": "canonical_profile",
                     "source_text": text[m.start():m.start() + 60].strip(),
                 }
+                if _oval:
+                    # Weighed on the ellipse (section_kg_per_m's OVAL). A flat-sided oval is a
+                    # stadium, about 6% longer round its outside at 30 x 15; said on the stock
+                    # so the shape is not lost, until a stadium form exists.
+                    out["profile_form"] = "OVAL"
+                    if _FLAT_SIDED_RE.search(up):
+                        out["oval_shape"] = "flat_sided"
+                return out
 
     # ── PATH 2: 'n.n WALL' notation (no keyword / no AxBxC) ──────────────────
     wm = re.search(r"(\d+(?:\.\d+)?)\s*WALL", up)
@@ -157,6 +223,96 @@ def detect_section_stock(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+# THE SHAPE A FLAT-SIDED OVAL IS (D-594). Stored as profile_form OVAL with oval_shape
+# "flat_sided" — every reader that asks "is it an oval" still hears yes — and weighed and
+# coated as what it is: a stadium, two flats joined by two half-rounds. "FSO" below is the
+# formula's key, asked through section_form(stock), never written onto a stock dict.
+_FSO_FORM = "FSO"
+
+
+def is_flat_sided_oval(stock: Any) -> bool:
+    """A section stock dict (or a form key) that is a flat-sided oval."""
+    if isinstance(stock, Mapping):
+        form = str(stock.get("profile_form") or "").strip().upper()
+        return form == _FSO_FORM or (form == "OVAL"
+                                     and str(stock.get("oval_shape") or "") == "flat_sided")
+    return str(stock or "").strip().upper() == _FSO_FORM
+
+
+def section_form(stock: Any) -> str:
+    """The form key the weight and perimeter formulas take for this stock: its profile_form,
+    or the stadium's key for a flat-sided oval."""
+    if not isinstance(stock, Mapping):
+        return str(stock or "")
+    return _FSO_FORM if is_flat_sided_oval(stock) else str(stock.get("profile_form") or "")
+
+
+def section_description(stock: Any) -> str:
+    """The section in purchasing words — "30 x 15 x 1.5 flat-sided oval (FSO) tube" — or ""
+    where the stock does not hold a whole size. Major side first, as a stockist lists it."""
+    if not isinstance(stock, Mapping):
+        return ""
+    try:
+        a, b, t = float(stock.get("a")), float(stock.get("b")), float(stock.get("t"))
+    except (TypeError, ValueError):
+        return ""
+    if a <= 0 or b <= 0 or t <= 0:
+        return ""
+    major, minor = max(a, b), min(a, b)
+    dims = f"{major:g} x {minor:g} x {t:g}"
+    form = str(stock.get("profile_form") or "").strip().upper()
+    if is_flat_sided_oval(stock):
+        return f"{dims} flat-sided oval (FSO) tube"
+    if form == "OVAL":
+        return f"{dims} oval tube"
+    if form == "CHS":
+        return f"{major:g} x {t:g} round tube (CHS)"
+    if form in ("SHS", "RHS"):
+        return f"{dims} {form}"
+    return ""
+
+
+def _stadium_area_mm2(major: float, minor: float) -> float:
+    if major <= 0 or minor <= 0:
+        return 0.0
+    major = max(major, minor)
+    return (major - minor) * minor + _PI * (minor / 2.0) ** 2
+
+
+def section_outer_perimeter_mm(a: Any, b: Any = None, profile_form: Any = "") -> Optional[float]:
+    """The outer perimeter of a section, mm — what powder lands on per mm of length.
+
+        round / CHS / ROUND   pi x D
+        OVAL                  Ramanujan's ellipse on the semi-axes
+        FSO (flat-sided oval) a stadium: 2 x (major - minor) + pi x minor (D-594)
+        everything else       2 x (a + b) — a closed box, and also an open angle or channel
+                              (both faces of both legs) or a flat bar (b is its thickness)
+
+    One formula for every reader that coats a section (D-532): the workbook's section area
+    and the costing's own coated area for a section part or a welded unit's members."""
+    try:
+        a_f = float(a)
+    except (TypeError, ValueError):
+        return None
+    try:
+        b_f = float(b) if b not in (None, "") else a_f
+    except (TypeError, ValueError):
+        b_f = a_f
+    if a_f <= 0:
+        return None
+    b_f = b_f if b_f > 0 else a_f
+    form = str(profile_form or "").strip().upper()
+    if form in ("CHS", "ROUND", "TUBE_ROUND"):
+        return _PI * a_f
+    if form == _FSO_FORM:
+        major, minor = max(a_f, b_f), min(a_f, b_f)
+        return 2.0 * (major - minor) + _PI * minor
+    if form == "OVAL":
+        ha, hb = a_f / 2.0, b_f / 2.0
+        return _PI * (3 * (ha + hb) - ((3 * ha + hb) * (ha + 3 * hb)) ** 0.5)
+    return 2.0 * (a_f + b_f)
+
+
 def section_kg_per_m(a: Any, b: Any, t: Any, profile_form: Any = "",
                      density_kg_m3: Optional[float] = None) -> Optional[float]:
     """Mass per metre of a hollow section, or None when the profile cannot be weighed.
@@ -173,7 +329,24 @@ def section_kg_per_m(a: Any, b: Any, t: Any, profile_form: Any = "",
         return None
     inner_a = max(0.0, a_f - 2.0 * t_f)
     inner_b = max(0.0, b_f - 2.0 * t_f)
-    if str(profile_form or "").upper() == "CHS":
+    form = str(profile_form or "").upper()
+    # AN OPEN SECTION IS NOT A BOX (D-528): an angle is two legs, a channel a web and two
+    # flanges, a flat or round bar solid. Weighed as a hollow box an angle comes out near double.
+    if form == "ANGLE":
+        area_mm2 = t_f * (a_f + b_f - t_f)
+    elif form == "CHANNEL":
+        area_mm2 = t_f * (a_f + 2.0 * b_f - 2.0 * t_f)
+    elif form == "FLAT":
+        area_mm2 = a_f * b_f
+    elif form == "ROUND":
+        area_mm2 = _PI / 4.0 * (a_f ** 2)
+    elif form == _FSO_FORM:
+        # A STADIUM, NOT AN ELLIPSE (D-594): outer flats-and-half-rounds less the inner.
+        area_mm2 = max(0.0, _stadium_area_mm2(max(a_f, b_f), min(a_f, b_f))
+                       - _stadium_area_mm2(max(inner_a, inner_b), min(inner_a, inner_b)))
+    elif form == "OVAL":
+        area_mm2 = max(0.0, _PI / 4.0 * ((a_f * b_f) - (inner_a * inner_b)))
+    elif form == "CHS":
         area_mm2 = max(0.0, _PI / 4.0 * ((a_f ** 2) - (inner_a ** 2)))
     else:
         area_mm2 = max(0.0, (a_f * b_f) - (inner_a * inner_b))

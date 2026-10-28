@@ -24,6 +24,11 @@ SO EACH CACHE IS MATCHED THE ONLY WAY IT HONESTLY CAN BE.
                  So the key is RECOMPUTED here from the same inputs the engine uses. If the
                  file is there, it is this pack's, by construction.
 
+  pdf_readings -- the read store's kept PDF readings (D-554): keyed on the PDF's bytes, the
+                 reader's code and its settings, but every entry RECORDS its source file's
+                 name. Matched on that, like vision_bom. Clearing one makes the next run OCR
+                 that PDF again; --fresh-read bypasses them all without deleting anything.
+
 THE INFERENCE ENTRIES CANNOT BE ATTRIBUTED AND THIS SAYS SO. Their key includes the BOM and
 the missing-detail list as they stood mid-run; nothing outside a run can reproduce that. They
 are reported as unattributable rather than guessed at, and --everything is offered for the one
@@ -39,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
@@ -47,9 +53,10 @@ _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT / "src"))
 
 # THE DIRECTORIES THIS TOOL IS ALLOWED TO DELETE FROM. Not a style point: the paths come from
-# env vars (SDI_LLM_EXTRACT_CACHE_DIR relocates one of them), and a misconfigured variable
-# pointing at a share is the difference between clearing a cache and clearing a job folder.
-_ALLOWED_DIR_NAMES = {"vision_bom", "llm_extract"}
+# env vars (SDI_LLM_EXTRACT_CACHE_DIR and SDI_READ_STORE_DIR relocate them), and a misconfigured
+# variable pointing at a share is the difference between clearing a cache and clearing a job
+# folder. pdf_readings is the read store's kept PDF readings (D-554).
+_ALLOWED_DIR_NAMES = {"vision_bom", "llm_extract", "pdf_readings"}
 
 
 def _pack_pdfs(job: Path) -> List[Path]:
@@ -81,6 +88,32 @@ def _vision_entries(names: Set[str]) -> Tuple[List[Path], int, str]:
             # files is not this tool's job.
             continue
         if str(entry.get("pdf_name") or "").strip().lower() in names:
+            hits.append(f)
+    return hits, total, ""
+
+
+def _read_store_entries(names: Set[str]) -> Tuple[List[Path], int, str]:
+    """The kept PDF readings (D-554): keyed on the PDF's BYTES, but every entry RECORDS the
+    source file's name. Matched on that, like the vision entries. Only the head of each file
+    is read — the name sits before the reading, which can run to megabytes."""
+    try:
+        import read_store
+        d = Path(read_store.store_dir("pdf_readings"))
+    except Exception as exc:                     # pragma: no cover - import guard
+        return [], 0, f"could not read the read store ({type(exc).__name__}: {exc})"
+    if not d.is_dir():
+        return [], 0, f"no kept readings at {d}"
+    hits, total = [], 0
+    for f in sorted(d.glob("*.json")):
+        total += 1
+        try:
+            with open(f, "r", encoding="utf-8") as fh:
+                head = fh.read(4096)
+            m = re.search(r'"source":\s*"((?:[^"\\]|\\.)*)"', head)
+            source = json.loads(f'"{m.group(1)}"') if m else json.loads(f.read_text(encoding="utf-8")).get("source")
+        except Exception:
+            continue                             # a corrupt entry is not this pack's by default
+        if str(source or "").strip().lower() in names:
             hits.append(f)
     return hits, total, ""
 
@@ -165,10 +198,13 @@ def main(argv: List[str] | None = None) -> int:
 
     vis, vis_total, vis_note = _vision_entries(names)
     full, full_total, unattributable, full_note = _full_extract_entries(pdfs, model)
+    kept, kept_total, kept_note = _read_store_entries(names)
 
     print("")
     print(f"Vision cache   {len(vis)} of {vis_total} entr(ies) belong to this pack"
           + (f" — {vis_note}" if vis_note else ""))
+    print(f"Read store     {len(kept)} of {kept_total} kept PDF reading(s) belong to this pack"
+          + (f" — {kept_note}" if kept_note else ""))
     print(f"Extract cache  {len(full)} of {full_total} entr(ies) identified as this pack's "
           f"whole-pack read (model {model or 'unknown'})"
           + (f" — {full_note}" if full_note else ""))
@@ -178,7 +214,7 @@ def main(argv: List[str] | None = None) -> int:
         print(f"               {unattributable} further entr(ies) cannot be attributed to any "
               f"pack from the cache alone (inference passes and other jobs). Left alone.")
 
-    targets = list(vis) + list(full)
+    targets = list(vis) + list(full) + list(kept)
     if args.everything:
         try:
             import llm_full_extract as lfe2

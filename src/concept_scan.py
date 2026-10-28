@@ -62,7 +62,9 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 #   c4  print is always its own graphic line, never folded into a board's material (D-365)
 #   c5  a folded part's folds, flange depth and blank basis (finished or flat), its internal
 #       cut-outs, and one line per size for a part that follows parts of different sizes (D-490)
-CONCEPT_PROMPT_VERSION = "c5"
+#   c6  a part's stock form, with a section's size and wall, a mesh's grid and wire, and a wire's
+#       diameter in fields of their own — never in the blank's thickness (D-528)
+CONCEPT_PROMPT_VERSION = "c6"
 
 SOURCE = "vision_concept"
 
@@ -551,6 +553,41 @@ def find_brief(folders: List[Any]) -> tuple:
     return "", ""
 
 
+# ── AN ACCEPTED CONSTRUCTION (D-534) ─────────────────────────────────────────────────────
+#
+# "The next step is to verify the member schedule against the PDF, then replay that accepted
+#  construction through pricing — not repeatedly ask Grok for another fresh design." — the
+#  reviewer, on 0356455's first book: wire hooks read as whole bars, a phantom pair of 1723 mm
+#  tubes, the flat-bar cross-members missing. The answers file corrects a size, a count or a
+#  material on a line the read made; it cannot add the line the read missed, remove one it
+#  invented, or change what a line is cut from. A construction a person has checked against the
+#  drawing is a better read than the model's: in the read's own shape, so every rule downstream
+#  prices it exactly as it would have priced the model's answer, and the model is not asked.
+# The file, its checks and its table live in accepted_construction (D-535): pure python, so the
+# portal refuses a schedule before staging by exactly the rules the run will apply.
+import accepted_construction as _accepted                          # noqa: E402
+
+CONSTRUCTION_SUFFIX = _accepted.SUFFIX
+CONSTRUCTION_FILENAME = _accepted.FILENAME
+
+
+def load_accepted_construction(path: Any) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+    """(answer, problems) from one construction file — the answer None when it is refused.
+
+    Refused, by name: no parts; a line with no name, no kind or no positive quantity; any money
+    key anywhere; and a file nobody has accepted ("accepted_by" empty, or still a DRAFT)."""
+    return _accepted.load(path)
+
+
+def find_accepted_construction(folders: List[Any], job: str = "") -> Tuple[
+        Optional[Dict[str, Any]], str, List[str]]:
+    """(answer, file, problems) from the first construction file in the run's folders.
+
+    "<job>_construction.json", then "<folder>_construction.json", then "construction.json".
+    A file that is found and refused returns (None, file, problems) — said, never ignored."""
+    return _accepted.find(folders, job=job)
+
+
 def missing_brief_flag(client_document: bool = False) -> str:
     """The book's own statement that NO enquiry brief reached this read (D-473).
 
@@ -605,6 +642,12 @@ SIGHTABLE_OPERATIONS = {
     "welding":          "welded joint",
     "powder_coating":   "powder coated finish",
     "deburring":        "deburr or fettle an edge",
+    # A PLATED OR POLISHED FINISH IS WORK TOO (D-595). Without these two words the read had
+    # no way to say chrome, and 0320730's polished nickel-chrome bar reached the book with no
+    # finish at all. Plating is not charged as labour: it puts the finish on the record and
+    # the subcontract plating line prices it (or asks for the plater's price).
+    "plating":          "electroplated finish — chrome, nickel or zinc, by a subcontract plater",
+    "polishing":        "polished or ground surface, by grit, before plating or as the finish",
 }
 
 _PROMPT = """You are looking at {n} image(s): customer-supplied renders or photos of ONE retail
@@ -655,6 +698,16 @@ Rules:
 - A PART THAT RUNS ALONG OTHER PARTS (an edge strip, a trim, a lip) takes its length from the
   part it runs along: where those parts differ in size, list one line per size, each with its
   own count — never one count at a single length.
+- STOCK THAT IS NOT SHEET KEEPS ITS OWN SIZES. Give every made part "stock.form": sheet,
+  board, box_section, tube, angle, channel, flat_bar, round_bar, wire or mesh.
+  A SECTION (box_section, tube, angle, channel, flat_bar, round_bar): "section_mm" is its
+  outside size ("25 x 25 box section" is [25, 25], "60 x 40 angle" is [60, 40], a round is
+  [diameter]), "wall_mm" its wall or gauge (0 if not shown), "length_mm" its cut length; its
+  assumed_blank_mm thickness is 0. A MESH: "aperture_mm" is its grid ("25 x 25 mesh" is
+  [25, 25]), "wire_mm" its wire diameter (0 if not shown), and assumed_blank_mm the panel's
+  length and width with thickness 0. A WIRE: "wire_mm" and "length_mm".
+  A size "A x B" written before a section or mesh word is its section or grid: NEVER a count,
+  NEVER a thickness.
 
 Return ONLY valid JSON, no markdown, exactly this shape:
 {{
@@ -665,6 +718,8 @@ Return ONLY valid JSON, no markdown, exactly this shape:
       "sighted_material": "<what it looks like, verbatim impression>",
       "material_guess": "<closest stock material, e.g. MFMDF, MDF, ACRYLIC, MILD STEEL, PRINTED_PAPER>",
       "assumed_blank_mm": {{"length": 0, "width": 0, "thickness": 0}},
+      "stock": {{"form": "sheet", "section_mm": [], "wall_mm": 0, "length_mm": 0,
+                "aperture_mm": [], "wire_mm": 0}},
       "quantity": 1, "quantity_basis": "<seen / implied by symmetry / per print set>",
       "operations": ["saw", "cnc_routing"],
       "folds": 0, "flange_mm": 0, "blank_basis": "finished|developed",
@@ -679,7 +734,7 @@ Return ONLY valid JSON, no markdown, exactly this shape:
 
 # The prompt's own hash, so a change without a version bump cannot pass silently. If a test
 # tells you this is wrong: bump CONCEPT_PROMPT_VERSION above, then put the new hash here.
-_PROMPT_FINGERPRINT = "f8289cfa0392"
+_PROMPT_FINGERPRINT = "0ec971544c51"
 
 
 class ConceptUnavailable(RuntimeError):
@@ -739,11 +794,13 @@ not in the brief" in why_size. Do not describe visual cues: there are none.
 #       (D-418: the 14:42 read dropped the front and back and sized the divider off a bag)
 SHEET_PROMPT_VERSION = "s4"
 # THE BUDGET FITS A WHOLE DOCUMENT (D-466). 6,000 characters was sized for single drawing
-# sheets and silently cut a sixteen-page tech brief at page six; 24,000 holds such a
-# document entire (the K-Wellness brief extracts ~15,000), and the page-aware trimming
-# with its disclosed coverage remains the safety net for truly huge packs. The words are
-# what is hashed, so a text that always fitted keeps its cache key and its answer.
-SHEET_TEXT_MAX_CHARS = 24000
+# sheets and silently cut a sixteen-page tech brief at page six; 24,000 held such a document
+# entire. D-597 raises it to 120,000 — well inside the model's window beside the page images —
+# and stops trimming pages to fit: a proportional trim can drop the one finish note that
+# matters while saying every page was included. Whole pages go in order; a page that does not
+# fit is NOT sent and is named as a gap, on the record and to the model. The words are what is
+# hashed, so a text that always fitted keeps its cache key and its answer.
+SHEET_TEXT_MAX_CHARS = 120000
 
 _SHEET_PREAMBLE = """THESE ARE DRAWING SHEETS, NOT PHOTOGRAPHS. Each image is a general-arrangement or
 design-intent drawing with a title block, dimensions and notes; the text printed on the sheets
@@ -1132,11 +1189,18 @@ def split_not_visible(items: List[Any]) -> tuple:
         low = said.lower()
         if any(w in low for w in ship_words):
             ship.append(said)
-        elif any(w in low for w in cons_words):
+        elif any(_names_noun(low, w) for w in cons_words):
             cons.append(said)
         else:
             unknown.append(said)
     return cons, ship, unknown
+
+
+def _names_noun(text: str, word: str) -> bool:
+    """`word` as a word of its own, singular or plural — not inside another (D-595). "ticket
+    holder inserted in central hole" read as a consumable because "insert" sits inside
+    "inserted", and a thing the product only RECEIVES was bought as a set of six."""
+    return bool(re.search(rf"(?<![a-z]){re.escape(word)}(?:s|es)?(?![a-z])", text))
 
 
 def consumable_lines(items: List[Any], stem: str,
@@ -1243,15 +1307,40 @@ def consumable_lines(items: List[Any], stem: str,
     return out
 
 
-def mechanically_fitted(parts: List[Any]) -> Dict[str, Any]:
+def brief_names_weld_of(name: Any, brief: Any) -> bool:
+    """Does an affirmative weld sentence of the brief name this piece, and name no fixing
+    (D-598a)? The same reading mechanically_fitted gives a piece's weld, from the words alone:
+    "Brackets: 2 per bar, TIG welded down both sides to the tube" names the brackets and the
+    tube."""
+    fixing_words = _vocab_list("CONCEPT_FIXING_WORDS") + _vocab_list("CONCEPT_FIXED_WITH_WORDS")
+    generic = set(_vocab_list("CONCEPT_NAME_GENERIC_WORDS"))
+    said = [s.lower() for s in brief_weld_statements(brief)
+            if not any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", s.lower())
+                       for w in fixing_words)]
+    words = [w for w in re.findall(r"[a-z]{4,}", str(name or "").lower()) if w not in generic]
+    return any(re.search(rf"(?<![a-z]){re.escape(w)}(?:s|es)?(?![a-z])", s)
+               for s in said for w in words)
+
+
+def mechanically_fitted(parts: List[Any], brief: str = "") -> Dict[str, Any]:
     """The made pieces a sighted unit fixes with fasteners, and why each other one is not (D-499).
 
     Counted: every made piece the unit fits. Not counted: a welded piece (its joint is its weld
     — never a fixing as well), a piece welded to a host (it is part of that host), and a piece
-    that hangs or clips — its own words say so (config CONCEPT_FIXING_FREE_WORDS), or a piece
-    welded to it does ("HOOKED BRACKET (WELDED TO TRAY)": the trays hang on their brackets)."""
+    that hangs or clips — its own words state how it is fitted (config
+    CONCEPT_FIXING_FREE_WORDS: "hangs on", "clip-on", never the bare noun "hook" in its name),
+    or a hook welded to it says it hangs ("HOOKED BRACKET (WELDED TO TRAY)": the trays hang on
+    their brackets, config CONCEPT_HANGING_HARDWARE_WORDS).
+
+    A WELD IS NAMED PIECE BY PIECE (review of D-595). A weld on the unit says the unit is
+    welded somewhere, not that this piece is: a bracket bolted to a welded frame still takes
+    fixings. So a piece counts as welded only on its own evidence — its own weld, a weld moved
+    from it to the unit, its own words ("welded to the tube"), or a brief weld statement that
+    names it and names no fixing. Any other piece is counted, and its fixings are asked."""
     free = _vocab_list("CONCEPT_FIXING_FREE_WORDS")
     bonded = _vocab_list("CONCEPT_BONDED_WORDS")
+    fixing_words = _vocab_list("CONCEPT_FIXING_WORDS") + _vocab_list("CONCEPT_FIXED_WITH_WORDS")
+    generic = set(_vocab_list("CONCEPT_NAME_GENERIC_WORDS"))
     made = [p for p in (parts or []) if isinstance(p, dict)
             and p.get("concept_kind") == "fabricated"]
 
@@ -1261,9 +1350,22 @@ def mechanically_fitted(parts: List[Any]) -> Dict[str, Any]:
 
     def _says_free(p: Mapping[str, Any]) -> bool:
         return _says(p, free)
+
+    # A statement that also names a fixing ("a welded frame, side panels bolted on") does not
+    # say which piece is welded, so it excuses none.
+    weld_said = [s.lower() for s in brief_weld_statements(brief)
+                 if not any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", s.lower())
+                            for w in fixing_words)]
+
+    def _brief_names_its_weld(p: Mapping[str, Any]) -> bool:
+        words = [w for w in re.findall(r"[a-z]{4,}", str(p.get("description") or "").lower())
+                 if w not in generic]
+        return any(re.search(rf"(?<![a-z]){re.escape(w)}(?:s|es)?(?![a-z])", s)
+                   for s in weld_said for w in words)
     hung_by: Dict[str, str] = {}
+    hanging = _vocab_list("CONCEPT_HANGING_HARDWARE_WORDS")
     for p in made:
-        if p.get("welded_to_hosts") and _says_free(p):
+        if p.get("welded_to_hosts") and (_says(p, hanging) or _says_free(p)):
             for h in p["welded_to_hosts"]:
                 hung_by.setdefault(str(h), str(p.get("part_number")))
     counted: Dict[str, int] = {}
@@ -1272,8 +1374,14 @@ def mechanically_fitted(parts: List[Any]) -> Dict[str, Any]:
         pn = str(p.get("part_number") or "")
         if p.get("welded_to_hosts"):
             excluded[pn] = "welded to its host"
-        elif "welding" in _ops_of(p):
+        elif "welding" in _ops_of(p) or p.get("weld_charged_on"):
             excluded[pn] = "welded — its joint is the weld"
+        elif _WELD_TO_RE.search(f"{p.get('description') or ''} {p.get('concept_seen') or ''}"):
+            excluded[pn] = "welded — its own words name the weld"
+        elif _brief_names_its_weld(p):
+            # 0320730's brief: "Brackets … TIG welded down both sides to the tube" names both
+            # pieces' weld; four M6 screws were bought for that bar on no evidence (D-595).
+            excluded[pn] = "welded — the brief's weld statement names it"
         elif _says(p, bonded):
             # BONDED IS NOT SCREWED (D-500): its adhesive is a different consumable, said.
             excluded[pn] = "bonded — its adhesive is not in this fixings allowance"
@@ -1283,7 +1391,34 @@ def mechanically_fitted(parts: List[Any]) -> Dict[str, Any]:
             excluded[pn] = f"hangs on {hung_by[pn]} welded to it"
         else:
             counted[pn] = _qty_of(p)
-    return {"pieces": sum(counted.values()), "counted": counted, "excluded": excluded}
+    try:
+        per_made = float((_vocab("CONCEPT_CONSUMABLE_ALLOWANCE", {}) or {})
+                         .get("per_piece_fitted") or 0)
+    except (TypeError, ValueError):
+        per_made = 0.0
+    fixings = per_made * sum(counted.values())
+    # BOUGHT HARDWARE SCREWED OR BOLTED ON (D-532): castors, plates, handles — counted by
+    # config CONCEPT_FASTENED_BOUGHT_ITEMS, each at its own fixings per item. A bought line
+    # its own words say is welded, bonded or clipped is fitted without them.
+    bought: Dict[str, Dict[str, Any]] = {}
+    for p in parts or []:
+        if not (isinstance(p, dict) and p.get("concept_kind") == "bought_in"):
+            continue
+        if p.get("concept_not_visible") or p.get("fixings_allowance") is not None:
+            continue
+        low = f" {p.get('description') or ''} {p.get('concept_seen') or ''} ".lower()
+        if _says(p, ["weld", "welded"] + bonded) or _says_free(p):
+            continue
+        per = next((n for words, n in (_vocab("CONCEPT_FASTENED_BOUGHT_ITEMS", ()) or ())
+                    if any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", low)
+                           for w in words)), 0)
+        if per:
+            pn = str(p.get("part_number") or "")
+            bought[pn] = {"quantity": _qty_of(p), "fixings_each": per}
+            counted[pn] = _qty_of(p)
+            fixings += per * _qty_of(p)
+    return {"pieces": sum(counted.values()), "counted": counted, "excluded": excluded,
+            "bought": bought, "fixings": int(round(fixings))}
 
 
 def adhesive_allowance_lines(parts: List[Any], stem: str, n: int) -> List[Dict[str, Any]]:
@@ -1432,9 +1567,15 @@ def fixings_allowance_line(parts: List[Any], stem: str, n: int) -> Optional[Dict
     mech = mechanically_fitted(parts)
     if per <= 0 or not ref or mech["pieces"] <= 0:
         return None
-    count = int(round(per * mech["pieces"]))
-    basis = (f"{per:g} per mechanically fitted piece × {mech['pieces']} piece(s) "
-             f"({_rule.get('basis') or 'config'})")
+    _bought = mech.get("bought") or {}
+    _made = mech["pieces"] - sum(int(b["quantity"]) for b in _bought.values())
+    count = int(mech.get("fixings") or round(per * mech["pieces"]))
+    basis = "; ".join(
+        ([f"{per:g} per mechanically fitted made piece × {_made} "
+          f"({_rule.get('basis') or 'config'})"] if _made > 0 else [])
+        + [f"{b['fixings_each']:g} per {k} × {b['quantity']} (bought hardware fixed on, "
+           f"config CONCEPT_FASTENED_BOUGHT_ITEMS — an assumption to confirm)"
+           for k, b in _bought.items()])
     record = _empty_part_record(f"{_slug(stem, 'CONCEPT')}-NV{n:02d}", item_number=None,
                                 description=f"Fixings allowance — {ref}", quantity=None)
     record["concept"] = True
@@ -1470,12 +1611,14 @@ def sheet_text_with_coverage(pdf_paths: List[Any]) -> tuple:
     Verbatim and unparsed: the model is told it is the pages' words, and `sheet_check` looks
     a figure up in it. A scan with no text layer gives "" and the read proceeds on the image.
 
-    EVERY PAGE CONTRIBUTES, AND A CUT IS SAID (D-466). The cap used to be one silent slice
-    off the front, so a sixteen-page brief reached the model as pages one to six and nothing
-    anywhere said so. Over the cap, each page now keeps its proportional share (never less
-    than a floor), a trimmed page says it was trimmed, and the text ends by stating the
-    coverage — to the model, on the record, and in the run log through the caller.
-    coverage = {"total": chars extracted, "sent": chars sent, "pages_trimmed": n}."""
+    WHOLE PAGES, AND A GAP IS NAMED (D-466, D-597). The cap used to be one silent slice off
+    the front; then every page kept a proportional share, which could drop a critical note
+    while claiming the page was included. Now whole pages go in order until the budget; a page
+    that does not fit is not sent at all and is named — to the model at the end of the text,
+    on the record, and in the run log through the caller. Only a single page larger than the
+    whole budget is cut, and that cut is named too.
+    coverage = {"total", "sent", "pages_trimmed", "pages_omitted", "omitted_pages",
+    "cut_pages"}."""
     chunks: List[str] = []
     for pdf in (pdf_paths or []):
         if is_brief_page(pdf):
@@ -1503,35 +1646,50 @@ def sheet_text_with_coverage(pdf_paths: List[Any]) -> tuple:
     total = sum(len(c) for c in chunks) + max(0, len(chunks) - 1)
     if total <= SHEET_TEXT_MAX_CHARS:
         return "\n".join(chunks), {"total": total, "sent": total, "pages_trimmed": 0,
-                                   "pages_omitted": 0}
-    # A BUDGET, NOT A GUESS: each page gets its proportional share, never less than a floor
-    # that itself shrinks when pages are many, and the spend is counted as written so a
-    # thousand tiny pages cannot ride a per-page floor past the cap. Pages the budget cannot
-    # reach are omitted and counted — said, not silent.
-    _MARK = "\n[… trimmed — the full page is in the images]"
-    floor = min(200, max(40, SHEET_TEXT_MAX_CHARS // len(chunks)))
-    budget = SHEET_TEXT_MAX_CHARS
+                                   "pages_omitted": 0, "omitted_pages": [], "cut_pages": []}
+
+    def _label(c: str) -> str:
+        return c.split("\n", 1)[0].strip("[]")
+
     out: List[str] = []
-    trimmed = omitted = 0
+    omitted: List[str] = []
+    cut: List[str] = []
+    budget = SHEET_TEXT_MAX_CHARS
     for c in chunks:
-        if budget <= floor:
-            omitted += 1
-            continue
-        share = min(budget, max(floor, int(len(c) * SHEET_TEXT_MAX_CHARS / total)))
-        if len(c) > share:
-            piece = c[:share].rstrip() + _MARK
-            trimmed += 1
+        need = len(c) + (1 if out else 0)
+        if need <= budget:
+            out.append(c)
+            budget -= need
+        elif not out and len(c) > SHEET_TEXT_MAX_CHARS:
+            # ONE PAGE LARGER THAN THE WHOLE BUDGET: the only cut, and it is named.
+            out.append(c[:SHEET_TEXT_MAX_CHARS - 200].rstrip()
+                       + "\n[… this page is cut here — the rest of it is NOT in this text]")
+            cut.append(_label(c))
+            budget = 0
         else:
-            piece = c
-        out.append(piece)
-        budget -= len(piece) + 1
-    text = "\n".join(out) + (
-        f"\n[text coverage: {len(chunks) - omitted} of {len(chunks)} page(s) included"
-        + (f", {trimmed} trimmed" if trimmed else "")
-        + (f", {omitted} only in the images" if omitted else "")
-        + f" — {SHEET_TEXT_MAX_CHARS} character budget of {total} extracted]")
-    return text, {"total": total, "sent": len(text), "pages_trimmed": trimmed,
-                  "pages_omitted": omitted}
+            omitted.append(_label(c))
+    text = "\n".join(out)
+    if omitted or cut:
+        # The note names up to eight pages and counts the rest — the record keeps every one,
+        # and a note listing a thousand pages would itself overrun the budget it reports.
+        named = ", ".join(omitted[:8]) + (f" and {len(omitted) - 8} more" if len(omitted) > 8
+                                          else "")
+        text += ("\n[text coverage: " + f"{len(chunks) - len(omitted)} of {len(chunks)} page(s) "
+                 f"sent whole" + (f"; cut: {', '.join(cut)}" if cut else "")
+                 + (f"; NOT SENT (read them from the images only): {named}" if omitted else "")
+                 + f" — {SHEET_TEXT_MAX_CHARS} character budget of {total} extracted]")
+    return text, {"total": total, "sent": len(text), "pages_trimmed": len(cut),
+                  "pages_omitted": len(omitted), "omitted_pages": omitted, "cut_pages": cut}
+
+
+def png_size(png: bytes) -> Tuple[int, int]:
+    """(width, height) in pixels from a PNG's own header, or (0, 0)."""
+    try:
+        if png[:8] == b"\x89PNG\r\n\x1a\n":
+            return int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+    except Exception:                                                # noqa: BLE001
+        pass
+    return 0, 0
 
 
 def sheet_text(pdf_paths: List[Any]) -> str:
@@ -1600,9 +1758,19 @@ def _call_vision_llm(png_pages: List[bytes], model: str, brief: str = "",
         b64 = base64.b64encode(png).decode("ascii")
         content.append({"type": "image_url",
                         "image_url": {"url": f"data:image/png;base64,{b64}"}})
-    resp = client.chat.completions.create(
-        model=model, temperature=0,
-        messages=[{"role": "user", "content": content}])
+    import time as _time                                            # noqa: WPS433
+    _t0, _failed = _time.time(), True
+    try:
+        resp = client.chat.completions.create(
+            model=model, temperature=0,
+            messages=[{"role": "user", "content": content}])
+        _failed = False
+    finally:
+        try:                                 # a partner run's call count (D-529); else nothing
+            import run_timing as _rt                                # noqa: WPS433
+            _rt.count("vision read", _time.time() - _t0, failed=_failed)
+        except Exception:                                           # noqa: BLE001
+            pass
     return resp.choices[0].message.content or ""
 
 
@@ -1619,6 +1787,46 @@ def parse_concept_response(raw: str) -> Optional[Dict[str, Any]]:
     if not isinstance(data, dict) or not isinstance(data.get("parts"), list):
         return None
     return data
+
+
+# ── a saved read, replayed (D-595) ─────────────────────────────────────────────────────
+#
+# A fix to what the engine DOES with a read is proved on the read that showed the fault, not
+# on a fresh one that may answer differently. SDI_CONCEPT_REPLAY names that read: a concept
+# cache entry (cache/vision_concept/<key>.json), its key alone, or a run record that kept the
+# read (output/json/<job>.json, concept_read.raw_response, D-595). The engine then prices that
+# answer with no model call, and the record says it was replayed and from where.
+CONCEPT_REPLAY_ENV = "SDI_CONCEPT_REPLAY"
+
+
+def replayed_read() -> Optional[Dict[str, Any]]:
+    """The saved read SDI_CONCEPT_REPLAY names, or None where it names none.
+
+    {"parsed", "raw_response", "read_key", "path"}. A name that is set and finds no readable
+    read raises ConceptUnavailable: a replay asked for and not done must never quietly become
+    a fresh model read."""
+    named = os.environ.get(CONCEPT_REPLAY_ENV, "").strip().strip('"')
+    if not named:
+        return None
+    path = Path(named)
+    if not path.is_file() and (_cache_dir() / (named + ".json")).is_file():
+        path = _cache_dir() / (named + ".json")
+    try:
+        entry = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ConceptUnavailable(
+            f"{CONCEPT_REPLAY_ENV} names {named!r}, which is no readable saved read "
+            f"({type(exc).__name__}) — nothing was replayed and no model was asked") from exc
+    entry = entry if isinstance(entry, dict) else {}
+    kept = entry.get("concept_read") if isinstance(entry.get("concept_read"), dict) else {}
+    raw = entry.get("raw_response") if "raw_response" in entry else kept.get("raw_response")
+    parsed = parse_concept_response(str(raw or ""))
+    if parsed is None:
+        raise ConceptUnavailable(
+            f"{CONCEPT_REPLAY_ENV} names {named!r}, which holds no concept answer the engine "
+            f"can parse — nothing was replayed and no model was asked")
+    return {"parsed": parsed, "raw_response": str(raw), "path": str(path),
+            "read_key": str(kept.get("read_key") or path.stem)}
 
 
 # ── cache: one call per (pack images + model + prompt), ever ────────────────────────
@@ -1700,6 +1908,7 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
         model = os.environ.get("XAI_VISION_MODEL", "grok-4.3")
     brief = str(brief or "").strip()[:BRIEF_MAX_CHARS]
     pngs: List[bytes] = []
+    rendered: List[Dict[str, Any]] = []
     for pdf in pdf_paths:
         # A BRIEF ALONE IS A PACK (D-401). A run queued from a typed brief with no drawings
         # is staged as the brief's own page (ENQUIRY_BRIEF.png beside ENQUIRY_BRIEF.txt) so
@@ -1710,7 +1919,12 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
         if is_brief_page(pdf):
             continue
         for index in range(pathB.count_pages(str(pdf))):
-            pngs.append(pathB.render_page_to_png(str(pdf), index))
+            png = pathB.render_page_to_png(str(pdf), index)
+            pngs.append(png)
+            # WHICH PAGE WENT AS AN IMAGE, AND HOW BIG (D-597): the page coverage record
+            # says what each page was read from, and a coarse image is a named risk.
+            rendered.append({"document": Path(str(pdf)).name, "page": index + 1,
+                             "px": list(png_size(png))})
     if not pngs and not brief:
         raise ConceptUnavailable("no pages could be rendered from this pack")
     recheck = str(recheck or "").strip()
@@ -1741,9 +1955,11 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
     key = base_key
     _extra = ({"sheet_text": _words} if sheet
               else ({"document_text_chars": len(_words)} if _words else {}))
-    if _words and _coverage.get("pages_trimmed"):
-        # A CUT IS SAID (D-466): on the record and, through the caller, in the run log.
+    if _words and (_coverage.get("pages_trimmed") or _coverage.get("pages_omitted")):
+        # A CUT OR A PAGE NOT SENT IS SAID (D-466, D-597): on the record and, through the
+        # caller, in the run log and on the page coverage record.
         _extra = dict(_extra, text_coverage=dict(_coverage))
+    _extra = dict(_extra, pages_rendered=rendered)
     if _refs:
         # The declared documents and what of them was readable, on the record: a scanned
         # manual with no text layer sends nothing, and that is a fact the caller flags.
@@ -1755,6 +1971,13 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
             # that on the book, not in a log.
             _extra = dict(_extra, standards_coverage=dict(_std_cov))
     _extra = dict(_extra, base_key=base_key)
+    # A SAVED READ, REPLAYED (D-595): the pages are still rendered and their words still go to
+    # the checks; the answer is the saved one, and no model is asked.
+    _replay = replayed_read()
+    if _replay is not None:
+        return dict({"parsed": _replay["parsed"], "raw_response": _replay["raw_response"],
+                     "cache_hit": True}, **dict(_extra, read_key=_replay["read_key"],
+                                                replayed_from=_replay["path"]))
     # ── AN UNCHANGED READ IS REUSED; A NEW BASELINE IS A NEW QUESTION (review of D-492) ──
     # The previous bill changes what the model is shown, so a cached answer must never
     # silently ignore it. Two cases, kept apart:
@@ -1791,9 +2014,19 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
             raw = entry.get("raw_response", "")
             parsed = parse_concept_response(raw)
             if parsed is not None:
+                try:
+                    import run_timing as _rt_cs
+                    _rt_cs.reuse("vision_concept", True)
+                except Exception:                            # noqa: BLE001
+                    pass
                 return dict({"parsed": parsed, "raw_response": raw, "cache_hit": True}, **_extra)
         except (OSError, ValueError):
             pass                                     # corrupt entry → re-fetch
+    try:
+        import run_timing as _rt_cs_miss
+        _rt_cs_miss.reuse("vision_concept", False)
+    except Exception:                                        # noqa: BLE001
+        pass
 
     # A render read calls exactly as it always has; only a sheet read or a re-ask says more —
     # and a re-read is given the previous read's bill to keep (D-492), outside the key.
@@ -2070,6 +2303,422 @@ def _num(value: Any) -> float:
     return f if f > 0 else 0.0
 
 
+# ── STOCK THAT IS NOT SHEET (D-528) ───────────────────────────────────────────────────────
+STOCK_SECTION_FORMS = ("box_section", "tube", "oval_tube", "angle", "channel", "flat_bar",
+                       "round_bar")
+STOCK_FORMS = STOCK_SECTION_FORMS + ("mesh", "wire", "sheet", "board")
+# section_profile.section_kg_per_m's names for each form ("" is a closed rectangle).
+_PROFILE_FORM = {"box_section": "", "tube": "CHS", "oval_tube": "OVAL", "angle": "ANGLE",
+                 "channel": "CHANNEL", "flat_bar": "FLAT", "round_bar": "ROUND"}
+_STOCK_SIZE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:mm)?\s*[x×]\s*(\d+(?:\.\d+)?)"
+                            r"(?:\s*(?:mm)?\s*[x×]\s*(\d+(?:\.\d+)?))?", re.IGNORECASE)
+# The largest cross-section or grid a size in a part's words can be: above it, "A x B" is the
+# part's length and width, not its section.
+_STOCK_SECTION_MAX_MM = 200.0
+_METAL_WORDS = ("STEEL", "ALUMIN", "ZINTEC", "STAINLESS", "GALV", "IRON", "METAL", "BRASS",
+                "COPPER", "WIRE", "MESH")
+
+
+def _stock_form_in_words(text: Any) -> str:
+    """The stock form a part's own words name (config.CONCEPT_STOCK_FORM_WORDS), or ""."""
+    said = " " + re.sub(r"[^A-Z0-9]+", " ", str(text or "").upper()) + " "
+    for form, words in _vocab("CONCEPT_STOCK_FORM_WORDS", ()) or ():
+        if any(f" {w} " in said for w in words):
+            return str(form)
+    return ""
+
+
+def _names_form(text: Any, form: str) -> bool:
+    """Do these words name this one stock form (config.CONCEPT_STOCK_FORM_WORDS)?"""
+    said = " " + re.sub(r"[^A-Z0-9]+", " ", str(text or "").upper()) + " "
+    words = dict(_vocab("CONCEPT_STOCK_FORM_WORDS", ()) or ()).get(form) or ()
+    return any(f" {w} " in said for w in words)
+
+
+_ITEM_STOP_WORDS = {"THE", "AND", "FOR", "WITH", "ONE", "OFF", "MM", "BOUGHT", "IN", "OF"}
+
+
+def stated_item_size(name: Any, text: Any) -> Optional[List[float]]:
+    """The size a brief states for this named item, or None (D-532).
+
+    A size counts when it stands beside the item's name in the sentence that names it, with
+    nothing but config.STATED_SIZE_FILLER_WORDS between: "7. one UPC ID plate (20 x 10 mm),
+    bought in" for "UPC ID PLATE". A name of one significant word is too loose to match by —
+    it returns None."""
+    sig = [w for w in re.findall(r"[A-Z0-9]+", str(name or "").upper())
+           if len(w) >= 2 and w not in _ITEM_STOP_WORDS and not w.isdigit()]
+    if len(sig) < 2:
+        return None
+    filler = {str(w).upper() for w in _vocab("STATED_SIZE_FILLER_WORDS", ()) or ()}
+    # THE SENTENCE THAT NAMES THE ITEM, NOT THE LINE (D-596d). A brief typed as one line put
+    # every item's words "on the line" with the tube's "30 x 15 x 1.5mm", and 0320730's
+    # identification label was described and researched at the tube's size.
+    for line in re.split(r"(?<!\d)\.(?!\d)|[\n;]+", str(text or "")):
+        words = [(m.group(0).upper(), m.start(), m.end())
+                 for m in re.finditer(r"\d+(?:\.\d+)?|[A-Za-z]+", line)]
+        # THE COMPONENT THE SIZE STANDS BESIDE, NOT THE SENTENCE IT IS IN (D-596e). A sentence
+        # can name the tube and the label together: "30 x 15 tube with an ID label fitted" is
+        # the tube's size, and only a size the item's own name stands next to is the item's.
+        spans = []
+        for a in range(len(words)):
+            for b in range(a, min(len(words), a + len(sig) + 2)):
+                if all(w in {x for x, _s, _e in words[a:b + 1]} for w in sig):
+                    spans.append((words[a][1], words[b][2]))
+                    break
+        for m in _STOCK_SIZE_RE.finditer(line):
+            for start, end in spans:
+                gap = ((end, m.start()) if m.start() >= end else
+                       (m.end(), start) if m.end() <= start else None)
+                if gap is None:
+                    continue
+                between = [w for w, s, e in words if s >= gap[0] and e <= gap[1]]
+                # A size the words after it name as a section is that section's: "ID label,
+                # 30 x 15 tube" sizes the tube.
+                after = [w for w, s, _e in words if s >= m.end() and w not in filler][:2]
+                if all(w in filler for w in between) and not _stock_form_in_words(" ".join(after)):
+                    return [float(g) for g in m.groups() if g]
+    return None
+
+
+_REFERENCE_CODE = re.compile(r"\b[A-Z]{1,4}-?\d{4,}[A-Z]{0,2}\b")
+_SENTENCES = re.compile(r"(?<!\d)\.(?!\d)|[\n;]+")
+
+
+def _names_item(sentence_words: set, name: Any) -> bool:
+    """Does a sentence name this item: every significant word of its name, singular?"""
+    sig = {_singular(w) for w in re.findall(r"[A-Z0-9]+", str(name or "").upper())
+           if len(w) >= 2 and w not in _ITEM_STOP_WORDS and not w.isdigit()}
+    return bool(sig) and sig <= sentence_words
+
+
+def _head_noun(name: Any) -> str:
+    sig = [w for w in re.findall(r"[A-Z]+", str(name or "").upper())
+           if len(w) >= 3 and w not in _ITEM_STOP_WORDS]
+    return _singular(sig[-1]) if sig else ""
+
+
+def stated_item_reference(name: Any, text: Any, others: Any = ()) -> str:
+    """The reference code a brief or a read line gives this named item, or "" (D-598).
+
+    A code counts in a sentence that names this item and no other read part, where a reference
+    word (config STATED_REFERENCE_WORDS) stands in the few words before it: "Fit 2 chrome end
+    caps per finished bar, drawing reference CA070092" for "CHROME END CAP". A colour or grade
+    with no reference word before it is not a part's reference."""
+    refs = [str(w).upper() for w in _vocab("STATED_REFERENCE_WORDS", ()) or ()]
+    for sentence in _SENTENCES.split(str(text or "")):
+        words = {_singular(w) for w in re.findall(r"[A-Za-z0-9]+", sentence.upper())}
+        if not _names_item(words, name) or any(
+                _names_item(words, o) for o in (others or ()) if _words(o) != _words(name)):
+            continue
+        up = " ".join(re.findall(r"[A-Z0-9-]+", sentence.upper()))
+        for m in _REFERENCE_CODE.finditer(up):
+            before = " " + " ".join(up[:m.start()].split()[-5:]) + " "
+            if any(f" {r} " in before for r in refs):
+                return m.group(0)
+    return ""
+
+
+def stated_item_holes(name: Any, text: Any, others: Any = ()) -> List[Dict[str, float]]:
+    """The holes a brief states for this item — [{"diameter_mm", "count"}] — in a sentence whose
+    only part noun is this item's (D-598): "Each bracket has the 3mm diameter hanging hole" for
+    "HOOK BRACKET" is one Ø3. The size must be called a diameter, beside the word hole; a count
+    written before it ("2 x 5mm diameter", "two Ø4") is the count, else one per part."""
+    head = _head_noun(name)
+    if not head:
+        return []
+    other_heads = {_head_noun(o) for o in (others or ()) if _head_noun(o) != head} - {""}
+    out: List[Dict[str, float]] = []
+    for sentence in _SENTENCES.split(str(text or "")):
+        words = {_singular(w) for w in re.findall(r"[A-Za-z]+", sentence.upper())}
+        if head not in words or words & other_heads or "HOLE" not in words:
+            continue
+        for m in re.finditer(r"(?:(\d+)\s*[x×]\s*|\b(one|two|three|four|six|eight)\s+)?"
+                             r"(?:(?:Ø|⌀)\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*mm\s*"
+                             r"(?:diameter|dia\b))", sentence, re.IGNORECASE):
+            count = (int(m.group(1)) if m.group(1) else
+                     _COUNT_WORDS.get(str(m.group(2) or "").lower(), 1))
+            out.append({"diameter_mm": float(m.group(3) or m.group(4)), "count": count})
+    return out
+
+
+def _words(value: Any) -> str:
+    return " ".join(re.sub(r"[^A-Z0-9]+", " ", str(value or "").upper()).split())
+
+
+def stated_section_forms(text: Any) -> Dict[Tuple[float, float], set]:
+    """The section forms a brief's or sheet's materials lines name, by size (D-532):
+    "1. 40 × 20 oval tube frame" gives {(20, 40): {"oval_tube"}}. One line, one size."""
+    out: Dict[Tuple[float, float], set] = {}
+    for line in re.split(r"[\n;]+", str(text or "")):
+        m = _STOCK_SIZE_RE.search(line)
+        form = _stock_form_in_words(line)
+        if not m or form not in STOCK_SECTION_FORMS:
+            continue
+        key = tuple(sorted((float(m.group(1)), float(m.group(2)))))
+        out.setdefault(key, set()).add(form)
+    return out
+
+
+def _sizes(value: Any) -> List[float]:
+    vals = value if isinstance(value, (list, tuple)) else [value]
+    return [v for v in (_num(x) for x in vals) if v > 0]
+
+
+def resolve_stock(p: Mapping[str, Any]) -> Dict[str, Any]:
+    """What a made line is cut from, every size in its own field (D-528).
+
+    {} for a sheet or board part (and anything not made). Otherwise {"form", "notes", ...}:
+    a section carries section_mm [a, b], wall_mm, length_mm, profile_form; a mesh carries
+    aperture_mm [a, b], wire_mm, panel_mm [L, W] and the wire_length_mm it is woven from; a
+    wire carries wire_mm and length_mm; "held" is a made metal line sighted as a plate thicker
+    than config.CONCEPT_PLATE_THICKNESS_LIMIT_MM that nothing says is a section — costed as
+    read and asked. Each size comes from the read's own stock fields, then the part's own words
+    ("25 x 25 box section"), then — said on the line — the old reading that wrote a section's
+    size into the blank's width and thickness. A wall or wire nobody states is the config
+    figure, marked assumed."""
+    if not isinstance(p, Mapping) or _concept_kind(p.get("kind")) != "fabricated":
+        return {}
+    st = p.get("stock") if isinstance(p.get("stock"), Mapping) else {}
+    words = " ".join(str(p.get(k) or "") for k in ("name", "sighted_material", "material_guess"))
+    blank = p.get("assumed_blank_mm") if isinstance(p.get("assumed_blank_mm"), Mapping) else {}
+    L, W, T = (_num(blank.get(k)) for k in ("length", "width", "thickness"))
+    limit = float(_vocab("CONCEPT_PLATE_THICKNESS_LIMIT_MM", 12.0) or 12.0)
+    metal = any(w in words.upper() for w in _METAL_WORDS) or not str(
+        p.get("material_guess") or "").strip()
+    said_form = str(st.get("form") or "").strip().lower().replace(" ", "_").replace("-", "_")
+    word_form = _stock_form_in_words(words) if metal else ""
+    if said_form in STOCK_SECTION_FORMS + ("mesh", "wire"):
+        form = said_form
+        # THE WORDS NAME AN OVAL THE SCHEMA HAS NO WORD FOR (D-531): a read that called
+        # "40 X 20 OVAL" a tube is right that it is hollow and wrong about its shape. The read's
+        # own size note counts as its words (D-532): 0356453's 20:20 read wrote "40x20 oval
+        # stated in materials list" in why_size and "tube" in the stock field.
+        if said_form in ("tube", "box_section") and (
+                word_form == "oval_tube"
+                or (metal and _names_form(" ".join(str(p.get(k) or "") for k in (
+                    "why_size", "seen")), "oval_tube"))):
+            form = "oval_tube"
+    elif said_form in ("sheet", "board", "plate"):
+        # The read says sheet; only a plate too thick to be one AND words naming a section
+        # outrank it — the corruption this exists for wrote "sheet" beside "25 x 25 mesh".
+        form = word_form if (word_form and T > limit) else ""
+    else:
+        form = word_form
+    notes: List[str] = []
+    m = next((x for x in _STOCK_SIZE_RE.finditer(words)
+              if float(x.group(1)) <= _STOCK_SECTION_MAX_MM
+              and float(x.group(2)) <= _STOCK_SECTION_MAX_MM), None)
+    if not form:
+        if metal and T > limit:
+            return {"form": "held", "thickness_mm": T,
+                    "notes": [f"sighted as {T:g} mm plate — thicker than the "
+                              f"{limit:g} mm a concept read is trusted to call plate, and nothing "
+                              f"says what section or mesh it is"]}
+        return {}
+    if form in STOCK_SECTION_FORMS:
+        sec, wall = _sizes(st.get("section_mm"))[:2], _num(st.get("wall_mm"))
+        if sec:
+            notes.append(f"section {' x '.join(f'{v:g}' for v in sec)} read as the stock's size")
+        elif m:
+            sec = [float(m.group(1)), float(m.group(2))]
+            wall = wall or (_num(m.group(3)) if m.group(3) else 0.0)
+            notes.append(f"section {m.group(0).strip()} taken from the part's own words")
+        elif 0 < W <= _STOCK_SECTION_MAX_MM and 0 < T <= _STOCK_SECTION_MAX_MM:
+            sec = [W, T]
+            notes.append(f"the read wrote the section's size into the blank's width and "
+                         f"thickness ({W:g} x {T:g}); taken as the section, not a "
+                         f"{T:g} mm plate")
+        if not sec:
+            return {"form": "held", "thickness_mm": T,
+                    "notes": [f"named as {form.replace('_', ' ')} with no section size"]}
+        if len(sec) == 1:
+            sec = [sec[0], sec[0]]
+        # A ROUND TUBE HAS ONE DIAMETER (D-532): a "tube" read with two different sides is a
+        # rectangular tube — weighed as round it took the larger side as its diameter.
+        if form == "tube" and abs(sec[0] - sec[1]) > 1e-6:
+            form = "box_section"
+            notes.append(f"{sec[0]:g} x {sec[1]:g} has two sides — a rectangular tube, not round")
+        assumed = False
+        if form == "flat_bar":
+            wall = sec[1]
+        elif form == "round_bar":
+            wall = sec[0]
+        elif not wall:
+            wall = float((_vocab("CONCEPT_SECTION_DEFAULT_WALL_MM", {}) or {}).get(form, 1.5))
+            assumed = True
+            notes.append(f"wall {wall:g} mm ASSUMED — the pack states none")
+        length = _num(st.get("length_mm")) or L
+        out = {"form": form, "section_mm": sec, "wall_mm": wall, "wall_assumed": assumed,
+               "length_mm": length, "profile_form": _PROFILE_FORM.get(form, ""),
+               "notes": notes}
+        # A FLAT-SIDED OVAL IS SAID ON THE STOCK (D-594), so it is weighed as a stadium. Read
+        # from the line's name and material words and from its note — the member-schedule
+        # panel's note lands in why_size — and never from the form alone: "oval tube" is an
+        # ellipse until something says flat-sided.
+        _oval_words = " ".join(str(x or "") for x in (words, p.get("why_size"), p.get("note"),
+                                                       st.get("note")))
+        if form == "oval_tube" and re.search(
+                r"(?<![A-Z0-9])(?:FLAT[\s-]*SIDED|F\.?\s?S\.?\s?O\.?)(?![A-Z0-9])",
+                _oval_words.upper()):
+            out["oval_shape"] = "flat_sided"
+        return out
+    if form == "mesh":
+        ap = _sizes(st.get("aperture_mm"))[:2]
+        wire = _num(st.get("wire_mm"))
+        if ap:
+            notes.append(f"grid {' x '.join(f'{v:g}' for v in ap)} read as the mesh's aperture")
+        elif m:
+            ap = [float(m.group(1)), float(m.group(2))]
+            wire = wire or (_num(m.group(3)) if m.group(3) else 0.0)
+            notes.append(f"grid {m.group(0).strip()} taken from the part's own words")
+        elif limit < T <= _STOCK_SECTION_MAX_MM:
+            ap = [T, T]
+            notes.append(f"the read wrote the mesh's grid into the blank's thickness ({T:g}); "
+                         f"taken as a {T:g} x {T:g} aperture, not a {T:g} mm plate")
+        if not ap:
+            _d = float(_vocab("CONCEPT_MESH_DEFAULT_APERTURE_MM", 25.0) or 25.0)
+            ap = [_d, _d]
+            notes.append(f"grid {_d:g} x {_d:g} ASSUMED — the pack states none")
+        if len(ap) == 1:
+            ap = [ap[0], ap[0]]
+        assumed = False
+        if not wire or wire > limit:
+            wire = float(_vocab("CONCEPT_MESH_DEFAULT_WIRE_MM", 3.0) or 3.0)
+            assumed = True
+            notes.append(f"wire Ø{wire:g} mm ASSUMED — the pack states none")
+        out = {"form": "mesh", "aperture_mm": ap, "wire_mm": wire, "wire_assumed": assumed,
+               "panel_mm": [L, W], "notes": notes}
+        if L and W:
+            import math                                               # noqa: WPS433
+            out["wire_length_mm"] = round((math.floor(W / ap[0]) + 1) * L
+                                          + (math.floor(L / ap[1]) + 1) * W, 1)
+        return out
+    wire = _num(st.get("wire_mm")) or (T if 0 < T <= limit else 0.0)
+    return {"form": "wire", "wire_mm": wire, "length_mm": _num(st.get("length_mm")) or L,
+            "notes": notes}
+
+
+def resolve_stocks(parts: List[Any], brief: str = "") -> List[Dict[str, Any]]:
+    """resolve_stock for every line of one read, index for index — and a held line whose
+    width and thickness are the section another line of the same read is cut from is that
+    section (D-528): FRAME HORIZONTALS at 415 x 25 x 25 beside FRAME VERTICALS of 25 x 25 box
+    section is 415 mm of the same box section, not a 25 mm plate.
+
+    THE BRIEF'S MATERIALS LINE NAMES THE SHAPE (D-532): a line the read called a hollow tube
+    whose section is the size a brief line gives as oval ("1. 40 × 20 oval tube frame") is that
+    oval — where the brief names no other form at that size."""
+    out = [resolve_stock(p) if isinstance(p, Mapping) else {} for p in parts or []]
+    _stated = stated_section_forms(brief)
+    from robust_ownership import brief_oval_shape
+    for s in out:
+        if s.get("form") not in ("tube", "box_section", "oval_tube") or not s.get("section_mm"):
+            continue
+        if _stated.get(tuple(sorted(s["section_mm"][:2]))) == {"oval_tube"}:
+            a, b = s["section_mm"][:2]
+            s.update(form="oval_tube", profile_form=_PROFILE_FORM["oval_tube"])
+            if s.get("wall_assumed"):
+                s["wall_mm"] = float((_vocab("CONCEPT_SECTION_DEFAULT_WALL_MM", {}) or {})
+                                     .get("oval_tube", s.get("wall_mm") or 1.5))
+            s.setdefault("notes", []).append(
+                f"oval: the brief's materials list gives {a:g} x {b:g} as oval tube")
+        if s.get("form") == "oval_tube" and brief_oval_shape(
+                brief, s["section_mm"], s.get("wall_mm")) == "flat_sided":
+            s["oval_shape"] = "flat_sided"
+            s.setdefault("notes", []).append("flat-sided shape from matching section clause in brief")
+    known: Dict[Tuple[float, float], Tuple[Dict[str, Any], str]] = {}
+    for p, s in zip(parts or [], out):
+        if s.get("form") in STOCK_SECTION_FORMS:
+            known.setdefault(tuple(sorted(s["section_mm"][:2])), (s, str(p.get("name") or "")))
+    for i, (p, s) in enumerate(zip(parts or [], out)):
+        if s.get("form") != "held":
+            continue
+        blank = p.get("assumed_blank_mm") if isinstance(p.get("assumed_blank_mm"), Mapping) else {}
+        L, W, T = (_num(blank.get(k)) for k in ("length", "width", "thickness"))
+        hit = known.get(tuple(sorted((W, T))))
+        if hit:
+            twin, of = hit
+            out[i] = dict(twin, length_mm=L, notes=[
+                f"the same {twin['section_mm'][0]:g} x {twin['section_mm'][1]:g} "
+                f"{twin['form'].replace('_', ' ')} as {of} — the read wrote it as a {T:g} mm "
+                f"plate"] + [n for n in twin.get("notes") or [] if "ASSUMED" in n])
+    return out
+
+
+def _stock_said(s: Mapping[str, Any]) -> str:
+    """A stock in the words an estimator confirms: '25 x 25 x 1.5 box section, 880 mm long'."""
+    form = str(s.get("form") or "").replace("_", " ")
+    if s.get("form") in STOCK_SECTION_FORMS:
+        a, b = s["section_mm"][:2]
+        size = (f"Ø{a:g}" if s.get("form") == "round_bar" else
+                f"{a:g} x {b:g}" if s.get("form") == "flat_bar" else
+                f"{a:g} x {b:g} x {s['wall_mm']:g}")
+        return f"{size} {form}" + (f", {s['length_mm']:g} mm long" if s.get("length_mm") else "")
+    if s.get("form") == "mesh":
+        ap = s.get("aperture_mm") or []
+        pan = [v for v in (s.get("panel_mm") or []) if v]
+        return (f"{ap[0]:g} x {ap[1]:g} mesh of Ø{s['wire_mm']:g} wire"
+                + (f", panel {pan[0]:g} x {pan[1]:g}" if len(pan) == 2 else ""))
+    return f"Ø{_num(s.get('wire_mm')):g} wire, {_num(s.get('length_mm')):g} mm"
+
+
+def _apply_stock(record: Dict[str, Any], s: Mapping[str, Any],
+                 blank: Mapping[str, Any]) -> Dict[str, Any]:
+    """The record a section, mesh or wire line becomes (D-528), in the fields the costing
+    already reads: section_stock {a, b, t, length_mm, profile_form} for the by-the-metre path,
+    wire_gauge_mm / wire_length_mm on wire stock for a mesh or wire. Returns the blank the rest
+    of the mapper writes: the cut length, the section's outside size and its wall — never a
+    section's size as a plate thickness."""
+    record["concept_stock"] = {k: v for k, v in s.items() if k != "notes"}
+    said = _stock_said(s)
+    if s.get("form") in STOCK_SECTION_FORMS:
+        a, b = s["section_mm"][:2]
+        record["section_stock"] = {
+            "a": a, "b": b, "t": s["wall_mm"], "length_mm": s.get("length_mm") or 0,
+            "profile_form": s.get("profile_form") or "", "form": s["form"],
+            "wall_assumed": bool(s.get("wall_assumed")), "source": SOURCE,
+            **({"oval_shape": s["oval_shape"]} if s.get("oval_shape") else {})}
+        record["stock_form"] = "tube"
+        record["review_flags"].append(
+            f"CONCEPT STOCK: {said} — costed by the metre, not nested as plate"
+            + (f" ({'; '.join(s['notes'])})" if s.get("notes") else ""))
+        return {"length": s.get("length_mm") or _num(blank.get("length")), "width": a,
+                "thickness": s["wall_mm"]}
+    wire_len = s.get("wire_length_mm") if s.get("form") == "mesh" else s.get("length_mm")
+    record["stock_form"] = "wire"
+    record.setdefault("manufacturing_interpretation", {})["stock_form"] = "wire"
+    if s.get("wire_mm"):
+        record["wire_gauge_mm"] = s["wire_mm"]
+    if wire_len:
+        record["wire_length_mm"] = wire_len
+    record["review_flags"].append(
+        f"CONCEPT STOCK: {said} — costed as "
+        + (f"{wire_len:,.0f} mm of wire" if wire_len else "wire") + ", not as a plate"
+        + (f" ({'; '.join(s['notes'])})" if s.get("notes") else ""))
+    if s.get("form") == "mesh":
+        pan = s.get("panel_mm") or [0, 0]
+        return {"length": pan[0], "width": pan[1], "thickness": s.get("wire_mm") or 0}
+    return {"length": s.get("length_mm") or 0, "width": 0, "thickness": s.get("wire_mm") or 0}
+
+
+def stock_mass_kg(p: Mapping[str, Any], density: float = 7850.0,
+                  stock: Optional[Mapping[str, Any]] = None) -> Optional[float]:
+    """One piece's mass by its stock (D-528) — a section by the metre, a mesh or wire by its
+    wire — or None where it is sheet, held, or cannot be weighed."""
+    s = dict(stock) if stock is not None else resolve_stock(p)
+    rho = density or 7850.0
+    if s.get("form") in STOCK_SECTION_FORMS and s.get("length_mm"):
+        from section_profile import section_kg_per_m                 # noqa: WPS433
+        a, b = s["section_mm"][:2]
+        from section_profile import section_form                     # noqa: WPS433
+        kg_m = section_kg_per_m(a, b, s["wall_mm"], section_form(s), rho)
+        return kg_m * s["length_mm"] / 1000.0 if kg_m else None
+    if s.get("form") == "mesh" and s.get("wire_length_mm"):
+        return s["wire_length_mm"] / 1000.0 * 3.14159265 / 4.0 * (s["wire_mm"] ** 2) * rho / 1e6
+    if s.get("form") == "wire" and s.get("wire_mm") and s.get("length_mm"):
+        return s["length_mm"] / 1000.0 * 3.14159265 / 4.0 * (s["wire_mm"] ** 2) * rho / 1e6
+    return None
+
+
 def _density(material: Any) -> float:
     """kg/m³ for a sighted material from config's density table, or 0 where it names none."""
     try:
@@ -2188,6 +2837,12 @@ def sheet_stated_facts(words: str) -> Dict[str, Any]:
                     m2 = re.match(r"^(\d+(?:\.\d+)?)\s*KG$", lines[j], re.IGNORECASE)
                     if m2:
                         weights.append(float(m2.group(1)))
+    if not weights:
+        # A TITLE BLOCK THAT PRINTS ONLY THE FIGURE (D-528): 0356456 prints "49KG" on a line of
+        # its own under the title, with no WEIGHT label — the only weight on the sheet. A lone
+        # "<n> KG" line counts where it is the one such figure the sheet prints.
+        weights = [float(m.group(1)) for m in
+                   (re.match(r"^(\d+(?:\.\d+)?)\s*KGS?$", l, re.IGNORECASE) for l in lines) if m]
     if _one(weights):
         out["stated_weight_kg"] = _one(weights)
 
@@ -2214,6 +2869,13 @@ def sheet_stated_facts(words: str) -> Dict[str, Any]:
         for word in sorted(materials, key=len, reverse=True):
             m = re.search(rf"\b(\d+(?:\.\d+)?)\s*MM\s+{re.escape(word)}\b", l, re.IGNORECASE)
             if m:
+                # A GAUGE THAT NAMES ITS PART IS THAT PART'S (D-528): "1.5MM STEEL SHEET SIDES"
+                # on a materials list is the sides' gauge, not the product's — "2mm STEEL
+                # CONSTRUCTION" is the product's. A tail naming anything but the stock is a part.
+                _tail = [w for w in re.findall(r"[A-Za-z]+", l[m.end():].upper())
+                         if w not in _GAUGE_NOTE_QUALIFIERS]
+                if _tail:
+                    break
                 gauges.append(float(m.group(1)))
                 mats.append(str(materials[word]))
                 break
@@ -2229,6 +2891,12 @@ def sheet_stated_facts(words: str) -> Dict[str, Any]:
     if len(set(finishes)) == 1:
         out["finish"] = finishes[0]
     return out
+
+
+_GAUGE_NOTE_QUALIFIERS = {"SHEET", "SHEETS", "PLATE", "CONSTRUCTION", "THROUGHOUT", "ALL",
+                          "GAUGE", "THICK", "THK", "MATERIAL", "MILD", "STEEL", "CR", "CRCA",
+                          "HR", "ZINTEC", "GALV", "GALVANISED", "GALVANIZED", "PRE", "ONLY",
+                          "UNLESS", "OTHERWISE", "STATED", "MM"}
 
 
 def _uncovered_faces(dims: List[float], made: List[Mapping[str, Any]], tol: float) -> List[str]:
@@ -2256,8 +2924,24 @@ def _uncovered_faces(dims: List[float], made: List[Mapping[str, Any]], tol: floa
     return out
 
 
+def brief_stated_weight(brief: str) -> float:
+    """The product's weight an enquiry brief states (D-528) — "49 kg stated on the drawing",
+    "weighs about 12kg" — or 0. Read only from a sentence that says it is a weight, never one
+    about a load, a capacity or each of something; two different figures state nothing."""
+    vals = set()
+    for sentence in re.split(r"(?<=[.;])\s+|\n", str(brief or "")):
+        if not re.search(r"weigh|weight|stated|overall|total", sentence, re.IGNORECASE):
+            continue
+        if re.search(r"\b(?:each|per|load|loads|capacity|max|maximum|swl|rated|holds?)\b",
+                     sentence, re.IGNORECASE):
+            continue
+        for m in re.finditer(r"(\d+(?:\.\d+)?)\s*kgs?\b", sentence, re.IGNORECASE):
+            vals.add(float(m.group(1)))
+    return vals.pop() if len(vals) == 1 else 0.0
+
+
 def sheet_check(answer: Mapping[str, Any], words: str = "",
-                envelope: Any = None) -> Dict[str, Any]:
+                envelope: Any = None, brief: str = "") -> Dict[str, Any]:
     """The sighted bill against the sheet's stated body, goods and weight.
 
     Returns {'checked', 'agrees', 'failures', 'body_mm', 'body_used_mm', 'body_source',
@@ -2392,6 +3076,12 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
     # too light under both, or too heavy under both, fails; fitting only one is UNVERIFIED —
     # the case a single reading let pass as "agrees".
     stated = _stated("stated weight", facts.get("stated_weight_kg"))
+    # THE BRIEF'S WEIGHT WHERE THE SHEET GIVES NONE (D-528): an enquiry brief is a stated fact
+    # (enquiry_brief rank), so it needs no printed figure to stand on.
+    _weight_from = "sheet" if stated else ""
+    if not stated:
+        stated = brief_stated_weight(brief)
+        _weight_from = "enquiry brief" if stated else ""
     unit_w = _stated("goods unit weight", facts.get("goods_unit_weight_kg"))
     goods = (goods_count * unit_w if (goods_count and unit_w)
              else _stated("goods weight", facts.get("goods_weight_kg")))
@@ -2409,10 +3099,16 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
     light_testable = bool(readings) and (_no or bool(_less_goods))
 
     sighted, unweighed = 0.0, []
-    for p in made:
+    # BY ITS STOCK (D-528): a section by the metre, a mesh by its wire — a 25 x 25 mesh weighed
+    # as a 25 mm plate is fifty times its weight, and the check then blames the wrong line.
+    for p, stock in zip(made, resolve_stocks(made)):
         blank = p.get("assumed_blank_mm") if isinstance(p.get("assumed_blank_mm"), Mapping) else {}
         l, w, t = (_num(blank.get(k)) for k in ("length", "width", "thickness"))
         rho = _density(p.get("material_guess")) or _density(facts.get("material"))
+        _by_stock = stock_mass_kg(p, rho or 7850.0, stock) if stock else None
+        if _by_stock:
+            sighted += _by_stock * (_num(p.get("quantity")) or 1.0)
+            continue
         if not (l and w and t and rho):
             unweighed.append(str(p.get("name") or "a part").strip())
             continue
@@ -2486,7 +3182,11 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
     _family = _density(_mat) if _mat_printed else 0.0
     gauge_checked = bool(gauge and _family and made)
     if gauge_checked:
-        for p in made:
+        # A SHEET GAUGE IS NOT A SECTION'S SIZE (D-528): a box section, angle, mesh or wire line
+        # has its own sizes, and holding them to "1.5MM STEEL" fails the line for being a section.
+        for p, _stk in zip(made, resolve_stocks(made)):
+            if _stk.get("form") in STOCK_SECTION_FORMS + ("mesh", "wire"):
+                continue
             blank = p.get("assumed_blank_mm") if isinstance(p.get("assumed_blank_mm"), Mapping) else {}
             t = _num(blank.get("thickness"))
             if t and _density(p.get("material_guess") or _mat) == _family and abs(t - gauge) > 0.05:
@@ -2574,6 +3274,7 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
             "labels_missing": [lab["label"] for lab in labels_missing],
             "gauge_checked": gauge_checked, "finish_checked": finish_checked,
             "stated_weight_kg": stated or None,
+            "stated_weight_from": _weight_from or None,
             "goods_weight_kg": goods or None, "net_weight_kg": net or None,
             "weight_readings_kg": [round(r, 2) for r in readings],
             "sighted_weight_kg": round(sighted, 2) if sighted else None,
@@ -2667,6 +3368,15 @@ def set_aside_undrawn(answer: Dict[str, Any]) -> tuple:
     return out, aside
 
 
+def _stage(name: str) -> None:
+    """A partner run's stage (D-529); nothing on any other run."""
+    try:
+        import run_timing as _rt                                    # noqa: WPS433
+        _rt.stage(name)
+    except Exception:                                               # noqa: BLE001
+        pass
+
+
 def read_sheet_concept(pdf_paths: List[str], *, refresh: bool = False,
                        brief: str = "", model: Optional[str] = None, envelope: Any = None,
                        envelope_of: str = "",
@@ -2687,16 +3397,20 @@ def read_sheet_concept(pdf_paths: List[str], *, refresh: bool = False,
     first_base_key = str(read.get("base_key") or "")
     answer = read.get("parsed") or {}
     words = str(read.get("sheet_text") or "")
-    check = sheet_check(answer, words, envelope=envelope)
+    _stage("checking")
+    check = sheet_check(answer, words, envelope=envelope, brief=brief)
     # A REPLAYED BILL WAS ALREADY THE BETTER OF TWO: the run that produced it took the re-ask.
-    if check.get("failures") and read.get("baseline") != "unchanged read reused":
+    # So was a saved read replayed by name (D-595): it is the answer that run priced.
+    if (check.get("failures") and read.get("baseline") != "unchanged read reused"
+            and not read.get("replayed_from")):
+        _stage("re-reading — the first read did not agree with the sheet")
         first = list(check["failures"])
         again = read_concept(pdf_paths, model=model, refresh=refresh, brief=brief, sheet=True,
                              recheck=recheck_text(check), **_env)
         answer2 = again.get("parsed") or {}
         taken = False
         if answer2.get("parts"):
-            check2 = sheet_check(answer2, words, envelope=envelope)
+            check2 = sheet_check(answer2, words, envelope=envelope, brief=brief)
             if _check_rank(check2) < _check_rank(check):
                 read, answer, check, taken = again, answer2, check2, True
         check["rechecked"] = True
@@ -2918,9 +3632,19 @@ def save_bill(folder: Any, job: str, answer: Mapping[str, Any],
                 and _key(r.get("name")) not in {_key(h.get("name")) for h in history}):
             history.append(dict(r, dropped_by_read=str(r.get("dropped_by_read") or read_key
                                                        or "a later read")))
+    # THE READ ITSELF, IN ITS OWN SHAPE (D-535): the portal's Member schedule panel starts the
+    # estimator's table from it — stock form, section, wall, holes and work included, which the
+    # summary rows above do not carry. Which read it was is said: the model's, or a schedule
+    # a person accepted (whose re-save is the schedule as priced).
+    _src = "accepted_construction" if isinstance(answer.get("accepted_construction"),
+                                                 Mapping) else "model"
+    read = {"source": _src,
+            **{k: answer[k] for k in ("product", "unit_operations", "not_visible")
+               if k in answer},
+            "parts": [dict(p) for p in (answer.get("parts") or []) if isinstance(p, Mapping)]}
     payload = json.dumps({"job": job, "prompt_version": CONCEPT_PROMPT_VERSION,
                           "base_key": base_key, "read_key": read_key, "parts": rows,
-                          "history": history[:40]}, indent=1)
+                          "history": history[:40], "read": read}, indent=1, default=str)
     written = None
     for path in (_bill_path(folder, job), _runner_bill_path(folder, job)):
         if path is None:
@@ -2968,12 +3692,52 @@ def bill_changes(previous: Mapping[str, Any], answer: Mapping[str, Any]) -> List
     moved. Matched by name, case and spacing ignored."""
     if not previous or not previous.get("parts"):
         return []
-    key = lambda n: re.sub(r"[^a-z0-9]+", " ", str(n).lower()).strip()
-    before = {key(r["name"]): r for r in previous.get("parts") or []}
-    after = {key(r["name"]): r for r in _bill_rows(answer or {})}
+    # "19MM" and "19 MM" are one spelling (D-537).
+    key = lambda n: re.sub(r"[^a-z0-9]+", " ", re.sub(  # noqa: E731
+        r"(?<=\d)(?=[a-z])|(?<=[a-z])(?=\d)", " ", str(n).lower())).strip()
+    def _keyed(rows: Any) -> Dict[str, Any]:
+        # Two lines of one name are two lines (D-537): the 21:37 read named a 732 mm and a
+        # 475 mm base angle alike, and keying by name alone kept only the second.
+        out_: Dict[str, Any] = {}
+        for r in rows or []:
+            k, n = key(r["name"]), 2
+            while k in out_:
+                k, n = f"{key(r['name'])} {n}", n + 1
+            out_[k] = r
+        return out_
+    before = _keyed(previous.get("parts"))
+    after = _keyed(_bill_rows(answer or {}))
+    # A LINE RENAMED IS NOT A LINE DROPPED (D-537). 0356455's 21:37 read called the uprights
+    # "MAIN VERTICAL OVAL UPRIGHT" where the last read said "MAIN VERTICAL UPRIGHT", and the
+    # book listed six lines as dropped — "its material and work are missing" — beside the same
+    # six lines added. A new name that holds every word of an old one (or the other way round),
+    # of the same kind, pairs with it when that pairing is the only one either name has.
+    _gone = [k for k in before if k not in after]
+    _new = [k for k in after if k not in before]
+    _words = lambda k: {w for w in k.split() if w not in ("mm", "x")}  # noqa: E731
+
+    def _pairs(a: str, b: str) -> bool:
+        wa, wb = _words(a), _words(b)
+        # One word ("Strip") is too loose to name a line by — the D-532 rule for item sizes.
+        return (min(len(wa), len(wb)) >= 2 and (wa <= wb or wb <= wa)
+                and before[a].get("kind") == after[b].get("kind"))
+    _dist = lambda a, b: len(_words(a) ^ _words(b))                   # noqa: E731
+    renamed: Dict[str, str] = {}
+    for a in _gone:
+        cands = sorted((b for b in _new if b not in renamed and _pairs(a, b)),
+                       key=lambda b: _dist(a, b))
+        if not cands or (len(cands) > 1 and _dist(a, cands[1]) == _dist(a, cands[0])):
+            continue
+        best = cands[0]
+        if any(x != a and _pairs(x, best) and _dist(x, best) <= _dist(a, best) for x in _gone):
+            continue
+        renamed[best] = a
     out: List[str] = []
     for k, r in after.items():
         p = before.get(k)
+        if p is None and k in renamed:
+            p = before[renamed[k]]
+            out.append(f"renamed: {p['name']} → {r['name']}")
         if p is None:
             out.append(f"added: {r['name']} x{r['quantity']:g}")
             continue
@@ -2988,8 +3752,9 @@ def bill_changes(previous: Mapping[str, Any], answer: Mapping[str, Any]) -> List
                        f"{r.get('length') or 0:g} × {r.get('width') or 0:g} mm"
                        + (" — AN APPROVED VALUE CHANGED; the estimator's stands" if "size" in _ok else "")
                        + _why)
+    _renamed_from = set(renamed.values())
     for k, p in before.items():
-        if k not in after:
+        if k not in after and k not in _renamed_from:
             out.append(f"dropped: {p['name']} x{p.get('quantity') or 0:g}")
     return out
 
@@ -3158,7 +3923,9 @@ def cutout_geometry(sighted: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def parts_from_concept(answer: Dict[str, Any], stem: str, *,
-                       sheet: bool = False) -> List[Dict[str, Any]]:
+                       sheet: bool = False, brief: str = "",
+                       source_answer: Optional[Mapping[str, Any]] = None,
+                       source_response: str = "") -> List[Dict[str, Any]]:
     """The sighted parts as engine part records, every field attributed at concept rank.
 
     Written through apply_field so the stamps are the arbitration machinery's own, not a
@@ -3167,10 +3934,21 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
 
     `sheet`: the pages are drawing sheets (D-415). A fitting the sheet does not draw is not
     minted by the implied-fittings net; it is asked on the part that implies it.
+
+    `source_answer`: the read as the model returned it, where `answer` is a copy with lines set
+    aside — so each record carries the ID of its line in the read itself (D-596e).
+    `source_response`: that response's identity as taken at the read (D-598).
     """
     from document_builder import _empty_part_record                 # noqa: WPS433
     from source_precedence import apply_field                       # noqa: WPS433
 
+    # WHICH LINE OF THE READ, BY ITS ID (D-596e), taken before any line is added or changed.
+    try:
+        from read_charge_contract import read_ids as _read_ids
+        _ids = _read_ids(source_answer if source_answer is not None else answer,
+                         response=source_response)
+    except Exception:                                                # noqa: BLE001
+        _ids = {}
     parts: List[Dict[str, Any]] = []
     answer = _with_print_lines(answer)
     _implied: List[Dict[str, Any]] = []
@@ -3180,6 +3958,7 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
         _implied = [p for p in (_netted.get("parts") or [])[_before:] if isinstance(p, dict)]
     else:
         answer = _with_implied_fittings(answer)
+    _stocks = resolve_stocks(list(answer.get("parts") or []), brief=brief)
     for n, sighted in enumerate(answer.get("parts") or [], start=1):
         if not isinstance(sighted, dict):
             continue
@@ -3229,6 +4008,21 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
             f"{_slug(stem, 'CONCEPT')}-CPT{n:02d}",
             item_number=n, description=name, quantity=None)
         record["concept"] = True
+        # WHICH READ LINE THIS IS (D-596): the fingerprint of the line as the read returned it,
+        # so the read ledger links the answer to this record whatever was set aside or
+        # appended before it was numbered; and whether the engine, not the read, minted it.
+        try:
+            from read_charge_contract import fingerprint as _read_fp
+            record["read_fingerprint"] = _read_fp(sighted)
+        except Exception:                                            # noqa: BLE001
+            pass
+        # ITS SOURCE ID, the read line's place and words (D-596e): a description the engine
+        # changes afterwards — a size appended, a name tidied — cannot break the link.
+        if _ids.get(id(sighted)):
+            record["read_id"] = _ids[id(sighted)]
+        record["read_origin"] = ("engine:implied_fitting" if sighted.get("_minted_fitting_for")
+                                 else "engine:print_line" if sighted.get("_minted_print_for")
+                                 else "read")
         # WHICH KIND OF LINE THIS IS, on the record rather than inferred from its material.
         # A fabricated panel must carry work or it is a part nobody can price; a bought-in
         # castor and an applied graphic correctly carry none, and the difference has to be
@@ -3321,7 +4115,41 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
             # plated bracket — which is a briefable item, as long as every word of it says
             # it was SIGHTED and approximate. The description on the sheet stays what it
             # was; this is a second field, read only by the rung that goes looking.
+            # A SIZE THE BRIEF STATES FOR THIS ITEM RIDES ITS LINE (D-532). 0356453's read
+            # named "UPC ID PLATE" and dropped the "20 X 10MM" the sheet and the brief both
+            # print, so the plate was researched with no size at all. Stated, not sighted:
+            # the description says it and the research asks for that size.
+            _stated_sz = (None if record.get("concept_sighted_size_mm")
+                          else stated_item_size(name, brief))
+            if _stated_sz:
+                record["concept_stated_size_mm"] = _stated_sz
+                _sz = " x ".join(f"{v:g}" for v in _stated_sz)
+                if not re.search(r"\d", name):
+                    record["description"] = f"{name} {_sz} MM"
+                record["review_flags"].append(
+                    f"CONCEPT: {_sz} mm is the size the brief states for this item — carried "
+                    f"on its line and into the price research, never nested")
+            # THE PART'S OWN REFERENCE, WHERE THE BRIEF OR THE READ STATES ONE (D-598). The 12:51
+            # 0320730 book priced a generic chrome end cap from the market; the drawing names
+            # CA070092. The code rides the research and the line, and the match is asked.
+            _others = [str(p.get("name") or "") for p in (answer.get("parts") or [])
+                       if isinstance(p, dict) and p is not sighted]
+            _ref = stated_item_reference(name, brief, _others)
+            _ref_src = "the enquiry brief" if _ref else ""
+            if not _ref:
+                _ref = stated_item_reference(name, " ".join(
+                    str(sighted.get(k) or "") for k in ("name", "seen", "sighted_material")), ())
+                _ref_src = "the read" if _ref else ""
+            if _ref:
+                record["concept_stated_reference"] = {"code": _ref, "source": _ref_src}
+                record["review_flags"].append(
+                    f"CONCEPT: {_ref_src} names {_ref} for this item — priced as found; the "
+                    f"supplier match to {_ref} is unproven until a catalogue line carries it")
             _spec = [name]
+            if _ref:
+                _spec.append(f"reference {_ref} (stated — price this part, or say it is not found)")
+            if _stated_sz:
+                _spec.append(f"{' x '.join(f'{v:g}' for v in _stated_sz)} mm (stated)")
             if sighted_mat:
                 _spec.append(str(sighted_mat))
             _dims = [f"{k} ~{blank_given}mm" for k, blank_given in
@@ -3340,7 +4168,45 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
         # ── FOLDS, FLANGES AND CUT-OUTS (D-490) ─────────────────────────────────────
         # The flat blank, the fold count and the internal cutting, each with its working.
         _cuts: Dict[str, Any] = {}
-        if kind == "fabricated" and not unclassified:
+        _stock = _stocks[n - 1] if n - 1 < len(_stocks) else {}
+        # THE HOLES THE BRIEF STATES FOR THIS PART, WHERE THE READ LISTED NONE OF THAT SIZE
+        # (D-598a): carried into its cut-outs, so the part that owns the hole is the part that
+        # is charged for cutting it, at its diameter and count. The read line is not changed.
+        _read_dias = [max(_num(c.get("length_mm")), _num(c.get("width_mm")))
+                      for c in (sighted.get("cutouts") or []) if isinstance(c, Mapping)
+                      and str(c.get("what") or "").strip().lower().startswith("hole")]
+        _brief_holes = [h for h in (stated_item_holes(name, brief, [
+            str(o.get("name") or "") for o in (answer.get("parts") or [])
+            if isinstance(o, dict) and o is not sighted]) if kind == "fabricated" else [])
+            if not any(abs(h["diameter_mm"] - d) <= 0.25 for d in _read_dias)]
+        _cut_line = (dict(sighted, cutouts=list(sighted.get("cutouts") or []) + [
+            {"what": "hole", "count": h["count"], "length_mm": h["diameter_mm"],
+             "width_mm": h["diameter_mm"]} for h in _brief_holes]) if _brief_holes else sighted)
+        if _brief_holes:
+            record["concept_cutouts_from_brief"] = [dict(h) for h in _brief_holes]
+            record["review_flags"].append(
+                "CONCEPT: the brief states " + ", ".join(
+                    f"{h['count']} × Ø{h['diameter_mm']:g} hole" for h in _brief_holes)
+                + " on this part, which the read did not list — carried into its cutting")
+        if kind == "fabricated" and not unclassified and _stock.get("form") in (
+                STOCK_SECTION_FORMS + ("mesh", "wire")):
+            # STOCK THAT IS NOT SHEET (D-528): costed as what it is cut from — a section by the
+            # metre, a mesh or wire by its wire — never nested as a plate at a section's size.
+            blank = _apply_stock(record, _stock, blank)
+            if _stock.get("notes"):
+                why = f"{why}; {'; '.join(_stock['notes'])}"
+            _assume("", _stock_said(_stock), "; ".join(_stock.get("notes") or [])
+                    or "the stock the read names", field="stock")
+        elif kind == "fabricated" and not unclassified:
+            if _stock.get("form") == "held":
+                from source_precedence import raise_manufacturing_question  # noqa: WPS433
+                raise_manufacturing_question(
+                    record,
+                    f"{name}: {'; '.join(_stock.get('notes') or [])}",
+                    f"costed as read — {_stock.get('thickness_mm', 0):g} mm plate",
+                    "state the stock in the brief or the answers file: the plate's gauge, or the "
+                    "section, mesh or wire it is cut from",
+                    "concept_stock_check")
             _dev = developed_blank(blank, sighted,
                                    envelope=(answer.get("product") or {}).get("assumed_overall_mm"))
             record["concept_blank_basis"] = _dev["basis"]
@@ -3359,7 +4225,7 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
                 record["concept_fold_count"] = _dev["folds"]
                 _assume("", _dev["folds"], "folds given by the concept read — provisional, not "
                         "counted off a drawing", field="fold count")
-            _cuts = cutout_geometry(sighted)
+            _cuts = cutout_geometry(_cut_line)
         # What the read said its size came from — the words a strip names its host in (D-499).
         record["concept_why_size"] = str(sighted.get("why_size") or "")
         wrote_size = False
@@ -3400,6 +4266,20 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
                     f"internal cut-outs given by the concept read — {_cuts['internal_mm']:g} mm "
                     f"of internal cutting and {_cuts['pierces']} pierce(s), provisional",
                     field="cut-outs")
+        elif record.get("section_stock"):
+            # A SECTION'S HOLES ARE ITS OWN (D-598a). The tube's Ø5 hole reached no record:
+            # cut-outs were taken only on the sheet path, so the drilling charged for it had no
+            # hole behind it. A sawn section keeps its holes as features — their count drives
+            # the drilling — and no laser cut length is added for them.
+            _sec_cuts = cutout_geometry(_cut_line)
+            _sec_holes = sum(int(i["count"]) for i in _sec_cuts.get("items") or []
+                             if str(i.get("what") or "").startswith("hole"))
+            if _sec_cuts.get("items"):
+                record["concept_cutouts"] = list(_sec_cuts["said"])
+                record["concept_cutout_dims"] = [dict(i) for i in _sec_cuts["items"]]
+            if _sec_holes:
+                record.setdefault("manufacturing_features", {})["hole_count"] = _sec_holes
+                record.setdefault("geometry_rollup", {})["estimated_hole_count"] = _sec_holes
 
         # ── THE WORK, OR THE LINE COSTS NOTHING ─────────────────────────────────────
         #
@@ -3446,6 +4326,19 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
                     seen_ops.append(name)
             elif name:
                 unknown.append(str(raw))
+        # A SECTION IS SAWN AND A MESH IS NOT LASERED (D-528): the read's flat-sheet cut on a
+        # line it was told is section or mesh stock is the cut that stock takes.
+        if record.get("concept_stock") and "laser_cutting" in seen_ops:
+            seen_ops.remove("laser_cutting")
+            if record.get("section_stock"):
+                if "saw" not in seen_ops:
+                    seen_ops.insert(0, "saw")
+                record["review_flags"].append(
+                    "CONCEPT STOCK: the read's laser cut is the section's saw cut to length")
+            else:
+                record["review_flags"].append(
+                    "CONCEPT STOCK: laser cutting dropped — mesh and wire are not cut on the "
+                    "flat-bed laser")
         if _edges and "edge_banding" in seen_ops:
             record["concept_banded_edges"] = _edges
             _assume("", f"edge_banding: {_edges}", "the edges visible on the render",
@@ -3489,6 +4382,26 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
             record["review_flags"].append(
                 "CONCEPT: operation(s) not on the rate card were sighted and dropped: "
                 + ", ".join(sorted(set(unknown))))
+        # A REQUIREMENT THE READ NAMED IS NOT DROPPED IN SILENCE (D-595): it is asked — unless
+        # the engine charges it another way (handling, packing, inspection: the unit's own
+        # rules), where a question would only be noise.
+        _covered = {str(w).lower() for w in
+                    (_vocab("CONCEPT_OPERATIONS_COVERED_ELSEWHERE", ()) or ())}
+        unknown = [u for u in unknown
+                   if str(u).strip().lower().replace(" ", "_") not in _covered]
+        if unknown:
+            _pn_u = str(record.get("part_number") or "this part")
+            try:
+                from source_precedence import raise_manufacturing_question as _ask_u
+                _ask_u(record, f"Work on {_pn_u} the engine cannot charge: "
+                               + ", ".join(sorted(set(unknown))),
+                       "the read named it and the rate card has no operation for it, so it is "
+                       "NOT in the price",
+                       "say which department does it and how long it takes, or confirm it is "
+                       "not needed", "concept_scan.parts_from_answer")
+            except Exception:                                        # noqa: BLE001
+                pass
+            record.setdefault("concept_dropped_operations", []).extend(sorted(set(unknown)))
 
         # THE ACTION RIDES ON THE PART. One line, in the estimator's imperative, because a
         # concept figure that nobody is told to confirm becomes a firm one by seniority.
@@ -3496,14 +4409,18 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
             record["review_flags"].append(
                 f"CONCEPT: size from the enquiry brief ({why}) — the model worked this part "
                 f"out from the brief's stated dimensions; confirm "
-                f"{blank.get('length', '?')} x {blank.get('width', '?')} x "
-                f"{blank.get('thickness', '?')}mm before release")
+                + (_stock_said(_stock) if record.get("concept_stock") else
+                   f"{blank.get('length', '?')} x {blank.get('width', '?')} x "
+                   f"{blank.get('thickness', '?')}mm")
+                + " before release")
         elif wrote_size or thickness > 0:
             record["review_flags"].append(
                 f"CONCEPT: size {'read off the design-intent sheet by the vision model' if sheet else 'assumed from the render'} "
                 f"({why}) — confirm "
-                f"{blank.get('length', '?')} x {blank.get('width', '?')} x "
-                f"{blank.get('thickness', '?')}mm before release")
+                + (_stock_said(_stock) if record.get("concept_stock") else
+                   f"{blank.get('length', '?')} x {blank.get('width', '?')} x "
+                   f"{blank.get('thickness', '?')}mm")
+                + " before release")
         elif not unclassified and kind == "fabricated":
             # An unclassified line already carries its one action; "enter the dimensions"
             # on top of it asks for a size before anybody has said what the thing is. Only a
@@ -3830,6 +4747,8 @@ def allow_components_inside(records: List[Dict[str, Any]],
                                 else f"{_from} line '{row.get('name')}' — a provisional "
                                      f"allowance, not confirmed by this read")}
         (rec,) = parts_from_concept({"product": {}, "parts": [sighted]}, stem)[:1]
+        # NOT A READ LINE: the allowance is the engine's, so it carries no read identity.
+        rec.pop("read_id", None), rec.pop("read_fingerprint", None), rec.pop("read_origin", None)
         rec["part_number"] = f"{_slug(stem, 'CONCEPT')}-CPA{n:02d}"
         rec["welded_to_hosts"] = [str(h.get("part_number")) for h in hosts]
         _coated = [str(h.get("part_number")) for h in hosts if "powder_coating" in _ops_of(h)]
@@ -3876,7 +4795,11 @@ _COUNT_STOP = {"is", "are", "and", "or", "with", "to", "of", "for", "at", "in", 
                "each", "all", "its", "their", "any", "also"}
 _COUNT_UNITS = {"mm", "cm", "m", "kg", "g", "off", "pcs", "pc", "x", "year", "years", "hour",
                 "hours", "min", "mins", "page", "pages", "units", "unit", "day", "days", "week",
-                "weeks", "percent"}
+                "weeks", "percent",
+                # A NUMBER BEFORE A DIMENSION WORD IS A SIZE (D-532): "frame 700 wide, uprights
+                # 1625 tall", "top rail (660 long)" were read as 700 frames and 660 rails.
+                "wide", "long", "tall", "high", "deep", "thick", "dia", "diameter", "across",
+                "overall", "wall", "radius", "rad", "deg", "degree", "degrees", "gauge", "swg"}
 _HAND_WORDS = {"left", "right", "lh", "rh", "mirrored", "handed", "hand"}
 
 
@@ -3891,7 +4814,11 @@ def brief_stated_counts(brief: str) -> List[Dict[str, Any]]:
     posts", "five front shelves". A count in a sentence that says each / per (other than per
     unit) is a count per something else, not a part's count, and is skipped."""
     out: List[Dict[str, Any]] = []
-    flat = " ".join(str(brief or "").split())
+    # A LIST LINE ENDS WHERE THE NEXT ONE STARTS (D-533). Flattened, "- four wire hooks, one on
+    # each end of each bar" ran into "- four U-channel bar connectors" as one clause, and the
+    # first line's "each" cancelled the second line's count.
+    _lines = re.sub(r"\n\s*(?=(?:[-•*•]|\d{1,2}[.)])\s)", ".\n", str(brief or ""))
+    flat = " ".join(_lines.split())
     _per = r"\beach\b|\bevery\b|\bper (?!unit\b|product\b|fixture\b)"
     for sentence in re.split(r"(?<=[.;:])\s+", flat):
         low = sentence.lower()
@@ -3910,6 +4837,11 @@ def brief_stated_counts(brief: str) -> List[Dict[str, Any]]:
             num = "|".join(list(_COUNT_WORDS) + [r"\d+"])
             for m in re.finditer(rf"(?<![\d.\-])\b({num})\b(?![\d.%\-])\s+"
                                  rf"([a-z][a-z\-]*(?:\s+[a-z][a-z\-]*){{0,3}})", clause):
+                # THE LAST TERM OF A SIZE IS NOT A COUNT (D-528). "60 x 40 angle runners" and
+                # "25 x 25 mesh base" were costed as 40 runners and 25 meshes over the read's 8
+                # and 1: the number after "<n> x" is a section, aperture or panel dimension.
+                if re.search(r"\d\s*(?:mm)?\s*[x×]\s*$", clause[:m.start(1)]):
+                    continue
                 n = int(m.group(1)) if m.group(1).isdigit() else _COUNT_WORDS[m.group(1)]
                 words = []
                 for w in m.group(2).split():
@@ -4546,6 +5478,219 @@ def unit_operations(answer: Dict[str, Any]) -> List[str]:
     return out
 
 
+# ── FAITHFUL TRANSFER (D-595) ──────────────────────────────────────────────────────────
+#
+# What the read and the brief state reaches the record, and every drop, conversion or
+# question the engine makes of it is written down — a change list on the record, and the
+# material ones on the decisions list. 0320730's book reached the customer page saying its
+# parts were "supplied as made" while the brief stated polished nickel-chrome: the read had no
+# word for plating, the brief's finish line was read by nothing, and the TIG it stated became
+# CO2 without a sentence.
+
+_FINISH_LINE_SPLIT = re.compile(r"(?<!\d)\.(?!\d)|\n|;")
+_FINISH_WORD = re.compile(r"\bFINISH(?!ED)\b|\bPLAT|MICRON|µM|\bUM\b", re.IGNORECASE)
+_POLISH_WORD = re.compile(r"\bPOLISH|\bGRIT\b|\bLINISH", re.IGNORECASE)
+_WELD_PROCESS_WORD = re.compile(
+    r"\b(TIG|MIG|MAG|GTAW|GMAW|MMA)\b(?=[\s\-]*WELD)"
+    r"|\bWELD\w*\s+(?:BY\s+|USING\s+|WITH\s+)?(TIG|MIG|MAG|GTAW|GMAW|MMA)\b", re.IGNORECASE)
+_PLATE_METAL_WORDS = ("STEEL", "ALUMIN", "BRASS", "COPPER", "ZINTEC", "GALV", "IRON")
+
+
+def dropped_unit_operations(answer: Mapping[str, Any]) -> List[str]:
+    """The unit-level work the read named that the vocabulary has no word for — dropped from
+    the price by unit_operations, so it must be asked (D-595), never lost in silence. Work the
+    engine charges another way (config CONCEPT_OPERATIONS_COVERED_ELSEWHERE) is not asked."""
+    covered = {str(w).lower() for w in (_vocab("CONCEPT_OPERATIONS_COVERED_ELSEWHERE", ()) or ())}
+    out: List[str] = []
+    for raw in (answer.get("unit_operations") or []):
+        name = str(raw or "").strip().lower().replace(" ", "_")
+        if (name and name not in SIGHTABLE_OPERATIONS and name not in covered
+                and str(raw).strip() not in out):
+            out.append(str(raw).strip())
+    return out
+
+
+def stated_finish(answer: Mapping[str, Any], brief: str = "") -> Dict[str, str]:
+    """The plate and the polish the read's sheet facts or the enquiry brief STATE.
+
+    {"plate", "plate_source", "polish", "polish_source"}, each present only when stated. A brief
+    line counts as a plate statement only where it is about the finish ("Finish:", plating,
+    microns) — "2 chrome end caps" names a bought part's finish, not the product's."""
+    try:
+        from finish_rules import finish_families
+    except Exception:                                                # noqa: BLE001
+        return {}
+    facts = answer.get("sheet_facts") if isinstance(answer.get("sheet_facts"), Mapping) else {}
+    cands: List[tuple] = []
+    if str(facts.get("finish") or "").strip():
+        cands.append((" ".join(str(facts["finish"]).split()), "the sheet's finish note, as read",
+                      True))
+    for line in _FINISH_LINE_SPLIT.split(str(brief or "")):
+        text = " ".join(line.split())
+        if text:
+            cands.append((text, "the enquiry brief", False))
+    out: Dict[str, str] = {}
+    for text, src, is_finish_field in cands:
+        if ("plate" not in out and "plate" in finish_families(text)
+                and (is_finish_field or _FINISH_WORD.search(text))):
+            out["plate"], out["plate_source"] = text, src
+        if "polish" not in out and _POLISH_WORD.search(text):
+            out["polish"], out["polish_source"] = text, src
+    return out
+
+
+def _record_ops(rec: Mapping[str, Any]) -> List[str]:
+    return [str(o) for f in ("inferred_operations", "textual_operations", "operations")
+            for o in (rec.get(f) or []) if isinstance(rec.get(f), list)]
+
+
+def _strip_op(rec: Dict[str, Any], op: str) -> bool:
+    hit = False
+    for f in ("inferred_operations", "textual_operations", "operations"):
+        lst = rec.get(f)
+        if isinstance(lst, list) and op in lst:
+            rec[f] = [o for o in lst if o != op]   # precedence: direct-write ok — an op converted to the finish it names, recorded as a change
+            hit = True
+    return hit
+
+
+def _is_metal_record(rec: Mapping[str, Any]) -> bool:
+    text = " ".join(str(rec.get(k) or "") for k in ("normalized_material", "material_guess",
+                                                     "concept_material")).upper()
+    return any(w in text for w in _PLATE_METAL_WORDS)
+
+
+def carry_stated_finish(unit: Optional[Dict[str, Any]], parts: List[Any],
+                        answer: Mapping[str, Any], brief: str = "") -> List[Dict[str, Any]]:
+    """A stated or sighted plate and polish reach the records (D-595). Returns the changes made.
+
+    The plate goes onto the welded unit — the thing that goes in the tank — or, with no unit,
+    onto each made metal part, as the finish the subcontract plating line reads: that line then
+    prices it, or, for a spec the zinc card does not cover (nickel, chrome), carries it unpriced
+    and asks for the plater's price. A "plating" operation is the same requirement and becomes
+    the finish, never a labour row. Polishing is put on the plated unit as its surface
+    preparation and always asked, with the grits as stated: nothing on the card charges it,
+    and the brushing-before-plating allowance is not it (D-596)."""
+    try:
+        from finish_rules import finish_families
+        from source_precedence import apply_field, raise_manufacturing_question
+    except Exception:                                                # noqa: BLE001
+        return []
+    changes: List[Dict[str, Any]] = []
+    made = [p for p in (parts or []) if isinstance(p, dict)
+            and p.get("concept_kind") == "fabricated"]
+    records = ([unit] if isinstance(unit, dict) else []) + [p for p in (parts or [])
+                                                            if isinstance(p, dict)]
+    sighted_plate = [r for r in records if "plating" in _record_ops(r)]
+    sighted_polish = [r for r in records if "polishing" in _record_ops(r)]
+    st = stated_finish(answer, brief)
+    plate = st.get("plate") or ("plated — the read names plating, the process is not stated"
+                                if sighted_plate else "")
+    hosts = ([unit] if isinstance(unit, dict) and unit.get("is_assembly_parent")
+             else [p for p in made if _is_metal_record(p)])
+    if plate and hosts:
+        src = st.get("plate_source") or "the read's operations"
+        for h in hosts:
+            _now = " ".join(str(h.get(k) or "") for k in ("normalized_finish", "finish"))
+            if "plate" in finish_families(_now):
+                continue
+            apply_field(h, "normalized_finish", plate,
+                        BRIEF_SOURCE if "brief" in src else SOURCE, note=f"stated by {src}")
+            _sf = [str(x) for x in (h.get("surface_finishes") or [])]
+            if plate not in _sf:
+                h["surface_finishes"] = _sf + [plate]
+            h["finish_stated_by"] = src
+        changes.append({"kind": "carried", "item": f"finish: {plate}",
+                        "to": [str(h.get("part_number") or "") for h in hosts],
+                        "why": f"stated by {src} — the subcontract plating line prices it, or "
+                               f"carries it unpriced and asks for the plater's price"})
+    for r in records:
+        if _strip_op(r, "plating"):
+            changes.append({"kind": "converted", "item": "plating operation",
+                            "to": [str(r.get("part_number") or "")],
+                            "why": "plating is a subcontract finish on the plating line, not a "
+                                   "labour row"})
+    polish = st.get("polish") or ("polished — the read names polishing, the grits are not "
+                                  "stated" if sighted_polish else "")
+    if polish:
+        for r in records:
+            _strip_op(r, "polishing")
+        host = (unit if isinstance(unit, dict) else
+                next((p for p in made if _is_metal_record(p)), None))
+        if host is not None:
+            host["surface_preparation"] = polish
+            pn = str(host.get("part_number") or "this part")
+            # BRUSHING IS NOT THIS POLISHING (review of D-595). The shop's brushing-before-
+            # plating allowance is its own line, calibrated on another product; a stated grit
+            # sequence is charged only by polishing time, and there is none on the card.
+            raise_manufacturing_question(
+                host, f"Polishing of {pn}: {polish}",
+                "NOT in the price — the rate card has no polishing time, and the "
+                "brushing-before-plating allowance is a separate job that does not satisfy "
+                "this sequence",
+                "give the polishing minutes a unit for this part, grit by grit, or rule how "
+                "it is covered",
+                "concept_scan.carry_stated_finish")
+            changes.append({"kind": "asked", "item": f"polishing: {polish}", "to": [pn],
+                            "why": st.get("polish_source") or "the read's operations"})
+    return changes
+
+
+def stated_weld_process(answer: Mapping[str, Any], brief: str = "",
+                        parts: Optional[List[Any]] = None) -> Dict[str, str]:
+    """The weld process the brief or the read STATES, from their own words — {"process",
+    "word", "source"}, or {} (D-595). The read ledger takes it from here, never from the records
+    the transfer wrote, so a transfer that fails cannot hide the statement it lost (D-596d)."""
+    try:
+        import config as _cfg                                       # noqa: WPS433
+        vocab = dict(getattr(_cfg, "WELD_PROCESS_VOCAB", None) or {})
+    except Exception:                                                # noqa: BLE001
+        vocab = {}
+    lines = [p for p in (answer.get("parts") or []) if isinstance(p, Mapping)] if isinstance(
+        answer, Mapping) else []
+    texts = [(str(brief or ""), "enquiry_brief")] + [
+        (f"{p.get('name') or ''} {p.get('seen') or ''}", "concept_read") for p in lines] + [
+        (f"{p.get('description') or ''} {p.get('concept_seen') or ''}", "concept_read")
+        for p in (parts or []) if isinstance(p, Mapping)]
+    for text, src in texts:
+        m = _WELD_PROCESS_WORD.search(text)
+        if m:
+            word = (m.group(1) or m.group(2) or "").upper()
+            return {"process": str(vocab.get(word) or word), "word": word, "source": src}
+    return {}
+
+
+def carry_weld_process(unit: Optional[Dict[str, Any]], parts: List[Any],
+                       answer: Mapping[str, Any], brief: str = "") -> List[Dict[str, Any]]:
+    """The weld PROCESS the brief or the read states reaches the welded records (D-595), so the
+    weld row names it and a process the rate card has no rate for is asked
+    (weld_symbols.weld_rate_gap_question) instead of being charged as CO2 in silence."""
+    stated = stated_weld_process(answer, brief, parts)
+    if not stated:
+        return []
+    proc, word, src = stated["process"], stated["word"], stated["source"]
+    records = ([unit] if isinstance(unit, dict) else []) + [p for p in (parts or [])
+                                                            if isinstance(p, dict)]
+    hosts = [r for r in records if "welding" in _record_ops(r) or r.get("weld_stated_by_note")]
+    if not hosts:
+        return []
+    try:
+        from weld_symbols import _arc_weld_row_title, weld_rate_gap_question
+        row = _arc_weld_row_title()
+    except Exception:                                                # noqa: BLE001
+        weld_rate_gap_question, row = None, "Weld (CO2)"
+    for h in hosts:
+        if not isinstance(h.get("weld_process_stated"), Mapping):
+            h["weld_process_stated"] = {"process": proc, "word": word, "default": False,
+                                        "charged_on": row, "source": src}
+        if weld_rate_gap_question is not None:
+            weld_rate_gap_question(h)
+    return [{"kind": "carried", "item": f"weld process: {proc}",
+             "to": [str(h.get("part_number") or "") for h in hosts],
+             "why": f"stated by the {'enquiry brief' if src == 'enquiry_brief' else 'read'} — "
+                    f"named on the weld row, charged at the {row} rate and asked"}]
+
+
 def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
                        stem: str) -> Optional[Dict[str, Any]]:
     """The product itself, as an assembly parent — or None where there is nothing to assemble.
@@ -4608,6 +5753,18 @@ def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
     record["is_assembly_parent"] = True
     record["canonical_kind"] = "assembly"
     record["assembly_children"] = [str(p.get("part_number") or "") for p in made]
+    # THE PRODUCT'S OWN SIZE, FOR PACKING IT AS ITSELF (D-530): the drawn body where the sheet
+    # gives one, else the read's overall size. Footprint longest first, then height.
+    _facts = answer.get("sheet_facts") if isinstance(answer.get("sheet_facts"), Mapping) else {}
+    for _src, _box in (("the drawing's body dimensions", _facts.get("body_mm")),
+                       ("the read's overall size",
+                        (answer.get("product") or {}).get("assumed_overall_mm"))):
+        if isinstance(_box, Mapping):
+            _h, _w, _d = (_num(_box.get(k)) for k in ("height", "width", "depth"))
+            if _h and _w and _d:
+                record["product_envelope_mm"] = {"length": max(_w, _d), "width": min(_w, _d),
+                                                 "height": _h, "source": _src}
+                break
     if material:
         apply_field(record, "normalized_material", material, SOURCE,
                     note=f"the board most of the sighted panels are made of ({material})")
@@ -4637,7 +5794,9 @@ def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
             return max(1, int(p.get("quantity") or 1))
         except (TypeError, ValueError):
             return 1
+    from robust_ownership import nonphysical
     fitted = [p for p in (parts or []) if isinstance(p, dict)
+              and not nonphysical(p)
               and p.get("concept_kind") != "assembly" and str(p.get("part_number") or "")]
     # A PIECE WELDED TO ITS HOST IS FITTED WITH IT (D-499): thirty brackets welded to fifteen
     # trays are fifteen trays to fit, label and fix, not forty-five pieces.
@@ -4692,7 +5851,93 @@ def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
            + ", ".join(f"{p.get('part_number')} ×{_qty(p)}" for p in joined) if joined else ""))
     record["assembly_fitted_items"] = [str(p.get("part_number")) for p in fitted
                                        if p.get("concept_kind") != "fabricated"]
+    joints_once_on_the_unit(record, made)
     return record
+
+
+_WELD_WORDS = ("welding", "spot_welding")
+
+
+def joints_once_on_the_unit(unit: Dict[str, Any], made: List[Dict[str, Any]]) -> List[str]:
+    """A WELDED UNIT OWNS ITS JOINTS (D-531). The read marks the unit welded and every member
+    welded too, and both were charged: the tote trolley and the hanging rail each paid Weld and
+    Dress on the unit AND on every member — the same connections, by two timers. A concept
+    member has no sub-weld of its own to show; its weld is the joint that puts it into this
+    unit (D-387: a member's welded finish is the assembly's joint). So the unit carries the
+    welding once, its joints counted from the welded PIECES — a weldment of N pieces has at
+    least N-1 joints, at the shop's per-joint rate — and a member's inferred weld comes off,
+    said on the member. A weld the brief states for a member is that member's and stays.
+
+    MEMBERS WELDED TO EACH OTHER MAKE A WELDED UNIT (D-537). 0356455's 21:37 read marked six
+    member lines welded and the unit only assembled and coated, so each member group paid its
+    own Weld and Dress rows — three of each, thirty minutes' set-up apiece — for joints that
+    are the unit's. Two or more welded member lines are welded to one another, here: the unit
+    is welded, said on it, and the joints are charged once as above.
+
+    COATED AFTER WELDING, AS ONE PIECE (D-537). A welded unit goes through the booth as the
+    weldment, not as its members: the same book hung 21 member pieces on the line and costed
+    the powder over 0.05 m2 while the welded frame's surface is over a square metre. A welded
+    member's coat moves to the unit (the unit is coated over its members' surfaces); a member
+    that is not welded in — a bar hung on hooks — keeps its own coat and hangs on its own."""
+    if not isinstance(unit, dict):
+        return []
+    if not (set(unit.get("inferred_operations") or []) & set(_WELD_WORDS)):
+        _welded_lines = [p for p in made or []
+                         if set(p.get("inferred_operations") or []) & set(_WELD_WORDS)]
+        if len(_welded_lines) < 2:
+            return []
+        unit["inferred_operations"] = list(unit.get("inferred_operations") or []) + ["welding"]
+        unit.setdefault("review_flags", []).append(
+            f"CONCEPT: welded as a unit — the read marked {len(_welded_lines)} member lines "
+            f"welded ({', '.join(str(p.get('part_number')) for p in _welded_lines)}) and the "
+            f"unit itself not; members welded to one another are the unit's weldment, so its "
+            f"joints are charged here, once. Confirm the members are welded")
+    moved: List[str] = []
+    coat_moved: List[str] = []
+    pieces = 0
+    for p in made or []:
+        ops = list(p.get("inferred_operations") or [])
+        welded = bool(set(ops) & set(_WELD_WORDS)) or bool(p.get("welded_to_hosts"))
+        if not welded:
+            continue
+        pieces += _qty_of(p)
+        if "powder_coating" in ops:
+            ops = [o for o in ops if o != "powder_coating"]
+            p["inferred_operations"] = ops
+            p["coat_charged_on"] = str(unit.get("part_number") or "")
+            p.setdefault("review_flags", []).append(
+                f"CONCEPT: coated with the welded unit — it goes through the booth as part of "
+                f"{unit.get('part_number')}, whose coat covers its surface; it is not hung on "
+                f"its own")
+            coat_moved.append(str(p.get("part_number")))
+        if p.get("weld_stated_by_brief") or not (set(ops) & set(_WELD_WORDS)):
+            continue
+        p["inferred_operations"] = [o for o in ops if o not in _WELD_WORDS]
+        # The joint is still a weld — only where it is charged moved (D-534): nothing may
+        # read this member as fitted by fasteners.
+        p["weld_charged_on"] = str(unit.get("part_number") or "")
+        p.setdefault("review_flags", []).append(
+            f"CONCEPT: welded into the unit — the joint is charged once, on "
+            f"{unit.get('part_number')}'s Weld and Dress rows, not again on this line")
+        moved.append(str(p.get("part_number")))
+    if pieces >= 2:
+        unit["weld_joint_count"] = max(int(_num(unit.get("weld_joint_count"))), pieces - 1)
+        unit.setdefault("review_flags", []).append(
+            f"CONCEPT: the unit's welding is charged once, here — {pieces} welded piece(s), so "
+            f"at least {pieces - 1} joint(s) at the shop's per-joint rate"
+            + (f"; the members' own weld rows are not charged ({', '.join(moved)})"
+               if moved else "")
+            + ". Confirm the joint count")
+    if coat_moved:
+        if "powder_coating" not in (unit.get("inferred_operations") or []):
+            unit["inferred_operations"] = list(unit.get("inferred_operations") or []) + [
+                "powder_coating"]
+        unit.setdefault("review_flags", []).append(
+            f"CONCEPT: coated once, as the welded unit — {', '.join(coat_moved)} go through the "
+            f"booth welded into it, not as {len(coat_moved)} line(s) of loose pieces; the coat "
+            f"covers their surfaces. Override on the sheet if the shop coats them before "
+            f"welding")
+    return moved
 
 
 def concept_note(answer: Dict[str, Any]) -> Dict[str, Any]:

@@ -122,7 +122,7 @@ def test_an_ordinary_job_still_gets_its_strengths():
     html = jr._render_whats_right(_summary([]), _streams())
     assert "Not established" not in html
     assert "No double-counting" in html
-    assert "correctly separated" in html
+    assert "recorded separately" in html, "said as bookkeeping, not as a verified selection"
 
 
 # ── the claim that was never checked ─────────────────────────────────────────

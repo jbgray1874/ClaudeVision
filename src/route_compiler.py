@@ -36,7 +36,7 @@ NEGATIVE_STATUSES = frozenset({RULED_OUT, NOT_APPLICABLE})
 # operations on the parent. A stronger measured claim can still win through source ranking.
 LEAF_ONLY_OPERATIONS = frozenset({
     "laser_cutting", "folding", "punch", "hole_machining", "drilling",
-    "guillotine", "saw", "tube_cut", "tube_bending",
+    "guillotine", "saw", "tube_cut", "tube_bending", "roll", "cnc_routing",
 })
 
 # Older cached extracts predate the scope field. For these operations, several participants
@@ -76,6 +76,8 @@ OPERATION_ALIASES = {
     "insert_pem": "hardware_insertion",
     "pem_insertion": "hardware_insertion",
     "clinch_insertion": "hardware_insertion",
+    # The template's Roll row is the engine's "roll" (config.ESTIMATE_LABOUR_LABEL_TO_OP).
+    "rolling": "roll",
 }
 
 # Shop-order fallback for a required event whose evidence named the work but omitted its
@@ -92,6 +94,7 @@ DEFAULT_OPERATION_SEQUENCE = {
     "drilling": 20,
     "tapping": 20,
     "folding": 30,
+    "roll": 30,
     "tube_bending": 30,
     "welding": 40,
     "dress_welds": 41,
@@ -334,6 +337,12 @@ class PartNode:
     # frames 202 and 203, 8 + 8 = 16; the ticket strip under the pocket ×8 and the rack ×1).
     # Empty for a root, and on a summary compiled before it existed.
     qty_by_parent: Dict[str, float] = field(default_factory=dict)
+    # WHAT THOSE TWO FIGURES ARE, said on the record (D-582): qty_per_unit is per finished
+    # product, and qty_by_parent is ALREADY the rolled contribution through that parent — not
+    # the local edge multiplier. A consumer that multiplied it by the parent's quantity again
+    # would double every sub-assembly; quantity_flow_contract checks against these labels.
+    qty_per_unit_basis: str = "per_finished_product"
+    qty_by_parent_basis: str = "rolled_contribution_per_finished_product"
     parents: List[str] = field(default_factory=list)
     children: List[ChildEdge] = field(default_factory=list)
     evidence: Dict[str, Any] = field(default_factory=dict)
@@ -415,6 +424,28 @@ class OperationDecision:
     # expose the cases where the waterfall called two sources equal and the arbiter had to
     # choose. That is the line an estimator should look at when tuning the engine.
     settled_by_key: str = ""
+
+
+def at_least_once_per_instance(stated: Any, target_id: Any, quantities: Mapping[str, Any],
+                               scope: Any) -> Tuple[Any, bool]:
+    """An assembly-level operation happens at least once per instance of its target (D-558).
+
+    401918-01-401, a welded base frame drawn once and used twice on the GA: the model read the
+    frame's own sheet and said welding qty_per_unit 1 — asked "per finished product", it
+    answered per frame — and the compiler took that as the event's count, so the weld was
+    charged once beside a dressing charged twice. A stated count below the target's canonical
+    multiplicity is raised to it; a count at or above it stands (the model may already have
+    counted every instance). Returns (count, raised)."""
+    if str(scope or "") != "assembly" or stated is None:
+        return stated, False
+    try:
+        _stated = float(stated)
+        _mult = float((quantities or {}).get(target_id, 1.0) or 1.0)
+    except (TypeError, ValueError):
+        return stated, False
+    if _mult > _stated:
+        return _mult, True
+    return stated, False
 
 
 def make_claim(
@@ -1244,8 +1275,13 @@ def _bom_stated_edges(
     rejected: Optional[List[str]] = None,
     allow_placeholder_mint: bool = False,
     several_items: Optional[Set[tuple]] = None,
+    incompatible: Optional[List[Dict[str, Any]]] = None,
 ) -> List[tuple]:
     """(child, parent, qty) for every BOM row that names an owner we already know.
+
+    `incompatible`, when given, receives each code that one table lists at several item
+    numbers for things its own descriptions say are DIFFERENT (D-508) — not summed; a row
+    whose words name another part of the job is linked to that part instead.
 
     `several_items`, when given, receives each (child, parent) whose count was summed from
     more than one item number of the table — a count no code-keyed reader can have.
@@ -1378,26 +1414,112 @@ def _bom_stated_edges(
         if not child or not parent or child == parent:
             continue
         edges.append((child, parent, number(row.get("quantity") or row.get("qty"), 1.0) or 1.0,
-                      str(row.get("bom_item_no") or row.get("item_number") or "").strip()))
+                      str(row.get("bom_item_no") or row.get("item_number") or "").strip(),
+                      str(row.get("description") or "").strip()))
     # ONE CODE AT SEVERAL ITEM NUMBERS OF ONE TABLE IS SEVERAL LINES (D-335). The caller
     # writes children[parent][child] = qty, so a second row overwrote the first: 12173's
     # trough lists its handed SIDE PANEL at items 1 and 3 and would have had one. Different
     # item numbers add; the same item number, or none, is the same line and does not.
+    #
+    # BUT NOT TWO DIFFERENT THINGS WEARING ONE CODE (D-508). 12665-01-GA lists 3987-GA at two
+    # item numbers — HOOK SECURITY STOP LOCK - 6mm x9 and POWERTOOL PIN x10 — and the sum
+    # costed nineteen "POWERTOOL PIN"s while the job's own P/P-HOOK-SECURITY-STOP-LOCK hung
+    # "not linked". A handed pair (SIDE PANEL LH / RH) or a misspelling shares its words and
+    # still adds; rows whose descriptions share none are not summed. A row whose words name
+    # another part of the job is linked to that part; any other is reported for a person.
     combined: Dict[tuple, List[Any]] = {}
-    for child, parent, qty, item in edges:
-        held = combined.get((child, parent))
-        if held is None:
-            combined[(child, parent)] = [qty, {item} if item else set()]
-        elif item and held[1] and item not in held[1]:
-            held[0] += qty
-            held[1].add(item)
+
+    def _add(_key: tuple, _qty: float, _item: str, _desc: str) -> None:
+        _held = combined.get(_key)
+        if _held is None:
+            combined[_key] = [_qty, {_item} if _item else set(), _desc]
+        elif _item and _held[1] and _item not in _held[1]:
+            _held[0] += _qty
+            _held[1].add(_item)
         else:
-            held[0] = qty
-            if item:
-                held[1].add(item)
+            _held[0] = _qty
+            if _item:
+                _held[1].add(_item)
+
+    for child, parent, qty, item, desc in edges:
+        held = combined.get((child, parent))
+        if (held is not None and item and held[1] and item not in held[1]
+                and desc and held[2] and not same_item_described(held[2], desc)):
+            # EITHER ROW MAY BE THE ONE WEARING ANOTHER PART'S CODE: the table's order says
+            # nothing about which. The row whose words spell another known part goes there;
+            # the code stays with the other.
+            target = relink_by_words(desc, known, exclude=(child, parent))
+            kept_target = "" if target else relink_by_words(held[2], known,
+                                                            exclude=(child, parent))
+            if kept_target:
+                _moved_qty, _moved_items, _moved_desc = combined.pop((child, parent))
+                for _mi in sorted(_moved_items) or [""]:
+                    _add((kept_target, parent), _moved_qty, _mi, _moved_desc)
+                    _moved_qty = 0.0                     # the count moves once, not per item
+                _add((child, parent), qty, item, desc)
+                if incompatible is not None:
+                    incompatible.append({"code": child, "parent": parent, "kept": desc,
+                                         "other": _moved_desc, "other_qty": held[0],
+                                         "other_item": ",".join(sorted(_moved_items)),
+                                         "relinked_to": kept_target})
+                continue
+            if incompatible is not None:
+                incompatible.append({"code": child, "parent": parent, "kept": held[2],
+                                     "other": desc, "other_qty": qty, "other_item": item,
+                                     "relinked_to": target or ""})
+            if target:
+                _add((target, parent), qty, item, desc)
+            continue
+        _add((child, parent), qty, item, desc)
     if several_items is not None:
-        several_items.update(k for k, (_q, _items) in combined.items() if len(_items) > 1)
-    return [(c, p, q) for (c, p), (q, _items) in combined.items()]
+        several_items.update(k for k, (_q, _items, _d) in combined.items() if len(_items) > 1)
+    return [(c, p, q) for (c, p), (q, _items, _d) in combined.items()]
+
+
+# Words that say WHICH HAND or HOW MANY, not WHAT — two rows differing only in these are one
+# item described twice.
+_NOT_ITEM_WORDS = frozenset({
+    "LH", "RH", "LEFT", "RIGHT", "HAND", "HANDED", "MIRROR", "MIRRORED", "MIR", "OPPOSITE",
+    "MM", "OFF", "QTY", "PCS", "PC", "EACH", "AND", "THE", "FOR", "WITH", "OF", "TO",
+})
+
+
+def _item_words(text: Any) -> Set[str]:
+    return {w for w in re.findall(r"[A-Z]{2,}", str(text or "").upper())
+            if w not in _NOT_ITEM_WORDS}
+
+
+def same_item_described(a: Any, b: Any) -> bool:
+    """Do two parts-list descriptions name ONE item? (D-508)
+
+    Yes where either says nothing comparable, or they share at least half the words of the
+    shorter — a handed pair and a misspelling both pass. No where they share no word at all:
+    HOOK SECURITY STOP LOCK and POWERTOOL PIN are two purchases whatever code they carry."""
+    wa, wb = _item_words(a), _item_words(b)
+    if not wa or not wb:
+        return True
+    shared = wa & wb
+    return bool(shared) and len(shared) / min(len(wa), len(wb)) >= 0.5
+
+
+def relink_by_words(description: Any, known: Any, exclude: Any = ()) -> str:
+    """The ONE known identity whose own code spells this description's words, or "" (D-508).
+
+    P/P-HOOK-SECURITY-STOP-LOCK spells HOOK SECURITY STOP LOCK; a row reading those words is
+    that part. At least two of the row's words, and most of them, must be in the code; two
+    candidates is no answer."""
+    words = _item_words(description)
+    if len(words) < 2:
+        return ""
+    hits = []
+    for code in known or ():
+        if code in exclude:
+            continue
+        cw = set(re.findall(r"[A-Z]{2,}", str(code).upper()))
+        shared = words & cw
+        if len(shared) >= 2 and len(shared) / len(words) >= 0.6:
+            hits.append(code)
+    return hits[0] if len(hits) == 1 else ""
 
 
 def _pdf_primary_stated_roots(
@@ -1490,6 +1612,7 @@ def build_part_graph(
     page_owner: Optional[Mapping[int, str]] = None,
     pack_mode: Optional[str] = None,
     declared_product: Optional[str] = None,
+    source_names: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     """Build canonical nodes and hierarchy edges from the whole job.
 
@@ -1855,10 +1978,25 @@ def build_part_graph(
     _claimed_before_bom = set(parents)
     _rejected_parents: List[str] = []
     _several_items: Set[tuple] = set()
+    _code_clashes: List[Dict[str, Any]] = []
     _bom_edges = _bom_stated_edges(
         bom_rows, aliases, set(raw) | set(extracted) | set(children) | _drawings,
         _rejected_parents, allow_placeholder_mint=(pack_mode == "pdf_primary"),
-        several_items=_several_items)
+        several_items=_several_items, incompatible=_code_clashes)
+    _clash_issues: List[Dict[str, Any]] = []
+    for _cl in _code_clashes:
+        print(f"   [bom] {_cl['code']} is listed under {_cl['parent']} for two different "
+              f"things — '{_cl['kept']}' and '{_cl['other']}' x{_cl['other_qty']:g} — not "
+              f"summed"
+              + (f"; the second row's words name {_cl['relinked_to']}, so it is linked there"
+                 if _cl.get("relinked_to") else "; the second is asked"), flush=True)
+        _clash_issues.append({
+            "code": "one_code_two_items", "severity": "review",
+            "part_code": _cl["code"], "parent": _cl["parent"], "kept": _cl["kept"],
+            "other": _cl["other"], "other_qty": _cl["other_qty"],
+            "relinked_to": _cl.get("relinked_to") or "",
+            "identities": [_cl["code"]] + ([_cl["relinked_to"]]
+                                           if _cl.get("relinked_to") else [])})
     if _rejected_parents:
         _unique = sorted({r for r in _rejected_parents if r})
         print(f"   [bom] {len(_rejected_parents)} row(s) name an owner this job does not "
@@ -1988,8 +2126,20 @@ def build_part_graph(
                 continue
             children.setdefault(_bp, {})[_pid] = _q
             parents.setdefault(_pid, set()).add(_bp)
-            records.setdefault(_bp, {})["is_sub_assembly"] = True
-            records[_bp]["hierarchy_source"] = "bom_table"
+            # A BOUGHT ITEM FITTED TO A PART DOES NOT MAKE THE PART AN ASSEMBLY (D-519).
+            # Hanging the edging under the shelf flipped a one-board product into a packed
+            # assembly: a Packing Joinery row covering the ABS, and the hole ruling
+            # re-worded to "assembly parent has no independently measured fabricated leaf"
+            # — the D-511 class of defect, re-opened by the new edge. The EDGE stands (the
+            # line is linked, scoped and charged); assembly-ness needs a MADE child or the
+            # parent's own evidence, exactly as D-508 holds that a parts list alone does
+            # not make an assembly.
+            _child_bought = bool(
+                _part.get("is_bought_in") or _part.get("_edging_line")
+                or "bought_in" in [str(r) for r in (_part.get("page_roles") or [])])
+            if not _child_bought:
+                records.setdefault(_bp, {})["is_sub_assembly"] = True
+                records[_bp]["hierarchy_source"] = "bom_table"
             print(f"   [bom] '{_pid}' owned by '{_bp}' (qty {_q:g}) — the record carries "
                   f"the parent BOM whose table listed it", flush=True)
 
@@ -2545,6 +2695,7 @@ def build_part_graph(
     _product_issues: List[Dict[str, Any]] = []
     _declared = str(declared_product or "").strip()
     product_root = ""
+    _product_is_leaf = False          # set only by the single-leaf resolution below (D-511)
     outside_product: Dict[str, str] = {}
     if _declared:
         _assemblies_here = set(top_ids) | {i for i, k in children.items() if k} | {
@@ -2568,6 +2719,26 @@ def build_part_graph(
         # about a name decides it: one root is the product, two are a choice, and a choice
         # is refused below as before (product_identity.tops_of_the_job, the same rule pre-run).
         _job_top = ""
+        # A PRODUCT CAN BE ONE PART (D-511). 12340-01M is a single bracket: one PDF, one
+        # DXF, zero BOM rows — so there are no assemblies, no children, no roots, and the
+        # candidate search above (assemblies only) finds nothing although the record the
+        # declared number names is sitting in the job. Where the job holds NO assemblies at
+        # all, the declared product may resolve to exactly one LEAF record that names it;
+        # ambiguity (two matches) still refuses as everywhere else, and a job that has any
+        # assembly keeps the assembly-only rule unchanged.
+        if not _candidates and not _assemblies_here:
+            _leaves = {i for i in set(records) | set(raw) | set(extracted)
+                       if i and not str(i).upper().startswith(("BI-", "P/P-"))}
+            _leaf_matches = sorted(i for i in _leaves if _names_the_product(_declared, i))
+            if len(_leaf_matches) == 1:
+                _candidates = _leaf_matches
+                # THE PRODUCT BEING ONE PART DOES NOT MAKE THAT PART AN ASSEMBLY (D-511).
+                # The node builder presumes the top of the graph is an assembly (a GA whose
+                # parts list went unread still is one); a product resolved to a LEAF must
+                # not inherit that presumption — 12340-01M's first run under this rule had
+                # its laser ruled "assembly parent has no independently measured fabricated
+                # leaf" and its blank refused, which priced the bracket as powder on air.
+                _product_is_leaf = True
         if not _candidates:
             from product_identity import (is_of_the_job, is_under_the_numbering,
                                           job_number_only, numbering_prefix)
@@ -2579,8 +2750,41 @@ def build_part_graph(
             if len(_job_roots) == 1:
                 _job_top = _job_roots[0]
             _candidates = _job_roots
+        _ref_top = ""
+        if not _candidates:
+            # THE PACK'S OWN REFERENCE NAMES THE PRODUCT (D-584). An enquiry filed as
+            # "<reference>-<title>-<customer drawing number>" is the product the reference
+            # was raised for: the UPC typed on the Run and the ROL number on the sheet are two
+            # names for one thing, and the file name is where the pack states the alias. The
+            # same resolver the portal used before Run (product_identity) says it here, so the
+            # run resolves what the page accepted rather than printing NOT RESOLVED over the
+            # right root. Only a ROOT may be named this way; a reference naming a detail sheet
+            # is still refused as everywhere else.
+            try:
+                from product_identity import product_sheets as _pi_sheets, _key as _pi_key
+                _names = [str(n) for n in (source_names or []) if n]
+                _ref_numbers = {_pi_key(d.get("number")) for d in _pi_sheets(_declared, _names)
+                                if d.get("reference")}
+                _ref_roots = sorted(t for t in top_ids if t and _pi_key(t) in _ref_numbers)
+            except Exception:                                        # noqa: BLE001
+                _ref_roots = []
+            if len(_ref_roots) == 1:
+                _ref_top = _ref_roots[0]
+                _candidates = _ref_roots
         if len(_candidates) == 1:
             product_root = _candidates[0]
+            if _ref_top:
+                _product_issues.append({
+                    "code": "product_is_the_packs_reference",
+                    "declared": _declared,
+                    "product": product_root,
+                    "detail": (f"The Drawing Number {_declared!r} is the reference this pack is "
+                               f"filed under, and the pack names {product_root} as the drawing "
+                               f"it was raised for. The two are one product: {product_root} is "
+                               f"costed, and the book carries both names."),
+                })
+                print(f"   [graph] {_declared!r} is the reference the pack is filed under — "
+                      f"the product is {product_root}", flush=True)
             if _job_top:
                 _product_issues.append({
                     "code": "product_is_the_jobs_top_assembly",
@@ -2772,9 +2976,15 @@ def build_part_graph(
     for ident, sq in _sq_ids.items():
         if len(sq) < 12 or "^" in ident:
             continue
+        # A LINE THE ENGINE GENERATED NEVER CAME OFF A BOM TABLE (D-595), so it cannot be two
+        # rows zipped. 0320730's "0320730-CPT00-PLATE" scanned as its weldment's code plus
+        # PLATERFREIGHT — a seven-digit job number fails the drawing-number grammar below —
+        # and the plating line was dropped with the parts hung beside it.
+        if _is_generated_line(ident, raw.get(ident) or records.get(ident)):
+            continue
         # A code that scans as an SDI drawing number is a real part whatever else is true;
         # the chimera's ten-digit head cannot pass this.
-        if re.match(r"^\d{4,5}-\d{2}\b", str(ident)):
+        if re.match(r"^\d{4,6}-\d{2}\b", str(ident)):
             continue
         # NOR IS A MIRROR OF ONE. "Mirror11650-03-GA" is SolidWorks' name for the opposite
         # hand of 11650-03-GA — a naming convention, not two rows zipped. It is spelled with
@@ -2787,7 +2997,7 @@ def build_part_graph(
             _mb = mirror_base(str(ident)) if is_mirror_code(str(ident)) else ""
         except Exception:                                            # noqa: BLE001
             _mb = ""
-        if _mb and re.match(r"^\d{4,5}-\d{2}\b", _mb):
+        if _mb and re.match(r"^\d{4,6}-\d{2}\b", _mb):
             continue
         # NO CHILD EXEMPTION. The first version skipped anything the hierarchy claimed as a
         # child — and the zipped BOM row is claimed by the GA precisely BECAUSE it came off
@@ -3122,6 +3332,8 @@ def build_part_graph(
             print(f"   [graph] {identity}: rolled up to {_rolled:g} per unit, the model "
                   f"counts {_total:g} — CHECK", flush=True)
 
+    _role_conflict_issues: List[Dict[str, Any]] = []
+
     def _carries_only_hardware(identity: str, record: Mapping[str, Any]) -> bool:
         """A measured part whose every child is something we BUY is a part carrying
         hardware, not an assembly.
@@ -3139,6 +3351,51 @@ def build_part_graph(
         """
         kids = children.get(identity) or {}
         if not kids:
+            return False
+        # THE EVIDENCE MUST BELONG TO THE PARENT'S OWN FABRICATED PART (D-522, the
+        # reviewer's correction of D-520's wording). "A GA never has fabrication
+        # evidence" was too absolute: a DXF matched to an assembly drawing, or geometry
+        # inherited onto it, would put measured fields on a record that is not a part we
+        # cut. A record whose drawing's ROLE is an assembly — its pages say so, or its
+        # code convention does — is an assembly whatever geometry got attached to it;
+        # the stamps (is_sub_assembly et al.) are deliberately NOT consulted here, since
+        # overriding a BOM edge's stamp on a measured PART is this gate's whole point
+        # (D-264's END CAP).
+        _role_says_assembly = ""
+        if any(str(r).lower() == "assembly" for r in (record.get("page_roles") or [])):
+            _role_says_assembly = "its pages carry the assembly role"
+        else:
+            try:
+                from part_code_conventions import carries_assembly_role as _is_ga_code
+                if _is_ga_code(identity):
+                    _role_says_assembly = "its code convention names an assembly drawing"
+            except Exception:                                        # noqa: BLE001
+                pass
+        if _role_says_assembly:
+            # AND THE CONFLICT IS SURFACED, NEVER SILENTLY SETTLED (D-523, the reviewer's
+            # proviso). A role that says assembly beside measured fabrication fields on
+            # the same record is two claims about one thing: the role is kept, and the
+            # disagreement goes on the issues list so a person decides whether the
+            # geometry belongs to a member rather than the assembly.
+            try:
+                from bought_in_policy import has_fabrication_evidence as _hfe
+                _conflicted = _hfe(dict(record))
+            except Exception:                                        # noqa: BLE001
+                _conflicted = False
+            if _conflicted:
+                _role_conflict_issues.append({
+                    "code": "assembly_role_carries_fabrication_evidence",
+                    "identity": identity,
+                    "detail": (f"{identity} is an assembly ({_role_says_assembly}) and "
+                               f"its record carries measured fabrication fields "
+                               f"(geometry source "
+                               f"{(record.get('normalized_geometry') or {}).get('geometry_source') or 'unstated'}). "
+                               f"The role is kept — it stays an assembly — but the "
+                               f"geometry may belong to a member: confirm which part "
+                               f"the measured outline is of."),
+                })
+                print(f"   [graph] {identity}: assembly role kept over measured geometry "
+                      f"on the same record — conflict surfaced for a person", flush=True)
             return False
         try:
             from bought_in_policy import has_fabrication_evidence, is_bought_in
@@ -3190,14 +3447,33 @@ def build_part_graph(
     nodes: List[PartNode] = []
     for identity in sorted(identities):
         record = records.get(identity) or {}
-        _hardware_carrier = identity != top_id and _carries_only_hardware(identity, record)
-        is_assembly = bool(
-            identity == top_id
-            or (not _hardware_carrier and (
-                identity in children
-                or record.get("is_sub_assembly")
-                or record.get("is_assembly_parent")))
-        )
+        # THE TOP MAY BE A HARDWARE CARRIER TOO (D-519). The gate used to exempt the top
+        # outright, to keep a genuine GA packing whatever joined it — but a GA has no
+        # fabrication evidence of its own, and _carries_only_hardware already refuses any
+        # record without it, so the exemption protected nothing and cost the END CAP case
+        # at the root: hanging EDGE23X1ABS under 12343-01J flipped the one-board shelf to
+        # "assembly", minted a Packing Joinery row covering the ABS, and re-worded the
+        # hole ruling to "assembly parent has no independently measured fabricated leaf"
+        # — D-511's defect, re-opened by the line D-517 linked. A measured part whose
+        # every child is bought is a cut part with inserts wherever it sits in the graph.
+        _hardware_carrier = _carries_only_hardware(identity, record)
+        # A WELDMENT CUT FROM ITS OWN PIECES IS A LEAF (D-577). Its "children" in the graph
+        # are the uncoded rows of its own cut list — the pieces it is sawn from, consumed as
+        # such (D-557/D-576) — and nothing on the bill answers to them. Called an assembly
+        # here, the workbook writer excluded its material as "carried by leaf children" and
+        # the frame reached the sheet priced by nothing: the record said part, the graph
+        # said assembly, and the writer read the graph.
+        _own_pieces = bool(record.get("weldment_from_own_cut_list"))
+        is_assembly = bool(not _hardware_carrier and not _own_pieces and (
+            (identity == top_id
+             and not (_product_is_leaf and identity == product_root))
+            or identity in children
+            or record.get("is_sub_assembly")
+            or record.get("is_assembly_parent")
+        ))
+        if _own_pieces and identity in children:
+            print(f"   [graph] {identity} is cut from the pieces of its own cut list — a part "
+                  f"sawn from section, not an assembly; its material is its own", flush=True)
         if _hardware_carrier:
             _hw = ", ".join(sorted(children.get(identity) or {}))
             print(f"   [graph] {identity} carries hardware ({_hw}) on its own sheet — a cut "
@@ -3257,7 +3533,8 @@ def build_part_graph(
 
     graph_issues = (list(_interleave_issues) + list(_minted_root_issues)
                     + list(_version_issues)
-                    + list(_product_issues) + list(_family_issues))
+                    + list(_product_issues) + list(_family_issues)
+                    + list(_clash_issues) + list(_role_conflict_issues))
     # A JOIN WE DECLINED IS EVIDENCE, NOT A NON-EVENT. The naming convention said these
     # two codes are one part and their kinds said otherwise. Either the convention matched
     # a spelling rather than a part — the case this guard exists for — or one of the two
@@ -3423,7 +3700,8 @@ def apply_canonical_evidence_to_parts(
     # cascade lost. One classification per job, consulted by every compile.
     graph = build_part_graph(parts, llm_extract, bom_rows, known_assemblies, page_owner,
                              pack_mode=_detect_pack_mode(summary or {}),
-                             declared_product=declared_product_of(summary or {}))
+                             declared_product=declared_product_of(summary or {}),
+                             source_names=source_names_of(summary or {}))
     # THE EVIDENCE, FILED AT THE FIRST DROP. The refresh recompile may never re-mint the
     # chimera's identity (its record is already gone from the parts), so if this call
     # does not file the quarantine on the summary, the pack-completeness invariant still
@@ -3442,11 +3720,43 @@ def apply_canonical_evidence_to_parts(
                     str(_iss.get("assembly") or ""),
                     float((_iss.get("counts") or {}).get(_m) or 1.0),
                     str((_iss.get("reasons") or {}).get(_m) or ""))
+    # ONE CODE, TWO ITEMS (D-508): said on both lines, and asked where nothing resolved it.
+    _clash_by: Dict[str, List[Mapping[str, Any]]] = {}
+    for _iss in graph.get("issues") or []:
+        if isinstance(_iss, Mapping) and _iss.get("code") == "one_code_two_items":
+            for _m in _iss.get("identities") or []:
+                _clash_by.setdefault(clean_part_number(_m), []).append(_iss)
     for part in parts or []:
         if not isinstance(part, dict):
             continue
         source_id = clean_part_number(part.get("part_number") or part.get("item_number"))
         identity = aliases.get(source_id, source_id)
+        for _cl in _clash_by.get(identity) or []:
+            _target = str(_cl.get("relinked_to") or "")
+            if identity == clean_part_number(_target):
+                _flag = (f"{identity} is linked under {_cl.get('parent')} x"
+                         f"{float(_cl.get('other_qty') or 1):g}: that table lists "
+                         f"'{_cl.get('other')}' under the code {_cl.get('part_code')}, which "
+                         f"it also uses for '{_cl.get('kept')}' — the row's words are this "
+                         f"part's own code; confirm against the parts list")
+                if _flag not in (part.get("review_flags") or []):
+                    part.setdefault("review_flags", []).append(_flag)
+                continue
+            _issue = (f"{_cl.get('part_code')} is listed under {_cl.get('parent')} for two "
+                      f"different things — '{_cl.get('kept')}' and '{_cl.get('other')}' x"
+                      f"{float(_cl.get('other_qty') or 1):g}")
+            try:
+                from source_precedence import raise_manufacturing_question as _ask_clash
+                _ask_clash(part, _issue,
+                           (f"costed as '{_cl.get('kept')}' only; the other row is linked to "
+                            f"{_target}" if _target else
+                            f"costed as '{_cl.get('kept')}' only; the other row is NOT "
+                            f"summed into it and carries no price yet"),
+                           "give the second item its own code (or confirm it is the same "
+                           "item) so each is priced at its own count",
+                           "route_compiler.one_code_two_items")
+            except Exception:                                        # noqa: BLE001
+                pass
         if identity in _adopted_by:
             _asm, _cnt, _why = _adopted_by[identity]
             _flag = (f"{identity} is costed under {_asm}, whose drawing is not in the pack: it "
@@ -3608,6 +3918,18 @@ def declared_product_of(summary: Optional[Mapping[str, Any]]) -> str:
         if _v:
             return _v
     return str(os.environ.get("SDI_PRODUCT") or "").strip()
+
+
+def source_names_of(summary: Optional[Mapping[str, Any]]) -> List[str]:
+    """The names of the drawing files this job was given, as the scan recorded them — what
+    the product resolver reads a pack's filing from (D-584). Empty when nothing was recorded."""
+    out: List[str] = []
+    if isinstance(summary, Mapping):
+        for e in (summary.get("job_source_pdfs") or []):
+            n = e.get("name") if isinstance(e, Mapping) else e
+            if n:
+                out.append(str(n).replace("\\", "/").rsplit("/", 1)[-1])
+    return out
 
 
 def outside_product_identities(issues: Any) -> Dict[str, str]:
@@ -3870,6 +4192,31 @@ def set_aside_late_lines(part_estimates: List[Dict[str, Any]], payload: Any,
         if not pn or pn in known or _is_generated_line(pn, part):
             kept.append(part)
             continue
+        # THE EDGING MATERIAL LINE IS PRODUCT MATERIAL, KEPT BY ITS PROVENANCE (D-516).
+        # It is minted at estimate time from metres measured on named parts, so the graph
+        # never saw it — and on 12343-01J's 11:22 book this rule set it aside as "Not
+        # linked" and re-created the very under-charge it was built to fix. It is NOT a
+        # blanket exemption: the line must carry _edging_for (the parts whose banded
+        # lengths created it) and at least one of them must be IN the graph — edging
+        # minted off an excluded product's parts is still excluded, and a line with no
+        # provenance has no claim. The config code alone exempts nothing: the same code
+        # could band a part this product does not contain.
+        if part.get("_edging_line"):
+            _for = [clean_part_number(x) for x in (part.get("_edging_for") or [])]
+            _for = [x for x in _for if x]
+            _in = [x for x in _for if x in known]
+            if _in:
+                if len(_in) < len(_for):
+                    part.setdefault("review_flags", []).append(
+                        f"EDGING METRES INCLUDE EXCLUDED PARTS: this line's length was "
+                        f"measured on {', '.join(sorted(set(_for)))} and only "
+                        f"{', '.join(sorted(set(_in)))} are in the product's scope — "
+                        f"reduce the metres to the in-scope edges before quoting.")
+                kept.append(part)
+                continue
+            removed.append((part, ("edging_of_excluded_parts" if _for
+                                   else "not_linked_to_the_product"), ""))
+            continue
         cands = by_key.get(spelling_key(pn)) or set()
         if len(cands) == 1:
             twin = next(iter(cands))
@@ -4083,7 +4430,8 @@ def compile_route_without_pricing(summary: Dict[str, Any]) -> Dict[str, Any]:
         job_drawing_numbers(summary),
         _assembly_page_owners(summary),
         pack_mode=_detect_pack_mode(summary),
-        declared_product=declared_product_of(summary))
+        declared_product=declared_product_of(summary),
+        source_names=source_names_of(summary))
     payload = {
         "schema": compiled.get("schema"),
         # NOT "shadow". A costed run publishes mode "shadow", meaning "compiled beside the
@@ -4156,7 +4504,8 @@ def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dic
                                  job_drawing_numbers(summary),
                                  _assembly_page_owners(summary),
                                  pack_mode=_pack_mode,
-                                 declared_product=declared_product_of(summary))
+                                 declared_product=declared_product_of(summary),
+                                 source_names=source_names_of(summary))
     # THE DROP, AFTER THE LAST READER AS WELL AS BEFORE THE FIRST. The pre-cost pass
     # quarantines the zipped-BOM-row chimera, and the dual-path reconciler then re-adds
     # its row from the raw table read — which is how a part the log twice said was
@@ -4194,7 +4543,8 @@ def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dic
                                      job_drawing_numbers(summary),
                                      _assembly_page_owners(summary),
                                      pack_mode=_pack_mode,
-                                 declared_product=declared_product_of(summary))
+                                     declared_product=declared_product_of(summary),
+                                     source_names=source_names_of(summary))
     payload = project_priced_route(compiled, final_estimates)
     estimate_summary["canonical_route_shadow"] = payload
     summary["estimate_summary"] = estimate_summary
@@ -4328,8 +4678,94 @@ def _ancestor_distances(identity: str, parents: Mapping[str, Set[str]]) -> Dict[
     return distances
 
 
+def _weldment_has_its_own_joints(part: Mapping[str, Any], part_number: str,
+                                 graph: Mapping[str, Any]) -> bool:
+    """A participant of a parent's welding event that is itself welded from pieces of its own
+    (D-566). 401918-01-03M FRAME - WELDMENT is welded from three tubes and then welded into
+    201 with its caps; the compatibility adapter read 03M's own WELDED as corroboration of
+    201's event and the frame's internal joints were never charged. Its own sheet's weld
+    evidence (symbols, FINISH: WELDED, a weld note) on a record that holds pieces — children
+    in the graph, a cut list of more than one piece, or a WELDMENT by name — is a weld of its
+    own, beside the parent's."""
+    own_evidence = bool(part.get("weld_symbols") or part.get("weld_stated_by_finish")
+                        or part.get("weld_stated_by_note"))
+    if not own_evidence:
+        return False
+    kids = (graph.get("children") or {}).get(part_number) or ()
+    ss = part.get("section_stock") if isinstance(part.get("section_stock"), Mapping) else {}
+    pieces = [x for x in (ss.get("cut_lengths_mm") or []) if x]
+    return bool(kids) or len(pieces) > 1 or bool(
+        re.search(r"\bWELDMENT\b", str(part.get("description") or ""), re.I))
+
+
 def _is_descendant(identity: str, ancestor: str, parents: Mapping[str, Set[str]]) -> bool:
     return identity != ancestor and ancestor in _ancestor_distances(identity, parents)
+
+
+# Words a materials-list line shares with any part, so they never decide which part it names.
+_CALLOUT_NOISE = {"MM", "MILD", "STEEL", "THE", "TO", "OF", "AND", "WITH", "OTHER", "SIDE",
+                  "WELDED", "WELD", "THICK", "BAR", "ON", "IN", "AT", "FOR"}
+
+
+def _callout_words(num: str, route: Mapping[str, Any], llm_extract: Mapping[str, Any]) -> str:
+    """The words the sheet prints against list item `num`: the extract's own line for it,
+    and the route's quoted evidence (D-533)."""
+    bits: List[str] = []
+    for pool in ("bom", "parts"):
+        for e in (llm_extract.get(pool) or []):
+            if not isinstance(e, Mapping):
+                continue
+            if any(str(e.get(k) or "").strip() == num for k in (
+                    "item_number", "item", "item_no", "callout", "find_number", "part_number")):
+                bits.extend(str(e.get(k) or "") for k in (
+                    "description", "name", "part_name", "material", "notes"))
+    for k in ("evidence", "drawing_note", "quote", "notes", "description"):
+        v = str(route.get(k) or "").strip()
+        if v and not any(v.upper() in b.upper() for b in bits):
+            bits.append(v)
+    return " ".join(b for b in bits if b).strip()
+
+
+def _resolve_callout(num: str, route: Mapping[str, Any], llm_extract: Mapping[str, Any],
+                     raw: Mapping[str, Mapping[str, Any]]) -> str:
+    """The one part whose own words share most with list item `num`'s line, or "" (D-533).
+
+    Two shared significant words at least, and strictly more than any other part — a line
+    that names nothing in this job, or names two parts equally, resolves to nothing."""
+    def _toks(text: str) -> Set[str]:
+        return {w for w in re.findall(r"[A-Z]{2,}", str(text or "").upper())
+                if w not in _CALLOUT_NOISE}
+    line = _toks(_callout_words(num, route, llm_extract))
+    if not line:
+        return ""
+    scored: List[Tuple[int, str]] = []
+    for pn, rec in (raw or {}).items():
+        if not isinstance(rec, Mapping):
+            continue
+        own = " ".join([str(rec.get("description") or ""), str(rec.get("concept_seen") or "")]
+                       + [str(m) for m in (rec.get("materials") or []) if m])
+        scored.append((len(line & _toks(own)), str(pn)))
+    scored.sort(reverse=True)
+    if not scored or scored[0][0] < 2 or (len(scored) > 1 and scored[1][0] == scored[0][0]):
+        return ""
+    return scored[0][1]
+
+
+def _welded_host(pn: str, graph: Mapping[str, Any], raw: Mapping[str, Mapping[str, Any]]) -> str:
+    """The nearest assembly above `pn` whose own record carries a weld — the joint the member's
+    stated weld already is (D-533) — or ""."""
+    if not pn:
+        return ""
+    dist = _ancestor_distances(pn, graph.get("parents") or {})
+    for anc, _d in sorted(dist.items(), key=lambda kv: kv[1]):
+        if anc == pn:
+            continue
+        rec = raw.get(anc) or {}
+        ops = [str(o).lower() for o in (list(rec.get("inferred_operations") or [])
+                                        + list(rec.get("textual_operations") or []))]
+        if any(o in ("welding", "spot_welding") for o in ops):
+            return str(anc)
+    return ""
 
 
 _PRESSED_FASTENER_DEFAULT_WORDS = (
@@ -4736,12 +5172,15 @@ def compile_job_route(
     finish_text_by_pn: Optional[Mapping[str, str]] = None,
     pack_mode: Optional[str] = None,
     declared_product: Optional[str] = None,
+    source_names: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     """Compile every route source into one job-level decision graph."""
     llm_extract = llm_extract or {}
     graph = build_part_graph(parts, llm_extract, bom_rows, known_assemblies, page_owner,
-                             pack_mode=pack_mode, declared_product=declared_product)
+                             pack_mode=pack_mode, declared_product=declared_product,
+                             source_names=source_names)
     raw: Dict[str, Mapping[str, Any]] = graph["raw"]
+    from robust_ownership import nonphysical
     kinds = {node.part_number: node.kind for node in graph["nodes"]}
     graph_quantities = graph["quantities"]
     claims_by_event: Dict[str, List[OperationClaim]] = {}
@@ -4775,6 +5214,51 @@ def compile_job_route(
             issues.append({"code": "route_participant_outside_the_product",
                            "operation": operation, "identities": _dropped,
                            "kept": list(participants)})
+        # A CALLOUT NUMBER IS NOT A PART (D-533). 0356455's materials list reads "6. 2MM
+        # U-CHANNEL BAR CONNECTOR OTHER SIDE WELDED TO UPRIGHT"; the extract keyed that weld to
+        # part "6" — the list's item number — and the sheet charged a Weld (CO2) row on a part
+        # that does not exist, beside the unit's own weld. A bare list number no part record
+        # carries is a reference to a line, never a participant.
+        # AND THE WORK IT STATES IS KEPT: the number is resolved to the part its list line
+        # names (U-CHANNEL BAR CONNECTOR -> the connector), and where that part is welded into
+        # an assembly whose own weld counts its joints, the stated weld is that weld — charged
+        # once, there, with the reason on the member. Only a line that names no part is left
+        # uncharged, and it is asked, not lost.
+        _callouts = [item for item in participants
+                     if re.fullmatch(r"\d{1,3}", str(item)) and not raw.get(item)]
+        if _callouts:
+            participants = [item for item in participants if item not in _callouts]
+            for _num in _callouts:
+                _hit = _resolve_callout(_num, route, llm_extract, raw)
+                _host = _welded_host(_hit, graph, raw) if (_hit and operation == "welding") else ""
+                if _hit and _host:
+                    _ev = stable_id("decision", {"route": "callout", "operation": operation,
+                                                 "scope": "part", "target_id": _hit})
+                    add_claim(_ev, make_claim(
+                        operation, NOT_APPLICABLE, "llm_full_extract",
+                        subject_id=_hit, target_id=_hit, scope="part", participants=[_hit],
+                        sequence=number(route.get("sequence")),
+                        reason=(f"the sheet's item {_num} states this {operation} "
+                                f"('{_callout_words(_num, route, llm_extract)[:70]}'); {_hit} is "
+                                f"welded into {_host}, whose own weld counts its joints — charged "
+                                f"once there, not again on this line"),
+                        route_id=str(route.get("route_id") or "")))
+                    issues.append({"code": "route_callout_resolved", "operation": operation,
+                                   "callout": _num, "part_number": _hit, "charged_on": _host,
+                                   "detail": (f"item {_num}'s {operation} is {_hit}'s joint, "
+                                              f"charged once on {_host}")})
+                elif _hit:
+                    participants.append(_hit)
+                    issues.append({"code": "route_callout_resolved", "operation": operation,
+                                   "callout": _num, "part_number": _hit, "charged_on": _hit,
+                                   "detail": f"item {_num}'s {operation} is charged on {_hit}"})
+                else:
+                    issues.append({"code": "route_participant_is_a_callout_number",
+                                   "operation": operation, "identities": [_num],
+                                   "kept": list(participants),
+                                   "detail": (f"{operation} was keyed to {_num} — a materials-list "
+                                              f"item number that names no part in this job; not "
+                                              f"charged until it is assigned to one")})
         if not operation or not participants:
             continue
         stated_scope = str(route.get("scope") or "").strip().lower()
@@ -4890,6 +5374,15 @@ def compile_job_route(
                     })
 
         for target_index, (scope, target_id, members) in enumerate(targets):
+            if operation == "assembly":
+                _services = [m for m in members if nonphysical(raw.get(m) or {})]
+                members = [m for m in members if m not in _services]
+                if _services:
+                    issues.append({"code": "services_not_physical_assembly_members",
+                                   "target": target_id, "excluded": _services,
+                                   "detail": "Service charges remain in the graph; excluded only from physical assembly participants."})
+                if _services and not members:
+                    continue
             route_id = (
                 base_route_id if len(targets) == 1
                 else f"{base_route_id}:{target_index + 1}"
@@ -4900,6 +5393,10 @@ def compile_job_route(
                 "scope": scope,
                 "target_id": target_id,
             })
+            # AT LEAST ONCE PER INSTANCE OF THE TARGET (D-558): a stated per-product count
+            # below the target's multiplicity is the model counting one frame of two.
+            _floored_qty, _floored = at_least_once_per_instance(
+                route.get("qty_per_unit"), target_id, graph_quantities, scope)
             claim = make_claim(
                 operation, REQUIRED, source,
                 subject_id=target_id,
@@ -4924,7 +5421,7 @@ def compile_job_route(
                 # from the canonical BOM -- which is the only place that knows how many of
                 # each part the product contains.
                 qty_per_unit=(
-                    route.get("qty_per_unit")
+                    _floored_qty
                     if (route.get("qty_per_unit") is not None and len(targets) == 1)
                     else graph_quantities.get(target_id, 1.0)
                 ),
@@ -4933,6 +5430,15 @@ def compile_job_route(
                 reason=_route_reason,
                 route_id=route_id,
             )
+            if _floored and route.get("qty_per_unit") is not None and len(targets) == 1:
+                issues.append({
+                    "code": "assembly_op_floored_to_target_count",
+                    "route_id": route_id,
+                    "operation": operation,
+                    "target": target_id,
+                    "stated": route.get("qty_per_unit"),
+                    "count": _floored_qty,
+                })
             add_claim(event_id, claim)
             if scope == "assembly":
                 explicit_assembly_events.setdefault(operation, []).append(
@@ -5016,6 +5522,9 @@ def compile_job_route(
         # words. That is a reading of the drawing. Falling back to "unknown" made it
         # indistinguishable from a claim nobody could account for, and section 12 printed forty
         # of them: "an unrecorded source", rank 0, for operations the drawing states.
+        # (D-586 narrows this: the field has grown other writers, so the drawing_notes label
+        # is kept only where the op carries its quote — operation_evidence — or a recorded
+        # source; see the gate below.)
         #
         # `operations` keeps "unknown" because it is written by several passes with different
         # provenance and this adapter cannot tell which wrote a given entry. Naming it would be
@@ -5037,8 +5546,67 @@ def compile_job_route(
                 if _spelled(operation) in _ruled_keys:
                     continue          # ruled off this record: the ruling event decides it
                 source = str(operation_sources.get(operation) or fallback_source)
+                # A NOTE IS QUOTED OR IT IS NOT A NOTE (D-586). textual_operations now has
+                # many writers — the note inferrer, the LLM route fold, the wire route, the
+                # assembly phrase scan — and only the first is a reading of the drawing.
+                # 0351292's strip reached the book welded and folded, each decision saying
+                # "a note on the drawing" with nothing quoted and nowhere named, because any
+                # unsourced op name in this field borrowed that authority. An op whose words
+                # were recorded (operation_evidence) keeps drawing_notes and carries the
+                # quote; an op with no recorded source and no words is an honest unknown —
+                # still priced, as every rank-0 claim is, never dressed as an instruction.
+                _op_evidence = str(
+                    (part.get("operation_evidence") or {}).get(operation) or "")
+                _op_evidence_where = ("the sheet's own note text, legend removed"
+                                      if _op_evidence else "")
+                _demoted = False
+                if (field_name == "textual_operations"
+                        and operation not in operation_sources and not _op_evidence):
+                    # THE RECORD'S OWN STATED FINISH IS EVIDENCE TOO. A weldment whose title
+                    # block says POWDER COATED carries its coat as a textual op with no
+                    # recorded source — demoting that read 12645's door to unverified. A
+                    # stated finish naming this operation's family, or a process statement
+                    # naming the operation, is the sheet's own word and keeps the note.
+                    try:
+                        from finish_rules import (finish_families as _ff,
+                                                  process_statements as _pst,
+                                                  stated_finish as _sf)
+                        _stated = _sf(part)
+                        if _stated:
+                            _fam = {"powder_coating": "powder", "wet_spray": "wet_spray",
+                                    "diamond_polish": "polish", "anodising": "anodise",
+                                    "plating": "plate"}.get(operation)
+                            _hits, _ = _pst(_stated)
+                            if (_fam and _fam in _ff(_stated)) or any(
+                                    operation in ops for ops in _hits.values()):
+                                _op_evidence = _stated
+                                _op_evidence_where = "the part's own stated finish"
+                    except Exception:                                # noqa: BLE001
+                        pass
+                    # A WELD SYMBOL COUNTED ON THE SHEET IS THE SHEET'S OWN WORD, and so is
+                    # a finish field that states the weld — the 90001 frame-in-a-frame's own
+                    # joints are claimed from exactly these, and demoting them unmade D-566.
+                    if not _op_evidence and operation in ("welding", "dress_welds"):
+                        _ws = part.get("weld_symbols")
+                        if isinstance(_ws, dict) and any(
+                                isinstance(v, (int, float)) and v > 0 for v in _ws.values()):
+                            _op_evidence = "weld symbols counted on its own sheet: " + \
+                                ", ".join(f"{k} x {v:g}" for k, v in _ws.items()
+                                          if isinstance(v, (int, float)) and v > 0)
+                            _op_evidence_where = "the sheet's weld symbols"
+                        elif part.get("weld_stated_by_finish"):
+                            _op_evidence = "the part's own finish field states the weld"
+                            _op_evidence_where = "the part's own stated finish"
+                    if not _op_evidence:
+                        # "unrecorded", not "unknown": the same rank (0) and the same English
+                        # ("an unrecorded source"), but the stranded-assembly status rule
+                        # keys on "unknown", and this demotion is a labelling correction,
+                        # not a licence to flip statuses across the fleet.
+                        source = "unrecorded"
+                        _demoted = True
                 event_ids = sorted(
                     explicit_memberships.get((operation, part_number)) or [])
+                compatibility_target = part_number
                 if not event_ids and operation in ASSEMBLY_EVENT_OPERATIONS:
                     # A child record often repeats its parent's finish/weld wording. If an
                     # explicit assembly event already owns that operation, the child word is
@@ -5062,6 +5630,24 @@ def compile_job_route(
                     ]
                     if len(most_specific) == 1:
                         event_ids = [most_specific[0][1]]
+                # A WELDMENT INSIDE A WELDED ASSEMBLY HAS JOINTS OF ITS OWN (D-566, placed
+                # here by D-572): its word corroborates the parent's event AND claims an event
+                # of its own. This has to follow the ancestor lookup above, not precede it: a
+                # member named on the parent's route arrives with its event ids filled, but a
+                # member the ancestor lookup absorbs — 401918-01-03M under 201, 07M under 401,
+                # each with a fillet on its own sheet, FINISH: WELDED and WELDMENT in its name
+                # — arrives with none, and the check sat before the lookup, so it was never
+                # asked; the lookup then folded the frame's own joints into the parent's
+                # event and neither frame was welded on the book.
+                if (event_ids and operation == "welding"
+                        and _weldment_has_its_own_joints(part, part_number, graph)):
+                    _own_event = stable_id("decision", {
+                        "origin": "compatibility", "operation": operation,
+                        "scope": "part", "target_id": part_number})
+                    if _own_event not in event_ids:
+                        event_ids.append(_own_event)
+                    explicit_memberships.setdefault(
+                        ("welding", part_number), set()).add(_own_event)
                 # Dressing is one event attached to the weld event, not a separate dressing
                 # charge on every participant which happened to carry the inferred word.
                 if not event_ids and operation == "dress_welds":
@@ -5191,15 +5777,23 @@ def compile_job_route(
                         # quantity is the part's own BOM multiplicity. The route's stated
                         # figure describes the group and is kept only where the event covers
                         # the group -- an assembly-scoped event, which has one target.
+                        # And at least once per instance of the target (D-558), as above.
                         qty_per_unit=(
-                            operation_quantities.get(operation)
+                            at_least_once_per_instance(
+                                operation_quantities.get(operation), target_id,
+                                graph["quantities"], scope)[0]
                             if (operation_quantities.get(operation) is not None
                                 and scope != "part")
                             else graph["quantities"].get(target_id, 1.0)
                         ),
                         sequence=sequences.get(operation),
-                        reason=f"{field_name} on existing part record",
+                        reason=(f"{field_name} on existing part record"
+                                + (" — no reader recorded a source or the drawing's words "
+                                   "for it; priced, not promoted to a note" if _demoted
+                                   else "")),
                         route_id=route_id,
+                        evidence=_op_evidence,
+                        evidence_where=_op_evidence_where,
                     ))
 
         for raw_operation, raw_reason in _rulings.items():
@@ -5388,10 +5982,14 @@ def compile_job_route(
             or (node.part_number in welded_targets and not _is_top)
         ):
             continue
+        _physical_children = [edge.part_number for edge in node.children
+                              if not nonphysical(raw.get(edge.part_number) or {})]
+        if not _physical_children:
+            continue
         assembly_route_id = stable_id("route", {
             "operation": "assembly",
             "target_id": node.part_number,
-            "participants": [edge.part_number for edge in node.children],
+            "participants": _physical_children,
         })
         assembly_event_id = stable_id("decision", {
             "route_id": assembly_route_id,
@@ -5404,7 +6002,7 @@ def compile_job_route(
             subject_id=node.part_number,
             target_id=node.part_number,
             scope="assembly",
-            participants=[edge.part_number for edge in node.children],
+            participants=_physical_children,
             qty_per_unit=node.qty_per_unit,
             sequence=90 if _is_top else 60,
             reason=("the top assembly is packed whatever joined it"
@@ -5646,6 +6244,19 @@ def compile_job_route(
         return not _pw_ruled_out("powder_coating",
                                  weldment_finish_for_gate(_rec, _pn, graph))
 
+    def _pw_bought(_pn: str) -> bool:
+        _rec = (graph["records"].get(_pn)
+                or _record_by_squashed_key(graph["records"], _pn) or {})
+        if not _rec:
+            return False
+        if _rec.get("is_bought_in") or str(_rec.get("concept_kind") or "") == "bought_in":
+            return True
+        try:
+            from bought_in_policy import is_bought_in as _bi
+            return bool(_bi(dict(_rec)))
+        except Exception:                                            # noqa: BLE001
+            return False
+
     for event_id, event_claims in list(claims_by_event.items()):
         _d = arbitrate_event(event_id, event_claims)
         if not (_d.operation == "powder_coating" and _d.status == REQUIRED
@@ -5657,9 +6268,13 @@ def compile_job_route(
             # words corroborate it; complete coverage cannot stand it down. A scope
             # label without welding evidence is a title-block statement, not a stage.
             continue
+        # BOUGHT HARDWARE ARRIVES FINISHED (D-532): a castor or an ID plate fitted after the
+        # coat is not a member "carrying no coat of its own" — 0356453's four castors and its
+        # plate turned a fully coated frame into a coating-scope question for a person.
         _leaf_desc = {pn for pn, k in kinds.items()
                       if k == "leaf" and _is_descendant(pn, _d.target_id,
-                                                        graph["parents"])}
+                                                        graph["parents"])
+                      and not _pw_bought(pn)}
         _coated_desc = {pn for pn in _leaf_desc
                         if pn in _pw_required and _pw_member_carries_coat(pn)}
         if _leaf_desc and _coated_desc == _leaf_desc:
@@ -5786,6 +6401,16 @@ def compile_job_route(
                 "TUBE", "CHS", "RHS", "SHS", "BOX SECTION",
             ))
         )
+        # EVERY SECTION IS CUT ONCE (D-532). A flat bar, angle, channel, round bar or oval
+        # with no flat pattern of its own is a stock length the saw cuts — the estimator's
+        # section path already strips the laser and charges the saw for exactly these, so a
+        # laser word left standing here put 0356453's 50 x 10 flat-bar feet on a Tube row
+        # AND a Saw row. A section that carries a DXF flat is profiled and left alone.
+        _flat = bool(raw_part.get("dxf_augmented") or raw_part.get("flat_pattern_detected")
+                     or str(raw_part.get("geometry_source") or "") == "dxf_flat_pattern")
+        if not is_tube and profile in {"FLAT", "ROUND", "ANGLE", "CHANNEL", "OVAL"} \
+                and not _flat:
+            is_tube = True
         if (
             is_tube
             and template.scope == "part"
@@ -5798,7 +6423,10 @@ def compile_job_route(
                 scope="part",
                 participants=[template.target_id],
                 sequence=template.sequence,
-                reason="section stock is cut by the tube process, not sheet profiling",
+                reason=("section stock is cut by the tube process, not sheet profiling"
+                        if profile in {"CHS", "RHS", "SHS", "TUBE", ""} else
+                        f"{'an' if profile[:1] in 'AEIOU' else 'a'} {profile.lower()} section is cut from a stock length, not "
+                        f"profiled from sheet"),
                 route_id=template.route_id,
             ))
 

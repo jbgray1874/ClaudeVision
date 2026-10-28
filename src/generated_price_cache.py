@@ -74,6 +74,15 @@ def _canonical(spec: Dict[str, Any]) -> str:
     return json.dumps(out, sort_keys=True, ensure_ascii=False)
 
 
+def _reuse_count(hit: bool) -> None:
+    """Count the answer on the run's timing record (D-553); never a failure."""
+    try:
+        import run_timing
+        run_timing.reuse("generated_prices", hit)
+    except Exception:                                        # noqa: BLE001
+        pass
+
+
 def cache_key(spec: Dict[str, Any], provider: str, model: str) -> str:
     h = hashlib.sha256()
     h.update(_canonical(spec).encode("utf-8"))
@@ -118,10 +127,12 @@ def cached_estimate(
                 result["price_is_reproducible"] = True
                 result["price_from_cache"] = True
                 result["price_first_taken"] = entry.get("created_utc")
+                _reuse_count(True)
                 return result
         except Exception:
             pass  # a corrupt entry is a cache miss, not a failure
 
+    _reuse_count(False)
     result = dict(compute() or {})
     if not result.get("found"):
         # Do not store. Tomorrow's run should ask again rather than inherit today's

@@ -885,6 +885,7 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         page_lookup[pnum] = {
             "text": merged,
             "role": (page.get("page_role") or {}).get("primary_role", ""),
+            "page": page,          # the sheet itself, for its figures (D-584)
         }
         if os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"} and "PETG" in merged.upper():
             bom = (page.get("region_text") or {}).get("bom") or ""
@@ -917,8 +918,33 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         _seen = _printed_material_rows.setdefault(_code, [])
         if not any(_t.upper() == _text.upper() for _t in _seen):
             _seen.append(_text)
+    # THE ROW'S PRINTED DIMENSION, COLLECTED THE SAME WAY (D-587). One cell per part, kept
+    # only where every row that lists the part prints the same figure: two rows printing
+    # different stock is a question for the estimator, never a choice by table order.
+    _printed_dimension_rows: Dict[str, List[str]] = {}
+    for _row in ((summary.get("document_analysis") or {}).get("bom_rows") or []):
+        if not isinstance(_row, dict):
+            continue
+        _dim = str(_row.get("dimension") or "").strip()
+        _code = _bare_code(str(_row.get("part_number") or ""))
+        if not _dim or not _code:
+            continue
+        _seen = _printed_dimension_rows.setdefault(_code, [])
+        if not any(re.sub(r"\s+", "", _t).upper() == re.sub(r"\s+", "", _dim).upper()
+                   for _t in _seen):
+            _seen.append(_dim)
 
     for part in parts:
+        _dims_printed = _printed_dimension_rows.get(
+            _bare_code(str(part.get("part_number") or ""))) or []
+        if len(_dims_printed) == 1:
+            part.setdefault("bom_dimension", _dims_printed[0])
+        elif len(_dims_printed) > 1:
+            part["bom_dimension_candidates"] = list(_dims_printed)
+            part.setdefault("review_flags", []).append(
+                "the parts lists print this part's stock more than once and the cells differ — "
+                + " / ".join(f"'{_d}'" for _d in _dims_printed)
+                + ". Neither is used to decide its stock form; confirm which is right")
         page_nums: List[int] = part.get("pages", [])
         page_roles: List[str] = part.get("page_roles", [])
         materials: List[str] = part.get("materials", [])
@@ -981,6 +1007,40 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         )
         combined_upper = combined_text.upper()
 
+        # THE SHEET'S OWN BANDING STATEMENT RIDES THE RECORD (D-513). 12343-01J's drawing
+        # says "EDGED ALL AROUND" and "2S/SL"; the finish box kept "EDGED" alone and the note
+        # snippets keep only deburr/weld/tap words, so the statement never reached a field the
+        # edging reader consults — the labour was flagged a CEILING and no edging material
+        # line was built, on a part whose drawing had answered the question. Harvested from
+        # the part's own DETAIL pages only (a note stays on the sheet it is written on; an
+        # assembly sheet's note names a member this pass cannot resolve), with the pack-wide
+        # specification legend stripped first.
+        _detail_text = " ".join(
+            page_lookup[pn]["text"] for pn in page_nums
+            if pn in page_lookup
+            and str(page_lookup[pn].get("role") or "") == "detail")
+        if not part.get("banding_statements") and _detail_text:
+            try:
+                from edge_banding import harvest_banding_statements as _harvest_banding
+                _stmts = _harvest_banding(_strip_specification_legend(_detail_text))
+                if _stmts:
+                    part["banding_statements"] = _stmts
+            except Exception:                                        # noqa: BLE001
+                pass
+        # THE DRAWING'S OWN BORE CALLOUTS, AS EVIDENCE (D-515). 12343-01J states
+        # "2 x Ø8.5 ↧11" and "2 x Ø6.5 ↧10"; the Ø and depth glyphs do not survive the text
+        # layer, so the Ø-anchored hole reader saw nothing and the record reached costing
+        # with half the boring. The surviving count-x-diameter-depth shape is kept as
+        # stated_bore_callouts — flags and questions only, never charged time.
+        if not part.get("stated_bore_callouts") and _detail_text:
+            try:
+                from extractor_patterns import extract_stated_bore_callouts as _bores
+                _calls = _bores(_strip_specification_legend(_detail_text))
+                if _calls:
+                    part["stated_bore_callouts"] = _calls
+            except Exception:                                        # noqa: BLE001
+                pass
+
         # Linear stock (tube / RHS / SHS / box section): capture the cutting-list
         # profile + cut length from the page text so the estimator's section path
         # fires even when the BOM line is the title-block name (e.g. the 3886-01
@@ -1018,6 +1078,67 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                                                 "SECTION", "BAR", "ROD", "UPRIGHT", "LEG",
                                                 "RAIL", "POST"))
                 )
+                # THE PART'S OWN PRINTED ROW SAYS WHAT STOCK IT IS (D-584). A canonical
+                # "30X20X2MM … TUBE" anywhere on a SHARED sheet was offered to every part on
+                # it, and four 2 mm top blanks became 20 x 30 x 2 tube. The row the parts list
+                # prints for THIS part is the authority on its stock: a row stating a section
+                # takes the profile; a row stating a plain gauge ("2 mm", "MILD STEEL - RAW")
+                # with no section word is sheet, and the callout is another part's. A sheet
+                # bound to this part alone (its own detail page) still speaks for it.
+                _own_row = " ".join(str(part.get(k) or "") for k in
+                                    ("material_text_as_printed", "dimension", "stock_size",
+                                     "bom_dimension")).upper()
+                _row_says_section = any(w in _own_row for w in
+                                        ("TUBE", "RHS", "SHS", "CHS", "BOX", "SECTION", "BAR",
+                                         "ROD", "ANGLE", "CHANNEL"))
+                _row_says_sheet = bool(_own_row) and not _row_says_section and bool(
+                    re.search(r"\b\d+(?:\.\d+)?\s*MM\b", _own_row)) and not re.search(
+                    r"\d\s*X\s*\d+(?:\.\d+)?\s*X\s*\d", _own_row)
+                _detail_pages = [pn for pn in page_nums if pn in page_lookup
+                                 and str(page_lookup[pn].get("role") or "") == "detail"]
+                _shared = len(page_nums) != 1 or len(_detail_pages) != 1
+                # THE PART'S OWN DETAIL SHEET SPEAKS FOR IT WITHOUT A ROW (D-584, fourth
+                # tranche). The top blank is bound to the rail sheet that lists it AND to its
+                # own sheet; with no printed row the guard above was inert and the rail's
+                # "30X20X2MM TUBE" became the blank's stock. A part with exactly one detail
+                # sheet whose text names no section is sheet, whatever a shared page says.
+                _own_detail_text = (str(page_lookup[_detail_pages[0]].get("text") or "").upper()
+                                    if len(_detail_pages) == 1 else "")
+                try:
+                    from section_profile import _SECTION_HOLLOW_KW as _hollow_kw
+                except Exception:                                    # noqa: BLE001
+                    _hollow_kw = ("TUBE", "RHS", "SHS", "BOX SECTION")
+                _own_detail_silent = bool(_own_detail_text) and not any(
+                    kw in _own_detail_text for kw in _hollow_kw) and not re.search(
+                    r"\d\s*X\s*\d+(?:\.\d+)?\s*X\s*\d", _own_detail_text)
+                # A PROFILE BELONGS TO THE ROW THAT PRINTS IT, AND A BOUGHT ITEM TAKES NO
+                # STOCK FORM FROM A PAGE (D-587). On 0351292's 09:48 book the rail sheet's
+                # "30X20X2MM ROL2021-2405" reached the top blanks AND a hex nut listed on the
+                # same sheet. The callout's own text names the part it belongs to: where it
+                # names a drawing number that is not this part's, it is another row's, unless
+                # this part's own row or name says it is section stock too. A purchased
+                # article — a nut, a screw, a Hafele foot — is bought as it is, never cut.
+                try:
+                    from part_code_conventions import (is_supplier_article as _is_article,
+                                                       looks_like_a_drawing_number as _is_dwg)
+                except Exception:                                    # noqa: BLE001
+                    _is_article = _is_dwg = (lambda _t: False)        # noqa: E731
+                _mine = _bare_code(str(part.get("part_number") or "")).upper()
+                _src_codes = sorted({
+                    _c for _c in re.findall(r"[A-Z0-9][A-Z0-9.\-]{4,}",
+                                            str(_sec.get("source_text") or "").upper())
+                    if _is_dwg(_c)})
+                _names_another = bool(_src_codes) and not any(
+                    _bare_code(_c).upper() == _mine for _c in _src_codes)
+                _is_assembly_rec = bool(part.get("is_assembly_parent")
+                                        or "assembly" in page_roles)
+                _own_section_word = _row_says_section or (
+                    _looks_like_section and not _is_assembly_rec)
+                # An article by its number (a designation, a supplier's dotted code), or a
+                # bought-in that is not an assembly record — the GA retags its own sub-
+                # assemblies "bought_in", and those are refused below by ownership instead.
+                _bought_line = (_is_article(str(part.get("part_number") or ""))
+                                or ("bought_in" in page_roles and not _is_assembly_rec))
                 if _measured_flat:
                     part.setdefault("review_flags", []).append(
                         f"section '{_path}' read from this part's page text was NOT applied — "
@@ -1028,7 +1149,50 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                         f"section '{_path}' read from this part's page text was NOT applied — "
                         f"nothing about this part says it is section stock, and the callout is "
                         f"shared page text that describes a different part on the drawing")
+                elif _bought_line and not _row_says_section:
+                    part.setdefault("review_flags", []).append(
+                        f"section '{_path}' read from this part's page was NOT applied — "
+                        f"this line is a bought-in article, bought as it is and never cut "
+                        f"from stock; the callout belongs to a made part on the same sheet")
+                elif _shared and _names_another and not _own_section_word:
+                    part.setdefault("review_flags", []).append(
+                        f"section '{_path}' read from a shared page was NOT applied — the "
+                        f"callout names {', '.join(_src_codes[:3])}, another part on the "
+                        f"sheet, and nothing on this part's own row or name says it is "
+                        f"section stock")
+                elif _shared and _row_says_sheet and not _looks_like_section:
+                    part.setdefault("review_flags", []).append(
+                        f"section '{_path}' read from a shared page was NOT applied — this "
+                        f"part's own parts-list row states a sheet gauge ({_own_row.strip()}) "
+                        f"and no section, so the callout is another part's on the same drawing")
+                elif _shared and _own_detail_silent and not _looks_like_section and not _row_says_section:
+                    part.setdefault("review_flags", []).append(
+                        f"section '{_path}' read from a shared page was NOT applied — this "
+                        f"part's own detail sheet (page {_detail_pages[0]}) names no section, "
+                        f"so the callout is another part's on the drawing that lists them both")
                 else:
+                    # THE CUT LENGTH IS THE SHEET'S FIGURE, NOT A NUMBER IN ITS PROSE (D-584):
+                    # on a part's own detail page the largest leading figure printed along an
+                    # axis is its length — 703 for the cross rail, 1395 for the upright —
+                    # where the text read gave the date, the drawing number or nothing.
+                    # One detail sheet is enough, whatever else the part is bound to: the
+                    # cross rail is listed on the support sheet and drawn on its own, and the
+                    # text path across both read 120 and then 304 from the notes block.
+                    if len(_detail_pages) == 1:
+                        try:
+                            from detail_page_geometry import read_sheet_figures as _figs
+                            _fig = _figs(page_lookup[_detail_pages[0]].get("page") or {})
+                            _vals = [v for v, _a in (_fig.get("figures") or [])]
+                            _long = max(_vals) if _vals else None
+                            _side = max(float(_sec.get("a") or 0), float(_sec.get("b") or 0))
+                            if _long and _long >= _side * 2:
+                                _text_len = _sec.get("length_mm")
+                                if _text_len is None or abs(float(_text_len) - _long) > 1.0:
+                                    _sec = dict(_sec, length_mm=_long,
+                                                length_source="detail_sheet_figure",
+                                                length_from_text=_text_len)
+                        except Exception:                            # noqa: BLE001
+                            pass
                     part["section_stock"] = _sec
 
         geo_reliability = float(
@@ -1339,9 +1503,21 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 or part.get("overall_length_mm")
                 or (part.get("dxf_raw_geometry") or {}).get("blank_area_mm2")
             )
+            # THE ENGINE'S SHAPE TEST, NOT A PRIVATE ONE (D-589, the D-584 class again). A
+            # digit-led regex here retagged 0351292's rail, base and supports — ROL2021-2466,
+            # -2467, -2468, sub-assemblies with sheets and members of their own — as bought
+            # commodities: the rail and base were then researched at market, £24.50 and
+            # £14.50, as if SDI bought them, and the provenance counted both beside their
+            # members' charged rows. A drawing number by the shared rule is never a commodity.
+            try:
+                from part_code_conventions import looks_like_a_drawing_number as _is_dwg_bi
+                _names_a_drawing_bi = (bool(_re_bi.match(r"^\d{3,6}-", _pn_bi))
+                                       or _is_dwg_bi(_pn_bi))
+            except Exception:                                        # noqa: BLE001
+                _names_a_drawing_bi = bool(_re_bi.match(r"^\d{3,6}-", _pn_bi))
             if (
                 _pn_bi
-                and not _re_bi.match(r"^\d{3,5}-", _pn_bi)
+                and not _names_a_drawing_bi
                 and not _has_geom_bi
                 and _is_good_description(part.get("description"))
                 and "bought_in" not in page_roles
@@ -1374,6 +1550,19 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 inferred = []
             if inferred:
                 part["textual_operations"] = list(inferred)
+                # THE WORDS TRAVEL WITH THE OPERATION (D-586). An op inferred here reached
+                # the route as "a note on the drawing" with nothing quoted, so a repeated op
+                # name and a genuine callout read identically. Each inferred op carries the
+                # sheet's own words; an op whose cue the text does not print carries none,
+                # and the route compiler will not call it a note.
+                try:
+                    from extractor_patterns import operation_evidence_in_text
+                    _op_ev = operation_evidence_in_text(cue_text, inferred)
+                except Exception:                                    # noqa: BLE001
+                    _op_ev = {}
+                for _op, _snippet in _op_ev.items():
+                    part.setdefault("operation_evidence", {}).setdefault(_op, _snippet)
+                    part.setdefault("operation_sources", {}).setdefault(_op, "drawing_notes")
                 _interpret_part(part)
 
         is_assembly_part = (
@@ -1396,16 +1585,27 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             ops_set = set(part.get("textual_operations", []))
             changed = False
 
-            if any(phrase in cue_upper for phrase in _ASSEMBLY_WELD_PHRASES):
+            _weld_phrase = next(
+                (p for p in _ASSEMBLY_WELD_PHRASES if p in cue_upper), None)
+            if _weld_phrase:
                 for op in ("welding", "dress_welds"):
                     if op not in ops_set:
                         ops_set.add(op)
                         changed = True
+                    # The phrase that put the weld here is the weld's evidence (D-586).
+                    part.setdefault("operation_evidence", {}).setdefault(op, _weld_phrase)
+                    part.setdefault("operation_sources", {}).setdefault(op, "drawing_notes")
 
-            if any(phrase in cue_upper for phrase in _ASSEMBLY_PC_PHRASES):
+            _pc_phrase = next(
+                (p for p in _ASSEMBLY_PC_PHRASES if p in cue_upper), None)
+            if _pc_phrase:
                 if "powder_coating" not in ops_set:
                     ops_set.add("powder_coating")
                     changed = True
+                part.setdefault("operation_evidence", {}).setdefault(
+                    "powder_coating", _pc_phrase)
+                part.setdefault("operation_sources", {}).setdefault(
+                    "powder_coating", "drawing_notes")
 
             if changed:
                 part["textual_operations"] = list(ops_set)
@@ -2266,7 +2466,7 @@ def _parse_bom_from_page_text(page_text: str) -> List[Dict[str, Any]]:
 
     _sdi_re = re.compile(
         r"(?:^|\s)(\d{1,3})\s+"
-        r"(\d{4,5}-\d{2}-\d{2,3}[A-Z]?)"
+        r"(\d{4,6}-\d{2}-\d{2,3}[A-Z]?)"
         r"\s+([A-Z][A-Z0-9 /\-\.&()]{0,60}?)"
         r"\s+(\d{1,4})"
         r"(?=\s+\d|\s*$|\s+[A-Z])",
@@ -2298,7 +2498,7 @@ def _parse_bom_from_page_text(page_text: str) -> List[Dict[str, Any]]:
     # This pass captures the top-level bay GA BOM (e.g. 1282-GA's seven lines).
     _ga_re = re.compile(
         r"(?:^|\s)(\d{1,3})\s+"
-        r"(\d{4,5}(?:-[A-Z0-9]{1,4}|\s-\s[A-Z0-9]{1,4}){1,3})-?"
+        r"(\d{4,6}(?:-[A-Z0-9]{1,4}|\s-\s[A-Z0-9]{1,4}){1,3})-?"
         r"\s+([A-Z0-9][A-Z0-9 /\-\.&()']{2,60}?)"
         r"\s+(\d{1,4})"
         r"(?=\s+\d|\s*$|\s+[A-Z])",
@@ -2475,6 +2675,78 @@ def restate_material_observations(summary: Dict[str, Any]) -> int:
     return changed
 
 
+def cut_list_member_records(bom_rows: Any, parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """A made record for each piece of a several-section cut list (D-548).
+
+    part_identity.mint_cut_list_member_identities names each row "<weldment>-CL<n>"; this is
+    where the row becomes the part SDI cuts: its section and its one cut length from its own
+    words (drawing_deterministic, the table being the drawing's own statement), a saw cut, and
+    its weldment as the parent the graph hangs it from. Never bought in, never put to the
+    catalogue, never sized as sheet. Its quantity is the row's; the tree multiplies it by its
+    weldment's as for any other child."""
+    from section_profile import detect_section_stock
+    # The part index may already hold a bare record for the code (it harvests every code the
+    # rows print); that record is the member, and is completed here rather than duplicated.
+    _existing = {str(p.get("part_number") or "").upper(): p for p in parts if isinstance(p, dict)}
+    out: List[Dict[str, Any]] = []
+    for row in bom_rows or []:
+        if not isinstance(row, dict) or str(row.get("identity_source") or "") != "cut_list_member":
+            continue
+        pn = str(row.get("part_number") or "").strip()
+        if not pn:
+            continue
+        desc = " ".join(str(row.get("description") or "").split())
+        sec = detect_section_stock(desc)
+        if not sec or not sec.get("length_mm"):
+            continue
+        rec = _existing.get(pn.upper())
+        _new = rec is None
+        if _new:
+            rec = _empty_part_record(pn, item_number=row.get("item_number"), description=desc,
+                                     quantity=None)
+            _apply_field(rec, "quantity", row.get("quantity") or 1, "bom_tree")
+        elif not str(rec.get("description") or "").strip() or rec.get("description") == pn:
+            rec["description"] = desc
+        rec["page_roles"] = ["section"]
+        rec["pages"] = []
+        rec["source"] = "cut_list_member"
+        rec["identity_source"] = "cut_list_member"
+        rec["printed_code"] = str(row.get("printed_code") or "")
+        rec["is_bought_in"] = False
+        rec["stock_form"] = "tube"
+        rec["cut_list_member_of"] = str(row.get("cut_list_member_of") or row.get("bom_parent") or "")
+        rec["bom_parent"] = rec["cut_list_member_of"]
+        stock = {k: sec.get(k) for k in ("a", "b", "t", "profile_form", "keyword")}
+        stock.update({"length_mm": float(sec["length_mm"]),
+                      "cut_lengths_mm": [float(sec["length_mm"])],
+                      "detection_path": "canonical_profile",
+                      "source": "drawing_deterministic", "source_text": desc})
+        rec["section_stock"] = stock
+        rec["textual_operations"] = ["saw"]
+        # A PIECE HAS NO SHEET OF ITS OWN; ITS WELDMENT'S SHEET IS ITS SHEET. 03M states FINISH:
+        # WELDED — how the frame leaves its sheet, coated later as 201 — and its pieces say the
+        # same, so the document's powder is not stamped onto each length of tube beside the
+        # assembly that is coated whole.
+        _par = _existing.get(rec["cut_list_member_of"].upper())
+        if isinstance(_par, dict):
+            if _par.get("surface_finishes") and not rec.get("surface_finishes"):
+                rec["surface_finishes"] = list(_par.get("surface_finishes") or [])
+                rec["finish_from_weldment"] = rec["cut_list_member_of"]
+            if _par.get("pages") and not rec.get("pages"):
+                rec["pages"] = list(_par.get("pages") or [])
+            for _k in ("normalized_material", "materials"):
+                if _par.get(_k) and not rec.get(_k):
+                    rec[_k] = _par.get(_k)
+        rec.setdefault("review_flags", []).append(
+            f"cut-list member of {rec['cut_list_member_of']}: its parts table lists pieces of "
+            f"more than one section, so each piece is a line of its own, cut and charged by "
+            f"length (D-548)")
+        if _new:
+            out.append(rec)
+            _existing[pn.upper()] = rec
+    return out
+
+
 def bought_in_rows_without_records(bom_rows: Any, parts: List[Dict[str, Any]]
                                    ) -> List[Dict[str, Any]]:
     """A bought-in record for every table row no record already stands for.
@@ -2496,9 +2768,11 @@ def bought_in_rows_without_records(bom_rows: Any, parts: List[Dict[str, Any]]
     _article_ids = category_code_identities(_rows)
     _existing_pns = {str(p.get("part_number") or "").upper() for p in parts
                      if isinstance(p, dict)}
-    _SDI_PN_RE = re.compile(r"^\d{4,5}-\d{2}-\d{2,3}[A-Z]?$")
+    _SDI_PN_RE = re.compile(r"^\d{4,6}-\d{2}-\d{2,3}[A-Z]?$")
     out: List[Dict[str, Any]] = []
     for _i, row in enumerate(_rows):
+        if str(row.get("identity_source") or "") == "cut_list_member":
+            continue                  # a piece SDI cuts, made by cut_list_member_records (D-548)
         _article = _article_ids.get(_i) or ""
         pn = _article or str(row.get("part_number") or "").strip()
         # A ROW SPLIT UPSTREAM ALREADY CARRIES ITS PER-ARTICLE IDENTITY. file_scan applies
@@ -2674,13 +2948,20 @@ def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
                 f"-> {[b.get('part_number') for b in bought_in_items]}"
             )
 
+    # The pieces of a several-section cut list are parts SDI cuts (D-548), made before the
+    # bought-in pass below could take them for purchases.
+    _cl_members = cut_list_member_records(
+        (summary.get("document_analysis") or {}).get("bom_rows") or [], parts)
+    if _cl_members:
+        parts.extend(_cl_members)
+
     # Fix B: bought_in records for non-SDI BOM rows (e.g. WINDMILL 1164: WSF45 ticket strip)
     _non_sdi_bought_in = bought_in_rows_without_records(
         (summary.get("document_analysis") or {}).get("bom_rows") or [], parts)
     # Fix C below reads both of these: the names now on the record, and the SDI code shape.
     _existing_pns = {str(p.get("part_number") or "").upper() for p in parts} | {
         str(r.get("part_number") or "").upper() for r in _non_sdi_bought_in}
-    _SDI_PN_RE = re.compile(r"^\d{4,5}-\d{2}-\d{2,3}[A-Z]?$")
+    _SDI_PN_RE = re.compile(r"^\d{4,6}-\d{2}-\d{2,3}[A-Z]?$")
     if _non_sdi_bought_in:
         parts.extend(_non_sdi_bought_in)
         if os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}:

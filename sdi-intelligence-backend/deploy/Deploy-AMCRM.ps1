@@ -11,8 +11,9 @@
          where Claude pushes - when the laptop has it, otherwise from origin).
       3. Copies only the AM CRM files that differ from the server's copies.
       4. Restarts the SDIIntelligence service if a Python file changed, and waits for it;
-         also the SDITrackerConnector service (ChatGPT / Claude connector) once it exists,
-         and the SDISplitScan service (delivery-note splitter) if its code changed.
+         also the SDITrackerConnector service (AM CRM connector for ChatGPT / Claude) and
+         the SDITTIConnector service (TTI despatch connector) once they exist, and the
+         SDISplitScan service (delivery-note splitter) if its code changed.
       5. Checks the server's files now match the laptop's, byte for byte.
 
     Why: deploying by hand went wrong in the ways hands do - a dropped VPN left robocopy
@@ -29,6 +30,7 @@ param(
     [string]$Branch = "claude/app-portal-main-2026",
     [string]$Service = "SDIIntelligence",
     [string]$ConnectorService = "SDITrackerConnector",
+    [string]$TtiConnectorService = "SDITTIConnector",
     [string]$SplitScanService = "SDISplitScan",
     # Which git remote to pull from. Default: "jbg" if the laptop has it, else "origin".
     [string]$Remote = "",
@@ -50,8 +52,33 @@ $Files = @(
     "appportal/voice-crm.html",
     "voicecrm_connector.py",
     "connector_cards.py",
-    "connector_oauth.py"
+    "connector_oauth.py",
+    "private_auth.py",
+    "private_email.py",
+    "private_email_routes.py",
+    "private_email_integration.py",
+    "private_draft_writer.py",
+    "sue_despatch.py",
+    "tracker_snapshot.py",
+    "tti_despatch_routes.py",
+    "tti_plan_source.py",
+    "tti_data.py",
+    "tti_search.py",
+    "tti_connector.py",
+    "connector_identity.py",
+    "appportal/tti-despatch.html",
+    "sdi_ops_routes.py",
+    "appportal/sdi-remote-control.html",
+    "private-email-readonly.html",
+    "private-email.html",
+    # The app portal's catalogue. Not Python, so it copies without a restart -
+    # the service reads it from disk on each request.
+    "services.json"
 )
+# app.py is deliberately NOT here. The server's copy has drifted from the repository
+# before, and this script copies whole files: adding it would silently overwrite
+# whatever is on the server with whatever is in the branch. Its two private-assistant
+# edits are applied in place - see PRIVATE_ASSISTANT_SETUP.md section 3.
 # The delivery-note splitter, which runs on the server as the SDISplitScan service. Paths
 # from the repository root; they land in C:\ClaudeVision\tools\logistics on the server.
 $ToolFiles = @(
@@ -167,6 +194,28 @@ $bad = @($changed | Where-Object { (Get-Sha $_.Src) -ne (Get-Sha $_.Dst) })
 if ($bad.Count -gt 0) { Stop-Deploy ("These didn't arrive intact: " + (($bad | ForEach-Object { $_.Name }) -join ", ") + ". Run this again.") }
 Say ("Copied {0} file(s), checked byte for byte." -f $changed.Count) Green
 
+# -- app.py IS NOT COPIED, AND SILENCE ABOUT THAT COSTS A DEPLOY ---------------------------
+#
+# This script copies a named list and deliberately leaves app.py alone, because the server's
+# copy has drifted before. push-to-server.ps1 copies the whole folder and DOES replace it.
+# Two scripts, two file sets, and nothing said which one a change needed - so a change whose
+# wiring lives in app.py deployed "successfully", restarted, and did nothing at all. That is
+# exactly how the TTI despatch view landed on the server unmounted on 26 October 2026.
+#
+# It still does not copy it. It now says when that matters, which is the part that was free.
+$appSrc = Join-Path $src "app.py"
+$appDst = Join-Path $dest "app.py"
+if ((Get-Sha $appSrc) -ne (Get-Sha $appDst)) {
+    Write-Host ""
+    Say "app.py differs from the server's copy, and this script does not copy it." Yellow
+    Say "If your change mounts a router or adds a path to the public allow-list, it is" Yellow
+    Say "NOT live yet. Deploy app.py with:" Yellow
+    Write-Host ""
+    Write-Host "      .\tools\start\push-to-server.ps1 -Apply" -ForegroundColor White
+    Write-Host ""
+    Say "That copies the whole backend folder, app.py included, then restart the service." Yellow
+}
+
 # -- 5. Restart, if the server code changed ----------------------------------------------
 $toolChanged = @($changed | Where-Object { $_.Name -like "tools/*.py" })
 $pyChanged = @($changed | Where-Object { $_.Name -like "*.py" -and $_.Name -notlike "tools/*" })
@@ -190,6 +239,17 @@ if ($pyChanged.Count -gt 0) {
         else { $restarted = $false }
     } elseif ($cState -ne "MISSING") {
         Say "$ConnectorService is $cState - left as it is." Gray
+    }
+    # The TTI connector (ChatGPT / Claude, chat and voice) runs the same TTI code as
+    # the web view: restart it too, once it is installed. Not installed is normal
+    # until it goes live.
+    $tState = Get-ServiceState $TtiConnectorService
+    if ($tState -eq "RUNNING") {
+        Say "Restarting $TtiConnectorService..."
+        if (Restart-One $TtiConnectorService) { Say "$TtiConnectorService is running the new code." Green }
+        else { $restarted = $false }
+    } elseif ($tState -ne "MISSING") {
+        Say "$TtiConnectorService is $tState - left as it is." Gray
     }
 } elseif ($toolChanged.Count -eq 0) {
     Say "Only the page changed: no restart needed." Green

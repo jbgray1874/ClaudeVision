@@ -629,6 +629,11 @@ def normalize_native_extract(records: List[Dict[str, Any]],
     top = _pick_top_assembly(records, _amb, job_codes=job_codes)
     if top:
         job.meta["top_assembly"] = top.get("title")
+        # THE PRODUCT'S OWN SIZE (D-551): the analyser records every document's bounding box;
+        # the top assembly's is the assembled product's envelope, which packing is sized from.
+        _tb = [v for v in (_num(x) for x in (top.get("bbox_mm") or [])) if v]
+        if len(_tb) == 3:
+            job.meta["top_assembly_bbox_mm"] = [round(v, 1) for v in _tb]
         job.meta.update(_amb)
         for line in (top.get("bom") or []):
             pn = _clean_pn(line.get("part_number") or "")
@@ -718,7 +723,15 @@ def native_extract_for_job(
             if native_files_state(_src)["count"]:
                 _analyse_from = _src
                 break
-    if jp is not None and run and _analyse_from is not None and _should_run(jp, _analyse_from):
+    _must_run = bool(jp is not None and run and _analyse_from is not None
+                     and _should_run(jp, _analyse_from))
+    try:
+        import run_timing as _rt_sw
+        if jp is not None and (jp.exists() or _must_run):
+            _rt_sw.reuse("solidworks_extract", not _must_run)
+    except Exception:                                        # noqa: BLE001
+        pass
+    if _must_run:
         _produced: List[str] = []
         _run_error = _run_analyser(_analyse_from, analyser=analyser, python_exe=python_exe,
                                    out_path=jp, produced=_produced)
@@ -2198,12 +2211,19 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                     flags.append(f"material '{new_mat}' from the SolidWorks model "
                                  f"(applied material: {nat.material})")
                     out["material"] += 1
-            elif new_mat and cur_mat and new_mat == cur_mat:
+            # ONE MATERIAL, TWO SPELLINGS, NO CONFLICT (D-511). The drawing reads
+            # "MILD STEEL" and the model "MILD_STEEL"; flagging that as a material
+            # disagreement sends an estimator to check a difference that does not exist.
+            # Equality is judged with separators collapsed; the recorded value keeps the
+            # spelling it arrived with.
+            _same_mat = (new_mat and cur_mat
+                         and re.sub(r"[\s_\-]+", " ", new_mat) == re.sub(r"[\s_\-]+", " ", cur_mat))
+            if new_mat and cur_mat and _same_mat:
                 # Same answer from a stronger source. Nothing changes on screen; what changes
                 # is that the value now rests on the model rather than on the drawing text,
                 # and a later pass can no longer quietly replace it.
-                _apply_field(part, "normalized_material", new_mat, _mat_src)
-            elif new_mat and cur_mat and new_mat != cur_mat:
+                _apply_field(part, "normalized_material", cur_mat, _mat_src)
+            elif new_mat and cur_mat and not _same_mat:
                 _cross_family = (
                     (new_mat in _NON_METAL_FAMILIES and cur_mat in _METAL_FAMILIES)
                     or (new_mat in _METAL_FAMILIES and cur_mat in _NON_METAL_FAMILIES)
@@ -2453,6 +2473,57 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                     flags.append(f"thickness {cur_thk:g}mm -> {thk:g}mm from the SolidWorks "
                                  f"cut list (modelled sheet gauge)")
                     out["thickness"] += 1
+        elif (not _plausible_thk(nat.thickness_mm)
+              and not _num(part.get("normalized_thickness_mm"))):
+            # A FLAT BOARD'S GAUGE IS ITS MODEL'S SMALLEST EXTENT — AS A LABELLED FALLBACK
+            # (D-512). 12343-01J, an 18 mm MFC shelf: the model carried the box
+            # 1198 x 18 x 398, but a board has no sheet-metal cut list and the analyser's
+            # gauge window (a sheet-METAL window) ends at 12 mm, so thickness_mm came
+            # through None — and with no gauge the shelf had no kg, no sheet price, no
+            # weight check, and was charged machining and edging on a board nobody bought.
+            #
+            # Deliberately NARROW, per the review that demanded it: only a part whose
+            # material the Other Sheet block prices (board/plastic, never metal), that is a
+            # LEAF (no assembly flags), whose box is plate-shaped (the smallest extent is a
+            # board gauge, 3-60 mm, and at most a quarter of the next dimension — a shaped
+            # component or a block fails this), and that still has no recorded gauge. The
+            # value enters at its own provisional rank, below every stated gauge, with a
+            # flag and a question — a drawing callout read later still displaces it.
+            _dims = sorted(v for v in (_num(x) for x in (nat.bbox_mm or [])) if v)
+            _board_mat = False
+            try:
+                from costed_facts import is_other_sheet_material as _other_sheet2
+                _own = [str(m.get("raw") if isinstance(m, dict) else m)
+                        for m in (part.get("materials") or [])]
+                _board_mat = (any(_other_sheet2(m) for m in _own)
+                              or _other_sheet2(part.get("normalized_material") or "")
+                              or _other_sheet2(_norm_sw_material(nat.material or "")))
+            except Exception:                                        # noqa: BLE001
+                _board_mat = False
+            _leaf = not (part.get("is_assembly_parent") or part.get("is_sub_assembly")
+                         or part.get("assembly_children"))
+            if (_board_mat and _leaf and len(_dims) == 3
+                    and 3.0 <= _dims[0] <= 60.0 and _dims[0] * 4 <= _dims[1]):
+                thk = float(_dims[0])
+                if _apply_field(part, "normalized_thickness_mm", thk,
+                                "model_extents_board_gauge"):
+                    _why = (f"BOARD GAUGE {thk:g} mm FROM THE MODEL'S SMALLEST EXTENT — a "
+                            f"labelled fallback, not a cut list: the solid measures "
+                            f"{_bbox_text(nat)} and its material is priced as board, so the "
+                            f"thin way through it is read as the gauge. A stated gauge (a "
+                            f"drawing callout, a DXF filename) replaces it.")
+                    flags.append(_why)
+                    part.setdefault("review_flags", []).append(_why)
+                    try:
+                        from source_precedence import raise_manufacturing_question as _ask_g
+                        _ask_g(part, f"Gauge of {part.get('part_number')}: {thk:g} mm from "
+                                     f"the model's smallest extent (provisional)",
+                               _why, "confirm the board gauge; the sheet price, weight and "
+                                     "nest follow it",
+                               "solidworks.board_gauge_from_model_extents")
+                    except Exception:                                # noqa: BLE001
+                        pass
+                    out["thickness"] += 1
 
         # ── SURFACE TREATMENT ────────────────────────────────────────────────────
         # The cut list publishes the finish the designer specified. This is the datum the
@@ -2474,6 +2545,11 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
         # ── MASS ─────────────────────────────────────────────────────────────────
         if nat.mass_kg and nat.mass_kg > 0 and not _num(part.get("stated_weight_g")):
             part["stated_weight_g"] = round(float(nat.mass_kg) * 1000.0, 2)
+            # WHOSE FIGURE THIS IS (D-514). The weight check called this "the sheet's
+            # stated weight": on 12343-01J it compared the blank to the MODEL's 5.496 kg
+            # and the book presented that as drawing corroboration while the drawing
+            # prints 5.573 kg. The figure is kept; its origin travels with it.
+            part["stated_weight_source"] = "solidworks_model_mass"
             flags.append(f"mass {nat.mass_kg:.4f}kg from the SolidWorks model")
             out["mass"] += 1
 

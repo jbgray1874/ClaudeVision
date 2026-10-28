@@ -234,6 +234,8 @@ def write_price_breaks(wb: Any, lines: Sequence[Dict[str, Any]], breaks: Sequenc
     last_col = int(cfg.get("last_price_col", 14))           # N
 
     done: Dict[str, Any] = {"quantities": [], "rows": 0, "skipped_occupied": 0,
+                            "coverage_scope": "price_table_only_not_calculated_charges",
+                            "coverage": [],
                             "outside_table": [], "refused": []}
     vector = quantity_vector(breaks)
     if not vector:
@@ -396,6 +398,11 @@ def write_price_breaks(wb: Any, lines: Sequence[Dict[str, Any]], breaks: Sequenc
             if _r in _break_for:
                 _by_row[_r] = ln
             elif _r > first_bom:
+                done["coverage"].append({
+                    "part": ln.get("code"), "estimate_row": _r,
+                    "status": "not_in_price_table", "charge_verified": False,
+                    "reason": "Requires calculated charge evidence at each requested break; "
+                              "absence from this table does not prove missing material."})
                 # NO SILENT CAP. The break table is shorter than the BOM block, so a line
                 # below its last row cannot be priced across the quantities — and a table
                 # that is simply missing a material reads as "this one does not move",
@@ -439,6 +446,11 @@ def write_price_breaks(wb: Any, lines: Sequence[Dict[str, Any]], breaks: Sequenc
                 wrote = True
             if wrote:
                 done["rows"] += 1
+            done["coverage"].append({
+                "part": line.get("code"), "estimate_row": bom_row,
+                "price_table_row": target, "charge_verified": False,
+                "status": "table_populated" if wrote else "table_not_changed",
+                "reason": "Table placement is not proof of a calculated charge."})
         return done
     except Exception as exc:                                      # noqa: BLE001
         done["refused"].append(f"{type(exc).__name__}: {exc}")

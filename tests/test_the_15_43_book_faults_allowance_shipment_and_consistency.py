@@ -199,11 +199,22 @@ def test_a_sections_own_cut_list_is_sawn_per_piece():
     assert pr["run_times_min_per_unit"]["saw"] == 4.5, "three cuts at 90 s each"
     assert pr["setup_times_min"]["saw"] == 10.0
     assert any("sawn to its own cut list (3 piece(s)" in str(f) for f in goal["review_flags"])
+    # D-586 overrules D-455's caution here: a section priced as stock the shop cuts is
+    # sawn once per piece as a flagged allowance even with no cut list and no saw named —
+    # 0351292's rails and arms carried stock-length metres with no cutting labour at all.
+    # The evidenced no-charge case remains: a catalogue piece bought at its own length.
     no_list = {"part_number": "T-1", "description": "TUBE", "normalized_material": "MILD STEEL",
                "quantity": 1, "section_stock": {"a": 25.0, "b": 25.0, "length_mm": 900.0}}
     pr2 = e.estimate_process_times(no_list, quantity=1)
-    assert "saw" not in (pr2.get("run_times_min_per_unit") or {}), \
-        "no cut list stated, no saw invented"
+    assert pr2["run_times_min_per_unit"]["saw"] == 1.5, \
+        "one cut at 90 s, charged as an allowance"
+    assert any("allowance" in str(f) for f in no_list.get("review_flags") or [])
+    bought_cut = {"part_number": "T-2", "description": "TUBE", "normalized_material": "MILD STEEL",
+                  "quantity": 1, "_material_cost_method": "catalogue_section_price",
+                  "section_stock": {"a": 25.0, "b": 25.0, "length_mm": 900.0}}
+    pr3 = e.estimate_process_times(bought_cut, quantity=1)
+    assert "saw" not in (pr3.get("run_times_min_per_unit") or {}), \
+        "bought cut to its own length, so no saw charged"
 
 
 # ── the first replay's stand-down (D-456) ────────────────────────────────────────────

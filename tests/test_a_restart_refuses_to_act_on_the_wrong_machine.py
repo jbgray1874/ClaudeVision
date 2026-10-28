@@ -128,6 +128,47 @@ def test_it_offers_both_ways_out():
     assert "on the other machine" in body, "the wrong-machine case has no remedy"
 
 
+# ── what is listening is not what the task will bring back ───────────────────
+#
+# 14 Oct 2026: DESKTOP-GFAAP80 listened on 8071 only, and the refusal said "re-run here with
+# -Port 8071". The laptop's scheduled task is installed for 8072; the last time "-Port 8071"
+# was run there it ended a stray 8071 window, started the task on 8072, and reported 8071 as
+# down. The remedy the guard offered was the fault the guard exists to prevent.
+
+def test_the_tasks_own_port_is_read_before_anything_is_stopped():
+    code = _code()
+    read = code.index("Get-ScheduledTask -TaskName $TaskName")
+    assert read < code.index("Stop-ScheduledTask"), (
+        "the task's port is learned after the task has been stopped")
+    assert re.search(r"-match '-Port\\s\+\(\\d\+\)'", _guard()), (
+        "the guard does not read the -Port the scheduled task was installed with")
+
+
+def test_a_listener_that_is_not_the_task_is_refused_before_it_is_ended():
+    body = _guard()
+    assert "$taskPort -ne $Port -and ($serving -contains $Port)" in body, (
+        "a listener on the asked port that the task does not own is ended, and the task is "
+        "brought back on another port")
+    assert body.count("exit 2") >= 2
+    assert "install-service-task.ps1 -Port" in body, (
+        "no way offered to make the listening port the machine's own")
+
+
+def test_asking_for_the_tasks_port_is_never_refused_as_the_wrong_machine():
+    """The task IS what serves its port, even while it is down and another window holds a
+    different one. Refusing that would leave no way to restart the machine's own service."""
+    body = _guard()
+    assert "($taskPort -ne $Port)" in body
+    assert "is not the scheduled task; it is left alone" in body, (
+        "the other listener is passed over in silence, still serving old code")
+
+
+def test_the_refusal_offers_the_tasks_port_when_it_knows_it():
+    body = _guard()
+    assert "if ($taskPort -gt 0) { $offer = $taskPort }" in body, (
+        "the remedy names whatever happens to be listening, not what the task starts")
+
+
 # ── PowerShell faults that cannot be caught by running it on Linux ───────────
 
 def test_no_if_statement_is_used_where_a_value_is_expected():
@@ -140,3 +181,33 @@ def test_no_if_statement_is_used_where_a_value_is_expected():
 def test_the_braces_and_parentheses_balance():
     assert _S.count("{") == _S.count("}"), "unbalanced braces"
     assert _S.count("(") == _S.count(")"), "unbalanced parentheses"
+
+
+# ── A FAILED RESTART SAYS WHY, ON THE SCREEN (24 Oct) ───────────────────────────────────
+# The laptop's restart reported "NOT answering on 8072. The reason is in service-<date>.log"
+# twice while a second starter had the service up on 8071 and both wrote one log file.
+
+def test_each_port_logs_to_its_own_file():
+    start = (_PATH.parent / "start-service.ps1").read_text(encoding="utf-8-sig")
+    assert '("service-" + $Port + "-" + (Get-Date -Format "yyyy-MM-dd") + ".log")' in start
+
+
+def test_the_restart_polls_rather_than_waiting_eight_seconds():
+    assert "Start-Sleep -Seconds 8" not in _S
+    assert "(Get-Date).AddSeconds(60)" in _S and "while ((Get-Date) -lt $deadline)" in _S
+
+
+def test_a_failed_restart_names_another_port_the_log_and_the_task_result():
+    fail = _S[_S.index("NOT answering on $Port after 60 seconds."):]
+    assert "foreach ($other in @(8071, 8072, 8073))" in fail
+    assert "The service IS answering on" in fail
+    assert "ParentProcessId" in fail, "the supervisor behind another port is named"
+    assert "Get-ScheduledTaskInfo" in fail
+    assert '"service-{0}-{1}.log" -f $Port, $day' in fail and "Select-Object -Last 25" in fail
+    assert "service-<date>.log" not in fail, "a file is named, not described"
+
+
+def test_the_scripts_stay_ascii():
+    for name in ("restart-service.ps1", "start-service.ps1", "install-service-task.ps1"):
+        text = (_PATH.parent / name).read_text(encoding="utf-8-sig")
+        assert all(ord(c) < 128 for c in text), f"{name} must stay ASCII for PowerShell 5.1"

@@ -83,6 +83,20 @@ _ESTIMATOR = {
     # A coat or a weld charged on an assembly and again on a part it contains: before AND
     # after assembly, or one item twice. Asked under Decisions required; only a person rules.
     "operation_charged_on_a_parent_and_its_child",
+    # The drawing's bore callouts state more holes than any measured view shows (D-515,
+    # 12343-01J: 2 x Ø8.5 ↧11 on faces neither export carries). No engine can measure a
+    # face nobody drew; whether the CNC program covers them is confirmed with the drawing
+    # open, or the drawing office exports the face.
+    "stated_bores_not_in_inventory",
+    # Work stated against a materials-list item number that names no part (D-533): which part
+    # it belongs to is read off the drawing by a person.
+    "route_participant_is_a_callout_number",
+    # An engine allowance the shop stated for another product, held until a person confirms
+    # it for this job (D-596): the time is a judgement about this product, not a defect.
+    "engine_allowance_unconfirmed",
+    # Stock, weld process, coating or bonding scope priced as an allowance and put to a
+    # person (D-598r): a TIG rate, a coated surface, separate bonding stages.
+    "owned_route_scope_unresolved",
 }
 
 # The union, so any caller still asking only "is this the engine's fault" gets the answer it
@@ -93,10 +107,15 @@ _NOT_OURS = _PACK | _COMMERCE | _ESTIMATOR
 # Would a perfect engine still raise it? NO. These are confessions: something was invented,
 # lost, guessed, or written where nothing can weigh it. This is the number that must fall.
 _OURS = {
+    "owned_specification_not_preserved",
     # Two readings of one nested line an order of magnitude apart (D-407): the engine's own
     # material basis and the sheet's charge. One of them is our wrong blank, gauge, weight or
     # stock form; never the drawing office's and never the estimator's to settle by hand.
     "sheet_charge_disagrees_with_engine_material_basis",
+    # A banded part whose metres RESOLVED and no edging line on the bill (D-515): the engine
+    # mints that line itself from the same metres, so this firing means our own hand-off
+    # dropped it — exactly the loss 12343-01J lived through three books running.
+    "edging_material_missing",
     "canonical_route_bom_node_disconnected",
     "bom_node_disconnected",
     "datum_written_without_source",
@@ -112,6 +131,23 @@ _OURS = {
     # The identity/scope enforcement family: every one of these is the ENGINE failing to
     # hold its own seal — never a drawing gap and never an estimator decision.
     "identity_gate_did_not_enforce",
+    # A parent that names no member and carries no material of its own (D-560): the pack gave
+    # 401918-01-07M a cut list and the engine held nothing — the drawings said what it is
+    # made of, so the missing steel is our hand-off, never the drawing office's.
+    "memberless_assembly_carries_nothing",
+    # A cut list the sheet prints that the bill does not price in full (D-576): the sheet
+    # said it, the engine lost it on the way to the workbook — ours.
+    "section_schedule_not_priced",
+    # A measured blank or a bought item the calculated book does not carry at the graph's
+    # quantity, or a quantity multiplied twice along its edges (D-582): the engine held the
+    # fact and lost it or doubled it on the way to the sheet — ours.
+    "material_quantity_charge_unverified",
+    # A parts-list row carrying less than its sheet prints with no recognised arrangement to
+    # say why (D-584): the engine's own rule divided it — ours.
+    "printed_quantity_divided_without_evidence",
+    # A charged line under a bare standard prefix, or one article charged under two names
+    # (D-584): the engine's reader cut the identity — ours.
+    "charged_identity_collision",
     "removed_identity_on_the_sheet",
     "priced_identity_outside_published_graph",
     "two_roots_price_the_same_members",
@@ -126,6 +162,22 @@ _OURS = {
     # run behind an accepted price and not one could evidence it, because none of them
     # mentioned that their totals were never read back. The omission is the engine's.
     "money_provenance_undeclared",
+    # An item the read returned that reaches no charge and no ruling, or a line the engine
+    # added that nothing the read or the brief names (D-596): the engine was given it and did
+    # not account for it, or bought on no evidence — ours. The checker failing is ours too.
+    "read_item_unresolved",
+    "engine_line_unconfirmed",
+    "read_charge_check_failed",
+    # A record whose read ID names another response or a line this one does not hold
+    # (D-598): the engine audited a record against a read it was not minted from — ours.
+    "read_id_stale",
+    # A page whose words the engine had and no reading received in full, or a page read only
+    # from a coarse or unread image (D-597): a perfect engine reads every page it is given.
+    "page_text_not_read",
+    "page_image_not_read_reliably",
+    "page_coverage_not_built",
+    # An empty book beside a page no reading took (D-598f): the engine was given the page.
+    "page_content_not_read",
 }
 
 # A RECORD THAT SAYS, CORRECTLY, THAT IT CANNOT EVIDENCE A PRICE. This one is deliberately
@@ -136,6 +188,9 @@ _OURS = {
 # push whoever is driving it down to suppress the declaration rather than fix the read-back.
 _ENVIRONMENT = {
     "money_provenance_cannot_evidence_a_price",
+    # The read could not be held to a calculated sheet because none was read back (D-596): on
+    # a machine with no Excel that is the only honest answer, for the same reason as above.
+    "read_charge_unverified",
 }
 
 _NOT_OURS = _NOT_OURS | _ENVIRONMENT

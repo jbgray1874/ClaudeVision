@@ -80,9 +80,10 @@ def test_a_flat_pattern_with_no_bend_layer_is_still_a_measurement():
 
 
 def test_a_count_read_off_a_drawing_note_admits_it():
-    """A 90 on the page is a perfectly good reason to fold. It is not a measurement, and the
-    sheet has to be able to say which of the two it charged."""
-    mf = synthesize_manufacturing_features(_part(angles_deg=[90.0]))
+    """A stated fold count is a perfectly good reason to fold. It is not a measurement, and the
+    sheet has to be able to say which of the two it charged. A bare 90 on the page is not one
+    (D-592a): it may be a countersink."""
+    mf = synthesize_manufacturing_features(_part(fold_count_textual=1, angles_deg=[90.0]))
     assert mf["bend_count"] == 1
     assert mf["bend_count_source"] == "drawing_fold_note"
 

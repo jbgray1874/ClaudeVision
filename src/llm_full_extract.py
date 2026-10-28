@@ -31,7 +31,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 try:
     import pdfplumber  # type: ignore
@@ -319,21 +319,209 @@ def build_document_context(pdf_path: str | Path, max_chars: int = 60000) -> str:
     with pdfplumber.open(str(p)) as pdf:
         for i, page in enumerate(pdf.pages, 1):
             out.append(f"\n===== PAGE {i} =====")
-            txt = (page.extract_text() or "").strip()
-            if txt:
-                out.append(txt)
-            for t in (page.extract_tables() or []):
-                if not t or not t[0]:
-                    continue
-                flat = " ".join((c or "") for row in t for c in row).upper()
-                if any(k in flat for k in ("ITEM", "DESCRIPTION", "QTY", "DWG NO", "LENGTH")):
-                    out.append("[TABLE]")
-                    for row in t:
-                        cells = [(c or "").replace("\n", " ").strip() for c in row]
-                        if any(cells):
-                            out.append(" | ".join(cells))
+            out.extend(_page_lines(page))
     ctx = "\n".join(out)
     return ctx[:max_chars]
+
+
+def _page_lines(page: Any) -> List[str]:
+    """The lines one page gives the whole-pack read: its text, then any parts table — written
+    exactly as build_document_context always has, so a pack read before D-597 keeps its key."""
+    out: List[str] = []
+    txt = (page.extract_text() or "").strip()
+    if txt:
+        out.append(txt)
+    for t in (page.extract_tables() or []):
+        if not t or not t[0]:
+            continue
+        flat = " ".join((c or "") for row in t for c in row).upper()
+        if any(k in flat for k in ("ITEM", "DESCRIPTION", "QTY", "DWG NO", "LENGTH")):
+            out.append("[TABLE]")
+            for row in t:
+                cells = [(c or "").replace("\n", " ").strip() for c in row]
+                if any(cells):
+                    out.append(" | ".join(cells))
+    return out
+
+
+# ── EVERY PAGE OF EVERY DOCUMENT, IN WHOLE PAGES (D-597) ───────────────────────────────
+#
+# The whole-pack read was handed ONE document — the job's anchor PDF — and cut it silently at
+# 60,000 characters. On a job of several PDFs, a specification, a parts list or a test report
+# in any other file never reached it, and nothing anywhere said so. It now reads every
+# document of the job. A pack over the budget is never trimmed (a trim can drop the one finish
+# note or BOM row that matters while claiming every page was included): it is split into
+# page-labelled batches of whole pages, each read in full, and the answers reconciled into one,
+# with every disagreement between batches kept as a warning. A page too long for one batch is
+# itself split into labelled parts. A batch whose read fails leaves its pages an explicit gap
+# on the coverage record — never silently absent.
+PACK_BATCH_CHARS = 60000
+INFER_BATCH_CHARS = 40000
+
+
+def pack_pages(pdf_paths: Any) -> List[Dict[str, Any]]:
+    """Every page of every document, as the whole-pack read sees it. A document that cannot be
+    opened is an entry with its error, never a silent absence."""
+    pages: List[Dict[str, Any]] = []
+    for pdf in (pdf_paths or []):
+        p = Path(str(pdf))
+        if pdfplumber is None or not p.exists():
+            pages.append({"document": p.name, "path": str(p), "page": None, "lines": [],
+                          "chars": 0, "has_text": False,
+                          "error": "pdfplumber not installed" if pdfplumber is None
+                          else "not found"})
+            continue
+        try:
+            with pdfplumber.open(str(p)) as doc:
+                for i, page in enumerate(doc.pages, 1):
+                    lines = _page_lines(page)
+                    body = "\n".join(lines)
+                    pages.append({"document": p.name, "path": str(p), "page": i,
+                                  "lines": lines, "chars": len(body),
+                                  "has_text": bool(body.strip()),
+                                  "width_pt": round(float(page.width), 1),
+                                  "height_pt": round(float(page.height), 1)})
+        except Exception as exc:                                     # noqa: BLE001
+            pages.append({"document": p.name, "path": str(p), "page": None, "lines": [],
+                          "chars": 0, "has_text": False,
+                          "error": f"{type(exc).__name__}: {exc}"})
+    return pages
+
+
+def context_batches(pages: List[Dict[str, Any]],
+                    budget: int = PACK_BATCH_CHARS) -> List[Dict[str, Any]]:
+    """The pack's text in page-labelled batches of whole pages, none over `budget`. One batch
+    of one document is word for word the context build_document_context gave, so its read is
+    reused; more than one batch each say which part of the pack they are."""
+    readable = [p for p in pages if p.get("page") is not None]
+    multi = len({p["document"] for p in readable}) > 1
+    segs: List[Tuple[str, str, Tuple[str, int]]] = []
+    for p in readable:
+        key = (str(p["document"]), int(p["page"]))
+        label = f"{p['document']} page {p['page']}" if multi else f"page {p['page']}"
+        header = (f"\n===== {p['document']} — PAGE {p['page']} =====" if multi
+                  else f"\n===== PAGE {p['page']} =====")
+        seg = "\n".join([header] + list(p.get("lines") or []))
+        if len(seg) <= budget:
+            segs.append((label, seg, key))
+            continue
+        # A PAGE LONGER THAN A BATCH IS SPLIT, LABELLED, NOT CUT.
+        body = "\n".join(p.get("lines") or [])
+        room = max(1000, budget - len(header) - 40)
+        chunks = [body[k:k + room] for k in range(0, len(body), room)]
+        for n, chunk in enumerate(chunks, 1):
+            segs.append((f"{label} (part {n} of {len(chunks)})",
+                         f"{header} (part {n} of {len(chunks)})\n{chunk}", key))
+    groups: List[List[Tuple[str, str, Tuple[str, int]]]] = []
+    cur: List[Tuple[str, str, Tuple[str, int]]] = []
+    size = 0
+    for label, seg, key in segs:
+        add = len(seg) + (1 if cur else 0)
+        if cur and size + add > budget:
+            groups.append(cur)
+            cur, size, add = [], 0, len(seg)
+        cur.append((label, seg, key))
+        size += add
+    if cur:
+        groups.append(cur)
+    out: List[Dict[str, Any]] = []
+    for k, group in enumerate(groups, 1):
+        text = "\n".join(s for _l, s, _k in group)
+        if len(groups) > 1:
+            text = (f"[PART {k} OF {len(groups)} OF THIS PACK — "
+                    f"{', '.join(l for l, _s, _k in group)}. The other pages are given in the "
+                    f"other parts; answer only from these.]\n" + text)
+        out.append({"index": k, "of": len(groups), "pages": [l for l, _s, _k in group],
+                    "keys": list(dict.fromkeys(key for _l, _s, key in group)),
+                    "text": text, "chars": len(text)})
+    return out
+
+
+def _row_identity(row: Mapping[str, Any]) -> str:
+    pn = str(row.get("part_number") or row.get("printed_code") or "").strip().upper()
+    if pn:
+        return pn
+    desc = " ".join(str(row.get("description") or "").upper().split())
+    return f"{str(row.get('item_no') or '').strip()}|{desc}" if desc else ""
+
+
+def _route_identity(route: Mapping[str, Any]) -> Tuple[str, Tuple[str, ...], str]:
+    return (str(route.get("operation") or "").strip().lower(),
+            tuple(sorted(str(x).strip().upper() for x in (route.get("part_numbers") or []))),
+            str(route.get("scope") or "").strip().lower())
+
+
+def merge_transcriptions(answers: List[Mapping[str, Any]]) -> Dict[str, Any]:
+    """The batch answers reconciled into one, in the transcription schema. A value read in one
+    batch fills a gap left by another; two batches reading DIFFERENT values for one field keep
+    the first and record the second — on `_batch_conflicts` and as a warning, never silently."""
+    empty = (None, "", [], {})
+    out: Dict[str, Any] = {"drawing_info": {}, "bom": [], "routes": [], "assemblies": [],
+                           "spec": {}, "warnings": [], "missing_information": []}
+    conflicts: List[Dict[str, Any]] = []
+    rank = {"low": 0, "medium": 1, "high": 2}
+    confidence = None
+    for k, ans in enumerate(answers, 1):
+        if not isinstance(ans, Mapping):
+            continue
+        for section in ("drawing_info", "spec"):
+            for key, val in (ans.get(section) or {}).items():
+                if isinstance(val, list):
+                    held = out[section].setdefault(key, [])
+                    held.extend(v for v in val if v not in held)
+                elif val not in empty:
+                    held = out[section].get(key)
+                    if held in empty:
+                        out[section][key] = val
+                    elif str(held).strip().lower() != str(val).strip().lower():
+                        conflicts.append({"field": f"{section}.{key}", "kept": held,
+                                          "also_read": val, "batch": k})
+        for row in (ans.get("bom") or []):
+            if not isinstance(row, Mapping):
+                continue
+            ident = _row_identity(row)
+            hit = next((r for r in out["bom"] if ident and _row_identity(r) == ident), None)
+            if hit is None:
+                out["bom"].append(dict(row))
+                continue
+            for f, v in row.items():
+                if v in empty:
+                    continue
+                if hit.get(f) in empty:
+                    hit[f] = v
+                elif (f not in ("comments", "source", "confidence")
+                      and str(hit[f]).strip().lower() != str(v).strip().lower()):
+                    conflicts.append({"field": f"bom[{ident}].{f}", "kept": hit[f],
+                                      "also_read": v, "batch": k})
+        for route in (ans.get("routes") or []):
+            if isinstance(route, Mapping) and not any(
+                    _route_identity(r) == _route_identity(route) for r in out["routes"]):
+                out["routes"].append(dict(route))
+        for asm in (ans.get("assemblies") or []):
+            if not isinstance(asm, Mapping):
+                continue
+            pn = str(asm.get("part_number") or "").strip().upper()
+            hit = next((a for a in out["assemblies"]
+                        if str(a.get("part_number") or "").strip().upper() == pn), None)
+            if hit is None:
+                out["assemblies"].append({**asm, "children": list(asm.get("children") or [])})
+                continue
+            have = {str((c or {}).get("part_number") or "").strip().upper()
+                    for c in hit["children"] if isinstance(c, Mapping)}
+            hit["children"].extend(c for c in (asm.get("children") or [])
+                                   if isinstance(c, Mapping)
+                                   and str(c.get("part_number") or "").strip().upper() not in have)
+        for key in ("warnings", "missing_information"):
+            out[key].extend(v for v in (ans.get(key) or []) if v not in out[key])
+        c = str(ans.get("extraction_confidence") or "").strip().lower()
+        if c in rank and (confidence is None or rank[c] < rank[confidence]):
+            confidence = c
+    for c in conflicts:
+        out["warnings"].append(f"the pack's parts disagree on {c['field']}: '{c['kept']}' kept, "
+                               f"'{c['also_read']}' also read (part {c['batch']} of the pack)")
+    out["extraction_confidence"] = confidence or ""
+    out["_batch_conflicts"] = conflicts
+    return out
 
 
 def _strip_fences(s: str) -> str:
@@ -398,10 +586,95 @@ def _call_llm(user_content: str, model: str,
 
 
 def extract_full_job(pdf_path: str | Path, model: str = DEFAULT_MODEL) -> Dict[str, Any]:
-    """Whole-document LLM extraction. Returns the structured job dict, or {} on any failure
-    (caller then falls back to the per-page / deterministic paths — never crashes a run)."""
+    """Whole-document LLM extraction of one PDF — the whole-pack read of a pack of one."""
+    return extract_full_pack([pdf_path], model=model)
+
+
+def extract_full_pack(pdf_paths: Any, model: str = DEFAULT_MODEL,
+                      budget: int = PACK_BATCH_CHARS) -> Dict[str, Any]:
+    """Whole-pack LLM extraction over EVERY document of the job (D-597). Returns the structured
+    job dict with `_coverage` — every page, the batch that read it, and any page left unread —
+    or a not-found dict with its error (the caller falls back to the per-page and deterministic
+    paths; this never crashes a run)."""
     result: Dict[str, Any] = {"source": SOURCE_NAME, "found": False}
-    ctx = build_document_context(pdf_path)
+    pages = pack_pages(pdf_paths)
+    batches = context_batches(pages, budget)
+    coverage: Dict[str, Any] = {
+        "documents": sorted({p["document"] for p in pages}),
+        "pages": [{k: p.get(k) for k in ("document", "page", "chars", "has_text", "width_pt",
+                                         "height_pt", "error")} for p in pages],
+        "batches": [], "budget_chars": budget, "not_read": []}
+    if not batches or not any(p.get("has_text") for p in pages):
+        result["error"] = "no document context (pdfplumber missing or empty PDF)"
+        result["_coverage"] = coverage
+        return result
+    by_key = {(str(p.get("document")), p.get("page")): p for p in coverage["pages"]}
+
+    def _mark(batch: Dict[str, Any], ok: bool) -> None:
+        # A page split across parts is read only when every part of it was.
+        for key in batch.get("keys") or []:
+            entry = by_key.get((str(key[0]), key[1]))
+            if entry is not None:
+                entry.setdefault("batches", []).append(batch["index"])
+                entry["text_processed"] = bool(entry.get("text_processed", True)) and ok
+                # A PAGE WITH NO TEXT LAYER IS PROCESSED, NOT READ (D-598f). This read is of
+                # text; 0320730's drawing page had none and was marked read because its batch
+                # answered. What it shows reached no reading here.
+                entry["read"] = (bool(entry.get("read", True)) and ok
+                                 and bool(entry.get("has_text")))
+
+    if len(batches) == 1:
+        obj = _transcribe(batches[0]["text"], model)
+        coverage["batches"].append({"index": 1, "of": 1, "pages": batches[0]["pages"],
+                                    "chars": batches[0]["chars"], "read": bool(obj.get("found")),
+                                    "from_cache": bool(obj.get("_from_cache")),
+                                    "error": obj.get("error") or ""})
+        _mark(batches[0], bool(obj.get("found")))
+        if not obj.get("found"):
+            coverage["not_read"] = list(batches[0]["pages"])
+        obj["_coverage"] = coverage
+        return obj
+    print(f"   [llm-full-extract] the pack is {sum(b['chars'] for b in batches)} characters over "
+          f"{len(coverage['documents'])} document(s): read in {len(batches)} parts of whole "
+          f"pages, none trimmed, and reconciled", flush=True)
+    parsed: List[Dict[str, Any]] = []
+    raws: List[str] = []
+    for b in batches:
+        obj = _transcribe(b["text"], model)
+        raw = str(obj.get("_raw_full_words") or "")
+        answer = _parse(raw) if raw else None
+        ok = bool(obj.get("found")) and isinstance(answer, dict)
+        coverage["batches"].append({"index": b["index"], "of": b["of"], "pages": b["pages"],
+                                    "chars": b["chars"], "read": ok,
+                                    "from_cache": bool(obj.get("_from_cache")),
+                                    "error": obj.get("error") or ("" if ok else
+                                                                  "no answer the engine can parse")})
+        _mark(b, ok)
+        if ok:
+            parsed.append(answer)
+            raws.append(f"[part {b['index']} of {b['of']}]\n{raw}")
+        else:
+            coverage["not_read"].extend(b["pages"])
+    if not parsed:
+        result["error"] = "no part of the pack returned an answer the engine can parse"
+        result["_coverage"] = coverage
+        return result
+    merged = _interpret_transcription(json.dumps(merge_transcriptions(parsed)))
+    if not merged:
+        result["error"] = "the reconciled answer could not be read"
+        result["_coverage"] = coverage
+        return result
+    merged["_raw_response"] = "\n".join(raws)[:20000]
+    merged["_raw_batches"] = raws
+    merged["_from_cache"] = all(b["from_cache"] for b in coverage["batches"] if b["read"])
+    merged["_coverage"] = coverage
+    return merged
+
+
+def _transcribe(ctx: str, model: str = DEFAULT_MODEL) -> Dict[str, Any]:
+    """One transcription of one context, cached on its content. The interpreted job, with the
+    model's words on `_raw_full_words` where they are to hand; a not-found dict on failure."""
+    result: Dict[str, Any] = {"source": SOURCE_NAME, "found": False}
     if not ctx:
         result["error"] = "no document context (pdfplumber missing or empty PDF)"
         return result
@@ -410,10 +683,26 @@ def extract_full_job(pdf_path: str | Path, model: str = DEFAULT_MODEL) -> Dict[s
     # halved. An estimate that moves by half between identical runs is not an estimate.
     _key = _cache_key("full", ctx, model, _PROMPT, SYSTEM_TRANSCRIBE)
     _hit = _cache_read(_key)
+    try:
+        import run_timing as _rt_llm
+        _rt_llm.reuse("llm_extract", _hit is not None)
+    except Exception:                                        # noqa: BLE001
+        pass
     if _hit is not None:
         print(f"   [llm-full-extract] reusing the cached read for this pack "
               f"(unchanged drawings, model and prompt) — the route does not get "
               f"reconsidered between runs", flush=True)
+        # THE WORDS ARE KEPT, THE READING OF THEM IS MADE AGAIN (D-554): a stored entry
+        # carries the model's whole response, and the current parser, bridge and normaliser
+        # run over it, so a fix to any of them reaches every stored read without a new call.
+        # An entry kept before this carried its interpretation only, and is used as it is.
+        _kept = _hit.get("_raw_full")
+        if _kept:
+            _again = _interpret_transcription(_kept)
+            if _again:
+                _again["_from_cache"] = True
+                _again["_raw_full_words"] = _kept
+                return _again
         return _hit
     try:
         raw = _call_llm(_PROMPT + "\n\n--- DRAWING PACK ---\n" + ctx, model,
@@ -421,11 +710,64 @@ def extract_full_job(pdf_path: str | Path, model: str = DEFAULT_MODEL) -> Dict[s
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
         return result
-    obj = _parse(raw or "")
+    obj = _interpret_transcription(raw or "")
     if not obj:
         result["error"] = "LLM response was not parseable JSON"
         result["raw"] = (raw or "")[:2000]
         return result
+    _cache_write(_key, {**obj, "_raw_full": raw or ""})
+    obj["_raw_full_words"] = raw or ""
+    return obj
+
+
+def infer_missing_details_in_batches(contexts: List[str], bom: List[Dict[str, Any]],
+                                     missing: List[Dict[str, Any]],
+                                     model: str = DEFAULT_MODEL) -> Dict[str, Any]:
+    """The inference pass over every part of the pack (D-597): it used to see the first
+    40,000 characters of the anchor document and nothing else. Each batch is asked only about
+    the parts still missing detail; the first answer for a part stands, every route is kept."""
+    if not missing or not contexts:
+        return {}
+    if len(contexts) == 1:
+        return infer_missing_details(contexts[0], bom, missing, model=model)
+    parts: List[Dict[str, Any]] = []
+    routes: List[Dict[str, Any]] = []
+    warnings: List[Any] = []
+    gaps: List[Any] = []
+    raws: List[str] = []
+    cached = True
+    left = list(missing)
+    for k, ctx in enumerate(contexts, 1):
+        if not left:
+            break
+        res = infer_missing_details(ctx, bom, left, model=model)
+        if not res:
+            continue
+        cached = cached and bool(res.get("_from_cache"))
+        raws.append(f"[part {k} of {len(contexts)}]\n{res.get('_raw_response') or ''}")
+        have = {str(p.get("part_number") or "").strip().upper() for p in parts}
+        for p in res.get("parts") or []:
+            pn = str(p.get("part_number") or "").strip().upper()
+            if pn and pn not in have:
+                parts.append(p)
+                have.add(pn)
+        routes.extend(r for r in (res.get("routes") or [])
+                      if _route_identity(r) not in {_route_identity(x) for x in routes})
+        warnings.extend(w for w in (res.get("warnings") or []) if w not in warnings)
+        gaps.extend(g for g in (res.get("missing_information") or []) if g not in gaps)
+        left = [m for m in left if str(m.get("part_number") or "").strip().upper() not in have]
+    return {"source": INFERENCE_SOURCE, "parts": parts, "routes": routes, "warnings": warnings,
+            "missing_information": gaps, "_raw_response": "\n".join(raws)[:20000],
+            "_from_cache": cached and bool(raws), "found": bool(parts or routes)}
+
+
+def _interpret_transcription(raw: str) -> Dict[str, Any]:
+    """What the engine reads from the model's words — parsed, projected onto the field names
+    the engine reads, normalised. {} when the words are not JSON. Run on the words whether
+    they were just spoken or kept (D-554)."""
+    obj = _parse(raw or "")
+    if not obj:
+        return {}
     obj["source"] = SOURCE_NAME
     obj["found"] = True
     normalize_job(obj)
@@ -433,10 +775,10 @@ def extract_full_job(pdf_path: str | Path, model: str = DEFAULT_MODEL) -> Dict[s
     # it" are indistinguishable from every saved artefact, because _llm_extract.json holds
     # the PARSED job. 2085's vanishing weld was settled by reading a commit diff and
     # noticing the parse path had not changed between two runs — which works once and is
-    # not a method. Truncated, because this is for answering a question, not an archive.
+    # not a method. Truncated, because this is for answering a question, not an archive;
+    # the store's entry holds the whole of it.
     obj["_raw_response"] = (raw or "")[:20000]
     obj["_prompt_fingerprint"] = _cache_key(_PROMPT, SYSTEM_TRANSCRIBE)
-    _cache_write(_key, obj)
     return obj
 
 
@@ -690,9 +1032,19 @@ def infer_missing_details(context: str, bom: List[Dict[str, Any]],
         # effect.
         _ikey = _cache_key("infer", payload, model, SYSTEM_INFER, _INFER_PROMPT)
         _ihit = _cache_read(_ikey)
+        try:
+            import run_timing as _rt_llm2
+            _rt_llm2.reuse("llm_extract_infer", _ihit is not None)
+        except Exception:                                    # noqa: BLE001
+            pass
+        _from_store = False
         if _ihit is not None:
-            return _ihit
-        raw = _call_llm(payload, model, system=SYSTEM_INFER)
+            _kept = _ihit.get("_raw_full")
+            if not _kept:
+                return _ihit            # kept before D-554: its interpretation only, as it is
+            raw, _from_store = _kept, True      # the words, read again by the current code
+        else:
+            raw = _call_llm(payload, model, system=SYSTEM_INFER)
         parsed = _parse(raw) if raw else None
     except Exception:
         return {}
@@ -738,8 +1090,12 @@ def infer_missing_details(context: str, bom: List[Dict[str, Any]],
             "_raw_response": (raw or "")[:20000],
             "found": bool(out or routes)}
     # The INFERRED route is the unstable half — welding on 2085 was a conclusion, not a
-    # reading, and it is the one that vanished. Cached on the same terms as the rest.
-    _cache_write(_ikey, _res)
+    # reading, and it is the one that vanished. Cached on the same terms as the rest, with
+    # the model's whole response so the next use re-reads the words (D-554).
+    if _from_store:
+        _res["_from_cache"] = True
+    else:
+        _cache_write(_ikey, {**_res, "_raw_full": raw or ""})
     return _res
 
 

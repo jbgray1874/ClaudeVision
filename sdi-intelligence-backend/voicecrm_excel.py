@@ -27,6 +27,18 @@ Two realities of a spreadsheet shape the design:
     sandbox pilot that window is accepted — and it is written down here so
     nobody mistakes it for a guarantee.
 
+  * A write is ONE CELL, and it is read back. `apply()` PATCHes
+    /workbook/worksheets('<sheet>')/range(address='<A1>') with that single
+    value, then reads the same address and checks it holds it. The file is
+    never replaced or re-uploaded, so nothing outside the named cell can
+    change and nobody else's edit can be overwritten wholesale. No workbook
+    session is opened: a range write with no session header is saved to the
+    never replaced or re-uploaded. Asked for by Nick Garrish, 23 October 2026,
+    after ChatGPT's own SharePoint connector offered him only a whole-file
+    replace. The write and the read-back share one PERSISTENT workbook session,
+    so the read cannot be answered from a copy that has not caught up - without
+    that, a change already in the file reported itself as failed.
+
 Configuration (.env), alongside the voicecrm.py settings:
 
     SDI_VOICECRM_STORE=excel      selects this backend (default is "list")
@@ -231,12 +243,28 @@ class ExcelStore:
     def _headers(self, token: str) -> dict:
         return {"Authorization": f"Bearer {token}"}
 
+    @staticmethod
+    def request_id(response: httpx.Response) -> str:
+        """Graph's own id for this call, which Microsoft support asks for.
+
+        Nick Garrish, 23 October 2026, on a write that did not happen: "capture the
+        actual request result: success or failure, HTTP status, error code/message,
+        and correlation/request ID." Without it a failure can be described but not
+        traced, and the answer to "was it us or them" stays an opinion."""
+        for header in ("request-id", "client-request-id", "x-ms-request-id"):
+            value = response.headers.get(header)
+            if value:
+                return value
+        return ""
+
     def _graph_detail(self, response: httpx.Response) -> str:
         try:
             err = response.json().get("error", {})
-            return f"{err.get('code', '')}: {err.get('message', '')}"[:400]
+            detail = f"{err.get('code', '')}: {err.get('message', '')}"[:400]
         except Exception:  # noqa: BLE001 — a non-JSON error body is still worth showing
-            return response.text[:400]
+            detail = response.text[:400]
+        rid = self.request_id(response)
+        return f"{detail} [request-id {rid}]" if rid else detail
 
     def _err(self, response: httpx.Response) -> dict:
         return {"state": "graph_error", "status": response.status_code,
@@ -562,16 +590,127 @@ class ExcelStore:
         url = f"{wb['base']}/worksheets('{wb['sheet']}')/range(address='{addr}')"
         try:
             with httpx.Client(timeout=30) as client:
-                res = client.patch(url, headers={**self._headers(token),
-                                                 "Content-Type": "application/json"},
-                                   json={"values": [[new_value]]})
+                # ── ONE SESSION FOR THE WRITE AND THE READ-BACK ────────────────────
+                # Without a session each call is served independently, and a read a
+                # moment after a write can still be answered from a copy that does
+                # not have it yet. See `_session` - this is what made a saved change
+                # report itself as failed on 23 October 2026.
+                session = self._session(client, token, wb)
+                headers = {**self._headers(token), "Content-Type": "application/json"}
+                if session:
+                    headers["workbook-session-id"] = session
+                try:
+                    res = client.patch(url, headers=headers, json={"values": [[new_value]]})
+                    if res.status_code >= 300:
+                        err = {"state": "failed", "status": res.status_code,
+                               "detail": self._graph_detail(res)}
+                        return (unavailable(err) if excel_refused({**err, "state": "graph_error"})
+                                else err)
+                    return self._verify(client, token, wb, addr, new_value,
+                                        self.request_id(res), session)
+                finally:
+                    self._close_session(client, token, wb, session)
         except httpx.HTTPError as exc:
             return {"state": "unreachable",
                     "detail": f"Could not reach Microsoft Graph: {exc}"}
-        if res.status_code >= 300:
-            err = {"state": "failed", "status": res.status_code, "detail": self._graph_detail(res)}
-            return unavailable(err) if excel_refused({**err, "state": "graph_error"}) else err
-        return None
+
+    def _session(self, client: httpx.Client, token: str, wb: dict) -> str:
+        """A persistent workbook session id, or "" if one could not be opened.
+
+        ── WHY A SESSION, WHEN THE WRITE SAVES WITHOUT ONE ─────────────────────────
+        Not to make the write persist: a range write with no session header IS saved
+        to the file, and persistChanges=true here says the same thing again. It is so
+        that the WRITE AND THE READ-BACK ARE THE SAME CONVERSATION.
+
+        Sessionless calls are independent, and Microsoft may answer two of them from
+        different copies of the workbook. On 23 October 2026 a cell was written
+        (PATCH 200), read back a fraction of a second later, still showed its old
+        value, and a change that was safely in the file was reported to Nick Garrish
+        as failed. The value was there all along; the second call had not seen it yet.
+        Sharing one session id removes that, because every call carrying it is served
+        by the same instance.
+
+        Failing to open one is not fatal - the write still saves - but it does make
+        the read-back untrustworthy, and `_verify` then declines to call a mismatch a
+        failure rather than risk repeating that.
+        """
+        try:
+            res = client.post(f"{wb['base']}/createSession",
+                              headers={**self._headers(token),
+                                       "Content-Type": "application/json"},
+                              json={"persistChanges": True})
+            if res.status_code < 300:
+                return str(res.json().get("id") or "")
+            print(f"[voicecrm.excel] no workbook session ({res.status_code} "
+                  f"{self._graph_detail(res)}); the write still saves, the read-back "
+                  f"becomes advisory", flush=True)
+        except (httpx.HTTPError, ValueError) as exc:          # noqa: BLE001
+            print(f"[voicecrm.excel] no workbook session ({type(exc).__name__}: {exc}); "
+                  f"the write still saves, the read-back becomes advisory", flush=True)
+        return ""
+
+    def _close_session(self, client: httpx.Client, token: str, wb: dict, session: str) -> None:
+        """Hand the session back. Excel expires them anyway; not leaving hundreds of
+        them open is simply good manners to a shared workbook."""
+        if not session:
+            return
+        try:
+            client.post(f"{wb['base']}/closeSession",
+                        headers={**self._headers(token), "workbook-session-id": session})
+        except httpx.HTTPError:
+            pass
+
+    def _verify(self, client: httpx.Client, token: str, wb: dict, addr: str, expected: str,
+                wrote_id: str = "", session: str = "") -> Optional[dict]:
+        """Read the cell back. None when the change stands, an error when it does not.
+
+        ── A SUCCESSFUL WRITE IS NEVER REPORTED AS A FAILURE ───────────────────────
+        Nick Garrish, 23 October 2026: "If the test succeeds, read the changed cell
+        back and confirm it persisted." Right to ask, and the first version of this
+        did exactly that and got it wrong: it ran without a session, read a copy of
+        the workbook that had not caught up, and told him a change already saved in
+        the file had failed. He then had every reason to believe writing was broken.
+
+        So the PATCH's own 200 is what decides, and this check can only add doubt on
+        top of it:
+          * cell holds the new value            -> saved (the ordinary case)
+          * cell differs, AND we had a session  -> not saved, and said plainly: the
+                                                   same session cannot be out of date
+                                                   with itself
+          * cell differs, no session            -> saved, with a line in the log. The
+                                                   read cannot be trusted to disagree
+          * the read-back itself fails          -> saved. A second call failing says
+                                                   nothing about the first
+        """
+        url = f"{wb['base']}/worksheets('{wb['sheet']}')/range(address='{addr}')"
+        headers = self._headers(token)
+        if session:
+            headers["workbook-session-id"] = session
+        try:
+            res = client.get(url, params={"$select": "text,values"}, headers=headers)
+            if res.status_code >= 300:
+                return None
+            body = res.json()
+            shown = ((body.get("text") or [[""]])[0] or [""])[0]
+            raw = ((body.get("values") or [[""]])[0] or [""])[0]
+        except (httpx.HTTPError, ValueError, IndexError, TypeError):
+            return None
+        want = str(expected).strip()
+        for got in (shown, raw):
+            # Excel reformats as it stores: a typed date becomes a serial and shows
+            # in the column's own format, a number loses its typed thousands comma.
+            # The cell is right if either face of it matches what was asked for.
+            if str(got).strip() == want:
+                return None
+        if not session:
+            print(f"[voicecrm.excel] {addr} read back as '{shown}' rather than '{want}', "
+                  f"with no workbook session to make that read reliable - the write "
+                  f"answered 200 and is reported as saved", flush=True)
+            return None
+        return {"state": "not_saved", "status": 200,
+                "detail": (f"Microsoft Graph accepted the change but {addr} still reads "
+                           f"'{shown}', not '{want}'. Nothing was saved. "
+                           + (f"[write request-id {wrote_id}]" if wrote_id else "")).strip()}
 
     def download(self, token: str) -> tuple[Optional[bytes], Optional[dict]]:
         """The whole workbook file, for a reader with no signed-in user.

@@ -235,7 +235,7 @@ def test_the_report_opens_on_the_take_off_label_with_the_design_and_what_was_set
     assert "CONCEPT TAKE-OFF FROM THE MODEL — not a drawings estimate" in text
     assert GA in text and BAG in text and BLOCK in text and V2 in text
     assert html.index("CONCEPT TAKE-OFF FROM THE MODEL") < html.index("<h2>Summary</h2>")
-    assert "NO PRICE — NOTHING TO COST" not in text, "a book with parts is not an empty book"
+    assert "NO ESTIMATE PRODUCED — NOTHING TO COST" not in text, "a book with parts is not an empty book"
 
 
 def test_a_report_without_a_take_off_has_no_label():
