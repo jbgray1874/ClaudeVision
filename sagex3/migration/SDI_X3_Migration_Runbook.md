@@ -109,9 +109,8 @@ Amount, Source Date, Paying Customer, Due Date, Payment Terms, Source Document, 
 comments, Line, Site, Plan code, General accounts, Distribution, Comment, Transaction Amount.
 - MINV / MCRN / MREC / MJDT / MJCT. General account 999100. Plan code 18L.
 - Amounts are the outstanding balance, positive; the document type carries the sign.
-- **Company (column D, new 28 Oct):** the X3 company code that site S01A belongs to, the same on
-  every row. **Waiting on Marc for the code;** blank until then. Set `COMPANY=<code>` and rerun
-  `scripts/build_bicy_bisy.py`.
+- **Company (column D, new 28 Oct): S01A on every row (James, 28 Oct).** Run
+  `scripts/build_bicy_bisy.py` with `COMPANY=S01A`.
 
 **YA004BISY – supplier open items (24 columns, one heading row only). Was YA004BISX (renamed 28 Oct).**
 As BICY, with Supplier and Paying Supplier, and general account 999200. Columns: Invoice Type,
@@ -610,7 +609,7 @@ There is no data dictionary for Access; everything below was found by querying t
    `populate_guides.py` (the five guides, SOHPJ columns, dates, characters). **Set
    `STOCK_DATE=<load day yyyymmdd>`** for the stock posted date; `OUT_DIR` builds to another folder. Then
    `recode_ledgers_v7.py` for the clean-run product codes, `build_mfg.py` for works orders, and
-   `build_bicy_bisy.py` (with `COMPANY=<code>`) to turn BICX / BISX into the BICY / BISY layout.
+   `build_bicy_bisy.py` (with `COMPANY=S01A`) to turn BICX / BISX into the BICY / BISY layout.
 6. **Spreadsheets:** `build_sheets.py` and `build_bp_sheets.py`. Each fills the template and
    reads every cell back against the load data.
 7. Run the checklist in section 9.
@@ -638,8 +637,8 @@ are. They need Python 3 with openpyxl.
 | YA004SMR_guide_MAPPED_clean_run | 6,303 lots, £3,437,532.29 |
 | YA004POH_guide_MAPPED_clean_run | 579 lines (479 + 100 new suppliers') |
 | YA004SOHPJ_guide_MAPPED_clean_run | 3,161 lines (2,012 + 1,149 new customers') |
-| YA004BICY_guide_MAPPED (was BICX) | 817 items, £8,788,291.72 (+230, £3.54m). Company column blank until Marc confirms |
-| YA004BISY_guide_MAPPED (was BISX) | 2,280 items, £6,953,942.83 (+253, £0.84m). CURLED removed; Company blank until Marc confirms |
+| YA004BICY_guide_MAPPED (was BICX) | 817 items, £8,788,291.72 (+230, £3.54m). Company = S01A |
+| YA004BISY_guide_MAPPED (was BISX) | 2,280 items, £6,953,942.83 (+253, £0.84m). CURLED removed; Company = S01A |
 
 Data: everything from the 21 Oct export, except the new accounts' rows, which are from 27 Oct.
 The real load needs one fresh extract of everything, on one day.
@@ -660,8 +659,6 @@ The real load needs one fresh extract of everything, on one day.
 invoice element; the ship-to field on SOHPJ; static data (999100, 999200, 18L, payment terms,
 EUR/USD); the 27 suggested bins, A001 and the racking; whether YA004ITM
 replaces ZSDIITM.
-
-**Waiting on Marc (28 Oct):** the X3 company code for the new Company column in BICY / BISY.
 
 **Waiting on Ethan:** DIE/CCE field names; the X3 lot
 export; the tax rules for UAT; BOMs and routes on bought-in products; route use status 1 or
@@ -735,13 +732,13 @@ fixes themselves are what every rerun must repeat.
 | **YA004ITM_guide.xlsx** + macro email | Marc, 23 Oct (sent again, identical) | Macro version of an import template: a cover sheet with defaults and a button that writes the .txt from "Data with Headings", skipping 2 rows; sheet names hard-coded. Product layout of 19 columns (statistical groups, expiry, shelf life, serial, tax level GSR, back-to-back) | The macro didn't survive email (plain .xlsx, empty cover sheet). We use spreadsheets with the same sheet naming. Whether YA004ITM replaces ZSDIITM is asked |
 | **SDI_Data_Migration_-_Import_Notes.docx** | Ethan, 23 Oct | Per-template fixes: allowed characters; BP tax rule table (no EU); AG address flag rule; GB and EU VAT formats; products and descriptions more thoroughly; BOMs need loaded products; work centre mapping; costs under material; SOH dates (2024) and DIE/CCE; SMR lots must be X3 lots; BICX/BISX "worked", missing accounts; IME column on BISX to come | Every point applied or asked (sections 5, 6, 14). The X3 lot export is still needed |
 | **YA004SOHPJ** (instructions) | Ethan, 23 Oct | SOH + Dim Code (D02) and Dimension (P00003) between columns M and N | Built as YA004SOHPJ (22 columns), DIE/CCE to confirm |
-| **BICY / BISY layout** | James, 28 Oct | BICX and BISX renamed YA004BICY and YA004BISY; CURLED removed from BISY; new column Company between C (Customer / Supplier) and D (Site) in both | Built (`build_bicy_bisy.py`). Company code to come from Marc |
+| **BICY / BISY layout** | James, 28 Oct | BICX and BISX renamed YA004BICY and YA004BISY; CURLED removed from BISY; new column Company between C (Customer / Supplier) and D (Site) in both | Built (`build_bicy_bisy.py`). Company = S01A (James, 28 Oct) |
 | **YA004BPCDL_guide.xlsx** | Ethan, 23 Oct (sent twice) | Customer delivery addresses: BPCNUM, BPAADD, BPDNAM. Load after customers | Built, 2,268 rows |
 | **ZSDIITMSUP_Guide_V2.xlsx** | Ethan, 23 Oct (sent twice) | Product-suppliers: ITMREF, BPSNUM, ITMREFBPS (= product code) | Built, 7,679 rows; PIO asked |
 | **YA004MFG_Guide.xlsx** | Ethan, 27 Oct | Works orders: 11 columns, BOM code and routing code 10, update code C, status 1. Example rows are illustrative, not live orders. Standard spreadsheet tools can't read its styles; it was read from the XML | Built, 638 orders; 6 questions asked |
 | **X3 work centre list** (screenshot) | James, 27 Oct | 33 X3 work centres with group, type and title (section 8) | Routes checked against it: all match |
 
-**Still to receive:** the X3 lot export (SMR); the company code for BICY / BISY; the field names for SOHPJ's two new columns; the IME column for BISX; clean-run
+**Still to receive:** the X3 lot export (SMR); the field names for SOHPJ's two new columns; the IME column for BISX; clean-run
 error logs; the original BPC and BPS template workbooks, to keep with this runbook.
 
 ---

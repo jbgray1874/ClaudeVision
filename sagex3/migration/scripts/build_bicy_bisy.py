@@ -4,13 +4,12 @@ What changed from BICX / BISX (James, 28 Oct):
   * the templates are renamed BICY and BISY
   * BISY loses the CURLED column
   * both get a new column, Company, between C (Customer / Supplier) and D (Site). Its value is
-    the X3 company code that site S01A belongs to - COMPANY below, to confirm with Marc. Until
-    then it is left blank.
+    the X3 company code: S01A (James, 28 Oct). COMPANY below, S01A by default.
 Everything else is the BICX / BISX file exactly as built (populate_guides.py): same rows,
 same values, same order. The build reads every data row back and checks that.
 
 Usage:
-    COMPANY=<code> python build_bicy_bisy.py
+    python build_bicy_bisy.py          (COMPANY=<code> to override S01A)
 """
 import os
 
@@ -20,7 +19,7 @@ from openpyxl.styles import Font
 BASE = "/tmp/claude-0/-home-user-ClaudeVision/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dadea/scratchpad"
 SRC = os.environ.get("SRC_DIR", f"{BASE}/out_mapped")
 OUT = os.environ.get("OUT_DIR", f"{BASE}/out_mapped")
-COMPANY = os.environ.get("COMPANY", "")
+COMPANY = os.environ.get("COMPANY", "S01A")
 NOTE = ("New in this layout (28 Oct): between {bp} and Site. The X3 company code that site S01A "
         "belongs to" + (f": {COMPANY}" if COMPANY else " - to confirm with Marc, blank until then"))
 
