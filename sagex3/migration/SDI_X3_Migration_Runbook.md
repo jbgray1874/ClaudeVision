@@ -771,6 +771,12 @@ error logs; the original BPC and BPS template workbooks, to keep with this runbo
    - split run-together Access address lines (the first customer file has
      "OAKWOOD DISTRIBUTION LTDGREAT BANK ROAD");
    - take the country from the address where Access says GB (994 addresses on the new customers alone);
+     350 rows still have GB with a non-UK postcode (27 Oct file): mostly TTI store addresses with
+     German postcodes (TEC106 / TEC118 140 each), plus TEC105 152 "77990FRAN". X3 accepted the
+     same pattern on the first pass (TES101 "LE5", PER100), so they load, but the country is
+     wrong. Detect the country from the postcode format and the town as well as from a country
+     line;
+   - the character rule on postcodes too: TEC122 002 / 003 have "FOT 2151" with an accented O;
    - move UK postcodes out of the address lines;
    - make delivery descriptions unique;
    - VAT numbers only with a valid country prefix.
