@@ -395,8 +395,11 @@ SELECT
                    THEN 'BAC_IMM' ELSE 'TFR_IMM' END
          WHEN LTRIM(RTRIM(ISNULL(s.PT_CURRENCYCODE, ''))) IN ('EUR', 'USD')
          THEN 'TFR_IMM' ELSE 'BAC_IMM' END                      AS PaymentTerms,
+    -- The supplier's reference, else the order number, else the document. Each is NULLIF'd:
+    -- Access holds a missing order number as '' not NULL, which stopped the COALESCE there and
+    -- left 317 items blank on 28 Oct.
     LEFT(LTRIM(RTRIM(COALESCE(NULLIF(LTRIM(RTRIM(s.PT_HEADER_REF2)) COLLATE DATABASE_DEFAULT, ''),
-                              s.PT_ORDER_NUMBER COLLATE DATABASE_DEFAULT,
+                              NULLIF(LTRIM(RTRIM(s.PT_ORDER_NUMBER)) COLLATE DATABASE_DEFAULT, ''),
                               s.PT_HEADER_REF   COLLATE DATABASE_DEFAULT, ''))), 20)
                                                                 AS SourceDocument,
     LEFT(LTRIM(RTRIM(ISNULL(s.PT_DESCRIPTION, ''))), 30) COLLATE DATABASE_DEFAULT        AS Comments1,

@@ -116,6 +116,11 @@ comments, Line, Site, Plan code, General accounts, Distribution, Comment, Transa
 As BICY, with Supplier and Paying Supplier, and general account 999200. Columns: Invoice Type,
 Document, Supplier, **Company**, Site, Accounting Date, Currency, GBP Amount, ... the same as BICY.
 - **CURLED is removed (James, 28 Oct).** It was column 7 of BISX; X3 didn't recognise it.
+- **Source Document** is the supplier's reference (PT_HEADER_REF2), else the order number, else the
+  document (PT_HEADER_REF). On 28 Oct, 317 items (£1.6m) came out blank: Access holds a missing
+  order number as '' not NULL, so the view's COALESCE stopped there. `views_v2.sql` now NULLIFs it,
+  and `populate_guides.py` fills any blank with the document reference. The BICY Source Document
+  (ST_ORDER_NUMBER) had no blanks.
 - Company in column D, as BICY.
 - **Built by `scripts/build_bicy_bisy.py`** from the BICX / BISX files that `populate_guides.py`
   makes. It deletes CURLED, inserts Company at D, updates the Mapping, Guide and Notes tabs, and
@@ -580,6 +585,9 @@ There is no data dictionary for Access; everything below was found by querying t
     delivery-address fields.
 
   Wait for each import to finish, read its log, then load the next. Reloading BPCDL afterwards is safe.
+- **COALESCE over Access text columns:** Access often stores "nothing" as '' not NULL, so
+  `COALESCE(a, b, c)` stops at an empty b. NULLIF every candidate:
+  `COALESCE(NULLIF(a,''), NULLIF(b,''), c)`.
 - **Supplier rejections cascade:** a rejected supplier takes its product-supplier rows, open
   items and purchase orders with it. Load suppliers first and read the log.
 
@@ -688,7 +696,7 @@ fixes themselves are what every rerun must repeat.
 | **YA004SOH → YA004SOHPJ** open sales orders | New template: Dim Code (DIE) = D02 and Dimension (CCE) = P00003 added between Header text and Line (22 columns). **Dates:** 293 lines with a ship or delivery date before 2025 moved to 20261031; 64 lines shipping before their order date given the requested delivery date; order dates unchanged; header dates the same on every line of an order (253 lines). **Text:** 145 cells cleaned to Ethan's rule; 878 blank descriptions filled from the product file. Lines renumbered from 1000 per order (271); 30 orders rearranged so identical headers are never adjacent. Units to EA, £ to GBP, outstanding quantity, discounted price. Held back 200 lines, including the credits on orders (£93,241.98). Clean run: 47 product codes changed. |
 | **YA004POH** open purchase orders | Mapped to the template. **Text:** 36 descriptions cleaned (M&S-TOOLING → M AND S-TOOLING). 272 blank descriptions filled. Lines renumbered (33), 26 orders rearranged. Held back 193 lines. Clean run: 5 product codes changed. |
 | **YA004BICX** customer open items | Mapped to the template. Outstanding balances, positive values, £ to GBP, Sage customer codes via the cross-reference, repeated references suffixed. Reconciles to Access to the penny. The character rule found nothing to change. |
-| **YA004BISX** supplier open items | As BICX, plus CURLED = GBP. **References:** 84 document references with spaces or / cleaned (2026158/77 → 2026158-77), still unique. 3,134 text cells tidied (dashes, double spaces). A 23-column version without CURLED exists in case X3 rejects it. |
+| **YA004BISX → BISY** supplier open items | **28 Oct:** 317 blank Source Documents filled with the document reference. As BICX, plus CURLED = GBP (removed in BISY). **References:** 84 document references with spaces or / cleaned (2026158/77 → 2026158-77), still unique. 3,134 text cells tidied (dashes, double spaces). A 23-column version without CURLED exists in case X3 rejects it. |
 | **YA004MFG** works orders (new) | 638 of the 744 open Access works orders, one line each. Quantity = ordered less made. Start = created date. End = scheduled date (13 that ended before they started now end on the start date). Held back 106: 36 with nothing left to make, 42 with no BOM, 25 not a product (all 16 prototypes), 3 with no route. Clean run: 42 codes changed. |
 
 ### Track 2 – master data

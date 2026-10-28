@@ -279,6 +279,18 @@ for tmpl, rows in DATA.items():
         if early:
             fixes["lines shipping before their order date given the requested delivery date"] = early
 
+    # BISX Source Document: the view falls back supplier ref -> order number -> document, but a
+    # blank order number in Access is '' not NULL, so the fallback stopped short (317 items,
+    # 28 Oct). Finish it here: a blank takes the document reference.
+    if tmpl == "YA004BISX":
+        filled = 0
+        for r in good:
+            if not r[13].strip():
+                r[13] = r[1][:20]
+                filled += 1
+        if filled:
+            fixes["blank Source Document filled with the document reference"] = filled
+
     # Cleaning a reference can make two the same. The template rejects duplicates, so the
     # second and later take a suffix, as the view does for references that repeat in Access.
     if tmpl in ("YA004BICX", "YA004BISX"):
