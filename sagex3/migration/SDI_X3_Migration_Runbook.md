@@ -154,6 +154,13 @@ Document, Supplier, **Company**, Site, Accounting Date, Currency, GBP Amount, ..
   Sheet1 / Sheet2 to "Data with Headings" / "Guide" because the macro looks for that name.
 - **Confidential:** bank account details. The spreadsheet and the query output stay out of git
   and inside SDI.
+- **Built 28 Oct:** 626 BACS suppliers loaded, all GBP, BIDNUM 18 characters. On the Check tab:
+  - 35 BACS suppliers have no bank details in Access;
+  - ASS500's 7-digit account was padded to 8 (Finance to confirm);
+  - PRC500 is held: the account number 93957497 sits in the bank-name field and "HSBC" in the
+    account field, so fix it in Access.
+  44 suppliers on transfer terms (TFR_) aren't loaded. Four BACS suppliers have a UK sort code
+  but a non-UK address country (FR, NL, HK, AT), and are loaded as they are.
 
 **YA004BPS – suppliers (33 columns).** Only the first 14 codes of the template were recorded:
 `BSGCOD, BPSNUM, BPSNAM, CRY, CUR, CRN, EECNUM, VACBPR, PTE, ACCCOD, BPAADD, BPADES, BPAADDLIG(0), BPAADDLIG(1)`
@@ -765,7 +772,7 @@ fixes themselves are what every rerun must repeat.
 | **YA004ITM_guide.xlsx** + macro email | Marc, 23 Oct (sent again, identical) | Macro version of an import template: a cover sheet with defaults and a button that writes the .txt from "Data with Headings", skipping 2 rows; sheet names hard-coded. Product layout of 19 columns (statistical groups, expiry, shelf life, serial, tax level GSR, back-to-back) | The macro didn't survive email (plain .xlsx, empty cover sheet). We use spreadsheets with the same sheet naming. Whether YA004ITM replaces ZSDIITM is asked |
 | **SDI_Data_Migration_-_Import_Notes.docx** | Ethan, 23 Oct | Per-template fixes: allowed characters; BP tax rule table (no EU); AG address flag rule; GB and EU VAT formats; products and descriptions more thoroughly; BOMs need loaded products; work centre mapping; costs under material; SOH dates (2024) and DIE/CCE; SMR lots must be X3 lots; BICX/BISX "worked", missing accounts; IME column on BISX to come | Every point applied or asked (sections 5, 6, 14). The X3 lot export is still needed |
 | **YA004SOHPJ** (instructions) | Ethan, 23 Oct | SOH + Dim Code (D02) and Dimension (P00003) between columns M and N | Built as YA004SOHPJ (22 columns), DIE/CCE to confirm |
-| **YA004BPSC_guide.xlsx** | Ethan, 28 Oct | Supplier bank details: BPSNUM, BPAADD, CRY, BIDNUM (XXXX + sort code + account), PAB1, BICCOD, PAB2 blank, CUR, BIDNUMFLG 2. BACS suppliers only | Mapped (section 3); `supplier_bank_details.sql` + `build_bpsc.py`. Waiting on the query output |
+| **YA004BPSC_guide.xlsx** | Ethan, 28 Oct | Supplier bank details: BPSNUM, BPAADD, CRY, BIDNUM (XXXX + sort code + account), PAB1, BICCOD, PAB2 blank, CUR, BIDNUMFLG 2. BACS suppliers only | Mapped (section 3); `supplier_bank_details.sql` + `build_bpsc.py`. Built 28 Oct: 626 loaded, 37 on the Check tab |
 | **BICY / BISY layout** | James, 28 Oct | BICX and BISX renamed YA004BICY and YA004BISY; CURLED removed from BISY; new column Company between C (Customer / Supplier) and D (Site) in both | Built (`build_bicy_bisy.py`). Company = S01A (James, 28 Oct) |
 | **YA004BPCDL_guide.xlsx** | Ethan, 23 Oct (sent twice) | Customer delivery addresses: BPCNUM, BPAADD, BPDNAM. Load after customers | Built, 2,268 rows |
 | **ZSDIITMSUP_Guide_V2.xlsx** | Ethan, 23 Oct (sent twice) | Product-suppliers: ITMREF, BPSNUM, ITMREFBPS (= product code) | Built, 7,679 rows; PIO asked |
