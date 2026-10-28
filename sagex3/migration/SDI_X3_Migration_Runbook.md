@@ -792,10 +792,26 @@ error logs; the original BPC and BPS template workbooks, to keep with this runbo
    - load only new rows on a top-up (the NEW_ACCOUNTS files);
    - ask Marc whether rows for existing customers are skipped or updated, and whether the import
      can run faster (for example without the address checks).
-9. **Decisions to get before the run:**
+9. **Product category PHANT is set mechanically.** In `migration.vw_ITM` a product is PHANT if
+   it's a BOM parent and also a component anywhere in Access's BOM table, including old BOMs
+   that aren't migrated. Example: 9758-00-GA (MASTER TILL ASSEMBLY, £2,285, sold to PER100) has
+   its own BOM (22 lines) and route (5 joinery operations). It's on 10 open sales order lines but
+   is PHANT, only because two unmigrated BOMs (STDTPSSTORE001, TPS-9758-GA2) use it.
+
+   Of 3,427 PHANT products:
+   - 298 are on open works orders;
+   - 127 hold stock;
+   - 32 are on open sales orders;
+   - 138 aren't a component of any migrated BOM.
+
+   **Ask Marc / Ethan what PHANT does in X3.** If it's a true phantom (not stocked, exploded into
+   the parent's works order), those products need to be FGML. Rule for the next run: PHANT only
+   when the product is a component of a *migrated* BOM and isn't itself sold, stocked or made on
+   its own works order.
+10. **Decisions to get before the run:**
    - Finance: employee expense accounts and intercompany; EU tax rules.
    - SDI: the 33 shared product codes; credits on orders; the OLD-product stock if rule 1 isn't adopted.
    - Ethan: a PIO column for alternative suppliers.
    - Marc: service items (installation, delivery, tooling) and the multi-drop ship-to.
-10. **Queries:** read-only against Access; narrow to the codes needed before any join or total;
+11. **Queries:** read-only against Access; narrow to the codes needed before any join or total;
    check brackets and REPLACE arguments; say what a query changes at the top.
