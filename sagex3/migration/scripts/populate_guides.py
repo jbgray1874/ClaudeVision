@@ -19,6 +19,8 @@ Fixes applied on the way through, each one counted on the Notes sheet:
     text and Line
   * SMR Description (VCRDES, column E) carries the product code - it is the product key on
     each line (James, 28 Oct). It was "OPENING STOCK" on every line
+  * SMR Posted Date (IPTDAT, column D) is the day the stock is loaded, STOCK_DATE (28 Oct),
+    not the accounting date
 """
 import csv
 import json
@@ -129,6 +131,10 @@ X3_REF = {"YA004SMR": [15, 16], "YA004BICX": [1, 12], "YA004BISX": [1, 13]}   # 
 OUTNAME = {"YA004SOH": "YA004SOHPJ"}
 SOH_NEW = ["D02", "P00003"]           # Dim Code, Dimension - inserted before Line (col N)
 ACCOUNTING_DATE, OLDEST_DATE = "20261031", "20250101"
+# Stock is posted on the day it is loaded (James, 28 Oct): set STOCK_DATE to the load day on
+# every run. A fixed value, not the system date, so a rebuild gives the same file.
+STOCK_DATE = os.environ.get("STOCK_DATE", "20261028")
+assert len(STOCK_DATE) == 8 and STOCK_DATE.isdigit(), STOCK_DATE
 
 
 # a supplier lot keeps its word breaks as hyphens - "5019032 04.12" must not become one number
@@ -179,6 +185,7 @@ for tmpl, rows in DATA.items():
         if reason:
             if tmpl == "YA004SMR":
                 r[4] = r[s["item"]]
+                r[3] = STOCK_DATE
             held.append(r + [reason])
             continue
         if s["desc"] is not None and not r[s["desc"]].strip():
@@ -220,6 +227,7 @@ for tmpl, rows in DATA.items():
                     r[c] = v
         if tmpl == "YA004SMR":                 # Description = the product key (column E)
             r[4] = r[s["item"]]
+            r[3] = STOCK_DATE                  # Posted Date (column D) = the load day
         good.append(r)
         good_oid.append(this_oid)
 
@@ -368,6 +376,9 @@ for tmpl, rows in DATA.items():
     if tmpl == "YA004SOH":
         n["lines priced at zero"] = sum(1 for r in good if float(r[18] or 0) == 0)
     n.update(fixes)
+    if tmpl == "YA004SMR":
+        n["posted date (column D) - the day the stock is loaded"] = STOCK_DATE
+        n["description (column E) - the product code, the product key on each line"] = "every line"
 
     notes = wb["Notes"]
     notes.insert_rows(3, amount=len(n) + 4)

@@ -131,9 +131,10 @@ SMR = [
   '"S01A". Which of the 11 Access warehouses map to sites and which to locations is still '
   "Marc's decision - REF_WAREHOUSE carries it. Marc: S01A is now the only site", "Agreed"),
  ("Posted Date", "IPTDAT", "20251021", "Hardcoded", "-",
-  ACCT + ". The old view used GETDATE(), so every run produced a different file", "Done"),
+  "The date the stock is loaded - today's date on the day of the load (28 Oct), set by STOCK_DATE "
+  "in populate_guides.py on every run. Not the accounting date: the view's 20261031 is replaced", "Done"),
  ("Description", "VCRDES", "IMP1", "(no note given)", "-",
-  '"OPENING STOCK". The old view called this column VCRDSE', "Hardcoded"),
+  "The product code (ITMREF) - the product key on each line (28 Oct). Was \"OPENING STOCK\"", "Done"),
  ("Movement code", "TRSCOD", "", "Hardcoded", "-", "Blank", "Hardcoded"),
  ("Document Line", "VCRLIN", "1", "(no note given)", "-",
   "ROW_NUMBER over part, warehouse and lot", "Done"),

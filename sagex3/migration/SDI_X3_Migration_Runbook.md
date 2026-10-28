@@ -77,6 +77,7 @@ and its sheet names are hard-coded.
 
 **YA004SMR – opening stock (19 columns)**
 `VCRTYP, VCRNUM, STOFCY, IPTDAT, VCRDES, TRSCOD, VCRLIN, ITMREF, PCU, QTYPCU, STU, QTYSTU, PRI, PCU, QTYPCU, BPSLOT, LOT, LOC, STA`
+  **Column D, Posted Date (IPTDAT), is the day the stock is loaded (`STOCK_DATE`), section 6.9.**
   **Column E, Description (VCRDES), is the product key: it carries the product code (ITMREF) on
   every line, the same as column H (James, 28 Oct).** It was "OPENING STOCK" on every line.
   The guide's examples (IMP1, IMP2) show it changes per line. `populate_guides.py` sets it,
@@ -424,7 +425,11 @@ codes, descriptions, names, addresses, operation descriptions, comments.
   M&S plc to MAR100 for UAT is asked.
 
 ### 6.9 Dates and site
-- Accounting date for UAT: 20261031.
+- Accounting date for UAT: 20261031. It's used by BICX, BISX and the SOH date moves.
+- **Stock (YA004SMR) Posted Date (IPTDAT, column D) = the day the stock is loaded, today's date
+  on load day (James, 28 Oct), not the accounting date.** Set `STOCK_DATE` (yyyymmdd) when running
+  `populate_guides.py`. It's a fixed value, not the system date, so a rebuild gives the same file.
+  The view's 20261031 is replaced, on the Held back tab too. UAT file of 28 Oct: 20261028.
 - Go-live: the last day of the previous financial period (31 Dec 2026 if periods are calendar
   months; to confirm with Marc).
 - S01A is the only site, for every site field.
@@ -589,7 +594,8 @@ There is no data dictionary for Access; everything below was found by querying t
 4. **Master data:** `build_v8_track2.py` applies the character rule, duplicates, tax rules,
    bought-in BOM and route holds, and runs every check as an assertion.
 5. **Opening transactions:** `map_bins.py`, then `build_mapped_guides.py` and
-   `populate_guides.py` (the five guides, SOHPJ columns, dates, characters). Then
+   `populate_guides.py` (the five guides, SOHPJ columns, dates, characters). **Set
+   `STOCK_DATE=<load day yyyymmdd>`** for the stock posted date; `OUT_DIR` builds to another folder. Then
    `recode_ledgers_v7.py` for the clean-run product codes, and `build_mfg.py` for works orders.
 6. **Spreadsheets:** `build_sheets.py` and `build_bp_sheets.py`. Each fills the template and
    reads every cell back against the load data.
@@ -665,7 +671,7 @@ fixes themselves are what every rerun must repeat.
 
 | File | Fixes applied |
 |---|---|
-| **YA004SMR** opening stock | Mapped column for column to the template. **Description (column E) = the product code, the product key on each line (28 Oct)**, including the Held back tab. Full lot cost (material + labour) from the lot records. Product codes as loaded. **Locations:** every Access bin mapped to Marc's list (437 exact, 253 by rule, 27 suggested, 1,213 to A001); 2,317 lots on a real location, 3,986 in A001. **Supplier lots:** 232 cleaned, spaces to hyphens. Held back 2,176 lots (£603,150.76) whose product is not in the product load. Clean run: 131 product codes changed to the V7 codes. |
+| **YA004SMR** opening stock | Mapped column for column to the template. **Description (column E) = the product code, the product key on each line, and Posted Date (column D) = the day the stock is loaded, 20261028 for UAT (28 Oct)**, on the Held back tab too. Full lot cost (material + labour) from the lot records. Product codes as loaded. **Locations:** every Access bin mapped to Marc's list (437 exact, 253 by rule, 27 suggested, 1,213 to A001); 2,317 lots on a real location, 3,986 in A001. **Supplier lots:** 232 cleaned, spaces to hyphens. Held back 2,176 lots (£603,150.76) whose product is not in the product load. Clean run: 131 product codes changed to the V7 codes. |
 | **YA004SOH → YA004SOHPJ** open sales orders | New template: Dim Code (DIE) = D02 and Dimension (CCE) = P00003 added between Header text and Line (22 columns). **Dates:** 293 lines with a ship or delivery date before 2025 moved to 20261031; 64 lines shipping before their order date given the requested delivery date; order dates unchanged; header dates the same on every line of an order (253 lines). **Text:** 145 cells cleaned to Ethan's rule; 878 blank descriptions filled from the product file. Lines renumbered from 1000 per order (271); 30 orders rearranged so identical headers are never adjacent. Units to EA, £ to GBP, outstanding quantity, discounted price. Held back 200 lines, including the credits on orders (£93,241.98). Clean run: 47 product codes changed. |
 | **YA004POH** open purchase orders | Mapped to the template. **Text:** 36 descriptions cleaned (M&S-TOOLING → M AND S-TOOLING). 272 blank descriptions filled. Lines renumbered (33), 26 orders rearranged. Held back 193 lines. Clean run: 5 product codes changed. |
 | **YA004BICX** customer open items | Mapped to the template. Outstanding balances, positive values, £ to GBP, Sage customer codes via the cross-reference, repeated references suffixed. Reconciles to Access to the penny. The character rule found nothing to change. |
