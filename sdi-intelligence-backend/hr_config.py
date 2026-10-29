@@ -196,6 +196,10 @@ BLIP_MAX_CLOCKIN_AGE_HOURS = float(_opt("BLIP_MAX_CLOCKIN_AGE_HOURS", "20"))
 # tools/probe_brighthr_fields.py shows which one BrightHR actually sends; a
 # dotted path ("lineManager.id") or a comma list is accepted.
 HR_MANAGER_FIELD = _opt("HR_MANAGER_FIELD")
+# BrightHR's API has no manager field (checked 29 Oct 2026), so managers come
+# from a spreadsheet HR keeps: tools/hr_managers_sheet.py writes it. A UNC path
+# the SDIIntelligence service can read, and that HR can edit. Empty = no list.
+HR_MANAGERS_FILE = _opt("HR_MANAGERS_FILE")
 
 HR_APP_USERS = {e.strip().lower() for e in _opt("SDI_HR_APP_USERS").split(",") if e.strip()}
 

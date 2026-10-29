@@ -132,10 +132,18 @@
   <h3>Latest</h3>
   <p>The most recent check or update, whoever ran it, with when it ran. Anyone clocked in for more than
   20 hours is marked in orange.</p>
-  <p><span class="btnname">Group by manager</span> puts the clocked-in list under each person's <b>BrightHR manager</b>,
+  <p><span class="btnname">Group by manager</span> puts the clocked-in list under each person's <b>manager</b>,
   one folded section per manager with how many people are in it. Tap a manager to open or close their team.
-  People BrightHR gives no manager for are together at the end, under <b>No manager in BrightHR</b>.
+  Anyone without a manager is together at the end, under <b>No manager listed</b>.
   <span class="btnname">Show as one list</span> goes back. The phone remembers which you chose, on both tabs.</p>
+  <div class="panel">
+    <h4>Where the managers come from</h4>
+    <p>BrightHR does not share who manages whom with other systems, so managers come from the <b>HR managers
+    list</b>: a spreadsheet with every current employee and a yellow <b>Manager</b> column. HR types each person's
+    manager there; a filter by department fills a whole team at once. Changes show after the next
+    <span class="btnname">Check who's clocked in</span>. New starters appear under <b>No manager listed</b> until
+    they are added: ask James to refresh the list, which keeps everything already typed.</p>
+  </div>
   <h3>Roll call</h3>
   <p>Everyone who should be in the building, each with a tick box. It combines <b>everyone InVentry shows on
   site</b> (including people signed in at reception) with <b>everyone clocked in on BrightHR</b> at the last
@@ -147,8 +155,8 @@
     <li><span class="btnname">Group by manager</span> folds the list by BrightHR manager, each section saying
     how many of that manager's team are accounted for (for example <span class="msg">2 of 5 accounted for</span>).
     People signed in at reception who are BrightHR staff go under their manager too. Sections you open stay
-    open as the list refreshes. Visitors and anyone BrightHR gives no manager for are under
-    <b>No manager in BrightHR</b>.</li>
+    open as the list refreshes. Visitors, and anyone without a manager in the HR managers list, are under
+    <b>No manager listed</b>.</li>
     <li><b>Start a new roll call</b> clears every tick on every phone.</li>
     <li>Forgotten clock-outs are left out: they are not in the building.</li>
   </ul>

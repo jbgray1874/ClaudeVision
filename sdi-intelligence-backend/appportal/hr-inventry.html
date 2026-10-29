@@ -245,7 +245,7 @@ function openFor(hrs){ return hrs>48?Math.round(hrs/24)+' days':Math.round(hrs)+
 /* ── grouped by BrightHR manager (Simon): each manager's people fold away ── */
 let GROUP=false; try{ GROUP=localStorage.getItem('hrGroupByManager')==='1'; }catch(e){}
 const OPEN=new Set();                // groups someone opened, kept across the 5-second refresh
-const NO_MANAGER='No manager in BrightHR';
+const NO_MANAGER='No manager listed';
 function setGroup(on){ GROUP=on; try{ localStorage.setItem('hrGroupByManager',on?'1':'0'); }catch(e){}
   document.querySelectorAll('[data-group]').forEach(b=>b.textContent=GROUP?'Show as one list':'Group by manager');
   renderLatest(); renderRoll(); }
@@ -264,8 +264,9 @@ function groups(scope, list, item, count, ulClass, wrap){
     return wrap?wrap(g):g; }).join('');
 }
 function noManagers(list){ return list.length && list.every(p=>!p.manager)
-  ? '<p class="muted" style="margin:6px 0">BrightHR has not given a manager for anyone in this list yet, so they are all under '
-    +NO_MANAGER+'. Run a new check; if that does not fill them in, the manager field needs setting up on the server.</p>' : ''; }
+  ? '<p class="muted" style="margin:6px 0">Nobody in this list has a manager yet, so they are all under '
+    +NO_MANAGER+'. Managers come from the HR managers list, not from BrightHR, which does not hold them; once it is'
+    +' filled in, press Check who\'s clocked in.</p>' : ''; }
 function groupButton(){ return '<button class="btn ghost" type="button" data-group>'+(GROUP?'Show as one list':'Group by manager')+'</button>'; }
 
 function clockedIn(list){
