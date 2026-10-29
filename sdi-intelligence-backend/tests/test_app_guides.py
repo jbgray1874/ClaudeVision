@@ -68,3 +68,55 @@ def test_the_tti_guide_lists_every_column_the_code_reads():
                    "BOOKED IN WITH TTI", "LABEL + Batch DONE", "INVOICE NUMBER",
                    "PROOF OF EXPORT", "DEL ADD", "WHO PAYING", "VALUE", "TRAILER"):
         assert column in guide, column
+
+
+def test_am_crm_offers_its_guide_and_links_to_it():
+    (svc,) = [s for s in _services() if s["id"] == "voice-crm"]
+    assert svc["guide_url"] == "guide-am-crm.html"
+    app = (APP_DIR / svc["app_url"]).read_text(encoding="utf-8")
+    assert 'href="guide-am-crm.html"' in app
+    guide = (APP_DIR / svc["guide_url"]).read_text(encoding="utf-8")
+    assert 'href="voice-crm.html"' in guide                          # and back again
+
+
+def test_the_am_crm_guide_names_every_button_the_app_shows():
+    """A button nobody explained is a button nobody presses."""
+    guide = (APP_DIR / "guide-am-crm.html").read_text(encoding="utf-8")
+    app = (APP_DIR / "voice-crm.html").read_text(encoding="utf-8")
+    buttons = {re.sub(r"\s+", " ", b).strip()
+               for b in re.findall(r"<button[^>]*>([^<]{3,40})</button>", app)}
+    # The mic and Drive carry an emoji in the app; the guide names them in words.
+    for name in sorted(buttons):
+        plain = re.sub(r"&#\d+;\s*", "", name).strip()
+        if not plain:
+            continue
+        assert plain in guide, f"the guide does not mention the {plain!r} button"
+
+
+def test_the_am_crm_guide_explains_the_refusals_a_person_can_hit():
+    """The messages worth explaining are the ones that stop somebody working,
+    and each of these is a sentence the code can actually produce."""
+    guide = (APP_DIR / "guide-am-crm.html").read_text(encoding="utf-8")
+    for phrase in ("Updates in this pilot are limited to named people",
+                   "updates aren't switched on for this pilot yet",
+                   "Someone changed that record while we were talking",
+                   "changes can't be saved"):
+        assert phrase in guide, phrase
+    source = (BACKEND / "voicecrm.py").read_text(encoding="utf-8")
+    excel = (BACKEND / "voicecrm_excel.py").read_text(encoding="utf-8")
+    for phrase in ("Updates in this pilot are limited to named people",
+                   "updates aren't switched on for this pilot yet",
+                   "Someone changed that record while we were talking"):
+        assert phrase in source, f"the guide quotes a message the app no longer says: {phrase}"
+    assert "changes can't be saved" in excel
+
+
+def test_the_am_crm_guide_does_not_promise_what_the_app_refuses():
+    """It says a calculated cell is never typed over and the owner column
+    cannot change. Both have to stay true of the code."""
+    guide = (APP_DIR / "guide-am-crm.html").read_text(encoding="utf-8")
+    source = (BACKEND / "voicecrm.py").read_text(encoding="utf-8")
+    assert "calculated cell" in guide
+    assert "is_formula" in source
+    assert "owner column" in guide
+    assert "_is_owner_field" in source or "OWNER_FIELD" in source

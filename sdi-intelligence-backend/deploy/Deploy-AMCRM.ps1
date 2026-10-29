@@ -70,6 +70,7 @@ $Files = @(
     "connector_identity.py",
     "appportal/tti-despatch.html",
     "appportal/guide-tti.html",
+    "appportal/guide-am-crm.html",
     "sdi_ops_routes.py",
     "appportal/sdi-remote-control.html",
     "private-email-readonly.html",
