@@ -84,7 +84,7 @@ the assigned-users list on each names the right people.
    `https://sdittidespatch-sdidisplays.msappproxy.net/oauth/callback`
    (the connector's own sign-in front door, below).
 5. **Enterprise applications** → *SDI TTI Despatch for ChatGPT* → Properties →
-   **Assignment required: Yes** → Users and groups → add **Selina, Lee, Sue and
+   **Assignment required: Yes** → Users and groups → add **Selina, Lee, Sue, Liam and
    James**. Nobody else can connect it.
 
 Step 5 and `SDI_TTI_OIDS` are two separate doors, deliberately. Entra decides
