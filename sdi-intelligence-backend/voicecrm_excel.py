@@ -61,6 +61,7 @@ writing needs Files.ReadWrite.All (or Sites.ReadWrite.All), consented.
 import hashlib
 import json
 import os
+import re
 import threading
 import time
 from typing import Optional
@@ -602,6 +603,44 @@ class ExcelStore:
                               may_reuse=may_reuse, light=False)
         return None, last_err or {"state": "empty_sheet", "detail": "No readable worksheet."}
 
+    def _amend(self, addr: str, new_value: str) -> None:
+        """Put one just-written cell into the held reading, or drop the reading.
+
+        Correctness first: if the address cannot be placed in the grid exactly -
+        a different sheet, a row outside it, a reading taken from a copy - the
+        reading is thrown away rather than patched on a guess. A stale answer
+        costs seventeen seconds to avoid; a wrong one costs more than that.
+        """
+        try:
+            match = re.fullmatch(r"([A-Z]+)(\d+)", str(addr).strip().upper())
+            if not match:
+                raise ValueError(f"not a cell address: {addr!r}")
+            letters, row_text = match.groups()
+            column = 0
+            for letter in letters:
+                column = column * 26 + (ord(letter) - ord("A") + 1)
+            with self._seen_lock:
+                held = self._seen
+                if not held:
+                    return
+                used = held["wb"]["used"]
+                row_index = (int(row_text) - 1) - int(used["row0"])
+                col_index = (column - 1) - int(used["col0"])
+                grid = used["grid"]
+                if not (0 <= row_index < len(grid)):
+                    raise ValueError(f"row {row_text} is outside the held reading")
+                row = list(grid[row_index])
+                if not (0 <= col_index < len(row)):
+                    raise ValueError(f"column {letters} is outside the held reading")
+                row[col_index] = str(new_value)
+                grid[row_index] = row
+        except Exception as problem:                     # noqa: BLE001
+            print(f"[voicecrm.excel] could not place {addr} in the held reading "
+                  f"({problem}); dropping it so the next lookup re-reads",
+                  flush=True)
+            with self._seen_lock:
+                self._seen = None
+
     def _remember(self, wb: dict) -> dict:
         """Keep this reading against the file version it came from, so the next
         LOOKUP can skip the sheet read while the file is unchanged.
@@ -806,16 +845,28 @@ class ExcelStore:
                        "detail": self._graph_detail(res)}
                 return (unavailable(err) if excel_refused({**err, "state": "graph_error"})
                         else err)
-            # ── A SAVE MAKES THE HELD READING WRONG, AT ONCE ───────────────────
-            # The lookup cache refreshes when Graph's eTag changes, and Excel
-            # Online can batch a save so the eTag lags it. Waiting for that
-            # would mean the question right after a change could still answer
-            # with the old value - "I just changed that" is the same loss of
-            # confidence as the failed-write report, by a different route.
-            with self._seen_lock:
-                self._seen = None
-            return self._verify(client, token, wb, addr, new_value,
-                                self.request_id(res), session)
+            problem = self._verify(client, token, wb, addr, new_value,
+                                   self.request_id(res), session)
+            if problem is None:
+                # ── A SAVE MAKES THE HELD READING WRONG, AT ONCE ───────────────
+                # The lookup cache refreshes when Graph's eTag changes, and Excel
+                # Online can batch a save so the eTag lags it. Waiting for that
+                # would mean the question right after a change could still answer
+                # with the old value - "I just changed that" is the same loss of
+                # confidence as the failed-write report, by a different route.
+                #
+                # Dropping the reading fixes that and costs seventeen seconds:
+                # the tracker is 913 rows, and re-reading the sheet is the one
+                # genuinely slow call in the app. Nick changes something and then
+                # asks a question; he should not wait for the whole sheet again.
+                #
+                # So the one cell that changed is corrected in the held reading
+                # instead. It is the sheet as it was read, plus the single value
+                # we have just watched Excel accept - which is exactly what the
+                # next read would return. Anything unexpected about the geometry
+                # drops the reading rather than patching it blindly.
+                self._amend(addr, new_value)
+            return problem
         except httpx.HTTPError as exc:
             return {"state": "unreachable",
                     "detail": f"Could not reach Microsoft Graph: {exc}"}

@@ -266,9 +266,35 @@ if ($startedAt -and $newest) {
         $liveHasFix = $false
     }
 } else {
-    Hm "Could not read the service's start time from here"
-    Say "Restart it anyway - it costs seconds and removes the doubt:"
-    Write-Host "      .\sdi-intelligence-backend\deploy\Check-AMCRM-Live.ps1 -Restart" -ForegroundColor White
+    # ── WHEN THE START TIME CANNOT BE READ, THE LOG STILL ANSWERS ────────────
+    # Reading a remote process's start time needs WMI, which is blocked on this
+    # server - so this said "the running process MAY NOT have it" about a
+    # service that demonstrably did, which is a worse answer than none.
+    #
+    # The log settles it behaviourally. "[voicecrm.tracker]" is a line only the
+    # fixed code can print: the old version had no timing around the tracker at
+    # all. If it appears after the newest file was written, the running process
+    # is the new one, and that is proof rather than inference.
+    Hm "Could not read the service's start time (WMI is blocked)"
+    $proof = $null
+    if ($stdout) {
+        $logGuess = $stdout -replace "^([A-Za-z]):", "\\$Server\`$1`$"
+        if (Test-Path -LiteralPath $logGuess) {
+            $marks = Select-String -LiteralPath $logGuess -Pattern "\[voicecrm\.tracker\]"
+            if ($marks) {
+                $proof = (Get-Item -LiteralPath $logGuess).LastWriteTime
+            }
+        }
+    }
+    if ($proof -and $newest -and $proof -gt $newest) {
+        Yes "The log carries [voicecrm.tracker] lines, which only the fixed code writes"
+        Say "Written after the files were - so the running service IS the new code."
+        $liveHasFix = $true
+    } else {
+        Say "Nothing in the log proves it either way yet."
+        Say "Restart it - it costs seconds and removes the doubt:"
+        Write-Host "      .\sdi-intelligence-backend\deploy\Check-AMCRM-Live.ps1 -Restart" -ForegroundColor White
+    }
 }
 # ── 5. Settings, by name only ────────────────────────────────────────────────
 Head "5. Is writing switched on? (names only - no values are printed)"
