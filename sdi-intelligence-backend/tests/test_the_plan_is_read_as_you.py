@@ -127,6 +127,16 @@ class ReadAsThePersonTests(unittest.TestCase):
         self.assertIn("your access", said.lower())
         self.assertIn("reads the workbook as you", said)
 
+    def test_not_found_is_usually_access_and_says_so(self):
+        """SharePoint answers 404, not 403, to someone who may not see a file.
+        "Renamed or moved" alone sent Liam looking for a file that was there."""
+        for status in (403, 404):
+            with self.subTest(status=status):
+                with self.assertRaises(plan.PlanUnavailable) as caught:
+                    plan.fetch_plan("tok", client=Graph(status=status))
+                self.assertEqual(caught.exception.reason, "access")
+                self.assertIn("your account", str(caught.exception).lower())
+
     def test_the_other_refusals_are_told_apart(self):
         for status, expected in ((404, "renamed or moved"),
                                  (401, "sign-in has expired"),

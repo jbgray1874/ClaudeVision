@@ -43,7 +43,12 @@ MAX_ROWS_IN_MEMORY = 20000
 
 
 class Unavailable(Exception):
-    """Said plainly to the person, never a guess about why."""
+    """Said plainly to the person, never a guess about why. `reason` as in
+    tti_plan_source.PlanUnavailable: "access" means this person's access."""
+
+    def __init__(self, message: str, reason: str = ""):
+        super().__init__(message)
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -101,7 +106,7 @@ def rows_for(token: str, *, client=None) -> Plan:
         data, saved, version = plan.fetch_plan(token, client=client,
                                                known_version=version_held)
     except plan.PlanUnavailable as exc:
-        raise Unavailable(str(exc)) from exc
+        raise Unavailable(str(exc), getattr(exc, "reason", "")) from exc
     if data is None and known:
         # SharePoint says the file has not been saved since this parse. Its own
         # save time is taken afresh all the same, so the screen's "last saved"
