@@ -100,6 +100,7 @@
       "category": "Apps",
       "surface": "app",
       "app_url": "hr-inventry.html",
+      "guide_url": "guide-hr-inventry.html",
       "desc": "See who is clocked in on BrightHR, and update InVentry’s on-site list — the fire roll call — from it, in or out of the office.",
       "requires": "Restricted to named HR and managers (SDI_HR_APP_USERS). Personal data, so Microsoft sign-in with MFA is required on every device."
     },
