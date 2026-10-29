@@ -90,7 +90,8 @@ if ($Check) {
 # has already happened, rather than leaving it to be remembered.
 $whole = Join-Path $repo "tools\start\push-to-server.ps1"
 $alsoNeeded = @("app.py", "estimate_routes.py", "estimating_job_tools.py",
-                "public_surface.py", "auth.py", "config.py")
+                "public_surface.py", "auth.py", "config.py",
+                "device.py", "access.py")
 $drifted = @()
 foreach ($name in $alsoNeeded) {
     $mine = Join-Path (Join-Path $repo "sdi-intelligence-backend") $name

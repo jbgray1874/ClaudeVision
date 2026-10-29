@@ -286,9 +286,19 @@ class ItReachesTheServerTests(unittest.TestCase):
         catalogue = json.loads((BACKEND / "services.json").read_text(encoding="utf-8"))
         ids = {s["id"] for s in catalogue["services"]}
         self.assertNotIn("estimating-pocket", ids, "it has a card of its own again")
+
+    def test_there_is_one_door_into_estimating(self):
+        """── "I don't want links all over the shop.. they need to be
+        centralised." ───────────────────────────────────────────────────────
+        There were three ways in: a second button on the portal card, a link in
+        the full screen's subtitle, and the bare URL. The card's second button
+        has gone; /estimating now decides by device.
+        """
+        catalogue = json.loads((BACKEND / "services.json").read_text(encoding="utf-8"))
         (card,) = [s for s in catalogue["services"] if s["id"] == "estimating"]
-        self.assertEqual(card["link"], "/app/estimating-pocket.html")
-        self.assertIn("phone", card["linkLabel"].lower())
+        self.assertNotIn("link", card, "the card has a second button again")
+        self.assertNotIn("linkLabel", card)
+        self.assertEqual(card["app_url"], "/estimating", "the one door moved")
 
     def test_the_estimating_screen_links_to_it(self):
         """The way in, for somebody who opened the full screen on a phone."""
@@ -296,8 +306,10 @@ class ItReachesTheServerTests(unittest.TestCase):
         self.assertIn("/app/estimating-pocket.html", full)
         self.assertIn("On a phone", full)
 
-    def test_and_it_links_back(self):
-        self.assertIn('href="/estimating"', PAGE)
+    def test_and_it_links_back_carrying_the_escape_hatch(self):
+        """?full=1 or the two pages volley: /estimating sends a phone to the
+        pocket page, and the pocket page would send it straight back."""
+        self.assertIn('href="/estimating?full=1"', PAGE)
         self.assertIn("Full screen", PAGE)
 
 
