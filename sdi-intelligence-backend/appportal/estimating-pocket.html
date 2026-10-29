@@ -85,6 +85,10 @@
   .chips button{background:var(--surface-2);border:1px solid var(--line);color:var(--ink-dim);
                 border-radius:999px;padding:7px 12px;font-size:13px}
   .chips button:hover{border-color:var(--accent);color:var(--ink)}
+  /* The two ways into Start are a choice, so the chosen one has to LOOK chosen -
+     on a phone there is no hover to fall back on. */
+  .chips button[aria-pressed=true]{border-color:var(--accent);color:var(--ink);
+                                   background:rgba(255,212,0,.10);font-weight:700}
 
   .crumbs{font-family:var(--mono);font-size:11.5px;color:var(--ink-faint);margin:8px 0 2px}
   .pick{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
@@ -152,24 +156,63 @@
   <!-- ── START ───────────────────────────────────────────────────────────── -->
   <section class="screen" id="s-start">
     <h1>Start one off</h1>
-    <p class="hint">Pick a drawing pack from Live Enquiry. It runs in the office and
-      emails you when it's done.</p>
-    <div id="start-browser"></div>
-    <div id="start-box" style="display:none">
-      <div class="card">
-        <h3 id="start-folder"></h3>
-        <p class="mono" id="start-drawings"></p>
-        <label class="muted" for="start-client">Client</label>
-        <input id="start-client" type="text" placeholder="e.g. Boots">
-        <label class="muted" for="start-units" style="display:block;margin-top:9px">How many</label>
-        <input id="start-units" type="number" min="1" step="1" value="1" inputmode="numeric">
-        <p class="muted" id="start-emailto" style="margin-top:9px"></p>
-        <div class="row"><button class="go" id="start-go" type="button">Start it</button></div>
+    <p class="hint">It runs in the office on the full engine and emails you when it is
+      done — the same run, and the same costed workbook, as starting it at a desk.</p>
+
+    <!-- TWO WAYS IN, ONE ENGINE.
+         A pack of drawings, or a written brief with no drawings at all (D-401).
+         Same engine, same queue, same runner: the brief route gives the concept
+         read words where the pack route gives it geometry, and nothing else
+         differs. So it belongs here as a choice of input, not somewhere else as
+         a second app - which is what the full screen already does with its own
+         brief box beside the same Run button. -->
+    <div class="chips" id="start-how">
+      <button type="button" data-how="pack" aria-pressed="true">From a drawing pack</button>
+      <button type="button" data-how="brief" aria-pressed="false">From a written brief</button>
+    </div>
+
+    <div id="start-pack">
+      <p class="hint">Pick the job folder from Live Enquiry.</p>
+      <div id="start-browser"></div>
+      <div id="start-box" style="display:none">
+        <div class="card">
+          <h3 id="start-folder"></h3>
+          <p class="mono" id="start-drawings"></p>
+          <label class="muted" for="start-client">Client</label>
+          <input id="start-client" type="text" placeholder="e.g. Boots">
+          <label class="muted" for="start-units" style="display:block;margin-top:9px">How many</label>
+          <input id="start-units" type="number" min="1" step="1" value="1" inputmode="numeric">
+          <p class="muted emailto" style="margin-top:9px"></p>
+          <div class="row"><button class="go" id="start-go" type="button">Start it</button></div>
+        </div>
       </div>
     </div>
+
+    <div id="start-brief" style="display:none">
+      <p class="hint">No drawings needed. Describe <b>one</b> construction, not
+        alternatives. Every size you give is taken as stated; every size you leave out
+        becomes an assumption the sheet names for confirmation.</p>
+      <div class="card">
+        <label class="muted" for="b-client">Customer</label>
+        <input id="b-client" type="text" placeholder="e.g. M&amp;S">
+        <label class="muted" for="b-ref" style="display:block;margin-top:9px">Enquiry or drawing number</label>
+        <input id="b-ref" type="text" placeholder="0359962 or 9598-02">
+        <label class="muted" for="b-units" style="display:block;margin-top:9px">How many</label>
+        <input id="b-units" type="number" min="1" step="1" value="1" inputmode="numeric">
+        <label class="muted" for="b-breaks" style="display:block;margin-top:9px">Also price at (optional)</label>
+        <input id="b-breaks" type="text" inputmode="numeric" placeholder="20, 50, 100">
+        <label class="muted" for="b-brief" style="display:block;margin-top:9px">The brief</label>
+        <textarea id="b-brief" maxlength="4000" placeholder="What it is, overall sizes in mm, materials and gauges, finish and colour, print, fixings, how it is packed. Example: 20 off half-A4 landscape ticket holders, 1.2 mm mild steel, 212 x 150 face with a 120 x 170 base, powder coated RAL 7021, a 400 micron printed card insert, four clear stick-on bumpers."></textarea>
+        <p class="muted" id="b-left"></p>
+        <p class="muted emailto" style="margin-top:9px"></p>
+        <div class="row"><button class="go" id="b-go" type="button">Start it</button></div>
+      </div>
+    </div>
+
     <div class="state" id="start-state" role="status" aria-live="polite"></div>
-    <div class="note">Quotations are never released from outside the office. This starts
-      the work and files it; sending it to a customer is done at a desk.</div>
+    <div class="note">A book costed from a brief alone is marked <b>provisional</b>.
+      Quotations are never released from outside the office — this starts the work and
+      files it; sending anything to a customer is done at a desk.</div>
   </section>
 </main>
 
@@ -219,6 +262,24 @@ async function api(path, body){
     throw new Error(detail || ("That did not work (" + r.status + ")."));
   }
   return j;
+}
+
+// ── WHO IS ASKING ───────────────────────────────────────────────────────────
+// The finished book is e-mailed to whoever started it, and that is the whole
+// point of starting one from a phone: you are told when it is done rather than
+// having to watch for it. So the signed-in address is not decoration here, it is
+// the delivery address - and the page states it before the button is pressed,
+// because a run that finishes into nobody's inbox is an hour of the engine's
+// time nobody hears about.
+let me = {};
+async function whoAmI(){
+  try{ me = (await api("/api/me")) || {}; }
+  catch(e){ me = {}; }
+  const where = me.email
+    ? "The finished estimate is e-mailed to " + me.email + "."
+    : "We could not read which account you are signed in as, so nothing would be "
+      + "e-mailed. Reload the page, or start this one at a desk.";
+  for(const n of document.querySelectorAll(".emailto")) n.textContent = where;
 }
 
 // ── Screens ─────────────────────────────────────────────────────────────────
@@ -407,6 +468,19 @@ function runCard(r){
   chip.style.marginTop = "4px";
 }
 
+// ── START: WHICH WAY IN ─────────────────────────────────────────────────────
+let how = "pack";
+function setHow(next){
+  how = next;
+  for(const b of document.querySelectorAll("#start-how button"))
+    b.setAttribute("aria-pressed", String(b.dataset.how === next));
+  $("start-pack").style.display  = (next === "pack")  ? "block" : "none";
+  $("start-brief").style.display = (next === "brief") ? "block" : "none";
+  say("start-state", "");
+}
+for(const b of document.querySelectorAll("#start-how button"))
+  b.onclick = () => setHow(b.dataset.how);
+
 // ── START ───────────────────────────────────────────────────────────────────
 function offerStart(data){
   chosen.start = {relative: data.relative, folder_path: data.folder_path,
@@ -442,6 +516,71 @@ async function startIt(){
   }finally{ $("start-go").disabled = false; }
 }
 $("start-go").onclick = startIt;
+
+// ── START FROM A WRITTEN BRIEF ──────────────────────────────────────────────
+// POSTs /api/estimate/brief, which hands straight through to /api/estimate with
+// method="llm". There is no second engine and no reduced engine out here: the
+// only difference from the pack route above is that the concept read is given
+// words instead of images. That is also why this is the same five fields as the
+// full screen's own brief box - it is the same request.
+//
+// Everything below is checked HERE, before the post, because the alternative is
+// a typo reaching the runner and failing forty minutes in, on a phone that has
+// long since been put away.
+function breaksOf(text){
+  const out = [];
+  for(const part of String(text || "").split(/[,;\s]+/)){
+    if(!part) continue;
+    const n = Number(part);
+    if(!Number.isInteger(n) || n < 1) return null;
+    out.push(n);
+  }
+  return out;
+}
+
+function briefLeft(){
+  const n = $("b-brief").value.length;
+  $("b-left").textContent = n ? (4000 - n) + " characters left" : "";
+}
+$("b-brief").oninput = briefLeft;
+
+async function startBrief(){
+  const client = $("b-client").value.trim();
+  const ref    = $("b-ref").value.trim();
+  const brief  = $("b-brief").value.trim();
+  const units  = Number($("b-units").value);
+  if(!client){ say("start-state", "Which customer is this for?", "err"); return; }
+  if(!ref){
+    say("start-state", "Give it an enquiry or drawing number - it is what the job "
+        + "gets filed under.", "err"); return; }
+  if(!Number.isInteger(units) || units < 1){
+    say("start-state", "How many? A whole number, 1 or more.", "err"); return; }
+  // A one-line brief prices almost nothing and comes back as a sheet of
+  // assumptions, which wastes a run and reads as the engine being useless.
+  if(brief.length < 40){
+    say("start-state", "The brief is too short to cost. Say what it is, its overall "
+        + "sizes in mm, the material and gauge, and the finish.", "err"); return; }
+  const breaks = breaksOf($("b-breaks").value);
+  if(breaks === null){
+    say("start-state", "“Also price at” takes whole numbers, like 20, 50, 100.",
+        "err"); return; }
+
+  $("b-go").disabled = true;
+  say("start-state", "Queueing it…");
+  try{
+    const r = await api("/api/estimate/brief",
+                        {client: client, reference: ref, units: units, brief: brief,
+                         quantity_breaks: breaks, email_to: me.email || null});
+    say("start-state", "Queued. " + (r && r.run_id ? "Run " + r.run_id + ". " : "")
+        + "You can close this - it will e-mail you when it finishes. The book is "
+        + "marked provisional for the estimators to look over.", "ok");
+    $("b-brief").value = "";
+    briefLeft();
+  }catch(e){
+    say("start-state", e.message, "err");
+  }finally{ $("b-go").disabled = false; }
+}
+$("b-go").onclick = startBrief;
 
 whoAmI();
 browse("ask", "");
