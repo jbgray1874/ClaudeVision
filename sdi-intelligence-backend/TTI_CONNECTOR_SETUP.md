@@ -1,7 +1,8 @@
-# TTI Despatch in ChatGPT: setting it up for Selina, Lee, Sue and James
+# TTI Despatch in ChatGPT: setting it up for Selina, Lee, Sue, Liam and James
 
-`tti_connector.py` lets the four of them ask the TTI Despatch Plan the same six
-questions the web app answers, from the ChatGPT app — typed or out loud. It runs
+`tti_connector.py` lets them ask the TTI Despatch Plan the same six questions
+the web app answers, and search the TTi folders on W: by name (Liam's request:
+Design, Production and Prototype), from the ChatGPT app — typed or out loud. It runs
 the same code as the web view (`tti_search.py` over `tti_data.py`), so there is
 one set of rules about what the workbook means rather than two.
 
@@ -43,8 +44,11 @@ Known so far:
 | James Gray (ordinary account, not admin) | `5acf6b37-147f-4468-bdb1-ecc3da1f1076` |
 | Selina Kuddus | **needed** |
 | Lee Merril | **needed** |
+| Liam | **needed** |
 
-To find one: Entra ID → Users → the person → **Object ID** on their overview.
+To find one: Entra ID → Users → the person → **Object ID** on their overview. Or
+the person opens `https://sdiintelligence-sdidisplays.msappproxy.net/api/me`
+signed in with their usual account and reads the `"oid"` value.
 
 An empty list admits **nobody**, on both surfaces, and the connector refuses to
 start rather than run as a service that refuses every call.
@@ -121,10 +125,23 @@ and make sure these are already there, from the web view:
 
 ```ini
 SDI_TTI_ENABLED=yes
-SDI_TTI_OIDS=<Selina>,<Lee>,cc53597a-c1b5-4bf9-b862-f63f7392ff81,5acf6b37-147f-4468-bdb1-ecc3da1f1076
+SDI_TTI_OIDS=<Selina>,<Lee>,<Liam>,cc53597a-c1b5-4bf9-b862-f63f7392ff81,5acf6b37-147f-4468-bdb1-ecc3da1f1076
 SDI_TTI_PLAN_SITE=sdidisplays.sharepoint.com:/sites/SUESOSOD
 SDI_TTI_PLAN_PATH=General/TTI Delivery Schedule 2021 V3.xlsx
 ```
+
+For the TTi folder search (web tab and the `tti_find_files` tool), the server
+needs W:'s network path, and an index built on a schedule:
+
+```ini
+SDI_DRIVE_MAP=K=\\sdi-dc01\shareddata$\Shared;W=<Remote name from "net use W:" on a PC>
+```
+
+Keep the `K=` part: this line replaces the default. Then run
+`tools\tti_index_folders.py` once by hand and schedule it (twice a day); see
+the TTI user guide on the app portal for what people see. Optional:
+`SDI_TTI_FOLDERS` (default: the three TTi folders), `SDI_TTI_FOLDER_INDEX`
+(default `C:\SDIIntelligence\tti\tti_folders.sqlite3`).
 
 Optional: `SDI_TTI_CONNECTOR_PORT` (default 8074).
 `SDI_TTI_PLAN_TTL` (default `0`) is how many seconds a parse of the workbook may
@@ -211,6 +228,9 @@ Voice chat working is not the same as voice **using the tools**. Check all three
    sentence ("…but N lines have a date I could not read"). That caveat is
    written into the answer rather than left to the assistant, because a voice
    answer has no footer for somebody to notice afterwards.
+
+4. **The folders:** "Find the TTi drawings for 9287" → it should give full
+   `W:\…` paths and say how old the folder index is.
 
 If a tool is never called, the usual causes are: the person is not in
 `SDI_TTI_OIDS` (the reply says so plainly — read the log line
