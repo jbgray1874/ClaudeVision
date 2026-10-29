@@ -557,23 +557,67 @@ class TheLookupCacheIsNotAPermissionHoleTests(WithAFakeWorkbook):
             with self.subTest(writing=writing):
                 self.assertNotIn(writing, source)
 
-    def test_a_save_drops_the_held_reading_at_once(self):
-        """── "I JUST CHANGED THAT" ──────────────────────────────────────────
-        The lookup cache refreshes when Graph's eTag changes, and Excel Online
-        can batch a save so the eTag lags it. Waiting for that would mean the
-        question right after a change still answered with the old value - the
-        same loss of confidence as the failed-write report, by another route.
-        So a successful write drops the held reading itself, without waiting
-        to be told.
+    def test_a_question_after_a_save_is_both_correct_and_fast(self):
+        """── SEVENTEEN SECONDS, AND THE REASON IT MATTERS ──────────────────
+        The live tracker is 913 rows and re-reading the sheet takes about
+        seventeen seconds. Nick changes something and then asks a question,
+        so the obvious safe thing - throw the reading away after every save -
+        makes him wait for the whole sheet again, every time.
+
+        The cell that changed is corrected in the held reading instead. The
+        next question answers from it, with the new value, and reads nothing.
         """
         self.store.rows("tok")
         item, _ = self.store.fetch("tok", BARBOUR)
         self.assertIsNone(self.store.apply("tok", item, "STATUS", "Closed"))
-        # The eTag deliberately does NOT change: Excel has not caught up.
         self.graph.calls.clear()
         after = self.store.rows("tok")
-        self.assertFalse(after["reused"], "a question after a save used the old reading")
-        self.assertEqual(after["items"][0]["fields"]["STATUS"], "Closed")
+        self.assertEqual(after["items"][0]["fields"]["STATUS"], "Closed",
+                         "a question after a save gave the old value")
+        self.assertEqual(self.graph.count("usedRange"), 0,
+                         "the whole sheet was read again after a one-cell save")
+        self.assertTrue(after["reused"])
+
+    def test_the_mended_reading_carries_a_new_fingerprint(self):
+        """The fingerprint is the version check. If the held reading kept the
+        old one, the next change would compare against a row that no longer
+        exists and either conflict wrongly or write over the save."""
+        before = self.store.rows("tok")["items"][0]["etag"]
+        item, _ = self.store.fetch("tok", BARBOUR)
+        self.store.apply("tok", item, "STATUS", "Closed")
+        after = self.store.rows("tok")["items"][0]["etag"]
+        self.assertNotEqual(after, before)
+        # And it is the fingerprint a genuine re-read computes, not merely a
+        # different one: the mended reading has to match the sheet.
+        self.graph.ETAG = '"{GUID},9"'                  # force a real re-read
+        fresh = self.store.rows("tok")
+        self.assertFalse(fresh["reused"])
+        self.assertEqual(fresh["items"][0]["etag"], after)
+
+    def test_an_address_that_cannot_be_placed_drops_the_reading_rather_than_guessing(self):
+        """A stale answer costs seventeen seconds to avoid. A wrong one costs
+        more, so anything unexpected about the geometry throws the reading
+        away instead of patching it."""
+        self.store.rows("tok")
+        item, _ = self.store.fetch("tok", BARBOUR)
+        item = dict(item)
+        item["_addr"] = dict(item["_addr"])
+        item["_addr"]["STATUS"] = "D9999"          # far outside the sheet
+        self.store.apply("tok", item, "STATUS", "Closed")
+        self.graph.calls.clear()
+        after = self.store.rows("tok")
+        self.assertFalse(after["reused"], "a reading that could not be mended was kept")
+
+    def test_a_failed_save_does_not_change_the_held_reading(self):
+        self.store.rows("tok")
+        item, _ = self.store.fetch("tok", BARBOUR)
+        self.graph.refuse = {"status": 423, "code": "resourceLocked"}
+        self.store.apply("tok", item, "STATUS", "Closed")
+        self.graph.refuse = None
+        self.graph.calls.clear()
+        after = self.store.rows("tok")
+        self.assertEqual(after["items"][0]["fields"]["STATUS"], "Live",
+                         "a refused save was written into the held reading")
 
     def test_a_stale_remembered_address_is_located_again_rather_than_failing(self):
         """The short path to the sheet is built from the file's remembered ids.

@@ -199,8 +199,12 @@ class FakeGraph:
         index = 0
         for ch in column:
             index = index * 26 + (ord(ch) - ord("A") + 1)
-        self._stale[address] = self.grid[int(row) - 1][index - 1]
-        self.grid[int(row) - 1][index - 1] = value
+        # A real sheet has a million rows, so Graph accepts an address beyond
+        # the data. This fake's grid is three records, so it records the write
+        # and leaves the grid alone rather than pretending the row exists.
+        if int(row) - 1 < len(self.grid) and index - 1 < len(self.grid[int(row) - 1]):
+            self._stale[address] = self.grid[int(row) - 1][index - 1]
+            self.grid[int(row) - 1][index - 1] = value
         self.written.append((address, value,
                              bool((headers or {}).get("workbook-session-id"))))
         return Reply(200, {"values": [[value]]})

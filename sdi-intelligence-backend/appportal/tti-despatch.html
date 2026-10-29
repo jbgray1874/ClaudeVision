@@ -117,8 +117,12 @@ function setStatus(text, kind=""){ const box = $("status");
 async function get(path){
   const r = await fetch(path, {cache:"no-store", credentials:"same-origin"});
   let j = {}; try{ j = await r.json(); }catch(e){}
-  if(!r.ok) throw new Error(typeof j.detail === "string" ? j.detail
-                            : "Could not read the plan (" + r.status + ").");
+  if(!r.ok){
+    const e = new Error(typeof j.detail === "string" ? j.detail
+                        : "Could not read the plan (" + r.status + ").");
+    e.reason = r.headers.get("X-TTI-Reason") || "";
+    throw e;
+  }
   return j;
 }
 
@@ -528,6 +532,21 @@ async function run(){
     (view.foot || provenance)(j);
   }catch(e){
     setStatus(e.message, "error");
+    // ── NOT ON SUE'S SITE IS NOT A BROKEN APP ──────────────────────────────
+    // Liam and Callum are on the TTI list for the drawings and cannot open the
+    // Despatch Plan. Every despatch tab said only "error"; this says what still
+    // works and what would open the rest.
+    if(e.reason === "access" && current !== "files"){
+      const note = el("div", null, $("out"), "caveat");
+      el("p", "This tab reads Sue's TTI Despatch Plan in SharePoint as you, and your account "
+         + "cannot open it, so there is nothing to show here. That is about access to the "
+         + "plan, not a fault in the app.", note);
+      el("p", "Find TTi files does not need the plan: drawings and files in the TTi folders "
+         + "on W: work for you now. For the despatch tabs, ask Sue to share the plan with you.",
+         note, "hint");
+      const go = el("button", "Go to Find TTi files", note, "primary");
+      go.type = "button"; go.style.marginTop = "10px"; go.onclick = () => show("files");
+    }
   }finally{
     for(const b of document.querySelectorAll("[data-run]")) b.disabled = false;
   }
@@ -535,6 +554,8 @@ async function run(){
 
 function show(name){
   current = name;
+  // The tab is in the address (…/despatch#files), so a link can open straight on it.
+  try{ history.replaceState(null, "", "#" + name); }catch(e){}
   for(const b of $("tabs").children)
     b.setAttribute("aria-selected", String(b.dataset.view === name));
   $("tools").innerHTML = VIEWS[name].tools;
@@ -550,7 +571,7 @@ for(const [name, view] of Object.entries(VIEWS)){
   b.setAttribute("role", "tab"); b.setAttribute("aria-selected", "false");
   b.onclick = () => show(name);
 }
-show("day");
+show(VIEWS[location.hash.slice(1)] ? location.hash.slice(1) : "day");
 </script>
 </body>
 </html>

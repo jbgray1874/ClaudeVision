@@ -69,7 +69,10 @@ def make_router(page_dir=None):
         try:
             return tti_data.rows_for(auth.graph_token(request))
         except tti_data.Unavailable as exc:
-            raise HTTPException(503, str(exc))
+            # The reason travels as a header so the page can offer the next
+            # step ("Find TTi files works without it") for an access answer.
+            raise HTTPException(503, str(exc),
+                                headers={"X-TTI-Reason": exc.reason} if exc.reason else None)
 
     def day_asked(day: str) -> date:
         try:

@@ -31,7 +31,17 @@ TIMEOUT = 30
 
 
 class PlanUnavailable(Exception):
-    """Said plainly to the person, never a guess about why."""
+    """Said plainly to the person, never a guess about why.
+
+    `reason` is "access" when the answer is about this person's own access to
+    the plan, so a screen can say what to do next rather than only that it
+    failed: Liam and Callum, who are on the TTI list for the drawings and not
+    on Sue's site, saw an error on every despatch tab and nothing else.
+    """
+
+    def __init__(self, message: str, reason: str = ""):
+        super().__init__(message)
+        self.reason = reason
 
 
 def configured() -> bool:
@@ -144,11 +154,16 @@ def _complain(response, what: str) -> None:
         raise PlanUnavailable(
             f"Your account does not have access to {what} in SharePoint. This "
             f"reads the workbook as you, so this is about your access to the "
-            f"site rather than about the app.")
+            f"site rather than about the app.", reason="access")
     if response.status_code == 404:
+        # SharePoint answers "not found", not "no access", to someone who may
+        # not see a file - so this is usually access, and saying only "moved"
+        # sent people looking for a file that was exactly where it should be.
         raise PlanUnavailable(
-            f"SharePoint has no file at the configured location, so {what} could "
-            f"not be read. The plan may have been renamed or moved.")
+            f"SharePoint did not find {what} for your account. Usually that means "
+            f"your account cannot open it - SharePoint says 'not found' rather than "
+            f"'no access' - and otherwise the plan has been renamed or moved.",
+            reason="access")
     if response.status_code == 401:
         raise PlanUnavailable("Microsoft sign-in has expired. Sign in again.")
     if response.status_code == 400:

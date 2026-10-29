@@ -232,6 +232,22 @@ def test_sharepoint_being_unreachable_is_said_and_not_guessed_around(client,
     assert "does not have access" in answer.json()["detail"]
 
 
+def test_no_access_to_the_plan_is_marked_so_the_page_can_say_what_still_works(client, monkeypatch):
+    """Liam and Callum are on the TTI list for the drawings, not on Sue's site.
+    Every despatch tab showed only an error; the reason header lets the page
+    point them at Find TTi files instead, which does not read the plan."""
+    def refuse(token, client=None, known_version=""):
+        raise plan.PlanUnavailable("SharePoint did not find the plan for your account.",
+                                   reason="access")
+    monkeypatch.setattr(plan, "fetch_plan", refuse)
+    tti_data.forget()
+    answer = client.get("/api/tti/despatch/week?day=2026-11-02")
+    assert answer.status_code == 503 and answer.headers["x-tti-reason"] == "access"
+    page = client.get("/api/tti/despatch").text
+    assert 'e.reason === "access"' in page and "Go to Find TTi files" in page
+    assert "location.hash.slice(1)" in page            # …/despatch#files opens on that tab
+
+
 def test_no_view_offers_a_way_to_change_anything(client):
     """Every route is a GET, and the ones that would change something do not
     exist. A POST to any of them is Method Not Allowed, not a surprise."""
