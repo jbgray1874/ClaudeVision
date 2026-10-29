@@ -31,7 +31,21 @@ with TestClient(c.build_app()) as client:
     out["resource"] = client.get("/.well-known/oauth-protected-resource/mcp").json()
     out["server"] = client.get("/.well-known/oauth-authorization-server").json()
     out["no_token"] = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).status_code
-print(json.dumps(out))
+
+# The week, through the tool itself, with fictional lines and the person check
+# stood aside (it is tested in the read-only tests).
+from datetime import datetime, timezone
+import tti_data
+from sue_despatch import SourceRow
+def line(n, order, departs):
+    return SourceRow("Nov 26 WK 41", n, {"SDI ORDER NO": order, "PART CODE": "P-" + order,
+                                         "LORRY FROM SDI": departs})
+rows = [line(3, "15001", "Mon 2nd Nov"), line(4, "15002", "Mon 2nd Nov"),
+        line(5, "15003", "Weds 4th Nov"), line(6, "15004", "when the boxes come in")]
+plan = tti_data.Plan(rows, datetime(2026, 10, 29, 9, tzinfo=timezone.utc), "v", "d", False)
+c._plan = lambda tool, started: ({"oid": "x", "email": "x"}, plan)
+out["week"] = c.tti_leaving_this_week("2026-11-04")
+print(json.dumps(out, default=str))
 """
 
 
@@ -58,9 +72,9 @@ def started(tmp_path_factory):
     return json.loads(run.stdout.strip().splitlines()[-1])
 
 
-def test_all_seven_tools_are_listed_and_each_says_it_only_reads(started):
+def test_all_eight_tools_are_listed_and_each_says_it_only_reads(started):
     assert started["tools"] == {name: True for name in (
-        "tti_find", "tti_leaving_on", "tti_chase", "tti_overdue",
+        "tti_find", "tti_leaving_on", "tti_leaving_this_week", "tti_chase", "tti_overdue",
         "tti_morning", "tti_data_quality", "tti_find_files")}
 
 
@@ -73,3 +87,13 @@ def test_chatgpt_is_sent_to_the_connectors_own_sign_in(started):
 
 def test_no_token_no_answer(started):
     assert started["no_token"] == 401
+
+
+def test_this_week_is_said_as_a_count_per_day(started):
+    week = started["week"]
+    assert week["state"] == "ok" and week["week_start"] == "2026-11-02"
+    assert week["spoken"].startswith(
+        "3 lines planned to leave between Monday 2 November and Friday 6 November: "
+        "2 on Monday; 1 on Wednesday. Nothing on Tuesday, Thursday or Friday.")
+    assert "1 other line has a date I could not read" in week["spoken"]
+    assert [d["line_count"] for d in week["days"]] == [2, 0, 1, 0, 0]
