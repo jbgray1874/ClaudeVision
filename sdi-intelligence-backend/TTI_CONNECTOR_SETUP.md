@@ -63,10 +63,19 @@ C:\ClaudeVision\sdi-intelligence-backend\.venv\Scripts\python.exe -m pip install
 
 ## 2. Entra (portal.azure.com → Microsoft Entra ID → App registrations)
 
-**a. The existing *SDI Intelligence* registration** already exposes
-`api://<SDI_CLIENT_ID>/tracker.access` (CONNECTOR_SETUP.md step 2a). Nothing to
-change — this connector asks for the same scope, and the object-ID list is what
-separates the two audiences, not the scope.
+**a. The existing *SDI Intelligence* registration → Expose an API.** It is an
+App Proxy app, so its Application ID URI is
+`https://SDIIntelligence-sdidisplays.msappproxy.net`, not `api://<id>`. Leave
+that URI alone: outside access to the intranet depends on it. App Proxy's own
+`user_impersonation` scope is there too; leave that alone as well.
+
+If `tracker.access` is not listed, **Add a scope**:
+scope name `tracker.access`, *Admins only*, admin consent display name
+*Read SDI Intelligence as the signed-in person*, description *Lets an approved
+app (ChatGPT, Claude) read SDI Intelligence data as the person signed in. It
+cannot sign anyone else in.*, Enabled → Add scope. Its full name is then
+`https://SDIIntelligence-sdidisplays.msappproxy.net/tracker.access`, which goes
+in `.env` in step 4 as `SDI_TTI_CONNECTOR_SCOPE_URI`.
 
 **b. A new registration, *SDI TTI Despatch for ChatGPT***. A separate one from
 *SDI Tracker for ChatGPT* so the two can be switched off independently and so
@@ -119,7 +128,13 @@ SDI_TTI_CONNECTOR_URL=https://sdittidespatch-sdidisplays.msappproxy.net/mcp
 SDI_TTI_CONNECTOR_CLIENTS=<Application ID of SDI TTI Despatch for ChatGPT>
 SDI_TTI_CONNECTOR_OAUTH_CLIENT=<Application ID of SDI TTI Despatch for ChatGPT>
 SDI_TTI_CONNECTOR_OAUTH_SECRET=<its client secret Value>
+SDI_TTI_CONNECTOR_SCOPE_URI=https://SDIIntelligence-sdidisplays.msappproxy.net/tracker.access
+SDI_TTI_CONNECTOR_AUDIENCE=https://SDIIntelligence-sdidisplays.msappproxy.net
 ```
+
+The last two are the scope's full name from step 2a, and the audience Entra
+writes into the token for it. Without them the connector would ask for
+`api://<id>/tracker.access`, which this App Proxy app does not answer to.
 
 and make sure these are already there, from the web view:
 
