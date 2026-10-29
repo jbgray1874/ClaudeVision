@@ -58,6 +58,22 @@ class TheFreeTextColumnTests(unittest.TestCase):
         found = tti.notes("Pick note number: 40015908 \nDel Note -")
         self.assertEqual(found["pick_note"], "40015908")
 
+    def test_picked_and_a_number_is_a_pick_note(self):
+        """How most picked lines are written in the plan. Only "Pick note
+        number:" was read, so 28 of the 29 picked lines in the workbook looked
+        unpicked, and none of them could reach the chase list."""
+        for cell, pick in (("Picked-  40015862\nDel Note - ", "40015862"),
+                           ("PICKED -  40015822\nDEL NOTE - ", "40015822"),
+                           ("Picked 40015863", "40015863")):
+            with self.subTest(cell=cell):
+                found = tti.notes(cell)
+                self.assertEqual(found["pick_note"], pick)
+                self.assertEqual(found["delivery_note"], "")
+
+    def test_picked_as_an_ordinary_word_is_not_a_pick_note(self):
+        found = tti.notes("Picked up by FedEx, tracking 77812233")
+        self.assertEqual(found["pick_note"], "")
+
     def test_a_dash_is_not_a_delivery_note(self):
         """── THE ONE THAT WOULD HAVE HURT ──────────────────────────────────
         "Del Note -" is somebody filling the field in to say there is not one
