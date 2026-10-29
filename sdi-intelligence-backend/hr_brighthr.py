@@ -101,10 +101,10 @@ def fetch_employees(token: str) -> list:
 # ── Who someone reports to ─────────────────────────────────────────────────
 #
 # Simon Foister asked for the app's lists grouped by each person's BrightHR
-# manager or approver. BrightHR's documentation was not to hand for the field
-# name, so the usual spellings are tried in order and the first one with a
-# value wins; HR_MANAGER_FIELD fixes it once tools/probe_brighthr_fields.py
-# has shown which one BrightHR really sends.
+# manager or approver. On 29 October 2026 tools/probe_brighthr_fields.py showed
+# BrightHR's employee records carry no such field, so managers come from the
+# list HR keeps (hr_managers.py), which wins over anything here. These spellings
+# are still tried, in case BrightHR adds one; HR_MANAGER_FIELD can name it.
 MANAGER_FIELDS = ("lineManager", "manager", "lineManagerId", "managerId", "reportsTo",
                   "reportsToId", "holidayApprover", "absenceApprover", "approver",
                   "approvers", "line_manager", "line_manager_id", "manager_id")

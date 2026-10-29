@@ -74,13 +74,14 @@ def _current_staff(token: str) -> list:
     this requires; leavers are left out.
     """
     import hr_brighthr as bh
+    import hr_managers
     problem = "could not be read"
     for attempt in range(STAFF_LIST_ATTEMPTS):
         if attempt:
             time.sleep(STAFF_LIST_PAUSE * attempt)
         try:
-            everyone = bh.name_managers([bh.normalise_employee(r)
-                                         for r in bh.fetch_employees(token)])
+            everyone = hr_managers.apply(bh.name_managers(
+                [bh.normalise_employee(r) for r in bh.fetch_employees(token)]))
             staff = [e for e in everyone if e["id"] and not e["terminated"]]
         except Exception as exc:
             problem = f"could not be read ({exc})"
@@ -362,6 +363,10 @@ def _run_blip() -> dict:
         "manager_fields": sorted({e.get("manager_field") for e in emp_list
                                   if e.get("manager_field")}),
     }
+
+    import hr_managers
+    if hr_managers.LAST_PROBLEM:
+        summary["warnings"].append(hr_managers.LAST_PROBLEM)
 
     # A snapshot built from failed queries under-reports who is in the building.
     # Mark it degraded so the InVentry load refuses it rather than publishing an
