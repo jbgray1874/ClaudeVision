@@ -149,11 +149,25 @@ def projects(request: Request, user: dict = Depends(auth.require_user)):
 
 def records_for(token: str) -> dict:
     """The owner's records, read from the tracker with this person's Graph
-    token. Shared by the web app and the connector (voicecrm_connector.py)."""
+    token. Shared by the web app and the connector (voicecrm_connector.py).
+
+    ── THE SLOW HALF WAS THE UNMEASURED HALF ──────────────────────────────────
+    There were timings around transcription and around the model, and none at
+    all around the tracker - so when the app felt slow, the part that could
+    not be seen in the log was the part doing four sequential round trips to
+    Microsoft. The reading is timed now, and says whether the sheet had to be
+    read again or Graph said the file was unchanged.
+    """
     if not CONFIGURED:
         return {"state": "not_configured", "detail": _status_payload(), "items": []}
     if EXCEL:
+        started = time.monotonic()
         data = EXCEL.rows(token)
+        print(f"[voicecrm.tracker] read state={data.get('state')} "
+              f"rows={len(data.get('items') or [])} "
+              f"source={data.get('source', 'live')} "
+              f"sheet_reread={'no' if data.get('reused') else 'yes'} "
+              f"secs={time.monotonic() - started:.1f}", flush=True)
         if data.get("state") == "graph_error" and data.get("status") in (403, 404):
             # Graph answers 403 - or 404, refusing even to confirm the file
             # exists - to someone who cannot open the sandbox site. For anyone
@@ -591,7 +605,11 @@ def confirm_change(user: dict, get_token, proposal_id: str, confirmed: bool) -> 
         # A workbook write cannot carry If-Match; the fingerprint comparison
         # above is the version check. voicecrm_excel.py documents the residual
         # read-to-write window this leaves open.
+        started = time.monotonic()
         err = EXCEL.apply(token, item, entry["field"], entry["new_value"])
+        print(f"[voicecrm.tracker] write field={entry['field']!r} "
+              f"outcome={'saved' if not err else err.get('state')} "
+              f"secs={time.monotonic() - started:.1f}", flush=True)
         if err:
             _journal.finish(proposal_id, "failed",
                             f"{err.get('state')}: {str(err.get('detail', ''))[:300]}")
