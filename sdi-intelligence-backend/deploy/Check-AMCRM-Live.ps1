@@ -424,6 +424,31 @@ Write-Host ""
 Say "A setting may hold an Entra GROUP's object id instead of a list of people -" Gray
 Say "see ENTRA_GROUP_ACCESS.md. Values are never printed here." Gray
 
+# ── THE SCREENS, NOT ONLY THE BACKEND ────────────────────────────────────────
+# Section 7 checked .py files and settings, so a deploy whose whole change was
+# a PAGE finished with a clean report that said nothing about it. The pocket
+# page's two ways into Start is exactly that kind of change: no new endpoint, no
+# new setting, one HTML file. A marker string per screen is enough to tell "the
+# new page is on the server" from "the deploy copied nothing and said OK".
+Write-Host ""
+Say "The screens" White
+foreach ($page in @(
+    @{ File = "appportal/estimating-pocket.html"; Name = "Estimating in your pocket";
+       Marker = "From a written brief";
+       Means = "Start takes a written brief as well as a drawing pack" },
+    @{ File = "appportal/estimating-pocket.html"; Name = "Estimating in your pocket";
+       Marker = "async function whoAmI";
+       Means = "the page can read who is signed in (without it, Start cannot run)" },
+    @{ File = "appportal/voice-crm.html"; Name = "AM CRM"; Marker = "";
+       Means = "the page is on the server" })) {
+    if (Live $page.File $page.Marker) {
+        Yes "  $($page.Name): $($page.Means)"
+    } else {
+        No  "  $($page.Name) is missing or is older code - $($page.Means) is NOT there"
+        Say "  Deploy it:  .\sdi-intelligence-backend\deploy\Ship-It.ps1" White
+    }
+}
+
 # ── Verdict ──────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host ("=" * 68)
