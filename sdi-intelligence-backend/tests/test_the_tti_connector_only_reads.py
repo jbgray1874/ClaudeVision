@@ -57,8 +57,8 @@ def names_in(node) -> set:
 class ThereAreSixToolsAndTheyAllReadTests(unittest.TestCase):
     def test_the_six_questions_and_the_folder_search_are_the_tools(self):
         self.assertEqual({t.name for t in TOOLS},
-                         {"tti_find", "tti_leaving_on", "tti_chase", "tti_overdue",
-                          "tti_morning", "tti_data_quality", "tti_find_files"})
+                         {"tti_find", "tti_leaving_on", "tti_leaving_this_week", "tti_chase",
+                          "tti_overdue", "tti_morning", "tti_data_quality", "tti_find_files"})
 
     def test_no_tool_is_registered_except_through_the_read_only_helper(self):
         """A tool decorated with apps.tool directly would skip READS."""
