@@ -42,6 +42,7 @@ input[type=search]{flex:1 1 220px;min-width:0}
 .primary{background:var(--yellow);color:#111;border:1px solid var(--yellow);font-weight:800;
          padding:11px 16px;border-radius:4px}
 .primary:hover{background:#ffe659}
+a.primary{display:inline-block;text-decoration:none;margin-right:8px}
 .secondary{background:#202026;color:var(--text);border:1px solid var(--line);
            padding:11px 16px;border-radius:4px}
 .status{min-height:48px;padding:13px 16px;border:1px solid var(--line);background:var(--panel);
@@ -439,6 +440,11 @@ files: {
       if(m.is_folder) el("span", "folder", h, "flag");
       const path = el("p", m.path, c, "meta");
       path.style.wordBreak = "break-all";
+      if(!m.is_folder){
+        const open = el("a", "Open", c, "primary");
+        open.href = "/api/tti/despatch/files/open?path=" + encodeURIComponent(m.path);
+        open.target = "_blank"; open.rel = "noopener";
+      }
       const copy = el("button", "Copy path", c, "secondary");
       copy.type = "button";
       copy.onclick = () => navigator.clipboard.writeText(m.path)
@@ -450,8 +456,8 @@ files: {
                 {day:"numeric", month:"short", year:"numeric"}));
       el("p", bits.join("  ·  "), c, "meta");
     }
-    el("p", j.note + "  Open a file from the W: drive in the office; nothing here opens, copies or sends files.",
-       $("out"), "hint");
+    el("p", j.note + "  Open shows a PDF or picture in a new tab and downloads anything else; "
+       + "nothing here changes, moves or deletes a file.", $("out"), "hint");
   },
   foot(j){
     const built = j.index_built || j.built;

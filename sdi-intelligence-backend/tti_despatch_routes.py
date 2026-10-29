@@ -147,8 +147,8 @@ def make_router(page_dir=None):
 
     # ── Liam's TTi folders: Design, Production, Prototype ──────────────────
     # A search of an index of names, built on a schedule. Like everything
-    # above it only reads, and the folders are configuration: a request
-    # carries words, never a location.
+    # above it only reads, and the folders are configuration: a search
+    # carries words, and opening carries only a path a search returned.
     @router.get("/despatch/files")
     def find_files(request: Request, q: str = Query(..., max_length=MAX_QUERY),
                    folder: str = Query("", max_length=40), kind: str = Query("", max_length=20)):
@@ -160,6 +160,29 @@ def make_router(page_dir=None):
         except tti_files.NotReady as exc:
             raise HTTPException(503, str(exc))
         return JSONResponse(answer, headers=_PAGE_HEADERS)
+
+    # Open one file a search found: a drawing on a phone, off site. Opened in a
+    # new tab, so a person not signed in is sent to sign in and brought back,
+    # rather than shown a 401. Only a file the index lists inside the three
+    # folders; tti_files.locate says why anything else is refused.
+    @router.get("/despatch/files/open")
+    def open_file(request: Request, path: str = Query(..., max_length=1000)):
+        if auth.ENABLED and auth.current_user(request) is None:
+            return auth.login_redirect(request)
+        who(request)
+        try:
+            found = tti_files.locate(path)
+        except tti_files.NotFound as exc:
+            raise HTTPException(404, str(exc))
+        except tti_files.NotReady as exc:
+            raise HTTPException(503, str(exc))
+        user = auth.current_user(request) or {}
+        print(f"[tti-files] opened by {user.get('email') or user.get('oid') or '?'}: "
+              f"{path[:300]} ({found['size']} bytes)", flush=True)
+        return FileResponse(found["unc"], media_type=found["media_type"], filename=found["name"],
+                            content_disposition_type="inline" if found["inline"] else "attachment",
+                            headers={"Cache-Control": "private, no-store",
+                                     "X-Content-Type-Options": "nosniff"})
 
     @router.get("/despatch/files/status")
     def files_status(request: Request):
