@@ -370,11 +370,66 @@ if ($logPath -and (Test-Path -LiteralPath $logPath)) {
     Say "On the SERVER, over Remote Desktop:  & C:\Tools\nssm.exe get SDIIntelligence AppStdout"
 }
 
+# ── 7. The other apps on this server ─────────────────────────────────────────
+#
+# ── WHY THIS SECTION EXISTS ──────────────────────────────────────────────────
+# Ship-It ends by running this script, and this script only ever looked at
+# Nick's tracker. So a deploy of estimating changes finished with a confident
+# report about the AM CRM write fix, and nothing at all about what had just
+# been deployed - "this has nothing to do with Nick? it's estimating?".
+#
+# Fair. The other apps get a line each: is their code on the server, and is
+# their door configured. Short, because the AM CRM detail above is the part
+# that needed six sections.
+Head "7. The other apps on this server"
+
+function Live([string]$File, [string]$Marker) {
+    $path = Join-Path $remote $File
+    if (-not (Test-Path -LiteralPath $path)) { return $false }
+    if (-not $Marker) { return $true }
+    return (Get-Content -LiteralPath $path -Raw) -like "*$Marker*"
+}
+
+# The shared access rule - groups as well as people - that every gated app now
+# asks. If this is not on the server, a GROUP id in any setting matches nobody
+# and only individual object IDs work: half-working, and silent about it.
+if (Live "access.py" "def may_use") {
+    Yes "access.py is on the server - settings may name a GROUP as well as people"
+} else {
+    No  "access.py is NOT on the server - a group id in any setting matches nobody"
+    Say "Deploy it:  .\sdi-intelligence-backend\deploy\Ship-It.ps1" White
+}
+
+foreach ($app in @(
+    @{ Name = "Estimating, from outside"; File = "app.py"; Marker = "access.may_use";
+       Setting = "SDI_ESTIMATOR_OIDS"; Governs = "starting a run (looking is open to anyone signed in)" },
+    @{ Name = "TTI Despatch";             File = "tti_despatch_routes.py"; Marker = "access.may_use";
+       Setting = "SDI_TTI_OIDS"; Governs = "the whole app" },
+    @{ Name = "Systems console";          File = "sdi_ops_routes.py"; Marker = "access.may_use";
+       Setting = "SDI_OPS_OIDS"; Governs = "the whole app, with SDI_OPS_ENABLED=yes" })) {
+    Write-Host ""
+    Say "$($app.Name)" White
+    if (Live $app.File $app.Marker) { Yes "  $($app.File) is on the server and asks the shared rule" }
+    else { No "  $($app.File) is missing or is older code" }
+    # Names and shapes only. A value is never printed: these are object IDs,
+    # and a console scrollback gets pasted into chats.
+    if ($seen.ContainsKey($app.Setting) -and $seen[$app.Setting]) {
+        Yes "  $($app.Setting) is set - governs $($app.Governs)"
+    } else {
+        No  "  $($app.Setting) is not set, so nobody may use it"
+        Say "  .\sdi-intelligence-backend\deploy\Set-Setting.ps1 $($app.Setting) ""<group or person id>""" White
+    }
+}
+Write-Host ""
+Say "A setting may hold an Entra GROUP's object id instead of a list of people -" Gray
+Say "see ENTRA_GROUP_ACCESS.md. Values are never printed here." Gray
+
 # ── Verdict ──────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host ("=" * 68)
+Write-Host "  Sections 2 to 6 are the AM CRM write fix. Section 7 is everything else." -ForegroundColor Gray
 if ($laptopOk -and $serverOk -and $liveHasFix -eq $true) {
-    Write-Host "  THE WRITE FIX IS ON THE SERVER AND THE RUNNING SERVICE HAS IT." -ForegroundColor Green
+    Write-Host "  AM CRM: THE WRITE FIX IS ON THE SERVER AND THE RUNNING SERVICE HAS IT." -ForegroundColor Green
     Write-Host "  If section 5 is green, Nick can be asked to save a change." -ForegroundColor Gray
 } elseif ($laptopOk -and $serverOk) {
     Write-Host "  THE FIX IS ON THE SERVER, BUT THE RUNNING PROCESS MAY NOT HAVE IT." -ForegroundColor Yellow
