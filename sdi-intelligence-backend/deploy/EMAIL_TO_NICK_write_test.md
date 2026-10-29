@@ -6,7 +6,7 @@ restarted. Adjust the app URL before sending.
 ---
 
 **To:** Nick Garrish
-**Subject:** AM CRM — the failed-save problem is fixed. Could you save one change?
+**Subject:** AM CRM — the failed-save problem is fixed. Two things: a quick test, and Sage
 
 ---
 
@@ -78,6 +78,53 @@ the request ID and that is what I need.
 If you'd rather change something harmless first, pick a NEXT STEPS cell and add
 a word to the end.
 
+---
+
+**Separately — feeding it from Sage.** I hear you want this joined up to Sage,
+and I think that is the right instinct. Before anyone builds anything I'd
+rather have your view on the shape of it, because there is a decision in here
+that is yours and not ours.
+
+Sage X3 will know the things the tracker can only guess at: what each client
+has actually bought and when, whether a quote turned into an order, where a job
+is on the floor, what was invoiced and whether it has been paid, and the margin
+as finance posted it rather than as estimated. Your tracker knows the things
+Sage will never know: what the next step is, who you are waiting on, how
+confident you are, and the context behind the number.
+
+So the useful question is not "should they talk to each other" — they should.
+It is **which columns should stop being yours to type.**
+
+If a figure comes from Sage, the app has to stop letting anyone edit it here,
+or the two systems will quietly disagree and neither will be trustworthy. That
+is a real trade and you are the person who should make it:
+
+1. **What do you type today that you believe Sage already knows?** That is the
+   list worth automating first — typing a number a system already holds is the
+   waste that annoys most.
+2. **Which of those would you be content to lose the ability to edit?** Anything
+   Sage owns becomes read-only here. If there is a column where you need the
+   last word even when Sage disagrees, say so now rather than later — that is a
+   design decision, not a bug to raise afterwards.
+3. **What would you want to be told rather than look up?** "This client hasn't
+   ordered in four months", "that quote converted", "this one's invoice is 60
+   days overdue" — alerts are where this gets genuinely useful, and they need
+   Sage to exist.
+4. **Anything you'd want to push the other way**, from the tracker into Sage?
+   I'd expect the answer to be very little, and I'd want a good reason before we
+   wrote anything into the ERP from here.
+
+**Timing, honestly.** X3 is still being loaded and tested area by area —
+estimating first, then customer services and finance. Nothing for sales exists
+to read yet, so this is a "what should it look like" conversation, not something
+I can deliver this month. But the answers shape what we build next, and getting
+them before the data arrives is much better than after.
+
+Your tracker's columns are a good place to start the conversation — CLIENT, JOB,
+STATUS, NEXT STEPS, KEY DATES, BUDGET COST, CONFIDENCE, MARGIN. If you went
+down that list and marked each one *mine*, *Sage's*, or *both*, that alone would
+tell us most of what we need.
+
 Thanks for the 23 October report. It was precise enough to find a bug that
 would have been very hard to see otherwise, and the four things you asked us to
 confirm are now the four things the tests check on every change.
@@ -135,3 +182,19 @@ Select-String $log -Pattern "\[voicecrm.tracker\]|\[voicecrm.interpret\]" |
 
 If `outcome=not_saved` appears, that is the honest failure path and it carries
 Microsoft's request ID. Send the whole line and tell Nick not to retry.
+
+**On the Sage section.** It asks him to classify his own columns rather than
+asking "what do you want from Sage?", because the open version of that question
+gets "everything, joined up" and the useful version gets a list. The point it
+is really making is the one he will not have thought about: a column Sage owns
+has to become read-only in the app, and if he needs the last word on something
+even when Sage disagrees, that has to be said before it is built rather than
+raised as a complaint afterwards.
+
+It also says plainly that nothing for sales exists in X3 to read yet, so he is
+not left expecting it this month. Worth checking that against where Acuity
+actually are before you send — if customer services testing has slipped, soften
+the timing line rather than let him find out from somebody else.
+
+There is nothing in the AM CRM app today that touches Sage, and this email does
+not promise otherwise. It asks for the shape.
