@@ -223,8 +223,8 @@ class NothingOnThePublicSurfaceGrewTests(unittest.TestCase):
         for path in sorted(called):
             with self.subTest(path=path):
                 self.assertTrue(
-                    path in ("/api/me", "/api/estimate", "/api/estimate/tools/ask",
-                             "/api/estimate/tools/briefs"),
+                    path in ("/api/me", "/api/estimate", "/api/estimate/brief",
+                             "/api/estimate/tools/ask", "/api/estimate/tools/briefs"),
                     f"{path} is not one of the paths this page is meant to use")
 
 
@@ -301,10 +301,6 @@ class ItReachesTheServerTests(unittest.TestCase):
         self.assertIn("Full screen", PAGE)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class EveryPromptThePageOffersIsAnswerableTests(unittest.TestCase):
     """── THE GUARD THAT CAUGHT THE FIRST ONE ──────────────────────────────
     The page suggests four questions. "What did this come out at?" was one of
@@ -354,3 +350,162 @@ class EveryPromptThePageOffersIsAnswerableTests(unittest.TestCase):
         self.assertIn("laser", tools.answer_saved_record(RECORD, "what operations")["answer"])
         self.assertIn("Material not confirmed",
                       tools.answer_saved_record(RECORD, "anything held")["answer"])
+
+
+# ── THE SCRIPT HAS TO SURVIVE BEING LOADED ──────────────────────────────────
+# whoAmI() was called at the foot of the page and defined nowhere, and `me` was
+# read by the start button and declared nowhere. Both are ReferenceErrors, so:
+# the start button could never have worked at all, and the throw at the foot of
+# the script killed the two lines after it - which are the ones that load the
+# Ask browser. The page opened blank and the one button on it did nothing.
+#
+# Nothing caught it because every other test here reads the page as TEXT and
+# asserts a string is present. "whoAmI" was present. It was present at the call
+# and absent at the definition, which is exactly what reading for substrings
+# cannot see.
+#
+# There is no JavaScript engine in this suite, so this does the one check that
+# does not need one: every name the page CALLS, it also DECLARES. Browser and
+# language globals are listed explicitly rather than guessed at, so a genuine
+# typo shows up as a failure instead of being waved through.
+BROWSER_GLOBALS = {
+    # language
+    "Number", "String", "Boolean", "Array", "Object", "JSON", "Math", "Date",
+    "isFinite", "isNaN", "parseInt", "parseFloat", "encodeURIComponent",
+    "decodeURIComponent", "Error", "Promise", "Set", "Map", "RegExp",
+    # browser
+    "fetch", "setTimeout", "clearTimeout", "setInterval", "clearInterval",
+    "alert", "confirm", "document", "window", "location", "console",
+    # the page's own two-character helpers, declared as arrow consts
+    "$", "el", "icon", "api", "say",
+}
+
+
+class EveryNameThePageCallsIsDeclaredTests(unittest.TestCase):
+    """The guard for the class of bug that shipped a page that could not run."""
+
+    def script(self):
+        return PAGE.split("<script>", 1)[1].split("</script>", 1)[0]
+
+    def declared(self):
+        import re
+        body = self.script()
+        names = set(re.findall(r"\bfunction\s+([A-Za-z_$][\w$]*)\s*\(", body))
+        names |= set(re.findall(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)", body))
+        return names
+
+    def called(self):
+        import re
+        body = self.script()
+        # Strip strings and comments first: "What did this come out at?" is not
+        # a call, and neither is anything inside a // note.
+        body = re.sub(r"//[^\n]*", "", body)
+        body = re.sub(r'"[^"\n]*"|\'[^\'\n]*\'|`[^`]*`', '""', body)
+        out = set()
+        for name in re.findall(r"(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(", body):
+            if name in ("if", "for", "while", "switch", "catch", "function",
+                        "return", "typeof", "await", "new"):
+                continue
+            out.add(name)
+        return out
+
+    def test_nothing_is_called_that_is_never_declared(self):
+        missing = sorted(self.called() - self.declared() - BROWSER_GLOBALS)
+        self.assertEqual(missing, [], f"the page calls {missing} and declares "
+                                      f"them nowhere - it would throw on load")
+
+    def test_who_am_i_in_particular_is_defined(self):
+        """Named, because this is the one that shipped broken."""
+        self.assertIn("async function whoAmI(", self.script())
+
+    def test_the_signed_in_person_is_declared_before_the_button_reads_them(self):
+        body = self.script()
+        self.assertIn("let me = {}", body)
+        self.assertLess(body.index("let me = {}"), body.index("me.email"),
+                        "me is read before it is declared")
+
+    def test_a_page_that_cannot_say_who_you_are_says_so(self):
+        """Silently e-mailing the finished book to nobody is an hour of the
+        engine's time that nobody hears about."""
+        self.assertIn("could not read which account", PAGE)
+
+
+class StartingFromAWrittenBriefTests(unittest.TestCase):
+    """── THE SAME ENGINE, GIVEN WORDS INSTEAD OF GEOMETRY ─────────────────
+    "it is exactly the same form as the main one" - it is, and that is the
+    point. /api/estimate/brief hands straight through to /api/estimate with
+    method="llm". So this is a second way IN on the Start screen, not a second
+    app and not a second engine.
+    """
+
+    def start_screen(self):
+        return PAGE.split('id="s-start"', 1)[1].split("</section>", 1)[0]
+
+    def test_start_offers_both_ways_in(self):
+        start = self.start_screen()
+        self.assertIn("From a drawing pack", start)
+        self.assertIn("From a written brief", start)
+
+    def test_the_chosen_one_looks_chosen_on_a_phone(self):
+        """There is no hover on a phone, so the pressed state must be styled."""
+        self.assertIn(".chips button[aria-pressed=true]", PAGE)
+
+    def test_it_posts_the_field_names_the_endpoint_actually_takes(self):
+        """── WHAT THIS CATCHES ────────────────────────────────────────────
+        BriefRequest takes `reference`, not `drawing_number`. Posting the
+        wrong name is a 422 the person reads as "it just doesn't work", and
+        no amount of reading the page's text would show it.
+        """
+        model = ROUTES.split("class BriefRequest(BaseModel):", 1)[1] \
+                      .split("@router.post", 1)[0]
+        required = {line.split(":", 1)[0].strip()
+                    for line in model.splitlines()
+                    if ":" in line and not line.strip().startswith(('"', "#"))
+                    and line.startswith("    ")}
+        required = {n for n in required if n and n.isidentifier()}
+        self.assertIn("reference", required, "the endpoint changed shape")
+
+        posted = PAGE.split('api("/api/estimate/brief"', 1)[1].split("});", 1)[0]
+        for field in ("client", "reference", "units", "brief"):
+            with self.subTest(field=field):
+                self.assertIn(field + ":", posted)
+        self.assertNotIn("drawing_number", posted)
+        for field in posted.split("{", 1)[1].split("}", 1)[0].split(","):
+            name = field.split(":", 1)[0].strip()
+            if name:
+                with self.subTest(field=name):
+                    self.assertIn(name, required,
+                                  f"the page posts {name!r} and BriefRequest "
+                                  f"has no such field")
+
+    def test_a_brief_too_thin_to_cost_is_refused_on_the_phone(self):
+        """A one-line brief comes back as a sheet of assumptions, which wastes
+        a run and reads as the engine being useless."""
+        self.assertIn("too short to cost", PAGE)
+
+    def test_the_quantity_breaks_are_checked_before_the_post(self):
+        """A typo here otherwise reaches the runner and fails forty minutes in,
+        on a phone that has long since been put away."""
+        self.assertIn("function breaksOf(", PAGE)
+        self.assertIn("Number.isInteger", PAGE)
+
+    def test_the_book_is_called_provisional_where_it_is_started(self):
+        """On the screen that starts it, not only in the reply afterwards."""
+        self.assertIn("provisional", self.start_screen().lower())
+
+    def test_the_page_computes_no_price_of_its_own(self):
+        """── WHY THE ENGINE IS NOT PORTABLE ───────────────────────────────
+        The engine is correct because it mirrors the workbook to the cell. A
+        second implementation anywhere is a second answer that has to be proved
+        equal to the first forever. This page must therefore only ever DISPLAY
+        a figure the engine recorded - never arrive at one.
+        """
+        body = PAGE.split("<script>", 1)[1].split("</script>", 1)[0]
+        for arithmetic in ("* 1.", "unit_gbp *", "* units", "units *",
+                           "+ vat", "* 0.", "/ units"):
+            with self.subTest(pattern=arithmetic):
+                self.assertNotIn(arithmetic, body.lower())
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -238,3 +238,50 @@ class SettingsAreChangedByACommandNotByHandTests(unittest.TestCase):
         file plainly contains the line saying otherwise."""
         self.assertIn("sdi-intelligence-backend\\.env", self.SET)
         self.assertIn("beside the service wins", self.SET)
+
+
+class TheCheckReportsOnWhatWasDeployedTests(unittest.TestCase):
+    """"this has nothing to do with nick? it's estimating?"
+
+    Ship-It ends by running Check-AMCRM-Live, and that script only ever looked
+    at Nick's tracker. So a deploy of estimating changes finished with a
+    confident report about the AM CRM write fix and said nothing at all about
+    what had just been deployed.
+    """
+
+    CHECK = (BACKEND / "deploy" / "Check-AMCRM-Live.ps1").read_text(encoding="utf-8")
+
+    def test_the_other_apps_get_a_line_each(self):
+        for setting in ("SDI_ESTIMATOR_OIDS", "SDI_TTI_OIDS", "SDI_OPS_OIDS"):
+            with self.subTest(setting=setting):
+                self.assertIn(setting, self.CHECK)
+
+    def test_it_checks_the_shared_access_rule_is_on_the_server(self):
+        """Without access.py, a GROUP id in any setting matches nobody and
+        only individual object IDs work - half-working, and silent about it."""
+        self.assertIn('Live "access.py" "def may_use"', self.CHECK)
+        self.assertIn("a group id in any setting matches nobody", self.CHECK)
+
+    def test_the_verdict_says_which_sections_are_about_which_app(self):
+        verdict = self.CHECK.split("# ── Verdict", 1)[1]
+        self.assertIn("Section 7 is everything else", verdict)
+        self.assertIn("AM CRM:", verdict)
+
+    def test_it_still_never_prints_a_setting_value(self):
+        seven = self.CHECK.split('Head "7.', 1)[1]
+        self.assertIn("never printed", seven.lower() + self.CHECK.lower())
+        self.assertNotIn("$seen[$app.Setting]}", seven)
+
+    def test_it_points_at_the_command_that_sets_a_missing_one(self):
+        self.assertIn("Set-Setting.ps1 $($app.Setting)", self.CHECK)
+
+    def test_the_settings_it_reports_are_the_ones_the_apps_actually_ask(self):
+        """Two lists that can disagree is one more than there should be."""
+        for setting, filename in (("SDI_ESTIMATOR_OIDS", "app.py"),
+                                  ("SDI_TTI_OIDS", "tti_despatch_routes.py"),
+                                  ("SDI_OPS_OIDS", "sdi_ops_routes.py")):
+            source = (BACKEND / filename).read_text(encoding="utf-8")
+            with self.subTest(setting=setting):
+                self.assertIn(f'access.may_use("{setting}"', source)
+                self.assertIn(f'Setting = "{setting}"', self.CHECK)
+                self.assertIn(f'File = "{filename}"', self.CHECK)
