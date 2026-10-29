@@ -59,14 +59,17 @@ def _cell(row: SourceRow, *names: str) -> str:
 # COMMENTS is where the real state of an order lives, in sentences:
 #
 #     "Pick note number: 40015908 \nDel Note -"
+#     "Picked-  40015862\nDel Note - "        (most picked lines are written so)
 #
 # A pick note means the warehouse has picked it. A delivery note means it went.
 # The difference between those two is most of what a chase list is, and today
 # it is only visible by reading the cell.
 _LABELS = re.compile(
-    r"(pick\s*notes?|del(?:ivery)?\s*notes?|invoice|proof\s*of\s*export|booked\s*in)",
+    r"(picked\b|pick\s*notes?|del(?:ivery)?\s*notes?|invoice|proof\s*of\s*export|booked\s*in)",
     re.I)
-_PICK = r"pick\s*notes?"
+# "Picked- 40015862" is a pick note too. As a word it is only a label when a
+# number follows it: "picked up by FedEx 1234" is not a pick note.
+_PICK = r"picked|pick\s*notes?"
 _DEL = r"del(?:ivery)?\s*notes?"
 # "await po", "awaiting PO", "chase PO", "no po yet" - the phrase Selina uses.
 _AWAITING_PO = re.compile(r"\b(?:a?wait(?:ing)?|chas(?:e|ing)|need|no)\b[^.\n]{0,20}\bp\.?o\.?\b", re.I)
@@ -84,7 +87,10 @@ def _tail_after(text: str, label: str) -> str:
             continue
         tail = text[hit.end():].split("\n", 1)[0]
         following = _LABELS.search(tail)
-        return (tail[:following.start()] if following else tail).strip(" :-=\t,;")
+        said = (tail[:following.start()] if following else tail).strip(" :-=\t,;")
+        if hit.group(1).lower() == "picked" and not said[:1].isdigit():
+            continue
+        return said
     return ""
 
 
