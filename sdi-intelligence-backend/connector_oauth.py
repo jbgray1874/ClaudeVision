@@ -80,7 +80,13 @@ class FrontDoor:
 
     def __init__(self, *, public_url: str, tenant: str, client_id: str, client_secret: str,
                  api_scope: str, scope: str, verify: Callable[[str], AccessToken | None],
-                 clients_file: str, redirects: tuple[str, ...] = DEFAULT_REDIRECTS):
+                 clients_file: str, redirects: tuple[str, ...] = DEFAULT_REDIRECTS,
+                 name: str = "SDI Tracker",
+                 purpose: str = "look up and change your tracker records as you, under SDI's rules"):
+        # What the consent page calls this connector and says it will do. Two
+        # connectors share this door, and the TTI one only reads: telling its
+        # users it would "change your tracker records" was simply untrue.
+        self.name, self.purpose = name, purpose
         self.resource = public_url.rstrip("/")
         self.base = "/".join(self.resource.split("/", 3)[:3])        # https://host
         self.callback_url = self.base + CALLBACK_PATH
@@ -175,7 +181,7 @@ class FrontDoor:
             p = self._pending.get(txn)
         if not p or time.time() - p["at"] > PENDING_SECONDS:
             return _page("Sign-in expired", "This sign-in link has expired or was already used. "
-                         "Go back to ChatGPT (or Claude) and connect SDI Tracker again.")
+                         "Go back to ChatGPT (or Claude) and connect " + self.name + " again.")
         params: AuthorizationParams = p["params"]
         if request.method == "POST":
             if form.get("allow") != "yes":
@@ -193,11 +199,11 @@ class FrontDoor:
         t = html.escape(txn)
         return HTMLResponse(
             "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"
-            "<title>Connect SDI Tracker</title>"
+            f"<title>Connect {html.escape(self.name)}</title>"
             "<body style='font:17px system-ui;margin:2em auto;max-width:30em;padding:0 1em'>"
-            f"<h2>Connect SDI Tracker to {html.escape(app)}?</h2>"
-            f"<p><b>{named}</b> (returning to <b>{html.escape(host)}</b>) is asking to look up and "
-            "change your tracker records as you, under SDI's rules.</p>"
+            f"<h2>Connect {html.escape(self.name)} to {html.escape(app)}?</h2>"
+            f"<p><b>{named}</b> (returning to <b>{html.escape(host)}</b>) is asking to "
+            f"{html.escape(self.purpose)}.</p>"
             "<p>Only continue if <b>you</b> just pressed Connect in your own "
             f"{html.escape(app)}. Next you'll choose your SDI Microsoft account.</p>"
             f"<form method=post><input type=hidden name=t value='{t}'>"
@@ -223,7 +229,7 @@ class FrontDoor:
             p = self._pending.pop(q.get("state") or "", None)
         if not p or not p["consented"] or time.time() - p["at"] > PENDING_SECONDS:
             return _page("Sign-in expired", "This sign-in link has expired or was already used. "
-                         "Go back to ChatGPT (or Claude) and connect SDI Tracker again.")
+                         "Go back to ChatGPT (or Claude) and connect " + self.name + " again.")
         params: AuthorizationParams = p["params"]
 
         def back(**kw: str | None) -> RedirectResponse:
@@ -244,7 +250,7 @@ class FrontDoor:
             return back(error="access_denied", error_description=why)
         who = await asyncio.to_thread(self._verify, tok["access_token"])
         if who is None:                                   # the verifier has logged why
-            return back(error="access_denied", error_description="That account can't use SDI Tracker.")
+            return back(error="access_denied", error_description=f"That account can't use {self.name}.")
         code = secrets.token_urlsafe(32)
         with self._lock:
             self._codes[code] = (AuthorizationCode(

@@ -65,12 +65,29 @@
   ul.names li small{display:block;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
   ul.names li.late small{color:var(--warn)}
   .notes li{margin:0 0 6px 18px;color:var(--ink-dim);font-size:13.5px}
+  .tabs{display:flex;gap:6px;overflow-x:auto;margin-top:16px;padding-bottom:2px;-webkit-overflow-scrolling:touch}
+  .tab{flex:0 0 auto;background:transparent;border:1px solid var(--line);color:var(--ink-dim);border-radius:999px;
+       font-family:var(--body);font-weight:600;font-size:13.5px;padding:8px 14px;cursor:pointer}
+  .tab.on{background:var(--accent);border-color:var(--accent);color:#000}
+  .view{display:none}
+  .view.on{display:block}
+  ul.roll{list-style:none}
+  ul.roll li{display:flex;align-items:center;gap:12px;padding:10px 2px;border-bottom:1px solid var(--line-soft)}
+  ul.roll input{width:22px;height:22px;accent-color:var(--ok);flex:0 0 auto}
+  ul.roll li.done span.n{color:var(--ink-faint);text-decoration:line-through}
+  ul.roll small{display:block;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+  .hist li{list-style:none;padding:9px 0;border-bottom:1px solid var(--line-soft);font-size:14px}
+  .hist li small{display:block;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+  table.t{width:100%;border-collapse:collapse;font-size:13.5px}
+  table.t td,table.t th{padding:6px 4px;border-bottom:1px solid var(--line-soft);text-align:left;vertical-align:top}
+  table.t th{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--ink-faint);text-transform:uppercase;font-weight:500}
 </style>
 </head>
 <body>
 <div class="top">
   <button class="back" onclick="location.href='./'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>All apps</button>
-  <span class="who" id="who"></span>
+  <span style="display:flex;gap:14px;align-items:center"><a href="guide-hr-inventry.html" style="font-size:14px">User guide</a>
+  <span class="who" id="who"></span></span>
 </div>
 <div class="wrap">
   <div class="kicker">SDI Intelligence app</div>
@@ -80,41 +97,108 @@
   signed out. Anyone signed in at reception is left alone, and nothing in BrightHR is changed.</p>
 
   <div class="panel" id="gate" style="display:none"></div>
+  <div class="panel warn" id="expired" style="display:none"><h4>Sign in again</h4><div>Your Microsoft
+    sign-in for the app portal has run out, so this page cannot reach the server. Anything already
+    running there carries on. <a href="#" onclick="location.reload();return false">Reload to sign in again</a>.</div></div>
 
-  <div class="panel" id="controls" style="display:none">
-    <h4>Run</h4>
-    <div class="btns">
-      <button class="btn ghost" id="check">Check who's clocked in</button>
-      <button class="btn" id="update">Update InVentry</button>
+  <div id="app" style="display:none">
+    <div class="panel">
+      <h4>Run</h4>
+      <div class="btns">
+        <button class="btn ghost" id="check">Check who's clocked in</button>
+        <button class="btn" id="update">Update InVentry</button>
+      </div>
+      <p class="muted" style="margin-top:10px">A check reads BrightHR and changes nothing. An update checks
+      BrightHR, then signs people in and out of InVentry. Either takes a few minutes; you can leave this
+      page and come back.</p>
+      <div class="err" id="err"></div>
     </div>
-    <p class="muted" style="margin-top:10px">A check reads BrightHR and changes nothing. An update checks
-    BrightHR, then signs people in and out of InVentry. Either takes a few minutes; you can leave this
-    page and come back.</p>
-    <div class="err" id="err"></div>
-  </div>
 
-  <div class="panel" id="job" style="display:none">
-    <h4><span id="jobtitle">Last run</span> <span class="chip c-off" id="chip"></span></h4>
-    <p class="muted" id="meta"></p>
-    <div id="out"></div>
+    <div class="tabs" role="tablist">
+      <button class="tab on" data-v="latest">Latest</button>
+      <button class="tab" data-v="roll">Roll call</button>
+      <button class="tab" data-v="issues">Data issues</button>
+      <button class="tab" data-v="forgot">Forgotten clock-outs</button>
+      <button class="tab" data-v="hist">History</button>
+    </div>
+
+    <div class="view on" id="v-latest">
+      <div class="panel" id="job" style="display:none">
+        <h4><span id="jobtitle">Last run</span> <span class="chip c-off" id="chip"></span></h4>
+        <p class="muted" id="meta"></p>
+        <div id="out"></div>
+      </div>
+      <p class="muted" id="nolatest" style="margin-top:14px">No check yet. Press Check who's clocked in.</p>
+    </div>
+
+    <div class="view" id="v-roll">
+      <div class="panel">
+        <h4>Fire roll call <span class="chip c-off" id="rollcount"></span></h4>
+        <div class="btns"><button class="btn ghost" id="rollload">Refresh</button>
+          <button class="btn ghost" id="rollnew">Start a new roll call</button></div>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:14px;color:var(--ink-dim)">
+          <input type="checkbox" id="rollhide" style="width:18px;height:18px"> Show only people not yet accounted for</label>
+        <p class="muted" style="margin-top:10px" id="rollmeta">Everyone InVentry shows on site, plus anyone clocked in on
+        BrightHR. Tick people off as they are accounted for: every marshal's phone sees the same ticks.</p>
+        <div class="err" id="rollerr"></div>
+        <ul class="roll" id="roll" style="margin-top:8px"></ul>
+      </div>
+    </div>
+
+    <div class="view" id="v-issues">
+      <div class="panel">
+        <h4>Data issues <span class="chip c-off" id="ischip"></span></h4>
+        <div class="btns"><button class="btn ghost" id="isrun">Run the data check</button></div>
+        <p class="muted" style="margin-top:10px">Compares every current BrightHR employee with InVentry's staff
+        records and lists what needs tidying. Changes nothing. Takes under a minute.</p>
+        <p class="muted" id="ismeta"></p>
+        <div class="err" id="iserr"></div>
+      </div>
+      <div id="isout"></div>
+    </div>
+
+    <div class="view" id="v-forgot">
+      <div class="panel">
+        <h4>Forgotten clock-outs</h4>
+        <p class="muted">Still clocked in on BrightHR more than 20 hours later, from the latest check. Their
+        BrightHR hours are wrong until the clocking is closed with the time they left, and they are not
+        counted as on site.</p>
+        <div id="fgout" style="margin-top:10px"></div>
+      </div>
+    </div>
+
+    <div class="view" id="v-hist">
+      <div class="panel">
+        <h4>History</h4>
+        <div class="btns"><button class="btn ghost" id="hload">Refresh</button></div>
+        <ul class="hist" id="hist" style="margin-top:8px"></ul>
+      </div>
+    </div>
   </div>
 </div>
 <script>
 const $=id=>document.getElementById(id);
 const API='../api/hr/app';
 const LOGIN='/auth/login?next='+encodeURIComponent('/app/hr-inventry.html');
-let timer=null;
+let timer=null, LAST={}, RUNNING=null;
 
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function when(iso){ const t=Date.parse(iso||''); if(isNaN(t)) return '';
   const d=new Date(t); return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'})+' '
     +d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}); }
+function ago(iso){ const t=Date.parse(iso||''); if(isNaN(t)) return null; return (Date.now()-t)/3600000; }
 
 function gate(cls, html){ const g=$('gate'); g.className='panel '+cls; g.innerHTML=html; g.style.display='';
-  $('controls').style.display='none'; }
+  $('app').style.display='none'; }
 
 async function call(path, method){
-  const r=await fetch(API+path,{method:method||'GET',cache:'no-store'});
+  let r;
+  // redirect:'manual' because an expired App Proxy sign-in answers with a redirect
+  // to Microsoft's login page, which a background request cannot follow: the
+  // browser called that "Failed to fetch", indistinguishable from no signal.
+  try{ r=await fetch(API+path,{method:method||'GET',cache:'no-store',redirect:'manual'}); }
+  catch(e){ throw new Error('offline'); }
+  if(r.type==='opaqueredirect' || r.status===0){ $('expired').style.display=''; throw new Error('signin'); }
   if(r.status===401){ gate('warn','<h4>Sign in</h4><div>This app needs your SDI Microsoft sign-in. '
       +'<a href="'+LOGIN+'">Sign in</a>. In the office without sign-in, use the BrightHR page on the intranet portal.</div>');
     throw new Error('signin'); }
@@ -124,45 +208,65 @@ async function call(path, method){
   if(!r.ok){ const e=new Error(j.detail||('The service answered '+r.status)); e.status=r.status; throw e; }
   return j;
 }
+const quiet=e=>e.message==='signin'||e.message==='forbidden';
+const OFFLINE='Lost contact with the server: no signal, or the server is restarting. Trying again; '
+  +'anything already running there carries on.';
+const msg=e=>e.message==='offline'?OFFLINE:e.message;
 
+/* ── tabs ── */
+document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===b));
+  document.querySelectorAll('.view').forEach(v=>v.classList.toggle('on',v.id==='v-'+b.dataset.v));
+  if(b.dataset.v==='roll') loadRoll(); else clearTimeout(rollTimer);
+  if(b.dataset.v==='hist') loadHistory();
+  if(b.dataset.v==='forgot') renderForgotten();
+}));
+
+/* ── shared pieces ── */
 function names(title, list, cls){
   list=list||[];
   if(!list.length) return '<div class="panel '+(cls||'')+'"><h4>'+esc(title)+' (0)</h4><p class="muted">None.</p></div>';
   return '<div class="panel '+(cls||'')+'"><h4>'+esc(title)+' ('+list.length+')</h4><ul class="names">'
     +list.map(n=>'<li>'+esc(n)+'</li>').join('')+'</ul></div>';
 }
-
+function openFor(hrs){ return hrs>48?Math.round(hrs/24)+' days':Math.round(hrs)+' h'; }
 function clockedIn(list){
-  list=list||[];
-  const now=Date.now(); let late=0;
-  const items=list.map(p=>{ const t=Date.parse(p.clocked_in||''); const hrs=isNaN(t)?null:(now-t)/3600000;
-    const isLate=hrs!==null&&hrs>20; if(isLate) late++;
-    return '<li'+(isLate?' class="late"':'')+'>'+esc(p.name)+'<small>'+(isNaN(t)?'':'in since '+when(p.clocked_in))
-      +(isLate?' · open '+(hrs>48?Math.round(hrs/24)+' days':Math.round(hrs)+' h')+', probably forgot to clock out':'')+'</small></li>'; });
+  list=list||[]; let late=0;
+  const items=list.map(p=>{ const hrs=ago(p.clocked_in); const isLate=hrs!==null&&hrs>20; if(isLate) late++;
+    return '<li'+(isLate?' class="late"':'')+'>'+esc(p.name)+'<small>'+(hrs===null?'':'in since '+when(p.clocked_in))
+      +(isLate?' · open '+openFor(hrs)+', probably forgot to clock out':'')+'</small></li>'; });
   return '<div class="panel"><h4>Clocked in on BrightHR ('+list.length+')</h4>'
     +(late?'<p class="muted" style="margin-bottom:8px">'+late+' marked in orange forgot to clock out. They are not signed in to InVentry.</p>':'')
     +(items.length?'<ul class="names">'+items.join('')+'</ul>':'<p class="muted">Nobody.</p>')+'</div>';
 }
 
-function render(job){
-  if(!job || job.state==='idle'){ $('job').style.display='none'; return; }
-  $('job').style.display='';
-  const running=job.state==='running';
-  $('jobtitle').textContent=(job.kind==='update'?'Update':'Check')+(running?' running':'');
-  const chip=$('chip');
+/* ── latest check or update ── */
+function latestJob(){
+  const c=LAST.check, u=LAST.update;
+  if(!c) return u; if(!u) return c;
+  return (u.finished||'')>(c.finished||'')?u:c;
+}
+function chipFor(job){
   const res=job.result||{}, blip=res.blip||{}, push=res.push;
-  let state=job.state, cls='c-off';
-  if(running){ state='running'; cls='c-warn'; }
-  else if(job.state==='error'){ cls='c-fail'; }
-  else if(res.not_updated || (push && push.status!=='ok') || (blip.status && blip.status!=='ok')){ state=(push&&push.status)||blip.status||'not updated'; cls='c-warn'; }
-  else { state='done'; cls='c-ok'; }
-  chip.textContent=state; chip.className='chip '+cls;
+  if(job.state==='running') return ['running','c-warn'];
+  if(job.state==='error') return ['error','c-fail'];
+  if(res.not_updated || (push && push.status!=='ok') || (blip.status && blip.status!=='ok'))
+    return [(push&&push.status)||blip.status||'not updated','c-warn'];
+  return ['done','c-ok'];
+}
+function renderLatest(){
+  const running=RUNNING && RUNNING.kind!=='issues' ? RUNNING : null;
+  const job=running||latestJob();
+  ['check','update'].forEach(id=>$(id).disabled=!!RUNNING);
+  if(!job){ $('job').style.display='none'; $('nolatest').style.display=''; return; }
+  $('nolatest').style.display='none'; $('job').style.display='';
+  $('jobtitle').textContent=(job.kind==='update'?'Update':'Check')+(job.state==='running'?' running':'');
+  const [state,cls]=chipFor(job); $('chip').textContent=state; $('chip').className='chip '+cls;
   $('meta').textContent='Started '+when(job.started)+(job.by?' by '+job.by:'')+(job.finished?' · finished '+when(job.finished):'');
-  ['check','update'].forEach(id=>$(id).disabled=running);
-  if(running){ $('out').innerHTML='<p class="muted">Asking BrightHR who is clocked in'
+  if(job.state==='running'){ $('out').innerHTML='<p class="muted">Asking BrightHR who is clocked in'
       +(job.kind==='update'?', then updating InVentry':'')+'. This usually takes 1 to 4 minutes.</p>'; return; }
   if(job.state==='error'){ $('out').innerHTML='<p class="err">'+esc(job.error||'The run failed.')+'</p>'; return; }
-
+  const res=job.result||{}, blip=res.blip||{}, push=res.push;
   let h='';
   if(push){
     h+='<div class="stats">'
@@ -190,27 +294,156 @@ function render(job){
   $('out').innerHTML=h;
 }
 
-async function refresh(){
-  clearTimeout(timer);
-  try{
-    const j=await call('/status');
-    $('who').textContent=j.user||'';
-    $('controls').style.display='';
-    render(j.job);
-    if(j.job && j.job.state==='running') timer=setTimeout(refresh,4000);
-  }catch(e){
-    if(e.message!=='signin' && e.message!=='forbidden'){ $('err').textContent='The service did not answer: '+e.message; timer=setTimeout(refresh,10000); }
+/* ── fire roll call: InVentry and BrightHR merged, ticks shared by every phone ── */
+let ROLL=null, rollTimer=null;
+const PENDING={};                    // ticks not yet saved: kept and resent, never dropped
+function whereFrom(p){
+  const bits=[];
+  if(p.inventry) bits.push('InVentry since '+(when(p.inventry.since)||'?')+(p.inventry.by==='sync'?'':' (reception)'));
+  if(p.brighthr) bits.push('clocked in '+(when(p.brighthr.since)||'?'));
+  if(p.brighthr && !p.inventry) bits.push('not on InVentry');
+  if(p.inventry && !p.brighthr) bits.push('not clocked in on BrightHR');
+  return bits.join(' · ');
+}
+function isTicked(p){ return p.key in PENDING ? PENDING[p.key] : !!p.ticked; }
+function renderRoll(){
+  if(!ROLL) return;
+  const hide=$('rollhide').checked;
+  const done=ROLL.people.filter(isTicked).length;
+  $('rollcount').textContent=done+' of '+ROLL.count+' accounted for';
+  $('rollcount').className='chip '+(ROLL.count&&done===ROLL.count?'c-ok':'c-warn');
+  const notes=['Updated '+when(ROLL.time)+'.'];
+  if(ROLL.started) notes.push('Roll call started '+when(ROLL.started)+(ROLL.started_by?' by '+ROLL.started_by:'')+'.');
+  if(ROLL.inventry_problem) notes.push(ROLL.inventry_problem);
+  if(ROLL.brighthr_checked){ const h=ago(ROLL.brighthr_checked);
+    notes.push('BrightHR checked '+when(ROLL.brighthr_checked)+(h>0.5?': press Check who\'s clocked in for an up-to-date list.':'.')); }
+  else notes.push('No BrightHR check yet: press Check who\'s clocked in.');
+  if(ROLL.forgotten_left_out) notes.push(ROLL.forgotten_left_out+' forgotten clock-outs are left out.');
+  if(Object.keys(PENDING).length) notes.push(Object.keys(PENDING).length+' tick(s) not saved yet; they will be sent when the signal allows.');
+  $('rollmeta').textContent=notes.join(' ');
+  const rows=ROLL.people.filter(p=>!(hide&&isTicked(p)));
+  $('roll').innerHTML=rows.map(p=>{ const t=isTicked(p);
+    const who=p.key in PENDING?'saving…':(p.ticked?'ticked by '+p.ticked.by+' at '+when(p.ticked.at):'');
+    return '<li'+(t?' class="done"':'')+'><input type="checkbox" data-k="'+esc(p.key)+'"'+(t?' checked':'')
+      +' aria-label="Accounted for: '+esc(p.name)+'"><span class="n">'+esc(p.name)+'<small>'+esc(whereFrom(p))+'</small>'
+      +(who?'<small>'+esc(who)+'</small>':'')+'</span></li>'; }).join('')
+    || '<li><span class="muted">'+(hide&&ROLL.count?'Everyone is accounted for.':'Nobody is shown on site.')+'</span></li>';
+}
+async function sendPending(){
+  for(const key of Object.keys(PENDING)){
+    try{ await fetch(API+'/rollcall/tick',{method:'POST',redirect:'manual',headers:{'Content-Type':'application/json'},
+           body:JSON.stringify({key, ticked:PENDING[key]})}).then(r=>{ if(!r.ok) throw new Error(r.status); });
+         delete PENDING[key]; }
+    catch(e){ /* kept; resent on the next refresh */ }
   }
 }
+async function loadRoll(){
+  clearTimeout(rollTimer); $('rollerr').textContent='';
+  try{ await sendPending(); ROLL=await call('/rollcall'); renderRoll(); }
+  catch(e){ if(!quiet(e)) $('rollerr').textContent=msg(e)+(Object.keys(PENDING).length?' Your ticks are kept on this phone and will be sent.':''); }
+  // While the roll call is open, keep every marshal's phone in step.
+  if($('v-roll').classList.contains('on')) rollTimer=setTimeout(loadRoll,5000);
+}
+$('roll').addEventListener('change',e=>{
+  const cb=e.target.closest('input[data-k]'); if(!cb) return;
+  PENDING[cb.dataset.k]=cb.checked; renderRoll(); sendPending().then(loadRoll);
+});
+$('rollhide').addEventListener('change',renderRoll);
+$('rollload').addEventListener('click',loadRoll);
+$('rollnew').addEventListener('click',async()=>{
+  if(!confirm('Start a new roll call?\n\nThis clears every tick, on every phone.')) return;
+  try{ for(const k in PENDING) delete PENDING[k]; ROLL=await call('/rollcall/new','POST'); renderRoll(); }
+  catch(e){ if(!quiet(e)) $('rollerr').textContent=msg(e); }
+});
 
-async function start(kind){
-  $('err').textContent='';
-  if(kind==='update' && !confirm('Update InVentry from BrightHR now?\n\nThis signs staff in and out on InVentry to match BrightHR, which is the fire roll call.')) return;
-  try{ const j=await call('/'+kind,'POST'); render(j.job); timer=setTimeout(refresh,4000); }
-  catch(e){ if(e.message!=='signin' && e.message!=='forbidden'){ $('err').textContent=e.message;
-    if(e.status===409) refresh(); } }      // someone else's run: show it
+/* ── data issues ── */
+function table(title, cls, head, rows, explain){
+  if(!rows.length) return '<div class="panel"><h4>'+esc(title)+' (0)</h4><p class="muted">None.</p></div>';
+  return '<div class="panel '+(cls||'')+'"><h4>'+esc(title)+' ('+rows.length+')</h4>'
+    +(explain?'<p class="muted" style="margin-bottom:8px">'+esc(explain)+'</p>':'')
+    +'<table class="t"><tr>'+head.map(h=>'<th>'+esc(h)+'</th>').join('')+'</tr>'
+    +rows.map(r=>'<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>').join('')+'</table></div>';
+}
+function renderIssues(){
+  const running=RUNNING && RUNNING.kind==='issues';
+  const job=LAST.issues;
+  $('isrun').disabled=!!RUNNING;
+  if(running){ $('ischip').textContent='running'; $('ischip').className='chip c-warn';
+    $('ismeta').textContent='Started '+when(RUNNING.started)+' by '+(RUNNING.by||''); return; }
+  if(!job){ $('ischip').textContent='not run yet'; $('ischip').className='chip c-off'; return; }
+  if(job.state==='error'){ $('ischip').textContent='error'; $('ischip').className='chip c-fail'; $('iserr').textContent=job.error||''; return; }
+  const r=(job.result||{}).issues||{};
+  const total=(r.duplicates||[]).length+(r.shared_identifiers||[]).length+(r.unmatched||[]).length;
+  $('ischip').textContent=total?total+' to fix':'all clear'; $('ischip').className='chip '+(total?'c-warn':'c-ok');
+  $('ismeta').textContent='Run '+when(job.finished)+(job.by?' by '+job.by:'')+' · '+(r.brighthr_staff||0)
+    +' BrightHR staff, '+(r.inventry_records||0)+' InVentry staff records';
+  let h='';
+  h+=table('Duplicate InVentry records','warn',['Person','Shared','Copies (last used)'],
+    (r.duplicates||[]).map(d=>[esc(d.name),esc(d.shared),d.records.map(x=>esc(when(x.last_seen)||'never')+(x.used?' <b>(used)</b>':'')).join('<br>')]),
+    'One person on several InVentry records. The sync uses the copy marked (used); reception may sign in on another. Merge or remove the extras.');
+  h+=table('One email or ID shared by different people','warn',['Shared','People'],
+    (r.shared_identifiers||[]).map(d=>[esc(d.shared),esc(d.names.join(', '))]),
+    'These people are matched by full name only until each has their own email or ID in InVentry.');
+  h+=table('BrightHR staff with no InVentry match','warn',['Person','Why'],
+    (r.unmatched||[]).map(d=>[esc(d.name),esc(d.reason)]),
+    'Never signed in to InVentry, so missing from the fire roll call when on site. Check their name and email in InVentry.');
+  h+=table('Accepted with a name difference','',['BrightHR','InVentry','Matched by'],
+    (r.name_checks||[]).map(d=>[esc(d.brighthr),esc(d.inventry),esc(d.by)]),
+    'Matched, but the names differ (a nickname or changed surname). Worth a glance.');
+  h+=table('InVentry staff records with no current BrightHR employee','',['Record','Last used','Why'],
+    (r.inventry_only||[]).map(d=>[esc(d.name),esc(when(d.last_seen)||'never'),esc(d.why)]),
+    'Probably leavers or old copies. The sync never touches them.');
+  $('isout').innerHTML=h;
+}
+$('isrun').addEventListener('click',()=>start('issues'));
+
+/* ── forgotten clock-outs, from the latest check ── */
+function renderForgotten(){
+  const job=latestJob(); const list=((job||{}).result||{}).clocked_in;
+  if(!list){ $('fgout').innerHTML='<p class="muted">No check yet. Press Check who\'s clocked in, then come back here.</p>'; return; }
+  const late=list.map(p=>({...p,hrs:ago(p.clocked_in)})).filter(p=>p.hrs!==null&&p.hrs>20).sort((a,b)=>b.hrs-a.hrs);
+  $('fgout').innerHTML='<p class="muted" style="margin-bottom:8px">From the check at '+esc(when(job.finished))+'.</p>'
+    +(late.length?'<table class="t"><tr><th>Person</th><th>Clocked in</th><th>Open for</th></tr>'
+      +late.map(p=>'<tr><td>'+esc(p.name)+'</td><td>'+esc(when(p.clocked_in))+'</td><td>'+openFor(p.hrs)+'</td></tr>').join('')+'</table>'
+      :'<p class="muted">Nobody. Everyone clocked in has been in for less than 20 hours.</p>');
 }
 
+/* ── history ── */
+async function loadHistory(){
+  try{
+    const j=await call('/history');
+    $('hist').innerHTML=(j.entries||[]).map(e=>{
+      const what=e.kind==='check'?'Check: '+(e.brighthr_on_site==null?'?':e.brighthr_on_site)+' clocked in of '+(e.staff_checked||'?')
+        : (e.kind==='update'?'Update':'Dry run')+': '+(e.signed_in||[]).length+' signed in, '+(e.signed_out||[]).length+' signed out'
+          +(e.unmatched?', '+e.unmatched+' not matched':'');
+      const who=[...(e.signed_in||[]).map(n=>'+ '+n),...(e.signed_out||[]).map(n=>'− '+n)].join(', ');
+      return '<li>'+esc(what)+(e.status&&e.status!=='ok'?' <span class="chip c-warn">'+esc(e.status)+'</span>':'')
+        +'<small>'+esc(when(e.time))+' · '+esc(e.by||'')+'</small>'+(who?'<small>'+esc(who)+'</small>':'')
+        +(e.note?'<small>'+esc(e.note)+'</small>':'')+'</li>';
+    }).join('') || '<li class="muted">Nothing yet.</li>';
+  }catch(e){ if(!quiet(e)) $('hist').innerHTML='<li class="err">'+esc(msg(e))+'</li>'; }
+}
+$('hload').addEventListener('click',loadHistory);
+
+/* ── status and jobs ── */
+function apply(j){
+  $('who').textContent=j.user||''; $('gate').style.display='none'; $('app').style.display='';
+  LAST=j.last||{}; RUNNING=j.running||null;
+  renderLatest(); renderIssues();
+  if($('v-forgot').classList.contains('on')) renderForgotten();
+}
+async function refresh(){
+  clearTimeout(timer);
+  try{ const j=await call('/status'); $('err').textContent=''; $('expired').style.display='none';
+       apply(j); if(j.running) timer=setTimeout(refresh,4000); }
+  catch(e){ if(!quiet(e)){ $('err').textContent=msg(e); timer=setTimeout(refresh,10000); } }
+}
+async function start(kind){
+  $('err').textContent=''; $('iserr').textContent='';
+  if(kind==='update' && !confirm('Update InVentry from BrightHR now?\n\nThis signs staff in and out on InVentry to match BrightHR, which is the fire roll call.')) return;
+  try{ const j=await call('/'+kind,'POST'); apply(j); timer=setTimeout(refresh,4000); }
+  catch(e){ if(!quiet(e)){ (kind==='issues'?$('iserr'):$('err')).textContent=msg(e); if(e.status===409) refresh(); } }
+}
 $('check').addEventListener('click',()=>start('check'));
 $('update').addEventListener('click',()=>start('update'));
 refresh();

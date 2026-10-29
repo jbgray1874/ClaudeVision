@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d0f">
+<title>TTI Despatch guide · SDI Intelligence</title>
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0d0d0f; --surface:#17171b; --surface-2:#1d1d22;
+    --line:#2a2a31; --line-soft:#202026;
+    --ink:#f3f2ee; --ink-dim:#a3a3aa; --ink-faint:#6b6b73;
+    --accent:#ffd400; --ok:#5fd08a; --warn:#ff9d42; --fail:#ff5d5d;
+    --r:4px;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    --disp:'Archivo',sans-serif;
+    --body:'Hanken Grotesk',sans-serif;
+    --safe-t:env(safe-area-inset-top,0px); --safe-b:env(safe-area-inset-bottom,0px);
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15.5px;
+       line-height:1.6;-webkit-font-smoothing:antialiased;min-height:100vh;overflow-wrap:anywhere;
+       background-image:radial-gradient(900px 500px at 88% -8%,rgba(255,212,0,.06),transparent 60%)}
+  a{color:var(--accent);text-decoration:none}
+  .top{position:sticky;top:0;z-index:20;background:rgba(13,13,15,.92);backdrop-filter:blur(12px);
+       border-bottom:1px solid var(--line);padding:calc(12px + var(--safe-t)) 16px 12px;
+       display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .top a{display:flex;align-items:center;gap:7px;color:var(--ink-dim);font-size:14px}
+  .top svg{width:17px;height:17px}
+  .wrap{padding:18px 16px calc(40px + var(--safe-b));max-width:760px;margin:0 auto}
+  .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--accent);text-transform:uppercase}
+  h1{font-family:var(--disp);font-weight:800;font-size:26px;line-height:1.15;margin:8px 0 10px}
+  h2{font-family:var(--disp);font-weight:800;font-size:19px;line-height:1.25;margin:30px 0 10px;
+     padding-top:8px;border-top:1px solid var(--line-soft);scroll-margin-top:70px}
+  h3{font-weight:700;font-size:16px;margin:18px 0 6px}
+  p{margin:8px 0;color:var(--ink)}
+  .sub{color:var(--ink-dim)}
+  ul,ol{margin:8px 0 8px 22px}
+  li{margin:5px 0}
+  b{font-weight:700}
+  .btnname{font-weight:700;color:var(--accent)}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 15px;margin:14px 0}
+  .panel h4{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--ink-faint);
+            text-transform:uppercase;font-weight:500;margin-bottom:8px}
+  .panel.warn{border-color:rgba(255,157,66,.35);background:rgba(255,157,66,.06)}
+  .panel.fail{border-color:rgba(255,93,93,.35);background:rgba(255,93,93,.06)}
+  .panel.ok{border-color:rgba(95,208,138,.35);background:rgba(95,208,138,.06)}
+  .toc a{display:block;padding:6px 0;border-bottom:1px solid var(--line-soft)}
+  .toc a:last-child{border-bottom:0}
+  table{width:100%;border-collapse:collapse;font-size:14px;margin:8px 0}
+  td,th{padding:8px 6px;border-bottom:1px solid var(--line-soft);text-align:left;vertical-align:top}
+  th{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--ink-faint);text-transform:uppercase;font-weight:500}
+  td:first-child{width:38%}
+  .msg{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
+  .muted{color:var(--ink-faint);font-size:13px}
+</style>
+</head>
+<body>
+<div class="top">
+  <a href="/api/tti/despatch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>Back to TTI Despatch</a>
+  <a href="./">All apps</a>
+</div>
+<div class="wrap">
+  <div class="kicker">User guide</div>
+  <h1>TTI Despatch</h1>
+  <p class="sub">Questions answered from the TTI Despatch Plan, every weekly sheet at once, and a search of the
+  TTi folders on W:. On the web from any device, and in ChatGPT, typed or spoken.</p>
+
+  <div class="panel toc">
+    <h4>Contents</h4>
+    <a href="#what">1. What it is</a>
+    <a href="#start">2. Getting started</a>
+    <a href="#data">3. Where the answers come from</a>
+    <a href="#tabs">4. The tabs, one by one</a>
+    <a href="#fields">5. The spreadsheet columns</a>
+    <a href="#dates">6. How dates are read</a>
+    <a href="#files">7. Finding TTi files</a>
+    <a href="#chatgpt">8. Using it in ChatGPT</a>
+    <a href="#where">9. What can be asked where</a>
+    <a href="#messages">10. Messages and what to do</a>
+    <a href="#help">11. Help</a>
+  </div>
+
+  <h2 id="what">1. What it is</h2>
+  <p>Customer Services plan what leaves SDI for TTI in the <b>TTI Despatch Plan</b>, a workbook with a sheet per
+  week. This app reads <b>every weekly sheet at once</b> and answers the questions people ask of it every day:
+  what is leaving on a day, where an order is, what is blocked, what was never updated, and what is wrong in
+  the sheet itself. It also finds files in the TTi Design, Production and Prototype folders.</p>
+  <div class="panel ok">
+    <h4>It only reads</h4>
+    <p>Nothing here changes the workbook, books anything in, moves anything to Completed Orders, opens or moves
+    files, or sends email. The morning summary is written for you to copy and send yourself.</p>
+  </div>
+  <p>Every answer says <b>which sheet and row</b> it came from, such as <span class="msg">Oct 26 WK 40!row 5</span>,
+  so you can check it at source.</p>
+
+  <h2 id="start">2. Getting started</h2>
+  <ol>
+    <li>Open the app portal at <a href="https://sdiintelligence-sdidisplays.msappproxy.net/app/">sdiintelligence-sdidisplays.msappproxy.net/app</a>
+    on a phone or laptop, in or out of the office.</li>
+    <li>Sign in with your <b>usual SDI Microsoft account</b>.</li>
+    <li>On the <b>TTI Despatch</b> square, tap <span class="btnname">Open TTI Despatch →</span>. You can bookmark the page it
+    opens, or add it to your phone's home screen.</li>
+  </ol>
+  <div class="panel">
+    <h4>Who can use it</h4>
+    <p>Named people only, because the plan is a live commercial tracker and every look at it is recorded against
+    the person. If you see <span class="msg">The TTI despatch view is for named Customer Services people</span>,
+    ask James Gray to add you.</p>
+    <p>The plan is read <b>as you</b>, so you also need your normal access to the Despatch Plan on SharePoint. The
+    file search (section 7) does not need that.</p>
+  </div>
+
+  <h2 id="data">3. Where the answers come from</h2>
+  <ul>
+    <li><b>The TTI Despatch Plan</b> on SharePoint (Sue's site, <i>TTI Delivery Schedule</i>), read fresh each time
+    you ask, with your own Microsoft sign-in.</li>
+    <li><b>Every weekly sheet</b> that has the columns <i>SDI ORDER NO</i>, <i>PART CODE</i> and <i>LORRY FROM SDI</i>
+    in its first 20 rows. Other sheets are ignored.</li>
+    <li><b>As current as the last save.</b> The line at the bottom of each answer says when the workbook was last
+    saved. An edit someone has not saved yet is not in the answer.</li>
+    <li><b>Dates are worked out against the day the plan was saved</b>, not today, so an answer always matches the
+    workbook it was read from.</li>
+  </ul>
+
+  <h2 id="tabs">4. The tabs, one by one</h2>
+
+  <h3>Leaving on a day</h3>
+  <p>Pick a date, or tap <span class="btnname">Today</span> or <span class="btnname">Next Thursday</span>, then
+  <span class="btnname">What is leaving that day?</span>. It lists the lines whose <b>LORRY FROM SDI</b> date is that
+  day. That's when a lorry is planned to leave SDI, not the customer's due date.</p>
+  <ul>
+    <li><b>Lines with a date it cannot read</b> are shown in a foldaway. If nothing else is found, it says those
+    cannot be ruled out, so check them in the workbook before relying on "nothing is leaving".</li>
+    <li><b>Lines with no departure date yet</b> (blank, N/A, TBC) are listed separately; that is normal for work
+    not yet planned.</li>
+    <li><b>Pallets are not added up</b>, because the column holds text as well as numbers.</li>
+    <li>A plan is not proof that goods have left.</li>
+  </ul>
+
+  <h3>Search all weeks</h3>
+  <p>Type an <b>SDI order number, customer PO, part code or TTI account</b> and press Enter. It searches every weekly
+  sheet at once.</p>
+  <ul>
+    <li><b>Matches</b> are lines where those columns contain every word you typed (part of a number is enough).</li>
+    <li><b>Mentions</b> are other lines that contain the words anywhere, usually in the comments.</li>
+    <li>Up to 60 of each are shown, soonest departure first.</li>
+  </ul>
+
+  <h3>Chase list</h3>
+  <p>What is blocked, and by what. Set how many days ahead to chase paperwork (7 by default, 0 to 90). A line can
+  appear under more than one heading.</p>
+  <table>
+    <tr><th>Heading</th><th>When a line is listed</th></tr>
+    <tr><td><b>Planned departure has passed, not invoiced</b></td><td>The lorry date has passed and there is no invoice number.</td></tr>
+    <tr><td><b>Picked, with no delivery note</b></td><td>A pick note is in the comments, but no delivery note.</td></tr>
+    <tr><td><b>Not booked in with TTI</b></td><td>Leaving within the days set, and <i>BOOKED IN WITH TTI</i> is not filled in.</td></tr>
+    <tr><td><b>Labels and batch not marked done</b></td><td>Leaving within the days set, and <i>LABEL + Batch DONE</i> is not filled in.</td></tr>
+    <tr><td><b>No customer PO</b></td><td>Any date: the PO is blank or a placeholder, or the comments say a PO is awaited ("await po", "chase PO").</td></tr>
+    <tr><td><b>Planned to leave after the customer due date</b></td><td>Any date: the lorry date is later than the <i>DUE DATE</i>.</td></tr>
+    <tr><td><b>No proof of export recorded</b></td><td>Gone and invoiced, with no proof of export. Judge it by the destination.</td></tr>
+  </table>
+
+  <h3>Overdue, no departure</h3>
+  <p>Lines whose <b>customer due date has passed</b> while the <b>LORRY FROM SDI</b> cell is still empty or unreadable:
+  the ones nobody updated, oldest first, each with how many days overdue.</p>
+
+  <h3>Morning summary</h3>
+  <p>Pick a day and tap <span class="btnname">Build the summary</span>. It writes a short summary you can read,
+  or <span class="btnname">Copy as text</span> and paste into an email. Nothing is sent. For the day chosen it
+  lists:</p>
+  <ul>
+    <li><b>Due out</b>, each with anything still <b>missing</b>: not booked in with TTI, labels and batch not marked done,
+    no customer PO, no pallet count, no delivery address or destination;</li>
+    <li><b>Planned to have left, not invoiced</b>: earlier departures with no invoice number;</li>
+    <li>any lines whose date could not be read.</li>
+  </ul>
+
+  <h3>Data quality</h3>
+  <p>Tap <span class="btnname">Check the workbook</span> to list the cells that stop answers being exact, so they can be
+  fixed at source:</p>
+  <ul>
+    <li>Departure dates that cannot be read;</li>
+    <li>Customer due dates that cannot be read;</li>
+    <li>Pallet counts stored as text;</li>
+    <li>Quantities stored as text;</li>
+    <li>Order lines with no order number;</li>
+    <li>The same order and part on more than one row (it may be a genuine split delivery);</li>
+    <li>Month spellings it corrected and used, such as <span class="msg">FRI 6TH NIV TBC</span> read as November.
+    Fix the cell rather than relying on this.</li>
+  </ul>
+
+  <h3>Find TTi files</h3>
+  <p>Search the TTi folders on W: by file or folder name. See section 7.</p>
+
+  <h2 id="fields">5. The spreadsheet columns</h2>
+  <p>Column names are matched ignoring capitals, spaces and punctuation. A row counts as an order line if it has an
+  SDI order number, a part code or a description.</p>
+  <table>
+    <tr><th>Column</th><th>How it is used</th></tr>
+    <tr><td><b>LORRY FROM SDI</b></td><td>The planned departure. Drives <i>Leaving on a day</i>, the chase list and the morning summary.</td></tr>
+    <tr><td><b>DUE DATE</b></td><td>When the customer wants it. Drives <i>Overdue, no departure</i> and "planned to leave after the due date".</td></tr>
+    <tr><td><b>SDI ORDER NO</b></td><td>Searched. Shown on every line.</td></tr>
+    <tr><td><b>CUSTOMER PO</b></td><td>Searched. Blank or a placeholder means "No customer PO".</td></tr>
+    <tr><td><b>PART CODE</b></td><td>Searched. Shown with the description.</td></tr>
+    <tr><td><b>DESCRIPTION</b></td><td>Shown.</td></tr>
+    <tr><td><b>TTI ACCOUNT</b></td><td>Searched. Shown.</td></tr>
+    <tr><td><b>QTY</b></td><td>Shown. Flagged in Data quality if it is not a number.</td></tr>
+    <tr><td><b>PALLETS</b></td><td>Shown as recorded, never added up. Flagged if not a number; blank is "no pallet count".</td></tr>
+    <tr><td><b>COMMENTS</b></td><td>Read for the <b>pick note</b>, <b>delivery note</b>, invoice, proof of export and "booked in" numbers, and for "await PO". Searched as a mention.</td></tr>
+    <tr><td><b>BOOKED IN WITH TTI</b></td><td>Checked for the chase list and morning summary.</td></tr>
+    <tr><td><b>LABEL + Batch DONE</b></td><td>Checked for the chase list and morning summary.</td></tr>
+    <tr><td><b>INVOICE NUMBER</b></td><td>Blank after departure means "not invoiced".</td></tr>
+    <tr><td><b>PROOF OF EXPORT</b></td><td>Checked once a line has gone and been invoiced.</td></tr>
+    <tr><td><b>DEL ADD</b> and <b>INTO ELC OR LOCAL DESTNATION</b></td><td>Both blank means "no delivery address or destination".</td></tr>
+    <tr><td><b>WHO PAYING</b>, <b>CHINA,UK OR POLAND MAN</b>, <b>TRAILER</b>, <b>VALUE</b></td><td>Read, but not shown on screen.</td></tr>
+    <tr><td><b>NUMBER/PALLET</b>, <b>LORRY FROM POLAND</b></td><td>Not used, except that a search finds words in them as mentions.</td></tr>
+  </table>
+  <div class="panel">
+    <h4>What counts as "not filled in"</h4>
+    <p>Blank, or any of: <span class="msg">- -- n/a na no none nil tbc tba tbd x ? ?? not yet pending await awaiting</span>.
+    Anything else, such as YES or a name, counts as done.</p>
+  </div>
+
+  <h2 id="dates">6. How dates are read</h2>
+  <ul>
+    <li>A real Excel date is used as it is.</li>
+    <li>Typed dates are read <b>UK way round</b>: <span class="msg">23/10/2026</span>, <span class="msg">23.10.26</span>,
+    <span class="msg">2026-10-23</span>, or words such as <span class="msg">FRI 23RD OCT</span>.</li>
+    <li><b>No year written:</b> the year is chosen so the date falls near when the plan was saved, and the weekday,
+    if given, must agree.</li>
+    <li><b>TBC, await, provisional or estimated</b> in the cell: read, but marked <b>tentative</b>.</li>
+    <li><b>Blank, N/A, TBC on its own</b> and similar: "no date yet", which is normal, not an error.</li>
+    <li><b>Two dates in one cell</b>, or words like "moved", "from", "until": not guessed. Listed as unreadable.</li>
+    <li><b>A weekday that does not match the date:</b> not guessed. Listed as unreadable.</li>
+    <li><b>A month misspelt by one letter</b> (NIV for Nov) is corrected only when a weekday confirms it, and is
+    listed in Data quality.</li>
+  </ul>
+
+  <h2 id="files">7. Finding TTi files</h2>
+  <p>The <b>Find TTi files</b> tab, and the same question in ChatGPT, search by <b>file and folder name</b> in:</p>
+  <ul>
+    <li><b>Design</b>: W:\Design\Customers April 08 Onwards\TTi</li>
+    <li><b>Production</b>: W:\Production\TTi</li>
+    <li><b>Prototype</b>: W:\Prototype\TTi</li>
+  </ul>
+  <ol>
+    <li>Type a <b>job number, drawing number, part code or product name</b>, or several words. Every word must appear
+    in the file's name or folder path.</li>
+    <li>Optionally choose one folder, and a kind: drawings (PDF, DXF, DWG), 3D models (SolidWorks, STEP), images,
+    documents, or folders only.</li>
+    <li>Results show the name, the full <b>W:\ path</b> (with a <span class="btnname">Copy path</span> button), the
+    folder, size and date modified. Best name matches come first, then the most recently changed.</li>
+    <li>Open the file from the W: drive in the office, by pasting the path into File Explorer.</li>
+  </ol>
+  <div class="panel warn">
+    <h4>Good to know</h4>
+    <p>It searches names, not what is inside files. It works from an <b>index rebuilt on a schedule</b>, and the line
+    at the bottom says when; a file saved since then will not be found yet. It does not open, copy or send
+    files.</p>
+  </div>
+
+  <h2 id="chatgpt">8. Using it in ChatGPT</h2>
+  <p>The same questions can be asked in ChatGPT, typed or by voice, through the <b>SDI TTI Despatch</b> connector.
+  ChatGPT reads the plan as you, with your Microsoft sign-in, and only reads.</p>
+  <h3>Connecting, once</h3>
+  <ol>
+    <li>In ChatGPT, open <b>Apps</b> (or Connectors) and choose <b>SDI TTI Despatch</b>. Your ChatGPT workspace admin
+    adds it; if you cannot see it, ask James.</li>
+    <li>Tap <b>Connect</b>. A page asks you to confirm that ChatGPT may <b>look up the TTI Despatch Plan and search the
+    TTi folders as you</b>, read-only. Tap <b>Continue</b>.</li>
+    <li>Choose your <b>SDI Microsoft account</b> and approve the sign-in (MFA).</li>
+    <li>If ChatGPT offers <b>Always allow</b>, it is safe: every tool only reads.</li>
+  </ol>
+  <h3>What to ask</h3>
+  <table>
+    <tr><th>Ask something like</th><th>What it does</th></tr>
+    <tr><td>"Where is TTI order 15194?"<br>"Find PO 9981."</td><td>Searches every weekly sheet, with the sheet and row.</td></tr>
+    <tr><td>"What's leaving SDI on Thursday?"</td><td>The lorry plan for that day, with any lines whose date it could not read.</td></tr>
+    <tr><td>"What do I need to chase?"<br>"Chase list for the next 3 days."</td><td>The chase list, grouped by what is missing.</td></tr>
+    <tr><td>"Which TTI orders are overdue with no departure date?"</td><td>Overdue, no departure.</td></tr>
+    <tr><td>"Read me this morning's despatch summary."</td><td>The morning summary, to read or copy. It is not sent.</td></tr>
+    <tr><td>"Why was that answer hedged?"<br>"What's wrong in the plan?"</td><td>Data quality.</td></tr>
+    <tr><td>"Find the TTi drawings for 9287."<br>"Any Production folder for the Milwaukee gondola?"</td><td>Searches the TTi folders by name, with full W:\ paths.</td></tr>
+  </table>
+  <p>Every answer says when the plan was last saved, and gives the sheet and row when you ask where something came
+  from. ChatGPT is told never to make up numbers or dates, and to say plainly when it cannot see something.</p>
+  <div class="panel">
+    <h4>It cannot</h4>
+    <p>Change the workbook, book anything in, send the summary, open files, or answer from an earlier part of the
+    conversation as if it were current. If you ask it to, it says it can only look things up.</p>
+  </div>
+
+  <h2 id="where">9. What can be asked where</h2>
+  <table>
+    <tr><th>Question</th><th>Web app</th><th>ChatGPT</th></tr>
+    <tr><td>Leaving on a day</td><td>✓</td><td>✓</td></tr>
+    <tr><td>Search all weeks</td><td>✓</td><td>✓</td></tr>
+    <tr><td>Chase list</td><td>✓</td><td>✓</td></tr>
+    <tr><td>Overdue, no departure</td><td>✓</td><td>✓</td></tr>
+    <tr><td>Morning summary</td><td>✓ (with Copy as text)</td><td>✓ (read out or as text)</td></tr>
+    <tr><td>Data quality</td><td>✓</td><td>✓</td></tr>
+    <tr><td>Find TTi files</td><td>✓ (with Copy path)</td><td>✓</td></tr>
+    <tr><td>Voice</td><td>no</td><td>✓ in the ChatGPT app</td></tr>
+  </table>
+
+  <h2 id="messages">10. Messages and what to do</h2>
+  <table>
+    <tr><th>You see</th><th>What it means</th></tr>
+    <tr><td class="msg">The TTI despatch view is for named Customer Services people</td><td>You are not on the list, or signed in with another account. Ask James.</td></tr>
+    <tr><td class="msg">Your account does not have access to …</td><td>Your own SharePoint access to the Despatch Plan is missing. Ask Sue or IT.</td></tr>
+    <tr><td class="msg">… was renamed or moved</td><td>The workbook is not where the app expects. Tell James.</td></tr>
+    <tr><td class="msg">Sign-in has expired</td><td>Reload the page, or in ChatGPT reconnect SDI TTI Despatch.</td></tr>
+    <tr><td class="msg">N lines could not be read and cannot be ruled out</td><td>Check those lines in the workbook (Data quality lists them).</td></tr>
+    <tr><td class="msg">The TTi folder index has not been built yet</td><td>The file search is not set up on the server yet. Tell James.</td></tr>
+    <tr><td class="msg">A date is needed, as YYYY-MM-DD</td><td>Pick a date first.</td></tr>
+  </table>
+
+  <h2 id="help">11. Help</h2>
+  <p>Questions, a missing name, or an answer that looks wrong: contact <b>James Gray</b>, AI and Systems Controller,
+  with a screenshot and the sheet and row if you have them.</p>
+</div>
+</body>
+</html>
