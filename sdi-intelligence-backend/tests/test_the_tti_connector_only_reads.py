@@ -56,10 +56,21 @@ def names_in(node) -> set:
 
 
 class ThereAreSixToolsAndTheyAllReadTests(unittest.TestCase):
-    def test_the_six_questions_are_the_six_tools(self):
+    def test_the_six_questions_and_the_folder_search_are_the_tools(self):
         self.assertEqual({t.name for t in TOOLS},
                          {"tti_find", "tti_leaving_on", "tti_chase", "tti_overdue",
-                          "tti_morning", "tti_data_quality"})
+                          "tti_morning", "tti_data_quality", "tti_find_files"})
+
+    def test_no_tool_is_registered_except_through_the_read_only_helper(self):
+        """A tool decorated with apps.tool directly would skip READS."""
+        for node in TREE.body:
+            if isinstance(node, ast.FunctionDef):
+                for d in node.decorator_list:
+                    target = d.func if isinstance(d, ast.Call) else d
+                    with self.subTest(function=node.name):
+                        self.assertFalse(isinstance(target, ast.Attribute) and target.attr == "tool"
+                                         and getattr(target.value, "id", "") == "apps",
+                                         f"{node.name} is registered without _tool")
 
     def test_every_tool_is_registered_read_only(self):
         """read_only_hint is not a comment: ChatGPT and the Claude app use it
@@ -112,17 +123,19 @@ class TheListIsCheckedInsideEveryToolTests(unittest.TestCase):
         for tool in TOOLS:
             used = names_in(ast.Module(body=tool.body, type_ignores=[]))
             with self.subTest(tool=tool.name):
-                self.assertIn("_plan", used,
-                              f"{tool.name} does not establish who is calling")
+                self.assertTrue({"_plan", "_person"} & used,
+                                f"{tool.name} does not establish who is calling")
                 self.assertIn("_Refused", used,
                               f"{tool.name} does not handle a refusal")
 
-    def test_the_gate_lives_in_the_one_helper_the_tools_all_use(self):
-        gate = [n for n in TREE.body
-                if isinstance(n, ast.FunctionDef) and n.name == "_plan"][0]
-        used = names_in(gate)
-        self.assertIn("named_in", used)
-        self.assertIn("OIDS_SETTING", used)
+    def test_the_gate_lives_in_the_helpers_the_tools_use(self):
+        for helper in ("_plan", "_person"):
+            gate = [n for n in TREE.body
+                    if isinstance(n, ast.FunctionDef) and n.name == helper][0]
+            used = names_in(gate)
+            with self.subTest(helper=helper):
+                self.assertIn("named_in", used)
+                self.assertIn("OIDS_SETTING", used)
 
     def test_it_is_the_same_list_as_the_web_app_uses(self):
         """Somebody in on one surface and out on the other is the bug that
@@ -270,6 +283,11 @@ class AnswersFitToSayOutLoudTests(unittest.TestCase):
         for tool in TOOLS:
             body = ast.get_source_segment(SOURCE, tool) or ""
             with self.subTest(tool=tool.name):
+                if tool.name == "tti_find_files":
+                    # Not the plan: its age is the folder index's, said in as_at.
+                    self.assertIn('answer["as_at"]', body)
+                    self.assertIn("index_age_hours", body)
+                    continue
                 self.assertIn("_ok(", body, f"{tool.name} answers without provenance")
 
     def test_the_instructions_forbid_quoting_stale_lines(self):
@@ -290,6 +308,9 @@ class AnswersFitToSayOutLoudTests(unittest.TestCase):
             if tool.name == "tti_data_quality":
                 self.assertIn("limit=15", body)      # already short by construction
                 continue
+            if tool.name == "tti_find_files":
+                self.assertIn("limit=25", body)      # names and paths, a few fields each
+                continue
             with self.subTest(tool=tool.name):
                 self.assertIn("_brief(", body)
 
@@ -301,7 +322,7 @@ class ItReachesTheServerTests(unittest.TestCase):
     def test_the_connector_and_what_it_imports_are_on_the_deploy(self):
         for name in ("tti_connector.py", "connector_identity.py", "tti_search.py",
                      "tti_data.py", "tti_plan_source.py", "sue_despatch.py",
-                     "tracker_snapshot.py"):
+                     "tracker_snapshot.py", "tti_files.py", "tools/tti_index_folders.py"):
             with self.subTest(file=name):
                 self.assertIn(f'"{name}"', DEPLOY)
 

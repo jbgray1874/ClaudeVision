@@ -29,6 +29,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 import auth
 import tti_data
+import tti_files
 from sue_despatch import going_out
 from tti_search import (chase, data_quality, find, morning, overdue_undated,
                         summary_text)
@@ -143,6 +144,30 @@ def make_router(page_dir=None):
         who(request)
         plan = read(request)
         return answered(plan, data_quality(plan.rows, as_of=plan.saved.date()))
+
+    # ── Liam's TTi folders: Design, Production, Prototype ──────────────────
+    # A search of an index of names, built on a schedule. Like everything
+    # above it only reads, and the folders are configuration: a request
+    # carries words, never a location.
+    @router.get("/despatch/files")
+    def find_files(request: Request, q: str = Query(..., max_length=MAX_QUERY),
+                   folder: str = Query("", max_length=40), kind: str = Query("", max_length=20)):
+        who(request)
+        try:
+            answer = tti_files.search(q, folder=folder, kind=kind)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        except tti_files.NotReady as exc:
+            raise HTTPException(503, str(exc))
+        return JSONResponse(answer, headers=_PAGE_HEADERS)
+
+    @router.get("/despatch/files/status")
+    def files_status(request: Request):
+        who(request)
+        try:
+            return JSONResponse(tti_files.status(), headers=_PAGE_HEADERS)
+        except tti_files.NotReady as exc:
+            raise HTTPException(503, str(exc))
 
     return router
 

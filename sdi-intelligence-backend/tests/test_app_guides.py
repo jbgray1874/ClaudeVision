@@ -38,3 +38,33 @@ def test_the_guide_covers_every_tab_and_button():
     for name in tabs + ["Check who's clocked in", "Update InVentry", "Start a new roll call",
                         "Run the data check"]:
         assert name.replace("'", "&#39;") in guide or name in guide, name
+
+
+def test_tti_despatch_offers_its_guide_and_links_to_it():
+    (svc,) = [s for s in _services() if s["id"] == "tti-despatch"]
+    assert svc["guide_url"] == "guide-tti.html"
+    page = (APP_DIR / "tti-despatch.html").read_text(encoding="utf-8")
+    assert 'href="/app/guide-tti.html"' in page
+    guide = (APP_DIR / "guide-tti.html").read_text(encoding="utf-8")
+    assert 'href="/api/tti/despatch"' in guide
+
+
+def test_the_tti_guide_names_every_tab_and_every_chase_heading():
+    import sys
+    sys.path.insert(0, str(BACKEND))
+    import tti_search
+    guide = (APP_DIR / "guide-tti.html").read_text(encoding="utf-8")
+    page = (APP_DIR / "tti-despatch.html").read_text(encoding="utf-8")
+    for tab in re.findall(r'^  label: "([^"]+)"', page, re.M):
+        assert tab in guide, tab
+    for heading in tti_search._HEADINGS.values():
+        assert heading in guide, heading
+
+
+def test_the_tti_guide_lists_every_column_the_code_reads():
+    guide = (APP_DIR / "guide-tti.html").read_text(encoding="utf-8")
+    for column in ("LORRY FROM SDI", "DUE DATE", "SDI ORDER NO", "CUSTOMER PO", "PART CODE",
+                   "DESCRIPTION", "TTI ACCOUNT", "QTY", "PALLETS", "COMMENTS",
+                   "BOOKED IN WITH TTI", "LABEL + Batch DONE", "INVOICE NUMBER",
+                   "PROOF OF EXPORT", "DEL ADD", "WHO PAYING", "VALUE", "TRAILER"):
+        assert column in guide, column
