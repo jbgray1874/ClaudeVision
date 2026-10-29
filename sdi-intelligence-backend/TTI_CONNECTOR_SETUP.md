@@ -1,7 +1,8 @@
-# TTI Despatch in ChatGPT: setting it up for Selina, Lee, Sue and James
+# TTI Despatch in ChatGPT: setting it up for Selina, Lee, Sue, Liam and James
 
-`tti_connector.py` lets the four of them ask the TTI Despatch Plan the same six
-questions the web app answers, from the ChatGPT app — typed or out loud. It runs
+`tti_connector.py` lets them ask the TTI Despatch Plan the same six questions
+the web app answers, and search the TTi folders on W: by name (Liam's request:
+Design, Production and Prototype), from the ChatGPT app — typed or out loud. It runs
 the same code as the web view (`tti_search.py` over `tti_data.py`), so there is
 one set of rules about what the workbook means rather than two.
 
@@ -43,8 +44,11 @@ Known so far:
 | James Gray (ordinary account, not admin) | `5acf6b37-147f-4468-bdb1-ecc3da1f1076` |
 | Selina Kuddus | **needed** |
 | Lee Merril | **needed** |
+| Liam | **needed** |
 
-To find one: Entra ID → Users → the person → **Object ID** on their overview.
+To find one: Entra ID → Users → the person → **Object ID** on their overview. Or
+the person opens `https://sdiintelligence-sdidisplays.msappproxy.net/api/me`
+signed in with their usual account and reads the `"oid"` value.
 
 An empty list admits **nobody**, on both surfaces, and the connector refuses to
 start rather than run as a service that refuses every call.
@@ -59,10 +63,21 @@ C:\ClaudeVision\sdi-intelligence-backend\.venv\Scripts\python.exe -m pip install
 
 ## 2. Entra (portal.azure.com → Microsoft Entra ID → App registrations)
 
-**a. The existing *SDI Intelligence* registration** already exposes
-`api://<SDI_CLIENT_ID>/tracker.access` (CONNECTOR_SETUP.md step 2a). Nothing to
-change — this connector asks for the same scope, and the object-ID list is what
-separates the two audiences, not the scope.
+**a. The *SDI Intelligence Portal* registration → Expose an API.** This is the
+app whose ID is `SDI_CLIENT_ID` in `.env` (the one with a client secret), and
+the connector reads Sue's plan on the person's behalf through it, so the scope
+must be on this app. **Not** on *SDI Intelligence*, the App Proxy app, whose
+Application ID URI is the msappproxy address and must be left alone.
+
+If no Application ID URI is set, **Add** → accept `api://<SDI_CLIENT_ID>` →
+Save. If `tracker.access` is not listed (CONNECTOR_SETUP.md may have added it
+for AM CRM), **Add a scope**: scope name `tracker.access`, *Admins only*, admin
+consent display name *Read SDI Intelligence as the signed-in person*,
+description *Lets an approved app (ChatGPT, Claude) read SDI Intelligence data
+as the person signed in. It cannot sign anyone else in.*, Enabled → Add scope.
+Its full name is then `api://<SDI_CLIENT_ID>/tracker.access`, which is what the
+connector asks for by default. Only if the URI is something else, put the full
+scope name in `.env` as `SDI_TTI_CONNECTOR_SCOPE_URI`.
 
 **b. A new registration, *SDI TTI Despatch for ChatGPT***. A separate one from
 *SDI Tracker for ChatGPT* so the two can be switched off independently and so
@@ -74,13 +89,13 @@ the assigned-users list on each names the right people.
 2. **Certificates & secrets** → New client secret (12 months) → copy the
    **Value** now (it is shown once). It goes in the server's `.env` in step 4
    and nowhere else — in particular, not into ChatGPT, and not into an email.
-3. **API permissions** → Add → *My APIs* → *SDI Intelligence* → Delegated →
+3. **API permissions** → Add → *My APIs* → *SDI Intelligence Portal* → Delegated →
    `tracker.access` → Add → **Grant admin consent**.
 4. **Authentication** → Add Redirect URI → Web →
    `https://sdittidespatch-sdidisplays.msappproxy.net/oauth/callback`
    (the connector's own sign-in front door, below).
 5. **Enterprise applications** → *SDI TTI Despatch for ChatGPT* → Properties →
-   **Assignment required: Yes** → Users and groups → add **Selina, Lee, Sue and
+   **Assignment required: Yes** → Users and groups → add **Selina, Lee, Sue, Liam and
    James**. Nobody else can connect it.
 
 Step 5 and `SDI_TTI_OIDS` are two separate doors, deliberately. Entra decides
@@ -121,10 +136,23 @@ and make sure these are already there, from the web view:
 
 ```ini
 SDI_TTI_ENABLED=yes
-SDI_TTI_OIDS=<Selina>,<Lee>,cc53597a-c1b5-4bf9-b862-f63f7392ff81,5acf6b37-147f-4468-bdb1-ecc3da1f1076
+SDI_TTI_OIDS=<Selina>,<Lee>,<Liam>,cc53597a-c1b5-4bf9-b862-f63f7392ff81,5acf6b37-147f-4468-bdb1-ecc3da1f1076
 SDI_TTI_PLAN_SITE=sdidisplays.sharepoint.com:/sites/SUESOSOD
 SDI_TTI_PLAN_PATH=General/TTI Delivery Schedule 2021 V3.xlsx
 ```
+
+For the TTi folder search (web tab and the `tti_find_files` tool), the server
+needs W:'s network path, and an index built on a schedule:
+
+```ini
+SDI_DRIVE_MAP=K=\\sdi-dc01\shareddata$\Shared;W=<Remote name from "net use W:" on a PC>
+```
+
+Keep the `K=` part: this line replaces the default. Then run
+`tools\tti_index_folders.py` once by hand and schedule it (twice a day); see
+the TTI user guide on the app portal for what people see. Optional:
+`SDI_TTI_FOLDERS` (default: the three TTi folders), `SDI_TTI_FOLDER_INDEX`
+(default `C:\SDIIntelligence\tti\tti_folders.sqlite3`).
 
 Optional: `SDI_TTI_CONNECTOR_PORT` (default 8074).
 `SDI_TTI_PLAN_TTL` (default `0`) is how many seconds a parse of the workbook may
@@ -211,6 +239,9 @@ Voice chat working is not the same as voice **using the tools**. Check all three
    sentence ("…but N lines have a date I could not read"). That caveat is
    written into the answer rather than left to the assistant, because a voice
    answer has no footer for somebody to notice afterwards.
+
+4. **The folders:** "Find the TTi drawings for 9287" → it should give full
+   `W:\…` paths and say how old the folder index is.
 
 If a tool is never called, the usual causes are: the person is not in
 `SDI_TTI_OIDS` (the reply says so plainly — read the log line

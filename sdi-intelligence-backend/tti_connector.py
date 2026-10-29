@@ -88,7 +88,10 @@ TENANT = auth.TENANT_ID
 API_ID = auth.CLIENT_ID                   # the SDI Intelligence app exposes the scope
 AUDIENCES = [a for a in (API_ID, f"api://{API_ID}" if API_ID else "",
                          _opt("SDI_TTI_CONNECTOR_AUDIENCE")) if a]
-SCOPE_URI = f"api://{API_ID}/{SCOPE}" if API_ID else SCOPE
+# The scope's full name as Entra shows it under Expose an API on the app that
+# is SDI_CLIENT_ID. Only needed if that app's Application ID URI is not api://<id>.
+SCOPE_URI = (_opt("SDI_TTI_CONNECTOR_SCOPE_URI")
+             or (f"api://{API_ID}/{SCOPE}" if API_ID else SCOPE))
 JWKS_URL = _opt("SDI_TTI_CONNECTOR_JWKS_URL")
 OAUTH_CLIENT = _opt("SDI_TTI_CONNECTOR_OAUTH_CLIENT")
 OAUTH_SECRET = _opt("SDI_TTI_CONNECTOR_OAUTH_SECRET")
