@@ -27,7 +27,17 @@
 param(
     [string]$Server = "10.0.0.5",
     # The commit that first carried the write fix. Anything containing it will do.
-    [string]$FixCommit = "d85ddfee"
+    [string]$FixCommit = "d85ddfee",
+    # Restart the service first, then check. Use this when section 4b says the
+    # process started before the files were copied.
+    #
+    # ── WHY sc.exe AND NOT Restart-Service ────────────────────────────────────
+    # Restart-Service has no -ComputerName in Windows PowerShell 5.1, which is
+    # what the laptop runs. Three attempts at it failed with "a parameter cannot
+    # be found that matches parameter name 'ComputerName'". sc.exe takes the
+    # machine as its first argument and is what Deploy-AMCRM.ps1 has always
+    # used, so it is known to work from here.
+    [switch]$Restart
 )
 
 $ErrorActionPreference = "Continue"
@@ -67,6 +77,45 @@ if (-not (Test-Path -LiteralPath $remote)) {
     exit 1
 }
 Yes "Reachable over UNC: $remote"
+
+# ── 1b. Restart, if asked ────────────────────────────────────────────────────
+function Get-State {
+    $answer = (& sc.exe "\\$Server" query SDIIntelligence 2>&1) -join " "
+    if ($answer -match "STATE\s*:\s*\d+\s+(\w+)") { return $Matches[1] }
+    if ($answer -match "1060") { return "MISSING" }
+    if ($answer -match "5:|Access is denied") { return "DENIED" }
+    return "UNKNOWN"
+}
+
+if ($Restart) {
+    Head "1b. Restarting the service"
+    $before = Get-State
+    if ($before -in @("DENIED", "UNKNOWN", "MISSING")) {
+        No "Cannot control the service from this laptop ($before)"
+        Say "Run this on the SERVER instead, over Remote Desktop, as admin:"
+        Write-Host "      Restart-Service SDIIntelligence -Force" -ForegroundColor White
+        Say "(-ComputerName does not exist on Restart-Service, which is why it"
+        Say " has to be either sc.exe from here or Restart-Service there.)"
+    } else {
+        Say "Currently $before. Stopping..."
+        & sc.exe "\\$Server" stop SDIIntelligence 2>&1 | Out-Null
+        $deadline = (Get-Date).AddSeconds(60)
+        do { Start-Sleep 2; $state = Get-State } until ($state -eq "STOPPED" -or (Get-Date) -gt $deadline)
+        Say "Now $state. Starting..."
+        & sc.exe "\\$Server" start SDIIntelligence 2>&1 | Out-Null
+        $deadline = (Get-Date).AddSeconds(60)
+        do { Start-Sleep 2; $state = Get-State } until ($state -eq "RUNNING" -or (Get-Date) -gt $deadline)
+        if ($state -eq "RUNNING") {
+            Yes "SDIIntelligence is RUNNING again"
+            Say "Giving it 8 seconds to finish starting up..."
+            Start-Sleep 8
+        } else {
+            No "It did not come back as RUNNING (last state: $state)"
+            Say "On the SERVER, over Remote Desktop, as admin:"
+            Write-Host "      Restart-Service SDIIntelligence -Force" -ForegroundColor White
+        }
+    }
+}
 
 # ── 2. The code, on both machines ───────────────────────────────────────────
 Head "2. Does the code have the write fix?"
@@ -213,13 +262,13 @@ if ($startedAt -and $newest) {
     } else {
         No "The service has been running since BEFORE the files were copied"
         Say "It still has the old code in memory. Restart it:"
-        Write-Host "      Restart-Service -ComputerName $Server -Name SDIIntelligence -Force" -ForegroundColor White
+        Write-Host "      .\sdi-intelligence-backend\deploy\Check-AMCRM-Live.ps1 -Restart" -ForegroundColor White
         $liveHasFix = $false
     }
 } else {
     Hm "Could not read the service's start time from here"
     Say "Restart it anyway - it costs seconds and removes the doubt:"
-    Write-Host "      Restart-Service -ComputerName $Server -Name SDIIntelligence -Force" -ForegroundColor White
+    Write-Host "      .\sdi-intelligence-backend\deploy\Check-AMCRM-Live.ps1 -Restart" -ForegroundColor White
 }
 # ── 5. Settings, by name only ────────────────────────────────────────────────
 Head "5. Is writing switched on? (names only - no values are printed)"
@@ -304,7 +353,7 @@ if ($laptopOk -and $serverOk -and $liveHasFix -eq $true) {
 } elseif ($laptopOk -and $serverOk) {
     Write-Host "  THE FIX IS ON THE SERVER, BUT THE RUNNING PROCESS MAY NOT HAVE IT." -ForegroundColor Yellow
     Write-Host "  Python loads a module once, at startup. Restart the service:" -ForegroundColor Gray
-    Write-Host "      Restart-Service -ComputerName $Server -Name SDIIntelligence -Force" -ForegroundColor White
+    Write-Host "      .\sdi-intelligence-backend\deploy\Check-AMCRM-Live.ps1 -Restart" -ForegroundColor White
     Write-Host "  Then run this script again. Section 4b should go green." -ForegroundColor Gray
 } elseif ($laptopOk) {
     Write-Host "  THE FIX IS ON THIS LAPTOP BUT NOT ON THE SERVER. Deploy it." -ForegroundColor Yellow
