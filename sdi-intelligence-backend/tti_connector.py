@@ -557,8 +557,13 @@ def tti_find_files(query: str, folder: str = "", kind: str = "") -> dict:
     answer["as_at"] = (f"The folder index was built {answer['index_age_hours']:.0f} hours ago; "
                        f"files added since then are not in it."
                        if answer["index_age_hours"] is not None else "")
-    answer["opening"] = ("Give the path so the person can open it from the W: drive in the "
-                         "office. Nothing here opens, copies or sends files.")
+    for match in answer["matches"]:
+        if not match["is_folder"]:
+            match["open_url"] = tti_files.open_url(match["path"])
+    answer["opening"] = ("Give each file's open_url as a link: it opens the file in the "
+                         "person's browser after their SDI sign-in, a PDF or picture on "
+                         "screen and anything else as a download. Give the path too, for "
+                         "the W: drive in the office. Nothing here changes a file.")
     _timed("tti_find_files", started, user, f"q={query[:40]!r} n={n}")
     return answer
 
