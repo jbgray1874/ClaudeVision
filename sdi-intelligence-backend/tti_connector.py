@@ -59,7 +59,7 @@ import connector_identity as identity
 import connector_oauth
 import tti_data
 import tti_files
-from sue_despatch import going_out
+from sue_despatch import going_out, going_out_week
 from tti_search import (chase, data_quality, find, morning, overdue_undated,
                         summary_text)
 
@@ -246,6 +246,21 @@ def _brief(lines: list[dict], keep: int = 12) -> list[dict]:
     return out
 
 
+def _said_day(d: date) -> str:
+    """"Monday 2 November", as it is said - not "Monday 02 November"."""
+    return f"{d.strftime('%A')} {d.day} {d.strftime('%B')}"
+
+
+def _lines_have(n: int) -> str:
+    return f"{n} line has" if n == 1 else f"{n} lines have"
+
+
+def _either(names) -> str:
+    """"Monday, Tuesday or Thursday"."""
+    names = list(names)
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
+
+
 def _name_of(line: dict) -> str:
     bits = [line.get("order") or "", line.get("part") or ""]
     return " ".join(b for b in bits if b) or "a line with no order number"
@@ -300,7 +315,9 @@ Answering:
 
 Dates: the tools take YYYY-MM-DD. The person will say "today", "tomorrow",
 "Thursday". Work out the actual date and send that. `today_iso` in every
-answer is today's date.
+answer is today's date. For "this week" or "next week" use
+tti_leaving_this_week with any date in that week; it answers Monday to Friday
+in one call, under `days`.
 
 Freshness: every answer carries `as_at`, saying when the plan was last saved.
 Say it the first time in a conversation you quote the plan, and whenever the
@@ -313,7 +330,8 @@ it says. In particular: if it says the person is not on the list, tell them so
 plainly and do not answer the question from anything earlier.
 
 Files: tti_find_files searches the TTi folders on W: (Design, Production,
-Prototype) by file and folder name. Give each result's `path` in full, say
+Prototype) by file and folder name. Give each file's `open_url` as a link - it
+opens the file after the person's SDI sign-in - and its `path` in full, say
 which folder it is in, and say `as_at` when the person may be looking for
 something recent. It does not look inside files.
 
@@ -380,24 +398,69 @@ def tti_leaving_on(day: str = "") -> dict:
     # sentence somebody acts on, and there is no footnote in a voice answer.
     if count:
         spoken = (f"{count} line{'s' if count != 1 else ''} planned to leave on "
-                  f"{asked.strftime('%A %d %B')}: "
+                  f"{_said_day(asked)}: "
                   + "; ".join(_name_of(l) for l in answer["lines"][:SAY_FIRST])
                   + (f"; and {count - SAY_FIRST} more." if count > SAY_FIRST else "."))
         if unread:
-            spoken += (f" {unread} other line{'s' if unread != 1 else ''} have a date "
+            spoken += (f" {_lines_have(unread).replace('line', 'other line', 1)} a date "
                        f"I could not read, so this may not be all of them.")
     elif unread:
-        spoken = (f"Nothing I can read is set to leave on {asked.strftime('%A %d %B')}, "
-                  f"but {unread} line{'s' if unread != 1 else ''} have a departure date "
+        spoken = (f"Nothing I can read is set to leave on {_said_day(asked)}, "
+                  f"but {_lines_have(unread)} a departure date "
                   f"I could not read and cannot rule out. Those need checking in the "
                   f"workbook before relying on this.")
     else:
         spoken = (f"Nothing in the plan is set to leave SDI on "
-                  f"{asked.strftime('%A %d %B')}.")
+                  f"{_said_day(asked)}.")
     answer["lines"] = _brief(answer["lines"], 25)
     answer["unresolved_date_lines"] = _brief(answer["unresolved_date_lines"], 10)
     answer["no_date_lines"] = _brief(answer["no_date_lines"], 5)
     _timed("tti_leaving_on", started, user, f"day={asked} n={count} unread={unread}")
+    return _ok(answer, spoken, plan)
+
+
+@_tool(
+    "What is planned to leave SDI in one week, Monday to Friday, a day at a time, "
+    "from the LORRY FROM SDI column. Send any date in that week as YYYY-MM-DD: "
+    "today for 'this week', a date next week for 'next week'. A Saturday or Sunday "
+    "is included only when something leaves on it. This is the departure plan, not "
+    "the customer due date.")
+def tti_leaving_this_week(day: str = "") -> dict:
+    started = time.monotonic()
+    try:
+        user, plan = _plan("tti_leaving_this_week", started)
+        asked = _day_meant(day, plan)
+    except _Refused as stop:
+        return stop.payload
+    answer = going_out_week(plan.rows, day=asked, as_of=plan.saved.date())
+    count, unread = answer["line_count"], answer["unresolved_date_count"]
+    first, last = (date.fromisoformat(answer[k]) for k in ("week_start", "week_end"))
+    span = f"between {_said_day(first)} and {_said_day(last)}"
+    # Said as a count per day: five days of order numbers read aloud is the
+    # ninety-second recital. The lines per day are there for "and Tuesday?".
+    if count:
+        spoken = (f"{count} line{'s' if count != 1 else ''} planned to leave {span}: "
+                  + "; ".join(f"{d['line_count']} on {date.fromisoformat(d['day']).strftime('%A')}"
+                              for d in answer["days"] if d["line_count"])
+                  + (". Nothing on " + _either(date.fromisoformat(d["day"]).strftime("%A")
+                                               for d in answer["days"] if not d["line_count"])
+                     if any(not d["line_count"] for d in answer["days"]) else "")
+                  + ".")
+        if unread:
+            spoken += (f" {_lines_have(unread).replace('line', 'other line', 1)} a date "
+                       f"I could not read, so this may not be all of them.")
+    elif unread:
+        spoken = (f"Nothing I can read is set to leave {span}, but {_lines_have(unread)} "
+                  f"a departure date I could not read and cannot rule out. Those need "
+                  f"checking in the workbook before relying on this.")
+    else:
+        spoken = f"Nothing in the plan is set to leave SDI {span}."
+    for one in answer["days"]:
+        one["lines"] = _brief(one["lines"], 12)
+    answer["unresolved_date_lines"] = _brief(answer["unresolved_date_lines"], 10)
+    answer["no_date_lines"] = _brief(answer["no_date_lines"], 5)
+    _timed("tti_leaving_this_week", started, user,
+           f"week={first} n={count} unread={unread}")
     return _ok(answer, spoken, plan)
 
 
@@ -475,8 +538,8 @@ def tti_morning(day: str = "") -> dict:
     out, slipped, short = (answer["due_out_count"], answer["slipped_count"],
                            answer["incomplete_count"])
     parts = [f"{out} line{'s' if out != 1 else ''} due out on "
-             f"{asked.strftime('%A %d %B')}" if out
-             else f"Nothing due out on {asked.strftime('%A %d %B')}"]
+             f"{_said_day(asked)}" if out
+             else f"Nothing due out on {_said_day(asked)}"]
     if short:
         parts.append(f"{short} of them with something missing")
     if slipped:
