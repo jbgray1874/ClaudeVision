@@ -136,6 +136,7 @@ function card(line, parent, cls){
   const h = el("h3", (line.order ? "Order " + line.order : "(no order number)")
                    + (line.customer_po ? "  ·  PO " + line.customer_po : ""), c);
   if(tentative) el("span", "tentative", h, "flag");
+  if(line.loaded) el("span", "loaded", h, "flag good");
   if(line.overdue_by_days) el("span", line.overdue_by_days + " days overdue", h, "flag bad");
   if(line.slipped_by_days) el("span", line.slipped_by_days + " days ago", h, "flag bad");
   if(line.part || line.description)
@@ -153,6 +154,7 @@ function card(line, parent, cls){
   if(line.pallets_as_recorded != null && line.pallets_as_recorded !== "")
     bits.push("pallets as recorded: " + line.pallets_as_recorded);
   if(line.tti_account) bits.push("TTI " + line.tti_account);
+  if(line.trailer) bits.push("Trailer: " + line.trailer);
   if(bits.length) el("p", bits.join("  ·  "), c, "meta");
 
   const paper = [];
@@ -160,6 +162,7 @@ function card(line, parent, cls){
   if(line.delivery_note) paper.push("delivery note " + line.delivery_note);
   if(line.invoice_number) paper.push("invoice " + line.invoice_number);
   if(line.booked_in_with_tti) paper.push("booked in: " + line.booked_in_with_tti);
+  if(line.label_and_batch_done) paper.push("labels: " + line.label_and_batch_done);
   if(line.proof_of_export) paper.push("proof of export: " + line.proof_of_export);
   if(paper.length) el("p", paper.join("  ·  "), c, "meta");
 
