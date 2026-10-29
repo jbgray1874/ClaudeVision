@@ -31,13 +31,17 @@ Two realities of a spreadsheet shape the design:
     /workbook/worksheets('<sheet>')/range(address='<A1>') with that single
     value, then reads the same address and checks it holds it. The file is
     never replaced or re-uploaded, so nothing outside the named cell can
-    change and nobody else's edit can be overwritten wholesale. No workbook
-    session is opened: a range write with no session header is saved to the
-    never replaced or re-uploaded. Asked for by Nick Garrish, 23 October 2026,
-    after ChatGPT's own SharePoint connector offered him only a whole-file
-    replace. The write and the read-back share one PERSISTENT workbook session,
-    so the read cannot be answered from a copy that has not caught up - without
-    that, a change already in the file reported itself as failed.
+    change and nobody else's edit can be overwritten wholesale. Asked for by
+    Nick Garrish, 23 October 2026, after ChatGPT's own SharePoint connector
+    offered him only a whole-file replace.
+
+    The write and the read-back share one PERSISTENT workbook session, so the
+    read cannot be answered from a copy that has not caught up. Without that, a
+    change already safely in the file reported itself to Nick as failed. (This
+    paragraph said the opposite until 29 October 2026 - "No workbook session is
+    opened" - left behind when the session was added. A comment that contradicts
+    the code is worse than none, and it was contradicting it about exactly the
+    thing that went wrong.)
 
 Configuration (.env), alongside the voicecrm.py settings:
 
