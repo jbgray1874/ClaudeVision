@@ -75,8 +75,13 @@ Have ready:
 
 ## 2. Let the group sign in to the portal — *Entra admin centre*
 
-**Entra ID → Enterprise applications → SDI Intelligence Portal →
-Users and groups → Add user/group**
+**Entra ID → Enterprise applications → [the one whose Application ID is
+SDI_CLIENT_ID] → Users and groups → Add user/group**
+
+The enterprise application and the app registration are two faces of the same
+thing, so this must be the SAME application as step 3 — matched by its
+Application ID, not by its name. See the box in step 3 on why the name is not
+enough in this tenant.
 
 Under **Users and groups**, pick the **group** — not the people. Assign.
 
@@ -92,8 +97,28 @@ sign in and this step changes nothing; leave it as it is either way.
 it is done, every sign-in carries `"groups": []`, a group id in a setting
 matches nobody, and it looks exactly like "that person is not in the group".
 
-**Entra ID → App registrations → SDI Intelligence → Token configuration →
-Add groups claim**
+> ### FIRST, find out WHICH registration the portal signs in with
+>
+> This tenant has more than one app registration whose name reads as "SDI
+> Intelligence", and on 29 October the claim went on the wrong one. Everything
+> looked correct and `/api/me` still said `"groups": []`, because the claim was
+> on an application the portal never signs in with. There is nothing on the
+> screen to tell you — both pages look identical.
+>
+> So take the id from the server rather than the name from the menu. On the
+> **laptop**:
+>
+> ```powershell
+> Select-String \\10.0.0.5\c$\ClaudeVision\sdi-intelligence-backend\.env -Pattern "SDI_CLIENT_ID"
+> ```
+>
+> Then **Entra ID → App registrations → All applications**, paste that id into
+> the search, and check the **Application (client) ID** on the Overview matches
+> before changing anything. The claim and the assignment in step 2 must both be
+> on *that* application.
+
+**Entra ID → App registrations → [the registration whose client id is
+SDI_CLIENT_ID] → Token configuration → Add groups claim**
 
 | Choose | Value |
 |---|---|
@@ -162,11 +187,21 @@ You should see the group id in `groups`:
  "oid":"5acf6b37-…","groups":["<the group's Object Id>"],"kind":"user"}
 ```
 
-**If `groups` is still `[]`,** step 3 has not taken effect. Sign out fully,
-close the browser, and sign in again. If it is still empty, re-check the
-Token configuration: the claim has to be on the **SDI Intelligence** app
-registration — the one whose Application (client) ID is `SDI_CLIENT_ID` in the
-server's `.env` — and not on a different registration with a similar name.
+**If `groups` is still `[]`,** work down these in order. All four have the
+same symptom and nothing on any screen distinguishes them:
+
+1. **The session is old.** Claims are captured at SIGN-IN and kept server-side
+   for ten hours; reloading the page or closing the tab does not refresh them.
+   Use `/auth/logout`, which clears the cookie and signs you out at Microsoft
+   too, then sign in again.
+2. **The claim is on the wrong app registration.** The one that bit on 29
+   October. Check `SDI_CLIENT_ID` as the box in step 3 says — this tenant has
+   two registrations whose names both read as "SDI Intelligence".
+3. **The group is not assigned to that application.** "Groups assigned to the
+   application" emits nothing else, so an unassigned group is invisible however
+   correct the claim is. Step 2.
+4. **The account is not in the group** — or is the `cadmin-` one rather than
+   the ordinary one.
 
 ---
 
