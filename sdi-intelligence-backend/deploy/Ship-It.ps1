@@ -78,6 +78,42 @@ if ($Check) {
     Write-Host ""
     exit 0
 }
+
+# -- THE OTHER DEPLOY, WHEN THE CHANGE IS NOT ON THIS ONE'S LIST ---------------
+#
+# Deploy-AMCRM copies a named list. push-to-server.ps1 copies the whole backend
+# folder and is the only way app.py, the estimating API and the rest reach the
+# server - and it does NOT pull, so running it by hand after forgetting the pull
+# copies yesterday. Both halves of that have cost a deploy.
+#
+# So: if a file outside the named list differs, do it here, after the pull that
+# has already happened, rather than leaving it to be remembered.
+$whole = Join-Path $repo "tools\start\push-to-server.ps1"
+$alsoNeeded = @("app.py", "estimate_routes.py", "estimating_job_tools.py",
+                "public_surface.py", "auth.py", "config.py")
+$drifted = @()
+foreach ($name in $alsoNeeded) {
+    $mine = Join-Path (Join-Path $repo "sdi-intelligence-backend") $name
+    $theirs = "\\$Server\c$\ClaudeVision\sdi-intelligence-backend\$name"
+    if (-not (Test-Path -LiteralPath $mine)) { continue }
+    $a = (Get-FileHash -LiteralPath $mine -Algorithm SHA256).Hash
+    $b = if (Test-Path -LiteralPath $theirs) {
+            (Get-FileHash -LiteralPath $theirs -Algorithm SHA256).Hash } else { "" }
+    if ($a -ne $b) { $drifted += $name }
+}
+if ($drifted.Count -gt 0 -and (Test-Path -LiteralPath $whole)) {
+    Write-Host ""
+    Write-Host "  These are not on the AM CRM list and differ from the server:" -ForegroundColor Yellow
+    $drifted | ForEach-Object { Write-Host "      $_" -ForegroundColor White }
+    Write-Host "  Running push-to-server.ps1 -Apply, which copies the whole folder." -ForegroundColor Yellow
+    Write-Host ""
+    & $whole -Apply
+    if ($LASTEXITCODE -gt 0) { Die "push-to-server.ps1 stopped. Its message above says why." }
+} elseif ($drifted.Count -gt 0) {
+    Write-Host ""
+    Write-Host "  These differ and need push-to-server.ps1, which is not at $whole" -ForegroundColor Yellow
+    $drifted | ForEach-Object { Write-Host "      $_" -ForegroundColor White }
+}
 # It pulls too, and has already been pulled above; -Remote keeps it on the same one.
 & $deploy -Server $Server -Remote $Remote
 $deployed = $LASTEXITCODE

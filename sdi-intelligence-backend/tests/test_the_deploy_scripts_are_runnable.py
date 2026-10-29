@@ -138,3 +138,43 @@ class TheScriptsSayWhereToRunThemTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ShipItDoesTheWholeJobTests(unittest.TestCase):
+    """"was there any git pulls?" - a fair question, asked after being handed
+    two commands that do not pull.
+
+    push-to-server.ps1 copies the whole backend folder and is the only way the
+    estimating API reaches the server. It does NOT pull, so running it by hand
+    after forgetting the pull copies yesterday. Both halves of that have cost a
+    deploy, so Ship-It pulls once and then runs whichever copier the change
+    actually needs.
+    """
+
+    SHIP = (BACKEND / "deploy" / "Ship-It.ps1").read_text(encoding="utf-8")
+
+    def test_it_pulls_before_it_copies_anything(self):
+        pull = self.SHIP.index("git pull")
+        for copier in ("Deploy-AMCRM.ps1", "push-to-server.ps1"):
+            with self.subTest(copier=copier):
+                self.assertLess(pull, self.SHIP.index(copier),
+                                f"{copier} is run before the pull")
+
+    def test_it_runs_the_whole_folder_copier_when_the_change_needs_it(self):
+        self.assertIn("push-to-server.ps1", self.SHIP)
+        self.assertIn("-Apply", self.SHIP)
+        named = self.SHIP.split("$alsoNeeded = @(", 1)[1].split(")", 1)[0]
+        for name in ("app.py", "estimate_routes.py", "estimating_job_tools.py"):
+            with self.subTest(file=name):
+                self.assertIn(f'"{name}"', named)
+
+    def test_the_files_it_watches_for_are_the_ones_the_other_list_leaves_out(self):
+        """Two lists that can disagree is one more than there should be."""
+        deploy = (BACKEND / "deploy" / "Deploy-AMCRM.ps1").read_text(encoding="utf-8")
+        warned = set(re.findall(r'"([\w.]+\.py)"',
+                                deploy.split("$NotCopied = @(", 1)[1].split(")", 1)[0]))
+        watched = set(re.findall(r'"([\w.]+\.py)"',
+                                 self.SHIP.split("$alsoNeeded = @(", 1)[1].split(")", 1)[0]))
+        self.assertEqual(warned, watched,
+                         "Deploy-AMCRM warns about one set of files and Ship-It "
+                         "deploys another")
