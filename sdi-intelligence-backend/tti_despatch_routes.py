@@ -27,6 +27,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
+import access
 import auth
 import tti_data
 import tti_files
@@ -46,11 +47,8 @@ MAX_QUERY = 80
 def allowed(request) -> bool:
     """Named Customer Services people, by Entra object ID. Never a shared key:
     this reads a live commercial tracker, so every read is attributable."""
-    named = {v.strip().lower() for v in
-             os.getenv("SDI_TTI_OIDS", "").split(",") if v.strip()}
     user = auth.current_user(request) if auth.ENABLED else None
-    return bool(named and user and user.get("kind") == "user"
-                and str(user.get("oid") or "").lower() in named)
+    return access.may_use("SDI_TTI_OIDS", user)
 
 
 def make_router(page_dir=None):
@@ -61,8 +59,8 @@ def make_router(page_dir=None):
 
     def who(request):
         if not allowed(request):
-            raise HTTPException(403, "The TTI despatch view is for named Customer "
-                                     "Services people. Ask IT to be added.")
+            raise HTTPException(403, access.why_refused(
+                "SDI_TTI_OIDS", auth.current_user(request) if auth.ENABLED else None))
 
     def read(request) -> tti_data.Plan:
         """One reading of the plan, as the person asking. Their access decides."""

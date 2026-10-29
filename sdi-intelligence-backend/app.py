@@ -41,6 +41,7 @@ except ImportError:                    # loaded by path, without this folder on 
     _scs.loader.exec_module(_scm)
     the_service_config = _scm.the_service_config
 config = the_service_config(config)   # this service's, even where the engine's holds the name
+import access
 import auth
 import quote_release
 
@@ -239,10 +240,8 @@ from public_surface import post_allowed as _public_post_allowed, \
 
 def _public_estimator(request) -> bool:
     """An explicitly allowed Entra person, never a portal or runner key."""
-    owners = {v.strip().lower() for v in os.getenv("SDI_ESTIMATOR_OIDS", "").split(",") if v.strip()}
     user = auth.current_user(request) if auth.ENABLED else None
-    return bool(owners and user and user.get("kind") == "user"
-                and str(user.get("oid") or "").lower() in owners)
+    return access.may_use("SDI_ESTIMATOR_OIDS", user)
 
 
 @app.middleware("http")
@@ -267,11 +266,7 @@ async def _public_surface_guard(request, call_next):
                         return auth.login_redirect(request)
                     if signed_in is not None:
                         return JSONResponse(status_code=403, content={"detail":
-                            "You are signed in, but this account is not on the "
-                            "estimator list. Remote estimating is limited to named "
-                            "people (SDI_ESTIMATOR_OIDS); an admin account is a "
-                            "different account from the ordinary one. Check which "
-                            "you are signed in as at /api/me, and ask IT to add it."})
+                            access.why_refused("SDI_ESTIMATOR_OIDS", signed_in)})
                     return JSONResponse(status_code=403, content={"detail": "Estimator access required"})
                 if request.method not in ("GET", "HEAD", "OPTIONS"):
                     origin = request.headers.get("origin", "").lower().rstrip("/")
