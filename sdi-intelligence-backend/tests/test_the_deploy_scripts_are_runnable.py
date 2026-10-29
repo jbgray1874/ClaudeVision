@@ -178,3 +178,63 @@ class ShipItDoesTheWholeJobTests(unittest.TestCase):
         self.assertEqual(warned, watched,
                          "Deploy-AMCRM warns about one set of files and Ship-It "
                          "deploys another")
+
+
+class SettingsAreChangedByACommandNotByHandTests(unittest.TestCase):
+    """Every setting in this project has been handed over as a line of text and
+    an unspoken "you know what to do with that". You do not: open a share, find
+    the file, find the line, decide whether to replace or add one, save it
+    without breaking the encoding, remember the restart. Five chances to get it
+    wrong on a file that is hand-edited over a share, is not in version
+    control, and that every app reads once at startup.
+    """
+
+    SET = (BACKEND / "deploy" / "Set-Setting.ps1").read_text(encoding="utf-8")
+
+    def test_it_takes_a_backup_before_it_writes(self):
+        backup = self.SET.index("Copy-Item")
+        write = self.SET.index("WriteAllLines")
+        self.assertLess(backup, write, "it writes before backing up")
+        self.assertIn(".bak", self.SET)
+
+    def test_a_failed_backup_stops_it_writing_at_all(self):
+        after = self.SET.split("Could not write a backup", 1)[0][-400:]
+        self.assertIn("try {", after)
+        self.assertIn("Stop-Here", self.SET.split("Copy-Item", 1)[1][:400])
+
+    def test_it_writes_utf8_without_a_byte_order_mark(self):
+        """A BOM makes the FIRST setting unreadable, and it fails as though
+        that setting were simply absent."""
+        self.assertIn("UTF8Encoding($false)", self.SET)
+        self.assertIn("WriteAllLines", self.SET)
+
+    def test_it_replaces_an_existing_line_rather_than_adding_a_second(self):
+        """Two lines for one setting is a file where the answer depends on
+        which one is read last."""
+        self.assertIn("$lines[$at] = $new", self.SET)
+        self.assertIn("Expected one $Name line", self.SET)
+
+    def test_it_never_prints_a_value(self):
+        """Object IDs, keys and client secrets, and a console scrollback gets
+        pasted into chats."""
+        self.assertIn("character(s) written", self.SET)
+        self.assertNotIn("Say \"$Name=$Value", self.SET)
+        self.assertNotIn("Write-Host $Value", self.SET)
+        shown = self.SET.split("if ($Show)", 1)[1].split("exit 0", 1)[0]
+        self.assertIn("no value is ever printed", shown)
+        self.assertNotIn("$Matches[2]}", shown)
+
+    def test_it_says_a_restart_is_needed(self):
+        self.assertIn("read ONCE, at startup", self.SET)
+        self.assertIn("Check-AMCRM-Live.ps1 -Restart", self.SET)
+
+    def test_it_can_say_what_it_would_do_without_doing_it(self):
+        self.assertIn("-WhatIf", self.SET)
+        self.assertIn("Nothing was written", self.SET)
+
+    def test_it_edits_the_env_beside_the_service_which_is_the_one_that_wins(self):
+        """config.py reads two files called .env and the service-specific one
+        beats the shared one. Editing the wrong one changes nothing and the
+        file plainly contains the line saying otherwise."""
+        self.assertIn("sdi-intelligence-backend\\.env", self.SET)
+        self.assertIn("beside the service wins", self.SET)
