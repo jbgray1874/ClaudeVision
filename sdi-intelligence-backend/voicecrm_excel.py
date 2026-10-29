@@ -61,10 +61,46 @@ writing needs Files.ReadWrite.All (or Sites.ReadWrite.All), consented.
 import hashlib
 import json
 import os
+import threading
+import time
 from typing import Optional
 from urllib.parse import quote
 
 import httpx
+
+
+# ── ONE CONNECTION, NOT ONE PER CALL ────────────────────────────────────────
+# A single saved change used to open seven HTTP clients: three for the fetch,
+# the formula check and the write, and four more inside them. Each one
+# negotiated TLS to graph.microsoft.com from scratch, which is most of a
+# round trip before a single byte of Graph's answer. One pooled client keeps
+# the connection open between them.
+#
+# Created on first use rather than at import, so a test that stands in for
+# httpx.Client is picked up; `reset_pool()` lets a test start clean.
+_pool_lock = threading.Lock()
+_pool: Optional[httpx.Client] = None
+POOL_TIMEOUT = 30
+
+
+def _client() -> httpx.Client:
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            _pool = httpx.Client(timeout=POOL_TIMEOUT)
+        return _pool
+
+
+def reset_pool() -> None:
+    """Drop the pooled client. For tests, and after a configuration change."""
+    global _pool
+    with _pool_lock:
+        held, _pool = _pool, None
+    if held is not None:
+        try:
+            held.close()
+        except Exception:                                # noqa: BLE001
+            pass
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 
@@ -233,6 +269,20 @@ class ExcelStore:
         # (drive id, item id) once found, so a file located by search is not
         # searched for again on every request.
         self._located: Optional[tuple] = None
+        # The site's id, resolved once for the life of the process. It is an
+        # identifier, not a credential, and it does not change - so asking
+        # Microsoft for it before every question was a round trip spent on an
+        # answer we already had. (The same saving as tti_plan_source._RESOLVED.)
+        self._site_id: str = ""
+        # The last reading of the sheet, with the file version it came from:
+        # {"version": eTag, "wb": ..., "rows": {...}}. Reused for LOOKUPS only
+        # when Graph says the file has not been saved since - never for the
+        # read immediately before a write. See _load().
+        self._seen: Optional[dict] = None
+        self._seen_lock = threading.Lock()
+        # A persistent workbook session, reused across writes rather than
+        # opened and closed for each one. {"id": ..., "until": monotonic}
+        self._live_session: Optional[dict] = None
         # Column names the app depends on (the owner column and the editable
         # ones), set by voicecrm.py. The header row — and, when no sheet is
         # configured, the worksheet — is the one where these actually appear:
@@ -274,14 +324,39 @@ class ExcelStore:
         return {"state": "graph_error", "status": response.status_code,
                 "detail": self._graph_detail(response)}
 
-    def _workbook(self, client: httpx.Client, token: str,
-                  download_only: bool = False) -> tuple[Optional[dict], Optional[dict]]:
-        """Resolve site -> drive item -> workbook base URL + file metadata."""
+    def _workbook(self, client: httpx.Client, token: str, download_only: bool = False,
+                  light: bool = False) -> tuple[Optional[dict], Optional[dict]]:
+        """Resolve site -> drive item -> workbook base URL + file metadata.
+
+        ── `light`: THE FILE'S ADDRESS WITHOUT ASKING FOR ITS METADATA ────────
+        The workbook's URL is built from the drive and item ids, both already
+        known once the file has been located. A caller that does not need the
+        file's VERSION - the read before a write, which must not reuse anything
+        anyway - can therefore go straight to the sheet and save a round trip
+        at the most latency-sensitive moment in the app.
+
+        Access is not skipped with it: the sheet read that follows is made with
+        this person's token and refuses them if it should. If the file has
+        moved since, that read answers 404 and the caller clears the location
+        and tries again the long way (see _load).
+        """
         headers = self._headers(token)
-        site = client.get(f"{GRAPH}/sites/{self.site}", headers=headers)
-        if site.status_code != 200:
-            return None, self._err(site)
-        site_id = site.json().get("id", "")
+        if light and self._located and (self.sheet or self._chosen_sheet):
+            drive_id, item_id = self._located
+            return {"base": f"{GRAPH}/drives/{drive_id}/items/{item_id}/workbook",
+                    "sheets": [self.sheet or self._chosen_sheet],
+                    "version": "", "modified": "", "light": True}, None
+        site_id = self._site_id
+        if not site_id:
+            site = client.get(f"{GRAPH}/sites/{self.site}", headers=headers)
+            if site.status_code != 200:
+                return None, self._err(site)
+            site_id = str(site.json().get("id") or "")
+            if not site_id:
+                return None, {"state": "graph_error", "status": site.status_code,
+                              "detail": f"SharePoint did not recognise the site "
+                                        f"'{self.site}'."}
+            self._site_id = site_id
 
         path = self.xlsx.lstrip("/")
         meta = None
@@ -320,7 +395,12 @@ class ExcelStore:
                 return None, {"state": "graph_error", "status": 200,
                               "detail": "The workbook has no worksheets."}
 
-        return {"base": base, "sheets": names,
+        # The file's version, as Graph states it. Used to tell whether the
+        # sheet needs reading again for a LOOKUP; never to decide whether a
+        # write is safe (see _load).
+        version = str(meta.get("eTag") or meta.get("cTag") or "") \
+            + "|" + str(meta.get("lastModifiedDateTime") or "")
+        return {"base": base, "sheets": names, "version": version.strip("|"),
                 "modified": meta.get("lastModifiedDateTime", "")}, None
 
     def _find_by_name(self, client: httpx.Client, headers: dict, site_id: str,
@@ -393,17 +473,27 @@ class ExcelStore:
                 url = body.get("@odata.nextLink")
         return found
 
-    def _used_range(self, client: httpx.Client, token: str,
-                    wb: dict) -> tuple[Optional[dict], Optional[dict]]:
+    def _used_range(self, client: httpx.Client, token: str, wb: dict,
+                    with_formulas: bool = False) -> tuple[Optional[dict], Optional[dict]]:
         """The sheet's used range: rendered text plus where it starts.
 
         `text` (what Excel displays) is used rather than `values` so dates read
         as dates, not as day-count serial numbers — this is what gets spoken
         back to the person, and what the fingerprint is computed over.
+
+        ── WHY FORMULAS COME BACK IN THE SAME CALL ────────────────────────────
+        A calculated cell must never be typed over, so every proposed change
+        asked Graph a second question - "is this one cell a formula?" - a whole
+        round trip after a request that had just read the entire sheet. Graph
+        will return `formulas` beside `text`, so the answer arrives with the
+        read that was happening anyway. Only asked for before a write; a
+        lookup does not need it and the payload is not free.
         """
+        select = "text,formulas,rowIndex,columnIndex" if with_formulas \
+            else "text,rowIndex,columnIndex"
         res = client.get(
             f"{wb['base']}/worksheets('{wb['sheet']}')/usedRange(valuesOnly=true)",
-            params={"$select": "text,rowIndex,columnIndex"},
+            params={"$select": select},
             headers=self._headers(token),
         )
         if res.status_code != 200:
@@ -414,6 +504,7 @@ class ExcelStore:
             return None, {"state": "empty_sheet",
                           "detail": f"Worksheet '{wb['sheet']}' has no data."}
         return {"grid": grid,
+                "formulas": data.get("formulas") or [],
                 "row0": int(data.get("rowIndex", 0)),      # 0-based sheet row of grid[0]
                 "col0": int(data.get("columnIndex", 0))}, None
 
@@ -441,50 +532,111 @@ class ExcelStore:
             return first[0], first[1], False
         return 0, [], False
 
-    def _load(self, client: httpx.Client, token: str):
-        """Workbook + chosen sheet + its grid + header row, or an error payload."""
-        wb, err = self._workbook(client, token)
+    def _load(self, client: httpx.Client, token: str, *, with_formulas: bool = False,
+              may_reuse: bool = False, light: bool = False):
+        """Workbook + chosen sheet + its grid + header row, or an error payload.
+
+        ── WHY `may_reuse` IS OFF BY DEFAULT, AND NEVER SET BEFORE A WRITE ────
+        Reading the whole sheet is the most expensive thing here, and for a
+        LOOKUP it can be skipped when Graph's own eTag says the file has not
+        been saved since the last reading. The file's metadata is still
+        fetched with THIS person's token every time, so their access still
+        decides; what is saved is the sheet read.
+
+        It is never reused for the read immediately before a write. That read
+        exists to compute the row's fingerprint and catch somebody else's edit,
+        and Excel Online can batch a co-author's save so the eTag lags behind
+        it by seconds. Trusting the eTag there would quietly defeat the one
+        protection against overwriting a colleague's change - a cheap saving
+        paid for in the only currency this app cannot spend.
+        """
+        # ── THE INVARIANT, ENFORCED RATHER THAN DOCUMENTED ────────────────────
+        # Formulas are only ever wanted by the read before a write, and that
+        # read must be live. Relying on "light reads carry no version, so they
+        # cannot match the cache" left the protection standing on a side
+        # effect: a test that flipped may_reuse on in fetch() still passed.
+        # This is a programming error, not a runtime condition, so it raises.
+        if may_reuse and with_formulas:
+            raise ValueError(
+                "the read before a write may not be reused: it computes the "
+                "row's fingerprint, which is what stops a colleague's edit "
+                "being overwritten")
+        wb, err = self._workbook(client, token, light=light)
         if err:
             return None, err
+        if may_reuse:
+            with self._seen_lock:
+                held = self._seen
+            if held and held["version"] and held["version"] == wb.get("version"):
+                return {**held["wb"], "modified": wb["modified"], "reused": True}, None
         order = list(wb["sheets"])
         if self._chosen_sheet in order:
             order.remove(self._chosen_sheet)
             order.insert(0, self._chosen_sheet)
         fallback, last_err = None, None
         for name in order[:12]:
-            used, err = self._used_range(client, token, {**wb, "sheet": name})
+            used, err = self._used_range(client, token, {**wb, "sheet": name},
+                                         with_formulas=with_formulas)
             if err:
                 last_err = err
                 continue
             off, headers, found = self._headers_row(used["grid"])
             if found or not self.key_columns:
                 self._chosen_sheet = name
-                return {**wb, "sheet": name, "used": used, "hdr": off,
-                        "headers": headers, "found": True}, None
+                return self._remember({**wb, "sheet": name, "used": used, "hdr": off,
+                                       "headers": headers, "found": True}), None
             if fallback is None:
                 fallback = {**wb, "sheet": name, "used": used, "hdr": off,
                             "headers": headers, "found": False}
         if fallback:
             self._chosen_sheet = fallback["sheet"]
-            return fallback, None
+            return self._remember(fallback), None
+        if light and last_err and int(last_err.get("status") or 0) in (404, 410):
+            # The remembered address is stale: the file was renamed, moved or
+            # replaced. Locate it again, the long way, once.
+            print("[voicecrm.excel] the workbook is no longer where it was; "
+                  "locating it again", flush=True)
+            self._located = None
+            self._chosen_sheet = None
+            return self._load(client, token, with_formulas=with_formulas,
+                              may_reuse=may_reuse, light=False)
         return None, last_err or {"state": "empty_sheet", "detail": "No readable worksheet."}
+
+    def _remember(self, wb: dict) -> dict:
+        """Keep this reading against the file version it came from, so the next
+        LOOKUP can skip the sheet read while the file is unchanged.
+
+        Reused only where `may_reuse` says so, which is lookups and never the
+        read before a write. Nothing is written to disk: this lives in the
+        process and goes when the service restarts, which is the right
+        lifetime for somebody's commercial tracker.
+        """
+        if wb.get("version"):
+            with self._seen_lock:
+                self._seen = {"version": wb["version"], "wb": wb}
+        return wb
 
     # ── The backend interface voicecrm.py consumes ──────────────────────────
 
     def rows(self, token: str) -> dict:
-        """Every data row, shaped like List items. Caller applies the owner filter."""
+        """Every data row, shaped like List items. Caller applies the owner filter.
+
+        May answer from the last reading when Graph says the file has not been
+        saved since. The file's metadata is still fetched as this person, so a
+        lookup by somebody who has lost access is still refused.
+        """
         try:
-            with httpx.Client(timeout=30) as client:
-                wb, err = self._load(client, token)
-                if err:
-                    if excel_refused(err):
-                        try:
-                            return self._rows_from_copy(token, err)
-                        except Exception as exc:  # noqa: BLE001 - a fallback must never crash a lookup
-                            print(f"[voicecrm.excel] copy fallback crashed: {type(exc).__name__}: {exc}"[:300],
-                                  flush=True)
-                            return {**err, "items": [], "copy_error": f"{type(exc).__name__}: {exc}"[:200]}
-                    return {**err, "items": []}
+            wb, err = self._load(_client(), token, may_reuse=True)
+            if err:
+                if excel_refused(err):
+                    try:
+                        return self._rows_from_copy(token, err)
+                    except Exception as exc:  # noqa: BLE001 - a fallback must never crash a lookup
+                        print(f"[voicecrm.excel] copy fallback crashed: "
+                              f"{type(exc).__name__}: {exc}"[:300], flush=True)
+                        return {**err, "items": [],
+                                "copy_error": f"{type(exc).__name__}: {exc}"[:200]}
+                return {**err, "items": []}
         except httpx.HTTPError as exc:
             return {"state": "unreachable", "items": [],
                     "detail": f"Could not reach Microsoft Graph: {exc}"}
@@ -512,10 +664,18 @@ class ExcelStore:
             })
         return {"state": "ok", "items": items, "sheet": wb["sheet"],
                 "sheets": wb["sheets"], "header_row": used["row0"] + hdr_offset + 1,
-                "headers": [h for h in headers if h], "key_columns_found": wb["found"]}
+                "headers": [h for h in headers if h], "key_columns_found": wb["found"],
+                # True when the sheet itself was not read again because Graph
+                # said the file was unchanged. Shown in the log, not to people.
+                "reused": bool(wb.get("reused"))}
 
     def fetch(self, token: str, item_id: str) -> tuple[Optional[dict], Optional[dict]]:
-        """One row by its xl<row> id, with the addresses needed to write to it."""
+        """One row by its xl<row> id, with the addresses needed to write to it.
+
+        Always a live read of the sheet: this is the read the fingerprint is
+        computed from, and it is what stops a colleague's edit being
+        overwritten. See _load() on why it may not be reused.
+        """
         if not item_id.startswith("xl"):
             return None, {"state": "graph_error", "status": 400,
                           "detail": f"'{item_id}' is not an Excel row id (expected xl<row>)."}
@@ -526,10 +686,13 @@ class ExcelStore:
                           "detail": f"'{item_id}' is not an Excel row id (expected xl<row>)."}
 
         try:
-            with httpx.Client(timeout=30) as client:
-                wb, err = self._load(client, token)
-                if err:
-                    return None, (unavailable(err) if excel_refused(err) else err)
+            # with_formulas: so the "is this cell calculated?" question needs no
+            # round trip of its own. may_reuse stays off - this read must be
+            # live. light: the file's version is not wanted here precisely
+            # BECAUSE nothing may be reused, so asking for it is a wasted call.
+            wb, err = self._load(_client(), token, with_formulas=True, light=True)
+            if err:
+                return None, (unavailable(err) if excel_refused(err) else err)
         except httpx.HTTPError as exc:
             return None, {"state": "unreachable",
                           "detail": f"Could not reach Microsoft Graph: {exc}"}
@@ -549,6 +712,14 @@ class ExcelStore:
         addr = {h: f"{_col_letter(used['col0'] + j)}{sheet_row}"
                 for j, h in enumerate(headers) if h}
 
+        # This row's formulas, from the same read as its text. "" where the
+        # read did not ask for them, which is_formula() tells from `_has_formulas`.
+        formula_grid = used.get("formulas") or []
+        formula_row = formula_grid[grid_index] if grid_index < len(formula_grid) else []
+        formulas = {h: (str(formula_row[j]) if j < len(formula_row)
+                        and formula_row[j] is not None else "")
+                    for j, h in enumerate(headers) if h}
+
         return {
             "fields": fields,
             "eTag": _fingerprint(cells),
@@ -558,20 +729,34 @@ class ExcelStore:
             # tell this person's own just-saved changes from someone else's.
             "_cells": cells,
             "_col": {h: j for j, h in enumerate(headers) if h},
+            "_formulas": formulas,
+            "_has_formulas": bool(formula_grid),
         }, None
 
     def is_formula(self, token: str, item: dict, field: str) -> bool:
         """True when the cell holds a formula. A calculated cell is never typed
         over: it would silently replace the calculation with a fixed value.
-        Unreadable counts as a formula - refusing is the safe side."""
+        Unreadable counts as a formula - refusing is the safe side.
+
+        ── NO ROUND TRIP OF ITS OWN ───────────────────────────────────────────
+        fetch() asks for the sheet's formulas alongside its text, so the answer
+        is already in hand. It used to be a separate Graph call for one cell,
+        made immediately after a request that had just read the whole sheet:
+        a round trip per proposed change, for information that had been sitting
+        in the previous response's sibling field all along.
+
+        The fallback below is for a row that came from a read without them.
+        """
         addr = item.get("_addr", {}).get(field)
         if not addr:
             return False
+        if item.get("_has_formulas"):
+            return str(item.get("_formulas", {}).get(field, "")).startswith("=")
         wb = item["_wb"]
         try:
-            with httpx.Client(timeout=30) as client:
-                res = client.get(f"{wb['base']}/worksheets('{wb['sheet']}')/range(address='{addr}')",
-                                 params={"$select": "formulas"}, headers=self._headers(token))
+            res = _client().get(
+                f"{wb['base']}/worksheets('{wb['sheet']}')/range(address='{addr}')",
+                params={"$select": "formulas"}, headers=self._headers(token))
         except httpx.HTTPError:
             return True
         if res.status_code != 200:
@@ -592,34 +777,83 @@ class ExcelStore:
                     "detail": f"Column '{field}' was not found in the sheet's header row."}
         wb = item["_wb"]
         url = f"{wb['base']}/worksheets('{wb['sheet']}')/range(address='{addr}')"
+        client = _client()
         try:
-            with httpx.Client(timeout=30) as client:
-                # ── ONE SESSION FOR THE WRITE AND THE READ-BACK ────────────────────
-                # Without a session each call is served independently, and a read a
-                # moment after a write can still be answered from a copy that does
-                # not have it yet. See `_session` - this is what made a saved change
-                # report itself as failed on 23 October 2026.
+            # ── ONE SESSION FOR THE WRITE AND THE READ-BACK ────────────────────
+            # Without a session each call is served independently, and a read a
+            # moment after a write can still be answered from a copy that does
+            # not have it yet. See `_session` - this is what made a saved change
+            # report itself as failed on 23 October 2026.
+            session = self._session(client, token, wb)
+            headers = {**self._headers(token), "Content-Type": "application/json"}
+            if session:
+                headers["workbook-session-id"] = session
+            res = client.patch(url, headers=headers, json={"values": [[new_value]]})
+            if res.status_code >= 300 and session and self._session_is_gone(res):
+                # The reused session had expired. Open a fresh one and write
+                # once more - the first attempt changed nothing, so this is a
+                # retry and not a second write.
+                print(f"[voicecrm.excel] workbook session expired; opening a new one "
+                      f"and writing {addr} again", flush=True)
+                self._forget_session()
                 session = self._session(client, token, wb)
-                headers = {**self._headers(token), "Content-Type": "application/json"}
+                headers.pop("workbook-session-id", None)
                 if session:
                     headers["workbook-session-id"] = session
-                try:
-                    res = client.patch(url, headers=headers, json={"values": [[new_value]]})
-                    if res.status_code >= 300:
-                        err = {"state": "failed", "status": res.status_code,
-                               "detail": self._graph_detail(res)}
-                        return (unavailable(err) if excel_refused({**err, "state": "graph_error"})
-                                else err)
-                    return self._verify(client, token, wb, addr, new_value,
-                                        self.request_id(res), session)
-                finally:
-                    self._close_session(client, token, wb, session)
+                res = client.patch(url, headers=headers, json={"values": [[new_value]]})
+            if res.status_code >= 300:
+                err = {"state": "failed", "status": res.status_code,
+                       "detail": self._graph_detail(res)}
+                return (unavailable(err) if excel_refused({**err, "state": "graph_error"})
+                        else err)
+            # ── A SAVE MAKES THE HELD READING WRONG, AT ONCE ───────────────────
+            # The lookup cache refreshes when Graph's eTag changes, and Excel
+            # Online can batch a save so the eTag lags it. Waiting for that
+            # would mean the question right after a change could still answer
+            # with the old value - "I just changed that" is the same loss of
+            # confidence as the failed-write report, by a different route.
+            with self._seen_lock:
+                self._seen = None
+            return self._verify(client, token, wb, addr, new_value,
+                                self.request_id(res), session)
         except httpx.HTTPError as exc:
             return {"state": "unreachable",
                     "detail": f"Could not reach Microsoft Graph: {exc}"}
 
+    # Excel keeps a persistent session alive for several minutes of idleness.
+    # Held for less than that, so an expired one is the exception rather than
+    # something every write has to recover from.
+    SESSION_SECONDS = 180
+
+    _SESSION_GONE = ("InvalidSession", "SessionNotFound", "invalidSessionId",
+                     "ActivityLimitReached", "SessionTimedOut", "sessionNotFound")
+
+    def _session_is_gone(self, response) -> bool:
+        """True when Graph refused the call because the session id is no longer
+        good, as opposed to anything about the cell or the file."""
+        if response.status_code not in (400, 404, 410):
+            return False
+        body = ""
+        try:
+            body = json.dumps(response.json())
+        except Exception:                                # noqa: BLE001
+            body = str(getattr(response, "text", ""))
+        return any(code.lower() in body.lower() for code in self._SESSION_GONE)
+
+    def _forget_session(self) -> None:
+        with self._seen_lock:
+            self._live_session = None
+
     def _session(self, client: httpx.Client, token: str, wb: dict) -> str:
         """A persistent workbook session id, or "" if one could not be opened.
+
+        ── REUSED BETWEEN WRITES ───────────────────────────────────────────────────
+        "Change the status, the next steps and the date" is three writes in one
+        sentence, and each one used to open a session and close it again: six Graph
+        calls spent on bookkeeping. One session serves them all, which is also
+        better manners to a shared workbook than opening three. It is let go after
+        SESSION_SECONDS, and if Excel has expired it first the write retries once
+        with a fresh one.
 
         ── WHY A SESSION, WHEN THE WRITE SAVES WITHOUT ONE ─────────────────────────
         Not to make the write persist: a range write with no session header IS saved
@@ -638,13 +872,23 @@ class ExcelStore:
         the read-back untrustworthy, and `_verify` then declines to call a mismatch a
         failure rather than risk repeating that.
         """
+        with self._seen_lock:
+            held = self._live_session
+        if held and held["base"] == wb["base"] and time.monotonic() < held["until"]:
+            return held["id"]
         try:
             res = client.post(f"{wb['base']}/createSession",
                               headers={**self._headers(token),
                                        "Content-Type": "application/json"},
                               json={"persistChanges": True})
             if res.status_code < 300:
-                return str(res.json().get("id") or "")
+                made = str(res.json().get("id") or "")
+                if made:
+                    with self._seen_lock:
+                        self._live_session = {
+                            "id": made, "base": wb["base"],
+                            "until": time.monotonic() + self.SESSION_SECONDS}
+                return made
             print(f"[voicecrm.excel] no workbook session ({res.status_code} "
                   f"{self._graph_detail(res)}); the write still saves, the read-back "
                   f"becomes advisory", flush=True)
@@ -653,9 +897,29 @@ class ExcelStore:
                   f"the write still saves, the read-back becomes advisory", flush=True)
         return ""
 
+    def close_session(self, token: str = "") -> None:
+        """Hand the live session back, if there is one.
+
+        Not called after every write any more - one session serves a whole
+        sentence of changes and is then let go on a timer. This exists so a
+        caller that knows it has finished can give it back at once, and so the
+        expiry retry in apply() can discard a dead one explicitly.
+        """
+        with self._seen_lock:
+            held, self._live_session = self._live_session, None
+        if not held:
+            return
+        try:
+            _client().post(f"{held['base']}/closeSession",
+                           headers={**self._headers(token),
+                                    "workbook-session-id": held["id"]})
+        except httpx.HTTPError:
+            pass
+
     def _close_session(self, client: httpx.Client, token: str, wb: dict, session: str) -> None:
-        """Hand the session back. Excel expires them anyway; not leaving hundreds of
-        them open is simply good manners to a shared workbook."""
+        """Hand one named session back, used by nothing on the write path now.
+        Kept because Excel expires sessions anyway and an explicit close is
+        better manners to a shared workbook."""
         if not session:
             return
         try:
@@ -724,7 +988,7 @@ class ExcelStore:
         downloaded, and is then read locally. Read-only by construction.
         """
         try:
-            with httpx.Client(timeout=60, follow_redirects=True) as client:
+            with httpx.Client(timeout=60, follow_redirects=True) as client:  # own client: a whole-file download
                 loc, err = self._workbook(client, token, download_only=True)
                 if err:
                     return None, err

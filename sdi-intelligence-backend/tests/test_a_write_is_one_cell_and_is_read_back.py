@@ -29,7 +29,16 @@ ITEM = {"_wb": WB, "_addr": {"Status": ADDR, "End date": "K14"}}
 
 
 def _store() -> vx.ExcelStore:
-    store = vx.ExcelStore.__new__(vx.ExcelStore)
+    """A real ExcelStore, built properly.
+
+    This used to be ExcelStore.__new__ to skip reading the environment - which
+    also skipped every instance attribute __init__ sets, so the store was a
+    different shape from the one the service runs. __init__ reads settings that
+    are simply empty here, which is harmless, and the pooled HTTP client is
+    dropped so each test's stand-in Graph is picked up.
+    """
+    vx.reset_pool()
+    store = vx.ExcelStore()
     store.key_columns = []
     return store
 
@@ -102,7 +111,11 @@ def test_the_cell_is_read_back_after_the_write(monkeypatch):
     monkeypatch.setattr(vx.httpx, "Client", graph)
     _store().apply("tok", ITEM, "Status", "Follow up January 2027")
     kinds = [c[0] for c in graph.calls]
-    assert kinds == ["POST", "PATCH", "GET", "POST"], kinds   # open, write, read, close
+    # Open the session, write, read it back. The session is no longer closed
+    # here: one serves a whole sentence of changes and is then let go on a
+    # timer, which is both fewer round trips and fewer sessions opened on a
+    # shared workbook. See test_one_session_serves_several_writes below.
+    assert kinds == ["POST", "PATCH", "GET"], kinds
     wrote = [c for c in graph.calls if c[0] == "PATCH"][0]
     read = [c for c in graph.calls if c[0] == "GET"][0]
     assert read[1] == wrote[1], "it reads back the address it wrote"
@@ -121,8 +134,24 @@ def test_the_write_and_the_read_back_share_one_persistent_session(monkeypatch):
     for kind, url, _, headers in graph.calls:
         if kind in ("PATCH", "GET"):
             assert headers.get("workbook-session-id") == "sess-1", (kind, url, headers)
+
+
+def test_one_session_serves_several_writes_and_is_handed_back(monkeypatch):
+    """"Change the status and the end date" is two writes. A session each was
+    four Graph calls spent on bookkeeping, and two sessions opened on somebody
+    else's workbook where one would do."""
+    graph = _Graph()
+    monkeypatch.setattr(vx.httpx, "Client", graph)
+    store = _store()
+    store.apply("tok", ITEM, "Status", "On hold")
+    store.apply("tok", ITEM, "End date", "2027-01-31")
+    opened = [c for c in graph.calls if c[0] == "POST" and c[1].endswith("/createSession")]
+    assert len(opened) == 1, graph.calls
+    assert len([c for c in graph.calls if c[0] == "PATCH"]) == 2, graph.calls
+
+    store.close_session("tok")
     assert [c for c in graph.calls if c[0] == "POST" and c[1].endswith("/closeSession")], \
-        "the session is handed back"
+        "the session is handed back when asked for"
 
 
 def test_a_successful_write_is_never_reported_as_a_failure(monkeypatch):
