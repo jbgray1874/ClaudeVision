@@ -275,6 +275,53 @@ class TheCheckReportsOnWhatWasDeployedTests(unittest.TestCase):
     def test_it_points_at_the_command_that_sets_a_missing_one(self):
         self.assertIn("Set-Setting.ps1 $($app.Setting)", self.CHECK)
 
+    def test_it_reports_on_the_screens_too_not_only_the_backend(self):
+        """── THE SAME GAP, IN A NEW FORM ──────────────────────────────────
+        Section 7 read .py files and settings. A deploy whose whole change was
+        a PAGE therefore finished with a clean report that said nothing about
+        it - which is how "it's estimating?" happened the first time.
+        """
+        self.assertIn("The screens", self.CHECK)
+        self.assertIn('File = "appportal/estimating-pocket.html"', self.CHECK)
+
+    def test_every_marker_it_looks_for_really_is_in_the_page(self):
+        """── A CHECK THAT CRIES WOLF IS WORSE THAN NO CHECK ───────────────
+        The screens section proves a deploy landed by finding a string in the
+        file on the server. If that string is not in the page in the first
+        place - a wording change, a typo - the check reports "missing or older
+        code" after a perfectly good deploy, every time, and the next real
+        failure is the one nobody believes.
+
+        So the markers are read out of the script and put to the real files.
+        """
+        import re
+        section = self.CHECK.split('Say "The screens" White', 1)[1] \
+                            .split("# ── Verdict", 1)[0]
+        pairs = re.findall(r'File\s*=\s*"([^"]+)";[^}]*?Marker\s*=\s*"([^"]*)"',
+                           section, re.S)
+        self.assertTrue(pairs, "no page/marker pairs found - did the shape change?")
+        for filename, marker in pairs:
+            with self.subTest(file=filename, marker=marker):
+                page = BACKEND / filename
+                self.assertTrue(page.is_file(), f"{filename} is not in the repo")
+                if marker:
+                    self.assertIn(marker, page.read_text(encoding="utf-8"),
+                                  f"Check-AMCRM-Live looks for {marker!r} in "
+                                  f"{filename} and it is not there, so the check "
+                                  f"would report a good deploy as a failure")
+
+    def test_the_pages_it_names_are_on_the_deploy(self):
+        """A page the check verifies but the deploy never copies would be
+        reported missing for ever, correctly and uselessly."""
+        import re
+        section = self.CHECK.split('Say "The screens" White', 1)[1] \
+                            .split("# ── Verdict", 1)[0]
+        deploy = (BACKEND / "deploy" / "Deploy-AMCRM.ps1").read_text(encoding="utf-8")
+        for filename in set(re.findall(r'File\s*=\s*"([^"]+)"', section)):
+            with self.subTest(file=filename):
+                self.assertIn(f'"{filename}"', deploy,
+                              f"{filename} is checked but never deployed")
+
     def test_the_settings_it_reports_are_the_ones_the_apps_actually_ask(self):
         """Two lists that can disagree is one more than there should be."""
         for setting, filename in (("SDI_ESTIMATOR_OIDS", "app.py"),
