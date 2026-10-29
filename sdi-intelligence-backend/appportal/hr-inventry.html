@@ -76,6 +76,16 @@
   ul.roll input{width:22px;height:22px;accent-color:var(--ok);flex:0 0 auto}
   ul.roll li.done span.n{color:var(--ink-faint);text-decoration:line-through}
   ul.roll small{display:block;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+  details.grp{border:1px solid var(--line);border-radius:var(--r);margin:8px 0;background:var(--surface-2)}
+  details.grp>summary{cursor:pointer;padding:11px 12px;font-weight:600;font-size:14.5px;list-style:none;
+       display:flex;justify-content:space-between;gap:10px}
+  details.grp>summary::-webkit-details-marker{display:none}
+  details.grp>summary::before{content:"\25B8";color:var(--ink-faint);margin-right:2px}
+  details.grp[open]>summary::before{content:"\25BE"}
+  details.grp>summary .muted{font-weight:400;margin-left:auto}
+  details.grp>ul{padding:0 12px 6px}
+  ul.roll li.grpli{display:block;padding:0;border:0}
+  .grpbar{display:flex;gap:10px;align-items:center;margin:4px 0 8px}
   .hist li{list-style:none;padding:9px 0;border-bottom:1px solid var(--line-soft);font-size:14px}
   .hist li small{display:block;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
   table.t{width:100%;border-collapse:collapse;font-size:13.5px}
@@ -135,7 +145,8 @@
       <div class="panel">
         <h4>Fire roll call <span class="chip c-off" id="rollcount"></span></h4>
         <div class="btns"><button class="btn ghost" id="rollload">Refresh</button>
-          <button class="btn ghost" id="rollnew">Start a new roll call</button></div>
+          <button class="btn ghost" id="rollnew">Start a new roll call</button>
+          <button class="btn ghost" type="button" data-group>Group by manager</button></div>
         <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:14px;color:var(--ink-dim)">
           <input type="checkbox" id="rollhide" style="width:18px;height:18px"> Show only people not yet accounted for</label>
         <p class="muted" style="margin-top:10px" id="rollmeta">Everyone InVentry shows on site, plus anyone clocked in on
@@ -230,14 +241,45 @@ function names(title, list, cls){
     +list.map(n=>'<li>'+esc(n)+'</li>').join('')+'</ul></div>';
 }
 function openFor(hrs){ return hrs>48?Math.round(hrs/24)+' days':Math.round(hrs)+' h'; }
+
+/* ── grouped by BrightHR manager (Simon): each manager's people fold away ── */
+let GROUP=false; try{ GROUP=localStorage.getItem('hrGroupByManager')==='1'; }catch(e){}
+const OPEN=new Set();                // groups someone opened, kept across the 5-second refresh
+const NO_MANAGER='No manager in BrightHR';
+function setGroup(on){ GROUP=on; try{ localStorage.setItem('hrGroupByManager',on?'1':'0'); }catch(e){}
+  document.querySelectorAll('[data-group]').forEach(b=>b.textContent=GROUP?'Show as one list':'Group by manager');
+  renderLatest(); renderRoll(); }
+document.addEventListener('click',e=>{ if(e.target.closest('[data-group]')) setGroup(!GROUP); });
+document.addEventListener('toggle',e=>{ const d=e.target;
+  if(d.matches && d.matches('details.grp')) d.open?OPEN.add(d.dataset.gid):OPEN.delete(d.dataset.gid); },true);
+function byManager(list){
+  const m=new Map();
+  for(const p of list){ const k=(p.manager||'').trim()||NO_MANAGER; if(!m.has(k)) m.set(k,[]); m.get(k).push(p); }
+  return [...m.entries()].sort((a,b)=>(a[0]===NO_MANAGER)-(b[0]===NO_MANAGER)||a[0].localeCompare(b[0]));
+}
+function groups(scope, list, item, count, ulClass, wrap){
+  return byManager(list).map(([mgr,ps])=>{ const gid=scope+'|'+mgr;
+    const g='<details class="grp" data-gid="'+esc(gid)+'"'+(OPEN.has(gid)?' open':'')+'><summary><span>'+esc(mgr)
+      +'</span><span class="muted">'+count(ps,mgr)+'</span></summary><ul class="'+ulClass+'">'+ps.map(item).join('')+'</ul></details>';
+    return wrap?wrap(g):g; }).join('');
+}
+function noManagers(list){ return list.length && list.every(p=>!p.manager)
+  ? '<p class="muted" style="margin:6px 0">BrightHR has not given a manager for anyone in this list yet, so they are all under '
+    +NO_MANAGER+'. Run a new check; if that does not fill them in, the manager field needs setting up on the server.</p>' : ''; }
+function groupButton(){ return '<button class="btn ghost" type="button" data-group>'+(GROUP?'Show as one list':'Group by manager')+'</button>'; }
+
 function clockedIn(list){
   list=list||[]; let late=0;
-  const items=list.map(p=>{ const hrs=ago(p.clocked_in); const isLate=hrs!==null&&hrs>20; if(isLate) late++;
+  const item=p=>{ const hrs=ago(p.clocked_in); const isLate=hrs!==null&&hrs>20; if(isLate) late++;
     return '<li'+(isLate?' class="late"':'')+'>'+esc(p.name)+'<small>'+(hrs===null?'':'in since '+when(p.clocked_in))
-      +(isLate?' · open '+openFor(hrs)+', probably forgot to clock out':'')+'</small></li>'; });
+      +(isLate?' · open '+openFor(hrs)+', probably forgot to clock out':'')+'</small></li>'; };
+  const body=!list.length?'<p class="muted">Nobody.</p>'
+    :GROUP?noManagers(list)+groups('in', list, item, ps=>ps.length+(ps.length===1?' person':' people'), 'names')
+    :'<ul class="names">'+list.map(item).join('')+'</ul>';
   return '<div class="panel"><h4>Clocked in on BrightHR ('+list.length+')</h4>'
+    +(list.length?'<div class="grpbar">'+groupButton()+'</div>':'')
     +(late?'<p class="muted" style="margin-bottom:8px">'+late+' marked in orange forgot to clock out. They are not signed in to InVentry.</p>':'')
-    +(items.length?'<ul class="names">'+items.join('')+'</ul>':'<p class="muted">Nobody.</p>')+'</div>';
+    +body+'</div>';
 }
 
 /* ── latest check or update ── */
@@ -322,12 +364,23 @@ function renderRoll(){
   if(Object.keys(PENDING).length) notes.push(Object.keys(PENDING).length+' tick(s) not saved yet; they will be sent when the signal allows.');
   $('rollmeta').textContent=notes.join(' ');
   const rows=ROLL.people.filter(p=>!(hide&&isTicked(p)));
-  $('roll').innerHTML=rows.map(p=>{ const t=isTicked(p);
+  const item=p=>{ const t=isTicked(p);
     const who=p.key in PENDING?'saving…':(p.ticked?'ticked by '+p.ticked.by+' at '+when(p.ticked.at):'');
     return '<li'+(t?' class="done"':'')+'><input type="checkbox" data-k="'+esc(p.key)+'"'+(t?' checked':'')
       +' aria-label="Accounted for: '+esc(p.name)+'"><span class="n">'+esc(p.name)+'<small>'+esc(whereFrom(p))+'</small>'
-      +(who?'<small>'+esc(who)+'</small>':'')+'</span></li>'; }).join('')
+      +(who?'<small>'+esc(who)+'</small>':'')+'</span></li>'; };
+  // A group's count is of everyone under that manager, ticked or not, so
+  // hiding the accounted-for never makes a manager's team look smaller.
+  const team=mgr=>ROLL.people.filter(p=>((p.manager||'').trim()||NO_MANAGER)===mgr);
+  const tally=(ps,mgr)=>{ const all=team(mgr), done=all.filter(isTicked).length;
+    return done+' of '+all.length+' accounted for'; };
+  $('roll').innerHTML=(rows.length
+      ? (GROUP ? (noManagers(ROLL.people)?'<li class="grpli">'+noManagers(ROLL.people)+'</li>':'')
+                 + groups('roll', rows, item, tally, 'roll', g=>'<li class="grpli">'+g+'</li>')
+               : rows.map(item).join(''))
+      : '')
     || '<li><span class="muted">'+(hide&&ROLL.count?'Everyone is accounted for.':'Nobody is shown on site.')+'</span></li>';
+  document.querySelectorAll('[data-group]').forEach(b=>b.textContent=GROUP?'Show as one list':'Group by manager');
 }
 async function sendPending(){
   for(const key of Object.keys(PENDING)){

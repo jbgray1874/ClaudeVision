@@ -222,6 +222,9 @@ def going_out(rows: Iterable[SourceRow], *, day: date, as_of: date) -> dict:
             "part": _clean(_get(row.cells, "PART CODE")),
             "description": _clean(_get(row.cells, "DESCRIPTION")),
             "pallets_as_recorded": _get(row.cells, "PALLETS"),
+            # Booked, a trailer registration, or "loaded" once it has gone.
+            "trailer": _clean(_get(row.cells, "TRAILER")),
+            "loaded": bool(re.search(r"\bloaded\b", _clean(_get(row.cells, "TRAILER")), re.I)),
             "dispatch_cell": parsed.raw,
             "date_basis": parsed.basis,
             "tentative": parsed.tentative,

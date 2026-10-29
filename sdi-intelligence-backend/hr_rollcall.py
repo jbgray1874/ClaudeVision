@@ -55,8 +55,11 @@ def build(inventry_on_site, snapshot, now=None, max_age_hours=None):
         e = entries.setdefault(key, {"key": key, "name": name})
         return e
 
+    managers = (snapshot or {}).get("managers") or {}
     for p in inventry_on_site or []:
-        slot(p["name"], "inventry")["inventry"] = {"since": p.get("since", ""), "by": p.get("by", "")}
+        e = slot(p["name"], "inventry")
+        e["inventry"] = {"since": p.get("since", ""), "by": p.get("by", "")}
+        e.setdefault("manager", managers.get(" ".join(p["name"].lower().split()), ""))
 
     forgotten = 0
     for r in (snapshot or {}).get("on_site") or []:
@@ -66,7 +69,11 @@ def build(inventry_on_site, snapshot, now=None, max_age_hours=None):
         if limit and t is not None and (now - t).total_seconds() / 3600 > limit:
             forgotten += 1
             continue
-        slot(name, "brighthr")["brighthr"] = {"since": start}
+        e = slot(name, "brighthr")
+        e["brighthr"] = {"since": start}
+        if r.get("manager"):
+            e["manager"] = r["manager"]
+        e.setdefault("manager", "")
 
     people = sorted(entries.values(), key=lambda e: (e["name"].lower(), e["key"]))
     return people, forgotten

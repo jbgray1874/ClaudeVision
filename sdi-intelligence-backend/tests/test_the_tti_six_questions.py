@@ -225,9 +225,10 @@ class ChaseListTests(unittest.TestCase):
         self.assertIn("awaiting_customer_po", reasons)
 
     def test_a_cell_filled_in_to_say_nothing_yet_is_not_an_answer(self):
-        """"TBC" in the booked-in column is not a booking, and "N/A" in the
-        PO column is not a PO. Counting them as answers is how a column comes
-        to look complete while nothing has happened."""
+        """"TBC" in the booked-in column is not a booking, and "TBC" in the
+        PO column is not a PO: Sue's word for waiting on information. Counting
+        them as answers is how a column comes to look complete while nothing
+        has happened."""
         vague = [row(**ORDER, **{"CUSTOMER PO": "TBC", "LORRY FROM SDI": "30/10/2026",
                                  "BOOKED IN WITH TTI": "-"})]
         reasons = {g["reason"] for g in tti.chase(vague, as_of=SAVED)["groups"]}
@@ -545,3 +546,54 @@ class ThisWeekTests(unittest.TestCase):
         answer = self.week(self.rows, day=date(2026, 11, 2), as_of=SAVED)
         self.assertEqual(answer["no_date_count"], 1)
         self.assertNotIn("lines", answer)                               # only per day
+
+
+class DoneNotNeededOrStillToDoTests(unittest.TestCase):
+    """Sue Rogers, 29 October 2026: "TBC as waiting information, N/A as that
+    process is not needed etc for that job" - and the label column holds what
+    still has to be done ("NEEDED", "Need to Relabel"), not that it was."""
+
+    def test_each_cell_reads_as_its_writer_meant(self):
+        for cell, meant in (("N/A", "not_needed"), ("n/a", "not_needed"), ("NA", "not_needed"),
+                            ("TBC", "to_do"), ("", "to_do"), ("-", "to_do"),
+                            ("NEEDED", "to_do"), ("Need to Relabel", "to_do"),
+                            ("NEED NEW LABEL", "to_do"), ("NEEDED TBC", "to_do"),
+                            ("AWAIT PO", "to_do"), ("AWAITPO", "to_do"),
+                            ("20.10.26", "done"), ("PROOF DONE", "done"), ("YES", "done"),
+                            ("Free of Charge", "done"), ("5014849", "done")):
+            with self.subTest(cell=cell):
+                self.assertEqual(tti._state(cell), meant)
+
+    def soon(self, **cells):
+        base = {"CUSTOMER PO": "PO1", "LORRY FROM SDI": "30/10/2026",
+                "BOOKED IN WITH TTI": "20.10.26", "LABEL + Batch DONE": "DONE",
+                "DEL ADD": "ELC"}
+        base.update(cells)
+        return {g["reason"]: g for g in tti.chase([row(**ORDER, **base)], as_of=SAVED)["groups"]}
+
+    def test_a_step_marked_not_needed_is_not_chased(self):
+        groups = self.soon(**{"BOOKED IN WITH TTI": "N/A", "LABEL + Batch DONE": "N/A",
+                              "CUSTOMER PO": "N/A"})
+        self.assertNotIn("not_booked_in_with_tti", groups)
+        self.assertNotIn("labels_not_done", groups)
+        self.assertNotIn("awaiting_customer_po", groups)
+
+    def test_labels_still_needed_are_chased_and_the_cell_is_quoted(self):
+        groups = self.soon(**{"LABEL + Batch DONE": "Need to Relabel"})
+        self.assertIn("“Need to Relabel”", groups["labels_not_done"]["lines"][0]["because"])
+
+    def test_a_free_of_charge_line_with_no_invoice_needed_is_not_chased(self):
+        gone = [row(**ORDER, **{"CUSTOMER PO": "Free of Charge", "LORRY FROM SDI": "20/10/2026",
+                                "INVOICE NUMBER": "N/A", "BOOKED IN WITH TTI": "N/A",
+                                "LABEL + Batch DONE": "N/A"})]
+        reasons = {g["reason"] for g in tti.chase(gone, as_of=SAVED)["groups"]}
+        self.assertNotIn("despatched_not_invoiced", reasons)
+
+    def test_loaded_in_the_trailer_column_means_it_has_gone(self):
+        """"Despatch guys add in trailer column loaded." Loaded and not
+        invoiced is a chase even before the planned day has passed."""
+        groups = self.soon(**{"TRAILER": "LOADED"})
+        self.assertIn("despatched_not_invoiced", groups)
+        self.assertIn("LOADED", groups["despatched_not_invoiced"]["lines"][0]["because"])
+        self.assertTrue(tti.find([row(**ORDER, **{"TRAILER": "Loaded - LLU7063A"})],
+                                 "15194", as_of=SAVED)["matches"][0]["loaded"])

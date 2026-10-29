@@ -149,6 +149,7 @@ def _line(row: SourceRow, *, as_of: date) -> dict:
         "destination": _cell(row, "INTO ELC OR LOCAL DESTNATION",
                              "INTO ELC OR LOCAL DESTINATION"),
         "trailer": _cell(row, "TRAILER"),
+        "loaded": bool(_LOADED.search(_cell(row, "TRAILER"))),
         "pallets_as_recorded": _get(row.cells, "PALLETS"),
         "label_and_batch_done": _cell(row, "LABEL + Batch DONE", "LABEL + BATCH DONE"),
         "booked_in_with_tti": _cell(row, "BOOKED IN WITH TTI"),
@@ -220,12 +221,37 @@ def find(rows: Iterable[SourceRow], query: str, *, as_of: date, limit: int = 60)
 
 # A cell that has been filled in to say "nothing here yet". Treating these as
 # answers is how a blank column comes to look complete.
-_EMPTY_ANSWERS = {"", "-", "--", "n/a", "na", "no", "none", "nil", "tbc", "tba",
-                  "tbd", "x", "?", "??", "not yet", "pending", "await", "awaiting"}
+# ── Done, not needed, or still to do ─────────────────────────────────────────
+#
+# Sue Rogers, 29 October 2026: "TBC as waiting information, N/A as that process
+# is not needed etc for that job". And the label column says what still has to
+# be done - "NEEDED", "Need to Relabel" - not that it was. A yes/no reading had
+# both backwards: N/A, a step nobody needs, was chased, and NEEDED, a step still
+# to do, passed as done. So a cell is one of three things.
+_NOT_NEEDED = {_norm(v) for v in ("n/a", "na", "not needed", "not required",
+                                  "not applicable")}
+_NOTHING_YET = {_norm(v) for v in ("", "-", "--", "x", "?", "??", "none", "nil", "no")}
+_STILL_TO_DO = re.compile(r"^\s*(?:need|tbc|tba|tbd|a?wait|pending|to\s*do|not\s*yet|chas)", re.I)
 
 
-def _said_yes(value: str) -> bool:
-    return bool(_clean(value)) and _norm(value) not in {_norm(v) for v in _EMPTY_ANSWERS}
+def _state(value) -> str:
+    """"done", "not_needed" or "to_do", as the person filling the cell meant it."""
+    text = _clean(value)
+    if _norm(text) in _NOTHING_YET:
+        return "to_do"
+    if _norm(text) in _NOT_NEEDED:
+        return "not_needed"
+    if _STILL_TO_DO.match(text):
+        return "to_do"
+    return "done"
+
+
+def _to_do(value) -> bool:
+    return _state(value) == "to_do"
+
+
+# "Despatch guys add in trailer column loaded" - Sue, on what shows it has gone.
+_LOADED = re.compile(r"\bloaded\b", re.I)
 
 
 def _days(line: dict, key: str, *, as_of: date) -> int | None:
@@ -276,7 +302,7 @@ def chase(rows: Iterable[SourceRow], *, as_of: date, horizon: int = 7) -> dict:
             flag("late_against_due_date", line,
                  f"Planned to leave {line['departs']}, customer due date {line['due']} "
                  f"- {out - wanted} day(s) later than wanted.", out)
-        if not _said_yes(line["customer_po"]) or notes(line["comments"])["awaiting_po"]:
+        if _to_do(line["customer_po"]) or notes(line["comments"])["awaiting_po"]:
             flag("awaiting_customer_po", line,
                  "No customer PO recorded"
                  + (" and the comments say it is still awaited." if
@@ -286,22 +312,26 @@ def chase(rows: Iterable[SourceRow], *, as_of: date, horizon: int = 7) -> dict:
                  f"Pick note {line['pick_note']} is recorded but no delivery note is, "
                  + ("and the planned departure has passed." if gone
                     else "and it is planned to leave within the week."), out)
-        if gone and not _said_yes(line["invoice_number"]):
+        if (gone or line["loaded"]) and _to_do(line["invoice_number"]):
             flag("despatched_not_invoiced", line,
-                 f"Planned to leave {line['departs']}, which has passed, and no "
-                 f"invoice number is recorded.", out)
-        if gone and _said_yes(line["invoice_number"]) \
-                and not _said_yes(line["proof_of_export"]):
+                 (f"Planned to leave {line['departs']}, which has passed, and no "
+                  f"invoice number is recorded." if gone else
+                  f"The trailer column says “{line['trailer']}”, and no invoice "
+                  f"number is recorded."), out)
+        if gone and _state(line["invoice_number"]) == "done" \
+                and _to_do(line["proof_of_export"]):
             flag("no_proof_of_export", line,
                  "Invoiced and gone, with no proof of export recorded. This only "
                  "applies if the consignment was exported - the workbook does not "
                  "say which were, so judge it by the destination.", out)
-        if soon and not _said_yes(line["booked_in_with_tti"]):
+        if soon and _to_do(line["booked_in_with_tti"]):
             flag("not_booked_in_with_tti", line,
                  _when_words(out) + ", and it is not booked in with TTI.", out)
-        if soon and not _said_yes(line["label_and_batch_done"]):
+        if soon and _to_do(line["label_and_batch_done"]):
             flag("labels_not_done", line,
-                 _when_words(out) + ", and labels and batch are not marked done.", out)
+                 _when_words(out) + ", and labels and batch "
+                 + (f"say “{line['label_and_batch_done']}”." if line["label_and_batch_done"]
+                    else "are not marked done."), out)
 
     groups = []
     for key, items in reasons.items():
@@ -406,7 +436,7 @@ def morning(rows: Iterable[SourceRow], *, day: date, as_of: date) -> dict:
                 line["missing"] = missing
                 incomplete.append(line)
             going.append(line)
-        elif out is not None and out < 0 and not _said_yes(line["invoice_number"]):
+        elif out is not None and out < 0 and _to_do(line["invoice_number"]):
             # Planned to go before today and still not invoiced: either it did
             # not go, or it went and the sheet has not caught up. Both are a
             # thing to say out loud in a morning summary.
@@ -436,15 +466,17 @@ def morning(rows: Iterable[SourceRow], *, day: date, as_of: date) -> dict:
 def _missing_before_departure(line: dict) -> list[str]:
     """What a line going out today has not got. Only the cells that stop it."""
     lacking = []
-    if not _said_yes(line["booked_in_with_tti"]):
+    if _to_do(line["booked_in_with_tti"]):
         lacking.append("not booked in with TTI")
-    if not _said_yes(line["label_and_batch_done"]):
-        lacking.append("labels and batch not marked done")
-    if not _said_yes(line["customer_po"]):
+    if _to_do(line["label_and_batch_done"]):
+        lacking.append("labels and batch not done"
+                       + (f" (“{line['label_and_batch_done']}”)" if line["label_and_batch_done"]
+                          else ""))
+    if _to_do(line["customer_po"]):
         lacking.append("no customer PO")
     if not _clean(str(line["pallets_as_recorded"] or "")):
         lacking.append("no pallet count")
-    if not _said_yes(line["delivery_address"]) and not _said_yes(line["destination"]):
+    if _to_do(line["delivery_address"]) and _to_do(line["destination"]):
         lacking.append("no delivery address or destination")
     return lacking
 

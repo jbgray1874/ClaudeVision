@@ -231,8 +231,9 @@ def _brief(lines: list[dict], keep: int = 12) -> list[dict]:
         kept = {k: line[k] for k in
                 ("source", "order", "customer_po", "part", "description", "qty",
                  "departs", "departs_cell", "due", "pick_note", "delivery_note",
-                 "invoice_number", "booked_in_with_tti", "tti_account",
-                 "delivery_address", "comments")
+                 "pallets_as_recorded", "invoice_number", "booked_in_with_tti",
+                 "label_and_batch_done",
+                 "trailer", "loaded", "tti_account", "delivery_address", "comments")
                 if line.get(k)}
         # going_out names its date fields dispatch_cell / date_basis / tentative;
         # the other answers say departs_*. Without these, "what is leaving on
