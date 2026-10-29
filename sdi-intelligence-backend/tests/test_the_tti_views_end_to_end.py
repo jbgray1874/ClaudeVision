@@ -118,7 +118,11 @@ def test_somebody_signed_in_but_not_on_the_list_is_refused_every_view(client, ur
     client.who["user"] = SOMEBODY_ELSE
     answer = client.get(url)
     assert answer.status_code == 403
-    assert "named Customer Services people" in answer.json()["detail"]
+    detail = answer.json()["detail"]
+    # It says which wall was hit and where to look, rather than a fixed
+    # sentence a reworded refusal would silently drift away from.
+    assert "not on the list" in detail
+    assert "/api/me" in detail
 
 
 @pytest.mark.parametrize("url", VIEWS)

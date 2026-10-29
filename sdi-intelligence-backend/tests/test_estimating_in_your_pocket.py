@@ -278,11 +278,27 @@ class ItReachesTheServerTests(unittest.TestCase):
         self.assertIn("estimating_job_tools.py", DEPLOY)
         self.assertIn("push-to-server.ps1 -Apply", DEPLOY)
 
-    def test_the_portal_offers_it(self):
+    def test_it_is_reached_from_the_estimating_app_not_a_card_of_its_own(self):
+        """── WHY IT IS NOT ON THE PORTAL GRID ──────────────────────────────
+        "needs to be built inside of SDI Estimating Intelligence... or it's too
+        cluttered." It is the same app in a different shape, not a second one,
+        and the grid is where nine apps already compete for a glance."""
         catalogue = json.loads((BACKEND / "services.json").read_text(encoding="utf-8"))
-        (card,) = [s for s in catalogue["services"] if s["id"] == "estimating-pocket"]
-        self.assertEqual(card["app_url"], "estimating-pocket.html")
-        self.assertTrue((BACKEND / "appportal" / card["app_url"]).is_file())
+        ids = {s["id"] for s in catalogue["services"]}
+        self.assertNotIn("estimating-pocket", ids, "it has a card of its own again")
+        (card,) = [s for s in catalogue["services"] if s["id"] == "estimating"]
+        self.assertEqual(card["link"], "/app/estimating-pocket.html")
+        self.assertIn("phone", card["linkLabel"].lower())
+
+    def test_the_estimating_screen_links_to_it(self):
+        """The way in, for somebody who opened the full screen on a phone."""
+        full = (BACKEND / "sdi-estimating-intelligence.html").read_text(encoding="utf-8")
+        self.assertIn("/app/estimating-pocket.html", full)
+        self.assertIn("On a phone", full)
+
+    def test_and_it_links_back(self):
+        self.assertIn('href="/estimating"', PAGE)
+        self.assertIn("Full screen", PAGE)
 
 
 if __name__ == "__main__":

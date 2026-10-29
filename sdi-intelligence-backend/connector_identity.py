@@ -125,14 +125,18 @@ def person(token) -> dict:
 
 
 def named_in(setting: str, user: dict) -> bool:
-    """Is this person on `setting`'s list of Entra object IDs?
+    """Is this person on `setting`'s list, by their own id or by a group?
 
-    An empty or unset list admits NOBODY. The alternative - an empty list
-    meaning "everyone" - turns a missing line in a .env file into an open
-    door, and that failure is silent on the day it happens.
+    The SAME rule the web app uses, from the same module - so nobody can be in
+    on one surface and out on the other, which is the bug that gets discovered
+    by the person who should not have seen the data.
+
+    An empty list - and an empty portal-wide fallback - admits NOBODY. The
+    alternative, empty meaning "everyone", turns a missing line in a .env file
+    into an open door, silently, on the day it happens.
     """
-    named = {v.strip().lower() for v in os.getenv(setting, "").split(",") if v.strip()}
-    return bool(named and user and str(user.get("oid") or "").lower() in named)
+    import access
+    return access.may_use(setting, user)
 
 
 class GraphOnBehalfOf:

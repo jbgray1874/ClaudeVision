@@ -117,9 +117,13 @@ class NamedPeopleTests(unittest.TestCase):
     def test_access_is_by_object_id_and_never_a_shared_key(self):
         gate = ROUTES.split("def allowed(", 1)[1].split("def make_router", 1)[0]
         self.assertIn("SDI_TTI_OIDS", gate)
-        self.assertIn('user.get("kind") == "user"', gate)
         self.assertNotIn("x_sdi_key", gate)
         self.assertNotIn("API_KEY", gate)
+        # The "is this a person, not a key" rule moved into access.may_use,
+        # which every gated app now shares. One rule, one place to get right.
+        shared = (BACKEND / "access.py").read_text(encoding="utf-8")
+        self.assertIn('user.get("kind") != "user"', shared)
+        self.assertIn("access.may_use", gate)
 
     def test_nobody_named_means_nobody_in(self):
         """An empty list must deny, not admit everyone."""
