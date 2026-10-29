@@ -230,9 +230,11 @@ day: {
     const unread = j.unresolved_date_count || 0;
     const when = j.days ? "between " + short(j.week_start) + " and " + short(j.week_end)
                         : "on " + pretty($("day").value);
+    const pal = n => n + (n === 1 ? " pallet" : " pallets");
     setStatus(
       j.line_count
-        ? some(j.line_count) + (j.line_count === 1 ? " is" : " are")
+        ? some(j.line_count) + (j.pallet_total ? ", " + pal(j.pallet_total) + "," : "")
+          + (j.line_count === 1 ? " is" : " are")
           + " planned to leave " + when + "."
           + (unread ? "  " + some(unread) + " could not be read, so this may not"
                       + " be all of them." : "")
@@ -244,7 +246,8 @@ day: {
       j.line_count && !unread ? "ok" : unread ? "error" : "");
     if(j.days){
       for(const d of j.days){
-        el("h2", pretty(d.day) + " — " + (d.line_count ? some(d.line_count) : "nothing planned"),
+        el("h2", pretty(d.day) + " — " + (d.line_count ? some(d.line_count)
+           + (d.pallet_total ? " · " + pal(d.pallet_total) : "") : "nothing planned"),
            $("out"), "dayhead");
         lines(d.lines, $("out"));
       }
@@ -253,7 +256,15 @@ day: {
     }
     const note = el("div", null, $("out"), "caveat");
     el("p", j.caveat, note);
-    el("p", "Pallets are not totalled: " + j.pallet_total_reason, note, "hint");
+    if(j.line_count){
+      const left = [];
+      if(j.pallet_lines_as_text && j.pallet_lines_as_text.length)
+        left.push(some(j.pallet_lines_as_text.length) + " with pallets written as text ("
+          + j.pallet_lines_as_text.map(t => "“" + t.pallets_as_recorded + "”, " + t.source).join("; ") + ")");
+      if(j.pallet_lines_blank) left.push(some(j.pallet_lines_blank) + " with no pallet count");
+      el("p", "Pallets: " + pal(j.pallet_total || 0) + ". " + j.pallet_total_reason
+         + (left.length ? "  Not counted: " + left.join(", and ") + "." : ""), note, "hint");
+    }
     foldaway($("out"), some(unread) + have(unread)
       + " a date this cannot read — check these in the workbook",
       j.unresolved_date_lines, j.unresolved_date_truncated, "unresolved", !j.line_count);

@@ -597,3 +597,16 @@ class DoneNotNeededOrStillToDoTests(unittest.TestCase):
         self.assertIn("LOADED", groups["despatched_not_invoiced"]["lines"][0]["because"])
         self.assertTrue(tti.find([row(**ORDER, **{"TRAILER": "Loaded - LLU7063A"})],
                                  "15194", as_of=SAVED)["matches"][0]["loaded"])
+
+
+class PalletsThisWeekTests(unittest.TestCase):
+    def test_pallets_are_added_per_day_and_for_the_week(self):
+        from sue_despatch import going_out_week
+        rows = [row(number=3, **{"SDI ORDER NO": "15178", "LORRY FROM SDI": "Mon 2nd Nov", "PALLETS": 30}),
+                row(number=4, **{"SDI ORDER NO": "15178", "LORRY FROM SDI": "Mon 2nd Nov", "PALLETS": 17}),
+                row(number=5, **{"SDI ORDER NO": "15188", "LORRY FROM SDI": "Weds 4th Nov", "PALLETS": "8"}),
+                row(number=6, **{"SDI ORDER NO": "15189", "LORRY FROM SDI": "Weds 4th Nov", "PALLETS": "tbc"})]
+        week = going_out_week(rows, day=date(2026, 11, 3), as_of=SAVED)
+        self.assertEqual([d["pallet_total"] for d in week["days"]], [47, 0, 8, 0, 0])
+        self.assertEqual(week["pallet_total"], 55)
+        self.assertEqual(week["pallet_lines_as_text"][0]["pallets_as_recorded"], "tbc")

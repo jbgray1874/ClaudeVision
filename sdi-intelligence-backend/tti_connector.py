@@ -256,6 +256,10 @@ def _lines_have(n: int) -> str:
     return f"{n} line has" if n == 1 else f"{n} lines have"
 
 
+def _pallets_said(n) -> str:
+    return f"{n} pallet" if n == 1 else f"{n} pallets"
+
+
 def _either(names) -> str:
     """"Monday, Tuesday or Thursday"."""
     names = list(names)
@@ -311,6 +315,9 @@ Answering:
   field is not in the answer, say you cannot see it.
 * `departs` is when a lorry is planned to leave SDI. `due` is when the customer
   wants it. They are different questions and must not be swapped.
+* `pallet_total` adds up the PALLETS column of the lines given. Several lines
+  often share a lorry, so it is pallets, never a number of lorries. Say which
+  lines were not counted (`pallet_lines_as_text`, `pallet_lines_blank`).
 * Say when a date was read with doubt: `departs_basis` tells you, and a
   `tentative` line is a plan, not a commitment.
 
@@ -398,8 +405,9 @@ def tti_leaving_on(day: str = "") -> dict:
     # about. Spoken aloud, an unqualified "nothing is going out" is the
     # sentence somebody acts on, and there is no footnote in a voice answer.
     if count:
-        spoken = (f"{count} line{'s' if count != 1 else ''} planned to leave on "
-                  f"{_said_day(asked)}: "
+        spoken = (f"{count} line{'s' if count != 1 else ''}"
+                  + (f", {_pallets_said(answer['pallet_total'])}," if answer["pallet_total"] else "")
+                  + f" planned to leave on {_said_day(asked)}: "
                   + "; ".join(_name_of(l) for l in answer["lines"][:SAY_FIRST])
                   + (f"; and {count - SAY_FIRST} more." if count > SAY_FIRST else "."))
         if unread:
@@ -440,8 +448,11 @@ def tti_leaving_this_week(day: str = "") -> dict:
     # Said as a count per day: five days of order numbers read aloud is the
     # ninety-second recital. The lines per day are there for "and Tuesday?".
     if count:
-        spoken = (f"{count} line{'s' if count != 1 else ''} planned to leave {span}: "
+        spoken = (f"{count} line{'s' if count != 1 else ''}"
+                  + (f", {_pallets_said(answer['pallet_total'])}," if answer["pallet_total"] else "")
+                  + f" planned to leave {span}: "
                   + "; ".join(f"{d['line_count']} on {date.fromisoformat(d['day']).strftime('%A')}"
+                              + (f" ({_pallets_said(d['pallet_total'])})" if d["pallet_total"] else "")
                               for d in answer["days"] if d["line_count"])
                   + (". Nothing on " + _either(date.fromisoformat(d["day"]).strftime("%A")
                                                for d in answer["days"] if not d["line_count"])

@@ -207,6 +207,50 @@ def _business_row(row: SourceRow) -> bool:
                ("SDI ORDER NO", "PART CODE", "DESCRIPTION"))
 
 
+# ── Pallets, added up ─────────────────────────────────────────────────────
+#
+# Phase one refused to total the PALLETS column: whether rows were separate
+# loads, or one load written on several lines, was unknown. Sue Rogers, 29
+# October 2026: one order goes in several loads "due to number of pallets that
+# can fit on a lorry", and "we often have various rows for the same lorry,
+# sometimes just one row just depends on the product". So every row carries its
+# own pallets, and adding them up is right - but it counts pallets, not lorries,
+# and the answer says so.
+PALLET_REASON = ("The PALLETS column added up for these lines. Several lines often go on one "
+                 "lorry, so this is pallets, not lorries.")
+
+
+def _pallets(value) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(_clean(value).replace(",", ""))
+    except ValueError:
+        return None
+
+
+def pallet_count(lines: list[dict]) -> dict:
+    """Total pallets on these lines, and which lines could not be counted."""
+    total, counted, text, blank = 0.0, 0, [], 0
+    for line in lines:
+        raw = line.get("pallets_as_recorded")
+        number = _pallets(raw)
+        if number is not None:
+            total += number
+            counted += 1
+        elif _clean(raw):
+            text.append({"source": line["source"], "pallets_as_recorded": _clean(raw)})
+        else:
+            blank += 1
+    return {"pallet_total": int(total) if total.is_integer() else round(total, 1),
+            "pallet_lines_counted": counted,
+            "pallet_lines_as_text": text,
+            "pallet_lines_blank": blank,
+            "pallet_total_reason": PALLET_REASON}
+
+
 def going_out(rows: Iterable[SourceRow], *, day: date, as_of: date) -> dict:
     """Answer 'what is leaving SDI on day?' from dispatch, not due-date, cells."""
     found: list[dict] = []
@@ -247,8 +291,7 @@ def going_out(rows: Iterable[SourceRow], *, day: date, as_of: date) -> dict:
         "no_date_lines": not_yet[:25],
         "no_date_truncated": len(not_yet) > 25,
         "line_count": len(found),
-        "pallet_total": None,
-        "pallet_total_reason": "Rows are order lines, not evidenced unique shipments; pallet cells may repeat.",
+        **pallet_count(found),
         "caveat": "A schedule is not confirmation that goods have left.",
     }
 
@@ -271,11 +314,12 @@ def going_out_week(rows: Iterable[SourceRow], *, day: date, as_of: date) -> dict
         first = first or answer
         if offset < 5 or answer["line_count"]:
             days.append({"day": on.isoformat(), "line_count": answer["line_count"],
-                         "lines": answer["lines"]})
+                         "lines": answer["lines"], "pallet_total": answer["pallet_total"]})
     week = {key: first[key] for key in (
         "source_version_date", "unresolved_date_count", "unresolved_date_lines",
         "unresolved_date_truncated", "no_date_count", "no_date_lines", "no_date_truncated",
-        "pallet_total", "pallet_total_reason", "caveat")}
+        "caveat")}
+    week.update(pallet_count([line for d in days for line in d["lines"]]))
     week.update({
         "question": f"What is due to leave SDI in the week of {monday.isoformat()}?",
         "week_start": monday.isoformat(),

@@ -19,7 +19,7 @@ class DespatchQuestions(unittest.TestCase):
         self.assertEqual(result["lines"][0]["source"], "Nov week 1!row 11")
         self.assertTrue(result["lines"][0]["tentative"])
         self.assertEqual(result["lines"][0]["date_basis"], "year inferred from snapshot")
-        self.assertIsNone(result["pallet_total"])
+        self.assertEqual(result["pallet_total"], 30)
         self.assertIn("not confirmation", result["caveat"])
 
     def test_due_date_is_not_dispatch_date(self):
@@ -39,14 +39,27 @@ class DespatchQuestions(unittest.TestCase):
     def test_wrong_weekday_is_unresolved(self):
         self.assertIsNone(schedule_date("Tue 2nd Nov TBC", as_of=AS_OF).value)
 
-    def test_repeated_order_lines_are_not_summed_as_pallets(self):
+    def test_each_row_s_pallets_are_added_and_called_pallets_not_lorries(self):
+        """Sue Rogers, 29 Oct 2026: "we often have various rows for the same
+        lorry". Each row has its own pallets, so two rows of 30 are 60 pallets
+        - which may be one lorry or two, so the answer never says lorries."""
         rows = [SourceRow("Nov week 1", n, {
             "SDI ORDER NO": 15178, "PART CODE": "TIE-1191", "PALLETS": 30,
             "LORRY FROM SDI": "Mon 2nd Nov TBC",
         }) for n in (11, 13)]
         result = going_out(rows, day=date(2026, 11, 2), as_of=AS_OF)
         self.assertEqual(result["line_count"], 2)
-        self.assertIsNone(result["pallet_total"])
+        self.assertEqual(result["pallet_total"], 60)
+        self.assertIn("pallets, not lorries", result["pallet_total_reason"])
+
+    def test_a_pallet_count_written_as_text_is_not_guessed(self):
+        rows = [SourceRow("Nov week 1", n, {"SDI ORDER NO": 1, "PALLETS": p,
+                                            "LORRY FROM SDI": "Mon 2nd Nov TBC"})
+                for n, p in ((3, 30), (4, "two"), (5, ""))]
+        result = going_out(rows, day=date(2026, 11, 2), as_of=AS_OF)
+        self.assertEqual((result["pallet_total"], result["pallet_lines_counted"],
+                          result["pallet_lines_blank"]), (30, 1, 1))
+        self.assertEqual(result["pallet_lines_as_text"][0]["pallets_as_recorded"], "two")
 
 
 class TransferPreview(unittest.TestCase):
@@ -275,6 +288,7 @@ class TheFirstLiveReadOfSuesWorkbook(unittest.TestCase):
         kept = [l for l in out["no_date_lines"] if not l["order"]]
         self.assertTrue(kept, "a described row with no order number was dropped")
 
-    def test_pallets_are_still_never_totalled(self):
+    def test_pallets_are_totalled_for_the_day_only(self):
         out = going_out(self.rows(), day=date(2026, 11, 6), as_of=AS_OF)
-        self.assertIsNone(out["pallet_total"])
+        self.assertEqual(out["pallet_lines_counted"] + out["pallet_lines_blank"]
+                         + len(out["pallet_lines_as_text"]), out["line_count"])

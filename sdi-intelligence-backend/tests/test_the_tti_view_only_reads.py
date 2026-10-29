@@ -175,10 +175,13 @@ class TheAnswerIsHonestTests(unittest.TestCase):
         self.assertNotIn("as_of=date.today()", ROUTES)
         self.assertNotIn("as_of=datetime.now", ROUTES)
 
-    def test_the_screen_carries_the_caveat_and_refuses_a_pallet_total(self):
+    def test_the_screen_carries_the_caveat_and_says_pallets_not_lorries(self):
+        """Pallets are added up since Sue confirmed each row has its own; the
+        screen carries the reason, which says they are pallets, not lorries,
+        and names the lines it could not count."""
         self.assertIn("j.caveat", PAGE)
-        self.assertIn("Pallets are not totalled", PAGE)
-        self.assertNotIn("pallet_total +", PAGE)
+        self.assertIn("j.pallet_total_reason", PAGE)
+        self.assertIn("Not counted: ", PAGE)
 
     def test_unreadable_dates_are_offered_not_dropped(self):
         """The lines most likely to be missed are the ones it could not parse."""

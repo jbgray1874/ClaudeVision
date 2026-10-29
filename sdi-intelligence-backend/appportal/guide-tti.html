@@ -149,7 +149,9 @@
     not yet planned.</li>
     <li>Each line shows its <b>trailer</b> column (BOOKED, a registration) and a green <b>loaded</b> tag once
     despatch have written "loaded" there.</li>
-    <li><b>Pallets are not added up</b> yet, because the column holds text as well as numbers.</li>
+    <li><b>Pallets are added up</b> for the day, and for each day of the week: the PALLETS column of those lines.
+    Several lines often go on one lorry, so it is a number of <b>pallets, not lorries</b>. A pallet count written
+    as text, or left blank, is not counted, and the note under the list says which lines those are.</li>
     <li>A plan is not proof that goods have left: that is the delivery note, the invoice number and "loaded" in the
     trailer column.</li>
   </ul>
@@ -222,7 +224,7 @@
     <tr><td><b>DESCRIPTION</b></td><td>Shown.</td></tr>
     <tr><td><b>TTI ACCOUNT</b></td><td>Searched. Shown.</td></tr>
     <tr><td><b>QTY</b></td><td>Shown. Flagged in Data quality if it is not a number.</td></tr>
-    <tr><td><b>PALLETS</b></td><td>Shown as recorded, never added up. Flagged if not a number; blank is "no pallet count".</td></tr>
+    <tr><td><b>PALLETS</b></td><td>Shown, and added up per day and per week on <i>Leaving on a day</i>. Each row has its own pallets; several rows can share a lorry. Text is not counted and is flagged in Data quality; blank is "no pallet count".</td></tr>
     <tr><td><b>COMMENTS</b></td><td>Read for the <b>pick note</b>, <b>delivery note</b>, invoice, proof of export and "booked in" numbers, and for "await PO". Searched as a mention.</td></tr>
     <tr><td><b>BOOKED IN WITH TTI</b></td><td>Checked for the chase list and morning summary.</td></tr>
     <tr><td><b>LABEL + Batch DONE</b></td><td>Checked for the chase list and morning summary.</td></tr>
@@ -298,7 +300,7 @@
     <tr><th>Ask something like</th><th>What it does</th></tr>
     <tr><td>"Where is TTI order 15194?"<br>"Find PO 9981."</td><td>Searches every weekly sheet, with the sheet and row.</td></tr>
     <tr><td>"What's leaving SDI on Thursday?"</td><td>The lorry plan for that day, with any lines whose date it could not read.</td></tr>
-    <tr><td>"What's leaving this week?" / "…next week?"</td><td>Monday to Friday in one answer: how many lines each day, and which. Ask "and Tuesday?" for the detail.</td></tr>
+    <tr><td>"What's leaving this week?" / "…next week?"</td><td>Monday to Friday in one answer: how many lines and pallets each day, and which. Ask "and Tuesday?" for the detail.</td></tr>
     <tr><td>"What do I need to chase?"<br>"Chase list for the next 3 days."</td><td>The chase list, grouped by what is missing.</td></tr>
     <tr><td>"Which TTI orders are overdue with no departure date?"</td><td>Overdue, no departure.</td></tr>
     <tr><td>"Read me this morning's despatch summary."</td><td>The morning summary, to read or copy. It is not sent.</td></tr>
