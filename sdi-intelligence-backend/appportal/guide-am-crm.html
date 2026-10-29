@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d0f">
+<title>AM CRM guide · SDI Intelligence</title>
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0d0d0f; --surface:#17171b; --surface-2:#1d1d22;
+    --line:#2a2a31; --line-soft:#202026;
+    --ink:#f3f2ee; --ink-dim:#a3a3aa; --ink-faint:#6b6b73;
+    --accent:#ffd400; --ok:#5fd08a; --warn:#ff9d42; --fail:#ff5d5d;
+    --r:4px;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    --disp:'Archivo',sans-serif;
+    --body:'Hanken Grotesk',sans-serif;
+    --safe-t:env(safe-area-inset-top,0px); --safe-b:env(safe-area-inset-bottom,0px);
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15.5px;
+       line-height:1.6;-webkit-font-smoothing:antialiased;min-height:100vh;overflow-wrap:anywhere;
+       background-image:radial-gradient(900px 500px at 88% -8%,rgba(255,212,0,.06),transparent 60%)}
+  a{color:var(--accent);text-decoration:none}
+  .top{position:sticky;top:0;z-index:20;background:rgba(13,13,15,.92);backdrop-filter:blur(12px);
+       border-bottom:1px solid var(--line);padding:calc(12px + var(--safe-t)) 16px 12px;
+       display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .top a{display:flex;align-items:center;gap:7px;color:var(--ink-dim);font-size:14px}
+  .top svg{width:17px;height:17px}
+  .wrap{padding:18px 16px calc(40px + var(--safe-b));max-width:760px;margin:0 auto}
+  .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--accent);text-transform:uppercase}
+  h1{font-family:var(--disp);font-weight:800;font-size:26px;line-height:1.15;margin:8px 0 10px}
+  h2{font-family:var(--disp);font-weight:800;font-size:19px;line-height:1.25;margin:30px 0 10px;
+     padding-top:8px;border-top:1px solid var(--line-soft);scroll-margin-top:70px}
+  h3{font-weight:700;font-size:16px;margin:18px 0 6px}
+  p{margin:8px 0;color:var(--ink)}
+  .sub{color:var(--ink-dim)}
+  ul,ol{margin:8px 0 8px 22px}
+  li{margin:5px 0}
+  b{font-weight:700}
+  .btnname{font-weight:700;color:var(--accent)}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 15px;margin:14px 0}
+  .panel h4{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--ink-faint);
+            text-transform:uppercase;font-weight:500;margin-bottom:8px}
+  .panel.warn{border-color:rgba(255,157,66,.35);background:rgba(255,157,66,.06)}
+  .panel.fail{border-color:rgba(255,93,93,.35);background:rgba(255,93,93,.06)}
+  .panel.ok{border-color:rgba(95,208,138,.35);background:rgba(95,208,138,.06)}
+  .toc a{display:block;padding:6px 0;border-bottom:1px solid var(--line-soft)}
+  .toc a:last-child{border-bottom:0}
+  table{width:100%;border-collapse:collapse;font-size:14px;margin:8px 0}
+  td,th{padding:8px 6px;border-bottom:1px solid var(--line-soft);text-align:left;vertical-align:top}
+  th{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--ink-faint);text-transform:uppercase;font-weight:500}
+  td:first-child{width:38%}
+  .msg{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
+  .say{font-family:var(--mono);font-size:13px;color:var(--accent)}
+  .muted{color:var(--ink-faint);font-size:13px}
+</style>
+</head>
+<body>
+<div class="top">
+  <a href="voice-crm.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>Back to the app</a>
+  <a href="./">All apps</a>
+</div>
+<div class="wrap">
+  <div class="kicker">User guide</div>
+  <h1>SDI Intelligence AM CRM</h1>
+  <p class="sub">Your account tracker, asked questions and updated by speaking — at your desk, on your
+  phone, or hands-free in the car. Every change is read back to you and saved only when you say yes.</p>
+
+  <div class="panel toc">
+    <h4>Contents</h4>
+    <a href="#what">1. What it does</a>
+    <a href="#start">2. Getting started</a>
+    <a href="#ask">3. Asking it things</a>
+    <a href="#change">4. Changing something</a>
+    <a href="#drive">5. Drive mode</a>
+    <a href="#briefing">6. Your morning briefing</a>
+    <a href="#recent">7. Recent activity</a>
+    <a href="#wont">8. What it will not do</a>
+    <a href="#messages">9. Messages and what to do</a>
+    <a href="#help">10. Help</a>
+  </div>
+
+  <h2 id="what">1. What it does</h2>
+  <p>It reads your account and project tracker — the workbook you already live in — and answers questions
+  about it out loud. It can also change a cell for you, but only after reading the change back and hearing
+  you agree.</p>
+  <ul>
+    <li><b>Only your records.</b> It filters the tracker to the rows where you are the owner. Other
+    people's rows are not shown and cannot be changed.</li>
+    <li><b>It reads the workbook as you.</b> Your own Microsoft sign-in, your own access. Nobody inherits
+    the ability to see it from the app.</li>
+    <li><b>One cell at a time.</b> A change writes a single cell. The workbook is never replaced or
+    re-uploaded, so nothing outside the cell you named can move.</li>
+    <li><b>Nothing is saved without a yes.</b> Every change is proposed, read back, and only written when
+    you confirm it.</li>
+  </ul>
+
+  <h2 id="start">2. Getting started</h2>
+  <ol>
+    <li>On your phone or laptop, open
+    <a href="https://sdiintelligence-sdidisplays.msappproxy.net/app/">sdiintelligence-sdidisplays.msappproxy.net/app</a>.
+    It works over mobile data or any Wi-Fi; no VPN is needed.</li>
+    <li>Sign in with your <b>usual SDI Microsoft account</b>, not an admin account.</li>
+    <li>Tap <span class="btnname">Open SDI Intelligence AM CRM →</span>.</li>
+    <li>On a phone, choose <b>Add to Home Screen</b> from the browser menu, so it opens like an app and the
+    microphone keeps its permission.</li>
+  </ol>
+  <p>The first time you use the microphone the browser asks permission. Say yes. On an iPhone it may ask
+  again the first time in each new session — that is the phone, not the app.</p>
+  <div class="panel">
+    <h4>Who can use it</h4>
+    <p>Asking questions is open to anyone who can see the tracker. <b>Changing</b> anything is limited to
+    named people. If you are not one of them you will be told so plainly, and you can still ask questions.</p>
+  </div>
+
+  <h2 id="ask">3. Asking it things</h2>
+  <p>Tap <span class="btnname">Tap to talk</span> and speak normally. It listens until you pause for about
+  three seconds, then works out what you said and answers out loud. Tap the microphone again to interrupt
+  it at any point.</p>
+  <p>If you would rather type, use the box and tap <span class="btnname">Send</span>. The microphone
+  switches off while you type and you will see <span class="msg">Mic off while you type</span>.</p>
+  <p>Things worth asking:</p>
+  <ul>
+    <li><span class="say">"What's due this week?"</span></li>
+    <li><span class="say">"What's overdue?"</span></li>
+    <li><span class="say">"Tell me about Barbour."</span></li>
+    <li><span class="say">"What's my biggest job by value?"</span></li>
+    <li><span class="say">"What am I waiting on?"</span></li>
+  </ul>
+  <div class="panel">
+    <h4>Say the name however it sounds</h4>
+    <p>Speech recognition mangles client names, so it matches by sound as well as spelling — "barber" finds
+    Barbour, "the perfume shop" finds TPS. If it cannot match a name at all it shows you everything rather
+    than claiming there is nothing.</p>
+  </div>
+  <p>Dates are read back in words — "the fourteenth of November" rather than 11/14/2026 — because a date
+  read as numbers is easy to mishear.</p>
+
+  <h2 id="change">4. Changing something</h2>
+  <p>Say the change in a normal sentence. You can make several in one go:</p>
+  <p><span class="say">"Set Barbour's status to live and the next step to chase the PO, due Friday."</span></p>
+  <p>Then three things happen, always in this order:</p>
+  <ol>
+    <li><b>It reads the change back.</b> For example: <span class="msg">Two changes. Barbour: Status from
+    Quoted to Live. Barbour: NEXT STEPS from Awaiting sign-off to Chase the PO. Shall I save them?</span></li>
+    <li><b>You answer.</b> Say <b>yes</b>, or tap <span class="btnname">Yes — write it</span>. To abandon it,
+    say <b>no</b> or tap <span class="btnname">No — cancel</span>.</li>
+    <li><b>It saves, and tells you what it saved</b> — <span class="msg">Done — I updated …</span></li>
+  </ol>
+  <div class="panel warn">
+    <h4>Only a plain yes saves</h4>
+    <p>"Yes", "yep", "go ahead", "save it" all save. Anything with a doubt in it does not: "yes but change
+    the date too" cancels and starts again, on purpose. If it cannot tell, it says
+    <span class="msg">I need a clear yes or no — or use the buttons</span> rather than guessing.</p>
+  </div>
+  <p><b>If somebody else edits the row while you are talking about it</b>, the save is abandoned and you are
+  told: <span class="msg">Someone changed that record while we were talking. Nothing was written.</span>
+  Ask for it again and re-propose. This is deliberate — it is what stops your change quietly overwriting
+  theirs.</p>
+  <p><b>Amounts</b> go in as plain numbers. Say "fifteen thousand five hundred"; it writes 15500. If it
+  cannot read an amount clearly it refuses rather than guessing at it.</p>
+  <p><b>To add to a cell rather than replace it</b>, say so: "add 'spoke to Dave' to the next steps". It
+  sends the old text plus the new words.</p>
+
+  <h2 id="drive">5. Drive mode</h2>
+  <p>Tap <span class="btnname">🚗 Drive</span> for hands-free use. The screen becomes large and simple, the
+  microphone reopens by itself after each answer, and you confirm changes by saying yes or no rather than
+  tapping. Tap <span class="btnname">Exit</span> to come out of it.</p>
+  <div class="panel fail">
+    <h4>Driving</h4>
+    <p>Set it going before you move off, and treat it like a phone call: if it needs your eyes, it needs
+    you parked.</p>
+  </div>
+
+  <h2 id="briefing">6. Your morning briefing</h2>
+  <p><span class="btnname">▶ Listen to my briefing</span> reads out what is due, what has slipped and what
+  is worth chasing. <span class="btnname">Show today's review</span> shows the same thing written down, and
+  <span class="btnname">Email it now</span> sends it to you.</p>
+  <p>It also arrives by email on weekday mornings without being asked.</p>
+
+  <h2 id="recent">7. Recent activity</h2>
+  <p><span class="btnname">Show recent activity</span> lists what has been proposed, saved, cancelled or
+  refused lately, newest first — whether it came from this app or from ChatGPT. Every change is recorded
+  with who made it and when, so there is always a record of what the app did.</p>
+
+  <h2 id="wont">8. What it will not do</h2>
+  <ul>
+    <li><b>Change somebody else's records.</b> It only ever sees rows where you are the owner.</li>
+    <li><b>Change the owner column.</b> That would hand a record away, so it is refused.</li>
+    <li><b>Type over a calculated cell.</b> If a column holds a formula — margin, for instance — it refuses
+    rather than silently replacing the calculation with a fixed number. If it cannot tell whether a cell is
+    calculated, it still refuses: better to make you do it by hand than flatten a formula nobody notices
+    for a month.</li>
+    <li><b>Replace the workbook.</b> It writes one cell through Excel's own interface and never uploads a
+    file over the top of yours.</li>
+    <li><b>Save anything you have not agreed to.</b></li>
+  </ul>
+
+  <h2 id="messages">9. Messages and what to do</h2>
+  <table>
+    <tr><th>You see or hear</th><th>What it means</th></tr>
+    <tr><td class="msg">Updates in this pilot are limited to named people</td><td>You can ask questions but
+    not change anything. Ask James Gray to add you.</td></tr>
+    <tr><td class="msg">updates aren't switched on for this pilot yet</td><td>Writing is switched off for
+    everyone at the moment. Questions still work.</td></tr>
+    <tr><td class="msg">Excel Online can't open the tracker right now, so changes can't be saved</td>
+    <td>Microsoft cannot open the workbook — usually because it is mid-save or locked. <b>Lookups still
+    work</b>, from a copy of the file, but nothing can be saved until it clears. Nothing was changed. Tell
+    James if it lasts.</td></tr>
+    <tr><td class="msg">Someone changed that record while we were talking</td><td>Somebody edited the row
+    between the read-back and the save. Nothing was written. Ask for the record again and re-propose.</td></tr>
+    <tr><td class="msg">No matching records</td><td>Nothing in your rows matched. Try the client name a
+    different way, or ask for everything and narrow down.</td></tr>
+    <tr><td class="msg">Could not reach Microsoft Graph</td><td>A network problem between the server and
+    Microsoft. Nothing was changed. Try again in a minute.</td></tr>
+    <tr><td class="msg">No Microsoft Graph access</td><td>Your sign-in has run out. Reload the page and sign
+    in again.</td></tr>
+    <tr><td class="msg">I need a clear yes or no</td><td>Your answer had a doubt in it, so nothing was
+    saved. Say yes or no on its own, or use the buttons.</td></tr>
+    <tr><td class="msg">Microphone access is blocked for this page</td><td>Allow the microphone in your
+    browser's settings for this site, then reload.</td></tr>
+    <tr><td class="msg">I didn't catch anything</td><td>It heard no speech. Tap the microphone and try
+    again.</td></tr>
+  </table>
+
+  <div class="panel ok">
+    <h4>If it says it saved, it saved</h4>
+    <p>In October a change that had been written was reported back as a failure, because the app checked the
+    cell against a copy of the workbook that had not caught up yet. That is fixed: the write and the check
+    now happen in one conversation with Excel, so they cannot disagree. If you are ever unsure, open the
+    tracker and look — and tell James either way.</p>
+  </div>
+
+  <h2 id="help">10. Help</h2>
+  <p>Questions, something that looks wrong, or a change you are not sure went in: contact <b>James Gray</b>,
+  AI and Systems Controller. If a change did not behave as expected, say roughly when it was — there is a
+  record of every proposal and every save, and the time is enough to find it.</p>
+  <p class="muted">This is a sandbox pilot running against a copy of the tracker, not the live one.</p>
+</div>
+</body>
+</html>

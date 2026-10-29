@@ -754,7 +754,8 @@
       ],
       "phase": "Pilot · voice loop built against the sandbox workbook — writes gated until Nick approves",
       "invoke": "Open the app, tap the mic and speak — e.g. “set the status on the Acme project to invoiced”. The change is read back and written only on an explicit yes, then journalled. Reads work as soon as the sandbox is configured; writes stay off until SDI_VOICECRM_WRITE and SDI_VOICECRM_APPROVED_BY are set. The live tracker is never touched. The outbound morning-call architecture described below is the next stage, not this build.",
-      "app_url": "voice-crm.html"
+      "app_url": "voice-crm.html",
+      "guide_url": "guide-am-crm.html"
     },
     {
       "id": "chatbots",
