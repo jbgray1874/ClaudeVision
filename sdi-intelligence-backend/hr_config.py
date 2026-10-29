@@ -191,6 +191,12 @@ BLIP_MAX_CLOCKIN_AGE_HOURS = float(_opt("BLIP_MAX_CLOCKIN_AGE_HOURS", "20"))
 # Who may open it: Microsoft sign-in email addresses, comma separated. It shows
 # who is in the building and writes to the fire roll call, so it is a named
 # list rather than "anyone in the tenant". Empty means nobody.
+# Which BrightHR employee field says who someone reports to, for grouping the
+# app's lists by manager. Empty = try the usual names (hr_brighthr.MANAGER_FIELDS).
+# tools/probe_brighthr_fields.py shows which one BrightHR actually sends; a
+# dotted path ("lineManager.id") or a comma list is accepted.
+HR_MANAGER_FIELD = _opt("HR_MANAGER_FIELD")
+
 HR_APP_USERS = {e.strip().lower() for e in _opt("SDI_HR_APP_USERS").split(",") if e.strip()}
 
 # Who gets the weekly forgotten clock-outs report (tools/forgotten_clockouts.py

@@ -98,6 +98,64 @@ def fetch_employees(token: str) -> list:
     return all_items
 
 
+# ── Who someone reports to ─────────────────────────────────────────────────
+#
+# Simon Foister asked for the app's lists grouped by each person's BrightHR
+# manager or approver. BrightHR's documentation was not to hand for the field
+# name, so the usual spellings are tried in order and the first one with a
+# value wins; HR_MANAGER_FIELD fixes it once tools/probe_brighthr_fields.py
+# has shown which one BrightHR really sends.
+MANAGER_FIELDS = ("lineManager", "manager", "lineManagerId", "managerId", "reportsTo",
+                  "reportsToId", "holidayApprover", "absenceApprover", "approver",
+                  "approvers", "line_manager", "line_manager_id", "manager_id")
+
+
+def _dig(raw, path: str):
+    for part in path.split("."):
+        raw = raw.get(part) if isinstance(raw, dict) else None
+    return raw
+
+
+def _full_name(value) -> str:
+    if isinstance(value, dict):
+        given = value.get("givenName") or value.get("given_name") or value.get("firstName") or ""
+        family = value.get("familyName") or value.get("family_name") or value.get("lastName") or ""
+        return " ".join(f"{given} {family}".split())
+    return " ".join(str(value or "").split())
+
+
+def _reference(value) -> tuple:
+    """(id, name) from whatever shape the field has: an id, a name, an object
+    with either, or a list of approvers (the first is taken)."""
+    if isinstance(value, list):
+        for item in value:
+            ref = _reference(item)
+            if any(ref):
+                return ref
+        return "", ""
+    if isinstance(value, dict):
+        ident = str(value.get("id") or value.get("employeeId") or value.get("managerId") or "").strip()
+        name = (_full_name(value.get("name")) if isinstance(value.get("name"), dict)
+                else _full_name(value.get("name") or value.get("displayName") or value.get("fullName")
+                                or (value if (value.get("firstName") or value.get("givenName")) else "")))
+        return ident, name
+    text = str(value or "").strip()
+    if not text:
+        return "", ""
+    # "Jo Smith" is a name; "3f2a-..." or "1234" is an id.
+    return ("", text) if " " in text and not any(c.isdigit() for c in text) else (text, "")
+
+
+def manager_of(raw: dict) -> dict:
+    """{"manager_id", "manager_name", "manager_field"} for one BrightHR record."""
+    wanted = [f.strip() for f in (cfg.HR_MANAGER_FIELD or "").split(",") if f.strip()]
+    for field in wanted or MANAGER_FIELDS:
+        ident, name = _reference(_dig(raw, field))
+        if ident or name:
+            return {"manager_id": ident, "manager_name": name, "manager_field": field}
+    return {"manager_id": "", "manager_name": "", "manager_field": ""}
+
+
 def normalise_employee(raw: dict) -> dict:
     """Map a BrightHR record to a stable shape, hedging camelCase / snake_case."""
     name = raw.get("name") or {}
@@ -112,4 +170,15 @@ def normalise_employee(raw: dict) -> dict:
         or raw.get("isTerminated")
         or str(raw.get("employmentStatus", "")).lower() == "terminated"
     )
-    return {"id": emp_id, "first_name": first, "surname": last, "email": email, "terminated": terminated}
+    return {"id": emp_id, "first_name": first, "surname": last, "email": email,
+            "terminated": terminated, **manager_of(raw)}
+
+
+def name_managers(staff: list) -> list:
+    """Fill in a manager's name from their id, using the same staff list. A
+    field that gives only an id is no use on a phone screen."""
+    names = {e["id"]: f"{e['first_name']} {e['surname']}".strip() for e in staff if e.get("id")}
+    for e in staff:
+        if e.get("manager_id") and not e.get("manager_name"):
+            e["manager_name"] = names.get(e["manager_id"], "")
+    return staff
