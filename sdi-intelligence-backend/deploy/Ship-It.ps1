@@ -88,8 +88,8 @@ if ($deployed -eq 2) {
 }
 
 # -- 3. Restart and prove it ---------------------------------------------------
-$check = Join-Path $here "Check-AMCRM-Live.ps1"
-if (-not (Test-Path -LiteralPath $check)) {
+$checkScript = Join-Path $here "Check-AMCRM-Live.ps1"
+if (-not (Test-Path -LiteralPath $checkScript)) {
     Write-Host ""
     Write-Host "  Check-AMCRM-Live.ps1 is missing, so nothing was verified." -ForegroundColor Yellow
     exit 0
@@ -97,10 +97,10 @@ if (-not (Test-Path -LiteralPath $check)) {
 if ($NoRestart) {
     Step "3. Checking (not restarting, -NoRestart)"
     Write-Host "  A Python file that was copied is NOT running until the service restarts." -ForegroundColor Yellow
-    & $check -Server $Server
+    & $checkScript -Server $Server
 } else {
     Step "3. Restarting and checking"
-    & $check -Server $Server -Restart
+    & $checkScript -Server $Server -Restart
 }
 
 Write-Host ""
