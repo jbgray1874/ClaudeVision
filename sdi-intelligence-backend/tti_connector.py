@@ -64,7 +64,6 @@ from tti_search import (chase, data_quality, find, morning, overdue_undated,
                         summary_text)
 
 import uvicorn
-from mcp.server.apps import Apps
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
 from mcp.server.mcpserver import MCPServer
@@ -252,7 +251,6 @@ def _name_of(line: dict) -> str:
     return " ".join(b for b in bits if b) or "a line with no order number"
 
 
-apps = Apps()
 READS = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
 
 
@@ -265,10 +263,23 @@ def _tool(description: str, invoking: str = "Reading the TTI Despatch Plan…",
     says so, and there is nothing in this service for the hint to be wrong
     about.
     """
-    return apps.tool(
-        annotations=READS, description=description,
-        meta={"openai/toolInvocation/invoking": invoking,
-              "openai/toolInvocation/invoked": invoked})
+    def register(fn):
+        _TOOLS.append((fn, {"annotations": READS, "description": description,
+                            "meta": {"openai/toolInvocation/invoking": invoking,
+                                     "openai/toolInvocation/invoked": invoked}}))
+        return fn
+    return register
+
+
+# Plain tools, added to the server in build_server. (mcp's Apps extension is
+# only for tools that render a ui:// card; none of these do.)
+_TOOLS: list = []
+
+
+def _add_tools(server: MCPServer) -> MCPServer:
+    for fn, settings in _TOOLS:
+        server.add_tool(fn, **settings)
+    return server
 
 
 INSTRUCTIONS = """You are connected to SDI's TTI Despatch Plan: the workbook
@@ -554,12 +565,12 @@ def tti_find_files(query: str, folder: str = "", kind: str = "") -> dict:
 
 def build_server() -> MCPServer:
     if not FRONT_DOOR:
-        return MCPServer(
-            name="SDI TTI Despatch", instructions=INSTRUCTIONS, extensions=[apps],
+        return _add_tools(MCPServer(
+            name="SDI TTI Despatch", instructions=INSTRUCTIONS,
             token_verifier=verifier(),
             auth=AuthSettings(issuer_url=verifier().issuers[0],
                               resource_server_url=PUBLIC_URL,
-                              required_scopes=[SCOPE_URI], validate_token_resource=False))
+                              required_scopes=[SCOPE_URI], validate_token_resource=False)))
     door = connector_oauth.FrontDoor(
         public_url=PUBLIC_URL, tenant=TENANT, client_id=OAUTH_CLIENT,
         client_secret=OAUTH_SECRET, api_scope=SCOPE_URI, scope=SCOPE,
@@ -568,7 +579,7 @@ def build_server() -> MCPServer:
         purpose=("look up the TTI Despatch Plan and search the TTi folders as you. "
                  "It can only read: it cannot change anything or send email"))
     server = MCPServer(
-        name="SDI TTI Despatch", instructions=INSTRUCTIONS, extensions=[apps],
+        name="SDI TTI Despatch", instructions=INSTRUCTIONS,
         auth_server_provider=door,
         auth=AuthSettings(issuer_url=door.base, resource_server_url=PUBLIC_URL,
                           required_scopes=[SCOPE], validate_token_resource=False,
@@ -577,7 +588,7 @@ def build_server() -> MCPServer:
                               default_scopes=door.scopes)))
     server.custom_route(connector_oauth.CONSENT_PATH, methods=["GET", "POST"])(door.consent)
     server.custom_route(connector_oauth.CALLBACK_PATH, methods=["GET"])(door.callback)
-    return server
+    return _add_tools(server)
 
 
 def build_app():
