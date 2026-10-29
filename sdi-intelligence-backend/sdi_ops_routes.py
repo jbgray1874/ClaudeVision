@@ -154,9 +154,37 @@ def make_router(page_dir=None):
     return router
 
 
+def _not_switched_on() -> APIRouter:
+    """Something at the path that says why there is nothing at the path.
+
+    ── "NOT FOUND" IS THE WRONG ANSWER TO "IS IT ON?" ────────────────────────
+    With the switch off, nothing was mounted, so the portal card opened and
+    the browser showed {"detail":"Not Found"}. That reads as broken - a card
+    for an app that does not exist - when the truth is that it exists and has
+    not been turned on. The two need different people to fix them, and the
+    page cannot tell you which it is if nothing answers.
+
+    It names the settings and nothing else: no values, no state, and none of
+    the console's own routes. An unconfigured app saying so is not a leak.
+    """
+    router = APIRouter(prefix=PREFIX)
+
+    @router.get("/{rest:path}")
+    def off(rest: str = ""):
+        return JSONResponse(
+            status_code=503, headers={"Cache-Control": "no-store"},
+            content={"detail": "SDI Remote Control Intelligence is built but not "
+                               "switched on. Set SDI_OPS_ENABLED=yes and "
+                               "SDI_OPS_OIDS to the Entra object IDs of the people "
+                               "who may use it, in the server's .env, then restart "
+                               "the service. (.env is read once, at startup.)"})
+    return router
+
+
 def install(app, env=None):
     env = os.environ if env is None else env
     if env.get("SDI_OPS_ENABLED", "").lower() != "yes":
+        app.include_router(_not_switched_on())
         return None
     app.include_router(make_router())
     return True

@@ -157,3 +157,54 @@ class ItReachesTheServerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SwitchedOffSaysSoTests(unittest.TestCase):
+    """── "NOT FOUND" IS THE WRONG ANSWER TO "IS IT ON?" ────────────────────
+    With SDI_OPS_ENABLED unset, nothing was mounted, so the portal card opened
+    and the browser showed {"detail":"Not Found"}. That reads as broken - a
+    card for an app that does not exist - when the truth is that it is built
+    and not switched on. The two need different people to fix them, and the
+    page cannot tell you which it is if nothing answers.
+    """
+
+    def app_with(self, enabled):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        made = FastAPI()
+        ops.install(made, env={"SDI_OPS_ENABLED": enabled} if enabled else {})
+        return TestClient(made)
+
+    def test_switched_off_it_explains_itself_rather_than_404(self):
+        answer = self.app_with(None).get("/api/ops")
+        self.assertEqual(answer.status_code, 503)
+        detail = answer.json()["detail"]
+        self.assertIn("not", detail.lower())
+        self.assertIn("SDI_OPS_ENABLED", detail)
+        self.assertIn("SDI_OPS_OIDS", detail)
+        self.assertIn("restart", detail.lower())
+
+    def test_every_path_under_it_says_the_same_thing(self):
+        client = self.app_with(None)
+        for path in ("/api/ops", "/api/ops/status", "/api/ops/health",
+                     "/api/ops/log?lines=40"):
+            with self.subTest(path=path):
+                self.assertEqual(client.get(path).status_code, 503)
+
+    def test_the_explanation_names_settings_and_never_their_values(self):
+        """An unconfigured app saying so is not a leak. Saying what is IN the
+        settings would be."""
+        detail = self.app_with(None).get("/api/ops").json()["detail"]
+        for leak in ("=yes", "oid", "@", "10.0.0", "C:\\"):
+            with self.subTest(leak=leak):
+                self.assertNotIn(leak, detail.replace("SDI_OPS_ENABLED=yes", ""))
+
+    def test_switched_on_it_is_the_real_console(self):
+        """The stub must not be what gets mounted when it IS switched on."""
+        import os
+        os.environ["SDI_OPS_OIDS"] = "somebody"
+        self.addCleanup(os.environ.pop, "SDI_OPS_OIDS", None)
+        answer = self.app_with("yes").get("/api/ops/status")
+        # Not 503-with-an-explanation: the real routes are gated, so a stranger
+        # is refused by the object-ID list instead.
+        self.assertEqual(answer.status_code, 403)
