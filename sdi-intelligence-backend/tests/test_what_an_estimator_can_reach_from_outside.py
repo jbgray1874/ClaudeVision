@@ -220,3 +220,69 @@ class NoLoginLoopTests(unittest.TestCase):
         after = self.GUARD.split("signed_in is not None", 1)[1][:400]
         self.assertIn("status_code=403", after)
         self.assertNotIn("login_redirect", after)
+
+
+class LookingAndDoingAreDifferentPermissionsTests(unittest.TestCase):
+    """── WHY THE LIST MOVED OFF THE SCREEN AND ONTO THE EXPENSIVE VERB ────
+    "I was able to use and see estimating before without this environmental
+    variable OIDS nonsense" - true, and the list arrived WITH putting
+    estimating on the internet rather than being taken from anybody.
+
+    But the AM CRM app, live for weeks, has no allow-list at all: anyone who
+    can sign in reads it, what they see is filtered, and only named people may
+    CHANGE anything. That is the house pattern, and a list standing between an
+    employee and a screen they are allowed to look at was the wrong shape.
+
+    So: looking is open to anyone signed in, and the one verb out here that
+    queues work on a machine in the office and costs money is named-people
+    only. Everything genuinely dangerous was already refused by path.
+    """
+
+    GUARD = APP.split("async def _public_surface_guard", 1)[1].split("\n# ──", 1)[0]
+    LOOK = APP.split("def _public_estimator(", 1)[1].split("\ndef ", 1)[0]
+    DO = APP.split("def _may_start_a_run(", 1)[1].split("\n\n@", 1)[0]
+
+    def test_looking_needs_only_a_signed_in_person(self):
+        self.assertIn("return True", self.LOOK)
+        self.assertIn('user.get("kind") != "user"', self.LOOK)
+
+    def test_looking_can_still_be_narrowed_if_it_is_ever_wanted(self):
+        self.assertIn("SDI_ESTIMATOR_VIEWERS", self.LOOK)
+
+    def test_starting_a_run_is_named_people_only(self):
+        self.assertIn('access.may_use("SDI_ESTIMATOR_OIDS"', self.DO)
+
+    def test_the_two_posts_that_queue_work_are_the_ones_held_to_the_list(self):
+        named = APP.split("STARTS_A_RUN = (", 1)[1].split(")", 1)[0]
+        self.assertIn('"/api/estimate"', named)
+        self.assertIn('"/api/estimate/brief"', named)
+        # Asking a question of a filed record queues nothing, so it is not
+        # held to the list - that is the whole point of the split.
+        self.assertNotIn("tools/ask", named)
+
+    def test_the_check_sits_after_the_post_allow_list_not_before_it(self):
+        """A POST nobody reviewed must be refused whoever is asking, before
+        the question of who they are even arises."""
+        allowed = self.GUARD.index("_public_post_allowed(path)")
+        started = self.GUARD.index("STARTS_A_RUN")
+        self.assertLess(allowed, started)
+
+    def test_nothing_dangerous_became_reachable(self):
+        """The split changes who may LOOK, not what may be done."""
+        import public_surface
+        self.assertEqual(public_surface.PUBLIC_POST,
+                         ("/api/estimate", "/api/estimate/brief",
+                          "/api/estimate/tools/ask"))
+        for never in public_surface.NEVER_PUBLIC_POST:
+            with self.subTest(path=never):
+                self.assertFalse(public_surface.post_allowed(never))
+
+    def test_a_key_is_still_never_a_person(self):
+        """auth.current_user returns a dict for an API key too; looking must
+        not be opened to one just because the list is empty."""
+        self.assertIn('user.get("kind") != "user"', self.LOOK)
+
+    def test_the_refusal_says_which_half_was_refused(self):
+        after = self.GUARD.split("STARTS_A_RUN", 1)[1][:600]
+        self.assertIn("Looking is open to anyone signed in", after)
+        self.assertIn("STARTING a run", after)

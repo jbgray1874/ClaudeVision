@@ -238,8 +238,46 @@ from public_surface import post_allowed as _public_post_allowed, \
     under_the_briefs as _under_the_briefs
 
 
+# ── LOOKING AND DOING ARE DIFFERENT PERMISSIONS, AS THEY ARE IN AM CRM ──────
+# The AM CRM app has no allow-list at all: anyone who can sign in to the portal
+# reads it, what they see is filtered to the owner's records, and only named
+# people may CHANGE anything. That is the house pattern, it has been live for
+# weeks, and it is the right shape here too - one list, guarding the thing that
+# actually costs something, rather than a list standing between an employee and
+# a screen they are allowed to look at.
+#
+# So, from outside the office:
+#
+#   LOOKING - the screen, the run list, asking what a finished job came out at:
+#   anyone who can sign in. SDI_ESTIMATOR_VIEWERS narrows it if that is ever
+#   wanted; empty means anyone signed in, which is the AM CRM rule.
+#
+#   STARTING A RUN - the one thing here that queues work and costs money:
+#   SDI_ESTIMATOR_OIDS, and empty means NOBODY does it remotely. The expensive
+#   verb fails closed; the harmless one does not need to.
+#
+# Everything genuinely dangerous was already refused by path and still is -
+# releasing a quotation to a customer, changing who quotes are emailed to, the
+# self-running switch (see public_surface.NEVER_PUBLIC_POST). This changes who
+# may look, not what may be done.
+STARTS_A_RUN = ("/api/estimate", "/api/estimate/brief")
+
+
 def _public_estimator(request) -> bool:
-    """An explicitly allowed Entra person, never a portal or runner key."""
+    """May this person LOOK at estimating from outside the office?
+
+    Signed in is enough unless SDI_ESTIMATOR_VIEWERS says otherwise.
+    """
+    user = auth.current_user(request) if auth.ENABLED else None
+    if user is None or user.get("kind") != "user":
+        return False
+    if os.getenv("SDI_ESTIMATOR_VIEWERS", "").strip():
+        return access.may_use("SDI_ESTIMATOR_VIEWERS", user)
+    return True
+
+
+def _may_start_a_run(request) -> bool:
+    """May this person QUEUE work from outside the office? Named people only."""
     user = auth.current_user(request) if auth.ENABLED else None
     return access.may_use("SDI_ESTIMATOR_OIDS", user)
 
@@ -278,6 +316,18 @@ async def _public_surface_guard(request, call_next):
                             "detail": "That action is only available on the office network. "
                                       "Releasing, emailing and the self-running switch are not "
                                       "remote controls."})
+                    # Of the three POSTs that ARE allowed out here, two queue
+                    # work on a machine in the office and cost money. Asking a
+                    # question of a filed record does not, so it is not held to
+                    # the same list.
+                    if path.rstrip("/") in STARTS_A_RUN and not _may_start_a_run(request):
+                        # Read afresh: the name above is only bound on the
+                        # branch where looking was refused, and we are past it.
+                        asking = auth.current_user(request) if auth.ENABLED else None
+                        return JSONResponse(status_code=403, content={
+                            "detail": "Looking is open to anyone signed in; STARTING a run "
+                                      "from outside the office is limited to named people. "
+                                      + access.why_refused("SDI_ESTIMATOR_OIDS", asking)})
                 if path in ("/api/files", "/api/file") and not _under_the_briefs(
                         request.query_params.get("path", "")):
                     return JSONResponse(status_code=403, content={
