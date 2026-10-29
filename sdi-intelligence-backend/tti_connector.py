@@ -88,9 +88,8 @@ TENANT = auth.TENANT_ID
 API_ID = auth.CLIENT_ID                   # the SDI Intelligence app exposes the scope
 AUDIENCES = [a for a in (API_ID, f"api://{API_ID}" if API_ID else "",
                          _opt("SDI_TTI_CONNECTOR_AUDIENCE")) if a]
-# The scope's full name as Entra shows it under Expose an API. SDI Intelligence
-# is an App Proxy app, so its Application ID URI is the msappproxy address,
-# not api://<id>: SDI_TTI_CONNECTOR_SCOPE_URI says so.
+# The scope's full name as Entra shows it under Expose an API on the app that
+# is SDI_CLIENT_ID. Only needed if that app's Application ID URI is not api://<id>.
 SCOPE_URI = (_opt("SDI_TTI_CONNECTOR_SCOPE_URI")
              or (f"api://{API_ID}/{SCOPE}" if API_ID else SCOPE))
 JWKS_URL = _opt("SDI_TTI_CONNECTOR_JWKS_URL")
