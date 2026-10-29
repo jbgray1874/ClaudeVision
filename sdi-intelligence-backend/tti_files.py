@@ -7,15 +7,19 @@ an index of names (tools/tti_index_folders.py, run on a schedule) is searched
 instead, and every answer says how old the index is.
 
 ── WHAT THIS CAN AND CANNOT DO ──────────────────────────────────────────────
-It finds files and folders by name and path, and says where they are. It does
-not open, copy, move or delete anything, and does not read inside files. The
-folders are configuration (SDI_TTI_FOLDERS), never a request parameter, so a
-search can only ever look inside them.
+It finds files and folders by name and path, says where they are, and opens a
+file it found: a drawing on Liam's phone, off site, after Microsoft sign-in.
+It does not copy, move, change or delete anything, and searching does not read
+inside files. The folders are configuration (SDI_TTI_FOLDERS), never a request
+parameter, so a search can only look inside them and only a file the index
+lists inside them can be opened.
 
-The index is built by the server's own account, so it lists every name that
-account can see. It is for the people on SDI_TTI_OIDS, like the despatch view.
+The index is built, and files are opened, by the server's own account, so it
+lists and opens what that account can see. Who may ask is SDI_TTI_OIDS, like
+the despatch view, checked on every request.
 """
 import datetime
+import mimetypes
 import os
 import re
 import sqlite3
@@ -40,6 +44,19 @@ KINDS = {
 
 class NotReady(Exception):
     """The index has not been built, or cannot be read. The message says which."""
+
+
+class NotFound(Exception):
+    """A path this cannot open. The message says why, in a sentence."""
+
+
+# Shown in the browser. Everything else downloads: an .html or .svg on the CAD
+# share opened inline would run as this site, with the person's sign-in.
+INLINE = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg",
+          ".jpeg": "image/jpeg", ".gif": "image/gif", ".bmp": "image/bmp",
+          ".webp": "image/webp"}
+MAX_OPEN_BYTES = 300 * 1024 * 1024
+OPEN_PATH = "/api/tti/despatch/files/open"
 
 
 def index_path() -> str:
@@ -264,3 +281,81 @@ def search(query: str, folder: str = "", kind: str = "", limit: int = 60, index=
             "note": ("Searched by file and folder name, not inside files. "
                      + (f"The index was built {age:.0f} hours ago, so anything newer is "
                         f"not in it yet." if age is not None else ""))}
+
+
+# ── opening a file ──────────────────────────────────────────────────────────
+
+def _slashes(path: str) -> str:
+    return re.sub(r"[\\/]+", "\\\\", str(path or "").strip()).rstrip("\\")
+
+
+def locate(path: str, index=None) -> dict:
+    """The file a search showed, ready to send: {unc, name, media_type, inline, size}.
+
+    Three things must all hold, or NotFound says which did not:
+      * the path starts with one of the configured folders, as shown;
+      * the index lists it as a file there, so a request cannot name anything
+        a search could not have found (no "..", no guessing at names);
+      * on disk it still resolves to inside that folder - a junction or a
+        renamed parent cannot walk it out.
+    """
+    asked = _slashes(path)
+    if not asked or len(asked) > 1000 or "\0" in asked:
+        raise NotFound("That is not a file path.")
+    if any(part in ("..", ".") for part in asked.split("\\")):
+        raise NotFound("A path with .. in it is not opened.")
+    configured = {_slashes(f["shown"]).lower() for f in folders()}
+    con = _open(index)
+    try:
+        roots = con.execute("SELECT id, shown, unc FROM roots ORDER BY length(shown) DESC").fetchall()
+        hit = None
+        for rid, shown, unc in roots:
+            head = _slashes(shown)
+            if asked.lower().startswith(head.lower() + "\\") and head.lower() in configured:
+                hit = (rid, unc, asked[len(head) + 1:])
+                break
+        if hit is None:
+            raise NotFound("Only files in the TTi folders can be opened: "
+                           + ", ".join(sorted(_slashes(f["shown"]) for f in folders())) + ".")
+        rid, unc, rest = hit
+        row = con.execute("SELECT rel, name, ext FROM files WHERE root = ? AND is_dir = 0 "
+                          "AND replace(low, '/', '\\') = ?", (rid, rest.lower())).fetchone()
+    finally:
+        con.close()
+    if row is None:
+        raise NotFound("That file is not in the TTi folder index. Search for it again; "
+                       "it may have been moved or renamed since the index was built.")
+    rel, name, ext = row
+    full = os.path.join(unc, *re.split(r"[\\/]", rel))
+    base = os.path.realpath(unc)
+    real = os.path.realpath(full)
+    if os.path.normcase(real) != os.path.normcase(base) and \
+            not os.path.normcase(real).startswith(os.path.normcase(base.rstrip("\\/") + os.sep)):
+        raise NotFound("That file resolves outside the TTi folders, so it is not opened.")
+    try:
+        size = os.stat(real).st_size
+    except OSError:
+        raise NotFound("That file could not be opened from the server just now; it may "
+                       "have been moved, renamed or deleted since the index was built.")
+    if not os.path.isfile(real):
+        raise NotFound("That is not a file.")
+    if size > MAX_OPEN_BYTES:
+        raise NotFound(f"That file is {size // (1024 * 1024)} MB, more than this opens. "
+                       f"Open it from the W: drive in the office.")
+    ext = (ext or os.path.splitext(name)[1]).lower()
+    inline = ext in INLINE
+    media = INLINE.get(ext) or "application/octet-stream"
+    return {"unc": real, "name": name, "media_type": media, "inline": inline, "size": size}
+
+
+def open_url(path: str) -> str:
+    """An absolute link that opens `path` through the app, for an answer in
+    ChatGPT. Empty when no public address is configured."""
+    base = os.getenv("SDI_TTI_OPEN_BASE", "").strip().rstrip("/")
+    if not base:
+        hosts = [h.strip() for h in os.getenv("SDI_PUBLIC_HOSTS", "").split(",") if h.strip()]
+        base = f"https://{hosts[0]}" if hosts else ""
+    if not base:
+        return ""
+    from urllib.parse import quote
+    return f"{base}{OPEN_PATH}?path={quote(path, safe='')}"
