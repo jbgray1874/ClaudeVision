@@ -96,6 +96,9 @@
   signed out. Anyone signed in at reception is left alone, and nothing in BrightHR is changed.</p>
 
   <div class="panel" id="gate" style="display:none"></div>
+  <div class="panel warn" id="expired" style="display:none"><h4>Sign in again</h4><div>Your Microsoft
+    sign-in for the app portal has run out, so this page cannot reach the server. Anything already
+    running there carries on. <a href="#" onclick="location.reload();return false">Reload to sign in again</a>.</div></div>
 
   <div id="app" style="display:none">
     <div class="panel">
@@ -188,7 +191,13 @@ function gate(cls, html){ const g=$('gate'); g.className='panel '+cls; g.innerHT
   $('app').style.display='none'; }
 
 async function call(path, method){
-  const r=await fetch(API+path,{method:method||'GET',cache:'no-store'});
+  let r;
+  // redirect:'manual' because an expired App Proxy sign-in answers with a redirect
+  // to Microsoft's login page, which a background request cannot follow: the
+  // browser called that "Failed to fetch", indistinguishable from no signal.
+  try{ r=await fetch(API+path,{method:method||'GET',cache:'no-store',redirect:'manual'}); }
+  catch(e){ throw new Error('offline'); }
+  if(r.type==='opaqueredirect' || r.status===0){ $('expired').style.display=''; throw new Error('signin'); }
   if(r.status===401){ gate('warn','<h4>Sign in</h4><div>This app needs your SDI Microsoft sign-in. '
       +'<a href="'+LOGIN+'">Sign in</a>. In the office without sign-in, use the BrightHR page on the intranet portal.</div>');
     throw new Error('signin'); }
@@ -199,6 +208,9 @@ async function call(path, method){
   return j;
 }
 const quiet=e=>e.message==='signin'||e.message==='forbidden';
+const OFFLINE='Lost contact with the server: no signal, or the server is restarting. Trying again; '
+  +'anything already running there carries on.';
+const msg=e=>e.message==='offline'?OFFLINE:e.message;
 
 /* ── tabs ── */
 document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{
@@ -318,7 +330,7 @@ function renderRoll(){
 }
 async function sendPending(){
   for(const key of Object.keys(PENDING)){
-    try{ await fetch(API+'/rollcall/tick',{method:'POST',headers:{'Content-Type':'application/json'},
+    try{ await fetch(API+'/rollcall/tick',{method:'POST',redirect:'manual',headers:{'Content-Type':'application/json'},
            body:JSON.stringify({key, ticked:PENDING[key]})}).then(r=>{ if(!r.ok) throw new Error(r.status); });
          delete PENDING[key]; }
     catch(e){ /* kept; resent on the next refresh */ }
@@ -327,7 +339,7 @@ async function sendPending(){
 async function loadRoll(){
   clearTimeout(rollTimer); $('rollerr').textContent='';
   try{ await sendPending(); ROLL=await call('/rollcall'); renderRoll(); }
-  catch(e){ if(!quiet(e)) $('rollerr').textContent=e.message+(Object.keys(PENDING).length?' Your ticks are kept on this phone and will be sent.':''); }
+  catch(e){ if(!quiet(e)) $('rollerr').textContent=msg(e)+(Object.keys(PENDING).length?' Your ticks are kept on this phone and will be sent.':''); }
   // While the roll call is open, keep every marshal's phone in step.
   if($('v-roll').classList.contains('on')) rollTimer=setTimeout(loadRoll,5000);
 }
@@ -340,7 +352,7 @@ $('rollload').addEventListener('click',loadRoll);
 $('rollnew').addEventListener('click',async()=>{
   if(!confirm('Start a new roll call?\n\nThis clears every tick, on every phone.')) return;
   try{ for(const k in PENDING) delete PENDING[k]; ROLL=await call('/rollcall/new','POST'); renderRoll(); }
-  catch(e){ if(!quiet(e)) $('rollerr').textContent=e.message; }
+  catch(e){ if(!quiet(e)) $('rollerr').textContent=msg(e); }
 });
 
 /* ── data issues ── */
@@ -408,7 +420,7 @@ async function loadHistory(){
         +'<small>'+esc(when(e.time))+' · '+esc(e.by||'')+'</small>'+(who?'<small>'+esc(who)+'</small>':'')
         +(e.note?'<small>'+esc(e.note)+'</small>':'')+'</li>';
     }).join('') || '<li class="muted">Nothing yet.</li>';
-  }catch(e){ if(!quiet(e)) $('hist').innerHTML='<li class="err">'+esc(e.message)+'</li>'; }
+  }catch(e){ if(!quiet(e)) $('hist').innerHTML='<li class="err">'+esc(msg(e))+'</li>'; }
 }
 $('hload').addEventListener('click',loadHistory);
 
@@ -421,14 +433,15 @@ function apply(j){
 }
 async function refresh(){
   clearTimeout(timer);
-  try{ const j=await call('/status'); apply(j); if(j.running) timer=setTimeout(refresh,4000); }
-  catch(e){ if(!quiet(e)){ $('err').textContent='The service did not answer: '+e.message; timer=setTimeout(refresh,10000); } }
+  try{ const j=await call('/status'); $('err').textContent=''; $('expired').style.display='none';
+       apply(j); if(j.running) timer=setTimeout(refresh,4000); }
+  catch(e){ if(!quiet(e)){ $('err').textContent=msg(e); timer=setTimeout(refresh,10000); } }
 }
 async function start(kind){
   $('err').textContent=''; $('iserr').textContent='';
   if(kind==='update' && !confirm('Update InVentry from BrightHR now?\n\nThis signs staff in and out on InVentry to match BrightHR, which is the fire roll call.')) return;
   try{ const j=await call('/'+kind,'POST'); apply(j); timer=setTimeout(refresh,4000); }
-  catch(e){ if(!quiet(e)){ (kind==='issues'?$('iserr'):$('err')).textContent=e.message; if(e.status===409) refresh(); } }
+  catch(e){ if(!quiet(e)){ (kind==='issues'?$('iserr'):$('err')).textContent=msg(e); if(e.status===409) refresh(); } }
 }
 $('check').addEventListener('click',()=>start('check'));
 $('update').addEventListener('click',()=>start('update'));
