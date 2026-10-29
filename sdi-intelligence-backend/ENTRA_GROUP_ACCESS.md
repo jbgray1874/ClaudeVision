@@ -31,15 +31,42 @@ Have ready:
 
 **Entra ID → Groups → All groups → New group**
 
-| Field | Value |
-|---|---|
-| Group type | **Security** |
-| Group name | `SDI Estimators` |
-| Membership type | **Assigned** |
-| Members | the estimators |
+| Field | Value | Why |
+|---|---|---|
+| Group type | **Security** | Not Microsoft 365 — this grants access, it is not a mailbox |
+| Group name | `SDI Estimators` | |
+| Group description | *"Access to SDI Intelligence estimating — portal sign-in and starting runs from outside the office."* | In a year somebody will wonder what it is for |
+| **Entra roles can be assigned to the group** | **OFF** | See below. Set at creation and **cannot be changed after** |
+| Membership type | **Assigned** | Not Dynamic |
+| Roles | *No roles selected* | Nothing to do with this |
+| Owners | **yourself, and whoever covers for you** | An owner manages membership **without being a Global Admin** — this is what makes adding somebody a one-click job later |
+| Members | the estimators | |
+
+> ### Leave "Microsoft Entra roles can be assigned to the group" OFF
+>
+> It is on by default on some tenants and it is the wrong setting here. It
+> makes the group *role-assignable*, which is for granting Entra admin roles
+> (Global Administrator and the like), and it has two consequences:
+>
+> * membership becomes **protected** — only a Privileged Role Administrator
+>   may add or remove people, which defeats the point of using a group at all;
+> * **it cannot be changed after the group is created.** Getting it wrong means
+>   deleting the group and starting again.
+>
+> It also forces Membership type to Assigned and greys the field out, which is
+> the visible clue that it is on.
 
 **Create**, then open the group and copy its **Object Id** — a long
 `xxxxxxxx-xxxx-…` value. That one string is used twice below and nowhere else.
+
+> ### Add your ORDINARY account, not the admin one
+>
+> You will be signed in to Entra as `cadmin-…` to do this, which is correct for
+> creating the group. The member you add for yourself must be the account you
+> sign in to the portal with — `James.Gray@wearesdi.com`, object id
+> `5acf6b37-147f-4468-bdb1-ecc3da1f1076`. They are different accounts with
+> different object IDs, and the admin one signing into the portal will not
+> match. This is the trap the refusal messages warn about by name.
 
 > **Already have a group?** Use it. Any security group works, including one
 > synced from on-premises AD. Just take its Object Id.
