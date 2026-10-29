@@ -504,3 +504,44 @@ class RowsThatAreNotOrderLinesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ThisWeekTests(unittest.TestCase):
+    """Today, Tomorrow and This week replaced "Next Thursday": Monday to Friday,
+    from one reading of the plan."""
+
+    def setUp(self):
+        from sue_despatch import going_out_week
+        self.week = going_out_week
+        self.rows = [
+            row(number=3, **{"SDI ORDER NO": "15178", "LORRY FROM SDI": "Mon 2nd Nov"}),
+            row(number=4, **{"SDI ORDER NO": "15178", "LORRY FROM SDI": "Mon 2nd Nov"}),
+            row(number=5, **{"SDI ORDER NO": "15188", "LORRY FROM SDI": "Weds 4th Nov"}),
+            row(number=6, **{"SDI ORDER NO": "16001", "LORRY FROM SDI": "Sat 7th Nov"}),
+            row(number=7, **{"SDI ORDER NO": "16002", "LORRY FROM SDI": "Mon 9th Nov"}),
+            row(number=8, **{"SDI ORDER NO": "16003", "LORRY FROM SDI": "TBC"}),
+        ]
+
+    def test_any_day_gives_its_monday_to_friday(self):
+        answer = self.week(self.rows, day=date(2026, 11, 4), as_of=SAVED)
+        self.assertEqual(answer["week_start"], "2026-11-02")
+        self.assertEqual([d["day"][-2:] for d in answer["days"]][:5], ["02", "03", "04", "05", "06"])
+        self.assertEqual([d["line_count"] for d in answer["days"][:5]], [2, 0, 1, 0, 0])
+
+    def test_a_weekend_departure_is_shown_only_when_there_is_one(self):
+        answer = self.week(self.rows, day=date(2026, 11, 2), as_of=SAVED)
+        self.assertEqual(answer["days"][-1]["day"], "2026-11-07")      # the Saturday
+        self.assertEqual(answer["week_end"], "2026-11-07")
+        self.assertEqual(answer["line_count"], 4)
+        later = self.week(self.rows, day=date(2026, 11, 9), as_of=SAVED)
+        self.assertEqual(len(later["days"]), 5)                         # no empty weekend
+
+    def test_next_weeks_lines_stay_in_next_week(self):
+        answer = self.week(self.rows, day=date(2026, 11, 2), as_of=SAVED)
+        orders = [l["order"] for d in answer["days"] for l in d["lines"]]
+        self.assertNotIn("16002", orders)
+
+    def test_lines_with_no_date_are_given_once_not_per_day(self):
+        answer = self.week(self.rows, day=date(2026, 11, 2), as_of=SAVED)
+        self.assertEqual(answer["no_date_count"], 1)
+        self.assertNotIn("lines", answer)                               # only per day

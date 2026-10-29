@@ -30,7 +30,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 import auth
 import tti_data
 import tti_files
-from sue_despatch import going_out
+from sue_despatch import going_out, going_out_week
 from tti_search import (chase, data_quality, find, morning, overdue_undated,
                         summary_text)
 
@@ -93,6 +93,14 @@ def make_router(page_dir=None):
         asked = day_asked(day)
         plan = read(request)
         return answered(plan, going_out(plan.rows, day=asked, as_of=plan.saved.date()))
+
+    @router.get("/despatch/week")
+    def leaving_this_week(request: Request, day: str = Query(..., max_length=10)):
+        """Monday to Friday of the week `day` falls in, from one reading of the plan."""
+        who(request)
+        asked = day_asked(day)
+        plan = read(request)
+        return answered(plan, going_out_week(plan.rows, day=asked, as_of=plan.saved.date()))
 
     @router.get("/despatch/search")
     def search(request: Request, q: str = Query(..., max_length=MAX_QUERY)):

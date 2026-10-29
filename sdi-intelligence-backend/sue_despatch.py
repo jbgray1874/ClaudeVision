@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Iterable, Mapping
 
 
@@ -248,6 +248,39 @@ def going_out(rows: Iterable[SourceRow], *, day: date, as_of: date) -> dict:
         "pallet_total_reason": "Rows are order lines, not evidenced unique shipments; pallet cells may repeat.",
         "caveat": "A schedule is not confirmation that goods have left.",
     }
+
+
+def going_out_week(rows: Iterable[SourceRow], *, day: date, as_of: date) -> dict:
+    """'What is leaving SDI this week?': Monday to Friday of the week `day` is in.
+
+    The same reading as going_out, a day at a time, from one copy of the plan.
+    A Saturday or Sunday departure is shown too, but only when there is one -
+    two empty weekend headings every week would just be noise. The lines whose
+    date could not be read, or is not set yet, belong to no day, so they are
+    given once for the week rather than five times.
+    """
+    rows = list(rows)
+    monday = day - timedelta(days=day.weekday())
+    days, first = [], None
+    for offset in range(7):
+        on = monday + timedelta(days=offset)
+        answer = going_out(rows, day=on, as_of=as_of)
+        first = first or answer
+        if offset < 5 or answer["line_count"]:
+            days.append({"day": on.isoformat(), "line_count": answer["line_count"],
+                         "lines": answer["lines"]})
+    week = {key: first[key] for key in (
+        "source_version_date", "unresolved_date_count", "unresolved_date_lines",
+        "unresolved_date_truncated", "no_date_count", "no_date_lines", "no_date_truncated",
+        "pallet_total", "pallet_total_reason", "caveat")}
+    week.update({
+        "question": f"What is due to leave SDI in the week of {monday.isoformat()}?",
+        "week_start": monday.isoformat(),
+        "week_end": days[-1]["day"],
+        "days": days,
+        "line_count": sum(d["line_count"] for d in days),
+    })
+    return week
 
 
 def propose_completed_transfer(

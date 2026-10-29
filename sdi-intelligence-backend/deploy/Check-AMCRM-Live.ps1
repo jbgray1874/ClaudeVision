@@ -153,38 +153,74 @@ if ($port) {
     try {
         $answer = Invoke-WebRequest "http://$Server`:$port/api/health" -UseBasicParsing -TimeoutSec 20
         $running = [string]$answer.Headers["X-SDI-Commit"]
-        if ($running) { Yes "The service is serving commit: $running" }
-        else { Hm "The service did not report a commit" }
-        # Only compare when the commit is one this clone actually knows about.
-        # A commit built on a machine whose work is not pulled here is unknown
-        # to git, and treating "git cannot find it" as "it lacks the fix" would
-        # be a false alarm - the file check in section 2 is the real answer.
-        if ($running -match "^[0-9a-f]{7,40}$") {
+        # ── WHY THIS NUMBER IS NOT THE ANSWER ON THIS SERVER ─────────────────
+        # SDI-App01 is not a git clone - it is files copied onto it - so the
+        # service cannot ask git what it is running. It falls back to the
+        # .sdi-commit stamp, which push-to-server.ps1 writes and
+        # Deploy-AMCRM.ps1 does not. So after an AM CRM deploy the stamp still
+        # names whenever push-to-server last ran, while the Python files beside
+        # it are current. Reporting that as "the service lacks the fix" was this
+        # script telling you something alarming and untrue.
+        if ($running) {
+            Say "Reports commit $running - but see below: on this server that stamp"
+            Say "is only refreshed by push-to-server.ps1, so it can lag the code."
+        }
+        Push-Location $repo
+        & git cat-file -e "$running^{commit}" 2>&1 | Out-Null
+        $known = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        if ($known -and $running) {
             Push-Location $repo
-            & git cat-file -e "$running^{commit}" 2>&1 | Out-Null
-            $known = ($LASTEXITCODE -eq 0)
-            if ($known) {
-                & git merge-base --is-ancestor $FixCommit $running 2>&1 | Out-Null
-                $liveHasFix = ($LASTEXITCODE -eq 0)
-            }
+            & git merge-base --is-ancestor $FixCommit $running 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) { Yes "That stamp already contains the write fix" }
             Pop-Location
-            if (-not $known) {
-                Hm "This clone does not know commit $running, so it cannot be compared"
-                Say "Normal if it was built from a branch this laptop has not pulled."
-                Say "Section 2 (the files on the server) is the answer that counts."
-            } elseif ($liveHasFix) {
-                Yes "That commit contains the write fix"
-            } else {
-                No "That commit does NOT contain the write fix"
-                Say "The files may still be newer than the running process - restart it."
-            }
         }
     } catch {
         Hm "Could not reach /api/health on port $port ($($_.Exception.Message))"
-        Say "The file check in section 2 is the one that matters; this is a nicety."
     }
 }
 
+# ── 4b. THE QUESTION THAT ACTUALLY MATTERS ───────────────────────────────────
+# Python loads a module once, at startup. So the code the process is running is
+# whatever was on disk when it STARTED - not what is on disk now. A deploy that
+# copied the fix and did not restart leaves the fix on the server and the fault
+# in memory, and nothing about the files can tell you which.
+Head "4b. Did the service start AFTER the fixed files were copied?"
+$newest = $null
+foreach ($file in $Markers.Keys) {
+    $there = Join-Path $remote $file
+    if (Test-Path -LiteralPath $there) {
+        $when = (Get-Item -LiteralPath $there).LastWriteTime
+        Say ("{0,-20} written {1}" -f $file, $when)
+        if (-not $newest -or $when -gt $newest) { $newest = $when }
+    }
+}
+$startedAt = $null
+try {
+    $wmi = Get-CimInstance -ComputerName $Server -ClassName Win32_Service `
+             -Filter "Name='SDIIntelligence'" -ErrorAction Stop
+    if ($wmi.ProcessId) {
+        $proc = Get-CimInstance -ComputerName $Server -ClassName Win32_Process `
+                  -Filter "ProcessId=$($wmi.ProcessId)" -ErrorAction Stop
+        $startedAt = $proc.CreationDate
+    }
+} catch { }
+if ($startedAt -and $newest) {
+    Say ("{0,-20} started {1}" -f "SDIIntelligence", $startedAt)
+    if ($startedAt -gt $newest) {
+        Yes "The service started after the files were written, so it IS running the fix"
+        $liveHasFix = $true
+    } else {
+        No "The service has been running since BEFORE the files were copied"
+        Say "It still has the old code in memory. Restart it:"
+        Write-Host "      Restart-Service -ComputerName $Server -Name SDIIntelligence -Force" -ForegroundColor White
+        $liveHasFix = $false
+    }
+} else {
+    Hm "Could not read the service's start time from here"
+    Say "Restart it anyway - it costs seconds and removes the doubt:"
+    Write-Host "      Restart-Service -ComputerName $Server -Name SDIIntelligence -Force" -ForegroundColor White
+}
 # ── 5. Settings, by name only ────────────────────────────────────────────────
 Head "5. Is writing switched on? (names only - no values are printed)"
 $envFiles = @(
@@ -207,10 +243,22 @@ foreach ($f in $envFiles) {
 }
 foreach ($name in @("SDI_VOICECRM_WRITE", "SDI_VOICECRM_APPROVED_BY",
                     "SDI_VOICECRM_WRITERS", "SDI_VOICECRM_SITE",
-                    "SDI_VOICECRM_XLSX", "SDI_VOICECRM_SHEET")) {
+                    "SDI_VOICECRM_XLSX")) {
     if ($seen.ContainsKey($name) -and $seen[$name]) { Yes "$name is set" }
     elseif ($seen.ContainsKey($name)) { No "$name is present but EMPTY" }
     else { No "$name is not set in either .env" }
+}
+# OPTIONAL, and listing it with the required ones was wrong: a missing SHEET is
+# reported as [NO] and reads as a fault, which it is not. Without it the app
+# finds the data tab itself by looking for the header row - that is what reads
+# past the summary tabs in front of the data. Setting it saves one round trip
+# the first time the service is asked anything.
+if ($seen.ContainsKey("SDI_VOICECRM_SHEET") -and $seen["SDI_VOICECRM_SHEET"]) {
+    Yes "SDI_VOICECRM_SHEET is set (optional)"
+} else {
+    Say "SDI_VOICECRM_SHEET is not set - OPTIONAL, not a fault. The worksheet is"
+    Say "found by looking for the header row. Setting it to the tracker's tab name"
+    Say "saves one call to Microsoft on the first question after a restart."
 }
 Say ""
 Say "Nick cannot save a change unless SDI_VOICECRM_WRITE is yes, APPROVED_BY has"
@@ -250,11 +298,14 @@ if ($logPath -and (Test-Path -LiteralPath $logPath)) {
 # ── Verdict ──────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host ("=" * 68)
-if ($laptopOk -and $serverOk) {
-    Write-Host "  THE WRITE FIX IS ON THE SERVER." -ForegroundColor Green
-    Write-Host "  If section 4 shows an older commit being served, restart the service:" -ForegroundColor Gray
+if ($laptopOk -and $serverOk -and $liveHasFix -eq $true) {
+    Write-Host "  THE WRITE FIX IS ON THE SERVER AND THE RUNNING SERVICE HAS IT." -ForegroundColor Green
+    Write-Host "  If section 5 is green, Nick can be asked to save a change." -ForegroundColor Gray
+} elseif ($laptopOk -and $serverOk) {
+    Write-Host "  THE FIX IS ON THE SERVER, BUT THE RUNNING PROCESS MAY NOT HAVE IT." -ForegroundColor Yellow
+    Write-Host "  Python loads a module once, at startup. Restart the service:" -ForegroundColor Gray
     Write-Host "      Restart-Service -ComputerName $Server -Name SDIIntelligence -Force" -ForegroundColor White
-    Write-Host "  Then, if section 5 is all green, Nick can be asked to save a change." -ForegroundColor Gray
+    Write-Host "  Then run this script again. Section 4b should go green." -ForegroundColor Gray
 } elseif ($laptopOk) {
     Write-Host "  THE FIX IS ON THIS LAPTOP BUT NOT ON THE SERVER. Deploy it." -ForegroundColor Yellow
 } else {

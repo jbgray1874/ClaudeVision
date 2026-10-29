@@ -175,7 +175,7 @@ class NothingIsLeavingIsAClaim(unittest.TestCase):
             / "appportal" / "tti-despatch.html").read_text(encoding="utf-8")
 
     def test_the_screen_qualifies_an_empty_answer(self):
-        self.assertIn("No confirmed matches for", self.PAGE)
+        self.assertIn('"No confirmed matches " + when', self.PAGE)
         self.assertIn("cannot be ruled out", self.PAGE)
 
     def test_a_found_answer_is_qualified_too(self):
@@ -183,7 +183,7 @@ class NothingIsLeavingIsAClaim(unittest.TestCase):
 
     def test_the_flat_sentence_survives_only_when_nothing_is_unreadable(self):
         said = self.PAGE.split("const unread =", 1)[1].split("renderUnused", 1)[0]
-        flat = said.index('"Nothing in the plan is set to leave on "')
+        flat = said.index('"Nothing in the plan is set to leave " + when')
         guard = said.index(": unread")
         self.assertLess(guard, flat, "the unreadable case must be handled first")
 

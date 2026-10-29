@@ -95,6 +95,7 @@ def client(monkeypatch):
 
 
 VIEWS = ("/api/tti/despatch/day?day=2026-10-23",
+         "/api/tti/despatch/week?day=2026-10-23",
          "/api/tti/despatch/search?q=15194",
          "/api/tti/despatch/chase",
          "/api/tti/despatch/overdue",

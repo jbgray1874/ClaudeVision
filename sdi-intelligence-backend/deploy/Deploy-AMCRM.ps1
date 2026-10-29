@@ -197,6 +197,33 @@ $bad = @($changed | Where-Object { (Get-Sha $_.Src) -ne (Get-Sha $_.Dst) })
 if ($bad.Count -gt 0) { Stop-Deploy ("These didn't arrive intact: " + (($bad | ForEach-Object { $_.Name }) -join ", ") + ". Run this again.") }
 Say ("Copied {0} file(s), checked byte for byte." -f $changed.Count) Green
 
+# -- THE VERSION STAMP, OR THE SERVICE REPORTS THE WRONG ONE ------------------------------
+#
+# SDI-App01 is not a git clone - it is files copied onto it - so the service cannot ask git
+# which commit it is running. It falls back to a .sdi-commit stamp (app.py _resolve_commit),
+# which push-to-server.ps1 writes and this script did not. So X-SDI-Commit and /api/health
+# went on naming whenever push-to-server last ran while the Python files beside them were
+# current - and on 29 October that read as "the service does not have the fix" about a
+# server that did. The header exists to end that guessing, so it has to be kept true.
+#
+# The second line records that this was a PARTIAL deploy. This script copies a named list
+# and leaves app.py alone, so "the server is at commit X" is true of the AM CRM code and
+# not necessarily of everything else; anyone reading the file should see that, and only the
+# first line is read as the commit.
+foreach ($stampDir in @($destRoot, $dest)) {
+    try {
+        $stampPath = Join-Path $stampDir ".sdi-commit"
+        @($commit,
+          "# Written by Deploy-AMCRM.ps1 on $(Get-Date -Format 'yyyy-MM-dd HH:mm'). PARTIAL deploy:",
+          "# the AM CRM file list only - app.py and anything outside it are whatever",
+          "# push-to-server.ps1 last copied. $($changed.Count) file(s) updated this run."
+        ) | Set-Content -LiteralPath $stampPath -Encoding ASCII -ErrorAction Stop
+    } catch {
+        Say "Could not write $stampPath - /api/health will report a stale commit: $($_.Exception.Message)" Yellow
+    }
+}
+Say "Version stamp updated, so /api/health reports $commit." Green
+
 # -- app.py IS NOT COPIED, AND SILENCE ABOUT THAT COSTS A DEPLOY ---------------------------
 #
 # This script copies a named list and deliberately leaves app.py alone, because the server's
