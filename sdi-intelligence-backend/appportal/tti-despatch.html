@@ -75,7 +75,8 @@ pre{background:#0a0a0c;border:1px solid var(--line);border-radius:4px;padding:14
 <header class="top">
   <div class="logo" aria-hidden="true">S</div>
   <div><div class="brand">SDI INTELLIGENCE</div><div class="subbrand">TTI DESPATCH</div></div>
-  <nav class="topnav" aria-label="Workspace"><a href="/app/">← App portal</a></nav>
+  <nav class="topnav" aria-label="Workspace"><a href="/app/guide-tti.html">User guide</a>
+    <a href="/app/">← App portal</a></nav>
 </header>
 <main>
   <div class="eyebrow">Customer services · TTI</div>
@@ -117,10 +118,16 @@ async function get(path){
 // Including the citation, always. A despatch answer somebody cannot check at
 // source is an answer they have to take on trust, and they should not have to.
 function card(line, parent, cls){
+  // "Leaving on a day" names its date fields dispatch_cell / date_basis /
+  // tentative; every other answer says departs_*. Read either, so that tab's
+  // cards show the departure, why a date could not be read, and the flag.
+  const departsCell = line.departs_cell || line.dispatch_cell;
+  const departsBasis = line.departs_basis || line.date_basis;
+  const tentative = line.departs_tentative || line.tentative;
   const c = el("div", null, parent, "card" + (cls ? " " + cls : ""));
   const h = el("h3", (line.order ? "Order " + line.order : "(no order number)")
                    + (line.customer_po ? "  ·  PO " + line.customer_po : ""), c);
-  if(line.departs_tentative) el("span", "tentative", h, "flag");
+  if(tentative) el("span", "tentative", h, "flag");
   if(line.overdue_by_days) el("span", line.overdue_by_days + " days overdue", h, "flag bad");
   if(line.slipped_by_days) el("span", line.slipped_by_days + " days ago", h, "flag bad");
   if(line.part || line.description)
@@ -130,9 +137,9 @@ function card(line, parent, cls){
     el("p", "Missing: " + line.missing.join("; "), c, "because");
 
   const bits = [];
-  if(line.departs_cell || line.departs_basis)
-    bits.push("Lorry from SDI: " + (line.departs_cell || "(blank)")
-              + " — " + line.departs_basis);
+  if(departsCell || departsBasis)
+    bits.push("Lorry from SDI: " + (departsCell || "(blank)")
+              + (departsBasis ? " — " + departsBasis : ""));
   if(line.due_cell) bits.push("Customer due: " + line.due_cell);
   if(line.qty) bits.push("qty " + line.qty);
   if(line.pallets_as_recorded != null && line.pallets_as_recorded !== "")
@@ -171,7 +178,7 @@ function provenance(j){
     + ".  This answer is only as current as that save.";
 }
 
-// ── The six views ───────────────────────────────────────────────────────────
+// ── The views: six questions about the plan, and the TTi folder search ──────
 const VIEWS = {
 
 day: {
@@ -385,6 +392,73 @@ quality: {
       }
     }
     el("p", j.note, $("out"), "hint");
+  }},
+
+// ── Liam's TTi folders: names only, from an index built on a schedule ──────
+files: {
+  label: "Find TTi files",
+  busy: "Searching the TTi folders…",
+  tools: `<input id="fq" type="search" maxlength="80"
+            placeholder="Job, drawing or part number, or a product name"
+            aria-label="Search the TTi folders">
+          <select id="ffolder" aria-label="Which folder"><option value="">All folders</option>
+            <option>Design</option><option>Production</option><option>Prototype</option></select>
+          <select id="fkind" aria-label="Which kind of file"><option value="">Any kind</option>
+            <option value="drawings">Drawings (PDF, DXF, DWG)</option>
+            <option value="models">3D models (SolidWorks, STEP)</option>
+            <option value="images">Images</option><option value="documents">Documents</option>
+            <option value="folders">Folders only</option></select>
+          <button class="primary" data-run>Find files</button>`,
+  ready(){ $("fq").addEventListener("keydown", e => { if(e.key === "Enter") run(); });
+    $("fq").focus();
+    get("/api/tti/despatch/files/status").then(st => {
+      const sel = $("ffolder");
+      if(sel && st.folders && st.folders.length){
+        sel.replaceChildren(el("option", "All folders"));
+        sel.firstChild.value = "";
+        for(const f of st.folders) el("option", f.label, sel).value = f.label;
+      }
+      setStatus("Ready. Searches " + (st.entries || 0).toLocaleString("en-GB")
+                + " files and folders by name.");
+      VIEWS.files.foot(st);
+    }).catch(e => setStatus(e.message, "error"));
+    return false; },
+  url(){ return "/api/tti/despatch/files?q=" + encodeURIComponent($("fq").value.trim())
+         + "&folder=" + encodeURIComponent($("ffolder").value)
+         + "&kind=" + encodeURIComponent($("fkind").value); },
+  guard(){ return $("fq").value.trim() ? "" : "Type part of a file or folder name."; },
+  draw(j){
+    const n = j.match_count, shown = j.matches.length;
+    setStatus(n ? n.toLocaleString("en-GB") + (n === 1 ? " file or folder matches" : " files and folders match")
+                  + " “" + j.searched_for + "”." + (n > shown ? "  Showing the best " + shown + "." : "")
+                : "Nothing in the TTi folders has “" + j.searched_for + "” in its name or path.",
+              n ? "ok" : "");
+    for(const m of j.matches){
+      const c = el("div", null, $("out"), "card");
+      const h = el("h3", m.name, c);
+      if(m.is_folder) el("span", "folder", h, "flag");
+      const path = el("p", m.path, c, "meta");
+      path.style.wordBreak = "break-all";
+      const copy = el("button", "Copy path", c, "secondary");
+      copy.type = "button";
+      copy.onclick = () => navigator.clipboard.writeText(m.path)
+        .then(() => { copy.textContent = "Copied"; }, () => { copy.textContent = "Select and copy the path above"; });
+      const bits = [m.folder, m.kind];
+      if(m.size != null) bits.push(m.size >= 1048576 ? (m.size / 1048576).toFixed(1) + " MB"
+                                   : Math.max(1, Math.round(m.size / 1024)) + " KB");
+      bits.push("modified " + new Date(m.modified).toLocaleDateString("en-GB",
+                {day:"numeric", month:"short", year:"numeric"}));
+      el("p", bits.join("  ·  "), c, "meta");
+    }
+    el("p", j.note + "  Open a file from the W: drive in the office; nothing here opens, copies or sends files.",
+       $("out"), "hint");
+  },
+  foot(j){
+    const built = j.index_built || j.built;
+    $("foot").textContent = built
+      ? "Index of the TTi folders built " + new Date(built).toLocaleString("en-GB")
+        + ".  Files added since are not in it yet.  Names only, not file contents."
+      : "";
   }}
 };
 
@@ -396,11 +470,11 @@ async function run(){
   if(stop){ setStatus(stop); return; }
   for(const b of document.querySelectorAll("[data-run]")) b.disabled = true;
   $("out").replaceChildren(); $("foot").textContent = "";
-  setStatus("Reading the Despatch Plan…");
+  setStatus(view.busy || "Reading the Despatch Plan…");
   try{
     const j = await get(view.url());
     view.draw(j);
-    provenance(j);
+    (view.foot || provenance)(j);
   }catch(e){
     setStatus(e.message, "error");
   }finally{

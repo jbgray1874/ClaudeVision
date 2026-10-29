@@ -58,6 +58,7 @@ import auth
 import connector_identity as identity
 import connector_oauth
 import tti_data
+import tti_files
 from sue_despatch import going_out
 from tti_search import (chase, data_quality, find, morning, overdue_undated,
                         summary_text)
@@ -166,6 +167,16 @@ def _plan(tool: str, started: float):
     return user, plan
 
 
+def _person(tool: str, started: float) -> dict:
+    """The person, checked against the same list, for a tool that does not
+    read the plan (the TTi folder search). Raises _Refused like _plan."""
+    user, _ = _caller()
+    if not identity.named_in(OIDS_SETTING, user):
+        _timed(tool, started, user, "state=not_named")
+        raise _Refused({"state": "not_allowed", "warning": NOT_NAMED, "matches": []})
+    return user
+
+
 def _dated(answer: dict, plan) -> dict:
     """Every answer says which save of the plan it came from, in words, because
     a spoken answer has no footer for somebody to notice afterwards."""
@@ -221,8 +232,12 @@ def _brief(lines: list[dict], keep: int = 12) -> list[dict]:
                  "invoice_number", "booked_in_with_tti", "tti_account",
                  "delivery_address", "comments")
                 if line.get(k)}
+        # going_out names its date fields dispatch_cell / date_basis / tentative;
+        # the other answers say departs_*. Without these, "what is leaving on
+        # Thursday" reached the assistant with no date and no doubt flag.
         for extra in ("because", "missing", "overdue_by_days", "slipped_by_days",
-                      "departs_basis"):
+                      "departs_basis", "departs_tentative", "dispatch_cell", "date_basis",
+                      "tentative"):
             if line.get(extra):
                 kept[extra] = line[extra]
         out.append(kept)
@@ -238,7 +253,8 @@ apps = Apps()
 READS = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
 
 
-def _tool(description: str):
+def _tool(description: str, invoking: str = "Reading the TTI Despatch Plan…",
+          invoked: str = "Read the TTI Despatch Plan"):
     """Registered read-only, with the invocation wording ChatGPT shows.
 
     read_only_hint is not a comment: ChatGPT and the Claude app use it to
@@ -248,8 +264,8 @@ def _tool(description: str):
     """
     return apps.tool(
         annotations=READS, description=description,
-        meta={"openai/toolInvocation/invoking": "Reading the TTI Despatch Plan…",
-              "openai/toolInvocation/invoked": "Read the TTI Despatch Plan"})
+        meta={"openai/toolInvocation/invoking": invoking,
+              "openai/toolInvocation/invoked": invoked})
 
 
 INSTRUCTIONS = """You are connected to SDI's TTI Despatch Plan: the workbook
@@ -281,6 +297,11 @@ day.
 If a tool reports `state` of anything but "ok", read its `warning` and do what
 it says. In particular: if it says the person is not on the list, tell them so
 plainly and do not answer the question from anything earlier.
+
+Files: tti_find_files searches the TTi folders on W: (Design, Production,
+Prototype) by file and folder name. Give each result's `path` in full, say
+which folder it is in, and say `as_at` when the person may be looking for
+something recent. It does not look inside files.
 
 This connector only reads. It cannot change the workbook, book anything in,
 or send email. If somebody asks you to, say that it can only look things up,
@@ -377,7 +398,8 @@ def tti_chase(horizon_days: int = 7) -> dict:
         user, plan = _plan("tti_chase", started)
     except _Refused as stop:
         return stop.payload
-    horizon = max(0, min(int(horizon_days or 7), 90))
+    # 0 is a real answer ("only what is already late"), not "use the default".
+    horizon = max(0, min(7 if horizon_days is None else int(horizon_days), 90))
     answer = chase(plan.rows, as_of=plan.saved.date(), horizon=horizon)
     if answer["line_count"]:
         biggest = answer["groups"][:3]
@@ -484,6 +506,49 @@ def tti_data_quality() -> dict:
     return _ok(answer, spoken, plan)
 
 
+@_tool(
+    (
+        "Find files and folders by name in SDI's TTi folders on W: - Design "
+        "(W:\\Design\\Customers April 08 Onwards\\TTi), Production (W:\\Production\\TTi) "
+        "and Prototype (W:\\Prototype\\TTi). Send words that appear in the file or folder "
+        "name or path, such as a job number, drawing number, part code or product name. "
+        "folder narrows to Design, Production or Prototype; kind narrows to drawings, "
+        "models, images, documents or folders. Searches names only, not inside files."),
+    invoking="Searching the TTi folders…", invoked="Searched the TTi folders")
+def tti_find_files(query: str, folder: str = "", kind: str = "") -> dict:
+    started = time.monotonic()
+    try:
+        user = _person("tti_find_files", started)
+    except _Refused as stop:
+        return stop.payload
+    try:
+        answer = tti_files.search(query, folder=folder, kind=kind, limit=25)
+    except ValueError as exc:
+        return {"state": "bad_query", "detail": str(exc), "matches": [],
+                "warning": "Ask the person what to search for, or which folder or kind."}
+    except tti_files.NotReady as exc:
+        _timed("tti_find_files", started, user, "state=no_index")
+        return {"state": "unavailable", "detail": str(exc), "matches": [],
+                "warning": "Tell the person the TTi folder search is not available just now."}
+    n = answer["match_count"]
+    if n:
+        first = answer["matches"][0]
+        spoken = (f"{n} file{'s' if n != 1 else ''} or folder{'s' if n != 1 else ''} match "
+                  f"{answer['searched_for']}. The best match is {first['name']}, in "
+                  f"{first['folder']}." + (f" And {n - 1} more." if n > 1 else ""))
+    else:
+        spoken = f"Nothing in the TTi folders has {answer['searched_for']} in its name or path."
+    answer["state"] = "ok"
+    answer["spoken"] = spoken
+    answer["as_at"] = (f"The folder index was built {answer['index_age_hours']:.0f} hours ago; "
+                       f"files added since then are not in it."
+                       if answer["index_age_hours"] is not None else "")
+    answer["opening"] = ("Give the path so the person can open it from the W: drive in the "
+                         "office. Nothing here opens, copies or sends files.")
+    _timed("tti_find_files", started, user, f"q={query[:40]!r} n={n}")
+    return answer
+
+
 def build_server() -> MCPServer:
     if not FRONT_DOOR:
         return MCPServer(
@@ -496,7 +561,9 @@ def build_server() -> MCPServer:
         public_url=PUBLIC_URL, tenant=TENANT, client_id=OAUTH_CLIENT,
         client_secret=OAUTH_SECRET, api_scope=SCOPE_URI, scope=SCOPE,
         verify=verifier().check, clients_file=OAUTH_CLIENTS_FILE,
-        redirects=OAUTH_REDIRECTS)
+        redirects=OAUTH_REDIRECTS, name="SDI TTI Despatch",
+        purpose=("look up the TTI Despatch Plan and search the TTi folders as you. "
+                 "It can only read: it cannot change anything or send email"))
     server = MCPServer(
         name="SDI TTI Despatch", instructions=INSTRUCTIONS, extensions=[apps],
         auth_server_provider=door,
