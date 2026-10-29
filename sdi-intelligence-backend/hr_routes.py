@@ -225,7 +225,8 @@ def _clocked_in_now() -> list:
     except (OSError, ValueError):
         return []
     people = [{"name": f"{r.get('first_name', '')} {r.get('surname', '')}".strip() or "?",
-               "clocked_in": (r.get("clocking") or {}).get("start", "")}
+               "clocked_in": (r.get("clocking") or {}).get("start", ""),
+               "manager": r.get("manager", "")}
               for r in snap.get("on_site") or []]
     return sorted(people, key=lambda x: x["name"].lower())
 

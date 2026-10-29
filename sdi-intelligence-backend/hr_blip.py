@@ -79,8 +79,9 @@ def _current_staff(token: str) -> list:
         if attempt:
             time.sleep(STAFF_LIST_PAUSE * attempt)
         try:
-            staff = [e for e in (bh.normalise_employee(r) for r in bh.fetch_employees(token))
-                     if e["id"] and not e["terminated"]]
+            everyone = bh.name_managers([bh.normalise_employee(r)
+                                         for r in bh.fetch_employees(token)])
+            staff = [e for e in everyone if e["id"] and not e["terminated"]]
         except Exception as exc:
             problem = f"could not be read ({exc})"
             _log(f"  staff list attempt {attempt + 1}: {problem}")
@@ -330,6 +331,7 @@ def _run_blip() -> dict:
                     "first_name": emp.get("first_name", ""),
                     "surname": emp.get("surname", ""),
                     "email": emp.get("email", ""),
+                    "manager": emp.get("manager_name", ""),
                 })
             if clockings:
                 on_site.append({
@@ -337,6 +339,7 @@ def _run_blip() -> dict:
                     "first_name": emp.get("first_name", ""),
                     "surname": emp.get("surname", ""),
                     "email": emp.get("email", ""),
+                    "manager": emp.get("manager_name", ""),
                     "clocking": clockings[0],
                 })
             if checked % 40 == 0:
@@ -353,6 +356,11 @@ def _run_blip() -> dict:
         "fail_pct": round(fail_pct, 2),
         "status": "ok",
         "warnings": [],
+        # For grouping by manager: how many BrightHR gave one for, and from
+        # which field, so "nobody has a manager" is visibly a setup question.
+        "staff_with_manager": sum(1 for e in emp_list if e.get("manager_name")),
+        "manager_fields": sorted({e.get("manager_field") for e in emp_list
+                                  if e.get("manager_field")}),
     }
 
     # A snapshot built from failed queries under-reports who is in the building.
@@ -370,7 +378,12 @@ def _run_blip() -> dict:
 
     # ── audit snapshot ──
     snap_path = Path(cfg.HR_SNAPSHOT_DIR) / f"blip_{_stamp()}.json"
-    snapshot = {"summary": summary, "on_site": on_site, "query_failed": query_failed}
+    # Every current employee's manager, by name, so the roll call can group
+    # people InVentry shows on site who are not clocked in on BrightHR.
+    managers = {" ".join(f"{e.get('first_name', '')} {e.get('surname', '')}".lower().split()):
+                e.get("manager_name", "") for e in emp_list if e.get("manager_name")}
+    snapshot = {"summary": summary, "on_site": on_site, "query_failed": query_failed,
+                "managers": managers}
     _atomic_write_json(snap_path, snapshot)
     _atomic_write_json(Path(cfg.HR_SNAPSHOT_DIR) / "blip_latest.json", snapshot)
 
