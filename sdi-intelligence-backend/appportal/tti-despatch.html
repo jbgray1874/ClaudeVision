@@ -42,6 +42,7 @@ input[type=search]{flex:1 1 220px;min-width:0}
 .primary{background:var(--yellow);color:#111;border:1px solid var(--yellow);font-weight:800;
          padding:11px 16px;border-radius:4px}
 .primary:hover{background:#ffe659}
+.dayhead{font-size:16px;margin:22px 0 10px;border-bottom:1px solid var(--line);padding-bottom:6px}
 a.primary{display:inline-block;text-decoration:none;margin-right:8px}
 .secondary{background:#202026;color:var(--text);border:1px solid var(--line);
            padding:11px 16px;border-radius:4px}
@@ -103,6 +104,12 @@ const iso = d => new Date(d.getTime() - d.getTimezoneOffset()*60000)
 const pretty = s => { const d = new Date(s + "T00:00:00");
   return isNaN(d) ? s : d.toLocaleDateString("en-GB",
     {weekday:"long", day:"numeric", month:"long", year:"numeric"}); };
+
+const short = s => { const d = new Date(s + "T00:00:00");
+  return isNaN(d) ? s : d.toLocaleDateString("en-GB", {weekday:"short", day:"numeric", month:"short"}); };
+const nextWorkingDay = d => { const n = new Date(d);
+  do { n.setDate(n.getDate() + 1); } while(n.getDay() === 0 || n.getDay() === 6); return n; };
+const mondayOf = d => { const m = new Date(d); m.setDate(m.getDate() - (m.getDay() + 6) % 7); return m; };
 
 function setStatus(text, kind=""){ const box = $("status");
   box.className = "status " + kind; box.textContent = text; }
@@ -187,14 +194,29 @@ day: {
   tools: `<input id="day" type="date" aria-label="Day to look at">
           <button class="primary" data-run>What is leaving that day?</button>
           <button class="secondary" id="today">Today</button>
-          <button class="secondary" id="thursday">Next Thursday</button>`,
-  ready(){ $("day").value = iso(new Date());
-    $("today").onclick = () => { $("day").value = iso(new Date()); run(); };
-    $("thursday").onclick = () => { const d = new Date();
-      d.setDate(d.getDate() + ((4 - d.getDay() + 7) % 7 || 7));
-      $("day").value = iso(d); run(); };
+          <button class="secondary" id="tomorrow">Tomorrow</button>
+          <button class="secondary" id="week">This week</button>`,
+  week: false,
+  ready(){
+    // "Tomorrow" is the next working day: on a Friday it is Monday, and says so.
+    // "This week" is Monday to Friday; at the weekend it is the week ahead.
+    const today = new Date(), next = nextWorkingDay(today);
+    const weekend = today.getDay() === 0 || today.getDay() === 6;
+    const monday = weekend ? next : mondayOf(today);
+    const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
+    $("tomorrow").textContent = iso(next) === iso(tomorrow) ? "Tomorrow"
+      : next.toLocaleDateString("en-GB", {weekday:"long"});
+    $("week").textContent = weekend ? "Next week" : "This week";
+    const pick = (d, week) => { VIEWS.day.week = week; $("day").value = iso(d); run(); };
+    VIEWS.day.week = false;
+    $("day").value = iso(today);
+    $("tools").querySelector("[data-run]").onclick = () => { VIEWS.day.week = false; run(); };
+    $("today").onclick = () => pick(today, false);
+    $("tomorrow").onclick = () => pick(next, false);
+    $("week").onclick = () => pick(monday, true);
     return true; },
-  url(){ return "/api/tti/despatch/day?day=" + encodeURIComponent($("day").value); },
+  url(){ return "/api/tti/despatch/" + (this.week ? "week" : "day")
+         + "?day=" + encodeURIComponent($("day").value); },
   guard(){ return $("day").value ? "" : "Pick a day first."; },
   draw(j){
     // ── "NOTHING IS LEAVING" IS ONLY SAFE WHEN NOTHING IS UNREADABLE ───────
@@ -203,20 +225,29 @@ day: {
     // six such lines is an unqualified claim resting on the ones it could not
     // read - and that is the sentence somebody would act on.
     const unread = j.unresolved_date_count || 0;
-    const day = $("day").value;
+    const when = j.days ? "between " + short(j.week_start) + " and " + short(j.week_end)
+                        : "on " + pretty($("day").value);
     setStatus(
       j.line_count
         ? some(j.line_count) + (j.line_count === 1 ? " is" : " are")
-          + " planned to leave on " + pretty(day) + "."
+          + " planned to leave " + when + "."
           + (unread ? "  " + some(unread) + " could not be read, so this may not"
                       + " be all of them." : "")
         : unread
-          ? "No confirmed matches for " + pretty(day) + ". " + some(unread)
+          ? "No confirmed matches " + when + ". " + some(unread)
             + " could not be read and cannot be ruled out — check those below"
             + " before relying on this."
-          : "Nothing in the plan is set to leave on " + pretty(day) + ".",
+          : "Nothing in the plan is set to leave " + when + ".",
       j.line_count && !unread ? "ok" : unread ? "error" : "");
-    lines(j.lines, $("out"));
+    if(j.days){
+      for(const d of j.days){
+        el("h2", pretty(d.day) + " — " + (d.line_count ? some(d.line_count) : "nothing planned"),
+           $("out"), "dayhead");
+        lines(d.lines, $("out"));
+      }
+    } else {
+      lines(j.lines, $("out"));
+    }
     const note = el("div", null, $("out"), "caveat");
     el("p", j.caveat, note);
     el("p", "Pallets are not totalled: " + j.pallet_total_reason, note, "hint");
