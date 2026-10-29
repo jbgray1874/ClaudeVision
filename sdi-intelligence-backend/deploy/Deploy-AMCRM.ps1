@@ -71,6 +71,7 @@ $Files = @(
     "appportal/tti-despatch.html",
     "appportal/guide-tti.html",
     "appportal/guide-am-crm.html",
+    "appportal/estimating-pocket.html",
     "sdi_ops_routes.py",
     "appportal/sdi-remote-control.html",
     "private-email-readonly.html",
@@ -234,17 +235,27 @@ Say "Version stamp updated, so /api/health reports $commit." Green
 # exactly how the TTI despatch view landed on the server unmounted on 26 October 2026.
 #
 # It still does not copy it. It now says when that matters, which is the part that was free.
-$appSrc = Join-Path $src "app.py"
-$appDst = Join-Path $dest "app.py"
-if ((Get-Sha $appSrc) -ne (Get-Sha $appDst)) {
+# The same trap applies to every backend file this script's list leaves out, not just
+# app.py. The estimating API is the one that bites next: a change to estimate_routes.py
+# or estimating_job_tools.py deploys "successfully" here, restarts, and is not on the
+# server at all. Checked by name, because silence is what cost the afternoon.
+$NotCopied = @("app.py", "estimate_routes.py", "estimating_job_tools.py",
+               "public_surface.py", "auth.py", "config.py")
+$missed = @()
+foreach ($name in $NotCopied) {
+    if ((Get-Sha (Join-Path $src $name)) -ne (Get-Sha (Join-Path $dest $name))) {
+        $missed += $name
+    }
+}
+if ($missed.Count -gt 0) {
     Write-Host ""
-    Say "app.py differs from the server's copy, and this script does not copy it." Yellow
-    Say "If your change mounts a router or adds a path to the public allow-list, it is" Yellow
-    Say "NOT live yet. Deploy app.py with:" Yellow
+    Say "These differ from the server's copies, and this script does not copy them:" Yellow
+    $missed | ForEach-Object { Say "    $_" White }
+    Say "If your change is in one of those, it is NOT live. Deploy them with:" Yellow
     Write-Host ""
     Write-Host "      .\tools\start\push-to-server.ps1 -Apply" -ForegroundColor White
     Write-Host ""
-    Say "That copies the whole backend folder, app.py included, then restart the service." Yellow
+    Say "That copies the whole backend folder, then restart the service." Yellow
 }
 
 # -- 5. Restart, if the server code changed ----------------------------------------------

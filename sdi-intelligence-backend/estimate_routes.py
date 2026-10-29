@@ -78,7 +78,8 @@ import estimate_email
 import quote_release
 import self_running_switch
 import staging
-from estimating_job_tools import areas, browse_briefs, answer_saved_record
+from estimating_job_tools import (areas, browse_briefs, answer_saved_record,
+                                   filed_record)
 
 router = APIRouter(prefix="/api/estimate", tags=["estimate"])
 
@@ -3247,7 +3248,12 @@ def completed_briefs(relative: str = "", area: str = "briefs",
 
 
 class SavedRunQuestion(BaseModel):
-    run_id: str
+    # One of the two. `run_id` answers about a run this service still holds;
+    # `brief` answers about a job already filed on the share, which is almost
+    # always what is wanted from outside the office.
+    run_id: str = ""
+    brief: str = ""
+    area: str = "briefs"
     question: str
 
 
@@ -3255,6 +3261,31 @@ class SavedRunQuestion(BaseModel):
 def ask_saved_run(req: SavedRunQuestion, x_sdi_key: Optional[str] = Header(default=None)):
     """Read an exact saved run record; never the mutable latest JSON for a job."""
     _check_key(x_sdi_key)
+    if req.brief.strip():
+        # ── A FILED JOB, WHICH IS MOST OF THEM ────────────────────────────────
+        # The branch below can only answer about runs still in memory, so every
+        # job from before the last restart replied "Run not found". That is the
+        # question an estimator actually asks away from their desk, about work
+        # finished weeks ago, so it is answered from the record on the share -
+        # confined to the approved areas by the same rule that confines browsing.
+        try:
+            held = filed_record(req.brief.strip(), req.area)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(503, "The completed AI briefs share is unavailable "
+                                     "to this service.") from exc
+        except json.JSONDecodeError as exc:
+            raise HTTPException(409, "That saved record cannot be read as JSON.") from exc
+        try:
+            result = answer_saved_record(held["record"], req.question)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"run_id": "", "drawing_number": held["folder_name"],
+                "record_name": held["record_name"], "brief": held["relative"],
+                "area": held["area"], **result}
+    if not req.run_id.strip():
+        raise HTTPException(400, "Name a filed job or a run to ask about.")
     with _LOCK:
         run = _RUNS.get(req.run_id)
         items = list(run.deliverables) if run else []
