@@ -20,10 +20,9 @@ The properties worth holding, in the order they would hurt:
   * a spoken answer carries its hedges in the sentence, because there is no
     footer in a voice answer for somebody to notice afterwards.
 
-The connector itself cannot be imported here: the MCP server package is not
-installed on this machine, which is also why the AM CRM connector has no
-tests. So the tools are read as CODE, with ast, rather than as text - a text
-match would pass on the comment that explains a rule instead of the rule.
+The rules are read as CODE, with ast, rather than as text - a text match
+would pass on the comment that explains a rule instead of the rule. Reading
+code does not prove it runs: test_the_tti_connector_starts.py starts it.
 """
 import ast
 import os
