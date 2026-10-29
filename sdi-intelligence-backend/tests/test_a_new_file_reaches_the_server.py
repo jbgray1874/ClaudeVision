@@ -135,9 +135,18 @@ class TheOtherDeployScriptTests(unittest.TestCase):
     failed one.
     """
 
-    def test_the_deploy_says_when_app_py_differs(self):
-        self.assertIn("app.py differs from the server's copy", DEPLOY)
+    def test_the_deploy_says_when_a_file_it_does_not_copy_differs(self):
+        """It used to name app.py alone. The same trap applies to every backend
+        file the list leaves out, and the estimating API is the one that bit
+        next: a change to estimate_routes.py deploys "successfully" through
+        this script, restarts, and is not on the server at all."""
+        self.assertIn("this script does not copy them", DEPLOY)
         self.assertIn("push-to-server.ps1 -Apply", DEPLOY)
+        named = DEPLOY.split("$NotCopied = @(", 1)[1].split(")", 1)[0]
+        for name in ("app.py", "estimate_routes.py", "estimating_job_tools.py",
+                     "public_surface.py"):
+            with self.subTest(file=name):
+                self.assertIn(f'"{name}"', named)
 
     def test_it_still_does_not_copy_app_py(self):
         """The warning is the fix, not a change of policy: the server's copy

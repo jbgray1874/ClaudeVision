@@ -137,6 +137,76 @@ def browse_briefs(relative: str = "", area: str = "briefs") -> dict[str, Any]:
             "other_types": other_types, "unreadable": unreadable}
 
 
+def _segments(relative: str) -> list[str]:
+    """The same path rule browse_briefs uses, so one place decides what a
+    caller may name: folder names only, never an absolute path, never "..".
+    """
+    if len(relative or "") > 512:
+        raise ValueError("Folder path is too long.")
+    found = relative.split("/") if relative else []
+    if any(not s or s in (".", "..") or "\\" in s or ":" in s
+           or any(ord(c) < 32 for c in s) for s in found):
+        raise ValueError("Invalid folder path.")
+    return found
+
+
+MAX_RECORD_BYTES = 30_000_000
+
+
+def filed_record(relative: str, area: str = "briefs") -> dict[str, Any]:
+    """The saved estimate record inside one filed brief folder.
+
+    ── WHY THIS EXISTS AT ALL ────────────────────────────────────────────────
+    The questions endpoint answered only from runs the service still held in
+    memory, so everything from before the last restart replied "Run not found.
+    The service may have restarted." Standing in front of a customer asking
+    what we quoted for a job last month, that is the whole feature failing.
+
+    The record is on the share, in the brief folder, and is the same shape the
+    in-memory path reads. So it is read from there, confined to the approved
+    areas by the same rule that confines browsing, and nothing else about the
+    answer changes.
+    """
+    root = area_root(area).resolve(strict=True)
+    parts = _segments(relative)
+    if not parts:
+        raise ValueError("Name the job folder to ask about.")
+    try:
+        folder = root.joinpath(*parts).resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise ValueError("That job folder is not in the approved area.") from exc
+    if folder != root and root not in folder.parents:
+        raise ValueError("That job folder is outside the approved area.")
+    if not folder.is_dir():
+        raise ValueError("That is a file, not a job folder.")
+
+    # The folder itself, then one level down - a brief is sometimes filed with
+    # its record in a subfolder. Deeper than that is a different job.
+    found: list[Path] = []
+    for depth in (folder.glob("*_record.json"), folder.glob("*/*_record.json")):
+        found.extend(p for p in depth if p.is_file())
+        if found:
+            break
+    if not found:
+        raise ValueError("No saved estimate record is filed in that folder, so "
+                         "there is nothing to answer from. Open its report instead.")
+    if len(found) > 1:
+        raise ValueError(f"{len(found)} saved records are filed in that folder, so "
+                         f"it is not clear which job is being asked about.")
+    record_path = found[0].resolve(strict=True)
+    if root not in record_path.parents:
+        raise ValueError("That record is outside the approved area.")
+    if record_path.stat().st_size > MAX_RECORD_BYTES:
+        raise ValueError("That saved record is too large to read here.")
+    import json
+    with record_path.open("r", encoding="utf-8") as stream:
+        record = json.load(stream)
+    if not isinstance(record, dict):
+        raise ValueError("That saved record is not in the expected shape.")
+    return {"record": record, "record_name": record_path.name,
+            "folder_name": folder.name, "relative": relative, "area": area}
+
+
 def answer_saved_record(record: dict[str, Any], question: str) -> dict[str, Any]:
     """Answer only from the supplied run record; never invent a cost or drawing fact."""
     q = " ".join(question.split()).lower()
@@ -145,7 +215,15 @@ def answer_saved_record(record: dict[str, Any], question: str) -> dict[str, Any]
     final = record.get("final_estimate") or {}
     costed = record.get("costed_job") or {}
     lines = costed.get("lines") or []
-    if any(w in q for w in ("price", "cost", "total", "amount", "charge")):
+    # ── THE WORDS ESTIMATORS ACTUALLY USE ────────────────────────────────────
+    # The list was price/cost/total/amount/charge, and "what did this come out
+    # at?" - the first thing anybody types, and one of the four prompts the
+    # pocket page offers - matched none of them and fell through to "I cannot
+    # establish that". A bounded tool that refuses the plainest form of the
+    # question it exists to answer reads as broken rather than careful.
+    if any(w in q for w in ("price", "cost", "total", "amount", "charge",
+                            "come out at", "came out at", "how much", "quote",
+                            "quoted", "£")):
         totals = final.get("totals") or {}
         if not totals:
             return {"answer": "No calculated total is present in this saved record.",
@@ -191,7 +269,10 @@ def answer_saved_record(record: dict[str, Any], question: str) -> dict[str, Any]
                            + answer) if answer else "No route operations are recorded.",
                 "sources": ["costed_job.lines[*].route_operations"],
                 "complete": bool(shown)}
-    if any(w in q for w in ("release", "hold", "risk", "missing", "unresolved", "question")):
+    # "held" is not "hold", and "anything held?" is how the question gets asked
+    # out loud. Same fault as the price words, found by the same test.
+    if any(w in q for w in ("release", "hold", "held", "risk", "missing",
+                            "unresolved", "question", "blocked", "outstanding")):
         release = costed.get("release") or {}
         reasons = release.get("reasons") or []
         answer = "Release status: {}. {}".format(

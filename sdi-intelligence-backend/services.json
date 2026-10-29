@@ -42,6 +42,30 @@
       "app_category": "Apps"
     },
     {
+      "id": "estimating-pocket",
+      "name": "Estimating in your pocket",
+      "status": "Phase one · out of office",
+      "cls": "c-prog",
+      "category": "Live & in-flight",
+      "app_category": "Apps",
+      "surface": "app",
+      "app_url": "estimating-pocket.html",
+      "desc": "The estimating engine from a phone: ask what a finished job came out at, see what is running, and start one off from a drawing pack. Built for out of the office — the engine itself stays on the network.",
+      "requires": "Named estimators only, through Microsoft sign-in with MFA — the same list as the full estimating screen. Every answer comes from the server; nothing is worked out on the phone.",
+      "detail": "The full estimating screen assumes you are at a desk watching a run: a live log, a file browser, a release button. <b>An engine run can take a couple of hours</b>, so on a phone that is the wrong shape entirely. This is built on the opposite assumption — start it, put the phone away, be told.<br><br><b>Ask</b> answers from what a finished estimate actually recorded: what it came out at, what parts are in it, what operations it needed, and what was held or unresolved. Every answer names the record it came from, because a figure quoted back to a customer has to be checkable. It never works a figure out and it never reads a drawing again — where the record does not hold the answer, it says so rather than estimating one.<br><br><b>Running</b> is what the service is holding: status, the headline figure, and nothing else. No log.<br><br><b>Start</b> picks a drawing pack from Live Enquiry and sets it going, with the finished estimate emailed to whoever started it. That is the point of starting one from a phone: you are told when it is done rather than watching for it.",
+      "sections": [
+        {
+          "title": "What it will not do",
+          "body": "Release a quotation to a customer, change who quotes are emailed to, or touch the self-running switch, overrides or parity. Those stay inside the office, and the boundary that holds them there is tested rather than assumed. It browses two folders — completed AI briefs and Live Enquiry — and no other share, whoever is asking."
+        },
+        {
+          "title": "Asking about older jobs",
+          "body": "Questions used to be answerable only about runs the service still held in memory, so anything from before the last restart replied “Run not found”. Standing in front of a customer asking what we quoted last month, that was the whole feature failing. It reads the filed record from the share instead, confined to the approved areas by the same rule that confines browsing."
+        }
+      ],
+      "next": "Prove the three screens, then the same questions in ChatGPT by voice — asking what we quoted for a job, out loud, from the car is the strongest fit for voice in the estate. Capturing a new enquiry from a phone (photograph a drawing, forward an email) needs a new public upload and is deliberately held until these are proven."
+    },
+    {
       "id": "private-assistant",
       "name": "SDI Private Assistant",
       "status": "Live · owner only",
