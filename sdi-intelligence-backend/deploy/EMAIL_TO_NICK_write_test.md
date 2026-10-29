@@ -88,18 +88,50 @@ James
 
 ## Notes for James, not for sending
 
-- Nick's write still needs `SDI_VOICECRM_WRITE=yes`, `SDI_VOICECRM_APPROVED_BY`
-  filled in, and his email in `SDI_VOICECRM_WRITERS`. If any is missing he gets
-  a polite refusal, not a save — worth checking before you send this.
-- After he's done it, the lines I need are:
+**Do not send this until both checks below pass.** The fix lives in
+`voicecrm_excel.py` on the server. Until that file is copied and the service
+restarted, Nick is running the code that told him a saved change had failed —
+and asking him to test it would get the old answer and cost his confidence
+twice.
 
-  ```powershell
-  Select-String C:\ClaudeVision\output\logs\service_out.log `
-    -Pattern "\[voicecrm.tracker\]|\[voicecrm.interpret\]" | Select-Object -Last 20
-  ```
+**1. Is the code actually on the server?** Every response carries the running
+commit, so this needs no server login:
 
-  `[voicecrm.tracker] write ... outcome=saved secs=…` is the write;
-  `read ... sheet_reread=no secs=…` is a lookup that reused the last reading;
-  `[voicecrm.interpret] ... secs=… first_say=…` is the model half.
-- If `outcome=not_saved` appears, that is the honest failure path and it carries
-  Microsoft's request ID — send me the whole line.
+```powershell
+(Invoke-WebRequest http://10.0.0.5:8000/api/health -UseBasicParsing).Headers["X-SDI-Commit"]
+```
+
+It must read `7deb273f` or later. `45d0fd6d` means the deploy has not run.
+`.\sdi-intelligence-backend\deploy\Deploy-AMCRM.ps1 -Check` says the same thing
+from the laptop and copies nothing.
+
+**2. Are writes switched on?** They are a separate `.env` setting from the fix,
+and if any is missing Nick gets a polite refusal rather than a save — which
+looks exactly like the bug coming back.
+
+```powershell
+Invoke-RestMethod http://10.0.0.5:8000/api/voicecrm/status
+```
+
+`writes_enabled` true, `approved_by` filled in, and his email in the writers
+list. If not: `SDI_VOICECRM_WRITE=yes`, `SDI_VOICECRM_APPROVED_BY=<name>`,
+`SDI_VOICECRM_WRITERS=<his email>,<yours>`. `.env` is read once at startup, so
+a change there needs a restart.
+
+**After he has saved something**, the lines to send me. Ask NSSM where the log
+is rather than assuming a path — there are three different names for it in the
+repo's own scripts, and I guessed the wrong one once already:
+
+```powershell
+$log = & C:\Tools\nssm.exe get SDIIntelligence AppStdout
+Select-String $log -Pattern "\[voicecrm.tracker\]|\[voicecrm.interpret\]" |
+  Select-Object -Last 20
+```
+
+- `[voicecrm.tracker] write … outcome=saved secs=…` — the write itself
+- `[voicecrm.tracker] read … sheet_reread=no secs=…` — a lookup that reused the
+  last reading rather than re-reading the sheet
+- `[voicecrm.interpret] … secs=… first_say=…` — the model half
+
+If `outcome=not_saved` appears, that is the honest failure path and it carries
+Microsoft's request ID. Send the whole line and tell Nick not to retry.
