@@ -58,6 +58,7 @@ import auth
 import connector_identity as identity
 import connector_oauth
 import tti_data
+import project_tracker
 import tti_files
 from sue_despatch import going_out, going_out_week
 from tti_search import (chase, data_quality, find, morning, overdue_undated,
@@ -343,6 +344,12 @@ opens the file after the person's SDI sign-in - and its `path` in full, say
 which folder it is in, and say `as_at` when the person may be looking for
 something recent. It does not look inside files.
 
+Project tracker: tti_project_tracker reads Liam's tracker (Milwaukee Amsterdam
+Conference 2027, PC 402426) as the person. Answer from its rows, give each
+row's `source`, and give a drawing's `open_url` as a link. Its columns are
+whatever the tracker has: read `headings`, and never assume a column means
+something its heading does not say.
+
 This connector only reads. It cannot change the workbook, book anything in,
 or send email. If somebody asks you to, say that it can only look things up,
 and that the morning summary can be read out or copied but has to be sent by
@@ -593,6 +600,52 @@ def tti_data_quality() -> dict:
         spoken = "Nothing in the workbook is unreadable on the checks this makes."
     _timed("tti_data_quality", started, user, f"n={answer['problem_count']}")
     return _ok(answer, spoken, plan)
+
+
+@_tool(
+    "Liam's project tracker: the Milwaukee Amsterdam Conference 2027 tracker (PC 402426) "
+    "in the TTi Projects SharePoint site, read as the person. Send words to find the rows "
+    "that contain all of them (a name, a part, a status, a date); send nothing for the "
+    "headings and the first rows. Every row has its source (file › sheet › row) and, for "
+    "any W:\\ drawing path in it, an open_url that opens the file after SDI sign-in.",
+    invoking="Reading the project tracker…", invoked="Read the project tracker")
+def tti_project_tracker(query: str = "") -> dict:
+    started = time.monotonic()
+    try:
+        user = _person("tti_project_tracker", started)
+    except _Refused as stop:
+        return stop.payload
+    _, api = _caller()
+    try:
+        read_ = project_tracker.read_all(_graph.token_for(api))
+    except project_tracker.Unavailable as exc:
+        _timed("tti_project_tracker", started, user, f"state=unavailable {str(exc)[:120]!r}")
+        return {"state": "unavailable", "detail": str(exc), "matches": [],
+                "warning": "Tell the person the tracker could not be read, and why, in "
+                           "the detail's words. Do not answer from earlier in the conversation."}
+    answer = project_tracker.search(read_, query, limit=25)
+    for m in answer["matches"]:
+        for p in m["paths"]:
+            if p["is_file"]:
+                p["open_url"] = tti_files.open_url(p["path"])
+    n = answer["match_count"]
+    files = [f for t in read_ for f in t["files"]]
+    answer["headings"] = {f"{f['name']} › {s['sheet']}": s["headings"] for f in files for s in f["sheets"]}
+    answer["saved"] = {f["name"]: f["saved"] for f in files}
+    if not files:
+        spoken = "The project tracker could not be found on the TTi Projects site."
+    elif answer["searched_for"]:
+        spoken = (f"{n} row{'s' if n != 1 else ''} in the project tracker "
+                  f"{'contain' if n != 1 else 'contains'} {answer['searched_for']}."
+                  if n else f"Nothing in the project tracker contains {answer['searched_for']}.")
+    else:
+        spoken = f"The project tracker has {n} row{'s' if n != 1 else ''}; here are the first."
+    answer["state"] = "ok"
+    answer["spoken"] = spoken
+    answer["as_at"] = ("Read from SharePoint just now; the tracker was last saved "
+                       + ", ".join(f"{k}: {v}" for k, v in answer["saved"].items()) + ".")
+    _timed("tti_project_tracker", started, user, f"q={query[:40]!r} n={n}")
+    return answer
 
 
 @_tool(

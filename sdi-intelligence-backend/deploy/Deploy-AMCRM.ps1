@@ -65,6 +65,7 @@ $Files = @(
     "tti_data.py",
     "tti_search.py",
     "tti_files.py",
+    "project_tracker.py",
     "tools/tti_index_folders.py",
     "tti_connector.py",
     "connector_identity.py",

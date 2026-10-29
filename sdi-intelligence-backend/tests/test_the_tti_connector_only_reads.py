@@ -58,7 +58,8 @@ class ThereAreSixToolsAndTheyAllReadTests(unittest.TestCase):
     def test_the_six_questions_and_the_folder_search_are_the_tools(self):
         self.assertEqual({t.name for t in TOOLS},
                          {"tti_find", "tti_leaving_on", "tti_leaving_this_week", "tti_chase",
-                          "tti_overdue", "tti_morning", "tti_data_quality", "tti_find_files"})
+                          "tti_overdue", "tti_morning", "tti_data_quality", "tti_find_files",
+                          "tti_project_tracker"})
 
     def test_no_tool_is_registered_except_through_the_read_only_helper(self):
         """A tool decorated with apps.tool directly would skip READS."""
@@ -287,6 +288,11 @@ class AnswersFitToSayOutLoudTests(unittest.TestCase):
                     self.assertIn('answer["as_at"]', body)
                     self.assertIn("index_age_hours", body)
                     continue
+                if tool.name == "tti_project_tracker":
+                    # Not the plan: Liam's tracker, read just now, with its own save time.
+                    self.assertIn('answer["as_at"]', body)
+                    self.assertIn("last saved", body)
+                    continue
                 self.assertIn("_ok(", body, f"{tool.name} answers without provenance")
 
     def test_the_instructions_forbid_quoting_stale_lines(self):
@@ -307,8 +313,8 @@ class AnswersFitToSayOutLoudTests(unittest.TestCase):
             if tool.name == "tti_data_quality":
                 self.assertIn("limit=15", body)      # already short by construction
                 continue
-            if tool.name == "tti_find_files":
-                self.assertIn("limit=25", body)      # names and paths, a few fields each
+            if tool.name in ("tti_find_files", "tti_project_tracker"):
+                self.assertIn("limit=25", body)      # a few fields each, 25 at most
                 continue
             with self.subTest(tool=tool.name):
                 self.assertIn("_brief(", body)

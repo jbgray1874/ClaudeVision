@@ -29,6 +29,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 import auth
 import tti_data
+import project_tracker
 import tti_files
 from sue_despatch import going_out, going_out_week
 from tti_search import (chase, data_quality, find, morning, overdue_undated,
@@ -194,6 +195,17 @@ def make_router(page_dir=None):
                             content_disposition_type="inline" if found["inline"] else "attachment",
                             headers={"Cache-Control": "private, no-store",
                                      "X-Content-Type-Options": "nosniff"})
+
+    # ── Liam's project tracker, read from his SharePoint as the person ─────
+    @router.get("/despatch/projects")
+    def projects(request: Request):
+        who(request)
+        try:
+            read_ = project_tracker.read_all(auth.graph_token(request))
+        except project_tracker.Unavailable as exc:
+            raise HTTPException(503, str(exc),
+                                headers={"X-TTI-Reason": exc.reason} if exc.reason else None)
+        return JSONResponse({"trackers": read_}, headers=_PAGE_HEADERS)
 
     @router.get("/despatch/files/status")
     def files_status(request: Request):

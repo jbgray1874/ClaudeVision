@@ -444,6 +444,66 @@ quality: {
     el("p", j.note, $("out"), "hint");
   }},
 
+// ── Liam's project tracker, from his SharePoint, read as you ────────────────
+projects: {
+  label: "Project tracker",
+  busy: "Reading the project tracker from SharePoint…",
+  tools: `<input id="pq" type="search" maxlength="80"
+            placeholder="Filter: any words in a row (a name, a part, a status)"
+            aria-label="Filter the project tracker">
+          <button class="secondary" data-run>Refresh</button>`,
+  data: null,
+  ready(){ $("pq").addEventListener("input", () => {
+      if(VIEWS.projects.data){ $("out").replaceChildren(); VIEWS.projects.draw(VIEWS.projects.data); } });
+    return true; },
+  url(){ return "/api/tti/despatch/projects"; },
+  draw(j){
+    VIEWS.projects.data = j;
+    const words = $("pq").value.toLowerCase().split(/\s+/).filter(Boolean);
+    let total = 0, shown = 0;
+    for(const t of j.trackers || []) for(const f of t.files || []){
+      el("h2", t.label + " — " + f.name, $("out"), "dayhead");
+      const about = el("p", "Last saved " + (f.saved ? new Date(f.saved).toLocaleString("en-GB") : "?") + ".  ",
+                       $("out"), "hint");
+      if(f.web_url){ const a = el("a", "Open it in SharePoint", about); a.href = f.web_url; a.target = "_blank"; a.rel = "noopener"; }
+      for(const sh of f.sheets || []){
+        const rows = sh.rows.filter(r => words.every(w =>
+          (sh.sheet + " " + Object.values(r.cells).join(" ")).toLowerCase().includes(w)));
+        total += sh.rows.length; shown += rows.length;
+        if(!rows.length && words.length) continue;
+        el("h3", sh.sheet + "  ·  " + rows.length + (rows.length === 1 ? " row" : " rows"), $("out"));
+        for(const r of rows){
+          const c = el("div", null, $("out"), "card");
+          const vals = Object.values(r.cells);
+          el("h3", vals.slice(0, 2).join("  ·  ") || "(row " + r.row + ")", c);
+          for(const [k, v] of Object.entries(r.cells).slice(2))
+            el("p", k + ": " + v, c, "meta");
+          for(const p of r.paths || []){
+            const line = el("p", null, c);
+            if(p.is_file){
+              const open = el("a", "Open", line, "primary");
+              open.href = "/api/tti/despatch/files/open?path=" + encodeURIComponent(p.path);
+              open.target = "_blank"; open.rel = "noopener";
+            } else {
+              const find = el("button", "Find in TTi files", line, "secondary");
+              find.type = "button";
+              find.onclick = () => { show("files"); $("fq").value = p.path.split(/[\\/]/).filter(Boolean).pop() || p.path; run(); };
+            }
+            // The path beside the button only when the cell does not already show it
+            // (a hyperlink labelled "see drawing", say).
+            if(!vals.some(v => v.replace(/\//g, "\\").includes(p.path)))
+              el("span", "  " + p.path, line, "meta");
+          }
+          el("p", f.name + " › " + sh.sheet + " › row " + r.row, c, "meta");
+        }
+      }
+    }
+    setStatus(words.length
+      ? shown + " of " + total + " rows have “" + words.join(" ") + "”."
+      : total + (total === 1 ? " row" : " rows") + " in the project tracker.", shown ? "ok" : "");
+  },
+  foot(){ $("foot").textContent = "Read from SharePoint as you, just now. Nothing here changes the tracker."; }},
+
 // ── Liam's TTi folders: names only, from an index built on a schedule ──────
 files: {
   label: "Find TTi files",
@@ -537,12 +597,15 @@ async function run(){
     // Despatch Plan. Every despatch tab said only "error"; this says what still
     // works and what would open the rest.
     if(e.reason === "access" && current !== "files"){
+      const tracker = current === "projects";
       const note = el("div", null, $("out"), "caveat");
-      el("p", "This tab reads Sue's TTI Despatch Plan in SharePoint as you, and your account "
-         + "cannot open it, so there is nothing to show here. That is about access to the "
-         + "plan, not a fault in the app.", note);
-      el("p", "Find TTi files does not need the plan: drawings and files in the TTi folders "
-         + "on W: work for you now. For the despatch tabs, ask Sue to share the plan with you.",
+      el("p", (tracker ? "This tab reads the project tracker in the TTi Projects SharePoint site"
+                       : "This tab reads Sue's TTI Despatch Plan in SharePoint")
+         + " as you, and your account cannot open it, so there is nothing to show here. That is "
+         + "about access to the file, not a fault in the app.", note);
+      el("p", "Find TTi files does not need it: drawings and files in the TTi folders on W: work "
+         + "for you now. " + (tracker ? "For the tracker, ask Liam to share it with you."
+                                      : "For the despatch tabs, ask Sue to share the plan with you."),
          note, "hint");
       const go = el("button", "Go to Find TTi files", note, "primary");
       go.type = "button"; go.style.marginTop = "10px"; go.onclick = () => show("files");
