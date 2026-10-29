@@ -100,8 +100,10 @@
        margin-top:9px;padding-top:8px;border-top:1px solid var(--line-soft)}
   /* An app with a screen opens from its own square; the rest of the square still
      opens the detail page. */
-  .card .go{align-self:flex-start;margin-top:12px;background:var(--accent);color:#000;
+  .card .gos{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .card .go{background:var(--accent);color:#000;
        font-family:var(--disp);font-weight:800;font-size:13.5px;padding:8px 14px;border-radius:var(--r)}
+  .card .go.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
 
   .chip{
     font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;
@@ -139,6 +141,7 @@
     display:inline-block;background:var(--accent);color:#000;font-weight:700;font-size:14px;
     padding:11px 16px;border-radius:var(--r);margin-top:18px;border:0;font-family:var(--body)
   }
+  .btn + .btn{margin-left:8px}
 
   .who{
     display:none;margin-top:9px;font-family:var(--mono);font-size:10.5px;
@@ -246,7 +249,9 @@ function renderList(filter){
         +'<span class="chip '+esc(s.cls||'c-plan')+'">'+esc(s.status||'')+'</span></div>'
         +(s.desc?'<div class="ds">'+esc(s.desc)+'</div>':'')
         +(s.requires?'<div class="req">'+esc(s.requires)+'</div>':'')
-        +(s.app_url?'<a class="go" href="'+esc(s.app_url)+'">Open '+esc(s.name.split(' · ')[0])+' \u2192</a>':'')
+        +((s.app_url||s.guide_url)?'<div class="gos">'
+          +(s.app_url?'<a class="go" href="'+esc(s.app_url)+'">Open '+esc(s.name.split(' · ')[0])+' \u2192</a>':'')
+          +(s.guide_url?'<a class="go ghost" href="'+esc(s.guide_url)+'">User guide</a>':'')+'</div>':'')
         +'</div>';
     });
   });
@@ -269,6 +274,7 @@ function renderDetail(s){
   if(s.invoke)   h+='<div class="note"><h4>How to use it</h4><div>'+s.invoke+'</div></div>';
   if(s.next)     h+='<div class="note"><h4>Next</h4><div>'+s.next+'</div></div>';
   if(s.app_url)  h+='<a class="btn" href="'+esc(s.app_url)+'">Open '+esc(s.name.split(' · ')[0])+' →</a>';
+  if(s.guide_url) h+='<a class="btn" href="'+esc(s.guide_url)+'">User guide</a>';
   if(s.link)     h+='<a class="btn" href="'+esc(s.link)+'" target="_blank" rel="noopener">'+esc(s.linkLabel||'Open ↗')+'</a>';
   $('detail').innerHTML=h;
 }
