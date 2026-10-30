@@ -287,7 +287,11 @@ def get_records(search: str = "") -> dict:
         _timed("get_records", started, user, "state=no_token")
         return {"state": "no_token", "records": [], "warning": NOT_READ,
                 "detail": "Couldn't reach the tracker as you. Reconnect SDI Tracker and sign in again."}
-    data = voicecrm.records_for(token)
+    # ChatGPT is a second front door to the same records, so it has to apply
+    # the same per-person filter. Left on the service-wide owner, asking
+    # "what's overdue?" in ChatGPT would answer about Nick's pipeline whoever
+    # was asking - and in voice mode there is nothing on screen to notice it by.
+    data = voicecrm.records_for(token, voicecrm.owner_for(user))
     if data.get("state") != "ok":
         detail = str(data.get("detail", ""))
         _timed("get_records", started, user,

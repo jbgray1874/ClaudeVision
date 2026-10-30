@@ -45,6 +45,7 @@ $ErrorActionPreference = "Continue"
 
 $Files = @(
     "voicecrm.py",
+    "crm_owners.py",
     "voicecrm_excel.py",
     "voicecrm_speech.py",
     "journal.py",

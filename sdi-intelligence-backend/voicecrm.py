@@ -64,6 +64,48 @@ EXCEL = voicecrm_excel.ExcelStore() if STORE == "excel" else None
 SITE = _opt("SDI_VOICECRM_SITE")
 LIST = _opt("SDI_VOICECRM_LIST")
 OWNER = _opt("SDI_VOICECRM_OWNER", "NG")
+
+# ── WHOSE RECORDS EACH PERSON SEES ───────────────────────────────────────────
+# OWNER above is ONE value, read once at startup, and for a one-person pilot
+# that was right. The moment a second person signs in it is wrong in the worst
+# way available: they do not see "nothing", they see NICK'S accounts, with no
+# hint that the rows are not theirs. Handing that to a Sales Director and two
+# account managers is not a gap, it is a false statement about whose pipeline
+# they are looking at.
+#
+# So: a mapping from a person's e-mail to their owner token in the tracker.
+#
+#   SDI_VOICECRM_OWNERS=nick.garrish@wearesdi.com=NG,kayleigh.thornhill@wearesdi.com=KT
+#
+# "*" as the token means every row, for the people whose job is the whole
+# pipeline rather than a queue:
+#
+#   ...,andy.baxter@wearesdi.com=*
+#
+# WHY A LIST OF PEOPLE AND NOT AN ENTRA GROUP, when every other app here moved
+# to groups: a group answers "may this person in?", and that is not the
+# question. The question is "which initials are theirs in the tracker", which
+# is a fact about the person that no group membership can carry.
+#
+# Empty (the default) keeps exactly the old behaviour, so nothing changes for
+# the running pilot until the setting is written. Once it IS written, somebody
+# who is not in it sees NOTHING and is told why - never a fallback to OWNER,
+# because a silent fallback is the bug this exists to prevent.
+#
+# The rule itself lives in crm_owners.py, which imports nothing, so it can be
+# exercised on a machine without httpx and FastAPI. This module cannot.
+import crm_owners
+
+ALL_RECORDS = crm_owners.ALL_RECORDS
+OWNERS = crm_owners.parse(_opt("SDI_VOICECRM_OWNERS"))
+
+
+def owner_for(user: dict | None) -> str | None:
+    """Which owner token this person's records carry, or None for nobody's.
+
+    None means "show them nothing and say why". It never means OWNER.
+    """
+    return crm_owners.owner_for(user, OWNERS, OWNER)
 # A List column has an internal name ("AMOwner"); a sheet header is the
 # literal text in the cell ("AM Owner").
 OWNER_FIELD = _opt("SDI_VOICECRM_OWNER_FIELD",
@@ -144,12 +186,18 @@ def projects(request: Request, user: dict = Depends(auth.require_user)):
                 "detail": ("No Microsoft Graph token for this session. Sign in again, and "
                            "check that a Sites.* scope is in SDI_GRAPH_SCOPES and has been "
                            "consented for this application.")}
-    return records_for(token)
+    # The signed-in person's own owner token, not the service's. See owner_for.
+    return records_for(token, owner_for(auth.current_user(request) or user))
 
 
-def records_for(token: str) -> dict:
+def records_for(token: str, owner: str | None = OWNER) -> dict:
     """The owner's records, read from the tracker with this person's Graph
     token. Shared by the web app and the connector (voicecrm_connector.py).
+
+    `owner` is the token whose rows to return - owner_for(user) decides it, so
+    two people signed in at once get their own. ALL_RECORDS ("*") returns every
+    row, for whoever's job is the whole pipeline. None returns none, which is
+    what an unmapped person gets: never somebody else's rows.
 
     ── THE SLOW HALF WAS THE UNMEASURED HALF ──────────────────────────────────
     There were timings around transcription and around the model, and none at
@@ -177,14 +225,26 @@ def records_for(token: str) -> dict:
                     "workbook": EXCEL.xlsx, "detail": data.get("detail", "")}
         if data.get("state") != "ok":
             return data
+        if owner is None:
+            # Mapped to nobody. Everything below would hand them another
+            # person's pipeline, so stop here and say so in words they can act
+            # on rather than returning an empty list that reads as "no work".
+            return {"state": "no_owner", "items": [],
+                    "detail": ("Your account is not mapped to an owner in the "
+                               "tracker, so there are no records to show you. "
+                               "Ask James Gray to add your initials - this is "
+                               "a one-line change, not a deployment."),
+                    "sheet": data.get("sheet", ""),
+                    "columns": data.get("headers", [])}
         rows, skipped = [], 0
+        everyone = (owner == ALL_RECORDS)
         for item in data["items"]:
-            owner = str(item["fields"].get(OWNER_FIELD, "")).strip()
-            if OWNER and owner.upper() != OWNER.upper():
+            row_owner = str(item["fields"].get(OWNER_FIELD, "")).strip()
+            if not everyone and owner and row_owner.upper() != owner.upper():
                 skipped += 1
                 continue
             rows.append(item)
-        out = {"state": "ok", "items": rows, "owner_filter": OWNER,
+        out = {"state": "ok", "items": rows, "owner_filter": owner,
                # "copy" when Excel Online refused the workbook and the rows were
                # read from a downloaded copy: lookups work, changes can't save.
                "source": data.get("source", "live"), "note": data.get("note", ""),
@@ -222,12 +282,30 @@ def records_for(token: str) -> dict:
         return {"state": "unreachable", "items": [],
                 "detail": f"Could not reach Microsoft Graph: {exc}"}
 
+    # ── THE LIST PATH FILTERS PER PERSON TOO ─────────────────────────────────
+    # This branch serves a SharePoint List rather than the workbook, and it is
+    # where AM CRM is headed for anything past the pilot. It had its own copy
+    # of the filter, still comparing against the service-wide OWNER - so the
+    # per-person fix would have silently stopped applying on the day the store
+    # changed, which is the worst possible day for it to stop.
+    #
+    # `row_owner`, not `owner`: the loop variable here was called `owner` and
+    # now collides with the parameter of that name. Same shape of bug as a
+    # PowerShell local shadowing a switch - it reads correctly and does the
+    # opposite of what it says.
+    if owner is None:
+        return {"state": "no_owner", "items": [],
+                "detail": ("Your account is not mapped to an owner in the tracker, "
+                           "so there are no records to show you. Ask James Gray to "
+                           "add your initials - this is a one-line change, not a "
+                           "deployment.")}
     rows = []
     skipped_other_owner = 0
+    everyone = (owner == ALL_RECORDS)
     for entry in items.json().get("value", []):
         fields = entry.get("fields", {}) or {}
-        owner = str(fields.get(OWNER_FIELD, "")).strip()
-        if OWNER and owner.upper() != OWNER.upper():
+        row_owner = str(fields.get(OWNER_FIELD, "")).strip()
+        if not everyone and owner and row_owner.upper() != owner.upper():
             skipped_other_owner += 1
             continue
         rows.append({
@@ -239,7 +317,7 @@ def records_for(token: str) -> dict:
             "fields": fields,
         })
 
-    return {"state": "ok", "items": rows, "owner_filter": OWNER,
+    return {"state": "ok", "items": rows, "owner_filter": owner,
             "skipped_other_owner": skipped_other_owner,
             "owner_field_found": any(OWNER_FIELD in r["fields"] for r in rows) if rows else None}
 
