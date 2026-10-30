@@ -344,6 +344,46 @@ class TheCheckReportsOnWhatWasDeployedTests(unittest.TestCase):
 
     NOT_COPIED = ("app", "config", "auth", "public_surface")
 
+    def test_every_function_is_defined_before_it_is_used(self):
+        """── POWERSHELL RESOLVES FUNCTIONS AT RUNTIME ─────────────────────
+        A function used in section 5 and defined in section 7 parses fine,
+        passes every syntax check, and then throws "is not recognized" on the
+        line that uses it - taking the rest of the check down with it. That is
+        how `Live` shipped broken for about four minutes.
+        """
+        import re
+        for name in ("Check-AMCRM-Live.ps1", "Ship-It.ps1", "Set-Setting.ps1",
+                     "Deploy-AMCRM.ps1"):
+            source = (BACKEND / "deploy" / name).read_text(encoding="utf-8")
+            # Strip comments: a function named in a comment is not a call.
+            code = "\n".join(l for l in source.splitlines()
+                              if not l.strip().startswith("#"))
+            defined = {m.group(1): m.start() for m in
+                       re.finditer(r"^function\s+([A-Za-z][\w-]*)", code, re.M)}
+            for func, at in defined.items():
+                # Calls look like "Func " or "(Func " at a statement position.
+                for call in re.finditer(r"(?<![\w-])" + re.escape(func)
+                                        + r"(?=\s+[\"$\w-])", code):
+                    if call.start() < at:
+                        self.fail(f"{name}: {func} is used at character "
+                                  f"{call.start()} and not defined until {at}")
+
+    def test_the_check_reports_who_sees_whose_records(self):
+        """Four people were being onboarded at once. A check that says the
+        write path is healthy, and nothing about whether they each see their
+        OWN rows, is answering the wrong question that week."""
+        self.assertIn("SDI_VOICECRM_OWNERS", self.CHECK)
+        self.assertIn('Live "crm_owners.py"', self.CHECK)
+
+    def test_it_catches_the_setting_written_before_the_code_was_deployed(self):
+        """── THE ORDERING MISTAKE THIS EXISTS FOR ─────────────────────────
+        SDI_VOICECRM_OWNERS does nothing until crm_owners.py is on the server.
+        Written first and deployed later, it leaves exactly the silent state
+        it was meant to prevent - everybody seeing one person's records, with
+        a setting in .env that says otherwise.
+        """
+        self.assertIn("is being IGNORED", self.CHECK)
+
     def test_the_settings_it_reports_are_the_ones_the_apps_actually_ask(self):
         """Two lists that can disagree is one more than there should be."""
         for setting, filename in (("SDI_ESTIMATOR_OIDS", "app.py"),
