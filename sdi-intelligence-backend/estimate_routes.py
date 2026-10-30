@@ -546,8 +546,9 @@ class EstimateRequest(BaseModel):
     fresh_read: bool = False
     # THE ENQUIRY BRIEF (D-360). Free text typed for an LLM-only run — "600 x 600 x 1200mm
     # bump bin with lid, 1800mm back panel, plywood with print, 350 off" — filed into the job
-    # folder as ENQUIRY_BRIEF.txt and read by the concept read as stated facts. Ignored on
-    # any other method: a drawing pack's drawings are its facts.
+    # folder as ENQUIRY_BRIEF.txt and read by the concept read as stated facts. Filed on every
+    # method (D-598y): an estimate whose drawings no reader can read falls back to that read,
+    # and a measured pack's drawings stay its facts, the brief set aside on the book.
     enquiry_brief: Optional[str] = None
     concept_document: bool = False
     # REFERENCE / STANDARDS DOCUMENTS (D-474). File names among the submitted files that the
@@ -2007,8 +2008,11 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                  "the DXF flat patterns and the SolidWorks extract are all OFF. This is a "
                  "MEASUREMENT of the model, not an estimate, and its total must not be "
                  "quoted or compared with a normal run's.")
-    _brief_status = (_file_enquiry_brief(run, job, req.enquiry_brief)
-                     if run.llm_only else "not_an_llm_read")
+    # EVERY RUN FILES ITS OWN BRIEF, OR CLEARS A STALE ONE (D-598y). An estimate of a drawing
+    # no reader can read falls back to the vision read (D-598g), and that read takes the brief;
+    # filed only on LLM runs, a customer's change could never reach it. On a measured pack the
+    # engine sets the brief aside and the book says so.
+    _brief_status = _file_enquiry_brief(run, job, req.enquiry_brief)
     # WHICH CONSTRUCTION THIS RUN PRICES, said where the estimator is looking (D-535): a
     # schedule on file changes what the run is, and a run that silently priced last week's
     # schedule — or silently asked the model again — is the failure this panel exists to end.

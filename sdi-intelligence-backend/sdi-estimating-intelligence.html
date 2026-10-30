@@ -659,14 +659,18 @@
            coated with print … 350 off." The render alone was read as a different product,
            and nothing may be typed into the code. So the brief is an input for THIS run,
            like the client: filed with the pack as ENQUIRY_BRIEF.txt and put to the model as
-           stated facts that outrank what the picture suggests. LLM-only runs only — on a
-           drawing pack the drawings are the facts. -->
+           stated facts that outrank what the picture suggests. On a measured drawing pack
+           the drawings are the facts. SENT WITH AN ESTIMATE TOO (D-598y): a drawing no reader
+           can read falls back to the vision read (D-598g), and the customer's changes reach it
+           only through this box. -->
       <label class="note" for="enquiryBrief" style="display:block;margin:0 0 4px">
-        <b>Enquiry brief</b> (optional, LLM read only) — what the customer or estimator has
+        <b>Enquiry brief</b> (optional) — what the customer or estimator has
         stated that the drawings or render cannot show: overall sizes, material, finish,
         construction, parts not visible. One option per run: for "plywood <i>or</i> steel",
         run it twice with each brief. Prices typed here are ignored — enter those on the
-        sheet.</label>
+        sheet. Read by the LLM read, and by an estimate whose drawings no reader can read
+        (a scan, or lettering printed as outlines); a measured drawing pack sets it aside
+        and the book says so.</label>
       <textarea id="enquiryBrief" rows="4" maxlength="4000"
         style="width:100%;box-sizing:border-box;margin:0 0 10px;font:inherit"
         placeholder="e.g. 600 x 600 x 1200mm bump bin with lid and 1800mm back panel. Plywood construction with print. 350 off."></textarea>
@@ -3261,6 +3265,9 @@ runBtn.onclick = async () => {
     // Only when the estimator ticked "Use these changes". Checked again by the service before
     // anything is staged; costed by the engine in place of what the drawings state.
     customer_changes: (document.getElementById("chgUse") || {}).checked ? changesSubmitted() : null,
+    // THE ENQUIRY BRIEF (D-598y): filed with every run, read only if the run falls back to
+    // the vision read because no reader could read the drawings.
+    enquiry_brief: (document.getElementById("enquiryBrief").value || "").trim() || null,
     // THE DELIVERY DECLARATION (D-524): the checkbox and postcode above. Always sent — the
     // ticked default keeps today's pricing; unticked is the deliberate £0; the postcode is
     // the future per-mile calculator's destination.
