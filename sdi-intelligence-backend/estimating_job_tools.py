@@ -130,11 +130,99 @@ def browse_briefs(relative: str = "", area: str = "briefs") -> dict[str, Any]:
                      Path(r["name"]).suffix.lower() in (
                          ".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw")]
     can_select = len(segments) >= 2 and bool(drawing_names)
-    return {"area": area, "relative": relative, "parent": "/".join(segments[:-1]),
-            "folder_path": str(target), "folder_name": target.name,
-            "entries": rows[:300], "truncated": len(rows) > 300,
-            "can_select": can_select, "drawing_count": len(drawing_names),
-            "other_types": other_types, "unreadable": unreadable}
+    out = {"area": area, "relative": relative, "parent": "/".join(segments[:-1]),
+           "folder_path": str(target), "folder_name": target.name,
+           "entries": rows[:300], "truncated": len(rows) > 300,
+           "can_select": can_select, "drawing_count": len(drawing_names),
+           "other_types": other_types, "unreadable": unreadable}
+
+    # ── THE JOB'S HEADLINE, ON THE CALL THAT OPENED THE FOLDER ───────────────
+    # The phone shows the figures the moment a job is picked rather than
+    # waiting to be asked, and this is the request that already happens when
+    # it is picked - so the card costs no extra round trip on a mobile
+    # connection, and there is no new endpoint on the public surface.
+    #
+    # Absent on purpose when there is no record: "no estimate filed here" is a
+    # real and useful answer, and a summary of nothing would read as zeroes.
+    if segments:
+        try:
+            out["summary"] = summarise_record(filed_record(relative, area)["record"])
+        except (ValueError, OSError, KeyError, TypeError):
+            # No record, two records, unreadable, or a record of a shape this
+            # cannot read. Browsing must not fail because of any of those -
+            # the folder listing is still correct and still wanted.
+            pass
+    return out
+
+
+def summarise_record(record: dict[str, Any]) -> dict[str, Any]:
+    """The headline of a filed estimate, as figures rather than as a sentence.
+
+    ── WHY A CARD AND NOT A PROMPT BOX ──────────────────────────────────────
+    "it's not that useful.. it's just a question / prompt box."
+
+    Picking a job gave you an empty box, so the only way to find out whether
+    the record held anything was to type a question and see. That reads as a
+    chatbot with nothing behind it, when in fact the record holds exactly four
+    things and they are all worth seeing at once.
+
+    So this returns them structured: the page shows them on sight, and the box
+    underneath is for the follow-ups (a named part, a particular operation).
+    It reads the same three places answer_saved_record reads and computes
+    nothing of its own - a figure this page states is a figure the engine
+    wrote, or it is absent.
+
+    Every value may be None, and None means "not recorded". It never means
+    zero: an absent total reported as £0.00 is a calculated fact that nobody
+    calculated, which is the one thing this is not allowed to do.
+    """
+    # ── EVERY SHAPE HERE IS CHECKED, NOT ASSUMED ─────────────────────────────
+    # browse_briefs now calls this on whatever *_record.json happens to sit in
+    # a folder on the share, so "the engine wrote it" is no longer a safe
+    # assumption. A record whose `lines` was a STRING iterated into single
+    # characters and died on line.get - and it died inside the folder listing,
+    # taking browsing down with it.
+    def mapping(value) -> dict[str, Any]:
+        return value if isinstance(value, dict) else {}
+
+    def sequence(value) -> list:
+        # A str is iterable and is never a list of items here.
+        return value if isinstance(value, list) else []
+
+    totals = mapping(mapping(record).get("final_estimate")).get("totals")
+    totals = mapping(totals)
+    costed = mapping(mapping(record).get("costed_job"))
+    lines = sequence(costed.get("lines"))
+    release = mapping(costed.get("release"))
+
+    def figure(key: str):
+        return float(totals[key]) if _is_number(totals.get(key)) else None
+
+    operations: list[str] = []
+    for line in lines:
+        for op in sequence(mapping(line).get("route_operations")):
+            text = str(op).strip()
+            if text and text not in operations:
+                operations.append(text)
+
+    status = str(release.get("status") or "").strip()
+    reasons = [str(r).strip() for r in sequence(release.get("reasons")) if str(r).strip()]
+    return {
+        "unit_gbp": figure("unit_gbp"),
+        "material_gbp": figure("material_gbp"),
+        "labour_gbp": figure("labour_gbp"),
+        "other_gbp": figure("other_gbp"),
+        "unit_cell": str(totals.get("unit_cell") or "") or None,
+        "part_count": len(lines),
+        "operations": operations[:40],
+        "operation_count": len(operations),
+        "release_status": status or None,
+        # "held" is the word the engine uses, and it is the one thing on this
+        # card that must be impossible to miss, so it is flagged rather than
+        # left for the reader to notice in a status string.
+        "held": status.lower() in ("held", "hold", "blocked"),
+        "release_reasons": reasons[:20],
+    }
 
 
 def _segments(relative: str) -> list[str]:

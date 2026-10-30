@@ -371,20 +371,75 @@ const ASKABLE = [
   "Was anything held or unresolved?",
 ];
 
+// ── THE JOB CARD ────────────────────────────────────────────────────────────
+// "it's not that useful.. it's just a question / prompt box."
+//
+// Picking a job used to give you an empty box, so the only way to find out
+// whether the record held anything was to type a question and see. That reads
+// as a chatbot with nothing behind it - when the record in fact holds exactly
+// four things, all of them worth seeing at once.
+//
+// So the figures are shown on sight, and the box underneath is for the
+// follow-ups. Everything here was written by the engine: nothing on this card
+// is worked out by the page, and an absent figure says so rather than showing
+// a zero nobody calculated.
+function jobCard(data, host){
+  const s = data.summary;
+  const c = el("div", null, host, "card" + (s && s.held ? " bad" : ""));
+  el("h3", data.folder_name, c);
+  if(!s){
+    el("p", "No estimate record is filed in this folder, so there is nothing "
+       + "here to answer from. Open the job's own report instead.", c, "hint");
+    return false;
+  }
+  const money = MONEY(s.unit_gbp);
+  if(money){
+    el("div", money, c, "figure");
+    // The workbook cell, because a figure quoted to a customer has to be
+    // checkable against the sheet it came from.
+    el("p", "per unit" + (s.unit_cell ? "  ·  " + s.unit_cell : ""), c, "mono");
+  } else {
+    el("p", "No unit total is recorded in this estimate.", c, "hint");
+  }
+  const split = [["material", s.material_gbp], ["labour", s.labour_gbp],
+                 ["other", s.other_gbp]]
+    .map(pair => MONEY(pair[1]) ? pair[0] + " " + MONEY(pair[1]) : null)
+    .filter(Boolean);
+  if(split.length) el("p", split.join("   ·   "), c, "muted");
+
+  const facts = el("div", null, c, "chips");
+  const chip = (text, cls) => el("span", text, facts, "chip" + (cls ? " " + cls : ""));
+  chip(s.part_count + (s.part_count === 1 ? " part" : " parts"));
+  chip(s.operation_count + (s.operation_count === 1 ? " operation" : " operations"));
+  if(s.release_status)
+    chip("release " + s.release_status, s.held ? "bad" : "ok");
+
+  // Held is the one thing on this card that must be impossible to miss.
+  if(s.held && s.release_reasons.length)
+    el("p", "Held: " + s.release_reasons.join("; "), el("div", null, c, "note"));
+  return true;
+}
+
 function offerAsk(data, relative){
   $("ask-chosen").replaceChildren();
-  const c = el("div", null, $("ask-chosen"), "card");
-  el("h3", data.folder_name, c);
-  el("p", "Asking about this job.", c, "muted");
-  $("ask-box").style.display = "block";
+  const filed = jobCard(data, $("ask-chosen"));
+  // Nothing filed means the question endpoint would refuse anyway, so the box
+  // goes away rather than inviting a question that cannot be answered.
+  $("ask-box").style.display = filed ? "block" : "none";
   $("ask-chips").replaceChildren();
+  if(!filed){
+    say("ask-state", "Nothing is filed in this folder to answer from.");
+    $("ask-out").replaceChildren();
+    return;
+  }
   for(const q of ASKABLE){
     const b = el("button", q, $("ask-chips"));
     b.type = "button";
     b.onclick = () => { $("ask-q").value = q; ask(); };
   }
-  say("ask-state", "Four kinds of question can be answered: what it cost, what "
-      + "parts are in it, what operations it needed, and what was held back.");
+  say("ask-state", "The figures above are straight from the filed record. Ask "
+      + "for the detail behind them - a named part, a particular operation, or "
+      + "why release is held.");
   $("ask-out").replaceChildren();
 }
 
