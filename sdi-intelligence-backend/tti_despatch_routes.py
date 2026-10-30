@@ -25,7 +25,7 @@ from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 
 import access
 import auth
@@ -84,9 +84,36 @@ def make_router(page_dir=None):
         answer["source_version_date"] = plan.saved.date().isoformat()
         return JSONResponse(answer, headers=_PAGE_HEADERS)
 
+    # ── A LINK FROM AN EMAIL ARRIVES WITH NO SESSION ───────────────────────
+    # App Proxy's Microsoft sign-in is not this app's session. Sue opened the
+    # link she was emailed and was shown a line of JSON saying she needed to be
+    # a signed-in person. The page is a page: someone not signed in is sent to
+    # sign in and straight back, and someone refused is told why on a screen
+    # with a way forward, never in raw JSON.
     @router.get("/despatch")
     def despatch(request: Request):
-        who(request)
+        if auth.ENABLED and auth.current_user(request) is None:
+            return auth.login_redirect(request)
+        try:
+            who(request)
+        except HTTPException as refused:
+            from html import escape
+            return HTMLResponse(
+                "<!doctype html><html lang='en-GB'><head><meta charset='utf-8'>"
+                "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                "<title>TTI Despatch · SDI Intelligence</title><style>"
+                "body{margin:0;background:#0d0d0f;color:#f3f2ee;font:16px/1.5 Arial,sans-serif}"
+                "main{max-width:620px;margin:0 auto;padding:40px 20px}"
+                "h1{font-size:26px;margin:0 0 12px}p{color:#c9c9cf}"
+                "a.b{display:inline-block;margin:18px 10px 0 0;padding:11px 16px;border-radius:4px;"
+                "text-decoration:none;font-weight:700;background:#ffd400;color:#111}"
+                "a.s{background:#202026;color:#f3f2ee;border:1px solid #303037}</style></head><body><main>"
+                "<h1>TTI Despatch</h1><p>" + escape(str(refused.detail)) + "</p>"
+                "<p>If you think you should have access, sign in again with your usual SDI account, "
+                "or ask James Gray to add you.</p>"
+                "<a class='b' href='/auth/login?next=%2Fapi%2Ftti%2Fdespatch'>Sign in</a>"
+                "<a class='b s' href='/app/'>App portal</a></main></body></html>",
+                status_code=refused.status_code, headers=_PAGE_HEADERS)
         return FileResponse(str(page), headers=_PAGE_HEADERS)
 
     @router.get("/despatch/day")
