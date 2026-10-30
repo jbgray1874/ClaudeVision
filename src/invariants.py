@@ -1164,15 +1164,19 @@ def check_prices_are_reproducible(summary: Any) -> List[Dict[str, Any]]:
     # which items to go and price.
     _names = sorted({str(g["part"]) for g in guessed if g.get("part")}) \
         or sorted({str(g["where"]) for g in guessed})
+    # THIS JOB'S FACTS ONLY (D-603a). The sentence carried another job's history, "one cable
+    # line moving from GBP 4.54 to GBP 8.54", into every book that tripped it, so the HPP
+    # covering email described a cable this job does not have. And it counted price records,
+    # not items: "8 priced line(s)" beside two names. The count is the items named; the
+    # records stay in the detail.
     return [_violation(
         "price_not_reproducible", BLOCKING,
-        f"{len(guessed)} priced line(s) that reached the total were costed by an AI market "
-        f"estimate rather than a catalogue: {', '.join(_names[:8])}"
-        f"{f' (+{len(_names) - 8} more)' if len(_names) > 8 else ''}. Those figures change "
-        f"every run — the same job has priced at three different totals on identical inputs, "
-        f"one cable line moving from GBP 4.54 to GBP 8.54 on its own — so the estimate cannot "
-        f"be reproduced or defended. Add these codes to the price catalogue, or price the "
-        f"lines by hand.",
+        f"{len(_names)} item(s) priced into the total by an AI market estimate rather than a "
+        f"catalogue: {', '.join(_names[:8])}"
+        f"{f' (+{len(_names) - 8} more)' if len(_names) > 8 else ''}. A market estimate is "
+        f"not a price anyone quoted, and a fresh read can return a different figure, so the "
+        f"estimate cannot be reproduced or defended on it. Add these codes to the price "
+        f"catalogue, or price the lines by hand.",
         parts=_names, lines=guessed[:10], count=len(guessed))]
 
 
