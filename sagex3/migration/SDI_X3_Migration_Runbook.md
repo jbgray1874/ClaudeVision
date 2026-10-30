@@ -43,7 +43,33 @@ an old file. Read section 1 before every run.
 
 ---
 
-## 2. Load order
+### 1a. No exclusions by assumption (James, 30 Oct)
+
+**Nothing is left out because of a guess about what Access holds or what X3 will need.** Every
+record that's live in Access goes across. Where a value is missing, it gets the best value Access
+does have, plus a flag; the record isn't dropped. A record is only left out on an explicit rule
+that someone named has agreed, and it's listed with its reason. The exclusions found so far, and
+what happens to each:
+
+| # | Exclusion | Effect | Decision |
+|---|---|---|---|
+| 1 | **Costs:** only products with a non-zero Access standard cost got a cost | 6,902 of 16,499 products have no cost. 860 of them hold stock, and the stock load stops on them (FIXING49 etc., 30 Oct) | **Switch off.** Every product gets a cost: the Access standard cost; else the average lot cost of its stock; else the last purchase price; else the X3 roll-up from BOM and route for made products. Anything still without a cost is listed for SDI |
+| 2 | **Products:** OLD grade ignores stock, purchases and open orders | 1,681 live products, £603k stock, about 620 order lines held | **Switch off.** Any product with stock, open orders or recent purchases goes in |
+| 3 | **Customers / suppliers:** GOOD grade only | 98 customers and 161 suppliers missed (fixed 27 Oct) | **Switched off.** Every live account goes in |
+| 4 | **Order and invoice views** inner-joined to the cross-reference | 1,428 / 124 / 255 / 241 rows dropped silently | **Switch off.** LEFT JOIN: a missing account shows on Held back. STOP check in section 9 |
+| 5 | **BOM lines** held when parent or component isn't in the product file | 33,596 lines | Follows 2: re-run once the products are in |
+| 6 | **Product-suppliers:** main supplier only | 3,150 alternatives not loaded | Ethan: a PIO column |
+| 7 | **Product-supplier links** for products not in the product file | 575 products | Follows 2 |
+| 8 | **Stock lots** on products not in the product file | 2,176 lots, £603k | Follows 2 |
+| 9 | **Order lines** with a product not in the product file | 418 SO and 204 PO lines | Follows 2 |
+| 10 | **Works orders** held (no BOM or route, nothing left to make, prototypes) | 106 | Review the 42 with no BOM once 2 and 5 are done |
+| 11 | **PHANT** set from "parent and component anywhere in Access" | 545 products mis-categorised | Switch to the usage test (section 13, item 9) |
+| 12 | **Routes on bought-in products** | 71 lines | Keep: X3 routes made products only (Ethan) |
+| 13 | **Bank details for BACS suppliers only** | 44 suppliers on transfer terms | Keep: Ethan's template note |
+| 14 | **Accounts left out:** intercompany, ledger accounts, employee expenses | 6 customers, 78 suppliers | Finance to decide. Until then they're listed, not silently dropped |
+| 15 | **Dormant accounts:** no trade for 2 years and nothing open | not migrated | To confirm with SDI |
+
+
 
 | # | Template | What it is | Track |
 |---|---|---|---|
