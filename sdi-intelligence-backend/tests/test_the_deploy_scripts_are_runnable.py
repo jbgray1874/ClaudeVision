@@ -333,6 +333,29 @@ class TheCheckReportsOnWhatWasDeployedTests(unittest.TestCase):
                                   f"{filename} and it is not there, so the check "
                                   f"would report a good deploy as a failure")
 
+    def test_the_log_section_says_which_reads_came_since_the_restart(self):
+        """── 30 OCTOBER: TWO RUNS, THE SAME SIX LINES ──────────────────────
+        After the speed fix was deployed, the check showed six tracker reads
+        twice over. Nothing said all six were from BEFORE the restart, so it
+        looked like the fix had not worked rather than that nobody had opened
+        AM CRM since. [config] is printed once as the service starts, which
+        is where the line is drawn."""
+        six = self.CHECK.split('Head "6.', 1)[1].split('Head "7.', 1)[0]
+        self.assertIn("$l.LineNumber -gt $config.LineNumber", six)
+        self.assertIn("the service last started here", six)
+        self.assertIn("Nobody has opened AM CRM since the service started", six)
+        config = (BACKEND / "config.py").read_text(encoding="utf-8")
+        self.assertIn('print("[config] "', config,
+                      "the marker the check draws the line at is gone")
+
+    def test_the_tracker_lines_say_when(self):
+        source = (BACKEND / "voicecrm.py").read_text(encoding="utf-8")
+        lines = re.findall(r'print\(f"\[voicecrm\.tracker\].*?flush=True\)', source, re.S)
+        self.assertEqual(len(lines), 2, "the read and the write line")
+        for line in lines:
+            with self.subTest(line=line[:40]):
+                self.assertIn("at={_log_time()}", line)
+
     def test_the_pages_it_names_are_on_the_deploy(self):
         """A page the check verifies but the deploy never copies would be
         reported missing for ever, correctly and uselessly."""

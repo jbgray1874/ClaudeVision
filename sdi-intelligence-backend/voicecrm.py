@@ -206,6 +206,13 @@ def projects(request: Request, user: dict = Depends(auth.require_user)):
     return records_for(token, owner_for(auth.current_user(request) or user))
 
 
+def _log_time() -> str:
+    """When, on the tracker's log lines. Without it, six lines read the same
+    the morning after a restart as the minute before it - 30 October, two runs
+    of the live check could not say whether anybody had opened AM CRM since."""
+    return time.strftime("%d-%b-%H:%M:%S")
+
+
 def records_for(token: str, owner: str | None = OWNER) -> dict:
     """The owner's records, read from the tracker with this person's Graph
     token. Shared by the web app and the connector (voicecrm_connector.py).
@@ -231,7 +238,7 @@ def records_for(token: str, owner: str | None = OWNER) -> dict:
               f"rows={len(data.get('items') or [])} "
               f"source={data.get('source', 'live')} "
               f"sheet_reread={'no' if data.get('reused') else 'yes'} "
-              f"secs={time.monotonic() - started:.1f}", flush=True)
+              f"secs={time.monotonic() - started:.1f} at={_log_time()}", flush=True)
         if data.get("state") == "graph_error" and data.get("status") in (403, 404):
             # Graph answers 403 - or 404, refusing even to confirm the file
             # exists - to someone who cannot open the sandbox site. For anyone
@@ -729,7 +736,7 @@ def confirm_change(user: dict, get_token, proposal_id: str, confirmed: bool) -> 
         err = EXCEL.apply(token, item, entry["field"], entry["new_value"])
         print(f"[voicecrm.tracker] write field={entry['field']!r} "
               f"outcome={'saved' if not err else err.get('state')} "
-              f"secs={time.monotonic() - started:.1f}", flush=True)
+              f"secs={time.monotonic() - started:.1f} at={_log_time()}", flush=True)
         if err:
             _journal.finish(proposal_id, "failed",
                             f"{err.get('state')}: {str(err.get('detail', ''))[:300]}")
