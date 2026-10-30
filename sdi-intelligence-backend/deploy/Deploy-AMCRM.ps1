@@ -69,6 +69,7 @@ $Files = @(
     "tools/tti_index_folders.py",
     "tti_connector.py",
     "connector_identity.py",
+    "access.py",
     "appportal/tti-despatch.html",
     "appportal/guide-tti.html",
     "sdi_ops_routes.py",

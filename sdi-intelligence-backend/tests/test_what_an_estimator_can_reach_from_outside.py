@@ -201,9 +201,20 @@ class NoLoginLoopTests(unittest.TestCase):
         self.assertLess(checked, redirect, "it must know who you are first")
 
     def test_an_authenticated_outsider_is_told_why(self):
-        self.assertIn("You are signed in, but this account is not on the", self.GUARD)
-        self.assertIn("/api/me", self.GUARD)
-        self.assertIn("an admin account is a", self.GUARD)
+        """The sentence moved into access.why_refused, which every gated app
+        now shares - so the test follows it there rather than pinning a copy
+        of the words in app.py that would drift from the one people read."""
+        self.assertIn('access.why_refused("SDI_ESTIMATOR_OIDS", signed_in)', self.GUARD)
+        import sys
+        sys.path.insert(0, str(BACKEND))
+        import access
+        said = access.why_refused("SDI_ESTIMATOR_OIDS",
+                                  {"kind": "user", "oid": "somebody",
+                                   "groups": ["a-group"]},
+                                  env={"SDI_ESTIMATOR_OIDS": "someone-else"})
+        self.assertIn("not on the list", said)
+        self.assertIn("/api/me", said)
+        self.assertIn("an admin account is a different account", said)
 
     def test_the_answer_is_still_403_and_not_a_redirect(self):
         after = self.GUARD.split("signed_in is not None", 1)[1][:400]

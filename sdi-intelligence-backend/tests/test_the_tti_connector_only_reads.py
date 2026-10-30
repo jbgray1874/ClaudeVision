@@ -141,7 +141,7 @@ class TheListIsCheckedInsideEveryToolTests(unittest.TestCase):
         """Somebody in on one surface and out on the other is the bug that
         gets discovered by the person who should not have seen the data."""
         self.assertIn('OIDS_SETTING = "SDI_TTI_OIDS"', SOURCE)
-        self.assertIn('os.getenv("SDI_TTI_OIDS", "")', ROUTES)
+        self.assertIn('"SDI_TTI_OIDS"', ROUTES)
 
     def test_nobody_named_means_nobody_in(self):
         os.environ.pop("SDI_TTI_OIDS", None)
@@ -152,12 +152,39 @@ class TheListIsCheckedInsideEveryToolTests(unittest.TestCase):
     def test_a_named_person_is_let_in_whatever_the_case(self):
         os.environ["SDI_TTI_OIDS"] = "CC53597A-C1B5-4BF9-B862-F63F7392FF81, other"
         self.assertTrue(identity.named_in(
-            "SDI_TTI_OIDS", {"oid": "cc53597a-c1b5-4bf9-b862-f63f7392ff81"}))
-        self.assertFalse(identity.named_in("SDI_TTI_OIDS", {"oid": "someone-else"}))
+            "SDI_TTI_OIDS", {"kind": "user",
+                             "oid": "cc53597a-c1b5-4bf9-b862-f63f7392ff81"}))
+        self.assertFalse(identity.named_in("SDI_TTI_OIDS",
+                                           {"kind": "user", "oid": "someone-else"}))
+
+    def test_a_group_on_the_list_lets_its_members_in(self):
+        """── WHY A GROUP AND NOT A LIST OF PEOPLE ──────────────────────────
+        A list of object IDs means IT edits a file on the server and restarts
+        the service every time somebody joins or leaves Customer Services.
+        Naming the GROUP once moves that into Entra, where access to
+        everything else is already managed - and the app is no less
+        restricted for it."""
+        os.environ["SDI_TTI_OIDS"] = "11111111-2222-3333-4444-555555555555"
+        self.assertTrue(identity.named_in(
+            "SDI_TTI_OIDS", {"kind": "user", "oid": "anybody",
+                             "groups": ["11111111-2222-3333-4444-555555555555"]}))
+        self.assertFalse(identity.named_in(
+            "SDI_TTI_OIDS", {"kind": "user", "oid": "anybody",
+                             "groups": ["some-other-group"]}))
+
+    def test_the_connector_and_the_web_app_decide_it_the_same_way(self):
+        """Somebody in on one surface and out on the other is the bug that
+        gets discovered by the person who should not have seen the data. One
+        rule, in one module, used by both."""
+        self.assertIn("import access", IDENTITY)
+        self.assertIn("access.may_use", IDENTITY)
+        routes = (BACKEND / "tti_despatch_routes.py").read_text(encoding="utf-8")
+        self.assertIn("access.may_use", routes)
 
     def test_a_person_with_no_object_id_is_not_let_in(self):
         os.environ["SDI_TTI_OIDS"] = "abc"
-        for nobody in ({}, {"oid": ""}, {"oid": None}, None):
+        for nobody in ({}, {"kind": "user", "oid": ""},
+                       {"kind": "user", "oid": None}, None):
             with self.subTest(user=nobody):
                 self.assertFalse(identity.named_in("SDI_TTI_OIDS", nobody))
 

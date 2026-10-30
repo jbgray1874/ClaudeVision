@@ -34,6 +34,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 
+import access
 import auth
 
 PREFIX = "/api/ops"
@@ -57,11 +58,8 @@ def redact(line: str) -> str:
 
 def allowed(request) -> bool:
     """Named people, by Entra object ID. Never a shared key."""
-    named = {v.strip().lower() for v in
-             os.getenv("SDI_OPS_OIDS", "").split(",") if v.strip()}
     user = auth.current_user(request) if auth.ENABLED else None
-    return bool(named and user and user.get("kind") == "user"
-                and str(user.get("oid") or "").lower() in named)
+    return access.may_use("SDI_OPS_OIDS", user)
 
 
 def log_path() -> Path:
@@ -77,9 +75,8 @@ def make_router(page_dir=None):
 
     def who(request):
         if not allowed(request):
-            raise HTTPException(403, "SDI Remote Control is for named people "
-                                     "(SDI_OPS_OIDS). Check which account you are "
-                                     "signed in as at /api/me.")
+            raise HTTPException(403, access.why_refused(
+                "SDI_OPS_OIDS", auth.current_user(request) if auth.ENABLED else None))
 
     @router.get("")
     def console(request: Request):
