@@ -1,0 +1,330 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>SDI Intelligence — what has changed, and where to see it</title>
+</head>
+<body style="margin:0;padding:0;background:#ffffff;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#ffffff;">
+<tr><td align="center" style="padding:0;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="720" style="width:720px;max-width:720px;font-family:Segoe UI,Calibri,Arial,sans-serif;font-size:15px;line-height:1.55;color:#1d2328;">
+
+  <tr><td style="padding:22px 0 6px 0;border-bottom:3px solid #c47d12;">
+    <div style="font-family:Consolas,'Courier New',monospace;font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#c47d12;font-weight:bold;">SDI Intelligence &middot; programme update</div>
+    <div style="font-size:23px;font-weight:bold;line-height:1.25;padding-top:6px;">What has changed this week, and where to see it</div>
+    <div style="font-size:13px;color:#5a6572;padding:6px 0 14px 0;">Thursday 17 September 2026 &middot; every section below links to the page it was made on</div>
+  </td></tr>
+
+  <tr><td style="padding:18px 0 0 0;">
+    <p style="margin:0 0 12px 0;">James, Jack,</p>
+    <p style="margin:0 0 12px 0;">A fuller note than usual, because a good deal has moved and most of it is now
+    visible on the portal rather than described in an e-mail. <b>Each heading below is a link to the page the
+    change was made on</b>, so this reads as a tour rather than a claim.</p>
+    <p style="margin:0 0 16px 0;">Five things: the estimating engine is now <b>measured against the
+    estimators' own spreadsheets</b> rather than assessed by eye; the <b>Access Supply Chain to Sage X3
+    migration</b> has a dated plan with owners and a gate; <b>Drawing Search has a link the design team can
+    use</b> for full user testing ahead of an imminent go-live; <b>Client Briefing is in full design and
+    analysis</b> with a working template; and <b>drawing packs are about to be assembled automatically</b>
+    for the manual estimators as well as for the engine.</p>
+  </td></tr>
+
+  <!-- ── 1 · PARITY ───────────────────────────────────────────────────── -->
+  <tr><td style="padding:20px 0 0 0;">
+    <div style="border-top:1px solid #d8dee5;padding:16px 0 2px 0;">
+      <div style="font-size:17px;font-weight:bold;">
+        <a href="http://10.0.0.5:8071/#aisvc-estimating" style="color:#1d2328;text-decoration:none;border-bottom:2px solid #c47d12;">1 &middot; SDI Estimating Intelligence &mdash; parity, measured</a>
+      </div>
+      <div style="font-family:Consolas,'Courier New',monospace;font-size:11px;color:#5a6572;padding-top:5px;">http://10.0.0.5:8071/#aisvc-estimating</div>
+    </div>
+    <p style="margin:12px 0 12px 0;">Until this week the only reading we had on accuracy was what the estimators
+    said in words. We now have <b>four jobs where the engine's workbook and the estimator's own manual estimate
+    sit side by side</b>, compared block by block at a matched quantity. This is the number the go-live decision
+    rests on, and it refreshes every week as more pairs come in.</p>
+
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;margin-bottom:14px;">
+      <tr>
+        <td width="25%" style="padding:12px 14px;background:#f2f7f4;border:1px solid #cfe0d6;vertical-align:top;">
+          <div style="font-size:24px;font-weight:bold;color:#2e7d4f;line-height:1.1;">4 of 11</div>
+          <div style="font-size:12.5px;color:#5a6572;padding-top:4px;"><b style="color:#1d2328;">jobs compared</b> &mdash; a manual sheet exists and pairs with a run</div>
+        </td>
+        <td width="25%" style="padding:12px 14px;background:#f7f9fa;border:1px solid #d8dee5;vertical-align:top;">
+          <div style="font-size:24px;font-weight:bold;color:#24568e;line-height:1.1;">17.9%</div>
+          <div style="font-size:12.5px;color:#5a6572;padding-top:4px;"><b style="color:#1d2328;">mean absolute variance</b> on material plus labour</div>
+        </td>
+        <td width="25%" style="padding:12px 14px;background:#f2f7f4;border:1px solid #cfe0d6;vertical-align:top;">
+          <div style="font-size:24px;font-weight:bold;color:#2e7d4f;line-height:1.1;">0.4%</div>
+          <div style="font-size:12.5px;color:#5a6572;padding-top:4px;"><b style="color:#1d2328;">closest material agreement</b> &mdash; essentially exact</div>
+        </td>
+        <td width="25%" style="padding:12px 14px;background:#f2f7f4;border:1px solid #cfe0d6;vertical-align:top;">
+          <div style="font-size:24px;font-weight:bold;color:#2e7d4f;line-height:1.1;">3 of 4</div>
+          <div style="font-size:12.5px;color:#5a6572;padding-top:4px;"><b style="color:#1d2328;">read under the manual</b> &mdash; the safe direction</div>
+        </td>
+      </tr>
+    </table>
+
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #d8dee5;border-collapse:collapse;">
+      <tr style="background:#eceff3;">
+        <td style="padding:9px 12px;font-family:Consolas,'Courier New',monospace;font-size:10.5px;letter-spacing:1px;text-transform:uppercase;color:#5a6572;border-bottom:1px solid #d8dee5;">Job</td>
+        <td style="padding:9px 12px;font-family:Consolas,'Courier New',monospace;font-size:10.5px;letter-spacing:1px;text-transform:uppercase;color:#5a6572;border-bottom:1px solid #d8dee5;">At</td>
+        <td style="padding:9px 12px;font-family:Consolas,'Courier New',monospace;font-size:10.5px;letter-spacing:1px;text-transform:uppercase;color:#5a6572;border-bottom:1px solid #d8dee5;">Material</td>
+        <td style="padding:9px 12px;font-family:Consolas,'Courier New',monospace;font-size:10.5px;letter-spacing:1px;text-transform:uppercase;color:#5a6572;border-bottom:1px solid #d8dee5;">Labour</td>
+        <td style="padding:9px 12px;font-family:Consolas,'Courier New',monospace;font-size:10.5px;letter-spacing:1px;text-transform:uppercase;color:#5a6572;border-bottom:1px solid #d8dee5;">Combined</td>
+        <td style="padding:9px 12px;font-family:Consolas,'Courier New',monospace;font-size:10.5px;letter-spacing:1px;text-transform:uppercase;color:#5a6572;border-bottom:1px solid #d8dee5;">Why</td>
+      </tr>
+      <tr>
+        <td style="padding:10px 12px;border-bottom:1px solid #e6eaee;vertical-align:top;"><b>7332-01</b><div style="font-size:12px;color:#5a6572;">Howard &middot; Harrods stand</div></td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e6eaee;vertical-align:top;white-space:nowrap;">6 off</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e6eaee;vertical-align:top;color:#9a5f05;font-weight:bold;">&minus;17.3%</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e6eaee;vertical-align:top;color:#a33232;font-weight:bold;">&minus;27.1%</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e6eaee;vertical-align:top;color:#9a5f05;font-weight:bold;">&minus;24.8%</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e6eaee;vertical-align:top;font-size:13px;">Plating and the freight to the plater carry no price &mdash; both awaiting current quotes rather than a figure off a sheet</td>
+      </tr>
+      <tr>
+        <td style="padding:10px 12px;border-bottom:1px solid #e6eaee;vertical-align:top;"><b>12349-02</b><div style="font-size:12px;color:#5a6572;">Tim &middot; Fanatics feeders</div></td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e6eaee;vertical-align:top;white-space:nowrap;">7 off</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e6eaee;vertical-align:top;color:#9a5f05;font-weight:bold;">&minus;21.1%</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e6eaee;vertical-align:top;color:#9a5f05;font-weight:bold;">&minus;23.5%</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e6eaee;vertical-align:top;color:#9a5f05;font-weight:bold;">&minus;22.9%</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e6eaee;vertical-align:top;font-size:13px;">Same cause &mdash; packaging, delivery and two fixings unpriced on this book</td>
+      </tr>
+      <tr>
+        <td style="padding:10px 12px;border-bottom:1px solid #e6eaee;vertical-align:top;"><b>10975-02</b><div style="font-size:12px;color:#5a6572;">Howard &middot; M&amp;S holder</div></td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e6eaee;vertical-align:top;white-space:nowrap;">10 off</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e6eaee;vertical-align:top;color:#2e7d4f;font-weight:bold;">+0.4%</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e6eaee;vertical-align:top;color:#9a5f05;font-weight:bold;">+19.5%</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e6eaee;vertical-align:top;color:#9a5f05;font-weight:bold;">+12.9%</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e6eaee;vertical-align:top;font-size:13px;"><b>Material essentially exact.</b> One labour line is still with Howard to rule on</td>
+      </tr>
+      <tr>
+        <td style="padding:10px 12px;vertical-align:top;"><b>11908-21</b><div style="font-size:12px;color:#5a6572;">Tony &middot; sunglasses tray</div></td>
+        <td style="padding:10px 12px;vertical-align:top;white-space:nowrap;">50 off</td>
+        <td style="padding:10px 12px;vertical-align:top;color:#a33232;font-weight:bold;">&minus;66.4%</td>
+        <td style="padding:10px 12px;vertical-align:top;color:#a33232;font-weight:bold;">+35.3%</td>
+        <td style="padding:10px 12px;vertical-align:top;color:#9a5f05;font-weight:bold;">&minus;10.8%</td>
+        <td style="padding:10px 12px;vertical-align:top;font-size:13px;">Labour over because Tony's review added the joinery route that was missing entirely; the material side is the open one</td>
+      </tr>
+    </table>
+
+    <p style="margin:12px 0 0 0;font-size:13.5px;color:#3f4a53;"><b>Two points on method, because they decide
+    whether the number means anything.</b> Both books are read by the same block reader and each is reconciled
+    to its own totals before anything is compared. And every pair is compared <b>at a matched quantity</b> &mdash;
+    two of these were priced at different quantities, and a variance across two quantities is arithmetic about
+    nothing, because set-up spreads over a different number on each side. No figure from a manual estimate is
+    retained in our reports; parity is published as our own number and a variance.</p>
+    <p style="margin:10px 0 0 0;font-size:13.5px;color:#3f4a53;">11350-02 and 11350-01 have engine runs and no
+    manual sheet, so no accuracy is claimed for them either way. If those books exist they complete the week.</p>
+  </td></tr>
+
+  <!-- ── 2 · SAGE X3 ──────────────────────────────────────────────────── -->
+  <tr><td style="padding:20px 0 0 0;">
+    <div style="border-top:1px solid #d8dee5;padding:16px 0 2px 0;">
+      <div style="font-size:17px;font-weight:bold;">
+        <a href="http://10.0.0.5:8071/#aisvc-x3" style="color:#1d2328;text-decoration:none;border-bottom:2px solid #c47d12;">2 &middot; Access Supply Chain &rarr; Sage X3 &mdash; the dates</a>
+      </div>
+      <div style="font-family:Consolas,'Courier New',monospace;font-size:11px;color:#5a6572;padding-top:5px;">http://10.0.0.5:8071/#aisvc-x3 &nbsp;&middot;&nbsp; also now a workstream on http://10.0.0.5:8071/#roadmap</div>
+    </div>
+    <p style="margin:12px 0 12px 0;">The migration has a dated plan, an owner for every data area and a gate.
+    <b>Eleven Sage X3 templates</b> are covered by built extract views over eighteen core source tables &mdash;
+    products, bills of material, customers and open sales orders, suppliers and open purchase orders, the AR, AP
+    and general-ledger openings, and stock. The remaining ~300 tables in SDI Live, and the Crystal Reports layer
+    above them, each get a stated disposition rather than surviving by accident.</p>
+
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #d8dee5;border-collapse:collapse;">
+      <tr>
+        <td style="padding:11px 13px;border-bottom:1px solid #e6eaee;vertical-align:top;white-space:nowrap;"><b>Mon 12 &ndash; Fri 16 Oct</b></td>
+        <td style="padding:11px 13px;border-bottom:1px solid #e6eaee;vertical-align:top;"><b>Mobilise.</b> Owner named per data area, classification locked per table, the UDEF column analysis run, the Crystal Reports inventory opened, parity and QA over the eleven views.</td>
+      </tr>
+      <tr style="background:#fdf8f1;">
+        <td style="padding:11px 13px;border-bottom:1px solid #e6eaee;vertical-align:top;white-space:nowrap;"><b style="color:#9a5f05;">Fri 16 Oct</b></td>
+        <td style="padding:11px 13px;border-bottom:1px solid #e6eaee;vertical-align:top;"><b style="color:#9a5f05;">The gate.</b> Three third-party items must clear: the sign convention, non-production environment access and the product-category confirmation. If they do not, the date rebaselines to mid-November.</td>
+      </tr>
+      <tr>
+        <td style="padding:11px 13px;border-bottom:1px solid #e6eaee;vertical-align:top;white-space:nowrap;"><b>Mon 19 &ndash; Fri 23 Oct</b></td>
+        <td style="padding:11px 13px;border-bottom:1px solid #e6eaee;vertical-align:top;"><b>Cleanse, in parallel by owner.</b> 20,724 items carry a blank description &mdash; half the catalogue, and the single biggest piece. Behind it: the zero base prices, 66 duplicate part records, 51 BOM orphans, 74 blank postcodes, and one decision that settles 23,082 sales-order lines.</td>
+      </tr>
+      <tr>
+        <td style="padding:11px 13px;border-bottom:1px solid #e6eaee;vertical-align:top;white-space:nowrap;"><b>Mon 26 &ndash; Thu 29 Oct</b></td>
+        <td style="padding:11px 13px;border-bottom:1px solid #e6eaee;vertical-align:top;">Trial load master data Monday, transactions Tuesday, a full timed dress rehearsal against a frozen snapshot Wednesday, then <b>cutover Thursday evening</b> &mdash; access read-only, snapshot taken, all waves loaded.</td>
+      </tr>
+      <tr style="background:#f2f7f4;">
+        <td style="padding:11px 13px;border-bottom:1px solid #e6eaee;vertical-align:top;white-space:nowrap;"><b style="color:#2e7d4f;">Fri 30 Oct</b></td>
+        <td style="padding:11px 13px;border-bottom:1px solid #e6eaee;vertical-align:top;"><b style="color:#2e7d4f;">All data in Sage X3.</b> Go / no-go in the morning, with the FD signing the trial balance, the stock value, AR and AP and the sales and purchase order totals.</td>
+      </tr>
+      <tr>
+        <td style="padding:11px 13px;border-bottom:1px solid #e6eaee;vertical-align:top;white-space:nowrap;"><b>End Oct</b></td>
+        <td style="padding:11px 13px;border-bottom:1px solid #e6eaee;vertical-align:top;">The Crystal Reports register complete &mdash; every report identified, its source tables traced, and rebuilt in X3 reporting or retired with an owner.</td>
+      </tr>
+      <tr>
+        <td style="padding:11px 13px;vertical-align:top;white-space:nowrap;"><b>Mon 4 Jan 2027</b></td>
+        <td style="padding:11px 13px;vertical-align:top;"><b>ERP go-live.</b> Not ours to move, and deliberately after the data lands. From this point the estimating engine reads its material and supplier prices from X3 rather than SDI Live, with dual-running validation across the changeover.</td>
+      </tr>
+    </table>
+    <p style="margin:12px 0 0 0;font-size:13.5px;color:#3f4a53;"><b>One thing still open before the plan is
+    final:</b> whether routings and works orders are in scope for October. They are not among the eleven
+    templates, and if they are now wanted it changes both the table dispositions and the load waves.</p>
+  </td></tr>
+
+  <!-- ── 3 · DRAWING SEARCH ───────────────────────────────────────────── -->
+  <tr><td style="padding:20px 0 0 0;">
+    <div style="border-top:1px solid #d8dee5;padding:16px 0 2px 0;">
+      <div style="font-size:17px;font-weight:bold;">
+        <a href="http://10.0.0.5:8071/#aisvc-drawing-search" style="color:#1d2328;text-decoration:none;border-bottom:2px solid #c47d12;">3 &middot; SDI Drawing Search Intelligence &mdash; a link for Design, and full UAT</a>
+      </div>
+      <div style="font-family:Consolas,'Courier New',monospace;font-size:11px;color:#5a6572;padding-top:5px;">http://10.0.0.5:8071/#aisvc-drawing-search</div>
+    </div>
+    <p style="margin:12px 0 12px 0;"><b>The design team now has a link.</b> It sits on the SDI Intelligence
+    portal menu, directly below its user guide, and opens the search in its own tab. That is what puts the tool
+    in front of every designer rather than on one machine, and it is what makes <b>full user acceptance testing
+    across Design</b> possible ahead of an <b>imminent go-live</b>.</p>
+    <p style="margin:0 0 12px 0;">It searches <b>32,422 indexed drawings</b> by what is actually printed on the
+    sheet &mdash; the client, the material, the finish, the RAL, the job number, a line from a note &mdash; and
+    from the result a designer opens the SolidWorks or 3ds Max file straight into the software rather than
+    hunting through folders. Ian has tested it. This week's fixes came from watching real use: opening the right
+    drawing, and drawings filed in unusual places not showing at all.</p>
+    <p style="margin:0;font-size:13.5px;color:#3f4a53;"><b>The next step after go-live is integration.</b> The
+    search runs as its own web application; the portal links to it rather than containing it. Joining the two is
+    what turns a drawing found in the library into a part code the price chain already understands.</p>
+  </td></tr>
+
+  <!-- ── 4 · CLIENT BRIEFING ──────────────────────────────────────────── -->
+  <tr><td style="padding:20px 0 0 0;">
+    <div style="border-top:1px solid #d8dee5;padding:16px 0 2px 0;">
+      <div style="font-size:17px;font-weight:bold;">
+        <a href="http://10.0.0.5:8071/#aisvc-client-briefing" style="color:#1d2328;text-decoration:none;border-bottom:2px solid #c47d12;">4 &middot; SDI Client Briefing Intelligence &mdash; in full design and analysis</a>
+      </div>
+      <div style="font-family:Consolas,'Courier New',monospace;font-size:11px;color:#5a6572;padding-top:5px;">http://10.0.0.5:8071/#aisvc-client-briefing</div>
+    </div>
+    <p style="margin:12px 0 12px 0;">It came off hold on 4 September and is now <b>in full design and
+    analysis</b> with Muhammad. It is worth correcting the impression that it restarted from a blank page:</p>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #d8dee5;border-collapse:collapse;">
+      <tr>
+        <td style="padding:10px 14px;border-bottom:1px solid #e6eaee;vertical-align:top;width:36%;"><b>A generic template, already developed</b></td>
+        <td style="padding:10px 14px;border-bottom:1px solid #e6eaee;vertical-align:top;">Built and in use. The work now is enhancing it, not designing it.</td>
+      </tr>
+      <tr>
+        <td style="padding:10px 14px;border-bottom:1px solid #e6eaee;vertical-align:top;"><b>Partly written automatically</b></td>
+        <td style="padding:10px 14px;border-bottom:1px solid #e6eaee;vertical-align:top;"><b>E-mail AI agents write into that template</b> from the client's own communications, so a brief that arrives as an e-mail, a recorded call or a voice note starts as a structured brief rather than as a blank form.</td>
+      </tr>
+      <tr>
+        <td style="padding:10px 14px;border-bottom:1px solid #e6eaee;vertical-align:top;"><b>The account comes with it</b></td>
+        <td style="padding:10px 14px;border-bottom:1px solid #e6eaee;vertical-align:top;">Design and account manager details are collated against the brief, so the right people and the account's own history travel with it.</td>
+      </tr>
+      <tr>
+        <td style="padding:10px 14px;vertical-align:top;"><b>And why it matters</b></td>
+        <td style="padding:10px 14px;vertical-align:top;">Communication and collaboration across the four teams: one consistent brief, the gaps named, and nothing booked without Jonathan's approval.</td>
+      </tr>
+    </table>
+    <p style="margin:12px 0 0 0;font-size:13.5px;color:#3f4a53;">Honestly early &mdash; two briefs through it so
+    far, both Muhammad's own. What it needs is Jonathan's time on real briefs, and that is the only thing
+    holding it.</p>
+  </td></tr>
+
+  <!-- ── 5 · DRAWING PACKS ────────────────────────────────────────────── -->
+  <tr><td style="padding:20px 0 0 0;">
+    <div style="border-top:1px solid #d8dee5;padding:16px 0 2px 0;">
+      <div style="font-size:17px;font-weight:bold;">
+        <a href="http://10.0.0.5:8071/#aisvc-technical-design" style="color:#1d2328;text-decoration:none;border-bottom:2px solid #c47d12;">5 &middot; Drawing packs, assembled automatically &mdash; for both sets of estimating</a>
+      </div>
+      <div style="font-family:Consolas,'Courier New',monospace;font-size:11px;color:#5a6572;padding-top:5px;">http://10.0.0.5:8071/#aisvc-technical-design</div>
+    </div>
+    <p style="margin:12px 0 12px 0;">This is the piece of the programme that pays back fastest, and it is worth
+    setting out on its own because it helps people who are not otherwise touched by any of it.</p>
+    <p style="margin:0 0 12px 0;">Today a drawing pack is assembled by hand: somebody finds the general
+    arrangement, the detail sheets, the DXFs and the models, decides which revision is current, and copies them
+    into a folder. It is done once for the AI engine and again, separately, for whoever is estimating manually.
+    <b>The same tool is going to do both.</b> Yogesh's Document Manager work walks the project's SolidWorks
+    references and collects the correct, current pack &mdash; the latest revision chosen from the data inside
+    the file rather than from the filename &mdash; and it will deliver:</p>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #d8dee5;border-collapse:collapse;">
+      <tr>
+        <td style="padding:11px 14px;border-bottom:1px solid #e6eaee;vertical-align:top;width:38%;"><b>Into SDI Estimating Intelligence</b></td>
+        <td style="padding:11px 14px;border-bottom:1px solid #e6eaee;vertical-align:top;">Straight into the engine, so an estimate is built from what design has now rather than from whatever was last copied into a folder. One button, and the pack that arrives is the current one.</td>
+      </tr>
+      <tr>
+        <td style="padding:11px 14px;vertical-align:top;"><b>Onto the W production drive</b></td>
+        <td style="padding:11px 14px;vertical-align:top;"><b>For manual estimating.</b> The same pack, in the place the estimators already work from, assembled without anybody collecting it. Dave's team stop doing that job whether or not a given enquiry goes through the engine.</td>
+      </tr>
+    </table>
+    <p style="margin:12px 0 0 0;font-size:13.5px;color:#3f4a53;"><b>Why it is worth naming separately:</b> every
+    other benefit on this programme is gated on a go-live. This one is not. It lands when the tool does, it
+    removes a job somebody does today, and it does so for the manual route as well as the automated one &mdash;
+    which also means both routes are estimating from the same pack, so a difference between them is a real
+    difference rather than two people looking at different revisions.</p>
+  </td></tr>
+
+  <!-- ── WHERE TO LOOK ────────────────────────────────────────────────── -->
+  <tr><td style="padding:22px 0 0 0;">
+    <div style="border-top:1px solid #d8dee5;padding:16px 0 10px 0;font-size:17px;font-weight:bold;">Everything above, on the portal</div>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #d8dee5;border-collapse:collapse;font-size:13.5px;">
+      <tr>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;width:42%;"><b>Dashboard</b> &mdash; all five workstreams at a glance</td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://10.0.0.5:8071/#dashboard" style="color:#1f4e79;">10.0.0.5:8071/#dashboard</a></td>
+      </tr>
+      <tr>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;"><b>AI Roadmap</b> &mdash; Sage X3 now sits here as a workstream</td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://10.0.0.5:8071/#roadmap" style="color:#1f4e79;">10.0.0.5:8071/#roadmap</a></td>
+      </tr>
+      <tr>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;"><b>AI Programme</b> &mdash; the timeline, six dated milestones</td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://10.0.0.5:8071/#programme" style="color:#1f4e79;">10.0.0.5:8071/#programme</a></td>
+      </tr>
+      <tr>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;"><b>SDI Estimating Intelligence</b></td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://10.0.0.5:8071/#aisvc-estimating" style="color:#1f4e79;">10.0.0.5:8071/#aisvc-estimating</a></td>
+      </tr>
+      <tr>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;"><b>SDI Technical Design Intelligence</b></td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://10.0.0.5:8071/#aisvc-technical-design" style="color:#1f4e79;">10.0.0.5:8071/#aisvc-technical-design</a></td>
+      </tr>
+      <tr>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;"><b>SDI Drawing Search Intelligence</b> &mdash; the application is on the portal menu</td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://10.0.0.5:8071/#aisvc-drawing-search" style="color:#1f4e79;">10.0.0.5:8071/#aisvc-drawing-search</a></td>
+      </tr>
+      <tr>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;"><b>SDI Client Briefing Intelligence</b></td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://10.0.0.5:8071/#aisvc-client-briefing" style="color:#1f4e79;">10.0.0.5:8071/#aisvc-client-briefing</a></td>
+      </tr>
+      <tr>
+        <td style="padding:9px 13px;"><b>SDI Sage X3 Data Migration</b> &mdash; the consolidated table view and the plan</td>
+        <td style="padding:9px 13px;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://10.0.0.5:8071/#aisvc-x3" style="color:#1f4e79;">10.0.0.5:8071/#aisvc-x3</a></td>
+      </tr>
+    </table>
+  </td></tr>
+
+  <tr><td style="padding:20px 0 0 0;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #e0c9a6;background:#fdf8f1;">
+      <tr><td style="padding:13px 15px;">
+        <b style="color:#9a5f05;">Unchanged, and still the two things we need.</b> The <b>shared workstation</b>
+        was needed by 10 September and is not ordered; Jack has the specification and quotes to work through.
+        Until it exists the designers and estimators cannot get test access to the Technical Design tools and
+        the engine keeps running on a laptop. And the <b>supplier price lists</b> &mdash; Elite, Eagle and
+        Thermaset &mdash; are what every unpriced line on an estimate traces back to; the machinery to load
+        them is built and tested and waiting on the files.
+      </td></tr>
+    </table>
+  </td></tr>
+
+  <tr><td style="padding:22px 0 8px 0;border-top:1px solid #d8dee5;">
+    <p style="margin:14px 0 12px 0;">Happy to walk either of you through any of it, or to demonstrate any of
+    the five.</p>
+    <p style="margin:0 0 12px 0;">Kind regards,<br>James</p>
+    <div style="font-size:13px;color:#5a6572;line-height:1.7;">
+      <b style="color:#1d2328;">James Gray</b><br>
+      AI and Systems Controller &middot; SDI Displays<br>
+      075858 16501 &middot; wearesdi.com
+    </div>
+  </td></tr>
+
+  <tr><td style="padding:14px 0 26px 0;">
+    <div style="font-size:11.5px;color:#7d8b97;line-height:1.8;border-top:1px solid #e6eaee;padding-top:12px;">
+      Attached: <b>SDI Intelligence Programme Status</b>, issue 3 &mdash; the full report, including the Sage X3
+      section at the same depth as the portal &middot; <b>SDI Intelligence Estimating Engine Status</b> &mdash;
+      the parity detail, the rules now live, and the questions owned by people.
+    </div>
+  </td></tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>

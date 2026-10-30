@@ -205,6 +205,9 @@ def extract_document_vision(pdf_path: Path) -> List[Dict[str, Any]]:
                     "drawings": page.get_drawings(),
                     "vision_model": _ollama_model() if used_llava else "",
                     "used_llava": used_llava,
+                    # Asked and unanswered is a server that was down, not a page with nothing to
+                    # say — the read store keeps no reading in that state (D-554).
+                    "ollama_attempted": bool(is_critical and _use_ollama() and ollama is not None),
                     "process_callouts": [],
                     "layout_engine": "layoutparser_ready",
                     "table_engine": "img2table_ready",

@@ -277,7 +277,24 @@ def upsert_catalogue(cur, line: Dict[str, Any], source: str, today: dt.date) -> 
            (supplier_id, supplier_sku, description, category, uom, unit_price_gbp,
             effective_from, source, version)
            VALUES (?,?,?,?,?,?,?,?,?)""",
-        supplier_id, sku, desc, line.get("category"), "each", price, today, source, version,
+        # THE UNIT THE CALLER WORKED OUT, NOT "each".
+        #
+        # supplier_price_list.py determines the unit deliberately -- from the unit column,
+        # then the price heading, then the description -- and reports which of the three it
+        # used, because a price is meaningless without it. It passes that through as `uom`.
+        # This then wrote the literal "each" and never read it.
+        #
+        # For fixings that was invisible: a castor IS priced each. It stops being invisible
+        # the moment a sheet material is loaded. Acrylic at GBP 30/m2, MFC at GBP 22/sheet
+        # and powder at GBP 9.73/kg would every one of them be stored as GBP 30 EACH, and
+        # nothing downstream could tell -- the number is plausible, the row looks complete,
+        # and a 2.5m x 1.25m sheet gets costed as one item. That is the shape of fault this
+        # engine keeps finding: not a crash, a confident wrong number.
+        #
+        # "each" remains the default, because that is what an unmarked bought-in line is.
+        supplier_id, sku, desc, line.get("category"),
+        (str(line.get("uom") or "").strip() or "each"),
+        price, today, source, version,
     )
     return (f"reprice v{version}  {key}  -> £{price:.4f}" if row
             else f"insert      {key}  £{price:.4f}")

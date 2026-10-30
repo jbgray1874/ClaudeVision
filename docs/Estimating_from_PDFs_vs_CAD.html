@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Automated Estimating: Why We Must Model the Process, Not the PDF — SDI Intelligence</title>
+<style>
+  :root{
+    --ink:#1a1f26; --muted:#5a6472; --line:#dfe4ea; --bg:#ffffff; --panel:#f6f8fa;
+    --accent:#0b5c8a; --accent-soft:#e8f1f7; --warn:#8a5a00; --warn-soft:#fdf5e4;
+    --good:#1e6b3a; --good-soft:#e9f5ed; --bad:#8a2020; --bad-soft:#fbecec; --max:920px;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;padding:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+  .wrap{max-width:var(--max);margin:0 auto;padding:48px 28px 90px}
+  header.doc{border-bottom:3px solid var(--accent);padding-bottom:22px;margin-bottom:36px}
+  .eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:700;margin:0 0 10px}
+  h1{font-size:31px;line-height:1.25;margin:0 0 14px;letter-spacing:-.01em}
+  .sub{font-size:17px;color:var(--muted);margin:0 0 6px}
+  .meta{font-size:14px;color:var(--muted);margin:14px 0 0}
+  h2{font-size:22px;margin:44px 0 14px;padding-top:20px;border-top:1px solid var(--line);letter-spacing:-.01em}
+  h2:first-of-type{border-top:none;padding-top:0}
+  h3{font-size:17px;margin:28px 0 8px;color:var(--accent)}
+  p{margin:0 0 14px}
+  ul,ol{margin:0 0 16px;padding-left:22px}
+  li{margin:0 0 8px}
+  strong{font-weight:650}
+  code{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:.88em;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  blockquote{margin:18px 0;padding:14px 20px;background:var(--accent-soft);
+    border-left:4px solid var(--accent);border-radius:0 6px 6px 0;color:var(--ink)}
+  blockquote p{margin:0}
+  .tablewrap{overflow-x:auto;margin:0 0 8px;-webkit-overflow-scrolling:touch}
+  table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:560px}
+  th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+  th{background:var(--panel);font-weight:650}
+  tbody tr:nth-child(even){background:#fbfcfd}
+  .src{font-size:13px;color:var(--muted);margin:0 0 20px}
+  .callout{border-radius:8px;padding:16px 20px;margin:22px 0;border:1px solid}
+  .callout p:last-child{margin-bottom:0}
+  .callout.key{background:var(--accent-soft);border-color:#bcd8e8}
+  .callout.warn{background:var(--warn-soft);border-color:#e8d6a8}
+  .callout.good{background:var(--good-soft);border-color:#c2e0cd}
+  .callout .lbl{display:block;font-size:11px;letter-spacing:.13em;text-transform:uppercase;font-weight:700;margin-bottom:7px}
+  .callout.key .lbl{color:var(--accent)} .callout.warn .lbl{color:var(--warn)} .callout.good .lbl{color:var(--good)}
+  .yes{color:var(--good);font-weight:650}
+  .tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.03em;padding:2px 8px;border-radius:20px;text-transform:uppercase;vertical-align:middle}
+  .t-good{background:var(--good-soft);color:var(--good)} .t-warn{background:var(--warn-soft);color:var(--warn)} .t-info{background:var(--accent-soft);color:var(--accent)}
+  footer.doc{margin-top:56px;padding-top:20px;border-top:1px solid var(--line);font-size:13.5px;color:var(--muted)}
+  @media (max-width:640px){.wrap{padding:30px 18px 70px} h1{font-size:25px} h2{font-size:19px} body{font-size:15.5px}}
+  @media print{body{font-size:10.5pt} .wrap{max-width:none;padding:0} h2{page-break-after:avoid}
+    table,blockquote,.callout{page-break-inside:avoid} a{text-decoration:none;color:inherit}}
+  @media (prefers-color-scheme:dark){
+    :root{--ink:#e6e9ee;--muted:#9aa4b2;--line:#2b323c;--bg:#12161c;--panel:#1a2029;
+      --accent:#5eb3e4;--accent-soft:#17293a;--warn:#e3b95f;--warn-soft:#2e2717;
+      --good:#6ed097;--good-soft:#16281d;--bad:#f08a8a;--bad-soft:#2c1a1a}
+    tbody tr:nth-child(even){background:#161b23}
+  }
+  :root[data-theme="dark"]{--ink:#e6e9ee;--muted:#9aa4b2;--line:#2b323c;--bg:#12161c;--panel:#1a2029;
+    --accent:#5eb3e4;--accent-soft:#17293a;--warn:#e3b95f;--warn-soft:#2e2717;--good:#6ed097;--good-soft:#16281d;--bad:#f08a8a;--bad-soft:#2c1a1a}
+  :root[data-theme="dark"] tbody tr:nth-child(even){background:#161b23}
+  :root[data-theme="light"]{--ink:#1a1f26;--muted:#5a6472;--line:#dfe4ea;--bg:#ffffff;--panel:#f6f8fa;
+    --accent:#0b5c8a;--accent-soft:#e8f1f7;--warn:#8a5a00;--warn-soft:#fdf5e4;--good:#1e6b3a;--good-soft:#e9f5ed;--bad:#8a2020;--bad-soft:#fbecec}
+  :root[data-theme="light"] tbody tr:nth-child(even){background:#fbfcfd}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <p class="eyebrow">SDI Intelligence · Estimating Automation</p>
+  <h1>Automated Estimating: Why We Must Model the Process, Not the PDF</h1>
+  <p class="sub">Findings from the M&amp;S Food Equipment tender — for estimators and production engineering</p>
+  <p class="meta">Banked jobs: 0348837 · 0357299 · 0357831 · 0359131 &nbsp;·&nbsp; July 2026</p>
+</header>
+
+<!-- ========== 1 EXECUTIVE ========== -->
+<h2>1. Executive summary</h2>
+
+<p>We have built and proven an automated estimating pipeline that reads drawing packs, extracts the bill of materials, assigns manufacturing routes, prices parts against the live catalogue and history, and populates the estimators' own workbook — with every figure traceable to its source.</p>
+
+<p>It works. Four M&amp;S products have been costed end-to-end with no manual intervention. On the hardest job (Cocktails Hero Bay, 60+ parts), costing bugs that once produced a distorted <strong>£5,270</strong> unit were fixed at source; the reconciled provisional figure is <strong>£669.80</strong>.</p>
+
+<div class="callout key">
+  <span class="lbl">The central finding</span>
+  <p><strong>The pipeline is running on the wrong fuel.</strong> We are feeding a manufacturing calculation with a <em>presentation document</em>. A PDF drawing pack cannot drive a CNC machine — that is not controversial; it is how manufacturing works. The same limitation applies, for the same reasons, to automated <em>and</em> manual estimating.</p>
+</div>
+
+<p>The highest-value change available is not more software. It is <strong>giving estimating the same data the shop floor already requires: DXF flat patterns, IGES/STEP solids, and native SolidWorks part and assembly files.</strong> With those, the pipeline produces defensible, quotable numbers. Without them, it produces an honest provisional figure with a warning banner — correct behaviour, and a limit of the input, not something we can code around.</p>
+
+<p><strong>We must not invent what the drawing does not contain.</strong></p>
+
+<!-- ========== 2 BANKED RESULTS ========== -->
+<h2>2. Banked jobs — workbook figures</h2>
+
+<p>Four products were driven end-to-end (PDF → extract → material/route → catalogue pricing → estimators' template → quote + review HTML). They stress different material families. <strong>Unit costs below are the authoritative workbook totals</strong> — the figures Excel itself computed, read back from each saved estimate.</p>
+
+<div class="tablewrap">
+<table>
+  <thead>
+    <tr><th>Job</th><th>Product</th><th>Unit (workbook)</th><th>Material</th><th>Labour</th><th>Parts</th><th>DXF</th><th>Credible</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>0348837</code></td>
+      <td>Horti Crate — timber<br/><code>FSC pine / MR-MDF</code></td>
+      <td><strong>£46.53</strong></td><td>£8.72</td><td>£34.56</td><td>11</td><td>0%</td><td>0%</td>
+    </tr>
+    <tr>
+      <td><code>0357299</code></td>
+      <td>2 Wide Arch — steel tube frame</td>
+      <td><strong>£363.43</strong></td><td>£31.61</td><td>£306.38</td><td>28</td><td>0%</td><td>0%</td>
+    </tr>
+    <tr>
+      <td><code>0357831</code></td>
+      <td>Madrid Bulk Stack — steel + MDF</td>
+      <td><strong>£556.03</strong></td><td>£150.64</td><td>£366.46</td><td>30</td><td>0%</td><td>0%</td>
+    </tr>
+    <tr>
+      <td><code>0359131</code></td>
+      <td>Cocktails Hero Bay 4ft — steel + ply + tile + acrylic</td>
+      <td><strong>£669.80</strong></td><td>£291.26</td><td>£331.65</td><td>69</td><td>0%</td><td>9%</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+<p class="src">Source: Excel-computed totals stamped into each job's JSON (<code>wep-readback</code>), read via <code>scripts/banked_job_figures.py</code>. <strong>DXF</strong> = share of fabricated parts with a matched flat pattern. <strong>Credible</strong> = proportion of cost from reliable geometry. All four are <code>insufficient_data</code> — 0% DXF — so every unit is provisional and not reportable for quoting.</p>
+
+<h3>Reading the table</h3>
+<ul>
+  <li><strong>Material + labour does not equal the unit — deliberately.</strong> The workbook adds its own rebate gross-up and overhead absorption on top of the manufacturing sub-total, exactly as on a manually prepared estimate. So adding the material and labour columns always falls short of the unit figure — e.g. Crate £8.72 + £34.56 = £43.28 against a £46.53 unit. That uplift is <strong>7.51%–7.53% on all four jobs</strong>: the same commercial treatment applied consistently on every sheet, not an error.</li>
+  <li><strong>Every job is 0% DXF and provisional.</strong> These are PDF-only packs, so no fabricated part carries a flat pattern. The credibility gate computes a total but marks it <em>not reportable</em>. These are working estimates for review, not quotable prices.</li>
+  <li><strong>Arch is the outlier — flag it before anyone leans on it.</strong> £306 labour against £32 material is a <strong>9.7 : 1</strong> ratio, where Cocktails is 1.1 : 1 and Madrid 2.4 : 1. On a tube frame with almost no sheet content that is directionally plausible (nearly all cutting, welding and dressing), but it is the figure in this set most in need of an estimator's judgement.</li>
+</ul>
+
+<div class="callout warn">
+  <span class="lbl">Status of these four totals</span>
+  <p>Only <strong>0359131 (Cocktails)</strong> was costed on the build carrying the material de-pollution, tube-routing, assembly-parent and labour-throughput fixes in §3 and §5. The Crate, Arch and Madrid figures are exactly what their workbooks say, but predate those fixes and are <strong>indicative pending a confirmation re-run</strong> (<code>scripts/rerun_banked_jobs.ps1</code>). The direction of travel from the fixes is downward — they remove phantom cost — so treat these three as upper bounds rather than settled totals.</p>
+</div>
+
+<div class="callout good">
+  <span class="lbl">What the pipeline proved (evidenced on these packs)</span>
+  <ul>
+    <li><strong>BOM extraction</strong> — multi-line BOMs including tubes, fixings, nutserts, LED. On Cocktails, 46 BOM lines against a 40-row template block: <strong>39 shown individually, the remaining 7 consolidated onto the 40th row and itemised in full on a dedicated "BOM Overflow" tab — nothing dropped</strong> (39 + 7 = 46).</li>
+    <li><strong>Material streams separated</strong> — sheet steel / acrylic / bought-in / other; no double-counting.</li>
+    <li><strong>Routes follow material (after fixes)</strong> — laser / fold / weld / powder for steel; joinery for real board; handling-only for tiles and catalogue bought-ins.</li>
+    <li><strong>Catalogue bought-ins</strong> — UDEF codes matched rather than fabricated.</li>
+    <li><strong>Assembly parents excluded</strong> — children carry cost; the top-level product line is not leaf-costed.</li>
+    <li><strong>Estimators' own template</strong> — same layout and formulas; the unit cost is Excel-computed, not a parallel black box.</li>
+    <li><strong>Transparent review lists</strong> — Verify items (weld cues, missing material, low confidence) instead of silent uncertainty.</li>
+  </ul>
+</div>
+
+<div class="callout warn">
+  <span class="lbl">How to read the parity quote / report HTML</span>
+  <ul>
+    <li><strong>Unit numbers match the workbook</strong> — use the table above as the estimate figure.</li>
+    <li><strong>Take process detail from the review report and workbook routes</strong>, not the quote's "What's included" bullets. Those bullets are a customer-facing summary; a defect that let drawing-note boilerplate reach them has been corrected, but packs generated before that fix may list generic processes (e.g. powder coat / diamond polish against a lacquered timber product). The workbook routes are authoritative in all cases.</li>
+    <li><strong>Material lines on quotes may echo residual labels</strong> (e.g. "Timber" next to mild steel). The labour block and stream split are the better check.</li>
+    <li><strong>Any "geometry reliability" percentage is PDF vector extraction confidence</strong> — how cleanly the page was read — <em>not</em> flat-pattern coverage. All four packs are <strong>0% DXF</strong> → provisional.</li>
+    <li><strong>Qty basis differs by deliverable</strong> — review reports often use qty 1; commercial quotes may scale. Confirm order qty before using order-value lines.</li>
+    <li><strong>Long Verify lists are correct behaviour</strong> — the system saying "check me," not "I failed silently."</li>
+  </ul>
+</div>
+
+<div class="callout good">
+  <span class="lbl">As good as the PDF allows</span>
+  <p>On these four jobs the engine extracted essentially everything a structured read of a GA pack can support: BOM lines, labelled materials where present, finish pointers, catalogue codes, and provisional routes. Where accuracy stops is where the PDF stops — no flat-pattern blanks, no true bend features, no weld lengths, no part-level material properties. Pushing further would mean inventing geometry. The Verify lists and 0% DXF flags are evidence that we stopped at the honest boundary.</p>
+</div>
+
+<!-- ========== 3 WHAT EACH JOB PROVED ========== -->
+<h2>3. What each job proved — and what it fixed</h2>
+
+<p>Each job exposed a distinct defect class. Fixes were written as <strong>general rules</strong> (family, stock form, drawing convention) — not part-number patches — so later jobs inherit them.</p>
+
+<h3>0348837 — Horti Crate <em>(timber)</em></h3>
+<p>FSC pine and MR-MDF; stated weights on the drawing; no fab DXF.</p>
+<ul>
+  <li><strong>Proved:</strong> timber/board path — material by mass (weight × £/kg) where no blank exists; joinery route (saw / CNC-rout / glue / lacquer) at real shop rates.</li>
+  <li><strong>Defect:</strong> material defaulted to mild steel; <code>FSC PINE</code> / <code>MRMDF</code> never applied → £0 material and £0 labour timed on geometry timber does not have.</li>
+  <li><strong>Fix:</strong> non-metal title-block override; timber/board normalisers; flat per-part joinery allowance for no-DXF board parts (flagged for estimator refinement).</li>
+  <li><strong>Banked unit:</strong> £46.53 (material £8.72 · labour £34.56).</li>
+</ul>
+
+<h3>0357299 — 2 Wide Arch <em>(metal / tube)</em></h3>
+<p>Steel tube-frame arch; SDI GA with tube cut-lists.</p>
+<ul>
+  <li><strong>Proved:</strong> metal and tube path — geometry scan, bought-in recognition, BOM tree, tubes priced as sections not sheet.</li>
+  <li><strong>Defect class (earlier runs):</strong> catalogue tube matching could ignore length; tubes could land in the Sheet Steel block instead of BOM.</li>
+  <li><strong>Fix:</strong> length-aware catalogue matching; stock-form so tubes always route to BOM, never sheet.</li>
+  <li><strong>Banked unit:</strong> £363.43 (material £31.61 · labour £306.38) — labour-heavy relative to material; weld/dress content is an estimator check item.</li>
+</ul>
+
+<h3>0357831 — Madrid Bulk Stack <em>(mixed steel + MDF)</em></h3>
+<p>Steel frame, MDF panels, ticket strip — first genuinely mixed job in the set.</p>
+<ul>
+  <li><strong>Proved:</strong> two material families in one job — steel laser/fold/weld/powder; board joinery; each on its own basis.</li>
+  <li><strong>Defect class (earlier):</strong> an unmapped finishing operation could fuzzy-match to the wrong department with no throughput floor — the same garbage-throughput failure mode later dominant on Cocktails.</li>
+  <li><strong>Fix:</strong> map finishing ops to the correct department; throughput floors so implausible rates are clamped and flagged.</li>
+  <li><strong>Banked unit:</strong> £556.03 (material £150.64 · labour £366.46).</li>
+</ul>
+
+<h3>0359131 — Cocktails Hero Bay 4ft <em>(steel + ply + tile + acrylic)</em></h3>
+<p>Hardest job: 60+ parts, four material families, ~46 BOM lines.</p>
+<ul>
+  <li><strong>Proved:</strong> multi-family handling, dual-path BOM (deterministic + AI cross-check), live catalogue bought-ins, parent exclusion, estimators' template, credibility gate refusing "quotable" at 0% DXF.</li>
+  <li><strong>Defects:</strong> the full set in §5 — boilerplate TIMBER/POLISH, tubes on joinery, product parent as leaf, unbounded throughputs.</li>
+  <li><strong>Outcome:</strong> unit <strong>£669.80</strong> (material £291.26, labour £331.65), reconciled from a distorted ~£5,270; still provisional.</li>
+</ul>
+
+<!-- ========== 4 CORE POINT ========== -->
+<h2>4. A PDF is not a manufacturing file</h2>
+
+<p><strong>You cannot machine from a PDF.</strong> No CNC, nesting package, or press-brake accepts one. A PDF describes marks on a page — lines, text, positions. It does not describe a part: no material property, thickness attribute, bend table, feature tree, or assembly relationship. Those were never in the file.</p>
+
+<blockquote><p>If a PDF does not contain enough information to <strong>make</strong> the part, it cannot contain enough information to accurately <strong>cost making</strong> the part.</p></blockquote>
+
+<p>Estimating is a manufacturing calculation. It needs the same class of data the manufacturing process needs.</p>
+
+<h3>Not only an AI problem</h3>
+<p>The PDF is a poor input for <strong>manual</strong> estimating too:</p>
+<ul>
+  <li><strong>Slow</strong> — re-keying dimensions, quantities and thicknesses that already exist in CAD.</li>
+  <li><strong>Error-prone</strong> — every re-key is a transposition or missed-revision risk; a 60-page pack has hundreds of such opportunities.</li>
+  <li><strong>Inconsistent</strong> — two estimators on the same ambiguous pack produce different numbers because the pack does not define the answer.</li>
+  <li><strong>Hides change</strong> — a revised part looks identical unless someone spots the revision cloud.</li>
+</ul>
+<p>Automating a PDF-based process makes it faster; it does not make the underlying data better. <strong>We are automating around a problem that should be removed at source.</strong></p>
+
+<div class="callout warn">
+  <span class="lbl">M&amp;S packs specifically</span>
+  <p><strong>These packs do not contain enough information for a trustworthy automated estimate on their own.</strong> They are GA presentation documents. Flat patterns, reliable per-part material properties, bend and weld definitions, and structured hierarchy are absent or ambiguous. What we extract is useful (BOM, counts, bought-ins, tube lists, finishes, provisional route). The credibility gate correctly reports <strong>0% DXF on fabricated parts</strong> and marks totals provisional. Only CAD — or, as a fallback, historical manufactured-cost matching — lifts that.</p>
+</div>
+
+<!-- ========== 5 WHAT PDF CANNOT GIVE ========== -->
+<h2>5. What a PDF cannot provide — real examples from this exercise</h2>
+
+<p>Each case is software reconstructing from an unstructured page what a CAD file simply contains.</p>
+
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Manufacturing need</th><th>What the PDF gives</th><th>What DXF / IGES / STEP / assembly gives</th><th>Consequence when wrong</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Material per part</strong></td><td>Title-block text or shared legend on every page (<code>TIMBER PRODUCTS:</code>, grade tables)</td><td class="yes">Material as a model property</td><td>Steel tagged TIMBER → saw/glue/CNC instead of laser/weld/powder</td></tr>
+    <tr><td><strong>Flat-pattern blank</strong></td><td>Often absent; GA dims ≠ unfolded blank</td><td class="yes">DXF <em>is</em> the flat pattern</td><td>No credible sheet cost or laser time → "dimensions required"</td></tr>
+    <tr><td><strong>Bend count / lines</strong></td><td>Occasional note; easy to miss</td><td class="yes">Bend features / DXF bend layer</td><td>Missed folds understate labour; invented folds overstate it</td></tr>
+    <tr><td><strong>Cut length &amp; cut-outs</strong></td><td>Noisy page vectors — overshoots common</td><td class="yes">Exact perimeter + holes from DXF</td><td>Derived 6–8 m internal cuts on small brackets inflate laser hours</td></tr>
+    <tr><td><strong>Tube size &amp; length</strong></td><td>Free text in a cut-list</td><td class="yes">Solid geometry — exact</td><td>Priced OK, but geometry weak; route can be mis-assigned</td></tr>
+    <tr><td><strong>Weld length / joint</strong></td><td>Weld symbol at best</td><td class="yes">Assembly mates / weld beads</td><td>Guessed weld time or blanket dress-weld</td></tr>
+    <tr><td><strong>Hierarchy &amp; qty</strong></td><td>BOM tables of varying layout; parents mixed with leaves</td><td class="yes">Assembly tree — exact</td><td>Product parent costed as a leaf (~£389 phantom material)</td></tr>
+    <tr><td><strong>Process note vs part op</strong></td><td>Shared "POLISHING SPECIFICATION / 400 GRIT" on every page</td><td class="yes">Op only where finish requires it</td><td>Diamond polish on powder-coated mild steel — phantom labour</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p><strong>Example — boilerplate material.</strong> The standard M&amp;S legend includes <em>"TIMBER PRODUCTS: …"</em> on steel detail pages. The scanner found the word TIMBER and tagged steel as timber until labelled <code>MATERIAL:</code> was made primary and legend text rejected. In CAD, material is a body property — nothing to mis-parse.</p>
+
+<p><strong>Example — polish note → polish op.</strong> <em>"POLISHING SPECIFICATION IS 400 GRIT FINAL POLISH"</em> became a diamond-polish operation on powder-coated steel parts until gated to genuine polish/acrylic cues.</p>
+
+<p><strong>Example — tubes as paragraphs.</strong> Cut-list text prices correctly; page vectors do not give real tube geometry. STEP/IGES <em>is</em> the tube.</p>
+
+<h3>Defects found → general rule applied</h3>
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Defect</th><th>Symptom</th><th>General rule</th></tr></thead>
+  <tbody>
+    <tr><td>Boilerplate <code>TIMBER PRODUCTS</code> / <code>POLISH</code></td><td>Steel → joinery; DPOL on powder-coated MS</td><td>Labelled <code>MATERIAL:</code> first; reject legend; genuine polish cue required</td></tr>
+    <tr><td><em>SEE INDIVIDUAL DRAWINGS</em> as material</td><td>Placeholder treated as a family</td><td>Reject reference phrases; default and flag</td></tr>
+    <tr><td>Tubes tagged timber</td><td>Leg/post/rail took saw/glue/CNC</td><td><code>stock_form = tube/section/wire</code> → never joinery route</td></tr>
+    <tr><td>Product GA line as a part</td><td>~£389 phantom material on top-level line</td><td>Top-level <code>-00-</code> unit line = assembly parent</td></tr>
+    <tr><td>Bought-in specials fabricated</td><td>Tiles given saw/glue/CNC/powder</td><td><code>-X</code> / tile / mosaic / graphic / vinyl → bought-in, no fab labour</td></tr>
+    <tr><td>Unbounded throughputs</td><td>CNC/glue/spray/dress in £100s–£1000s</td><td>Throughput floor/ceiling per op; substitution flagged</td></tr>
+    <tr><td>BOM larger than template</td><td>Fallback sheet or silent drop</td><td>Spill to BOM Overflow tab; consolidate; nothing dropped</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout good">
+  <span class="lbl">Cumulative effect on Cocktails</span>
+  <p><strong>£5,270 → £670.</strong> None of these were arithmetic errors. Every one was mis-reading an unstructured document — and every one is absent by construction when reading CAD.</p>
+</div>
+
+<!-- ========== 6 NO GUESSING ========== -->
+<h2>6. Why we deliberately refuse to guess</h2>
+
+<p>Unpriced or flagged lines are <strong>intentional</strong> — the most important design decision in the system.</p>
+<ul>
+  <li><strong>Quantity not on the drawing</strong> — powder kg, packaging, delivery (order-level commercial).</li>
+  <li><strong>Not in catalogue and no geometry</strong> — special tiles, graphics.</li>
+  <li><strong>No flat pattern</strong> — blank size and cut/fold time cannot be computed; flag rather than assume.</li>
+</ul>
+
+<div class="callout warn">
+  <span class="lbl">Hallucination risk</span>
+  <p>An AI system asked for a number will produce a number. If the information is missing, it produces a <em>plausible</em> one — and a fabricated figure looks as authoritative on the sheet as a measured one. No asterisk. That is more dangerous than a blank. A blank says <em>"I need this."</em> A guess says nothing, and gets quoted and manufactured at a loss.</p>
+</div>
+
+<p><strong>The system transcribes and computes; it does not speculate.</strong> Where it must assume so a job can be reviewed at all, the assumption is written on the face of the estimate. Cocktails produced 40+ explicit flags. When DXF coverage on fabricated parts is 0%, the credibility gate computes a provisional total but <strong>refuses to present it as reportable</strong>. That is the system telling the truth about its inputs — and it should be respected, not worked around.</p>
+
+<!-- ========== 7 PERFORMANCE ========== -->
+<h2>7. Performance, image quality, and price data</h2>
+
+<p>A full tender pack is not small. Analysing on the order of <strong>60 PDF drawings can take more than half an hour</strong>. Drivers:</p>
+<ol>
+  <li><strong>Data volume</strong> — every page rendered, vectors extracted, text parsed. Dense GA/mesh pages can contain thousands of paths (one Cocktails page held 9,771), most irrelevant to costing but still processed to determine that.</li>
+  <li><strong>AI cross-check</strong> — a whole-document pass in addition to deterministic extraction, so disagreements are flagged (a deliberate accuracy/time trade).</li>
+  <li><strong>Catalogue lookups against a messy dataset</strong> — duplicate codes, free-text descriptions, inconsistent formatting. (An earlier pattern scanned tens of thousands of rows per part until corrected.)</li>
+</ol>
+<p><strong>None of that reconstruction work is necessary against CAD</strong> — geometry is read directly; the AI guard against ambiguous text becomes far less critical.</p>
+
+<h3>Image quality</h3>
+<p>Vision analysis does not rely on native display resolution. Pages are re-rendered at substantially higher pixel density — <strong>~300 DPI, up from an initial 144 DPI</strong> — with a size cap, improving legibility of small callouts, dimensions and table text for OCR and AI reading.</p>
+
+<div class="callout key">
+  <span class="lbl">Being precise</span>
+  <p><strong>Upscaling improves how well we read what is on the page. It cannot add information that was never drawn.</strong> A sharper image of a folded view still does not contain a flat pattern.</p>
+</div>
+
+<h3>Supplier price API</h3>
+<p>Bought-ins are priced from catalogue and quote history first. The historical set is large and inconsistent; gaps fall to flagged web/AI indicative prices or zero. <strong>A direct supplier price API</strong> would cut matching error, remove indicative AI pricing on bought-ins, and speed runs. CAD does not solve bought-in pricing; a price feed does.</p>
+
+<p><strong>Packaging and delivery</strong> are order-level commercial costs — never from CAD or the drawing. They need a small rules module (envelope, units per box/pallet, haulage rates), separate from drawing analysis.</p>
+
+<!-- ========== 8 CAD ASK ========== -->
+<h2>8. What we need — and how to produce it</h2>
+
+<p>To move from <em>provisional</em> to <em>quotable</em>, per product:</p>
+
+<div class="tablewrap">
+<table>
+  <thead><tr><th>File</th><th>Unlocks</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Part DXF</strong> (flat pattern, one per fab sheet part)</td><td>Blank size, nesting, profile cut, holes, bends — <strong>highest single value</strong></td></tr>
+    <tr><td><strong>IGES / STEP</strong></td><td>Tube/section geometry, volumes/weights, weld lengths</td></tr>
+    <tr><td><strong>SolidWorks part</strong> (<code>.SLDPRT</code>)</td><td>Material, thickness, sheet-metal parameters, features</td></tr>
+    <tr><td><strong>SolidWorks assembly</strong> (<code>.SLDASM</code>)</td><td>Real part tree, quantities, joints — removes BOM-table guesswork</td></tr>
+    <tr><td><strong>Drawings</strong> (<code>.SLDDRW</code> / <code>.DWG</code>)</td><td>Structured dimensioned detail, not a flattened page</td></tr>
+  </tbody>
+</table>
+</div>
+
+<ul>
+  <li><strong>DXF flat patterns</strong> — sheet-metal flat-pattern feature → Export to DXF, or Save As DXF/DWG (flat-pattern option). Batchable via Task Scheduler or a macro.</li>
+  <li><strong>STEP / IGES</strong> — File → Save As at part or assembly level.</li>
+  <li><strong>Native files</strong> — <strong>Pack and Go</strong> gathers assembly, parts and drawings with references intact. <em>Easiest single request to a design source: one Pack-and-Go per product.</em></li>
+</ul>
+
+<p>If drawings originate outside SDI (as with M&amp;S), this is a data request to the customer or their consultancy — reasonable, because the parts cannot have been designed or manufactured without those files.</p>
+
+<p><strong>Strategic end-state:</strong> direct SolidWorks / PDM API — geometry, materials, sheet-metal parameters and the assembly tree from the model, with no export step. That removes the entire class of defects in §5 at source.</p>
+
+<p><strong>Fallback where CAD cannot be obtained:</strong> deeper historical quote / actual-cost matching — measured reality in place of missing geometry. Already partially in the pipeline; worth further development.</p>
+
+<!-- ========== 9 ESTIMATOR GUIDANCE ========== -->
+<h2>9. Guidance for estimators</h2>
+
+<ol>
+  <li><strong>Treat PDF-only output as a provisional first pass</strong> — structure, BOM completeness, catalogue hits, risk flags. Not a final sell price while fabricated parts have no DXF (the sheet says so).</li>
+  <li><strong>Read the flags</strong> — they are the most valuable part. An assumption written in words is an instruction, not noise.</li>
+  <li><strong>Prefer the review report and workbook routes</strong> over quote "What's included" bullets for process truth.</li>
+  <li><strong>Ask for part DXFs (and STEP/assembly where relevant)</strong> — the same standard required to manufacture.</li>
+  <li><strong>Fill commercial gaps deliberately</strong> — packaging, delivery, and specials not in the catalogue come back as zero on purpose.</li>
+  <li><strong>Prefer catalogue and historical matches for bought-ins</strong> — indicative web/AI prices are marked; verify before they reach a quote.</li>
+  <li><strong>Do not pressure the system — or a person — to "complete" numbers the drawing cannot support.</strong> That is how an inaccurate quote is born. A gap is a question, not a blank to invent.</li>
+</ol>
+
+<!-- ========== 10 CONCLUSION ========== -->
+<h2>10. Conclusion and recommendation</h2>
+
+<ul>
+  <li>The automation <strong>works</strong>, proven across timber, metal and mixed builds; Cocktails shows both the capability and the cost of PDF ambiguity (£5,270 → £670).</li>
+  <li>The accuracy ceiling is set by the <strong>input format</strong>, not the software. Every significant defect traced to reconstructing, from an unstructured presentation document, information a CAD file contains.</li>
+  <li><strong>A PDF cannot drive a CNC machine, and for the same reasons it cannot support a fully trustworthy estimate</strong> — automated or manual. Manual estimating also pays in re-key time, transcription error and inconsistency.</li>
+  <li>The system is built <strong>not to guess</strong>. Unpriced lines and the provisional banner are features. A flagged gap filled in seconds is worth more than a confident, invisible fabrication.</li>
+  <li><strong>Highest-value action: obtain CAD</strong> — DXF flat patterns, STEP/IGES, native part/assembly (Pack-and-Go), toward SolidWorks API integration.</li>
+  <li><strong>Secondary:</strong> supplier price API; a packaging/delivery rules module; stronger historical matching where CAD cannot be obtained.</li>
+</ul>
+
+<div class="callout good">
+  <span class="lbl">Bottom line</span>
+  <p>A strong provisional estimate from PDFs is available <strong>today</strong>, and is useful for early commercial decisions. <strong>The CAD inputs are what convert it into a defensible quoted price.</strong></p>
+</div>
+
+<footer class="doc">
+  <p>Prepared from the M&amp;S Food Equipment tender automation exercise (ClaudeVision / SDI Intelligence).<br/>
+  Reference jobs: <code>0348837</code> Horti Crate · <code>0357299</code> 2 Wide Arch · <code>0357831</code> Madrid Bulk Stack · <code>0359131</code> Cocktails Hero Bay 4ft.<br/>
+  Companion note in repo: <code>docs/Estimating_from_PDFs_vs_CAD.md</code> (same content, markdown).</p>
+  <p>Document date: July 2026 · Status: PDF path provisional-by-design pending part CAD.</p>
+</footer>
+
+</div>
+</body>
+</html>

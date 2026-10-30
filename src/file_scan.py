@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -7,6 +8,9 @@ from decimal import Decimal
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+from source_precedence import apply_field as _apply_field
+from source_precedence import source_of as _source_of
 
 try:
     import pdfplumber  # type: ignore
@@ -19,6 +23,7 @@ except ImportError:  # pragma: no cover
     PdfReader = None
 
 import config
+import run_timing
 from document_builder import build_document_writeup, merge_page_analysis
 from estimator import append_rows_to_csv, build_estimate_input_rows, estimate_document
 from extractor_patterns import build_textual_manufacturing_summary, normalize_text
@@ -43,6 +48,339 @@ from sql_export import build_run_metadata, write_postgres_insert_sql
 from vision_extraction import extract_document_vision
 
 
+def _find_manual_workbook(summary: Optional[Dict[str, Any]] = None, scan_label: Optional[str] = None):
+    """Locate a manual estimate workbook for this job via the UNC share convention:
+    <share>\\<year>\\<customer>\\<jobfolder>\\*.xls  — returns the first .xls found, else None.
+
+    Summary-driven so the client-quote customer derivation
+    (client_quote_html._customer_from_manual_path, which calls this as
+    _find_manual_workbook(summary)) can resolve the manual — and therefore the real
+    customer name — without needing the scan_label main.py has. Uses the SAME loosened
+    job-number-token matching as main._find_manual_workbook (match on the numeric job
+    number within the customer/year tree, not the exact folder name). Never raises.
+
+    NOTE: main.py keeps its own copy of this lookup for the parity path. The two are
+    intentionally kept in sync; consolidating them into a single source is a follow-up
+    (deliberately not refactoring the working parity path here). See STATUS doc §6.
+    """
+    try:
+        import glob
+        share_root = r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Manual Estimates"
+        if not os.path.isdir(share_root):
+            print(f"   [manual-lookup:customer] share not reachable: {share_root}", flush=True)
+            return None
+        # Derive the job number from the scan_label (if given) and the summary's job folder.
+        cands_labels = []
+        if scan_label:
+            cands_labels.append(str(scan_label))
+        if isinstance(summary, dict):
+            _jf = summary.get("job_folder") or summary.get("job_output_stem")
+            if _jf:
+                cands_labels.append(os.path.basename(str(_jf)))
+        job_nums = []
+        for lab in cands_labels:
+            jn = str(lab).split("-")[0].strip()
+            jn = jn.split()[0] if jn else jn  # leading numeric token only
+            if jn and jn not in job_nums:
+                job_nums.append(jn)
+        if not job_nums:
+            print("   [manual-lookup:customer] no job number derivable from summary -> None", flush=True)
+            return None
+        candidates = []
+        for year_dir in sorted(glob.glob(os.path.join(share_root, "20*")), reverse=True):
+            for jn in job_nums:
+                candidates += glob.glob(os.path.join(year_dir, "*", "*" + jn + "*", "*.xls"))
+                candidates += glob.glob(os.path.join(year_dir, "*" + jn + "*", "*.xls"))
+        seen = []
+        for c in candidates:
+            if os.path.basename(c).startswith("~$"):  # skip Excel lock files
+                continue
+            if c not in seen:
+                seen.append(c)
+        return seen[0] if seen else None
+    except Exception as _mexc:
+        print(f"   [manual-lookup:customer] error ({type(_mexc).__name__}: {_mexc}) -> None", flush=True)
+        return None
+
+
+def _reconcile_dualpath_into_part_estimates(summary, dp):
+    """Push dual-path BOM-table fastener quantities/identities into the FINAL
+    estimate_summary.part_estimates (the list the sheet actually reads).
+
+    MUST be called AFTER estimate_document() — that is what builds part_estimates.
+    The previous inline placement ran BEFORE estimate_document, so part_estimates
+    did not exist yet, the isinstance guard skipped the block, and the corrections
+    (self-clinch 1->4, knob 1->2, add BI-PEMSTUD) never reached the sheet. See the
+    STATUS doc S3.3. Failure-isolated; fabricated parts are never touched.
+    Returns (updated, added) counts.
+    """
+    import estimator as _E_recon
+    import re as _re_recon
+
+    rows = (dp or {}).get("rows") or []
+    if not rows:
+        return (0, 0)
+    _es_recon = summary.get("estimate_summary") or {}
+    _parts_recon = _es_recon.get("part_estimates")
+    if _parts_recon is None:
+        _parts_recon = summary.get("part_estimates")
+    if not isinstance(_parts_recon, list):
+        return (0, 0)
+
+    def _is_fastener_row(_r):
+        _d = (str(_r.get("description") or "") + " " +
+              str(_r.get("part_code") or _r.get("code") or _r.get("part_number") or "")).upper()
+        return any(_k in _d for _k in ("CLINCH", "NUT", "KNURL", "KNOB", "THUMB", "SCREW",
+                   "PEM", "STUD", "RIVET", "THUM", "WASHER", "BOLT", "GLIDE"))
+
+    def _dp_code(_r):
+        return str(_r.get("part_code") or _r.get("code") or _r.get("part_number") or "").strip()
+
+    def _dp_qty(_r):
+        _q = _r.get("qty") or _r.get("quantity") or _r.get("qty_per_unit")
+        try:
+            return int(float(_q)) if _q is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _p_code(_p):
+        return str(_p.get("part_number") or "").strip().upper()
+
+    def _clean_code(_desc, _fallback):
+        # ONE MAPPING, NOT A COPY PER READER. This table also has to run before the canonical
+        # graph is built — that is how the wing nuts and PEM studs came to be in the workbook
+        # and absent from the hierarchy — so it lives in part_identity and both paths call it.
+        from part_identity import synthesise_bought_in_code
+        return synthesise_bought_in_code(_desc, _fallback) or _fallback or "BI-FIXING"
+
+    def _note_parent(_p, _r, _q):
+        """Record WHICH TABLE listed this row, per distinct occurrence. The same nut can
+        legitimately sit under two assemblies (4 under A-101 and 2 under A-102), and
+        keeping only the first owner silently halves the job's hardware — the graph
+        needs every stated occurrence with its own quantity."""
+        _bp = str(_r.get("bom_parent") or _r.get("source_pdf") or "").strip()
+        if not _bp:
+            return
+        _lst = _p.setdefault("bom_parents", [])
+        if isinstance(_lst, list) and not any(
+                isinstance(e, dict) and str(e.get("parent") or "").upper() == _bp.upper()
+                for e in _lst):
+            _lst.append({"parent": _bp, "qty": _q})
+        if not _p.get("bom_parent"):
+            _p["bom_parent"] = _bp
+
+    from part_identity import same_row_read_as_one_cell as _one_cell    # D-443
+    from part_identity import same_bom_occurrence as _same_occ           # D-454
+    _added = _updated = 0
+    for _r in rows:
+        if not _is_fastener_row(_r):
+            continue
+        _code = _dp_code(_r)
+        _qty = _dp_qty(_r)
+        _desc = str(_r.get("description") or _code)
+        if _qty is None or _qty <= 0:
+            _qty = 1
+
+        # 1) CODE match -> update qty, no add
+        # A WRAPPED CELL IS ONE ROW HERE TOO (D-443). D-435 taught the route compiler that an
+        # identity spelled as another's code and description joined is the same row read as
+        # one cell; this reconcile minted its own record first — the table reader's whole-cell
+        # "FIXING M6X12MM THREADED INSERT, HEADED HEX DRIVE" found no record of that code and
+        # was appended beside "FIXING M6x12mm", four inserts charged as eight (19:32 book).
+        # One predicate, shared, so the two passes cannot disagree.
+        _cm = None
+        if _code:
+            for _p in _parts_recon:
+                if _p_code(_p) == _code.upper():
+                    _cm = _p
+                    break
+            if _cm is None:
+                for _p in _parts_recon:
+                    if _one_cell(_code, _desc if _desc != _code else "",
+                                 _p.get("part_number"), _p.get("description")) \
+                            and _same_occ(_r, _p):
+                        _cm = _p
+                        print(f"   [recon-row] ONE-CELL '{_code}' is {_p_code(_p)} read as one "
+                              f"cell — one line, not two", flush=True)
+                        break
+        if _cm is not None:
+            # A quantity read from the PDF BOM table — rank 60. It must not displace the
+            # assembly BOM the shop builds from, and the flag is gated on the write landing
+            # so the record cannot claim a change the resolver refused.
+            if _apply_field(_cm, "quantity", _qty, "bom_tree"):
+                _cm.setdefault("review_flags", []).append(
+                    f"Quantity set to {_qty} from dual-path BOM table read")
+                _updated += 1
+            _note_parent(_cm, _r, _qty)
+            print(f"   [recon-row] CODE-MATCH '{_desc}' (code {_code}) -> qty {_qty}", flush=True)
+            continue
+
+        # 2) TOKEN match vs bought-in parts -> dual-path qty wins
+        _ctoks = _E_recon._bought_in_token_set({"description": _desc})
+        _tm = None
+        if _ctoks is not None:
+            for _p in _parts_recon:
+                _roles = _p.get("page_roles") or []
+                if not ("bought_in" in _roles or _p_code(_p).startswith("BI-")):
+                    continue
+                _ptoks = _E_recon._bought_in_token_set(_p)
+                if _ptoks is not None and _E_recon._bought_in_same_item(_ctoks, _ptoks):
+                    _tm = _p
+                    break
+        if _tm is not None:
+            if _tm.get("quantity") != _qty:
+                _old = _tm.get("quantity")
+                _apply_field(_tm, "quantity", _qty, "bom_tree")
+                _tm.setdefault("review_flags", []).append(
+                    f"Quantity corrected {_old} -> {_qty} from dual-path BOM table read (matched '{_desc}')")
+                _updated += 1
+            _note_parent(_tm, _r, _qty)
+            print(f"   [recon-row] TOKEN-MATCH '{_desc}' -> {_p_code(_tm)} qty {_qty}", flush=True)
+            continue
+
+        # 3) No match -> ADD clean bought-in row
+        _cc = _clean_code(_desc, _code)
+        _dup = next((_p for _p in _parts_recon if _p_code(_p) == _cc.upper()), None)
+        # THE SAME MINTED CODE IS NOT THE SAME ITEM. "M6 WASHER" and "M5 SERRATED WASHER"
+        # both mint BI-WASHER; filed as a second occurrence, the M5 washers became extra M6
+        # ones (12312-01 prints both as unnumbered FIXING rows). Where the item already
+        # holding the code is a different item by the thread-aware test, this row gets a
+        # code of its own, with the thread it names.
+        if _dup is not None:
+            _a = _E_recon._bought_in_token_set({"description": _desc})
+            _b = _E_recon._bought_in_token_set(_dup)
+            if _a is not None and _b is not None and not _E_recon._bought_in_same_item(_a, _b):
+                _thr = _re_recon.findall(
+                    r"(?<![A-Z0-9])M(\d+(?:\.\d+)?)(?=\s*(?:X|-|\b|[A-Z]))", _desc.upper())
+                _alt = f"{_cc}-M{_thr[0]}" if len(set(_thr)) == 1 else f"{_cc}-{len(_parts_recon)}"
+                print(f"   [recon-row] '{_desc}' mints {_cc}, already held by a different "
+                      f"item ('{_dup.get('description')}') — carried as {_alt}", flush=True)
+                _cc = _alt
+                _dup = next((_p for _p in _parts_recon if _p_code(_p) == _cc.upper()), None)
+        if _dup is not None:
+            # The row is a SECOND OCCURRENCE of a known item, not a duplicate to drop —
+            # its own table's parent and quantity still count.
+            _note_parent(_dup, _r, _qty)
+            print(f"   [recon-row] SKIP-ADD '{_desc}' -> {_cc} already present", flush=True)
+            continue
+        _parts_recon.append({
+            "part_number": _cc, "description": _desc, "quantity": _qty,
+            "pages": [], "page_roles": ["bought_in"], "materials": [],
+            "surface_finishes": [], "colours": [], "thicknesses_mm": [],
+            "weights": [], "textual_operations": ["handling"],
+            "inferred_operations": [], "flat_pattern_detected": False,
+            "assembly_candidate": False, "process_notes": [],
+            "review_flags": [
+                f"Added from dual-path BOM table read (code '{_code}' -> '{_cc}'), "
+                f"qty {_qty} - price via waterfall, estimator to verify"],
+            "confidence": {"overall": 0.0}, "source": "non_sdi_bom_row",
+            # WHICH TABLE LISTED IT IS THE OWNER THE PDF STATES. The dual-path row knows
+            # the parent BOM whose table it sits in (11350-01: wing nuts on the GA's
+            # table, PEM studs on 101's) — and dropping it here is why both fasteners
+            # blocked as bom_node_disconnected: the row-level edge cannot resolve a
+            # child for a synthesised BI- code, so the record must carry the parent.
+            "bom_parent": str(_r.get("bom_parent") or _r.get("source_pdf") or "") or None,
+        })
+        # THE COUNT IS THE TABLE'S, AND THE RECORD SAYS SO — as the two matches above do.
+        # Written bare, it had no source, so the over-50 guard (D-315 exempts a count read off
+        # a parts list) reset 12645's 120 nuts to 1.
+        _apply_field(_parts_recon[-1], "quantity", _qty, "bom_tree")
+        _note_parent(_parts_recon[-1], _r, _qty)
+        _added += 1
+        print(f"   [recon-row] ADD {_cc} '{_desc}' qty {_qty}", flush=True)
+
+    # EVERY ROW THE TABLE READER SAW, NOT ONLY THE FASTENERS. The loop above is the fastener
+    # vocabulary; a row that is not a fastener was skipped here. The writeup's minter
+    # (document_builder.bought_in_rows_without_records, D-277) does see these rows — the
+    # reconciled rows ARE document_analysis.bom_rows — and on 12567 it refused the two EPDM
+    # tape lengths because their split identities were longer than its identifier cap
+    # (fixed in the minter, D-290). This pass is the safety net for a row that reaches the
+    # table reader after the writeup ran: the same minter, so one rule names every table
+    # row, and a row whose article an existing record already describes is not minted
+    # twice — its occurrence is noted on that record instead, as the fastener loop does.
+    try:
+        from document_builder import bought_in_rows_without_records as _mint_rows
+        from part_identity import _article_words as _aw
+        _held: Dict[tuple, Dict[str, Any]] = {}
+        for _p in _parts_recon:
+            if isinstance(_p, dict) and _p.get("description"):
+                _held.setdefault(tuple(_aw(_p.get("description"))), _p)
+        _other = []
+        for _r in rows:
+            if _is_fastener_row(_r):
+                continue
+            _q0 = _dp_qty(_r)
+            _other.append({"part_number": _dp_code(_r),
+                           "printed_code": _r.get("printed_code"),
+                           "description": str(_r.get("description") or ""),
+                           "quantity": _q0 if _q0 is not None else 1,
+                           "bom_parent": str(_r.get("bom_parent") or _r.get("source_pdf") or "")})
+        def _same_article_held(_w):
+            """The record already describing this article, or None. Exact words first; then
+            one description's article words inside the other's ("JST Y SPLITTER" and "JST Y
+            SPLITTER 3 WAY" are one article; HOOK and LOOP Velcro are not, nor are two tape
+            lengths). The fastener loop's thread-aware test is NOT used here: it reads two
+            lengths of one tape as one item, which is right for a screw and wrong for a tape."""
+            if _w in _held:
+                return _held[_w]
+            _ws = set(_w)
+            if _ws:
+                from bought_in_policy import is_bought_in as _bought
+                for _hw, _hp in _held.items():
+                    _hs = set(_hw)
+                    # ONE ARTICLE INSIDE ANOTHER ONLY BETWEEN PURCHASES. 12645-03GA's one word
+                    # "DOOR" sits inside "Roller Shutter Door", so the shutter row was filed as
+                    # an occurrence of the door ASSEMBLY and never minted: no line, no price,
+                    # not in "to settle" (D-318). An exact article match is unchanged.
+                    if _hs and (_ws <= _hs or _hs <= _ws) and _bought(dict(_hp)):
+                        return _hp
+            return None
+
+        _minted = {tuple(_aw(_r.get("description"))): _r for _r in _mint_rows(_other, _parts_recon)}
+        for _o in _other:
+            _w = tuple(_aw(_o.get("description")))
+            _rec = _minted.get(_w)
+            _already = _same_article_held(_w)
+            if _already is None:                                  # the row read as one cell (D-443)
+                _already = next((_p for _p in _parts_recon if isinstance(_p, dict)
+                                 and _one_cell(_o.get("part_number"), _o.get("description"),
+                                               _p.get("part_number"), _p.get("description"))
+                                 and _p_code(_p) != str(_o.get("part_number") or "").strip().upper()),
+                                None)
+            if _rec is None or _already is not None:
+                # Held already — by identity (the minter skipped it) or by article. This
+                # table's occurrence is still a fact about the record.
+                _tgt = _already or next(
+                    (_p for _p in _parts_recon if isinstance(_p, dict)
+                     and _p_code(_p) == str(_o.get("part_number") or "").strip().upper()), None)
+                if _tgt is not None:
+                    _note_parent(_tgt, _o, _o.get("quantity"))
+                continue
+            if not _rec.get("textual_operations"):
+                _rec["textual_operations"] = ["handling"]      # fitting a purchased part is bench time
+            _rec.setdefault("review_flags", []).append(
+                f"Added from dual-path BOM table read (a row only the table reader saw), "
+                f"qty {_rec.get('quantity')} - costed by the estimator once the table is "
+                f"reconciled; estimator to verify")
+            _parts_recon.append(_rec)
+            _held[_w] = _rec
+            _added += 1
+            print(f"   [recon-row] ADD {_rec['part_number']} '{_rec.get('description')}' "
+                  f"qty {_rec.get('quantity')}", flush=True)
+    except Exception as _mint_exc:                                   # noqa: BLE001
+        print(f"   [recon-row] non-fastener rows not minted ({type(_mint_exc).__name__}: "
+              f"{_mint_exc})", flush=True)
+
+    if _es_recon.get("part_estimates") is not None:
+        _es_recon["part_estimates"] = _parts_recon
+    elif isinstance(summary.get("estimate_summary"), dict) and \
+            summary["estimate_summary"].get("part_estimates") is not None:
+        summary["estimate_summary"]["part_estimates"] = _parts_recon
+    else:
+        summary["part_estimates"] = _parts_recon
+    return (_updated, _added)
+
+
 def _json_default(value: Any) -> Any:
     if isinstance(value, Decimal):
         return float(value)
@@ -57,6 +395,53 @@ def _is_excluded_doc(path: Path) -> bool:
     name = path.name.upper()
     pats = [str(p).upper() for p in getattr(config, "EXCLUDE_DOC_FILENAME_PATTERNS", [])]
     return any(p in name for p in pats)
+
+
+def title_block_author_tokens(summary: Any) -> set:
+    """The NAMES of the people the title blocks credit — DRAWN BY / MODIFIED BY.
+
+    Read so that a draughtsman cannot be costed as a part. Dyson 10575-02 is drawn by
+    "P.Andrew" and the engine costed a part called ANDREW-14: 1200 x 1000 x 18mm MDF at
+    GBP 28.21 plus CNC joinery, on a job whose BOM has no MDF in it at all. The dimensions
+    were the pallet's, the name was the draughtsman's, and nothing on the sheet said either.
+
+    Only alphabetic runs of three or more characters count. Initials ("P", "PA") are far too
+    short to match on: two letters appear inside real codes constantly, and a guard that fires
+    on them would start deleting genuine parts, which is the worse failure by a distance.
+    """
+    tokens: set = set()
+    if not isinstance(summary, dict):
+        return tokens
+    for page in (summary.get("pages") or []):
+        if not isinstance(page, dict):
+            continue
+        block = ((page.get("page_analysis") or {}).get("title_block") or {})
+        if not isinstance(block, dict):
+            continue
+        for key in ("drawn_by", "modified_by"):
+            value = block.get(key)
+            for name in (value if isinstance(value, (list, tuple)) else [value]):
+                if not name:
+                    continue
+                for word in re.findall(r"[A-Za-z]{3,}", str(name).upper()):
+                    tokens.add(word)
+    return tokens
+
+
+def is_a_person_not_a_part(part_number: Any, author_tokens: set) -> bool:
+    """True when a 'part number' is one of the draughtsmen with a number stuck to it.
+
+    DELIBERATELY NARROW. The test is that the part number's letters, with every digit and
+    separator removed, are EXACTLY an author's name: "ANDREW-14" -> "ANDREW". A real SDI code
+    survives it untouched — "8352-01-02" has no letters at all, "BI-FOOTPLATE" reduces to
+    BIFOOTPLATE, "FIXING2104" to FIXING — and so does any code that merely CONTAINS a name.
+    Deleting a real part costs more than carrying a phantom, so the rule only fires where the
+    identity is nothing but the name.
+    """
+    if not part_number or not author_tokens:
+        return False
+    letters = re.sub(r"[^A-Za-z]", "", str(part_number)).upper()
+    return bool(letters) and letters in author_tokens
 
 
 def list_input_files(search_root: Path = config.DRAWINGS_DIR, drawing_pattern: str = "*") -> List[Path]:
@@ -77,10 +462,21 @@ def list_input_files(search_root: Path = config.DRAWINGS_DIR, drawing_pattern: s
 
 
 def group_input_files_by_folder(files: Sequence[Path]) -> Dict[Path, List[Path]]:
-    """Group PDF paths by parent directory for folder-as-job scanning."""
+    """Group drawing paths by parent directory for folder-as-job scanning.
+
+    PDFs AND IMAGE RENDERS. This filtered to `.pdf` alone, which was right until a render
+    became an input and then silently undid the whole feature: the first live run on the
+    Plan A bin printed "Found 1 drawing file(s)" and then "Folder-as-job: 0 job folder(s)
+    from 1 file(s)" — the PNG was discovered by `list_input_files`, dropped here, and the
+    run filed a summary with no workbook. Nothing failed; the pack simply became empty
+    between one function and the next.
+
+    `scan_folder_job` wraps each render as a one-page PDF, so everything downstream of this
+    grouping already handles them — this was the one gate that had not been told.
+    """
     groups: Dict[Path, List[Path]] = {}
     for path in files:
-        if path.suffix.lower() != ".pdf":
+        if path.suffix.lower() != ".pdf" and not is_image_path(path):
             continue
         if _is_excluded_doc(path):  # A7: skip setup/route/MO sheets
             continue
@@ -109,12 +505,95 @@ def _score_primary_job_pdf(pdf_path: Path, summary: Dict[str, Any]) -> int:
         score += 20
     if re.search(r"\b\d{4}\b", name):
         score += 5
-    if "WALL BAY" in name or "STANDARD" in name:
-        score += 3
     bom_rows = (summary.get("document_analysis") or {}).get("bom_rows") or []
     score += min(len(bom_rows), 30)
     score += min(int(summary.get("page_count") or 0), 10)
     return score
+
+
+def _merge_bom_rows(winner: Dict[str, Any], loser: Dict[str, Any]) -> None:
+    """Fold the losing drawing's reading of one BOM line into the row we are keeping.
+
+    Both rows were read off a printed parts table, so both are `bom_tree` and neither
+    outranks the other: the loser fills what the winner left blank, and where the two
+    disagree the winner stands and the disagreement is written onto it. `source_pdf`
+    names which drawing this row was taken from and must keep naming the winner's.
+    """
+    # EVERY READING IS KEPT, NOT JUST THE WINNER AND A NOTE. Two readings of one line are what
+    # make a row trustworthy — the table parser and the vision model agreeing is stronger
+    # evidence than either alone — and where they DISAGREE that is the most valuable fact the
+    # pipeline produces, because it is the one that finds errors.
+    #
+    # The generic merge treats every field the same way: the winner's value stands, the loser's
+    # becomes prose in a note. So a row read twice came out looking read once (7332-01's tab said
+    # "appears on 1 row" for every line in a pack where most parts are drawn on several sheets),
+    # and a vision reading of qty 4 against a table reading of qty 2 survived only as a sentence
+    # nothing could act on.
+    #
+    # So each reading is preserved WHOLE, on the row, before the merge decides anything. The
+    # arbitrated values stay on the row where every existing consumer already reads them —
+    # precedence is unchanged — and `readings` holds what each reader actually said. A BOM row is
+    # a handful of short fields and a pack has tens of them; there is no memory argument here,
+    # and there never was one good enough to justify losing a reading.
+    _merge_own = ("readings", "also_read_by", "also_on_pages", "merge_notes", "review_flags")
+
+    def _reading_of(_row: Dict[str, Any]) -> Dict[str, Any]:
+        """One reader's own account of this line, with nothing of the merge in it."""
+        return {_k: _v for _k, _v in _row.items()
+                if _k not in _merge_own and _v not in (None, "", [], {})}
+
+    _readings: List[Dict[str, Any]] = []
+
+    def _remember(_reading: Dict[str, Any]) -> None:
+        if _reading and _reading not in _readings:
+            _readings.append(_reading)
+
+    for _row in (winner, loser):
+        _prior_readings = _row.get("readings") or []
+        for _prior in _prior_readings:
+            _remember(_prior)
+        # A ROW THAT ALREADY CARRIES READINGS IS ARBITRATION OUTPUT, NOT A READING. Its field
+        # values are what the merge decided, and every reader that contributed is already in the
+        # list. Deriving a fresh reading from it would invent a reader that never read anything
+        # — a third sheet turned two real readings into four, one of them a ghost wearing the
+        # winner's name.
+        if not _prior_readings:
+            _remember(_reading_of(_row))
+
+    _readers, _pages = [], []
+    for _reading in _readings:
+        _r, _p = _reading.get("source"), _reading.get("source_page")
+        if _r and _r not in _readers:
+            _readers.append(_r)
+        if _p is not None and _p not in _pages:
+            _pages.append(_p)
+
+    try:
+        from record_merge import merge_records, BOOKKEEPING_FIELDS
+    except Exception:                                              # pragma: no cover
+        return
+    _notes = merge_records(
+        winner, loser, winner_source="bom_tree", loser_source="bom_tree",
+        decided=("part_number", "bom_parent"),
+        skip=tuple(BOOKKEEPING_FIELDS) + ("source_pdf", "source", "source_page",
+                                          "also_read_by", "also_on_pages"),
+        label=f"BOM line {winner.get('part_number')} also on "
+              f"{loser.get('source_pdf') or 'another drawing'}")
+    if _notes and os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}:
+        for _n in _notes:
+            print(f"   [bom-merge] {_n}", flush=True)
+
+    # The first of each stays the row's own; the rest are the corroboration. Kept in the order
+    # they were seen rather than sorted, so "read first by the table parser, then confirmed by
+    # vision" survives as an order somebody can reason about.
+    if _readings:
+        winner["readings"] = _readings
+    if _readers:
+        winner["source"] = _readers[0]
+        winner["also_read_by"] = _readers[1:]
+    if _pages:
+        winner["source_page"] = _pages[0]
+        winner["also_on_pages"] = _pages[1:]
 
 
 def _bom_row_merge_preferred(
@@ -132,6 +611,112 @@ def _bom_row_merge_preferred(
     if len(str(row.get("description") or "")) > len(str(existing.get("description") or "")):
         return True
     return False
+
+
+def _codes_claimed_by_the_hierarchy(summary: Dict[str, Any]) -> List[str]:
+    """Every code some assembly names as a child, from all three hierarchy sources.
+
+    WHICH OF TWO SPELLINGS OF ONE PART TO KEEP is decided by length unless something says
+    otherwise, and this is what says otherwise. 12422-24 carried "79814P" as a child of the
+    GA and "79814P613" as a child of nothing — the same four screws, and the length rule
+    would have kept the one the drawing does not reference, leaving the disconnected node it
+    was supposed to remove.
+
+    Read from the parts themselves (assembly_children, written by the SolidWorks pass and
+    the description rule) and from the whole-job extract's assemblies. Every source is
+    unioned rather than ranked: this asks only "did ANY reading of this job claim this
+    code", which is a weaker question than whose tree is right, and the weaker question is
+    the one that has an answer here.
+    """
+    claimed: List[str] = []
+    for part in ((summary.get("manufacturing_writeup") or {}).get("parts") or []):
+        if not isinstance(part, dict):
+            continue
+        for kid in (part.get("assembly_children") or []):
+            if str(kid or "").strip():
+                claimed.append(str(kid))
+    for holder in (summary.get("llm_full_extract"), summary.get("llm_extract")):
+        if not isinstance(holder, dict):
+            continue
+        for assembly in (holder.get("assemblies") or []):
+            if not isinstance(assembly, dict):
+                continue
+            for edge in (assembly.get("children") or []):
+                code = edge.get("part_number") if isinstance(edge, dict) else edge
+                if str(code or "").strip():
+                    claimed.append(str(code))
+    return claimed
+
+
+def _merge_truncated_bom_codes(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One screw extracted twice is one BOM line, not two unpriceable ones.
+
+    12422-24's pooled BOM carried "79814P613  3.5 x 16mm Pan Head Wood Screw" qty 4 AND
+    "79814P  3.5 x 16mm Pan Head Wood Screw" qty 4 — the same four screws, read twice, once
+    with the code truncated. The stem is not a code, so UDEF has no row for it and that line
+    could never be priced whatever we asked; and the quantity sat on the sheet twice for an
+    estimator to spot and merge by hand.
+
+    The merge is refused unless the DESCRIPTIONS agree as well as the codes. Two codes that
+    share a prefix and describe different parts are two parts, and a prefix alone is a weak
+    enough signal that it must not act on its own. Quantity is taken as the LARGER of the
+    two rather than the sum: these are two readings of one line, not two lines.
+
+    A labelled cell — "VITAL PARTS: LOW068" — has its label stripped here too, so the code
+    that reaches UDEF is the one the supplier would recognise.
+    """
+    from part_identity import (is_engine_derived_identity, normalize_part_code,
+                               strip_code_label, stem_duplicate_target)
+
+    if not rows:
+        return rows
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if is_engine_derived_identity(row):
+            # FIXING-<article> / BI-<word>: an identity we derived, not a labelled cell (D-383).
+            continue
+        _raw = row.get("part_number") or row.get("part_code") or ""
+        _clean = strip_code_label(_raw)
+        if _clean and _clean != str(_raw).strip():
+            row["part_number"] = _clean
+            row.setdefault("review_flags", []).append(
+                f"BOM code '{_raw}' carried a label; read as '{_clean}' so it can be looked up")
+
+    def _desc(r):
+        return " ".join(str(r.get("description") or "").upper().split())
+
+    _codes = [str(r.get("part_number") or "") for r in rows if isinstance(r, dict)]
+    _by_code = {normalize_part_code(c): r for c, r in zip(_codes, rows)}
+    out: List[Dict[str, Any]] = []
+    for row, code in zip(rows, _codes):
+        if not isinstance(row, dict):
+            out.append(row)
+            continue
+        target = stem_duplicate_target(code, [c for c in _codes if c != code])
+        keeper = _by_code.get(target) if target else None
+        if keeper is None or not _desc(row) or _desc(row) != _desc(keeper):
+            out.append(row)
+            continue
+        try:
+            _q_stem = float(row.get("quantity") or row.get("qty") or 0)
+            _q_keep = float(keeper.get("quantity") or keeper.get("qty") or 0)
+        except (TypeError, ValueError):
+            out.append(row)
+            continue
+        if _q_stem > _q_keep:
+            # A raw BOM ROW at extraction time, before any part record exists for the
+            # resolver to arbitrate on. Not a new observation: two readings of ONE printed
+            # cell, and the larger is the one that read the whole line rather than a
+            # truncation of it. No source is displaced.
+            keeper["quantity"] = _q_stem   # precedence: direct-write ok — reconciles two readings of one raw BOM cell
+        keeper.setdefault("review_flags", []).append(
+            f"BOM line '{code}' merged into '{target}': same description, and '{code}' is a "
+            f"truncation of it. One item read twice — the quantity is the larger of the two "
+            f"({_q_keep:g} and {_q_stem:g}), not their sum.")
+        print(f"   [bom] merged truncated code '{code}' into '{target}' "
+              f"(same description, qty {max(_q_stem, _q_keep):g})")
+    return out
 
 
 def merge_job_pdf_summaries(
@@ -152,6 +737,8 @@ def merge_job_pdf_summaries(
         "full_path": str(job_folder.resolve()),
         "job_folder": str(job_folder.resolve()),
         "job_output_stem": job_folder.name,
+        # The product the run was asked for (--product / the portal's Drawing Number).
+        "declared_product": str(os.environ.get("SDI_PRODUCT") or "").strip(),
         "scan_mode": "folder_as_job",
         "scanned_at": datetime.now().isoformat(timespec="seconds"),
         "job_source_pdfs": [],
@@ -164,7 +751,7 @@ def merge_job_pdf_summaries(
         "pdf_metadata": dict(primary_summary.get("pdf_metadata") or {}),
     }
 
-    bom_by_key: Dict[str, Dict[str, Any]] = {}
+    bom_by_key: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
     part_numbers: set[str] = set()
     dates: set[str] = set()
     revisions: set[str] = set()
@@ -207,14 +794,37 @@ def merge_job_pdf_summaries(
 
         doc = summary.get("document_analysis") or {}
         for row in doc.get("bom_rows") or []:
-            key = _normalize_bom_part_key(row.get("part_number"))
-            if not key:
+            code = _normalize_bom_part_key(row.get("part_number"))
+            if not code:
                 continue
             row_copy = dict(row)
             row_copy["source_pdf"] = pdf_path.name
+            # THE LINE, NOT THE CODE. This kept one row per part number across the whole
+            # folder, so an enquiry with two general arrangements lost one of every fastener
+            # line that both drawings used — the quantity and the owner with it, before any
+            # other pass could see either. The parent comes from the sheet's own title block;
+            # where no sheet named one, the key falls back to the code and this behaves
+            # exactly as it did, which is what makes it safe to turn on for every job.
+            key = (_normalize_bom_part_key(row.get("bom_parent")),
+                   code,
+                   normalize_text(str(row.get("description") or "")).upper())
             existing = bom_by_key.get(key)
-            if existing is None or _bom_row_merge_preferred(row_copy, existing, pdf_path, primary_pdf):
+            if existing is None:
                 bom_by_key[key] = row_copy
+            else:
+                # TWO DRAWINGS PRINTING ONE LINE. The preference rule below decides which
+                # ROW to keep — the primary GA's, on principle, because it is the sheet the
+                # job is quoted from. It was then kept WHOLESALE, so where the primary's
+                # table clipped a column and the other drawing printed it, the winning row
+                # carried the blank and the reading that had the number was dropped. Both
+                # readings come off a parts table and rank equally, so the loser can fill
+                # gaps and displace nothing; where they genuinely differ, the disagreement
+                # is recorded on the surviving row instead of vanishing with it.
+                _prefer_new = _bom_row_merge_preferred(row_copy, existing, pdf_path, primary_pdf)
+                _winner, _loser = ((row_copy, existing) if _prefer_new
+                                   else (existing, row_copy))
+                _merge_bom_rows(_winner, _loser)
+                bom_by_key[key] = _winner
 
         ps = summary.get("pattern_summary") or {}
         part_numbers.update(ps.get("part_numbers") or [])
@@ -245,7 +855,12 @@ def merge_job_pdf_summaries(
         "dimensions_mm": sorted(dimensions, key=lambda v: float(v) if re.match(r"^\d", str(v)) else 0),
     }
     merged_doc = dict(merged.get("document_analysis") or {})
-    merged_doc["bom_rows"] = list(bom_by_key.values())
+    merged_doc["bom_rows"] = _merge_truncated_bom_codes(list(bom_by_key.values()))
+    try:
+        from part_identity import split_category_code_rows
+        split_category_code_rows(merged_doc["bom_rows"])
+    except Exception:                                                   # noqa: BLE001
+        pass
     merged["document_analysis"] = merged_doc
 
     primary_gs = primary_summary.get("geometry_summary") or {}
@@ -268,12 +883,105 @@ def merge_job_pdf_summaries(
     return merged, primary_pdf
 
 
+# The knobs the OCR/vision reader takes from the environment: part of what a reading depends on.
+_VISION_ENV_KNOBS = ("VISION_USE_OLLAMA", "VISION_OLLAMA_MODEL", "VISION_RENDER_DPI",
+                     "VISION_MAX_SIDE")
+_READER_LIBRARIES = ("PyMuPDF", "pdfplumber", "pypdf", "paddleocr", "ollama")
+
+
+def _pages_the_local_model_left_unanswered(vision_pages: Any) -> int:
+    """Pages that asked the local vision model and got nothing back — a server that was down,
+    not a page with nothing to say."""
+    return sum(1 for p in (vision_pages or [])
+               if isinstance(p, dict) and p.get("ollama_attempted") and not p.get("used_llava"))
+
+
+def _local_vision_model_reachable(skip_vision: bool) -> Optional[bool]:
+    """Whether the local vision model (Ollama) would answer this run — part of the reading's
+    SETTINGS (D-564), so a reading made without it and one made with it are two readings.
+
+    THE FIRST POLICY DEFEATED THE STORE. D-554 kept no reading whose pages had asked the local
+    model and got nothing back, so that a server that was down did not freeze a degraded read.
+    On a machine where that server is never running, every page is asked and unanswered on
+    every run, so no reading was ever kept and every run re-read every page — the 13:10
+    401918 book, the second of the day, read its PDF again. The reading is now kept either
+    way, keyed on whether the model was there to ask: when it comes up, the key changes and
+    the pages are read again with it. None where the question does not arise."""
+    if skip_vision:
+        return None
+    try:
+        import vision_extraction as _ve
+        if not _ve._use_ollama() or getattr(_ve, "ollama", None) is None:
+            return None
+        _client = _ve.ollama.Client(timeout=3)
+        _client.list()
+        return True
+    except Exception:                                                # noqa: BLE001
+        return False
+
+
+def _thin_readings(readings: Dict[str, Any]) -> Dict[str, Any]:
+    """What the store keeps: the readings without the vision pages' fitz drawings, which
+    geometry re-derives from the PDF itself every run (and which do not survive JSON)."""
+    thin = dict(readings)
+    thin["vision"] = [{k: v for k, v in p.items() if k != "drawings"} if isinstance(p, dict) else p
+                      for p in (readings.get("vision") or [])]
+    return thin
+
+
+def pdf_readings(pdf_path: Path) -> Dict[str, Any]:
+    """The three raw readings of one PDF — its text layer (pdfplumber), its pypdf text and its
+    OCR/vision pass — from the read store when these same bytes were last read by this same
+    reader code under these same settings, else made now and kept (D-554).
+
+    THE READING IS KEPT, THE INTERPRETATION IS NOT. summarise_document and the geometry pass
+    run on every job from these readings with whatever code is current, so a rule fixed in the
+    interpreter reaches a kept reading on its next use. 0359342 spent 3,002 s of a 3,775 s run
+    in this loop — OCR and a local vision model over every page — and every re-run spent it
+    again on bytes nothing had changed.
+    """
+    skip_vision = os.getenv("SKIP_VISION_EXTRACTION", "").lower() in {"1", "true", "yes"}
+    pdf_path = Path(pdf_path)
+
+    def _make() -> Dict[str, Any]:
+        return {"plumber": extract_with_pdfplumber(pdf_path),
+                "pypdf": extract_with_pypdf(pdf_path),
+                "vision": [] if skip_vision else extract_document_vision(pdf_path)}
+
+    try:
+        import read_store
+        import vision_extraction as _ve
+        _content = pdf_path.read_bytes()
+        _fp = read_store.fingerprint_code(extract_with_pdfplumber, extract_with_pypdf, _ve)
+        _ctx = {"skip_vision": skip_vision,
+                "env": {k: os.getenv(k) for k in _VISION_ENV_KNOBS},
+                "libraries": read_store.library_versions(*_READER_LIBRARIES),
+                "local_vision_model_reachable": _local_vision_model_reachable(skip_vision)}
+    except Exception as exc:                                     # noqa: BLE001
+        print(f"   [read-store] {pdf_path.name}: the store was not consulted "
+              f"({type(exc).__name__}: {exc}) — read afresh", flush=True)
+        return _make()
+    got = read_store.reuse("pdf_readings", content=_content, fingerprint=_fp, context=_ctx,
+                           compute=_make, source=pdf_path.name, thin=_thin_readings)
+    if got.get("hit"):
+        print(f"        reused the readings kept {got.get('created_utc')} — same bytes, same "
+              f"reader code, same settings; interpreted afresh", flush=True)
+    else:
+        _unanswered = _pages_the_local_model_left_unanswered((got.get("raw") or {}).get("vision"))
+        if _unanswered:
+            print(f"        the local vision model was asked on {_unanswered} page(s) and never "
+                  f"answered — read kept as made without it; it is read again with the model "
+                  f"the first run after that model is up (or set VISION_USE_OLLAMA=0 to stop "
+                  f"asking)", flush=True)
+    return got["raw"]
+
+
 def extract_pdf_summary(pdf_path: Path) -> Dict[str, Any]:
     """PDF extract + geometry only — no writeup, DXF merge, or estimate."""
-    skip_vision = os.getenv("SKIP_VISION_EXTRACTION", "").lower() in {"1", "true", "yes"}
-    plumber_pages = extract_with_pdfplumber(pdf_path)
-    pypdf_pages = extract_with_pypdf(pdf_path)
-    vision_pages = [] if skip_vision else extract_document_vision(pdf_path)
+    readings = pdf_readings(pdf_path)
+    plumber_pages = readings["plumber"]
+    pypdf_pages = readings["pypdf"]
+    vision_pages = readings["vision"]
     summary = summarise_document(pdf_path, plumber_pages, pypdf_pages, vision_pages=vision_pages)
     processed_pages = summary.get("pages", [])
     geometry_results = analyse_document_geometry(processed_pages, pdf_path=pdf_path)
@@ -294,6 +1002,32 @@ def extract_pdf_summary(pdf_path: Path) -> Dict[str, Any]:
     return summary
 
 
+def _weight_would_be_someone_elses(part) -> bool:
+    """True when a WEIGHT read off this part's pages would not be this part's weight.
+
+    A detail drawing describes ONE part, so every weight on it is that part's and taking the
+    largest is a sensible way to pick between a title-block figure and a repeat of it. An
+    assembly or GA sheet describes MANY, so the largest weight on it is the assembly's own or
+    its heaviest child -- and attributing that to a part named only on that sheet inflates it
+    by whatever the biggest thing on the page happens to be.
+
+    ONE PREDICATE, BOTH READERS. This test already existed, inline, in the pass that clears
+    stated_weight_g on assembly-only records. The text-scan that sets it ran AFTERWARDS and
+    asked nothing, so the guard was dead on every weight the scan found. Two places deciding
+    one question, and only one of them consulted -- so the question is asked here, once.
+    """
+    if not isinstance(part, dict):
+        return False
+    roles = part.get("page_roles") or []
+    pages = part.get("pages") or []
+    has_description = bool(str(part.get("description") or "").strip())
+    return bool(
+        "assembly" in str(roles).lower()
+        or (len(pages) > 1 and not has_description)
+        or not has_description
+    )
+
+
 def scan_folder_job(
     job_folder: Path,
     pdf_paths: Sequence[Path],
@@ -305,16 +1039,105 @@ def scan_folder_job(
     debug = os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}
     started = time.time()
     pdfs = [Path(p) for p in pdf_paths if Path(p).suffix.lower() == ".pdf"]
+    # A DECLARED REFERENCE DOCUMENT NEVER ENTERS THE PRODUCT READ (D-477). D-474 kept a
+    # standards manual out of the CONCEPT prompt, but the 11 Oct 21:20 K-Wellness run never
+    # reached that prompt: the ordinary pipeline extracted all 101 pages of the Boots
+    # manual, sent them to the BOM vision read, minted 32 parts from Appendix A's worked
+    # EXAMPLE pack (a DS Screen FSU with Samsung screens — on a job whose brief states no
+    # electrics), took the manual as the anchor PDF and could not resolve the declared
+    # product. The separation is a property of the DOCUMENT, so it is enforced here, where
+    # documents enter the pipeline — extraction, geometry, the pooled BOM, the vision read
+    # and the roots never see a declared reference file. Its words still reach the model,
+    # through the standards channel the concept read carries (reference_pack_paths below).
+    reference_pdfs: List[Path] = []
+    _undeclared_note = ""
+    try:
+        import concept_scan as _cs_ref                              # noqa: WPS433
+        _ref_names = set(_cs_ref.reference_documents_declared([job_folder]))
+    except Exception:                                               # noqa: BLE001
+        _ref_names = set()
+    if _ref_names:
+        _held = [p for p in pdfs if p.name in _ref_names]
+        _product_pdfs = [p for p in pdfs if p.name not in _ref_names]
+        if _held and _product_pdfs:
+            reference_pdfs, pdfs = _held, _product_pdfs
+            print(f"   -> Reference document(s) held OUT of the product read: "
+                  f"{', '.join(p.name for p in reference_pdfs)} — their words ride the "
+                  f"concept read as the customer's standards; nothing they illustrate can "
+                  f"join the bill")
+        elif _held:
+            print(f"   -> every staged document is declared reference — the declaration "
+                  f"is set aside so the read has a product", flush=True)
+    elif (len(pdfs) > 1
+          and os.getenv("SDI_LLM_ONLY", "").strip().lower() in {"1", "true", "yes"}):
+        # THE ABSENCE IS SAID WHERE THE HOUR IS ABOUT TO BE SPENT (D-479): three K-Wellness
+        # runs read a 101-page standards manual as the product because the declaration was
+        # lost on the way in, and the only sign was a line that was not printed. Scoped to
+        # LLM-only runs — an ordinary multi-sheet drawing pack has no declaration and needs
+        # none. The flag below puts the same fact ON THE BOOK the estimator opens.
+        print(f"   -> NOTE: {len(pdfs)} documents and NO reference declaration — every one "
+              f"is read as the product. If one is a standards or reference manual, tick it "
+              f"in the portal's Reference/standards list and run again.", flush=True)
+        _undeclared_note = (
+            f"{len(pdfs)} documents reached this LLM read with NO reference declaration "
+            f"and every one was read as the product ("
+            + ", ".join(p.name for p in pdfs)
+            + ") — if one of them is a standards or reference manual, its examples are in "
+              "this bill: tick it in the portal's Reference/standards list and run again")
+    # A RENDER IN THE PACK IS A PAGE OF THE JOB. Wrapped one image to one PDF page, so the
+    # pooled scan reads it exactly as it reads a raster drawing sheet; what it cannot supply
+    # (text, title block, BOM) is absent because a render carries none, not because a reader
+    # failed. The wrap lands in the output tree, never in the job folder — see image_as_pdf.
+    renders = sorted((Path(p) for p in pdf_paths if is_image_path(Path(p))),
+                     key=lambda p: p.name.lower())
+    for image in renders:
+        wrapped = image_as_pdf(image)
+        print(f"      • {image.name} is an image render — scanned as a one-page PDF")
+        pdfs.append(wrapped)
     if not pdfs:
-        raise ValueError(f"No PDF files to scan in job folder {job_folder}")
+        raise ValueError(f"No drawing files to scan in job folder {job_folder}")
 
-    print(f"   -> Folder-as-job: {job_folder.name} ({len(pdfs)} PDF(s))")
+    print(f"   -> Folder-as-job: {job_folder.name} ({len(pdfs)} document(s)"
+          + (f", {len(renders)} of them image render(s)" if renders else "") + ")")
     partials: List[Tuple[Path, Dict[str, Any]]] = []
+    # THE SIX MINUTES NOBODY COULD SEE. extract_pdf_summary is bracketed on the single-PDF
+    # path, and folder-as-job — which is how every real job now runs — calls it here instead,
+    # outside the brackets. 0359342 spent 3,002s of a 3,775s run "outside any timed phase",
+    # and this loop is the first piece of it: the runner's only evidence was three "no output
+    # for 130s" notices. run_timing's own advice when the unmeasured row is the biggest one is
+    # to bracket more rather than optimise anything, so that is what these are.
+    run_timing.identify(stem=job_folder.name)
+    run_timing.mark("start extract_pdf_summary")
     for pdf_path in sorted(pdfs, key=lambda p: p.name.lower()):
         print(f"      • Extracting {pdf_path.name}")
         partials.append((pdf_path, extract_pdf_summary(pdf_path)))
+    run_timing.mark("done extract_pdf_summary")
 
+    run_timing.mark("start merge_job_pdf_summaries")
     merged, anchor_pdf = merge_job_pdf_summaries(partials, job_folder)
+    run_timing.mark("done merge_job_pdf_summaries")
+    # The documents this job actually read, wrapped renders included — the concept read
+    # renders ITS pages from these, and a wrapped render lives in the output tree, not in
+    # the job folder, so a glob of the folder would silently miss the whole point.
+    merged["scanned_documents"] = [str(p) for p in pdfs]
+    if reference_pdfs:
+        # The held-out standards documents, for the concept read's requirements channel.
+        merged["reference_pack_paths"] = [str(p) for p in reference_pdfs]
+    if _undeclared_note:
+        merged.setdefault("review_flags", []).append(_undeclared_note)
+    # THE PACK THE ESTIMATOR STAGED, exactly as handed in, before this function dropped what
+    # no reader opens. The measured-CAD guard reads THIS, not a listing of the folder: a STEP
+    # file selected for the job is part of the job even though nothing read it, and a STEP
+    # file merely sitting in the same folder — an old revision, a neighbouring job, a file
+    # somebody parked there — is not, and must not silently refuse the concept read (D-176).
+    merged["staged_inputs"] = [str(p) for p in pdf_paths] + [
+        str(p) for p in (attach_dxf_paths or [])]
+    if renders:
+        merged["render_images"] = [r.name for r in renders]
+        if len(renders) == len(pdfs):
+            # Nothing in this pack is a drawing. Everything downstream that would say "the
+            # readers found nothing" must be able to say "there was nothing to read" instead.
+            merged["source_format"] = "image_render"
     bom_count = len((merged.get("document_analysis") or {}).get("bom_rows") or [])
     print(f"   -> Pooled BOM: {bom_count} line(s); anchor PDF: {anchor_pdf.name}")
 
@@ -330,8 +1153,64 @@ def scan_folder_job(
     )
 
 
+def job_documents(summary: Any, pdf_path: Any = None) -> List[str]:
+    """Every PDF of the job a whole-pack read must see (D-597): the anchor first, then each
+    other document the scan read, in order — never a declared reference document (those are
+    held out on purpose) and never the staged brief page (the brief rides as words)."""
+    out: List[str] = []
+    seen: set = set()
+    cands = ([str(pdf_path)] if pdf_path else []) + [
+        str(p) for p in ((summary or {}).get("scanned_documents") or [])
+        if isinstance(summary, dict)]
+    try:
+        from concept_scan import is_brief_page as _is_brief
+    except Exception:                                                # noqa: BLE001
+        _is_brief = lambda _p: False                                 # noqa: E731
+    for c in cands:
+        p = Path(c)
+        if p.suffix.lower() != ".pdf" or not p.exists() or _is_brief(str(p)):
+            continue
+        key = str(p.resolve()).lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(str(p))
+    return out
+
+
+def image_only_pages(summary: Any) -> List[str]:
+    """The pages with no text layer, as "<document> page <n>" (D-598g). A scanned drawing is
+    one: the text, vector and table readers cannot read it by construction, and the vision
+    read is the one reader that can."""
+    out: List[str] = []
+    for pg in ((summary or {}).get("pages") or []) if isinstance(summary, dict) else []:
+        if not isinstance(pg, dict) or str(pg.get("pdfplumber_text")
+                                           or pg.get("normalized_text") or "").strip():
+            continue
+        doc = re.split(r"[\\/]", str(pg.get("source_pdf_path") or ""))[-1] or "the pack"
+        out.append(f"{doc} page {pg.get('page_number')}")
+    return out
+
+
+def design_intent_pages(summary: Any) -> List[Any]:
+    """The page numbers whose role is design_intent (D-406), in order."""
+    out: List[Any] = []
+    for pg in ((summary or {}).get("pages") or []) if isinstance(summary, dict) else []:
+        if not isinstance(pg, dict):
+            continue
+        _r = pg.get("page_role")
+        _r = _r.get("primary_role") if isinstance(_r, dict) else _r
+        if str(_r or "").strip().lower() == "design_intent":
+            out.append(pg.get("page_number"))
+    return out
+
+
 def _infer_page_role(page_text: str, bom_text: str, title_block_text: str) -> Dict[str, Any]:
-    full_text = normalize_text(f"{page_text} {bom_text} {title_block_text}")
+    # THE REVISION TABLE DOES NOT MAKE A SHEET AN ASSEMBLY (D-511). 12340-01M's table lists
+    # the superseded 12341-01M, which read as a second unique code and flipped this single
+    # bracket's sheet to "assembly" — the role that feeds its title to the prose recogniser.
+    # History is struck before anything here is counted.
+    from extractor_patterns import strip_revision_table as _strip_rev
+    full_text = _strip_rev(normalize_text(f"{page_text} {bom_text} {title_block_text}"))
     part_numbers = re.findall(config.PART_NUMBER_PATTERN, full_text, flags=re.IGNORECASE)
     _junk_sfx = (
         " - ALUMINIUM", " - ALUMINUM", " - STEEL", " - TIMBER", " - PLYWOOD",
@@ -349,13 +1228,31 @@ def _infer_page_role(page_text: str, bom_text: str, title_block_text: str) -> Di
     unique_part_numbers = sorted(set(part_numbers))
     detail_cues = any(token in full_text.upper() for token in ["FLAT PATTERN", "DETAIL "])
     drawing_assembly_hint = "ASSEMBLY" in normalize_text(title_block_text).upper()
-    title_block_drawing_numbers = re.findall(config.DRAWING_NUMBER_PATTERN, normalize_text(title_block_text), flags=re.IGNORECASE)
+    title_block_drawing_numbers = re.findall(
+        config.DRAWING_NUMBER_PATTERN, _strip_rev(normalize_text(title_block_text)),
+        flags=re.IGNORECASE)
     title_block_drawing_number_count = len(title_block_drawing_numbers)
     page_text_upper = normalize_text(page_text).upper()
     bom_header_detected = all(token in page_text_upper for token in ["ITEM", "DWG NO", "QTY"])
 
     signals: List[str] = []
     primary_role = "detail"
+
+    # A DESIGN-INTENT SHEET IS NOT A PART DRAWING (D-406). "… — DESIGN INTENT" in the title
+    # block, "DESIGN INTENT ONLY" on the sheet, a concept's block model: a drawing of an idea,
+    # not of parts. It mints no part (part_index) and, with nothing else in the pack, the
+    # drawings run stops and names the method that answers it. Vocabulary in config.
+    try:
+        _di_markers = [re.compile(m, re.IGNORECASE)
+                       for m in (getattr(config, "DESIGN_INTENT_MARKERS", None) or [])]
+    except re.error:
+        _di_markers = []
+    # The row count is not the test: the M&S border's glyph-spaced "304 - STAINLESS STEEL …
+    # 6063" matches the BOM-row pattern once on every sheet, which is what kept this branch
+    # off on 12675-01's 18:32 book. A parts list has a header (ITEM / DWG NO / QTY).
+    if _di_markers and not bom_header_detected and any(m.search(full_text) for m in _di_markers):
+        signals.append("design_intent_detected")
+        return {"primary_role": "design_intent", "signals": signals}
 
     if bom_row_count > 0:
         signals.append("bom_rows_detected")
@@ -403,7 +1300,16 @@ def _calibrate_title_block_region(title_block_text: str, full_text: str) -> Dict
 
 def extract_with_pdfplumber(pdf_path: Path) -> List[Dict[str, Any]]:
     if pdfplumber is None:
-        raise RuntimeError("pdfplumber is not installed.")
+        # NAMES THE FIX, because this message is the last thing anybody sees. It used to read
+        # "pdfplumber is not installed." and arrive as a traceback after the scan had begun,
+        # leaving the reader to work out that requirements.txt lists it as core-required and
+        # that one pip command restores it. main() now preflights this, so reaching here means
+        # the preflight was bypassed or the package vanished mid-run — still worth saying
+        # properly.
+        raise RuntimeError(
+            "pdfplumber is not installed, so no PDF text can be read — every page would be "
+            "empty. It is listed in requirements.txt as core-required. Fix with: "
+            "pip install pdfplumber   (or: pip install -r requirements.txt)")
 
     pages: List[Dict[str, Any]] = []
     with pdfplumber.open(pdf_path) as pdf:
@@ -510,7 +1416,12 @@ def extract_patterns(text: str) -> Dict[str, Any]:
             return False
         return True
 
-    _raw_pns = re.findall(config.PART_NUMBER_PATTERN, normalized, flags=re.IGNORECASE)
+    # A SUPERSEDED NUMBER IS NOT A PART (D-511): codes are harvested with the revision
+    # table struck, so a prior issue's number never joins the job's part-number list —
+    # the current number still prints in the DRAWING No field and survives.
+    from extractor_patterns import strip_revision_table as _strip_rev
+    _raw_pns = re.findall(config.PART_NUMBER_PATTERN, _strip_rev(normalized),
+                          flags=re.IGNORECASE)
     return {
         "part_numbers": sorted(set(p for p in _raw_pns if _valid_pn(p))),
         "dates": sorted(set(re.findall(config.DATE_PATTERN, normalized, flags=re.IGNORECASE))),
@@ -540,6 +1451,7 @@ def _is_revision_table_noise(text: str) -> bool:
         "CODES ADDED",
         "FIRST ISSUE",
         "DRG NO DESCRIPTION DATE",
+        "DWG NO DESCRIPTION DATE",
         "REVISION TABLE",
     ]
     return any(marker in upper for marker in noise_markers) or len(text) > 120
@@ -550,6 +1462,210 @@ def _clean_field_list(values: List[str], field: str) -> List[str]:
     if field not in ("colours", "surface_finishes"):
         return values
     return [v for v in (values or []) if not _is_revision_table_noise(v)]
+
+
+def _page_drawing_number(page: Dict[str, Any]) -> str:
+    """The drawing this page IS, from its own title block — "" when it does not say.
+
+    Deliberately the title block and nothing else. A drawing number appearing anywhere else
+    on a sheet is usually a reference to another sheet, and taking one would make a detail
+    claim to own the assembly that references it.
+    """
+    # THE WORD GEOMETRY FIRST, AND THE SAME READER THE BOM PATH USES.
+    #
+    # This read region_text["title_block"] — a crop taken by _zone_boxes and flattened to a
+    # string. The BOM reader reads the SAME title block from word positions, with its own
+    # band cutoff and its own run-joining. Two readers of one thing, and only one of them
+    # was ever corrected: tools/diagnose_title_block.py finds 12392-04-GA on a sheet where
+    # this returns "", because the crop and the band do not agree about where a title block
+    # is, and because a flattened string has lost the y-positions that tell a title block
+    # from a revision table.
+    #
+    # On job 12392 that cost the whole hierarchy: "4/4 row(s) traced to a sheet; 0 carry the
+    # drawing that owns them". Rows placed on the right pages, every one of them an orphan,
+    # and two bought-in nodes disconnected downstream because no page could own anything.
+    #
+    # The words are already on the page dict, so the reader that works can simply be asked.
+    # The region text stays as the fallback for a page whose words were never captured.
+    _words = page.get("words") or []
+    if _words:
+        try:
+            import _bom_words_reader as _wr
+            _tb = _wr._title_block_dwg_no(_words)
+            if _tb:
+                return normalize_text(str(_tb)).upper().strip()
+        except Exception:
+            pass
+
+    text = normalize_text(str((page.get("region_text") or {}).get("title_block") or ""))
+    if not text:
+        return ""
+    found = re.findall(config.DRAWING_NUMBER_PATTERN, text, flags=re.IGNORECASE)
+    if not found:
+        # THE LABEL IS NOT THE NUMBER. DRAWING_NUMBER_PATTERN requires a literal "DWG NO"
+        # or "DRAWING NO" immediately before the code, so a title block whose label does
+        # not survive text extraction next to its number yields nothing — and
+        # assembly_page_owners then falls back to the FILE STEM, which matches no part the
+        # job knows, so the page can own nothing.
+        #
+        # That is why job 12392's bolt stayed disconnected with a page in hand: page 6 is
+        # an assembly page, the record carried source_page=6 into both compiler pools, and
+        # the only thing missing was the page's own name.
+        #
+        # The shape rule needs no label. It is the same authority the BOM reader's title
+        # block read uses — part_code_conventions.looks_like_a_drawing_number — which finds
+        # 12392-04-GA on this very sheet. Adjacent tokens are joined first so a spaced
+        # "1282 - GA" reads as one code, and the LONGEST match wins so "12392-02" cannot
+        # beat "12392-02-GA" and reparent the sheet onto its own parent.
+        # THE SHAPE RULE, NOT THE LABEL. Two things it must not do.
+        #
+        # It must not swallow the description: joining greedily turned
+        # "12392-04-GA MOD BRACKET SET" into "12392-04-GAMODBRACKETSET", which passes the
+        # shape test because every word is alphanumeric. So tokens are only joined across
+        # a literal "-", which is the spaced form a drawing prints as "1282 - GA" and is
+        # never how a description continues.
+        #
+        # And it must not take a prefix: "12392-02 - GA" reads as "12392-02" if single
+        # tokens simply win, and that is the sheet's PARENT — every row on the page would
+        # be reparented one level up.
+        import part_code_conventions as _pcc
+        _toks = [t for t in re.split(r"\s+", text.upper()) if t]
+        _codes = []
+        _i = 0
+        while _i < len(_toks):
+            if not _pcc.looks_like_a_drawing_number(_toks[_i]) and not (
+                    _i + 2 < len(_toks) and _toks[_i + 1] == "-"):
+                _i += 1
+                continue
+            _run, _j = _toks[_i], _i
+            while _j + 2 < len(_toks) and _toks[_j + 1] == "-" \
+                    and _pcc.looks_like_a_drawing_number(_run + "-" + _toks[_j + 2]):
+                _run = _run + "-" + _toks[_j + 2]
+                _j += 2
+            if _pcc.looks_like_a_drawing_number(_run) and _run not in _codes:
+                _codes.append(_run)
+            _i = _j + 1
+        # ONE, OR NONE, exactly as the labelled path: a region holding two drawing numbers
+        # has caught a cross-reference as well as its own, and naming the wrong one gives
+        # every row on the page the wrong owner.
+        if len(_codes) == 1:
+            found = _codes
+
+    # ONE, OR NONE. A title block region that caught two drawing numbers has caught a
+    # cross-reference as well as its own, and there is no way to tell which is which from
+    # here. Naming the wrong one would give every row on the page the wrong owner.
+    uniq = []
+    for f in found:
+        c = normalize_text(str(f)).upper().strip()
+        if c and c not in uniq:
+            uniq.append(c)
+    return uniq[0] if len(uniq) == 1 else ""
+
+
+def assembly_page_owners(summary: Dict[str, Any]) -> Dict[int, str]:
+    """page number -> the drawing that page IS, for pages carrying an assembly BOM.
+
+    THE ROWS ARE NOT ALWAYS WHERE THE ATTRIBUTION LOOKS. attribute_bom_rows_to_source_pages
+    stamps document_analysis["bom_rows"], which is what the deterministic text reader
+    produces — and on job 12392 that reader found nothing at all. The BOM arrived from the
+    vision extract and from rows synthesised out of the costed parts, neither of which
+    carries a parent, so the hierarchy source had nothing to consume and every part on the
+    second drawing stayed an orphan. The chain was correct and wired to an empty tap.
+
+    A part still knows which PAGES it appeared on, whatever read it. That is the fact this
+    exposes: the page's own role, which the engine already infers, and the drawing that page
+    belongs to. A part on an ASSEMBLY page of a drawing is listed by that drawing.
+
+    ASSEMBLY PAGES ONLY, and that is the whole safety of it. A detail sheet is not an owner —
+    it is one part drawn large — so giving it children would invent a parent for every part
+    that merely has its own sheet. The role is read from the page, not guessed from the file
+    name; where the title block does not name a drawing the file's own stem stands in, and
+    the compiler refuses any owner it cannot already identify, so a descriptive file name
+    resolves to nothing and no edge is made.
+    """
+    owners: Dict[int, str] = {}
+    for page in (summary.get("pages") or []):
+        if not isinstance(page, dict):
+            continue
+        role = str(((page.get("page_role") or {}) if isinstance(page.get("page_role"), dict)
+                    else {}).get("primary_role") or "").strip().lower()
+        if role != "assembly":
+            continue
+        number = page.get("page_number")
+        if number is None:
+            continue
+        drawing = _page_drawing_number(page)
+        if not drawing:
+            stem = str(page.get("source_pdf_name") or "")
+            if stem.lower().endswith(".pdf"):
+                stem = stem[:-4]
+            drawing = normalize_text(stem).upper().strip()
+        if drawing:
+            owners[int(number)] = drawing
+    return owners
+
+
+def attribute_bom_rows_to_source_pages(rows: List[Dict[str, Any]],
+                                       pages: List[Dict[str, Any]]) -> int:
+    """Stamp each BOM row with the page that printed it, and that page's drawing number.
+
+    THE OWNERSHIP IS NOT LOST LATER — IT IS NEVER RECORDED. summarise_document joins every
+    page's BOM region into one string and runs one regex over the lot, so a row arrives with
+    an item number, a code, a description and a quantity, and no idea which sheet it was on.
+    Every downstream attempt to recover the tree is therefore reconstructing something the
+    first read threw away, which is why it keeps half-working.
+
+    This does NOT change which rows are read. The joined-text pass runs exactly as before and
+    produces exactly the same rows; this walks them afterwards and says where each came from.
+    Additive by construction: a row that cannot be placed is left alone and carries no parent,
+    which is the same "" every row carried before.
+
+    TWO OF THE SAME CODE ON TWO SHEETS ARE TWO ROWS, and they must not both be attributed to
+    the first sheet. Each page's occurrences are consumed as they are claimed, so a fastener
+    listed on the panel GA and again on the bracket GA gets one row per sheet — which is the
+    whole point, because those are different quantities under different owners.
+
+    Returns how many rows were placed, so the caller can say when it placed none.
+    """
+    if not rows or not pages:
+        return 0
+    # What each page's BOM region says, and how many times it names each code.
+    page_info: List[Tuple[Dict[str, Any], str, str]] = []
+    for page in pages:
+        region = (page.get("region_text") or {})
+        text = normalize_text(f"{region.get('bom') or ''} {region.get('notes') or ''}").upper()
+        if text.strip():
+            page_info.append((page, text, _page_drawing_number(page)))
+    if not page_info:
+        return 0
+
+    remaining: List[Dict[str, int]] = []
+    for _page, text, _dwg in page_info:
+        counts: Dict[str, int] = {}
+        for row in rows:
+            code = str(row.get("part_number") or "").upper().strip()
+            if code and code not in counts:
+                counts[code] = text.count(code)
+        remaining.append(counts)
+
+    placed = 0
+    for row in rows:
+        code = str(row.get("part_number") or "").upper().strip()
+        if not code:
+            continue
+        for index, (page, _text, drawing) in enumerate(page_info):
+            if remaining[index].get(code, 0) <= 0:
+                continue
+            remaining[index][code] -= 1
+            row["source_page"] = page.get("page_number")
+            # The parent is the DRAWING the page is, not the page. A sheet with no readable
+            # title block places the row without claiming an owner for it — the honest
+            # outcome, and the one the compiler's refusal is built to expect.
+            if drawing:
+                row["bom_parent"] = drawing
+            placed += 1
+            break
+    return placed
 
 
 def summarise_document(pdf_path: Path, plumber_pages: List[Dict[str, Any]], pypdf_pages: List[str], vision_pages: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
@@ -569,6 +1685,20 @@ def summarise_document(pdf_path: Path, plumber_pages: List[Dict[str, Any]], pypd
         notes_text=joined_notes,
         page_role_hint="document",
     )
+
+    # WHERE EACH ROW CAME FROM, recorded at the only point it is still knowable.
+    _placed = attribute_bom_rows_to_source_pages(
+        document_analysis.get("bom_rows") or [], plumber_pages)
+    _rows_total = len(document_analysis.get("bom_rows") or [])
+    if _rows_total:
+        _owned = sum(1 for r in document_analysis["bom_rows"] if r.get("bom_parent"))
+        # A GATE NOBODY ASKS REPORTS NOTHING. If attribution places nothing, or places rows
+        # without ever finding a drawing number, the hierarchy that depends on it will be
+        # silently absent — and that is exactly how this defect survived to a customer price.
+        print(f"   [bom] {_placed}/{_rows_total} row(s) traced to a sheet; "
+              f"{_owned} carry the drawing that owns them"
+              + ("" if _owned else " — no title block on any BOM page named a drawing, so "
+                                   "these rows state no hierarchy"), flush=True)
 
     tb = document_analysis.get("title_block") or {}
     for field in ("colours", "surface_finishes"):
@@ -607,6 +1737,10 @@ def summarise_document(pdf_path: Path, plumber_pages: List[Dict[str, Any]], pypd
             bom_text=normalize_text(f"{page['region_text']['bom']} {page['region_text']['notes']}"),
             notes_text=page["region_text"]["notes"],
             page_role_hint=page["page_role"]["primary_role"],
+            # THE PAGE THE ROW WAS READ FROM, carried into the row itself. Known here and
+            # nowhere downstream: once rows from every page are merged into one list, which
+            # page a line came from cannot be recovered.
+            source_page=page_number,
         )
         vision_page = vision_lookup.get(page_number)
         llm_page = reconcile_with_llm(
@@ -901,9 +2035,40 @@ def write_outputs(summary: Dict[str, Any]) -> Tuple[Path, Path, Path, Path]:
     return json_path, text_path, log_path, csv_path
 
 
+def _material_family(name: Any) -> str:
+    """The family a stated material belongs to — MILD STEEL and ZINTEC are one, MDF and
+    TIMBER are one (boards), ACRYLIC another — by the engine's own canonical material."""
+    try:
+        from json_normaliser import normalise_material
+        canon = str(normalise_material(str(name or "")) or "").upper()
+    except Exception:                                                     # noqa: BLE001
+        canon = str(name or "").upper()
+    if not canon or canon in {"UNKNOWN", "NONE", "?"}:
+        return ""
+    for family, words in (getattr(config, "MATERIAL_FAMILY_WORDS", None) or ()):
+        if any(w in canon for w in words):
+            return family
+    return canon
+
+
+def _own_sheet_unresolved_material(part: Dict[str, Any], pages: Any) -> str:
+    """The material a part's OWN sheet prints and the book cannot resolve, or "" (D-598j)."""
+    bare = re.sub(r"[\s\-_]+", "", str(part.get("part_number") or "").upper())
+    if not bare:
+        return ""
+    for pg in pages or []:
+        pa = pg.get("page_analysis") if isinstance(pg, dict) else None
+        tb = (pa.get("title_block") or {}) if isinstance(pa, dict) else {}
+        own = {re.sub(r"[\s\-_]+", "", str(n).upper()) for n in (tb.get("drawing_numbers") or [])}
+        if bare in own and tb.get("material_stated_unresolved") and not tb.get("materials"):
+            return str(tb["material_stated_unresolved"])
+    return ""
+
+
 def _inherit_document_material_to_parts(
     parts: List[Dict[str, Any]],
     document_analysis: Dict[str, Any],
+    pages: Any = None,
 ) -> None:
     """
     Propagate document-level material to parts that have no material of their own.
@@ -911,6 +2076,11 @@ def _inherit_document_material_to_parts(
     """
     if not parts:
         return
+    # Own-sheet evidence is independent of the document's majority material,
+    # and must be submitted before any already-populated/default early return.
+    from owned_specification import retain_own_material
+    for _part in parts:
+        retain_own_material(_part, pages, _apply_field)
     pf = document_analysis.get("primary_fields") or {}
     doc_mat_norm = (
         pf.get("normalized_material_majority")
@@ -920,6 +2090,15 @@ def _inherit_document_material_to_parts(
     tb_norm = (document_analysis.get("title_block") or {}).get("normalized") or {}
     doc_mat_raw = tb_norm.get("primary_material") or None
     if not doc_mat_norm and not doc_mat_raw:
+        return
+    # A DOCUMENT OF SEVERAL MATERIALS HAS NONE TO HAND DOWN (D-421). 8188-08 pools a GA
+    # ("MATERIAL: VARIOUS"), steel, acrylic and MDF sheets; its document material came out
+    # TIMBER and the wire frame and two wave layers — parts with no sheet of their own —
+    # inherited it. One family stated is a GA's material; two or more is a mixed pack.
+    _families = {_material_family(m) for m in
+                 ((document_analysis.get("title_block") or {}).get("materials") or [])}
+    _families.discard("")
+    if len(_families) > 1:
         return
     for part in parts:
         # Display boards (VINYL-* / DISPLAY BOARD) must NOT inherit the assembly's
@@ -935,12 +2114,126 @@ def _inherit_document_material_to_parts(
             continue
         if part.get("materials"):
             continue
+        # A PART WHOSE OWN SHEET PRINTS A MATERIAL KEEPS IT, EVEN ONE THE BOOK CANNOT NAME
+        # (D-598j). 9287-10-005's sheet says "HANEX GAD-001", a solid surface; the GA's "HANEX,
+        # ACRYLIC" resolved to acrylic and the base inherited it. Unresolved, the base reaches
+        # the estimator as a visible gap; inherited, it reaches them as somebody else's sheet.
+        _printed = _own_sheet_unresolved_material(part, pages)
+        if _printed:
+            part["material_stated"] = _printed
+            part.setdefault("review_flags", []).append(
+                f"MATERIAL AS PRINTED: {part.get('part_number')}'s own sheet states "
+                f"'{_printed}', which the material book does not name — not taken from the "
+                f"document's '{doc_mat_norm or doc_mat_raw}'. Say its stock and its price.")
+            continue
         if doc_mat_norm:
-            part["normalized_material"] = doc_mat_norm
+            # INHERITED from the document, not read from this part. Rank 60: better than a
+            # guess, weaker than anything that looked at the part itself. The `if
+            # part.get("materials"): continue` guard above protects a part that states its
+            # own material, but says nothing about a part whose material came from the MODEL.
+            _apply_field(part, "normalized_material", doc_mat_norm, "bom_tree")
             part.setdefault("material_inherited_from", "document_level")
         if doc_mat_raw and not part.get("materials"):
             part["materials"] = [doc_mat_raw]
             part.setdefault("material_inherited_from", "document_level")
+
+
+def word_coded_row_is_a_purchase(part_number: Any, description: Any) -> bool:
+    """Is a parts-list row whose code cell holds a WORD a purchased line to keep (D-436)?
+
+    8188-08-SA04's table prints "Strengthener | EXTRUSION 92: LENGTH =100mm | 24". The code
+    cell is a word, so the validity gate — written for finish and title-block text, and
+    demanding a digit — rejected it, the record lost its identity, and the 24 lengths of
+    extrusion were on the bill the product reaches with no line on the sheet. A word in the
+    code cell is not a code, but with a description the row reader calls a part it is the
+    drawing's own name for a thing we buy, and the line stands under that name: a word
+    alone, no placeholder, no category word (FIXING, P/P — those are shared rows), no finish
+    word, and a description that reads as a part, never a note, a finish or a material."""
+    pn = " ".join(str(part_number or "").split())
+    if len(pn) < 3 or not re.fullmatch(r"[A-Za-z][A-Za-z ]*", pn):
+        return False
+    up = pn.upper()
+    if any(w in up for w in ("COATED", "GLOSS", "POWDER", "MATT", "PRIMER", "FINISH")):
+        return False
+    try:
+        from part_identity import (ROW_ROLE_PART, is_placeholder_identity,
+                                   parts_list_row_role)
+        from part_code_conventions import is_category_not_a_code
+    except Exception:                                                 # noqa: BLE001
+        return False
+    if is_placeholder_identity(pn) or is_category_not_a_code(pn):
+        return False
+    desc = " ".join(str(description or "").split())
+    return bool(desc) and parts_list_row_role(desc) == ROW_ROLE_PART
+
+
+def _inherit_sheet_material_to_parts(
+    parts: List[Dict[str, Any]],
+    pages: List[Dict[str, Any]],
+) -> None:
+    """A part with no sheet of its own takes the material of the sheet that draws it (D-426).
+
+    8188-08: wave layers 014 and 015 are drawn on 013's sheet, whose title block states
+    ACRYLIC, and have no title block of their own. The document states several materials, so
+    it hands down none (D-421), and the model's library appearance — MILD_STEEL, the default
+    the same sheet overruled on 013 — was the only reading: both layers were nested on the
+    Sheet Steel block, lasered on the metal laser, folded and powder coated.
+
+    Only a sheet that states ONE family hands anything down, only to a made part, and only
+    where none of the part's pages is its own; the part's own title block always outranks
+    this, and where it displaces another family the record says so as a question."""
+    if not parts or not pages:
+        return
+
+    def _bare(code: Any) -> str:
+        return re.sub(r"[\s\-_]+", "", str(code or "").upper())
+
+    sheets: Dict[str, Tuple[List[str], List[str]]] = {}
+    for pg in pages:
+        pa = pg.get("page_analysis")
+        tb = (pa.get("title_block") or {}) if isinstance(pa, dict) else {}
+        sheets[str(pg.get("page_number") or "").strip()] = (
+            [str(n) for n in (tb.get("drawing_numbers") or []) if n],
+            [str(m) for m in (tb.get("materials") or []) if str(m or "").strip()],
+        )
+    for part in parts:
+        pn = str(part.get("part_number") or "").strip()
+        if not pn or part.get("is_bought_in") or part.get("is_assembly_parent") \
+                or part.get("is_sub_assembly") or "bought_in" in [
+                    str(r).lower() for r in (part.get("page_roles") or [])]:
+            continue
+        drawn_on = [str(p).strip() for p in (part.get("pages") or []) if str(p).strip() in sheets]
+        if not drawn_on:
+            continue
+        if any(_bare(pn) in {_bare(n) for n in sheets[p][0]} for p in drawn_on):
+            continue                     # its own sheet speaks through the drawing readers
+        stated = [m for p in drawn_on for m in sheets[p][1]]
+        families = {_material_family(m) for m in stated}
+        families.discard("")
+        if len(families) != 1:
+            continue
+        try:
+            from json_normaliser import normalise_material
+            material = str(normalise_material(stated[0]) or stated[0])
+        except Exception:                                                 # noqa: BLE001
+            material = stated[0]
+        before = str(part.get("normalized_material") or "").strip()
+        before_src = str(_source_of(part, "normalized_material") or "")
+        sheet = ", ".join(f"p.{p}" + (f" ({sheets[p][0][0]})" if sheets[p][0] else "")
+                          for p in drawn_on)
+        if not _apply_field(part, "normalized_material", material, "drawn_on_sheet"):
+            continue
+        part["material_inherited_from"] = f"the sheet that draws it: {sheet}"
+        if not part.get("materials"):
+            part["materials"] = [stated[0]]
+        if before and _material_family(before) not in families:
+            part.setdefault("review_flags", []).append(
+                f"material: {pn} has no sheet of its own; the sheet that draws it ({sheet}) "
+                f"states {stated[0]}, taken over '{before}'"
+                + (" — the model's library appearance, not a spec"
+                   if before_src == "solidworks_applied_material" else
+                   f" from {before_src}" if before_src else "")
+                + ". Confirm the material against the drawing.")
 
 
 def _fill_part_revisions_from_pages(summary: Dict[str, Any]) -> None:
@@ -1012,7 +2305,7 @@ def _build_additive_summary_sections(summary: Dict[str, Any]) -> None:
     document_analysis = summary.get("document_analysis", {})
     parts = manufacturing_writeup.get("parts", [])
 
-    _inherit_document_material_to_parts(parts, document_analysis)
+    _inherit_document_material_to_parts(parts, document_analysis, summary.get("pages"))
 
     summary["drawing_metadata"] = {
         "source_file": summary.get("source_file"),
@@ -1059,6 +2352,51 @@ def _build_additive_summary_sections(summary: Dict[str, Any]) -> None:
     summary["alternative_processes"] = []
 
 
+def is_image_path(path: Path) -> bool:
+    return path.suffix.lower() in getattr(config, "IMAGE_RENDER_EXTENSIONS", set())
+
+
+# WHERE EACH RENDER CAME FROM (D-361). A render is scanned as a PDF in the output tree, so
+# the scan cannot see the staged folder it was dropped in — and the enquiry brief filed
+# beside it went unread on the 13:07 M&S run. Recorded here, per converted file.
+_RENDER_SOURCE_DIRS: Dict[str, str] = {}
+
+
+def _render_source_dir(pdf: Any) -> Optional[str]:
+    """The staged folder a converted render came from, or None."""
+    for key in (str(pdf), str(Path(str(pdf)).resolve())):
+        if key in _RENDER_SOURCE_DIRS:
+            return _RENDER_SOURCE_DIRS[key]
+    return None
+
+
+def image_as_pdf(image_path: Path) -> Path:
+    """The one-page PDF this image is scanned as. Lossless — the image is embedded, not
+    re-rendered — so the vision readers see exactly the pixels the customer sent.
+
+    WRITTEN INTO THE OUTPUT TREE, NOT BESIDE THE SOURCE. The staged job folder is "a durable
+    record of exactly which drawings produced a number"; a derived file appearing in it makes
+    the record lie, and a folder rescan would find the PNG and its own conversion and cost
+    the job twice. Keyed on content, so an unchanged render converts once ever and a
+    re-scanned one gets a fresh page rather than a stale one.
+    """
+    import pymupdf                                                  # noqa: WPS433
+
+    raw = image_path.read_bytes()
+    key = hashlib.sha256(raw).hexdigest()[:16]
+    out_dir = Path(config.OUTPUT_DIR) / "render_pdfs"
+    out = out_dir / f"{key}-{image_path.stem}.pdf"
+    _RENDER_SOURCE_DIRS[str(out)] = str(Path(image_path).resolve().parent)
+    _RENDER_SOURCE_DIRS[str(out.resolve())] = str(Path(image_path).resolve().parent)
+    if out.is_file() and out.stat().st_size > 0:
+        return out
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with pymupdf.open(str(image_path)) as img:
+        pdf_bytes = img.convert_to_pdf()
+    out.write_bytes(pdf_bytes)
+    return out
+
+
 def scan_file(
     drawing_path: Path,
     *,
@@ -1071,6 +2409,22 @@ def scan_file(
             attach_dxf_paths=attach_dxf_paths,
             auto_discover_dxf=auto_discover_dxf,
         )
+    if is_image_path(drawing_path):
+        # A RENDER, NOT A DRAWING — and the summary says so, because everything this scan
+        # cannot know (dimensions, materials, a BOM) is absent for that reason and not
+        # because the readers failed. No DXF ever belongs to a render.
+        print(f"   -> Image source: {drawing_path.name} wrapped as a one-page PDF; "
+              f"no text layer, no title block — a render, not a drawing")
+        wrapped = image_as_pdf(drawing_path)
+        summary, paths = scan_pdf_file(
+            wrapped,
+            attach_dxf_paths=None,
+            auto_discover_dxf=False,
+        )
+        summary["source_format"] = "image_render"
+        summary["source_image_path"] = str(drawing_path.resolve())
+        summary["source_image_name"] = drawing_path.name
+        return summary, paths
     return scan_pdf_file(
         drawing_path,
         attach_dxf_paths=attach_dxf_paths,
@@ -1088,6 +2442,11 @@ def scan_dxf_file(
     started = time.time()
 
     def _debug(stage: str) -> None:
+        # TIMED WHETHER OR NOT ANYONE IS WATCHING. These brackets already named every major
+        # phase and threw the timing away unless the run was in debug mode, so the only
+        # evidence of where forty minutes went was the runner's "no output for 133s" notices
+        # — the absence of printing, read as if it were a phase.
+        run_timing.mark(stage)
         if debug:
             elapsed = round(time.time() - started, 2)
             print(f"[DEBUG] {stage} (+{elapsed}s)")
@@ -1150,6 +2509,11 @@ def scan_pdf_file(
     started = time.time()
 
     def _debug(stage: str) -> None:
+        # TIMED WHETHER OR NOT ANYONE IS WATCHING. These brackets already named every major
+        # phase and threw the timing away unless the run was in debug mode, so the only
+        # evidence of where forty minutes went was the runner's "no output for 133s" notices
+        # — the absence of printing, read as if it were a phase.
+        run_timing.mark(stage)
         if debug:
             elapsed = round(time.time() - started, 2)
             print(f"[DEBUG] {stage} (+{elapsed}s)")
@@ -1178,6 +2542,153 @@ def scan_pdf_file(
     )
 
 
+def _answers_file_for_order_qty(job_folder: Any, pdf_path: Any):
+    """The answers file the order-quantity probe may consult BEFORE the drawing number is
+    known — or None, refusing loudly where consulting would risk cross-job pollution.
+
+    The name-matched lookup misses at this point of the run (10975-02's order_quantity
+    sat unread while its tape length, applied by the later name-matched pass, landed).
+    But "the only answers file in the folder" is NOT unambiguous by itself: a folder
+    holding several jobs and one file would apply that file's order quantity to every
+    job before their drawing numbers are known — exactly the pollution the
+    specific-name-first rule exists to prevent (review, 16 Sep). So the fallback demands
+    one of two proofs:
+
+      - the folder holds AT MOST ONE PDF — one job, so the one file can only be its; or
+      - the file's own name POSITIVELY matches the PDF or folder name we already have.
+    """
+    _cands = []
+    _roots = {p for p in (job_folder, (Path(pdf_path).parent if pdf_path else None)) if p}
+    for _root in _roots:
+        try:
+            _cands += list(Path(_root).glob("*_confirmed.json"))
+            _cands += list(Path(_root).glob("*_estimator_dimensions.json"))
+        except OSError:
+            pass
+    _cands = sorted(set(_cands))
+    if not _cands:
+        return None
+    if len(_cands) > 1:
+        print(f"   [order-qty] {len(_cands)} answers files in the job folder and no "
+              f"drawing number known yet — none consulted for the order quantity; the "
+              f"name-matched pass later picks the right one for its own fields.",
+              flush=True)
+        return None
+    _f = _cands[0]
+    _pdfs = []
+    for _root in _roots:
+        try:
+            _pdfs += list(Path(_root).glob("*.[pP][dD][fF]"))
+        except OSError:
+            pass
+    if len(set(_pdfs)) <= 1:
+        return _f
+    def _bare(t: Any) -> str:
+        return re.sub(r"[\s\-_]+", "", str(t or "").upper())
+    _stem = re.sub(r"_(confirmed|estimator_dimensions)\.json$", "", _f.name,
+                   flags=re.IGNORECASE)
+    _idents = [Path(pdf_path).stem if pdf_path else "",
+               Path(job_folder).name if job_folder else ""]
+    if _bare(_stem) and any(_bare(_stem) in _bare(_i) for _i in _idents if _i):
+        return _f
+    print(f"   [order-qty] {_f.name} is the folder's only answers file, but the folder "
+          f"holds {len(set(_pdfs))} PDFs and the file's name matches neither the PDF "
+          f"nor the folder — not consulted for the order quantity; the name-matched "
+          f"pass later picks it up for the job it actually names.", flush=True)
+    return None
+
+
+def pre_costing_passes(summary: Dict[str, Any]) -> None:
+    """The readings that must land on the part records before estimate_document prices them,
+    in order (D-433, D-437, D-453, D-454, D-451, D-445, D-440). One function, called by the run
+    and by tools/replay_saved_job.py, so a replay exercises exactly what a run does."""
+    if not isinstance(summary, dict) or not isinstance(summary.get("manufacturing_writeup"), dict):
+        return
+    # THE SHEET THAT DRAWS A PART HANDS DOWN ITS MATERIAL BEFORE ANYTHING IS COSTED (D-433).
+    # D-426 ran in the summary sections, after estimate_document: on 8188-08's 17:37 book the
+    # report said 014 and 015 took ACRYLIC from their sheet while the sheet costed both as
+    # 3 mm mild steel. A material that arrives after the price is a note, not a material.
+    _inherit_sheet_material_to_parts(summary["manufacturing_writeup"]["parts"],
+                                     summary.get("pages") or [])
+    # AND A WIRE PART'S GAUGE AND OUTLINE (D-437), read off the same sheets, before the
+    # costing reaches for a default gauge and an assumed length.
+    try:
+        from wire_sheet_reader import apply_wire_callouts_to_parts as _wire_callouts
+        _n_wire = _wire_callouts(summary["manufacturing_writeup"]["parts"],
+                                 summary.get("pages") or [])
+        if _n_wire:
+            print(f"   [wire] {_n_wire} wire part(s) took a gauge or an outline off the sheet "
+                  f"that draws them", flush=True)
+    except Exception as _wire_exc:                                  # noqa: BLE001
+        print(f"   [wire] sheet callouts not read ({type(_wire_exc).__name__}: {_wire_exc})",
+              flush=True)
+    # THE MATERIAL THE PACK'S MODEL PRINTED ITS WEIGHTS IN, where its measured parts say so (D-453),
+    # and the measured blanks of related parts (same material and gauge) beside each (D-454).
+    try:
+        from estimator import related_measured_blanks as _rmb
+        _rmb(summary["manufacturing_writeup"]["parts"])
+    except Exception as _rmb_exc:                                   # noqa: BLE001
+        print(f"   [weight] related blanks not read ({type(_rmb_exc).__name__}: {_rmb_exc})", flush=True)
+    try:
+        from estimator import pack_model_material as _pmm
+        _pm = _pmm(summary["manufacturing_writeup"]["parts"])
+        if _pm:
+            summary["pack_model_material"] = _pm
+            for _p in summary["manufacturing_writeup"]["parts"]:
+                if isinstance(_p, dict):
+                    _p["_pack_model_material"] = _pm
+            print(f"   [weight] the pack's model printed its weights in {_pm['material'].lower()} "
+                  f"({', '.join(_pm['parts'][:6])})", flush=True)
+    except Exception as _pm_exc:                                    # noqa: BLE001
+        print(f"   [weight] pack model material not read ({type(_pm_exc).__name__}: {_pm_exc})",
+              flush=True)
+    # ONE ROW READ TWO WAYS IS ONE RECORD (D-451), folded before anything is costed.
+    try:
+        from part_identity import fold_one_cell_duplicates as _fold
+        _folded = _fold(summary["manufacturing_writeup"]["parts"])
+        if _folded:
+            print(f"   [one-cell] {len(_folded)} record(s) folded onto the line they are a "
+                  f"second reading of: {', '.join(a for a, _ in _folded)}", flush=True)
+    except Exception as _fold_exc:                                  # noqa: BLE001
+        print(f"   [one-cell] not folded ({type(_fold_exc).__name__}: {_fold_exc})", flush=True)
+    # AND THE ONE READING A TWO-UNIT SIZE ALLOWS, where the job's yardstick decides (D-445).
+    try:
+        from size_reading import apply_size_readings as _size_readings
+        _n_sz = _size_readings(summary["manufacturing_writeup"]["parts"], summary)
+        if _n_sz:
+            print(f"   [size] {_n_sz} purchased line(s) read at the one size the job allows; "
+                  f"priced at that reading, still to confirm", flush=True)
+    except Exception as _sz_exc:                                    # noqa: BLE001
+        print(f"   [size] two-unit sizes not resolved ({type(_sz_exc).__name__}: {_sz_exc})",
+              flush=True)
+    # AND WHICH MACHINE CUTS A SHEET PART, where its sheets name one (D-440).
+    try:
+        from cut_method_reader import apply_cut_method_from_sheets as _cut_from_sheets
+        _n_cut = _cut_from_sheets(summary["manufacturing_writeup"]["parts"],
+                                  summary.get("pages") or [])
+        if _n_cut:
+            print(f"   [cut] {_n_cut} part(s) took a cutting machine, or a question, off the "
+                  f"sheet that draws them", flush=True)
+    except Exception as _cut_exc:                                   # noqa: BLE001
+        print(f"   [cut] sheet cut words not read ({type(_cut_exc).__name__}: {_cut_exc})",
+              flush=True)
+
+
+    # A SECTION SCHEDULE ON A PART'S OWN SHEET REACHES ITS RECORD (D-576), after every
+    # pre-costing pass that could have lost it: the requirement is captured from the sheet's
+    # words, a record with no members and no pieces is given them, and the hand-off audit
+    # later checks they were priced. A failure here is a finding on the book, not a stop.
+    try:
+        from section_coverage_contract import prepare as _prepare_section_coverage
+        _changed = _prepare_section_coverage(summary)
+        if _changed:
+            print(f"   [section-coverage] schedule restored from the sheet on "
+                  f"{', '.join(_changed)}", flush=True)
+    except Exception as _sc_exc:                                     # noqa: BLE001
+        print(f"   [section-coverage] not prepared ({type(_sc_exc).__name__}: {_sc_exc})",
+              flush=True)
+
+
 def _finalize_scan_summary(
     summary: Dict[str, Any],
     started: float,
@@ -1190,6 +2701,11 @@ def _finalize_scan_summary(
     auto_discover_dxf: Optional[bool] = None,
 ) -> Tuple[Dict[str, Any], Tuple[Path, Path, Path, Path]]:
     def _debug(stage: str) -> None:
+        # TIMED WHETHER OR NOT ANYONE IS WATCHING. These brackets already named every major
+        # phase and threw the timing away unless the run was in debug mode, so the only
+        # evidence of where forty minutes went was the runner's "no output for 133s" notices
+        # — the absence of printing, read as if it were a phase.
+        run_timing.mark(stage)
         if debug:
             elapsed = round(time.time() - started, 2)
             print(f"[DEBUG] {stage} (+{elapsed}s)")
@@ -1199,164 +2715,127 @@ def _finalize_scan_summary(
     summary = merge_page_analysis(summary, geom_pages)
     _debug("done merge_page_analysis")
 
-    # -- Dual-path BOM override (flagged, default OFF) --------------------------
-    # When SDI_DUALPATH_BOM is set, the deterministic (pdfplumber) + vision (Grok)
-    # reconciled reader becomes the authoritative source of the bom_rows that
-    # build_document_writeup consumes below. Flag OFF => byte-identical to baseline.
+    # -- Dual-path BOM read (default ON) ---------------------------------------
+    # The deterministic (pdfplumber word-geometry) + vision (Grok) reconciled reader is
+    # the authoritative source of the bom_rows that build_document_writeup consumes
+    # below. It reads the parts list the drawing PRINTS; the fallback reconstructs one
+    # from scrambled text. SDI_DUALPATH_BOM=0 restores the fallback for comparison.
     # Any failure leaves the existing rows untouched (a scan never breaks on this).
-    if os.getenv("SDI_DUALPATH_BOM", "").lower() in {"1", "true", "yes"}:
+    from bom_pipeline import dual_path_enabled as _dual_path_enabled
+    if _dual_path_enabled():
         try:
             from bom_pipeline import reconciled_bom_rows_for_job
-            if job_folder and summary.get("scan_mode") == "folder_as_job":
+            # Prefer the EXACT PDF paths the pipeline already scanned (job_source_pdfs)
+            # over re-discovering them from the folder. find_pdfs(folder) returned []
+            # here on the UNC share (pdfs_found=0) even though the pipeline read the PDF
+            # fine — re-globbing the folder is a needless second point of failure. These
+            # resolved paths are known-good, so Path A reads the same files the estimate
+            # was built from.
+            _job_pdfs = [j.get("path") for j in (summary.get("job_source_pdfs") or []) if j.get("path")]
+            # DIAGNOSTIC (temporary): show which reconcile input branch is taken and why,
+            # so an empty _dp is explainable at the source (job_source_pdfs vs folder vs
+            # single pdf). Prints the actual paths so a bad/absent path is visible.
+            print(f"   [recon-input] job_source_pdfs={len(_job_pdfs)} "
+                  f"job_folder={str(job_folder)!r} scan_mode={summary.get('scan_mode')!r} "
+                  f"pdf_path={str(pdf_path)!r}", flush=True)
+            run_timing.mark("start dual_path_bom_read")
+            if _job_pdfs:
+                print(f"   [recon-input] using job_source_pdfs -> {_job_pdfs}", flush=True)
+                _dp = reconciled_bom_rows_for_job(pdfs=_job_pdfs)
+            elif job_folder and summary.get("scan_mode") == "folder_as_job":
+                print(f"   [recon-input] fallback to folder discovery on {str(job_folder)!r}", flush=True)
                 _dp = reconciled_bom_rows_for_job(folder=job_folder)
             elif pdf_path:
                 _dp = reconciled_bom_rows_for_job(pdfs=[pdf_path])
             else:
                 _fp_src = summary.get("full_path") or summary.get("source_file")
                 _dp = reconciled_bom_rows_for_job(pdfs=[_fp_src]) if _fp_src else {"rows": []}
+            run_timing.mark("done dual_path_bom_read")
+            print(f"   [recon-input] _dp keys={sorted((_dp or {}).keys())} "
+                  f"pdf_paths={len((_dp or {}).get('pdf_paths') or [])} "
+                  f"a_count={(_dp or {}).get('a_count')} b_count={(_dp or {}).get('b_count')}", flush=True)
+            _da = summary.setdefault("document_analysis", {})
+            # Recorded whether or not rows came back. Which readers covered this job is
+            # the one fact that cannot be recovered from the rows themselves — an absent
+            # reader leaves no trace in what it did not find — and check_both_bom_readers_ran
+            # reads it. Written BEFORE the rows guard so a job the readers could not read
+            # at all still says who was unable to read it.
+            _da["bom_readers_unread"] = list(_dp.get("unread") or [])
+            _da["bom_vision_calls"] = dict(_dp.get("vision_calls") or {})
+            _vc = _da["bom_vision_calls"]
+            if _vc:
+                print(f"   [bom-vision] {_vc.get('paid', 0)} page(s) sent to the model, "
+                      f"{_vc.get('cached', 0)} from cache, "
+                      f"{_vc.get('skipped', 0)} not selected", flush=True)
+            # HOW MUCH EACH READER ACTUALLY CONTRIBUTED, which was computed on every run
+            # since the dual path was built and printed only by the standalone CLI.
+            #
+            # The BOM is read twice so the two can check each other, and reconcile_page
+            # already records WHICH of them saw each row. That is the direct answer to
+            # "is the vision model pulling its weight" and to "what would we lose without
+            # the deterministic reader" -- and it was being thrown away on the one run
+            # where somebody is looking.
+            #
+            # recovered is the number that justifies paying for vision at all: rows the
+            # deterministic reader did not find. a_only is its mirror -- rows vision
+            # missed, which is what an LLM-only run would lose.
+            _cnt = dict((_dp or {}).get("counts") or {})
+            if _cnt:
+                _da["bom_reader_counts"] = _cnt
+                print(f"   [bom-readers] both agreed {_cnt.get('both', 0)}; "
+                      f"vision recovered {_cnt.get('recovered', 0)} the deterministic "
+                      f"reader missed; vision overrode {_cnt.get('override', 0)}; "
+                      f"vision missed {_cnt.get('a_only', 0)}", flush=True)
             if _dp.get("rows"):
-                _da = summary.setdefault("document_analysis", {})
+                # One category code over several articles is several parts, from here on
+                # (part_identity.category_code_identities) — the reconciler below and every
+                # reader of bom_rows see the same identity per article.
+                try:
+                    from part_identity import (mint_cut_list_member_identities,
+                                               mint_uncoded_row_identities,
+                                               rejoin_dimension_split_rows,
+                                               split_category_code_rows)
+                    _n_split = split_category_code_rows(_dp["rows"])
+                    _n_rejoin = rejoin_dimension_split_rows(_dp["rows"])
+                    if _n_rejoin:
+                        print(f"   [bom-identity] {_n_rejoin} row(s) whose size was read as "
+                              f"a code rejoined (D-548)", flush=True)
+                    # A CUT LIST OF SEVERAL SECTIONS IS SEVERAL MEMBERS (D-548), named before
+                    # the bought-in minter sees the rows, so a tube piece is never a BI- line.
+                    _n_members = mint_cut_list_member_identities(_dp["rows"])
+                    if _n_members:
+                        print(f"   [bom-identity] {_n_members} cut-list piece(s) of several "
+                              f"sections made members of their weldment (D-548)", flush=True)
+                    _n_mint = mint_uncoded_row_identities(_dp["rows"])
+                    if _n_mint:
+                        print(f"   [bom-identity] {_n_mint} uncoded parts-list row(s) named "
+                              f"by their words (BI-<word>) so they reach the bill",
+                              flush=True)
+                    _roles: Dict[str, int] = {}
+                    for _r in _dp["rows"]:
+                        if isinstance(_r, dict) and _r.get("row_role") \
+                                and _r.get("row_role") != "part":
+                            _roles[_r["row_role"]] = _roles.get(_r["row_role"], 0) + 1
+                    if _roles:
+                        print(f"   [bom-identity] uncoded rows that are the parent's, not "
+                              f"parts: {', '.join(f'{k} {v}' for k, v in sorted(_roles.items()))}",
+                              flush=True)
+                    if _n_split:
+                        print(f"   [bom-identity] {_n_split} row(s) under a shared category "
+                              f"code (P/P, FIXING...) given one identity per article",
+                              flush=True)
+                except Exception as _sp_err:                          # noqa: BLE001
+                    _debug(f"category-code split skipped: {_sp_err}")
                 _da["bom_rows"] = _dp["rows"]
                 _da["bom_code_quality_findings"] = _dp.get("findings", [])
                 _debug(f"dual-path bom_rows applied: {len(_dp['rows'])} rows")
         except Exception as _dp_err:
             _debug(f"dual-path bom_rows hook skipped: {_dp_err}")
 
-        # -- Dual-path -> part_estimates reconciliation (self-contained) -----------
-        # bom_rows was updated above, but the SHEET reads estimate_summary.part_estimates.
-        # Push dual-path fastener quantities/identities into part_estimates so they reach
-        # the sheet. Failure-isolated; fabricated parts never touched.
-        try:
-            if _dp.get("rows"):
-                import estimator as _E_recon
-                import re as _re_recon
-
-                _es_recon = summary.setdefault("estimate_summary", {})
-                _parts_recon = _es_recon.get("part_estimates")
-                if _parts_recon is None:
-                    _parts_recon = summary.get("part_estimates")
-
-                if isinstance(_parts_recon, list):
-
-                    def _is_fastener_row(_r):
-                        _d = (str(_r.get("description") or "") + " " +
-                              str(_r.get("part_code") or _r.get("code") or
-                                  _r.get("part_number") or "")).upper()
-                        return any(_k in _d for _k in ("CLINCH", "NUT", "KNURL", "KNOB",
-                                   "THUMB", "SCREW", "PEM", "STUD", "RIVET", "THUM",
-                                   "WASHER", "BOLT", "GLIDE"))
-
-                    def _dp_code(_r):
-                        return str(_r.get("part_code") or _r.get("code") or
-                                   _r.get("part_number") or "").strip()
-
-                    def _dp_qty(_r):
-                        _q = _r.get("qty") or _r.get("quantity") or _r.get("qty_per_unit")
-                        try:
-                            return int(float(_q)) if _q is not None else None
-                        except (TypeError, ValueError):
-                            return None
-
-                    def _p_code(_p):
-                        return str(_p.get("part_number") or "").strip().upper()
-
-                    def _clean_code(_desc, _fallback):
-                        _dU = (_desc or "").upper()
-                        _fb = (_fallback or "").upper().strip()
-                        _VAGUE = ("STD PART", "FIXING", "FIXINGTBC", "TBC", "STDPART", "")
-                        if _fb not in _VAGUE and _re_recon.search(r"\d", _fb):
-                            return _fallback
-                        _MAP = [
-                            (r"SELF[\s-]?CLINCH.*NUT|CLINCH.*NUT", "BI-SELFCLINCHNUT"),
-                            (r"KNURLED.*KNOB", "BI-KNURLEDKNOB"),
-                            (r"KNURLED.*NUT", "BI-KNURLEDNUT"),
-                            (r"THREADED.*PEM.*STUD|PEM.*STUD", "BI-PEMSTUD"),
-                            (r"KEYHOLE.*PEM", "BI-KEYHOLEPEM"),
-                            (r"MUSHROOM.*THUMB|THUMB.*SCREW", "BI-THUMBSCREW"),
-                            (r"BUTTON.*HEAD.*SCREW", "BI-BUTTONSCREW"),
-                            (r"DOME.*RIVET|POP.*RIVET|RIVET", "BI-RIVET"),
-                            (r"NUT", "BI-NUT"), (r"SCREW", "BI-SCREW"),
-                            (r"WASHER", "BI-WASHER"), (r"BOLT", "BI-BOLT"),
-                        ]
-                        for _pat, _code in _MAP:
-                            if _re_recon.search(_pat, _dU):
-                                return _code
-                        return _fallback or "BI-FIXING"
-
-                    _added = _updated = 0
-                    for _r in _dp["rows"]:
-                        if not _is_fastener_row(_r):
-                            continue
-                        _code = _dp_code(_r)
-                        _qty = _dp_qty(_r)
-                        _desc = str(_r.get("description") or _code)
-                        if _qty is None or _qty <= 0:
-                            _qty = 1
-
-                        # 1) CODE match -> update qty, no add
-                        _cm = None
-                        if _code:
-                            for _p in _parts_recon:
-                                if _p_code(_p) == _code.upper():
-                                    _cm = _p
-                                    break
-                        if _cm is not None:
-                            if _cm.get("quantity") != _qty:
-                                _cm["quantity"] = _qty
-                                _cm.setdefault("review_flags", []).append(
-                                    f"Quantity set to {_qty} from dual-path BOM table read")
-                                _updated += 1
-                            continue
-
-                        # 2) TOKEN match vs bought-in parts -> dual-path qty wins
-                        _ctoks = _E_recon._bought_in_token_set({"description": _desc})
-                        _tm = None
-                        if _ctoks is not None:
-                            for _p in _parts_recon:
-                                _roles = _p.get("page_roles") or []
-                                if not ("bought_in" in _roles or _p_code(_p).startswith("BI-")):
-                                    continue
-                                _ptoks = _E_recon._bought_in_token_set(_p)
-                                if _ptoks is not None and _E_recon._bought_in_same_item(_ctoks, _ptoks):
-                                    _tm = _p
-                                    break
-                        if _tm is not None:
-                            if _tm.get("quantity") != _qty:
-                                _old = _tm.get("quantity")
-                                _tm["quantity"] = _qty
-                                _tm.setdefault("review_flags", []).append(
-                                    f"Quantity corrected {_old} -> {_qty} from dual-path BOM "
-                                    f"table read (matched '{_desc}')")
-                                _updated += 1
-                            continue
-
-                        # 3) No match -> ADD clean bought-in row
-                        _cc = _clean_code(_desc, _code)
-                        if any(_p_code(_p) == _cc.upper() for _p in _parts_recon):
-                            continue
-                        _parts_recon.append({
-                            "part_number": _cc, "description": _desc, "quantity": _qty,
-                            "pages": [], "page_roles": ["bought_in"], "materials": [],
-                            "surface_finishes": [], "colours": [], "thicknesses_mm": [],
-                            "weights": [], "textual_operations": ["handling"],
-                            "inferred_operations": [], "flat_pattern_detected": False,
-                            "assembly_candidate": False, "process_notes": [],
-                            "review_flags": [
-                                f"Added from dual-path BOM table read (code '{_code}' -> "
-                                f"'{_cc}'), qty {_qty} - price via waterfall, estimator to verify"],
-                            "confidence": {"overall": 0.0}, "source": "non_sdi_bom_row",
-                        })
-                        _added += 1
-
-                    if _es_recon.get("part_estimates") is not None:
-                        _es_recon["part_estimates"] = _parts_recon
-                    else:
-                        summary["part_estimates"] = _parts_recon
-                    if _added or _updated:
-                        print(f"   [dual-path recon] part_estimates: {_updated} qty-corrected, "
-                              f"{_added} added from BOM table read")
-        except Exception as _dpr_err:
-            _debug(f"dual-path part_estimates reconcile skipped: {_dpr_err}")
+        # The early dual-path -> part_estimates reconcile that lived here was dead code:
+        # it ran before part_estimates existed, so it always skipped, and the live pass is
+        # _reconcile_dualpath_into_part_estimates after estimate_document. Removed by the
+        # pipeline audit (docs/PIPELINE_WRITER_INVENTORY.md, stage 0).
 
     _debug("start build_document_writeup")
     summary["manufacturing_writeup"] = build_document_writeup(summary)
@@ -1400,6 +2879,13 @@ def _finalize_scan_summary(
         summary = augment_summary_with_dxf(summary, dxf_paths, reestimate=False)
         _debug("done augment_summary_with_dxf")
 
+    # THE STRETCH NOBODY HAD TIMED. Everything from here to estimate_document — the
+    # normalisers, the dual-path BOM read, the SolidWorks extract, the LLM extract, the
+    # graph compile, the mirror and detail-page passes — ran outside every bracket, and
+    # on 12567-01 that stretch was most of 2,557 unmeasured seconds in a 4,351 s run.
+    # Bracketed coarsely here and finely inside (run_timing merges nested spans), so the
+    # table names the step and not only the gap (D-279).
+    run_timing.mark("start pre_estimate_passes")
     # ── Pre-estimate normalisation ────────────────────────────────────────────
     # Must run BEFORE estimate_document so BOUGHT_IN materials price at £0,
     # and boilerplate-sourced operations are stripped before routing is costed.
@@ -1464,6 +2950,14 @@ def _finalize_scan_summary(
                 return False
             if _FAKE_PN_PATTERNS.match(pn_stripped):
                 return False
+            # A category code carrying its article's words ("P/P-SEMI-BLIND-RUBBER-GROMMET")
+            # is an identity part_identity gave a shared "P/P" row — no digit needed.
+            try:
+                from part_code_conventions import is_category_not_a_code as _is_cat
+                if "-" in pn_stripped and _is_cat(pn_stripped.split("-", 1)[0]):
+                    return True
+            except Exception:                                           # noqa: BLE001
+                pass
             # Real part numbers always have digits
             if not re.search(r'\d', pn_stripped):
                 return False
@@ -1489,6 +2983,31 @@ def _finalize_scan_summary(
                 str(p.get("description") or p.get("part_number") or "").strip()
             )
         ]
+        # ── THE DRAUGHTSMAN IS NOT A COMPONENT ────────────────────────────────────
+        # Dyson 10575-02 is drawn by "P.Andrew", and the engine costed ANDREW-14 as a
+        # 1200 x 1000 x 18mm MDF panel — GBP 28.21 of board plus CNC joinery — on a job
+        # whose BOM contains no MDF. The dimensions were the pallet's; the name was the
+        # draughtsman's. It passed the boilerplate guard because that guard demands a digit
+        # and "-14" supplied one, so a person became a part on the strength of a revision
+        # number typed beside their name.
+        #
+        # DROPPED, NOT UN-NAMED. Blanking the part number leaves the money on the sheet
+        # under a nameless line, which is the same phantom wearing a worse label. It is not
+        # a part, so it does not belong in the costing at all — and the drop is announced,
+        # because a line vanishing without explanation is its own kind of unexplained number.
+        _authors = title_block_author_tokens(summary)
+        if _authors:
+            _people = [p for p in _pre_estimate_parts
+                       if is_a_person_not_a_part(p.get("part_number"), _authors)]
+            if _people:
+                _pre_estimate_parts = [p for p in _pre_estimate_parts if p not in _people]
+                for _ghost in _people:
+                    print(f"   [phantom] dropped '{_ghost.get('part_number')}' — that is the "
+                          f"draughtsman named in the title block, not a part", flush=True)
+                summary.setdefault("dropped_phantom_parts", []).extend(
+                    {"part_number": g.get("part_number"),
+                     "description": g.get("description"),
+                     "reason": "title_block_author_read_as_a_part"} for g in _people)
         # Normalise + validate each part_number: reject finish/boilerplate text.
         for _p in _pre_estimate_parts:
             _pn = _normalise_part_number(_p.get("part_number"))
@@ -1496,6 +3015,20 @@ def _finalize_scan_summary(
                 _p["part_number"] = _pn
             if _p.get("part_number") and not _is_valid_part_number(_p["part_number"]):
                 _bad = _p["part_number"]
+                # A WORD IN THE CODE CELL WITH A PART'S DESCRIPTION IS A PURCHASED LINE
+                # (D-436), kept under the drawing's own word, not rejected to a nameless
+                # record the sheet cannot carry.
+                if word_coded_row_is_a_purchase(_bad, _p.get("description")):
+                    _p["part_number"] = str(_bad).strip().upper()
+                    _p["is_bought_in"] = True
+                    _roles = _p.setdefault("page_roles", [])
+                    if isinstance(_roles, list) and "bought_in" not in _roles:
+                        _roles.append("bought_in")
+                    _p.setdefault("review_flags", []).append(
+                        f"word-coded parts-list row: the code cell prints '{_bad}', a word, "
+                        f"not a code; kept as a purchased line under that word, priced by "
+                        f"its description")
+                    continue
                 _p["part_number"] = None
                 _p.setdefault("review_flags", []).append({
                     "severity": "warning",
@@ -1506,15 +3039,7 @@ def _finalize_scan_summary(
         # Suppress stated_weight_g on assembly/overview pages to prevent
         # double-counting sub-part weights into parent assembly material cost.
         for _part in _pre_estimate_parts:
-            _page_roles = _part.get("page_roles") or []
-            _pages = _part.get("pages") or []
-            _has_desc = bool(str(_part.get("description") or "").strip())
-            _is_assembly_page = (
-                "assembly" in str(_page_roles).lower()
-                or (len(_pages) > 1 and not _has_desc)
-                or not _has_desc
-            )
-            if _part.get("stated_weight_g") and _is_assembly_page:
+            if _part.get("stated_weight_g") and _weight_would_be_someone_elses(_part):
                 _part["stated_weight_g"] = None
                 _part["weights"] = []
 
@@ -1523,7 +3048,7 @@ def _finalize_scan_summary(
             for _dim_field in ('overall_length_mm', 'overall_width_mm'):
                 _v = _part.get(_dim_field)
                 if _v is not None and 1900.0 <= float(_v) <= 2100.0:
-                    _part[_dim_field] = None
+                    _part[_dim_field] = None   # precedence: direct-write ok — clears a dimension, adds no evidence
         summary.setdefault("manufacturing_writeup", {})["parts"] = _pre_estimate_parts
 
         # Drop None-PN BOM artefacts whose description is a qty-suffixed duplicate
@@ -1543,23 +3068,27 @@ def _finalize_scan_summary(
         # Deduplicate None-PN parts sharing page+geometry with a named part
         _by_geom: Dict[tuple, int] = {}
         _drop_idx: set = set()
-        for _di, _dp in enumerate(_pre_estimate_parts):
-            _gr = _dp.get("geometry_rollup") or _dp.get("geometry") or {}
+        for _di, _pep in enumerate(_pre_estimate_parts):
+            # NOTE: loop var is _pep (pre-estimate part), NOT _dp — _dp holds the
+            # dual-path BOM result computed far above and consumed by the reconcile
+            # after estimate_document. Reusing _dp here clobbered it, so the fastener
+            # reconcile always saw a part dict (no "rows") and silently no-op'd.
+            _gr = _pep.get("geometry_rollup") or _pep.get("geometry") or {}
             _cut = round(float(_gr.get("estimated_cut_length_mm") or 0))
             if _cut <= 0:
                 continue
-            _dk = (tuple(sorted(_dp.get("pages") or [])), _cut)
+            _dk = (tuple(sorted(_pep.get("pages") or [])), _cut)
             if _dk not in _by_geom:
                 _by_geom[_dk] = _di
                 continue
             _prev_i = _by_geom[_dk]
             _prev_p = _pre_estimate_parts[_prev_i]
-            if _dp.get("part_number") and not _prev_p.get("part_number"):
+            if _pep.get("part_number") and not _prev_p.get("part_number"):
                 _drop_idx.add(_prev_i)
                 _by_geom[_dk] = _di
-            elif not _dp.get("part_number") and _prev_p.get("part_number"):
+            elif not _pep.get("part_number") and _prev_p.get("part_number"):
                 _drop_idx.add(_di)
-            elif not _dp.get("part_number") and not _prev_p.get("part_number"):
+            elif not _pep.get("part_number") and not _prev_p.get("part_number"):
                 _drop_idx.add(_di)
         if _drop_idx:
             _pre_estimate_parts = [_p for _i, _p in enumerate(_pre_estimate_parts) if _i not in _drop_idx]
@@ -1573,34 +3102,35 @@ def _finalize_scan_summary(
                 if _tm_thk:
                     _tv_thk = float(_tm_thk.group(1))
                     if 0.3 <= _tv_thk <= 25.0:
-                        _part["normalized_thickness_mm"] = _tv_thk
+                        # From the filename, so inference — not the geometry, not the model.
+                        _apply_field(_part, "normalized_thickness_mm", _tv_thk, "inference")
             # 1. Set correct normalized_material (BOUGHT_IN, VENEERED_MDF etc.)
             _mat = normalise_material_for_part(_part)
             if _mat:
-                _part["normalized_material"] = _mat
+                _apply_field(_part, "normalized_material", _mat, "inference")
             # Fabricated MS flat patterns must not stay BOUGHT_IN (e.g. GRAPHIC CHANNEL).
             if (_part.get("normalized_material") or "").upper() == "BOUGHT_IN":
                 _dfn_chk = str(_part.get("dxf_source_file") or _part.get("geometry_source_path") or "").upper()
                 if _part.get("flat_pattern_detected") and ("_MS_" in _dfn_chk or " MS_" in _dfn_chk
                         or re.search(r"\d+\.?\d*\s*MM\s*MS", _dfn_chk)):
-                    _part["normalized_material"] = "MILD_STEEL"
+                    _apply_field(_part, "normalized_material", "MILD_STEEL", "inference")
             # DXF filename material fallback
             if not _part.get("normalized_material"):
                 _dfn = str(_part.get("dxf_source_file") or _part.get("geometry_source_path") or "").upper()
                 _dgs = str(_part.get("geometry_source") or "")
                 if "dxf" in _dgs.lower() and _dfn:
                     if "_MS_" in _dfn or "MS_" in _dfn or "_MS." in _dfn:
-                        _part["normalized_material"] = "MILD_STEEL"
+                        _apply_field(_part, "normalized_material", "MILD_STEEL", "inference")
                     elif "PETG" in _dfn:
-                        _part["normalized_material"] = "ACRYLIC"
+                        _apply_field(_part, "normalized_material", "ACRYLIC", "inference")
                     elif ("_ACR_" in _dfn or "ACRYLIC" in _dfn or "HI ACR" in _dfn
                             or "HI_ACR" in _dfn or "HIGH IMPACT" in _dfn or "HIGH_IMPACT" in _dfn
                             or "PERSPEX" in _dfn or "PMMA" in _dfn):
-                        _part["normalized_material"] = "ACRYLIC"
+                        _apply_field(_part, "normalized_material", "ACRYLIC", "inference")
                     elif "JOINERY" in _dfn or "_MDF_" in _dfn:
-                        _part["normalized_material"] = "MDF"
+                        _apply_field(_part, "normalized_material", "MDF", "inference")
                     elif "DISPA" in _dfn or "PAPER" in _dfn:
-                        _part["normalized_material"] = "BOUGHT_IN"
+                        _apply_field(_part, "normalized_material", "BOUGHT_IN", "inference")
             # 2. Strip spec boilerplate from process_notes then re-derive ops
             _clean_notes = [_strip_spec_boilerplate(str(n)) for n in (_part.get("process_notes") or [])]
             _part["process_notes"] = _clean_notes
@@ -1617,10 +3147,33 @@ def _finalize_scan_summary(
                     for p in (summary.get("pages") or [])
                     if p.get("page_number") in (_part.get("pages") or [])
                 )
+                # A WEIGHT THE SHEET QUALIFIES AS SOMETHING ELSE'S IS NOT THE PART'S (D-406):
+                # "ESTIMATED BAG WEIGHT - 1.5kg" became 12675-01-02's weight.
+                from extractor_patterns import strip_weights_not_the_parts as _strip_w
                 _weight_matches = re.findall(
                     r"WEIGHT\s*(?:\([^)]*\))?\s*[:\s]+([0-9]+(?:\.[0-9]+)?)\s*(KG|G)\b",
-                    _all_page_text.upper(),
+                    _strip_w(_all_page_text).upper(),
                 )
+                # THE SAME RULE THE SUPPRESSION PASS USES, ASKED HERE TOO.
+                #
+                # That pass runs EARLIER in this function and clears stated_weight_g on
+                # assembly-only records "to prevent double-counting sub-part weights into
+                # parent assembly material cost". Then this block ran and put one back, so
+                # the guard was dead for every weight the text scan found -- a gate that
+                # runs before the thing it gates.
+                #
+                # 11650-05-02M SLIDER is the cost. Named only on a GA page, no detail
+                # drawing, no blank, no thickness -- and it came out at 11.694 kg, because
+                # "the largest weight found on the part's pages" on an assembly sheet is
+                # the assembly's own weight or its heaviest child, never this part's.
+                # 11.694 kg x GBP 0.80/kg x 1.04 scrap = GBP 9.73, x2 = GBP 20.24, which was
+                # 38% of that job's material.
+                #
+                # Taking the MAX is right on a detail drawing, where the candidates are one
+                # part's weight written more than once. It is exactly wrong on a sheet that
+                # describes many parts.
+                if _weight_matches and _weight_would_be_someone_elses(_part):
+                    _weight_matches = []
                 if _weight_matches:
                     # Take the largest weight found on the part's pages
                     _best = max(
@@ -1638,6 +3191,18 @@ def _finalize_scan_summary(
             # (e.g. "Weld and Dress" callouts) are legitimate and must be kept.
             _clean_text = _strip_spec_boilerplate(" ".join(_clean_notes))
             _clean_ops = set(infer_operations(_clean_text))
+            # The note words each op was read from travel with it (D-586) — an op the notes
+            # genuinely state is a drawing note WITH its quote; one merely carried over from
+            # an earlier pass stays unsourced and is never promoted to one.
+            if _clean_ops:
+                try:
+                    from extractor_patterns import operation_evidence_in_text
+                    _op_ev = operation_evidence_in_text(_clean_text, sorted(_clean_ops))
+                except Exception:                                    # noqa: BLE001
+                    _op_ev = {}
+                for _op, _snip in _op_ev.items():
+                    _part.setdefault("operation_evidence", {}).setdefault(_op, _snip)
+                    _part.setdefault("operation_sources", {}).setdefault(_op, "drawing_notes")
             _existing_ops = list(_part.get("textual_operations") or [])
             # Merge: start from clean inference, add any upstream ops not in result
             _merged = list(_clean_ops)
@@ -1655,6 +3220,572 @@ def _finalize_scan_summary(
                            {"powder_coating", "diamond_polish", "wet_spray"}]
             _part["textual_operations"] = _merged
     # ─────────────────────────────────────────────────────────────────────────
+
+    # ── SolidWorks native extract — LAYER 0 of the source waterfall ─────────────────────
+    # Runs BEFORE the LLM extract and before costing, so modelled truth (flat blank from the
+    # sheet-metal cut list, sheet gauge, applied material, full-depth BOM quantities) is in
+    # the part records first and every lower source can only fill the gaps it leaves.
+    #
+    # Self-gating: it applies when the analyser's `_sw_native_extract.json` is present in the
+    # job folder — i.e. when somebody ran tools/solidworks/sw_native_analyse.py on a machine
+    # with SolidWorks. No file, no effect: the job runs on PDF + DXF exactly as before.
+    #   SDI_APPLY_SOLIDWORKS=0   force off
+    #   SDI_APPLY_SOLIDWORKS=1   force on (and say so loudly if the extract is missing)
+    #   SDI_SW_EXTRACT_JSON=...  read the extract from an explicit path
+    _sw_flag = os.getenv("SDI_APPLY_SOLIDWORKS", "").strip().lower()
+    # BOUND BEFORE THE BRANCH, so every later reader gets a value rather than a name that
+    # may or may not exist. The hierarchy pass 400 lines below fished this name out of the
+    # frame's locals precisely because it could be unbound — and an unbound name and a
+    # refused extract both arrived there as None, which made "the pass printed nothing"
+    # unanswerable.
+    # _sw_why records which of the several ways to have no extract actually happened.
+    _sw_job = None
+    # THIS JOB'S OWN EXTRACT THAT MATCHED NO PART, kept for the model take-off (D-411): on a
+    # design-intent pack the drawings mint nothing, so the model is the parts list.
+    _sw_job_own_unmatched = None
+    _sw_why = "not attempted"
+    if _sw_flag in {"0", "false", "no", "off"}:
+        _sw_why = "SDI_APPLY_SOLIDWORKS is off"
+    if _sw_flag not in {"0", "false", "no", "off"}:
+        try:
+            from source_connectors.solidworks import (
+                apply_native_to_pre_estimate,
+                native_extract_for_job,
+            )
+            _sw_json = os.getenv("SDI_SW_EXTRACT_JSON") or None
+            # job_folder is only set on the folder-as-job path; a single --pdf scan passes
+            # none. Fall back to the PDF's own directory, which is where the extract
+            # naturally sits — otherwise the file is present and silently ignored.
+            _sw_folder = job_folder or (Path(pdf_path).parent if pdf_path else None)
+            # OPT-IN, NOT DEFAULT — and the reason is other people's work, not caution.
+            # The analyser calls Dispatch("SldWorks.Application"), which ATTACHES to a
+            # SolidWorks already running on this machine.
+            #
+            # THE DESTRUCTIVE HALF OF THIS IS FIXED, AND THIS COMMENT USED TO SAY OTHERWISE.
+            # It described the analyser closing every title it touched, which stopped being
+            # true when sw_native_analyse learned ownership: it asks what is already open
+            # BEFORE opening anything, records those as borrowed, and close_all() closes only
+            # the documents this process opened. A stale hazard note is not harmless — this
+            # one was read as current and produced a warning telling somebody not to run a
+            # tool that is now safe to run.
+            #
+            # WHAT REMAINS IS REAL AND DIFFERENT. A borrowed document is read in the state
+            # the designer has it in, which may include unsaved changes — so the extract can
+            # describe a model that is not what is on disk, and the freshness fingerprint
+            # cannot see that. Save open work before extracting.
+            #
+            # Still opt-in HERE, because attaching to somebody's session mid-estimate is a
+            # decision that belongs to whoever owns the machine, not to a costing run. Enable
+            # it where SolidWorks belongs to this process — a dedicated worker or batch box —
+            # with SDI_SW_RUN_ANALYSER=1. Everywhere else the pipeline consumes an extract
+            # someone else produced, and says so loudly when models are present and no
+            # extract is.
+            # DEFAULT ON AGAIN, AND THIS IS A RESTORATION RATHER THAN A NEW POLICY.
+            #
+            # b1f501b made acquisition automatic: "the pipeline CONSUMED an extract but never
+            # produced one, so on a machine with SolidWorks the strongest source available was
+            # used or skipped depending on whether somebody had remembered to run a separate
+            # script — and skipping it looked exactly like a job with no models."
+            #
+            # fd2d6c8 turned it off the SAME DAY, for a reason that was correct at the time:
+            # the analyser closed every title it touched, so on a designer's workstation it
+            # closed their work, unsaved changes included. That is a data-loss risk and no
+            # costing run is worth it.
+            #
+            # THAT REASON NO LONGER EXISTS. sw_native_analyse learned document ownership: it
+            # asks what is already open BEFORE opening anything, records those as borrowed,
+            # and close_all() closes only the documents this process opened. The comment above
+            # this block already says so. The opt-out was never lifted, so every job since has
+            # quietly been PDF+DXF unless a person set an environment variable — which is
+            # exactly the failure b1f501b was written to end, restored by inaction.
+            #
+            # WHAT REMAINS IS SMALLER AND IS NOT A REASON TO SKIP. A borrowed document is read
+            # in the state the designer has it in, so the extract can describe unsaved work
+            # that is not on disk, and the fingerprint cannot see it because it hashes the
+            # file. The manifest now records which documents were borrowed, so that caveat
+            # reaches the estimate instead of being used to justify reading nothing at all.
+            #
+            #   SDI_SW_RUN_ANALYSER=0   consume an existing extract only; never invoke COM
+            _sw_run = os.getenv("SDI_SW_RUN_ANALYSER", "").strip().lower() \
+                not in {"0", "false", "no", "off"}
+            # THE PART NUMBERS THE DRAWINGS ALREADY GAVE US, handed to the extract so it can
+            # tell which of several assemblies is this job. Without them the picker ranks by
+            # BOM size, and on 11650 that made a test rig the top of the tree.
+            # ONE NORMALISER, BOTH SIDES. This first used part_code_conventions.bare_code
+            # here and the connector's _clean_pn on the extract — "11650-01-01M" became
+            # "116500101M" on one side and stayed "11650-01-01M" on the other, so the
+            # intersection was EMPTY on every job, the overlap path never fired, and the
+            # picker fell silently back to largest-BOM. The run printed the fallback message
+            # and looked exactly like a build that did not have the fix at all.
+            #
+            # Two normalisers on the two sides of one comparison is the same defect as two
+            # copies of an exclusion list, and it is invisible for the same reason: nothing
+            # fails, a set is just always empty.
+            from source_connectors.solidworks import _clean_pn as _norm_code
+            _job_codes = {_norm_code(str(p.get("part_number") or ""))
+                          for p in (_pre_estimate_parts or [])
+                          if isinstance(p, dict) and p.get("part_number")} - {""}
+            run_timing.mark("start solidworks_extract")
+            _sw_job = native_extract_for_job(folder=_sw_folder, json_path=_sw_json,
+                                             run=_sw_run, job_codes=_job_codes) \
+                if (_sw_folder or _sw_json) else None
+            run_timing.mark("done solidworks_extract")
+            if not (_sw_folder or _sw_json):
+                _sw_why = ("no job folder and no SDI_SW_EXTRACT_JSON — nowhere to look for "
+                           "an extract")
+            elif _sw_job is None or not getattr(_sw_job, "found", False):
+                _sw_why = (f"no readable _sw_native_extract.json under {_sw_folder} "
+                           f"(run tools/solidworks/sw_native_analyse.py on the model folder)")
+            else:
+                _sw_why = ""
+            if _sw_job is not None and _sw_job.meta.get("native_folder_unreachable"):
+                # THE FOLDER COULD NOT BE OPENED. Distinct from "no models here", which is
+                # silent by design — a VPN down or an unmapped drive produces a job that says
+                # nothing at all about SolidWorks and reads exactly like a drawings-only one.
+                _unreach = _sw_job.meta.get("native_folder_unreachable")
+                summary.setdefault("solidworks_native", {}).update({
+                    "source": "solidworks_api", "found": False,
+                    "native_folder_unreachable": _unreach,
+                })
+                print(f"   [solidworks] COULD NOT LOOK for native models — the folder is not "
+                      f"reachable from this machine: {_unreach}. That is not the same as a job "
+                      f"with no models: reconnect the VPN or map the drive and re-run before "
+                      f"treating this estimate as drawings-only.", flush=True)
+            if _sw_job is not None and _sw_job.meta.get("native_present_but_unread"):
+                summary["solidworks_native"] = {
+                    "source": "solidworks_api",
+                    "found": False,
+                    "native_files_present": _sw_job.meta.get("native_files_present"),
+                    "native_present_but_unread": True,
+                    "reason": _sw_job.meta.get("native_unread_reason"),
+                    "analyser_error": _sw_job.meta.get("analyser_error"),
+                }
+                print(f"   [solidworks] {_sw_job.meta.get('native_files_present')} native model "
+                      f"file(s) are in this job folder but were NOT read: "
+                      f"{_sw_job.meta.get('native_unread_reason')}", flush=True)
+            # ── SAY WHAT LAYER 0 DID, ON EVERY RUN, WHETHER OR NOT IT WORKED ─────────
+            #
+            # analyser_error was recorded on the job's meta and printed only inside the
+            # branch above — which needs models COUNTED and no records. Any other shape of
+            # failure (the analyser exits non-zero, cannot start, times out, writes
+            # somewhere unexpected) set the field and printed NOTHING. The run then looked
+            # exactly like a job with no models, on a pack where the models are the only
+            # measured geometry there is.
+            #
+            # That silence cost a day. James, after four runs: "solid works com api needs to
+            # run. you assured me it would." The engine had the answer each time and did not
+            # say it.
+            #
+            # So Layer 0 now reports its outcome unconditionally: attached and read, or the
+            # reason it did not. One line either way, and never nothing.
+            if _sw_job is not None:
+                _n = len(getattr(_sw_job, "parts", None) or {}) or None
+                if _sw_job.meta.get("analyser_error"):
+                    print(f"   [solidworks] the analyser did not produce an extract: "
+                          f"{_sw_job.meta['analyser_error']}", flush=True)
+                elif getattr(_sw_job, "found", False):
+                    print(f"   [solidworks] model extract APPLIED"
+                          + (f" — {_n} part record(s)" if _n else "")
+                          + f" from {_sw_job.meta.get('extract_path') or 'the job folder'}",
+                          flush=True)
+                else:
+                    # THE HOLE IN MY OWN "UNCONDITIONAL" REPORTING, one commit later.
+                    # A job object with no analyser error and found=False fell between the two
+                    # branches and printed nothing — the exact silence the previous commit was
+                    # written to end, reintroduced by writing `if error / elif found` and
+                    # calling it exhaustive. An extract that was carried, read, and then
+                    # matched no part on the job lands here, and it is the case worth hearing
+                    # about: the file is present and contributing nothing.
+                    print(f"   [solidworks] an extract was resolved but NOTHING WAS APPLIED "
+                          f"from it — {_sw_job.meta.get('extract_path') or 'no path recorded'}"
+                          f". The models did not match this job's part numbers, so the "
+                          f"estimate is running on drawings alone.", flush=True)
+            elif _sw_flag not in {"0", "false", "no", "off"}:
+                print("   [solidworks] no extract was resolved for this job and no reason was "
+                      "recorded — the estimate is running on drawings alone.", flush=True)
+            # ── AN EXTRACT FOR ANOTHER JOB IS WORSE THAN NO EXTRACT ──────────────
+            # M&S 2085 was costed against 12120_sw_extract_v7.json — top assembly
+            # 12120-01-GA, a different customer's job, bound through a persistent
+            # SDI_SW_EXTRACT_JSON. The connector took it, matched nothing, applied
+            # nothing, and stamped a native_extract_partial BLOCKER describing 12120's
+            # unreadable model onto 2085's estimate. The estimator was told a released
+            # component might be missing, about a pack with nothing to do with the job.
+            #
+            # Zeros are survivable. What this opens is not: SDI numbers sequentially, so
+            # -01/-02/-03 collide across jobs constantly, and a colliding pair would have
+            # had one job's bounding boxes, materials and bend counts written onto the
+            # other's parts at the HIGHEST rank in the waterfall.
+            _sw_id = None
+            if _sw_job and _sw_job.found:
+                from source_connectors.solidworks import extract_is_for_this_job
+                # THE JOB'S OWN IDENTITY GOES WITH THE PARTS (D-410): a pack that minted no
+                # part still has a drawing number and a folder, and its extract is still its own.
+                _sw_id = extract_is_for_this_job(
+                    _pre_estimate_parts, _sw_job,
+                    job_identity=[summary.get("drawing_number"), summary.get("job_name"),
+                                  Path(str(summary.get("job_folder") or "")).name])
+                if not _sw_id.get("belongs"):
+                    # WHICH FAILURE IS THIS? Both look like zero matches, and for a whole
+                    # session job 11350 reported "different job" while suffering "our matcher
+                    # does not know this convention". Say which, and print the codes on both
+                    # sides, so the next convention gap is one look rather than a week.
+                    _ours = _sw_id.get("shares_job_number")
+                    _empty_job = bool(_sw_id.get("job_has_no_parts"))
+                    # THREE FAILURES, NOT TWO (D-410). A pack that produced no part records
+                    # cannot match anything, and that is neither a foreign extract nor an
+                    # unknown naming convention: it is this job's model with nothing drawn to
+                    # hold it against — the parts list where the pack has none.
+                    _why = ((("THIS IS THIS JOB'S OWN EXTRACT (the codes share this job's "
+                              "number) and the pack produced NO part records to match it "
+                              "against — the model is the parts list where the pack has none, "
+                              "and nothing was taken off from it on this run.")
+                             if _empty_job else
+                             ("THIS IS THIS JOB'S OWN EXTRACT and we could not match it — the "
+                              "codes share a job number. That is a naming convention this "
+                              "connector does not know, NOT a foreign pack."))
+                            if _ours else
+                            "The codes share no job number with this one, so it describes a "
+                            "different job. Point SDI_SW_EXTRACT_JSON at this job's extract, "
+                            "or unset it.")
+                    print(f"   [solidworks] REFUSED this extract. It describes "
+                          f"{_sw_id.get('candidates')} part(s) under top assembly "
+                          f"'{_sw_id.get('top_assembly') or '?'}' and matches NONE of this "
+                          f"job's {_sw_id.get('job_parts')} part(s).\n"
+                          f"                {_why}\n"
+                          f"                extract codes: "
+                          f"{', '.join(_sw_id.get('extract_codes') or []) or '(none)'}\n"
+                          f"                job codes:     "
+                          f"{', '.join(_sw_id.get('job_codes') or []) or '(none)'}\n"
+                          f"                extract: {_sw_job.meta.get('extract_path')}\n"
+                          f"                Nothing from it has been applied — this job is "
+                          f"costed from drawings alone.", flush=True)
+                    summary["solidworks_native"] = {
+                        "source": "solidworks_api",
+                        "found": False,
+                        "refused_wrong_job": True,
+                        "refused_own_job": bool(_ours),
+                        "job_has_no_parts": _empty_job,
+                        "extract_path": _sw_job.meta.get("extract_path"),
+                        "extract_top_assembly": _sw_id.get("top_assembly"),
+                        "extract_part_count": _sw_id.get("candidates"),
+                        "job_part_count": _sw_id.get("job_parts"),
+                        "extract_codes": _sw_id.get("extract_codes"),
+                        "job_codes": _sw_id.get("job_codes"),
+                        "reason": _why,
+                    }
+                    if _ours and _empty_job:
+                        _sw_job_own_unmatched = _sw_job
+                    _sw_job = None
+                    _sw_why = f"extract refused as belonging to another job: {_why}"
+            if _sw_job and _sw_job.found:
+                run_timing.mark("start apply_solidworks_extract")
+                # THE DRAWING'S OWN COUNT OF EACH CODE, per parts list, counted as the tree
+                # counts it (bom_tree.rows_combined_per_table). The model's handed twin is
+                # folded into its code only where the drawing lists the code for both hands.
+                try:
+                    from bom_tree import drawn_counts_by_code as _drawn_counts
+                    _sw_drawn = _drawn_counts(
+                        (summary.get("document_analysis") or {}).get("bom_rows") or [])
+                except Exception:                                    # noqa: BLE001
+                    _sw_drawn = None
+                _swc = apply_native_to_pre_estimate(_pre_estimate_parts, _sw_job,
+                                                    drawn_counts=_sw_drawn)
+                run_timing.mark("done apply_solidworks_extract")
+                summary.setdefault("manufacturing_writeup", {})["parts"] = _pre_estimate_parts
+                # Keep the normalised extract on the summary so the estimator can audit the
+                # modelled source data behind every native-sourced number.
+                summary["solidworks_native"] = {
+                    "source": "solidworks_api",
+                    # SUCCESS SAYS SO IN THE SAME WORD FAILURE USES. Both refusal paths
+                    # write "found": False and this one wrote nothing, so a reader asking
+                    # the obvious question got None on a perfectly good extract — the tree
+                    # was applied, the geometry was applied, and the record said "unknown".
+                    "found": True,
+                    "reliability": 1.0,
+                    "extract_path": _sw_job.meta.get("extract_path"),
+                    "top_assembly": _sw_job.meta.get("top_assembly"),
+                    "top_assembly_bbox_mm": _sw_job.meta.get("top_assembly_bbox_mm"),
+                    # CHOSEN, WHEN IT COULD NOT BE READ. The top assembly's full-depth BOM
+                    # becomes the job's component list at rank 90; on a folder of fifteen
+                    # assemblies the extract can rule out anything that is somebody's child
+                    # and cannot tell a released GA from a scratch one. Carried so an
+                    # invariant can say a choice was made, rather than the sheet presenting
+                    # somebody's test rig as the job.
+                    "top_assembly_candidates": _sw_job.meta.get("top_assembly_candidates"),
+                    "top_assembly_chosen_by": _sw_job.meta.get("top_assembly_chosen_by"),
+                    "counts": _sw_job.meta.get("counts"),
+                    "applied": _swc,
+                    # Freshness, carried onto the job so an invariant can act on it.
+                    "extract_stale": bool(_sw_job.meta.get("extract_stale")),
+                    "extract_incomplete": bool(_sw_job.meta.get("extract_incomplete")),
+                    "manifest_absent": bool(_sw_job.meta.get("manifest_absent")),
+                    "freshness_unverifiable": bool(_sw_job.meta.get("freshness_unverifiable")),
+                    "fingerprint_folder": _sw_job.meta.get("fingerprint_folder"),
+                    "source_unreachable": bool(_sw_job.meta.get("source_unreachable")),
+                    "changed_during_extraction": bool(_sw_job.meta.get("changed_during_extraction")),
+                    "fingerprint_before": _sw_job.meta.get("fingerprint_before"),
+                    "extract_errors": _sw_job.meta.get("extract_errors"),
+                    "freshness_check": _sw_job.meta.get("freshness_check"),
+                    "files_read": _sw_job.meta.get("files_read"),
+                    "files_failed": _sw_job.meta.get("files_failed"),
+                    "native_files_present": _sw_job.meta.get("native_files_present"),
+                    "native_files_fingerprint": _sw_job.meta.get("native_files_fingerprint"),
+                    "analyser_error": _sw_job.meta.get("analyser_error"),
+                    "bom": [vars(r) for r in _sw_job.bom],
+                }
+                # A DXF READ AS A NUMBERED PIECE IS CHECKED AGAINST THE MODEL TOO. The merge ran
+                # before the model was read, so it could only check the job's parts and parts
+                # lists; a model component <part>-<n> makes the piece reading a question.
+                try:
+                    from drawing_job_merge import recheck_dxf_pieces_against_model as _pc_recheck
+                    _pc_asked = _pc_recheck(
+                        _pre_estimate_parts,
+                        [getattr(_r, "part_number", "") for _r in (_sw_job.bom or [])]
+                        + list((getattr(_sw_job, "part_signals", None) or {}).keys())
+                        + list(getattr(_sw_job, "assembly_pns", None) or []))
+                    if _pc_asked:
+                        print(f"   [dxf] numbered piece(s) asked — the model holds a component "
+                              f"of the same number: {', '.join(_pc_asked)}", flush=True)
+                except Exception as _e_pc:                           # noqa: BLE001
+                    print(f"   [dxf] piece/model check skipped ({_e_pc})", flush=True)
+                if _sw_job.meta.get("extract_stale"):
+                    print("   [solidworks] EXTRACT IS STALE — the native models have changed "
+                          "since it was taken. The estimate is built on older geometry and "
+                          "is PROVISIONAL until the extract is regenerated.", flush=True)
+                print(f"   [solidworks] native extract applied — flat+{_swc['flat']} "
+                      f"thickness+{_swc['thickness']} material+{_swc['material']} "
+                      f"bends+{_swc['bends']} qty+{_swc['qty']} "
+                      f"assembly-parent+{_swc['assembly_parent']} bought-in+{_swc['bought_in']}",
+                      flush=True)
+                if _swc["material_conflict"] or _swc["geometry_conflict"]:
+                    print(f"   [solidworks] {_swc['material_conflict']} material and "
+                          f"{_swc['geometry_conflict']} blank disagreement(s) with the drawing "
+                          f"— flagged on the part, drawing value kept", flush=True)
+                if _swc["no_geometry_flagged"]:
+                    print(f"   [solidworks] {_swc['no_geometry_flagged']} part(s) have a "
+                          f"material but NO usable geometry — flagged as unpriced, NOT £0",
+                          flush=True)
+                if _swc["rejected_values"] or _swc["geometry_unchecked"]:
+                    print(f"   [solidworks] {_swc['rejected_values']} modelled value(s) READ "
+                          f"BUT REJECTED by the geometry gates, {_swc['geometry_unchecked']} "
+                          f"blank(s) left unreconciled against the DXF — both flagged on the "
+                          f"part, neither silently dropped", flush=True)
+                if _swc["not_in_bom"]:
+                    print(f"   [solidworks] {_swc['not_in_bom']} modelled part(s) appear in "
+                          f"NO assembly BOM (fixture/jig/setup) — flagged, confirm before "
+                          f"costing", flush=True)
+            elif _sw_flag in {"1", "true", "yes", "on"}:
+                print("   [solidworks] NOT APPLIED — no _sw_native_extract.json for this job "
+                      "(run tools/solidworks/sw_native_analyse.py on the model folder)", flush=True)
+        except Exception as _e_sw:
+            print(f"   [solidworks] skipped ({_e_sw})", flush=True)
+            _sw_why = f"the connector raised {type(_e_sw).__name__}: {_e_sw}"
+
+    # ── WELD SYMBOLS ON A PART'S OWN SHEET ─────────────────────────────────────────────
+    # Before every reader that can add an operation, so a weld the drawing states by symbol
+    # rules out one a later pass infers from a name. 12527-22-101 carries four ISO spot-weld
+    # symbols and no text; the engine charged Weld (CO2) and dressing and said "no weld note
+    # or symbol on the drawing". Failure-isolated: an unreadable sheet leaves the job as it is.
+    # The sheet facts and the records they were read onto are kept: an assembly the SolidWorks
+    # tree mints later has a sheet of its own in the pack too, and is read then (D-390).
+    _ws_by_part: Dict[str, Any] = {}
+    _ws_seen_pns: set = set()
+    if pdf_path:
+        try:
+            from weld_symbols import (apply_to_parts as _ws_apply,
+                                      apply_finish_welds as _ws_finish,
+                                      sheet_weld_facts as _ws_read)
+            run_timing.mark("start weld_symbols")
+            # EVERY PDF IN THE PACK, not only the one this summary is anchored on: a
+            # multi-sheet job states a sub-assembly's weld on that sub-assembly's own file.
+            _ws_pdfs = [pdf_path] + [_j.get("path") for _j in (summary.get("job_source_pdfs") or [])
+                                     if isinstance(_j, dict) and _j.get("path")]
+            _ws_by_part = _ws_read(_ws_pdfs)
+            _ws_seen_pns = {str(_p.get("part_number") or "").strip().upper()
+                            for _p in _pre_estimate_parts if isinstance(_p, dict)}
+            _ws_ruled = _ws_apply(_pre_estimate_parts, _ws_by_part)
+            _ws_fin = _ws_finish(_pre_estimate_parts, _ws_by_part)
+            try:
+                # A weld note on the part's own sheet states the weld (D-397).
+                from weld_symbols import apply_sheet_weld_notes as _ws_notes
+                _ws_noted = _ws_notes(_pre_estimate_parts, _ws_by_part)
+                if _ws_noted:
+                    print(f"   [weld-symbols] welded per a note on its own sheet: "
+                          f"{', '.join(_ws_noted)}", flush=True)
+            except Exception as _wn_err:                             # noqa: BLE001
+                print(f"   [weld-symbols] sheet weld notes not read: {_wn_err}", flush=True)
+            try:
+                from weld_symbols import apply_finish_coats as _ws_coats
+                _ws_coated = _ws_coats(_pre_estimate_parts, _ws_by_part)
+                if _ws_coated:
+                    print(f"   [weld-symbols] coated per its own sheet's FINISH (assembly): "
+                          f"{', '.join(_ws_coated)}", flush=True)
+            except Exception as _wc_err:                             # noqa: BLE001
+                print(f"   [weld-symbols] finish coats not read: {_wc_err}", flush=True)
+            try:
+                # Hand work the FINISH field states (SCRAPED EDGES), minted as its operation
+                # so the sheet charges it (D-393).
+                from weld_symbols import apply_finish_processes as _ws_procs
+                _ws_handwork = _ws_procs(_pre_estimate_parts, _ws_by_part)
+                if _ws_handwork:
+                    print(f"   [weld-symbols] hand work per its own sheet's FINISH: "
+                          f"{', '.join(_ws_handwork)}", flush=True)
+            except Exception as _wp_err:                             # noqa: BLE001
+                print(f"   [weld-symbols] finish processes not read: {_wp_err}", flush=True)
+            if _ws_fin.get("stated") or _ws_fin.get("questioned") \
+                    or _ws_fin.get("joined_by_symbol"):
+                print(f"   [weld-symbols] welded per its own sheet's FINISH: "
+                      f"{', '.join(_ws_fin.get('stated') or []) or 'none'}; welded on assembly "
+                      f"per its own sheet's weld symbols: "
+                      f"{', '.join(_ws_fin.get('joined_by_symbol') or []) or 'none'}; asked "
+                      f"whether welded itself (members state WELDED, the reader found no arc-"
+                      f"weld symbol on its own sheet): "
+                      f"{', '.join(_ws_fin.get('questioned') or []) or 'none'}",
+                      flush=True)
+            _ws_sym = sorted(str(_p.get("part_number")) for _p in _pre_estimate_parts
+                             if isinstance(_p, dict) and (_p.get("operation_sources") or {})
+                             .get("welding") == "drawing_deterministic"
+                             and any(str(_f).startswith("WELDED per the drawing:")
+                                     for _f in (_p.get("review_flags") or [])))
+            if _ws_sym:
+                print(f"   [weld-symbols] welded per the arc-weld symbols on its own sheet: "
+                      f"{', '.join(_ws_sym)}", flush=True)
+            run_timing.mark("done weld_symbols")
+            summary["weld_symbols_by_part"] = _ws_by_part
+            if _ws_ruled:
+                print(f"   [weld-symbols] spot welded per its own sheet: "
+                      f"{', '.join(_ws_ruled)} — arc weld ruled out", flush=True)
+        except Exception as _ws_err:
+            print(f"   [weld-symbols] not read: {type(_ws_err).__name__}: {_ws_err}",
+                  flush=True)
+
+    # ── Whole-document LLM extract — DRIVE the estimate from a chat-session-style read ──
+    # Gated (SDI_LLM_FULL_EXTRACT). Reasons over the ENTIRE pack in one call (hierarchy + tube
+    # cut lengths + materials + weights) and folds it into the pre-estimate parts BEFORE costing,
+    # so the engine's own tube/weight paths fire with the real data instead of garbled per-page
+    # vision geometry. Every value is flagged LLM-sourced (estimator to verify) and is
+    # transcribed from the drawing, cross-checked against the deterministic reads. Failure-isolated.
+    import os as _os_llm
+    # Default ON for PDF jobs when an XAI_API_KEY is present — the DXF waterfall keeps measured
+    # parts safe (LLM only fills gaps there), so the extract is safe on every job and this removes
+    # the silent no-op where the flag was simply never set and the good data never reached costing.
+    # Explicit SDI_LLM_FULL_EXTRACT=0/false/no/off disables it; =1/true/yes/on forces it on.
+    _llm_flag = _os_llm.getenv("SDI_LLM_FULL_EXTRACT", "").strip().lower()
+    _llm_off = _llm_flag in {"0", "false", "no", "off"}
+    _llm_on = (_llm_flag in {"1", "true", "yes", "on"}
+               or (_llm_flag == "" and bool(_os_llm.getenv("XAI_API_KEY"))))
+    if pdf_path and _llm_on and not _llm_off:
+        try:
+            from llm_full_extract import extract_full_pack
+            from source_connectors.llm_full_job import apply_full_job_to_pre_estimate, overlay_drawing_facts
+            # EVERY DOCUMENT OF THE JOB, NOT THE ANCHOR ALONE (D-597): the anchor first, then
+            # every other PDF the job read. A specification or a parts list in another file
+            # used to reach no whole-pack read at all.
+            _job_pdfs = job_documents(summary, pdf_path)
+            run_timing.mark("start llm_full_extract")
+            _job = extract_full_pack(_job_pdfs)
+            run_timing.mark("done llm_full_extract")
+            summary["llm_full_extract_coverage"] = _job.get("_coverage") or {}
+            if _job.get("found"):
+                # Overlay the DETERMINISTIC drawing_facts onto the LLM job: printed title-block
+                # values (per-part finish/thickness) fill the LLM's nulls, and the weld spec is
+                # combined (LLM 'set-down 20%' + deterministic 'ALL WELDS TO BE TIG'). Best of both.
+                try:
+                    from drawing_facts import extract_drawing_facts_for
+                    overlay_drawing_facts(_job, extract_drawing_facts_for(_job_pdfs))
+                except Exception as _e_ov:
+                    print(f"   [llm-full-extract] overlay skipped ({_e_ov})", flush=True)
+                # SECOND PASS — what the drawing IMPLIES but does not print. The pass above
+                # is forbidden from inventing, and rightly so; on a GA-only pack that leaves
+                # parts with no material and no size, which nothing downstream can price or
+                # route. M&S 2085 booked GBP 2.00 of labour on a welded three-part bracket
+                # because neither tube carried a single operation.
+                #
+                # Asked only about parts the first pass left empty, and everything it returns
+                # is stamped `inference` — the lowest rank in the waterfall — so it can never
+                # overwrite a printed or measured value. Failure-isolated: no model, no key,
+                # or a refusal all leave the job exactly as it is today.
+                try:
+                    from llm_full_extract import (INFER_BATCH_CHARS, context_batches,
+                                                  infer_missing_details_in_batches,
+                                                  merge_inference, pack_pages,
+                                                  parts_missing_detail)
+                    _missing = parts_missing_detail(_job.get("parts") or [])
+                    if _missing:
+                        # THE INFERENCE PASS SEES THE WHOLE PACK TOO (D-597), in whole-page
+                        # parts, where it saw the anchor's first 40,000 characters.
+                        _inf = infer_missing_details_in_batches(
+                            [b["text"] for b in context_batches(pack_pages(_job_pdfs),
+                                                                INFER_BATCH_CHARS)],
+                            _job.get("bom") or [], _missing)
+                        if _inf.get("found"):
+                            _job["inferred_parts"] = _inf.get("parts")
+                            _job["inferred_routes"] = _inf.get("routes")
+                            # THE WELD LIVES HERE, NOT IN THE TRANSCRIPTION.
+                            # Keeping the raw response was for answering "did the model say
+                            # welding?" — and welding is a CONCLUSION, so it comes from the
+                            # inference pass. Surfacing only the transcription raw answered
+                            # a question nobody was asking and left the one that cost a
+                            # commit-diff argument still unanswerable from the deliverable.
+                            _job["_inferred_raw_response"] = _inf.get("_raw_response")
+                            _job["_inference_from_cache"] = bool(_inf.get("_from_cache"))
+                            # MERGE, not stash. Stashing it on the job was the whole of the
+                            # last attempt: apply_full_job_to_pre_estimate reads job["parts"]
+                            # and job["routes"] and nothing else, so the inference sat beside
+                            # the job it was meant to complete and never reached a price.
+                            _mc = merge_inference(_job, _inf)
+                            print(f"   [llm-inference] {len(_inf.get('parts') or [])} part(s) had "
+                                  f"no material or size printed — filled {_mc['fields']} field(s), "
+                                  f"added {_mc['parts_added']} part(s) and {_mc['routes']} route(s), "
+                                  f"all stamped 'inference' (lowest rank, never overwrites a "
+                                  f"measurement)", flush=True)
+                        else:
+                            print(f"   [llm-inference] {len(_missing)} part(s) have nothing "
+                                  f"printed to cost from and inference returned nothing — "
+                                  f"they stay empty rather than guessed", flush=True)
+                except Exception as _e_inf:
+                    print(f"   [llm-inference] skipped ({_e_inf}) — run continues", flush=True)
+
+                _c = apply_full_job_to_pre_estimate(_pre_estimate_parts, _job)
+                summary.setdefault("manufacturing_writeup", {})["parts"] = _pre_estimate_parts
+                # Keep the WHOLE extract on the summary so it can be dumped to a retrievable
+                # sidecar next to the deliverables — this is the transcribed source data the
+                # estimator can audit against (BOM hierarchy, tube cut lengths, weights, spec).
+                summary["llm_full_extract"] = {
+                    "source": _job.get("source"),
+                    "top_assembly": _job.get("top_assembly"),
+                    "bom": _job.get("bom"),
+                    "routes": _job.get("routes"),
+                    "assemblies": _job.get("assemblies"),
+                    "parts": _job.get("parts"),
+                    "spec": _job.get("spec"),
+                    "inferred_parts": _job.get("inferred_parts"),
+                    "inferred_routes": _job.get("inferred_routes"),
+                    # What the model literally returned, so a route that appears on one run
+                    # and not the next can be settled by comparing responses rather than by
+                    # inferring from which files a commit happened to touch.
+                    "raw_response": _job.get("_raw_response"),
+                    "inferred_raw_response": _job.get("_inferred_raw_response"),
+                    "prompt_fingerprint": _job.get("_prompt_fingerprint"),
+                    "from_cache": bool(_job.get("_from_cache")),
+                    "inference_from_cache": bool(_job.get("_inference_from_cache")),
+                    "counts": _c,
+                    # Which pages of which documents the read had, in which part (D-597).
+                    "coverage": _job.get("_coverage") or {},
+                    "batch_conflicts": _job.get("_batch_conflicts") or [],
+                }
+                print(f"   [llm-full-extract] drove tube+{_c['tube']} qty+{_c.get('qty', 0)} "
+                      f"material+{_c['material']} weight+{_c['weight']} thickness+{_c['thickness']} "
+                      f"assembly-flagged+{_c['assembly_flagged']} into the estimate", flush=True)
+            else:
+                print(f"   [llm-full-extract] no job returned ({_job.get('error', '')})", flush=True)
+        except Exception as _e_llm:
+            print(f"   [llm-full-extract] skipped ({_e_llm})", flush=True)
+    elif pdf_path and not _llm_off:
+        # Loud, not silent: the extract would have run but there is no API key. This is the
+        # exact footgun that made earlier runs quietly ignore the good LLM data.
+        print("   [llm-full-extract] NOT RUN — no XAI_API_KEY set (set it, or "
+              "SDI_LLM_FULL_EXTRACT=1, so the PDF extract can drive the estimate)", flush=True)
 
     # SDI Intelligence — Learning Engine pre-scan
     # Runs AFTER augment_summary_with_dxf + pre-estimate normalisation,
@@ -1678,12 +3809,104 @@ def _finalize_scan_summary(
         summary.setdefault("ai_inference", {})["geometry"] = _inf
         if _inf.get("inferred") or _inf.get("still_missing"):
             print(f"   [inference] {len(_inf.get('inferred', []))} no-DXF part(s) given provisional dimensions; {len(_inf.get('still_missing', []))} still £0")
+        # A REFUSAL IS A DECISION AND HAS TO BE AUDIBLE. Silently, a bought-in that was
+        # denied a borrowed blank is indistinguishable from one the rule never considered —
+        # and it is the borrow being denied that stops a ball bearing arriving with the
+        # cross member's flat pattern, a laser op and 269 seconds against it.
+        _ref = _inf.get("refused_bought_in") or []
+        if _ref:
+            # NAME THE ONES SOMEBODY IS LOOKING FOR. The first version printed the first six
+            # in list order and hid the rest behind "(+2 more)". On 12552 that put "None" and
+            # five FIXING codes on screen and buried the two drawing-numbered parts the line
+            # existed to report — and the truncation was read, reasonably, as proof they were
+            # never refused at all. Hardware is the bulk and the least interesting: a job's
+            # own part numbers sort first.
+            def _ref_key(_r):
+                _pn = str(_r.get("part") or "")
+                return (0 if re.match(r"^\d{3,6}-", _pn) else 1, _pn)
+
+            # A NAMELESS ROW STILL HAS TO BE FINDABLE. str(None) is "None", which names
+            # nothing an estimator can look up; the description is what that row is known by
+            # on the sheet.
+            def _ref_name(_r):
+                return (str(_r.get("part") or "").strip()
+                        or str(_r.get("description") or "").strip()
+                        or "an unnamed row")
+
+            _ref = sorted(_ref, key=_ref_key)
+            print(f"   [inference] {len(_ref)} bought-in part(s) NOT given borrowed "
+                  f"dimensions — they are purchased, so a blank of ours would be another "
+                  f"part's: " + ", ".join(_ref_name(r) for r in _ref[:6])
+                  + (f" (+{len(_ref) - 6} more)" if len(_ref) > 6 else ""), flush=True)
     except Exception as _e:
         print(f"   [inference] skipped: {_e}", flush=True)
 
+    run_timing.mark("done pre_estimate_passes")
     _debug("start estimate_document")
-    if not summary.get("quantity") and not summary.get("assumed_job_quantity"):
+    # ── THE QUANTITY THE JOB IS COSTED AT, DECIDED ONCE, HERE ────────────────────────
+    #
+    # estimate_document amortises setup as (rate/60 x setup_mins) / qty and reads that qty
+    # from this field. A requested quantity that arrives after this line is a label on a
+    # price computed for a different batch: at 10 off against a 180 default, the setup
+    # component of every operation comes out 18x light and nothing on the sheet says so.
+    #
+    # An explicit request beats an inferred quantity as well as the default. It is the one
+    # fact about a job the customer states directly, and no reading of the drawings
+    # outranks being told. Which of the three supplied it is recorded, because "10" from
+    # the enquiry and "10" from a default are the same number and not the same evidence.
+    _req_qty_raw = os.getenv("SDI_ORDER_QTY", "").strip()
+    _req_qty_src = "--order-qty / SDI_ORDER_QTY"
+    if not _req_qty_raw:
+        # THE RUN CONTRACT SURVIVES A DROPPED FLAG. Two 11908-21 runs went out at 1-off
+        # against a --order-qty 50 command the runner never delivered, and nothing on the
+        # sheet said so. The answers file beside the drawings is the durable, job-owned
+        # statement of the same fact: {"order_quantity": 50} in <job>_confirmed.json is
+        # read here, at the one point the run decides its quantity. The flag, when it
+        # arrives, still wins — a per-run instruction beats the file's standing one.
+        try:
+            import estimator_confirmed as _ecq
+            _ecq_path = _ecq.find_corrections_file(
+                job_folder, pdf_path,
+                (summary.get("document_analysis") or {}).get("drawing_number")
+                or summary.get("drawing_number"))
+            if not _ecq_path:
+                _ecq_path = _answers_file_for_order_qty(job_folder, pdf_path)
+            if _ecq_path:
+                import json as _json_q
+                _raw_q = _json_q.loads(Path(_ecq_path).read_text(encoding="utf-8"))
+                if isinstance(_raw_q, dict) and _raw_q.get("order_quantity"):
+                    _req_qty_raw = str(_raw_q["order_quantity"]).strip()
+                    _req_qty_src = f"{_ecq_path.name} (the job's answers file)"
+        except Exception:                                            # noqa: BLE001
+            pass
+    _req_qty = None
+    if _req_qty_raw:
+        try:
+            _req_qty = max(1, int(float(_req_qty_raw)))
+        except (TypeError, ValueError):
+            print(f"   [order-qty] IGNORED — the requested quantity {_req_qty_raw!r} "
+                  f"({_req_qty_src}) is not a number. "
+                  f"Costing at the quantity the drawings imply instead.", flush=True)
+    if _req_qty:
+        summary["requested_order_quantity"] = _req_qty
+        summary["requested_order_quantity_source"] = _req_qty_src
+        # precedence: direct-write ok — this is the JOB HEADER, not a part record. The
+        # arbitrated `quantity` the resolver protects is a per-part figure read off a BOM
+        # against competing readings of the same drawing; how many units the customer
+        # ordered has no competing sources to rank, and being told outranks any reading.
+        summary["quantity"] = _req_qty  # precedence: direct-write ok — job header, see above
+        summary["assumed_job_quantity"] = _req_qty
+        summary["order_quantity_source"] = "requested"
+    elif not summary.get("quantity") and not summary.get("assumed_job_quantity"):
         summary["assumed_job_quantity"] = getattr(config, "DEFAULT_JOB_QUANTITY", 180)
+        summary["order_quantity_source"] = "default"
+    else:
+        summary["order_quantity_source"] = "inferred"
+    # A GATE NOBODY ASKS REPORTS NOTHING, and every labour figure below hangs off this
+    # number. It is stated on every run, whichever way it was arrived at.
+    print(f"   [order-qty] costing this job at "
+          f"{summary.get('quantity') or summary.get('assumed_job_quantity')} off "
+          f"({summary['order_quantity_source']})", flush=True)
 
     # FINAL phantom-duplicate sweep — runs AFTER inference and any late description
     # merges, immediately before costing. The earlier pre-estimate passes can miss
@@ -1753,21 +3976,2092 @@ def _finalize_scan_summary(
         from bom_tree import merge_table_bom_rows as _merge_bom_rows
         _bt_rows = (summary.get("document_analysis") or {}).get("bom_rows") or []
         _bt_rows = _merge_bom_rows(_bt_rows, summary)
-        _effmap = (_resolve_eff_qty(_bt_rows) or {}).get("effective") or {}
+        # WHAT ONE OF THIS IS. The estimator pointed at a folder, and the folder is named for
+        # the assembly being quoted — 12349-02's is named for 12349-02-69-100, which is what
+        # Tim costed. Without it the GA row "3 x 12349-02-69-100" set the multiplier for the
+        # whole family and every fabricated line came out at qty 3.
+        from bom_tree import unit_assembly_from_label as _unit_from
+        _label = " ".join(str(x) for x in (
+            summary.get("job_folder"), summary.get("job_name"), summary.get("drawing_number"),
+            summary.get("job_label"), summary.get("scan_label")) if x)
+        _unit_asm = _unit_from(_label, _bt_rows)
+        _bt = _resolve_eff_qty(_bt_rows, unit_assembly=_unit_asm) or {}
+        _effmap = _bt.get("effective") or {}
+        # ALWAYS ONE LINE, EVEN WHEN THERE IS NOTHING TO DO. Every print in this block used to be
+        # conditional on the rule firing, so a pack it declined produced no [bom_tree] output at
+        # all — and a log with no such line was read as "this code never ran", which is not
+        # something the log could actually distinguish. It says what it decided and why, now,
+        # whichever way it went. No costing depends on it.
+        print(f"   [bom_tree] {len(_bt_rows)} row(s); general arrangement taken as "
+              f"'{_bt.get('main_ga') or '(none found)'}'"
+              + (f"; unit named by the job label as '{_unit_asm}'" if _unit_asm else "")
+              + f"; {len(_effmap)} effective quantit(y/ies) resolved", flush=True)
+        if _bt.get("install_context_decision"):
+            print(f"   [bom_tree] {_bt['install_context_decision']}", flush=True)
+        for _f in (_bt.get("flags") or []):
+            if _f.get("severity") in ("info", "warning") and "install context" in str(_f.get("detail")):
+                print(f"   [bom_tree] {_f['detail']}", flush=True)
+                summary.setdefault("review_flags", []).append(_f)
+        # THE DECISION IS ON THE RECORD, NOT ONLY ON THE CONSOLE (D-584): a divided row must
+        # be able to point at the evidence that divided it.
+        summary["install_context"] = {
+            "recognised": bool(_bt.get("install_context")),
+            "codes": sorted(_bt.get("install_context") or {}),
+            "n": (next(iter(set((_bt.get("install_context") or {}).values())), 1)
+                  if _bt.get("install_context") else 1),
+            "general_arrangement": _bt.get("main_ga") or "",
+            "decision": _bt.get("install_context_decision") or "",
+        }
         if _effmap:
             _parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
+            # THE CODES THE TREE AGREED WITH, NAMED. Agreement printed nothing, so once the tree
+            # and the records had been brought into line the log went quiet — and a quiet log is
+            # how "did this part go through the quantity rule" became unanswerable. Gathered into
+            # one line rather than one line each, so the audit trail exists without burying the
+            # disagreements that need reading.
+            _agreed: List[str] = []
             for _p in _parts:
                 _code = _re_bt.sub(r"\s+", "", str(_p.get("part_number") or "")).upper()
+                if not _code:
+                    # A RECORD WITH NO PART NUMBER MATCHES NOTHING, NOT THE EMPTY KEY. This is
+                    # the other half of `None qty 4 KEPT (GA tree said 1)`: a nameless record
+                    # looked up "" and found whatever a nameless ROW had left there. The tree no
+                    # longer files a quantity under no name, and nothing asks it for one.
+                    continue
                 _eff = _effmap.get(_code)
+                if _eff is not None and _eff == _p.get("quantity"):
+                    _agreed.append(f"{_p.get('part_number')}={_eff}")
                 if _eff is not None and _eff != _p.get("quantity"):
+                    # PRECEDENCE. This pass reads the PDF's GA table; a quantity already set
+                    # from the SolidWorks assembly BOM came from the structure the shop
+                    # builds from, and must not be silently replaced by a reading of a
+                    # printed table. apply_field keeps the stronger value and records the
+                    # disagreement so an estimator sees that two sources differed.
+                    from source_precedence import apply_field as _apply_qty
+                    from source_precedence import source_of as _qty_src
                     _prev = _p.get("quantity")
-                    _p["quantity"] = _eff
-                    print(f"   [bom_tree] {_p.get('part_number')} qty {_prev} -> {_eff} (GA tree)", flush=True)
+                    # THE ROW'S OWN COUNT TIMES ITS ASSEMBLY'S (D-552): submitted as the
+                    # tree's per-unit reading, which outranks the row it multiplies and
+                    # nothing measured or modelled.
+                    _q_source = ("bom_tree_per_unit"
+                                 if str(_qty_src(_p, "quantity") or "") == "bom_tree"
+                                 else "bom_tree")
+                    if _apply_qty(_p, "quantity", _eff, _q_source):
+                        print(f"   [bom_tree] {_p.get('part_number')} qty {_prev} -> {_eff} "
+                              f"(GA tree: its own count times its assembly's)", flush=True)
+                    else:
+                        print(f"   [bom_tree] {_p.get('part_number')} qty {_prev} KEPT "
+                              f"(GA tree said {_eff}) — stronger source, disagreement flagged",
+                              flush=True)
+            if _agreed:
+                print(f"   [bom_tree] per-unit quantity confirmed, tree and record agree: "
+                      f"{', '.join(_agreed)}", flush=True)
+        # ── AND THE SAME CORRECTION ON THE ROWS, BECAUSE THERE ARE TWO CASCADES ────────
+        #
+        # THE 12349-02 FAILURE, AND THE LOG THAT FOUND IT. bom_tree resolved every quantity
+        # correctly, said so on the console — "the GA shows 3 x 12349-02-69-100, install
+        # context, not the unit" — and the Estimate sheet still carried 3. The reason is that
+        # bom_tree is not the only cascade. route_compiler.build_part_graph walks the same
+        # tree independently:
+        #
+        #     for _root in top_ids: add_descendants(_root, 1.0, set())
+        #     ... add_descendants(child, factor * child_qty, ...)
+        #
+        # and wb_populate takes the workbook quantity from THAT graph's node, not from the
+        # part record. The graph has never heard of install context, so it multiplied the
+        # GA's 3 into everything below it. Two implementations of one rule, one of which
+        # knows about arrangements and one of which does not.
+        #
+        # Correcting the part records could not have fixed it, and the older logs prove the
+        # part records were already right: "12349-02-69-04M qty 1 KEPT (GA tree said 3) —
+        # stronger source". The record held 1 the whole time.
+        #
+        # So the EDGE is corrected rather than the node. A main-GA row IS the child edge the
+        # graph reads, so dividing it there means both cascades start from the same number
+        # and any future third one inherits the rule for free. Bought-in rows on that drawing
+        # divide too — eighteen wood screws beside three arrangements is six each.
+        try:
+            _ctx = _bt.get("install_context") or {}
+            _main = _bt.get("main_ga")
+            if _ctx and _main:
+                _n = next(iter(set(int(v) for v in _ctx.values())), 1)
+                _fixed = 0
+                if _n > 1:
+                    for _row in ((summary.get("document_analysis") or {}).get("bom_rows")
+                                 or []):
+                        if str(_row.get("source_pdf") or "") != _main:
+                            continue
+                        try:
+                            _q = int(float(_row.get("quantity")))
+                        except (TypeError, ValueError):
+                            continue
+                        if _q and _q % _n == 0 and _q // _n != _q:
+                            # THE PRINTED READING IS KEPT. The GA really does say 3, and that
+                            # is a fact about the drawing — what changes is what it MEANS once
+                            # the tree has recognised an arrangement. Overwriting without
+                            # recording would destroy the evidence for the correction.
+                            _row["quantity_as_printed"] = _q
+                            _row["quantity_note"] = (
+                                f"the general arrangement prints {_q}; it shows {_n} "
+                                f"arrangements, so one arrangement takes {_q // _n}")
+                            # THE EVIDENCE TRAVELS WITH THE ROW (D-584): which drawing was
+                            # taken as the arrangement, which codes of its own numbering it
+                            # showed N times, and the rule's own sentence. A divided row that
+                            # cannot point at this is a divided row with no reason, and the
+                            # invariant says so.
+                            _row["quantity_evidence"] = {
+                                "general_arrangement": _main, "divided_by": _n,
+                                "arrangement_codes": sorted(_ctx),
+                                "decision": _bt.get("install_context_decision") or ""}
+                            # A BOM ROW IS A READING, NOT AN ARBITRATED PART RECORD.
+                            # apply_field ranks competing CLAIMS about a part; this is
+                            # arithmetic on the drawing's own row, correcting the child edge
+                            # the route graph reads. Submitting it as a ranked claim would put
+                            # it in a contest it is not part of — and the part records were
+                            # already correct, which the logs show on every one of them:
+                            # "12349-02-69-04M qty 1 KEPT (GA tree said 3) — stronger source".
+                            _row["quantity"] = _q // _n  # precedence: direct-write ok — a BOM row is a reading, not a part record
+                            _fixed += 1
+                if _fixed:
+                    print(f"   [bom_tree] {_fixed} row(s) on {_main} divided by {_n} — the "
+                          f"arrangement quantity is no longer multiplied into the graph the "
+                          f"workbook reads", flush=True)
+                # ── AND THE PARENT'S OWN RECORD, BECAUSE THE CASCADE FALLS BACK TO IT ──
+                #
+                # CORRECTING THE EDGE WAS NOT ENOUGH, AND 12349-02 AT 23:56 IS THE PROOF. The
+                # row was divided — the workbook's own BOM block shows -69-100 with qty_own 1
+                # and the arrangement note on it — and the Estimate still printed three lids,
+                # three covers, twelve screws and eighteen bumpons.
+                #
+                # The edge is only read if the cascade gets there. -69-100's parent is the
+                # general arrangement, which is a DRAWING LABEL and not a part node, so the
+                # module has no root above it and build_part_graph never reaches it. It takes
+                # this instead, three lines below the cascade:
+                #
+                #     for identity in identities:
+                #         if identity not in quantities:
+                #             quantities[identity] = number(records[identity]["quantity"], 1.0)
+                #
+                # — the PART RECORD, which still said 3. Every leaf under the module then
+                # multiplied by it, while the general arrangement's OWN leaves (the packer, the
+                # wood screws) were corrected because they hang off the GA directly. That split
+                # is exactly what the sheet printed, and it is why the workbook agreed with
+                # itself while being wrong: one store, holding the parent's uncorrected figure.
+                #
+                # An install-context code IS the unit, so it is one per quoted unit.
+                #
+                # SUBMITTED, NOT WRITTEN. Through apply_field so a reader that genuinely owns
+                # this quantity still wins and the disagreement is recorded — this pass reads a
+                # printed GA table and does not get to overrule a model. That also means the
+                # write can be REFUSED, by a holder at 70 such as drawing_deterministic, and
+                # which of those happened decides whether the next fix is here or in the
+                # corroboration quorum. So the outcome is printed either way and names the
+                # holder: a silent no-op here would look exactly like this run did.
+                if _n > 1 and _ctx:
+                    from source_precedence import apply_field as _apply_parent_qty
+                    from source_precedence import source_of as _src_of
+                    _ctx_codes = {_re_bt.sub(r"\s+", "", str(c)).upper() for c in _ctx}
+                    for _p in ((summary.get("manufacturing_writeup") or {}).get("parts") or []):
+                        _pc = _re_bt.sub(r"\s+", "", str(_p.get("part_number") or "")).upper()
+                        if not _pc or _pc not in _ctx_codes:
+                            continue
+                        _was = _p.get("quantity")
+                        # A READER MAY CORRECT ITSELF. THAT IS NOT A RANK CONTEST.
+                        #
+                        # apply_field refuses an equal-rank replacement on purpose — two
+                        # title-block readings disagreeing is a conflict, not refinement, and
+                        # letting the later one win would make the answer depend on page order.
+                        # But this is not two readings. It is ONE reader revising its own figure
+                        # on something the earlier pass did not know: that the general
+                        # arrangement is an arrangement. The tree wrote 3 before it recognised
+                        # that, and now says 1.
+                        #
+                        # Left as a plain equal-rank submission it is REFUSED, which is the most
+                        # likely case on a real pack — the 3 on this record is the tree's own —
+                        # so the fix would have changed nothing and failed the same way twice.
+                        #
+                        # Handled by demoting the STALE STAMP rather than by raising anything:
+                        # the provenance belongs to a reading taken before the arrangement was
+                        # known, so it is cleared and the corrected figure submitted normally.
+                        # apply_field then does the rest and records what it displaced. Scoped to
+                        # the tree's own figure: any other holder goes to rank, untouched.
+                        if _was != 1 and str(_src_of(_p, "quantity") or "") == "bom_tree":
+                            _p["quantity_source"] = ""   # precedence: direct-write ok — clears a stamp the same reader is superseding, so apply_field below records the change
+                        if _apply_parent_qty(_p, "quantity", 1, "bom_tree"):
+                            # AND THE STAMP THAT SURVIVES THE NEXT COMPILE.
+                            #
+                            # Correcting this record was not enough on its own, and 12349-02 at
+                            # 05:24 is the proof: the record read 1, every leaf record read 1,
+                            # and the Estimate still printed three lids. The probe named why —
+                            #
+                            #   edge  12349-02-69-GA -> 12349-02-69-100   qty = 3.0
+                            #   node  qty_per_unit = 3.0   (own 1 x parent edge 3)
+                            #
+                            # The graph multiplies by the EDGE, and that edge is the general
+                            # arrangement's printed 3. It cannot be corrected here: compile_job_route
+                            # is handed `parts` and `llm_full_extract` and rebuilds its edges from
+                            # the extract on every compile, so a write to the edge dies on the next
+                            # one. The record is the store that survives, because the record is what
+                            # compile is handed.
+                            #
+                            # So the record carries the RULING as well as the figure: this code is
+                            # the unit, and the arrangement count that was divided out. _per_parent
+                            # honours that stamp ahead of the edge — which is not a sixth divider,
+                            # it is the existing division's verdict reaching the one reader that
+                            # never saw it.
+                            #
+                            # Stamped only where the write LANDED. A refused write means a stronger
+                            # reader owns this quantity and its figure, not this rule's, is the
+                            # per-unit truth — so no stamp, the edge stands, and the refusal is
+                            # already printed below.
+                            _p["quantity_is_per_quoted_unit"] = _n
+                            print(f"   [bom_tree] {_p.get('part_number')} is the unit — its "
+                                  f"record qty {_was} -> 1 per quoted unit ({_n} arrangements "
+                                  f"on {_main}); the cascade below it now starts from one",
+                                  flush=True)
+                        elif _was != 1:
+                            _holder = _src_of(_p, "quantity") or "an unnamed reader"
+                            print(f"   [bom_tree] {_p.get('part_number')} is the unit, but its "
+                                  f"record qty {_was} from {_holder} was NOT replaced by 1 — "
+                                  f"everything under it still cascades at {_was}. THIS IS THE "
+                                  f"REMAINING MULTIPLE, AND {_holder} IS WHAT HOLDS IT",
+                                  flush=True)
+        except Exception as _rowfix:                                     # noqa: BLE001
+            print(f"   [bom_tree] row correction skipped: {_rowfix}", flush=True)
     except Exception as _bte:
         print(f"   [bom_tree] skipped: {_bte}", flush=True)
 
+    # ── THE CANONICAL GRAPH IS AN AUTHORITY, NOT AN AFTER-THE-FACT REPORT ──────────────
+    #
+    # The compiler ran only after estimate_part. At that point it could state that
+    # 11350-01-101 is an assembly and that a row is bought-in — and the workbook had already
+    # charged 101 as a 2.5mm fabricated leaf, with its own laser and fold, on top of the bar
+    # it is made from. A graph that describes what pricing already did cannot correct it.
+    #
+    # Failure-isolated: a compile error leaves the run exactly as it was before this existed.
+    # ── THE MIRRORED FLAT, AT THE POINT EVERY PART EXISTS ─────────────────────────────
+    #
+    # apply_mirror_geometry also runs inside augment_summary_with_dxf, and on 11350 it found
+    # nothing to do: "11350-01-02 MIR" is created by the LLM full extract five hundred lines
+    # LATER. The rule was right, the fixtures were right, and it ran before the part it was
+    # written for existed — so the right arm reached costing with no blank, no material and
+    # no measured throughput, and the sheet under-read.
+    #
+    # Running it here as well is safe by construction, not by luck: it gap-fills only, skips
+    # any part that already has a blank, and refuses a base whose own flat was inherited. A
+    # second pass over parts it has already filled changes nothing. The earlier call stays
+    # because augment_summary_with_dxf is also the standalone DXF-merge entry point.
+    # ── THE SAME SEAM, FOR THE MODELS ─────────────────────────────────────────────────
+    #
+    # apply_native_to_pre_estimate runs at line ~1979. The LLM full extract creates parts at
+    # ~2116. On 11350 that is 137 lines between the models being applied and
+    # "11350-01-02 MIR" existing — and the pack contains Mirror11350-01-02M.SLDPRT, so the
+    # right arm has its OWN model, at rank 90, better evidence than the inherited flat. It
+    # reached costing with thickness 0 and fallback throughput because the connector had
+    # already run before the part was born.
+    #
+    # ONLY THE PARTS THAT MISSED IT. 27 of the connector's 28 review-flag appends are
+    # unguarded, so re-running it over parts it has already enriched would duplicate every
+    # QA message on the job. Restricted to records with no solidworks_native marker, this
+    # adds evidence and repeats nothing.
+    try:
+        from source_connectors.solidworks import apply_native_to_pre_estimate as _apply_native
+        # The accepted extract is still bound in this function — _sw_job is initialised
+        # before the branch above and only cleared when the extract was refused. Read it
+        # directly rather than through locals(), which cannot tell an unbound name from a
+        # refused extract and so turned every failure mode into the same silent None.
+        _sw_job_late = _sw_job
+        _missed = [p for p in summary["manufacturing_writeup"]["parts"]
+                   if isinstance(p, dict) and not p.get("solidworks_native")]
+        if _sw_job_late is not None and getattr(_sw_job_late, "found", False) and _missed:
+            try:
+                from bom_tree import drawn_counts_by_code as _drawn_counts_late
+                _sw_drawn_late = _drawn_counts_late(
+                    (summary.get("document_analysis") or {}).get("bom_rows") or [])
+            except Exception:                                        # noqa: BLE001
+                _sw_drawn_late = None
+            # The parts that missed the first pass, against the WHOLE population's hands: a
+            # hand record the first pass already holds still lists its base's other hand.
+            _lc = _apply_native(_missed, _sw_job_late, drawn_counts=_sw_drawn_late,
+                                population=summary["manufacturing_writeup"]["parts"])
+            _got = [p.get("part_number") for p in _missed if p.get("solidworks_native")]
+            if _got:
+                print(f"   [solidworks] applied to {len(_got)} part(s) that did not exist "
+                      f"when the models were first read: {', '.join(str(g) for g in _got)}",
+                      flush=True)
+        # THE MODEL'S OWN TREE, ONTO THE WHOLE POPULATION. Stamped separately from the
+        # geometry apply above because that one deliberately skips parts already carrying
+        # native evidence — and an assembly's CHILDREN are exactly the fact a part can be
+        # missing while every other native datum on it is present. Runs before the canonical
+        # graph is compiled, so a node arrives with its parent rather than being repaired
+        # after it is already flagged disconnected.
+        #
+        # A GATE NOBODY ASKS REPORTS NOTHING — and the last version of this reported nothing
+        # for the one state it was written to explain. The three-state message below sat
+        # INSIDE `if the extract was accepted`, so an absent, refused or unread extract
+        # produced no [hierarchy] line at all, which is indistinguishable from the pass not
+        # existing. Every path now prints exactly one line, and the reason travels onto the
+        # summary as well as the console, because an estimator running this unattended from
+        # the intranet never sees a console at all.
+        _hier: List[Dict[str, Any]] = []
+        _msg = ""
+        if _sw_job_late is None or not getattr(_sw_job_late, "found", False):
+            _msg = f"no SolidWorks extract was applied to this job — {_sw_why or 'reason not recorded'}"
+        else:
+            from source_connectors.solidworks import apply_native_hierarchy_to_parts
+            run_timing.mark("start apply_solidworks_hierarchy")
+            _hier = apply_native_hierarchy_to_parts(
+                summary["manufacturing_writeup"]["parts"], _sw_job_late)
+            run_timing.mark("done apply_solidworks_hierarchy")
+            for _h in _hier:
+                print(f"   [hierarchy] {_h['part_number']} holds "
+                      f"{', '.join(_h['children'])} (from the SolidWorks model)", flush=True)
+            _sw_meta = getattr(_sw_job_late, "meta", {}) or {}
+            _edges = sum(len(v) for v in (getattr(_sw_job_late, "hierarchy", {}) or {}).values())
+            _asms = len(getattr(_sw_job_late, "assembly_pns", []) or [])
+            _asm_recs = int(_sw_meta.get("hierarchy_assembly_records") or 0)
+            if not _hier:
+                if _edges:
+                    _msg = (f"the extract carries {_edges} parent/child edge(s) but none named "
+                            f"a part in this job — the codes in the models and the codes on "
+                            f"the drawing may not match. Model parents: "
+                            f"{', '.join(_sw_meta.get('hierarchy_parents') or []) or '(none)'}")
+                elif _asms or _asm_recs:
+                    _msg = (f"{_asms or _asm_recs} assembly document(s) were read and NONE "
+                            f"reported parent/child edges or BOM-line parents. The extract "
+                            f"predates the analyser change, or this SolidWorks build returns "
+                            f"no component parents. "
+                            f"Re-run tools/solidworks/sw_native_analyse.py, then this job")
+                else:
+                    _msg = ("the extract contains no assembly documents, so the models "
+                            "describe no hierarchy to apply")
+            # THE TREE ITSELF, ON THE SUMMARY. The console line answers "did it fire"; this
+            # answers "what did it say" from the saved job JSON alone, which is the only
+            # record an unattended run leaves behind.
+            _sw_block = summary.get("solidworks_native")
+            if isinstance(_sw_block, dict):
+                _sw_block["hierarchy"] = {
+                    str(_p): [[str(_c), float(_q)] for _c, _q in _kids]
+                    for _p, _kids in (getattr(_sw_job_late, "hierarchy", {}) or {}).items()}
+                _sw_block["hierarchy_edges"] = _edges
+                _sw_block["hierarchy_sources"] = _sw_meta.get("hierarchy_sources") or {}
+                _sw_block["hierarchy_applied"] = [
+                    {"part_number": _h["part_number"], "children": list(_h["children"])}
+                    for _h in _hier]
+        if _msg:
+            print(f"   [hierarchy] NOT APPLIED — {_msg}", flush=True)
+            summary.setdefault("review_flags", []).append(
+                f"SolidWorks hierarchy not applied: {_msg}. Any part left without a "
+                f"parent is reported separately as a disconnected BOM node.")
+        else:
+            print(f"   [hierarchy] applied to {len(_hier)} assembly node(s) from the "
+                  f"SolidWorks models", flush=True)
+            # A RECORD MINTED HERE HAS A SHEET IN THE PACK TOO (D-390). 12173-07-1-GA and
+            # 07-2-GA exist only from this point — the model's tree mints them — so the sheet
+            # readers above never saw them: their title blocks say POWDER COATED and the trough's
+            # draws five fillets, and the 4 Oct book coated four assemblies, not six. The same
+            # readers run once more, over the records that did not exist the first time only, so
+            # nothing already read is read twice.
+            try:
+                _late_parts = [_p for _p in (summary["manufacturing_writeup"]["parts"] or [])
+                               if isinstance(_p, dict)
+                               and str(_p.get("part_number") or "").strip().upper()
+                               not in _ws_seen_pns]
+                if _ws_by_part and _late_parts:
+                    from weld_symbols import (apply_to_parts as _ws_apply_late,
+                                              apply_finish_welds as _ws_finish_late,
+                                              apply_finish_coats as _ws_coats_late,
+                                              apply_finish_processes as _ws_procs_late,
+                                              apply_sheet_weld_notes as _ws_notes_late)
+                    _ws_apply_late(_late_parts, _ws_by_part)
+                    _ws_fin_late = _ws_finish_late(_late_parts, _ws_by_part)
+                    _ws_notes_late(_late_parts, _ws_by_part)
+                    _ws_procs_late(_late_parts, _ws_by_part)
+                    _ws_coated_late = _ws_coats_late(
+                        summary["manufacturing_writeup"]["parts"], _ws_by_part)
+                    _ws_seen_pns |= {str(_p.get("part_number") or "").strip().upper()
+                                     for _p in _late_parts}
+                    if _ws_coated_late or _ws_fin_late.get("stated") \
+                            or _ws_fin_late.get("joined_by_symbol"):
+                        print(f"   [weld-symbols] read the sheets of the assemblies the model "
+                              f"minted: coated per own FINISH "
+                              f"{', '.join(_ws_coated_late) or 'none'}; welded per own sheet "
+                              f"{', '.join((_ws_fin_late.get('stated') or []) + (_ws_fin_late.get('joined_by_symbol') or [])) or 'none'}",
+                              flush=True)
+            except Exception as _ws_late_err:                        # noqa: BLE001
+                print(f"   [weld-symbols] late sheet read skipped: {_ws_late_err}", flush=True)
+    except Exception as _sw_late_err:
+        print(f"   [solidworks] late application skipped: "
+              f"{type(_sw_late_err).__name__}: {_sw_late_err}", flush=True)
+
+    # ── THE SAME SEAM, FOR THE HIERARCHY THE DESCRIPTION STATES ───────────────────────
+    #
+    # "<A> WITH <B>" needs BOTH halves to be lines on this BOM, and on 11350 the PEM stud is
+    # created by the LLM extract and the dual-path reader — after the DXF pass where the rule
+    # ran. So 11350-01-101's children were never recorded, and 11350-01-01, BI-NUT and
+    # BI-PEMSTUD arrived at the compiler with no parent: two bom_node_disconnected blockers
+    # on a job whose hierarchy we can read perfectly well.
+    #
+    # Same idempotency as the mirror pass: a part already marked an assembly parent is
+    # skipped, and the flag is appended once.
+    try:
+        from drawing_job_merge import _stamp_assembly_parents
+        _stamp_assembly_parents(summary["manufacturing_writeup"]["parts"])
+    except Exception as _asm_err:
+        print(f"   [hierarchy] description pass skipped: "
+              f"{type(_asm_err).__name__}: {_asm_err}", flush=True)
+
+    # ONE ITEM READ TWICE IS ONE PART, and it must stop being two BEFORE the canonical
+    # graph is compiled — a phantom that becomes a node has to be repaired afterwards,
+    # which is how a truncated stem reached the sheet as its own unpriceable line.
+    try:
+        from drawing_job_merge import merge_truncated_part_codes
+        _bom_merged = merge_truncated_part_codes(
+            summary["manufacturing_writeup"]["parts"],
+            claimed_codes=_codes_claimed_by_the_hierarchy(summary))
+        for _m in _bom_merged:
+            print(f"   [bom] '{_m['part_number']}' merged into '{_m['merged_into']}' "
+                  f"({_m.get('reason') or 'truncated code'}; qty {_m['quantity']:g})",
+                  flush=True)
+    except Exception as _bm_err:
+        print(f"   [bom] truncated-code merge skipped: "
+              f"{type(_bm_err).__name__}: {_bm_err}", flush=True)
+
+    try:
+        from drawing_job_merge import apply_mirror_geometry, settle_handed_pairs
+        # A HAND THE SHEET NAMES, NOT THE CODE. Stamped before the mirror pass so a part
+        # whose drawing says "symmetrically opposite — refer to drawing X" is filled from X
+        # exactly as a "-H" or "MIR" code would be (D-265).
+        try:
+            from drawing_job_merge import stamp_mirror_notes
+            _noted = stamp_mirror_notes(summary["manufacturing_writeup"]["parts"], summary)
+            if _noted:
+                print(f"   [mirror] {_noted} part(s) named as the opposite hand of another "
+                      f"drawing by a note on their own sheet", flush=True)
+        except Exception as _mn_err:                                 # noqa: BLE001
+            print(f"   [mirror] sheet-note pass skipped: {_mn_err}", flush=True)
+        _mirrored = apply_mirror_geometry(summary["manufacturing_writeup"]["parts"])
+        try:
+            from drawing_job_merge import (propose_missing_cuts, settle_mirrored_folds,
+                                           stamp_drawing_bend_callouts)
+            stamp_drawing_bend_callouts(summary["manufacturing_writeup"]["parts"], summary)
+            # Every fold reading is in by now, so a hand can take its base's evidence whole.
+            settle_mirrored_folds(summary["manufacturing_writeup"]["parts"], summary)
+            for _cp in propose_missing_cuts(summary["manufacturing_writeup"]["parts"]):
+                print(f"   [route] {_cp['part_number']}: measured flat, no cutting operation "
+                      f"-> {_cp['result']}", flush=True)
+        except Exception as _pc_err:                                 # noqa: BLE001
+            print(f"   [route] missing-cut check skipped: {_pc_err}", flush=True)
+        if _mirrored:
+            print("   [mirror] " + "; ".join(
+                f"{m.get('part_number')} inherits the measured flat of {m.get('mirrored_from')}"
+                for m in _mirrored), flush=True)
+        # SETTLING FOLLOWS MIRRORING EVERYWHERE MIRRORING HAPPENS, AND THIS IS THE SITE THE
+        # PORTAL ACTUALLY USES. The pair rules were wired into augment_summary_with_dxf, which
+        # this path does not call for the mirror step — so three commits of pair-scoped
+        # arbitration shipped, passed their guards, and never executed on a real job. The
+        # guard asserted the call existed in drawing_job_merge.py, which was true and useless:
+        # test the caller, not the helper.
+        _settled = settle_handed_pairs(summary["manufacturing_writeup"]["parts"])
+        for _s in _settled or ():
+            if _s.get("outcome") == "pooled_quorum":
+                print(f"   [pair] {_s.get('part_number')}: {_s.get('field')} -> "
+                      f"{_s.get('value')} on {len(_s.get('sources') or [])} pooled source(s) "
+                      f"across the pair", flush=True)
+            elif _s.get("outcome") == "undecided":
+                print(f"   [pair] {_s.get('part_number')} and {_s.get('base')} disagree on the "
+                      f"stock key with equal evidence — left for a person", flush=True)
+            else:
+                print(f"   [pair] {_s.get('part_number')} takes {_s.get('stock_key')} from "
+                      f"{_s.get('base')} — a handed pair is one purchase", flush=True)
+    except Exception as _mirror_err:
+        print(f"   [mirror] skipped: {type(_mirror_err).__name__}: {_mirror_err}", flush=True)
+
+    try:
+        # THE ROW'S OWN PRINTED SPECIFICATION, at the point it still changes the answer.
+        # The readers keep material/thickness/mass per BOM row and the flatten preserves
+        # them; this is where they become PART evidence — through source_precedence, so a
+        # DXF or model still outranks a table cell and a blanket document figure does not.
+        from bom_pipeline import (apply_bom_row_evidence_to_parts,
+                                  apply_stated_cut_list_to_parts,
+                                  apply_stated_edging_to_parts,
+                                  raise_unread_parts_list_rows)
+        _rows_ev = (summary.get("document_analysis") or {}).get("bom_rows") or []
+        _n_ev = apply_bom_row_evidence_to_parts(
+            summary["manufacturing_writeup"]["parts"], _rows_ev)
+        # A PART'S OWN CUT LIST, READ OFF ITS OWN TABLE (D-383): the codeless section rows the
+        # minter classed parent_cut_list are the frame's pieces, not bought-in tube. After the
+        # LLM overlay above, and through source_precedence, so the table outranks the
+        # transcription whichever runs last.
+        _n_cut = apply_stated_cut_list_to_parts(
+            summary["manufacturing_writeup"]["parts"], _rows_ev)
+        if _n_cut:
+            print(f"   [bom-evidence] {_n_cut} part(s) take their section cut list from "
+                  f"their own parts table", flush=True)
+        _n_edg = apply_stated_edging_to_parts(
+            summary["manufacturing_writeup"]["parts"], _rows_ev)
+        if _n_edg:
+            print(f"   [bom-evidence] {_n_edg} part(s) take their edging length from the "
+                  f"edging row of their own parts list", flush=True)
+        # WHAT NO READER TOOK IS ASKED, NEVER DROPPED (D-383).
+        _n_unread = raise_unread_parts_list_rows(
+            summary["manufacturing_writeup"]["parts"], _rows_ev)
+        if _n_unread:
+            print(f"   [bom-evidence] {_n_unread} codeless parts-list row(s) no reader took "
+                  f"— raised as questions on their parents", flush=True)
+        if _n_ev:
+            print(f"   [bom-evidence] {_n_ev} part(s) took material/thickness/mass from "
+                  f"their own BOM row (bom_tree rank — a measured source still wins)",
+                  flush=True)
+    except Exception as _row_ev_err:
+        print(f"   [bom-evidence] row evidence not applied: "
+              f"{type(_row_ev_err).__name__}: {_row_ev_err}", flush=True)
+
+    try:
+        # THE PART'S OWN DETAIL SHEET SIZES IT — beside the BOM-row stamper above and for the
+        # same reason. The row gives material, gauge and mass; the sheet gives the blank. Both
+        # go through source_precedence, so a DXF or a model still outranks either, and a part
+        # with no single defining sheet keeps its fallback envelope and SAYS so rather than
+        # being sized off somebody else's page.
+        from detail_page_geometry import apply_detail_page_geometry, isolate_dimension_text
+        _parts_dg = summary["manufacturing_writeup"]["parts"]
+        _n_iso = isolate_dimension_text(_parts_dg, summary)
+        if _n_iso:
+            print(f"   [detail-geometry] {_n_iso} part(s) had dimension text dropped that was "
+                  f"read off pages they are not bound to", flush=True)
+        # WHAT DEPENDS ON THE SHEET IS READ FROM THE PART'S OWN SHEET FIRST (D-591, D-592), so the
+        # blank, its flanges and its folds are developed from the part's own figures, weight and
+        # angles — not from the assembly sheet that also lists it.
+        from detail_page_geometry import revalidate_from_own_sheets
+        _reval = revalidate_from_own_sheets(_parts_dg, summary)
+        if _reval:
+            print(f"   [detail-geometry] {', '.join(_reval)} re-read from their own sheet — "
+                  f"weight, features and page geometry from the page that is theirs", flush=True)
+        run_timing.mark("start detail_page_geometry")
+        _n_dg = apply_detail_page_geometry(_parts_dg, summary)
+        run_timing.mark("done detail_page_geometry")
+        if _n_dg:
+            print(f"   [detail-geometry] {_n_dg} part(s) sized from their own detail sheet "
+                  f"(pdf_overall_dims rank — a measured blank still wins)", flush=True)
+        # THE OTHER HAND TAKES ITS BASE'S PROVISIONAL BLANK (D-508), now that the base has one,
+        # and THEN every part read off a drawing is held against the assembly it sits in.
+        from detail_page_geometry import (check_parts_against_their_assembly,
+                                          mirror_provisional_blanks)
+        _mirrored = mirror_provisional_blanks(_parts_dg)
+        if _mirrored:
+            print(f"   [detail-geometry] {', '.join(_mirrored)} take their other hand's "
+                  f"provisional blank — the same flat, labelled and asked", flush=True)
+        _capped = check_parts_against_their_assembly(_parts_dg, summary)
+        if _capped:
+            print(f"   [detail-geometry] {', '.join(_capped)} read larger than the assembly "
+                  f"each sits in — costed on that assembly's developed outline and asked",
+                  flush=True)
+        # A FOLD THE COUNTER CHARGES FROM THE DRAWING CARRIES THAT EVIDENCE (D-592), and cutting
+        # the blank cannot hold is not the part's (D-591) — before anything is costed from either.
+        from detail_page_geometry import bound_unmeasured_cut_path, settle_fold_evidence
+        _settled = settle_fold_evidence(_parts_dg)
+        if _settled:
+            print(f"   [detail-geometry] {', '.join(_settled)}: the fold the drawing states is "
+                  f"the fold the route charges — one verdict", flush=True)
+        _bounded = bound_unmeasured_cut_path(_parts_dg)
+        if _bounded:
+            print(f"   [detail-geometry] {', '.join(_bounded)}: cutting held to what the blank "
+                  f"can hold — the page's lines are not the part's", flush=True)
+        # A RADIUS ITS FLAT CANNOT HOLD IS ROLLED (D-589), read once every blank is known.
+        from detail_page_geometry import stamp_rolled_radii
+        _rolled = stamp_rolled_radii(_parts_dg, summary)
+        if _rolled:
+            print(f"   [detail-geometry] {', '.join(_rolled)} rolled to a radius their own "
+                  f"sheet prints — charged on the Roll row and asked", flush=True)
+    except Exception as _dg_err:
+        print(f"   [detail-geometry] not applied: "
+              f"{type(_dg_err).__name__}: {_dg_err}", flush=True)
+
+    # Declared before the try so the concept hook can ask what the answers file said even
+    # when this block did not run: the sighted parts are minted AFTER this pass, so their
+    # confirmations have to be applied a second time, down there, to a list that holds them.
+    _ec_data: Dict[str, Any] = {}
+    _ec_src = ""
+    try:
+        # WHAT A PERSON READ OFF THE DRAWING, LAST AND HIGHEST. It runs after every reader
+        # so that what it displaces is recorded against a fully-populated record rather than
+        # an empty one, and at rank 100 nothing downstream can overturn it. The usual case is
+        # that no file exists and this is one skipped line; the file is written only for a
+        # pack whose sheets the readers cannot handle.
+        import estimator_confirmed as _ec
+        _ec_drawing = ((summary.get("document_analysis") or {}).get("drawing_number")
+                       or summary.get("drawing_number"))
+        _ec_path = _ec.find_corrections_file(job_folder, pdf_path, _ec_drawing)
+        _ec_data, _ec_problems = ({}, [])
+        if _ec_path:
+            _ec_data, _ec_problems = _ec.load_corrections(_ec_path)
+        # AND THE RULINGS THE REPOSITORY ALREADY HOLDS, WHICH NOBODY HAS TO COPY ANYWHERE.
+        # config.JOB_DECISIONS is the home for a decision about a job; a file beside the
+        # drawings is still read and merged on top of it, with every overlap reported.
+        _ec_data, _ec_cfg_problems = _ec.merge_config_decisions(
+            _ec_data, _ec_drawing, getattr(pdf_path, "name", pdf_path), job_folder)
+        _ec_problems = list(_ec_problems) + list(_ec_cfg_problems)
+        _ec_src = (_ec_path.name if _ec_path
+                   else str(_ec_data.get("path") or "config.JOB_DECISIONS"))
+        if _ec_path or _ec_data.get("estimator_decisions"):
+            for _p in _ec_problems:
+                print(f"   [confirmed] NOT APPLIED — {_p}", flush=True)
+            _ec_rep = _ec.apply_estimator_confirmed(
+                summary["manufacturing_writeup"]["parts"], _ec_data)
+            if _ec_rep["stamped"]:
+                print(f"   [confirmed] {_ec_rep['stamped']} part(s), "
+                      f"{_ec_rep['fields']} field(s) taken from {_ec_src} — confirmed "
+                      f"by {_ec_data.get('confirmed_by') or 'an estimator'} "
+                      f"(estimator_confirmed rank; nothing outranks it)", flush=True)
+            if _ec_rep.get("agreed"):
+                # An agreement writes nothing, and a working file that logs nothing looks
+                # broken — say that the answer arrived and what it did: closed the question.
+                print(f"   [confirmed] {_ec_rep['agreed']} figure(s) in {_ec_src} "
+                      f"AGREE with what the files already said — "
+                      f"{_ec_data.get('confirmed_by') or 'an estimator'}'s confirmation is "
+                      f"recorded and the open question it answers is closed", flush=True)
+            for _code in _ec_rep["unmatched"]:
+                print(f"   [confirmed] {_code} is in {_ec_src} but NO part of this job "
+                      f"carries that number — the line did nothing. Check the code",
+                      flush=True)
+            summary.setdefault("document_analysis", {})["estimator_confirmed"] = {
+                "file": str(_ec_path) if _ec_path else _ec_src, "report": _ec_rep,
+                "problems": _ec_problems,
+                "confirmed_by": _ec_data.get("confirmed_by"),
+                "confirmed_on": _ec_data.get("confirmed_on"),
+                "note": _ec_data.get("note"),
+            }
+            # THE DECISIONS GO ON THE SUMMARY, NOT ONTO THE PARTS.
+            #
+            # A reading belongs to a part and is stamped on it. A decision — what we charge
+            # for the plating, which operation comes off, what the acrylic laser runs at —
+            # is about the JOB, and the places that act on it are the costing pass, the
+            # route and the workbook, all of which read the summary. Carried whole, with
+            # whose decision it is, so every line it touches can say so.
+            _dec = _ec_data.get("estimator_decisions") or {}
+            if _dec:
+                summary["estimator_decisions"] = dict(
+                    _dec,
+                    decided_by=_ec_data.get("confirmed_by") or "an estimator",
+                    decided_on=_ec_data.get("confirmed_on") or "",
+                    decided_in=_ec_src)
+                from owned_specification import apply_role_counts
+                for _rq in apply_role_counts(summary):
+                    print(f"   [confirmed] NOT APPLIED — {_rq}", flush=True)
+                print(f"   [confirmed] {len(_dec)} estimator DECISION(S) from "
+                      f"{_ec_src}: {', '.join(sorted(_dec))} — "
+                      f"{_ec_data.get('confirmed_by') or 'an estimator'}'s call, applied as "
+                      f"theirs and recorded as theirs", flush=True)
+                # An operation taken off is a per-PART decision, so it is stamped on the
+                # part rather than left on the summary for every reader to re-derive.
+                # A code that matches no part is reported, exactly as an unmatched
+                # reading is — a typo that silently does nothing is how a feature comes
+                # to be trusted while contributing nothing.
+                _offs = _dec.get("operations_off") or {}
+                if _offs:
+                    _seen_off = set()
+                    for _p in (summary["manufacturing_writeup"]["parts"] or []):
+                        if not isinstance(_p, dict):
+                            continue
+                        _pc = str(_p.get("part_number") or "").strip().upper()
+                        if _pc in _offs:
+                            _p["_estimator_operations_off"] = list(_offs[_pc])
+                            _seen_off.add(_pc)
+                            print(f"   [confirmed] {_pc}: "
+                                  f"{', '.join(_offs[_pc])} taken OFF by "
+                                  f"{_ec_data.get('confirmed_by') or 'the estimator'}",
+                                  flush=True)
+                    for _pc in sorted(set(_offs) - _seen_off):
+                        print(f"   [confirmed] operations_off names {_pc}, but NO part of "
+                              f"this job carries that number — the line did nothing. Check "
+                              f"the code", flush=True)
+                # A PERSON'S INSTRUCTION TO OVERCOAT WINS OVER A FINISH IN THE MATERIAL
+                # (D-589b). A brushed, polished or anodised member normally stays out of its
+                # assembly's powder; "coat_with_assembly": ["<part>"] puts it back in, recorded
+                # as that person's call. Unmatched codes are reported, as above.
+                _coat_in = {str(x).strip().upper() for x in
+                            (_dec.get("coat_with_assembly") or []) if str(x).strip()}
+                if _coat_in:
+                    _seen_coat = set()
+                    for _p in (summary["manufacturing_writeup"]["parts"] or []):
+                        if not isinstance(_p, dict):
+                            continue
+                        _pc = str(_p.get("part_number") or "").strip().upper()
+                        if _pc in _coat_in:
+                            _p["_coat_with_assembly"] = {
+                                "by": _ec_data.get("confirmed_by") or "an estimator",
+                                "in": str(_ec_src or "")}
+                            _seen_coat.add(_pc)
+                            print(f"   [confirmed] {_pc}: coated with its assembly by "
+                                  f"{_ec_data.get('confirmed_by') or 'the estimator'}'s "
+                                  f"instruction, whatever its material states", flush=True)
+                    for _pc in sorted(_coat_in - _seen_coat):
+                        print(f"   [confirmed] coat_with_assembly names {_pc}, but NO part of "
+                              f"this job carries that number — the line did nothing. Check "
+                              f"the code", flush=True)
+                # MAKE OR BUY, ANSWERED (D-384): stamped on the part, where bought_in_policy
+                # and the route compiler's family gate both read it.
+                _mob = _dec.get("make_or_buy") or {}
+                if _mob:
+                    _seen_mob = set()
+                    for _p in (summary["manufacturing_writeup"]["parts"] or []):
+                        if not isinstance(_p, dict):
+                            continue
+                        _pc = str(_p.get("part_number") or "").strip().upper()
+                        if _pc in _mob:
+                            _p["_estimator_make_or_buy"] = _mob[_pc]
+                            _p["_estimator_make_or_buy_by"] = str(
+                                _ec_data.get("confirmed_by") or "the estimator")
+                            _seen_mob.add(_pc)
+                            print(f"   [confirmed] {_pc}: {_mob[_pc].upper()} — "
+                                  f"{_ec_data.get('confirmed_by') or 'the estimator'}'s "
+                                  f"make-or-buy ruling", flush=True)
+                    for _pc in sorted(set(_mob) - _seen_mob):
+                        print(f"   [confirmed] make_or_buy names {_pc}, but NO part of this "
+                              f"job carries that number — the line did nothing. Check the "
+                              f"code", flush=True)
+                # ── A CONFIRMED BANDED LENGTH IS ALSO A ROUTE FACT ───────────────────
+                #
+                # It buys metres of ABS — the material line already reads it — AND it says
+                # somebody runs the bander. The 16:39 book bought the tape and charged
+                # nobody to apply it, which is the same half-a-line the perimeter fix was
+                # criticised for: measured, and not applied.
+                #
+                # Stamped on the PART, in millimetres, so the labour rule can time the
+                # work against the length that is actually banded rather than against the
+                # perimeter it was using — the default D-104 outlawed for the material and
+                # left standing in the labour rule beside it.
+                #
+                # A per-unit figure is the whole tray's banded edge, so it goes on the
+                # assembly parent, which is the one row that represents the tray. A
+                # per-part figure goes on the parts it names.
+                _bm_dec = _dec.get("banded_metres") or {}
+                _bm_pp = {str(k).upper(): v
+                          for k, v in (_bm_dec.get("per_part") or {}).items()}
+                _bm_unit = _bm_dec.get("per_unit")
+                _bm_who = _ec_data.get("confirmed_by") or "the estimator"
+                if _bm_pp or _bm_unit is not None:
+                    _bm_seen, _bm_parent = set(), None
+                    for _p in (summary["manufacturing_writeup"]["parts"] or []):
+                        if not isinstance(_p, dict):
+                            continue
+                        _pc = str(_p.get("part_number") or "").strip().upper()
+                        if _pc in _bm_pp:
+                            _p["_confirmed_banded_mm"] = float(_bm_pp[_pc]) * 1000.0
+                            _p["_confirmed_banded_by"] = _bm_who
+                            _p.setdefault("textual_operations", []).append("edge_banding")
+                            _bm_seen.add(_pc)
+                        if _bm_parent is None and (_p.get("is_assembly_parent")
+                                                   or _p.get("assembly_children")):
+                            _bm_parent = _p
+                    if _bm_unit is not None:
+                        # ── WHICH ROW CARRIES THE BANDER ─────────────────────────────
+                        #
+                        # NOT THE ASSEMBLY PARENT. A parent's fabrication route is
+                        # deliberately suppressed — its material and its making belong to
+                        # its children — so an operation stamped there is dropped without a
+                        # word, which is exactly what happened to the 17:18 book: the metres
+                        # were bought, the bander was routed on the parent, and no Edge
+                        # Banding row appeared.
+                        #
+                        # So it goes on the BIGGEST FACED PANEL, which is a real fabricated
+                        # part with a live route and the one most likely to be banded. The
+                        # length is divided by that part's own quantity, because the row
+                        # will multiply by it: five metres a TRAY stays five metres a tray
+                        # however many of that panel go into one.
+                        def _area(_p):
+                            try:
+                                return (float(_p.get("blank_length_mm") or 0)
+                                        * float(_p.get("blank_width_mm") or 0))
+                            except (TypeError, ValueError):
+                                return 0.0
+                        _cands = [
+                            p for p in (summary["manufacturing_writeup"]["parts"] or [])
+                            if isinstance(p, dict) and _area(p) > 0
+                            and not p.get("is_assembly_parent")
+                            and not re.search(r"-GA\b|ASSEMBL",
+                                              str(p.get("part_number") or "").upper())]
+                        _tgt = max(_cands, key=_area) if _cands else None
+                        if _tgt is not None:
+                            _q_tgt = 1.0
+                            try:
+                                _q_tgt = float(_tgt.get("quantity") or 1) or 1.0
+                            except (TypeError, ValueError):
+                                _q_tgt = 1.0
+                            _tgt["_confirmed_banded_mm"] = (float(_bm_unit) * 1000.0
+                                                            / _q_tgt)
+                            _tgt["_confirmed_banded_by"] = _bm_who
+                            _tgt.setdefault("textual_operations", []).append("edge_banding")
+                            print(f"   [confirmed] {_bm_unit:g} m of banded edge a unit "
+                                  f"({_bm_who}) — the ABS is bought by the metre and the "
+                                  f"bander is routed on {_tgt.get('part_number')} "
+                                  f"({_bm_unit / _q_tgt:g} m x {_q_tgt:g} off = "
+                                  f"{_bm_unit:g} m a unit)", flush=True)
+                        else:
+                            print("   [confirmed] banded_length_m was given but this job "
+                                  "has no fabricated panel to carry the bander — the "
+                                  "metres are bought and the LABOUR did nothing",
+                                  flush=True)
+                    for _pc in sorted(set(_bm_pp) - _bm_seen):
+                        print(f"   [confirmed] banded_length_m names {_pc}, but NO part of "
+                              f"this job carries that number — the line did nothing",
+                              flush=True)
+        else:
+            # A FILE THAT DID NOTHING MUST NOT DO IT SILENTLY.
+            #
+            # Three 10975-02 runs went out at quantity 1 with the gauge and the tape still
+            # being asked, against an answers file the office had written and placed. Each
+            # time the only evidence was an absence — nothing in the log said the file had
+            # been looked for, where, or under what names — so the diagnosis cost a rerun
+            # every time. No file is the ORDINARY case and must stay quiet; a folder that
+            # holds something answers-shaped and still yields nothing is not ordinary, and
+            # this says exactly what was searched and what was seen.
+            try:
+                _looked = [p for p in ([Path(job_folder)] if job_folder else [])
+                           + ([Path(pdf_path).parent] if pdf_path else []) if p.is_dir()]
+                _near = []
+                for _root in dict.fromkeys(_looked):
+                    _near += [f.name for f in sorted(_root.glob("*.json"))
+                              if "confirm" in f.name.lower()
+                              or "estimator_dimensions" in f.name.lower()]
+                _dn = ((summary.get("document_analysis") or {}).get("drawing_number")
+                       or summary.get("drawing_number") or "")
+                _where = ", ".join(str(_p) for _p in dict.fromkeys(_looked)) or "nowhere"
+                if _near:
+                    print(f"   [confirmed] NO answers file was accepted for this job, but "
+                          f"the folder holds {', '.join(sorted(set(_near)))}. Searched "
+                          f"{_where} against drawing number {_dn!r}, the PDF name and the "
+                          f"folder name. Rename the file for the drawing, or put a "
+                          f"\"drawing_number\" inside it, and it will be read.", flush=True)
+                else:
+                    # SAY IT EVEN WHEN THERE IS NOTHING TO FIND. No answers file is the
+                    # ORDINARY case and used to pass in silence — which is right until a
+                    # job is being re-run BECAUSE somebody placed one. Four 10975-02 runs
+                    # went out at quantity 1 with the gauge still being asked, and each
+                    # time the log said nothing at all, so the one question that mattered —
+                    # is the file where the engine looks? — could not be answered from the
+                    # evidence the run produced. One line costs nothing and settles it.
+                    print(f"   [confirmed] no answers file for this job — none found in "
+                          f"{_where} (looked for <name>_confirmed.json / "
+                          f"<name>_estimator_dimensions.json against drawing number "
+                          f"{_dn!r}, the PDF name and the folder name). If one was placed, "
+                          f"it is not in the folder the engine reads.", flush=True)
+            except Exception:                                    # noqa: BLE001
+                pass
+    except Exception as _ec_err:
+        print(f"   [confirmed] not applied: {type(_ec_err).__name__}: {_ec_err}", flush=True)
+
+    try:
+        # WHAT THE CUSTOMER HAS ASKED FOR SINCE THE DRAWINGS WERE ISSUED (D-507), after the
+        # answers file and above it: the drawing is right about what was drawn, and the
+        # customer has since asked for something else. Its own file, so the portal's material
+        # confirmation and an e-mail's changes never shadow one another. No file is the usual
+        # case and is one quiet line.
+        import customer_changes as _cc
+        _cc_drawing = ((summary.get("document_analysis") or {}).get("drawing_number")
+                       or summary.get("drawing_number"))
+        _cc_path = _cc.find_changes_file(job_folder, pdf_path, _cc_drawing)
+        if _cc_path:
+            _cc_data, _cc_problems = _cc.load_changes(_cc_path)
+            for _p in _cc_problems:
+                print(f"   [customer-change] NOT APPLIED — {_p}", flush=True)
+            _cc_rep = _cc.apply_customer_changes(summary["manufacturing_writeup"]["parts"],
+                                                 _cc_data, summary)
+            for _a in _cc_rep["applied"]:
+                print(f"   [customer-change] {_a.get('part') or 'order'}: "
+                      f"{_cc.LABELS.get(_a['field'], _a['field'])} -> "
+                      f"{_cc.describe(_a.get('to'), _a['field'])} — {_a['evidence']}",
+                      flush=True)
+            for _n in _cc_rep["not_applied"]:
+                print(f"   [customer-change] NOT APPLIED — {_n.get('part') or 'order'}: "
+                      f"{_n.get('why')} (asked on the book)", flush=True)
+            summary["customer_changes"] = dict(
+                _cc_rep, file=str(_cc_path), problems=_cc_problems,
+                accepted_by=_cc_data.get("accepted_by"),
+                accepted_on=_cc_data.get("accepted_on"))
+    except Exception as _cc_err:                                       # noqa: BLE001
+        print(f"   [customer-change] not applied: {type(_cc_err).__name__}: {_cc_err}",
+              flush=True)
+
+    try:
+        # THE RUN'S DELIVERY DECLARATION (D-524), beside the customer changes and under the
+        # same one-file-per-run rule: whether this order is delivered, and the postcode it
+        # goes to, declared on the portal's Run form. The estimator's DELIVERY line reads
+        # summary["delivery_declared"]; no file is the usual case and costs as before.
+        import commercial_lines as _dl
+        _dd = _dl.find_delivery_declaration(
+            [job_folder, summary.get("job_folder")]
+            + ([Path(str(pdf_path)).parent] if pdf_path is not None else []))
+        if _dd:
+            summary["delivery_declared"] = _dd
+            _dd_say = ("no delivery — collection" if _dd.get("requested") is False
+                       else ("delivery to " + _dd["postcode"] if _dd.get("postcode")
+                             else "delivery required, postcode not given"))
+            summary.setdefault("review_flags", []).append(
+                f"DELIVERY DECLARED on the Run: {_dd_say} — the DELIVERY line follows it")
+            print(f"   [delivery] declared on the Run: {_dd_say}", flush=True)
+    except Exception as _dd_err:                                       # noqa: BLE001
+        print(f"   [delivery] declaration not read: {type(_dd_err).__name__}: {_dd_err}",
+              flush=True)
+
+    try:
+        from route_compiler import apply_canonical_evidence_to_parts, job_drawing_numbers
+        # THE BOM'S OWN PARENT EDGES, at the point the classification still changes the
+        # answer. This runs before costing, so a part the BOM parents is an assembly's child
+        # here rather than a disconnected leaf that has already been priced as one.
+        _canon_pre = apply_canonical_evidence_to_parts(
+            summary["manufacturing_writeup"]["parts"],
+            summary.get("llm_full_extract") or {},
+            (summary.get("document_analysis") or {}).get("bom_rows") or [],
+            job_drawing_numbers(summary),
+            assembly_page_owners(summary),
+            summary=summary)
+        summary["canonical_part_graph_pre_cost"] = {
+            "nodes": len(_canon_pre.get("nodes") or []),
+            "issues": list(_canon_pre.get("issues") or []),
+            "roots": list(_canon_pre.get("top_assemblies") or []),
+        }
+        _roots = [r for r in (_canon_pre.get("top_assemblies") or []) if r]
+        print(f"   [canonical-part-graph] applied before costing: "
+              f"{len(_canon_pre.get('nodes') or [])} node(s)"
+              + (f"; {len(_roots)} assemblies ship on this enquiry ({', '.join(_roots)})"
+                 if len(_roots) > 1 else ""), flush=True)
+        # A HANDED BOM ROW THE PACK NEVER DREW (D-509). Read off the RAW BOM ROWS, not the
+        # compiled graph: a row whose owner the graph refuses (12665-03-01M-H under the
+        # handed assembly 12665-03-GA-H) gets no edge and NO NODE, so the graph cannot name
+        # it — the printed row is the evidence. A row that is another part's hand is minted
+        # from that part HERE, while the mint can still be costed — and the mirror rule runs
+        # again so the new record takes its base's provisional blank like a drawn hand.
+        from detail_page_geometry import (mint_missing_hand_records,
+                                          mirror_provisional_blanks)
+        _minted_hands = mint_missing_hand_records(
+            summary["manufacturing_writeup"]["parts"],
+            (summary.get("document_analysis") or {}).get("bom_rows") or [])
+        if _minted_hands:
+            print(f"   [canonical-part-graph] {', '.join(_minted_hands)} minted as the other "
+                  f"hand of an existing part — a BOM row the pack never drew", flush=True)
+            _mirrored_late = mirror_provisional_blanks(
+                summary["manufacturing_writeup"]["parts"])
+            if _mirrored_late:
+                print(f"   [detail-geometry] {', '.join(_mirrored_late)} take their other "
+                      f"hand's provisional blank — the same flat, labelled and asked",
+                      flush=True)
+    except Exception as _canon_pre_err:
+        print(f"   [canonical-part-graph] pre-cost application skipped: "
+              f"{type(_canon_pre_err).__name__}: {_canon_pre_err}", flush=True)
+
+    # AND AGAIN, AT THE LAST BOUNDARY BEFORE COSTING.
+    #
+    # The merge above protects the canonical graph, and something between there and here
+    # re-creates the phantoms: the renderer's own [bom-rows] line showed SCREW, STD PART,
+    # 79814P and FIXING back in the costed population after they had been removed from the
+    # parts. A pass materialises the drawing's raw BOM lines as parts, and it runs later.
+    #
+    # Rather than a third guess at which pass, the same rule runs once more at the point
+    # nothing can add a part after it. It is idempotent — a stem with no fuller code beside
+    # it is left alone — so the second call is free on a job the first one already settled,
+    # and part_identity remains the single authority both calls ask.
+    try:
+        from drawing_job_merge import merge_truncated_part_codes as _merge_late
+        _late = _merge_late(summary["manufacturing_writeup"]["parts"],
+                            claimed_codes=_codes_claimed_by_the_hierarchy(summary))
+        for _m in _late:
+            print(f"   [bom] '{_m['part_number']}' merged into '{_m['merged_into']}' "
+                  f"(re-created after the first pass; qty {_m['quantity']:g})", flush=True)
+    except Exception as _lm_err:
+        print(f"   [bom] late truncated-code merge skipped: "
+              f"{type(_lm_err).__name__}: {_lm_err}", flush=True)
+
+    # AND THE LEAF-OPERATION STRIP AGAIN, AT THE LAST BOUNDARY BEFORE COSTING.
+    #
+    # apply_canonical_evidence_to_parts removes them where it classifies a record as an
+    # assembly, and on 12392 they were back by the time the invariants ran: 12392-02-201 was
+    # reported carrying folding and laser_cutting on a workbook whose own log says the
+    # assembly was excluded from material. Something between the two re-derives operations
+    # from the drawing text.
+    #
+    # This is the same answer the truncated-code merge above reaches for the same reason:
+    # rather than a third guess at which pass, the rule runs once more at the point nothing
+    # can add an operation after it. strip_leaf_operations is idempotent and does nothing at
+    # all to a record the graph has not called an assembly, so the second call is free on a
+    # job the first one settled.
+    try:
+        import bought_in_policy as _bip
+        for _p in summary["manufacturing_writeup"]["parts"]:
+            _late_dropped = _bip.strip_leaf_operations(_p)
+            if _late_dropped:
+                _p.setdefault("removed_operations", []).extend(_late_dropped)
+                print(f"   [route] '{_p.get('part_number')}' is an assembly and had "
+                      f"{', '.join(_late_dropped)} put back on it after the first strip; "
+                      f"removed again — that work belongs to its children", flush=True)
+    except Exception as _strip_err:
+        print(f"   [route] late leaf-operation strip skipped: "
+              f"{type(_strip_err).__name__}: {_strip_err}", flush=True)
+
+    # ── THE CONCEPT READ, AT THE LAST BOUNDARY BEFORE COSTING ───────────────────────
+    #
+    # A render pack reaches this point with an empty parts list, because every reader above
+    # is a reader of drawings and a render is not one. On an --llm-only run that is not the
+    # end of the answer: the concept read (concept_scan.py) sights the parts off the images
+    # themselves — assumed sizes, sighted materials, rank vision_concept — and THEY go into
+    # estimate_document like any other parts, so the pricing waterfall and the workbook
+    # populate exactly as they do on a drawing job. "we need to build in the pipeline to
+    # populate the pricing s/sheet from the LLM only model" (James Gray, 22 Sep 2026).
+    #
+    # Placed here, beside the late merges, for their reason: nothing can add or remove a
+    # part after this point, so "the pack produced no parts" is finally a fact rather than
+    # a stage nobody has run yet. Gated on --llm-only AND on the ordinary readers having
+    # found nothing (or the pack being renders outright) — a drawing pack that names its
+    # parts never pays for this, and a full engine run never sights what it can measure.
+    _llm_only_run = os.getenv("SDI_LLM_ONLY", "").strip().lower() in {"1", "true", "yes"}
+    _is_render_pack = summary.get("source_format") == "image_render"
+    # CLIENT-DOCUMENT MODE IS DECLARED, NEVER GUESSED (D-464): the portal stages the marker
+    # beside the pack, and only an LLM-only run honours it. An ordinary LLM run of drawings
+    # supplied as PDFs keeps the readers' parts — their dimensions are real and the
+    # measured-CAD guard cannot protect a PDF read.
+    import concept_scan as _cs_mode
+    _client_document = _llm_only_run and _cs_mode.document_mode_requested(
+        [job_folder, summary.get("job_folder")]
+        + [Path(str(_sp)).parent for _sp in (summary.get("staged_inputs") or [])]
+        + ([Path(str(pdf_path)).parent] if pdf_path is not None else []))
+    _no_parts = not summary["manufacturing_writeup"]["parts"]
+    if _is_render_pack and not _llm_only_run:
+        # A RENDER PACK ON AN ENGINE RUN IS AN EMPTY BOOK WAITING TO BE MISREAD. The four
+        # readers read drawings; a render has no text layer, no dimensions and no flats, so
+        # they correctly find nothing — and "£0.00, no parts" filed without a reason reads
+        # as a free job, not as the wrong mode. Say which mode answers this pack.
+        _render_stop = (
+            "THIS PACK IS IMAGE RENDERS AND THIS WAS AN ENGINE RUN — the drawing readers "
+            "have nothing to measure, so this book is empty by mode, not by content. Run "
+            "the same pack as LLM SCAN ONLY: the vision model sights the parts and the "
+            "ordinary waterfall prices them.")
+        summary.setdefault("review_flags", []).append(_render_stop)
+        if _no_parts:
+            # THE STOP IS A FACT ON THE RECORD, NOT ONLY A FLAG (D-409): the commercial
+            # lines, the quote, the sheet banner and the report all ask run_stop.
+            from run_stop import record as _record_stop
+            _record_stop(summary, "image_render_pack_on_engine_run", _render_stop,
+                         next_step="Run the same pack as LLM SCAN ONLY: the vision model "
+                                   "sights the parts and the ordinary waterfall prices them.")
+        print("   !! this pack is image renders on an ENGINE run — nothing to measure. "
+              "Run it as LLM SCAN ONLY to sight and price the parts.", flush=True)
+    # A DESIGN-INTENT PACK ON AN ENGINE RUN IS THE SAME EMPTY BOOK (D-406). 12675-01: three
+    # concept sheets, no parts list, no part sheets; the readers minted a part per drawing
+    # number and costed a tube callout as a 20 mm blank. With nothing the readers can cost,
+    # the book is empty by mode and says so — and names the method that answers the pack.
+    _design_intent_pages = design_intent_pages(summary)
+    _di_pending = None          # (stop text, next step): recorded only if nothing below prices the pack
+    _design_intent_fallback = False
+    if _design_intent_pages and _no_parts and not _llm_only_run and not _is_render_pack:
+        # THE MODEL IS THE PARTS LIST WHERE THE PACK HAS NONE (D-411). James Gray, 8 Oct 2026:
+        # "we should be able to BOM and route a lot from this." The job's own extract was kept
+        # when it matched no drawn part; the chosen design's bodies become the parts, stamped
+        # by the connector that stamps a drawn part, and the book says it is a concept take-off.
+        _took = None
+        try:
+            import model_takeoff as _mt
+            _took = _mt.takeoff(summary, _sw_job_own_unmatched,
+                                declared=str(summary.get("declared_product") or ""),
+                                drawing_number=str(summary.get("drawing_number") or ""),
+                                job_folder_name=Path(str(summary.get("job_folder") or "")).name)
+        except Exception as _mt_exc:                                   # noqa: BLE001
+            print(f"   [takeoff] the model take-off could not run "
+                  f"({type(_mt_exc).__name__}: {_mt_exc})", flush=True)
+            _took = None
+        if _took and _took.get("parts"):
+            summary["manufacturing_writeup"]["parts"].extend(_took["parts"])
+            _no_parts = False
+            print(f"   [takeoff] CONCEPT TAKE-OFF FROM THE MODEL: {len(_took['parts']) - 1} "
+                  f"part(s) under {_took['design']} ({_took['chosen_by']})"
+                  + (f"; set aside: {', '.join(e['part_number'] for e in _took['excluded'])}"
+                     if _took.get("excluded") else "")
+                  + (f"; other designs not priced in this book: "
+                     f"{', '.join(_took['other_designs'])}" if _took.get("other_designs") else ""),
+                  flush=True)
+        else:
+            _di_why = ((_took or {}).get("why_not")
+                       or "no SolidWorks extract of this job's own was available")
+            # THE MODEL DOOR RAN AND ANSWERED (D-414): recorded, so the concept read's guard
+            # knows the model files beside the pack were offered first and gave nothing to
+            # cost — they are not measured CAD the sighting would be guessing over.
+            summary["model_takeoff_door"] = {
+                "ran": True, "design": str((_took or {}).get("design") or ""),
+                "why_not": _di_why,
+                "undetailed": list((_took or {}).get("undetailed") or []),
+                # The one block's envelope, where the design is one (D-416): the body the
+                # concept read is told and held to.
+                "model_envelope_mm": list((_took or {}).get("model_envelope_mm") or []),
+                "model_envelope_of": str((_took or {}).get("model_envelope_of") or ""),
+                "excluded": [e.get("part_number") for e in ((_took or {}).get("excluded") or [])
+                             if isinstance(e, dict)],
+            }
+            _di_next = ("The design being priced is taken off from its own SolidWorks assembly "
+                        "(the model is the parts list where the pack has none) or detailed by "
+                        "Design into a GA with a parts list and part sheets; an LLM scan with an "
+                        "enquiry brief is a fallback budget only, one design per run.")
+            _di_stop = (
+                f"THIS PACK IS DESIGN-INTENT SHEETS (page(s) {', '.join(str(p) for p in _design_intent_pages)}) "
+                f"AND THIS WAS AN ENGINE RUN — no parts list and no part drawings, so the drawing "
+                f"readers have nothing to cost and this book is empty by mode, not by content. "
+                f"The model take-off did not run: {_di_why}. {_di_next}")
+            summary.setdefault("review_flags", []).append(_di_stop)
+            # THE STOP IS DEFERRED, NOT DROPPED (D-409, D-411): the concept read with the
+            # brief is tried first as the fallback James named; if it prices nothing either,
+            # the stop is recorded as the fact on the record, as before.
+            _di_pending = (_di_stop, _di_next, _di_why)
+            _design_intent_fallback = True
+            print("   !! this pack is design-intent sheets on an ENGINE run and the model gave "
+                  f"no take-off ({_di_why}) — the concept read with the brief is the fallback; "
+                  "failing that, nothing to cost.", flush=True)
+    # The concept read runs for an LLM-only run, and as the FALLBACK for a design-intent pack
+    # the model could not answer (D-411) — "even if it's LLM pricing" (James Gray, 8 Oct 2026).
+    # A SCANNED DRAWING ON AN ENGINE RUN IS READ BY THE ONE READER THAT CAN READ IT (D-598g).
+    # 0320730 through the portal: an M&S pack whose only drawing is a page with no text layer,
+    # beside seven pages of forms. Every engine reader reads text, vectors, tables or flats, so
+    # none could read the picture; they found no part, correctly, and the book went out empty,
+    # while the same pack as LLM SCAN ONLY priced. With no part read, no design-intent sheet,
+    # and a page that is only an image, the engine run takes the concept read as its fallback,
+    # as a design-intent pack does (D-411). The measured-CAD guard below still refuses a pack
+    # with real geometry, and every part it gives is stamped as sighted.
+    _scanned_pages = image_only_pages(summary)
+    _scanned_drawing_fallback = bool(_no_parts and not _llm_only_run and not _is_render_pack
+                                     and not _design_intent_pages and not _design_intent_fallback
+                                     and _scanned_pages)
+    if _scanned_drawing_fallback:
+        summary["scanned_drawing_fallback"] = {
+            "pages": _scanned_pages[:20],
+            "why": ("no engine reader found a part, and the pack has page(s) with no text "
+                    "layer that only the vision read can read"),
+        }
+        # NO TEXT IS NOT PROOF OF A DRAWING (review of D-598g): a blank page, lettering drawn
+        # as outlines and an image-only form qualify too. The read establishes what is there,
+        # and the flag claims no more than the missing text layer.
+        summary.setdefault("review_flags", []).append(
+            "PRICED FROM THE VISION READ: no engine reader found a part, and "
+            f"{', '.join(_scanned_pages[:6])} carr{'y' if len(_scanned_pages) > 1 else 'ies'} "
+            "no text layer, which only the vision read can read. The parts below were sighted "
+            "by the vision model, not measured; every size and count is for the estimator to "
+            "confirm.")
+        print(f"   [concept] no engine reader found a part, and {', '.join(_scanned_pages[:6])} "
+              f"has no text layer — the vision read is the fallback", flush=True)
+    _sight_run = _llm_only_run or _design_intent_fallback or _scanned_drawing_fallback
+    # ── MEASURED CAD IS NEVER SIGHTED OVER ──────────────────────────────────────────
+    #
+    # The condition below is "--llm-only AND (a render pack OR nothing came out)", and the
+    # second half is a hole: a REAL drawing pack whose BOM read came back empty would be
+    # handed to the concept read and guessed at, with flats and models sitting unread in the
+    # same folder. James Gray, 22 Sep 2026: "If you point the render assembler at a real
+    # pack, you will flatten a weldment into one 5 mm panel again."
+    #
+    # A drawing pack that produced no parts is a READER FAILURE, and the honest output for
+    # that is the failure — not a picture-guess wearing its name. Checked BEFORE the try, so
+    # a deliberate refusal is never reported as a concept read that crashed.
+    _concept_refused = None
+    # A DECLARED CLIENT-DOCUMENT RUN IS A SIGHT RUN WHATEVER THE READERS PARSED (D-463,
+    # narrowed by D-464 to the portal's explicit marker): a tech brief whose pages were
+    # minted as BOM rows still goes to the concept read, and those rows stand down below.
+    # The measured-CAD guard right here still refuses a pack with real geometry.
+    if _sight_run and (_no_parts or _is_render_pack or _client_document):
+        try:
+            import concept_scan as _cs_probe
+            # THE STAGED PACK, NOT THE FOLDER. This listed every file beside the render —
+            # James Gray, 22 Sep 2026: "the CAD refusal scans every file in the job folder,
+            # not only the selected/staged pack." A folder is a place, not a selection: one
+            # stale STEP left in a customer's drop would refuse the concept read on a pack
+            # of renders that had nothing to do with it. What counts as measured CAD here is
+            # what this run staged or actually attached — including a DXF the job discovered
+            # and MEASURED, because that geometry is in the estimate whatever found it.
+            _pack_files = list(summary.get("scanned_documents") or [])
+            _pack_files += [str(p) for p in (summary.get("staged_inputs") or [])]
+            if pdf_path is not None:
+                _pack_files.append(str(pdf_path))
+            _pack_files += [str(p) for p in (dxf_paths or [])]
+            _pack_files += [str(p) for p in (attach_dxf_paths or [])]
+            _concept_refused = _cs_probe.why_not_sightable(summary, _pack_files)
+        except Exception as _wexc:                                   # noqa: BLE001
+            # FAIL CLOSED. If the guard itself cannot run, the concept read does not run:
+            # the one thing worse than refusing a pack we could have sighted is sighting
+            # over a pack we could have measured.
+            _concept_refused = f"the measured-CAD guard could not run ({_wexc})"
+    # A BRIEF THAT NOTHING READ SAYS SO (D-360). It is used by the concept read only; on a
+    # drawing pack, or an engine run, the drawings are the facts and the brief is not.
+    try:
+        import concept_scan as _cs_brief
+        _brief_unused = _cs_brief.find_brief(
+            [job_folder, summary.get("job_folder")]
+            + [_render_source_dir(p) for p in
+               (list(summary.get("scanned_documents") or [])
+                + list(summary.get("staged_inputs") or [])
+                + ([str(pdf_path)] if pdf_path is not None else []))]
+            + ([Path(str(summary["source_image_path"])).parent]
+               if summary.get("source_image_path") else [])
+            + [Path(str(p)).parent for p in (summary.get("staged_inputs") or [])])[0]
+    except Exception:                                                # noqa: BLE001
+        _brief_unused = ""
+    if _brief_unused and (_concept_refused or not (_sight_run and (_no_parts
+                                                                  or _is_render_pack
+                                                                  or _client_document))):
+        summary.setdefault("review_flags", []).append(
+            "ENQUIRY BRIEF NOT USED: a brief is filed with this pack, but it is read only by "
+            "an LLM-only run of a render pack. This run priced the drawings, which outrank it.")
+    # ONE DESIGN PER READ (D-413). A design-intent pack holding several designs is read one
+    # design at a time — the sheet(s) the same rule picks that picks a design from the model —
+    # never all three as one stand. A pack it cannot choose from asks, and the read does not run.
+    _fallback_sheets: List[str] = []
+    _fallback_pick: Optional[Dict[str, Any]] = None
+    _fallback_ask = ""
+    if _sight_run and (_no_parts or _is_render_pack or _client_document) and not _concept_refused and _design_intent_pages:
+        try:
+            import model_takeoff as _mt_sheets
+            _cands = ([str(p) for p in (summary.get("scanned_documents") or [])]
+                      or ([str(pdf_path)] if pdf_path is not None else []))
+            _fallback_pick = _mt_sheets.choose_design_sheets(
+                _cands, declared=str(summary.get("declared_product") or ""),
+                drawing_number=str(summary.get("drawing_number") or ""))
+            if _fallback_pick.get("sheets"):
+                _fallback_sheets = list(_fallback_pick["sheets"])
+            else:
+                _fallback_ask = str(_fallback_pick.get("why_not") or "which design to read is not said")
+        except Exception as _fs_exc:                                    # noqa: BLE001
+            _fallback_ask = f"the design sheets could not be chosen ({type(_fs_exc).__name__}: {_fs_exc})"
+    if _concept_refused:
+        summary["concept_read"] = {"refused": _concept_refused}
+        _cr_stop = (f"CONCEPT READ REFUSED: {_concept_refused}. This pack has measurable "
+                    f"geometry, so an empty parts list is a reading problem to fix, not a "
+                    f"picture to guess at.")
+        summary.setdefault("review_flags", []).append(_cr_stop)
+        if _no_parts:
+            from run_stop import record as _record_stop
+            _record_stop(summary, "concept_read_refused", _cr_stop,
+                         next_step="Fix the reading of the pack's drawings; nothing is "
+                                   "guessed from pictures while measurable geometry is present.",
+                         refused=_concept_refused)
+        print(f"   [concept] not sighted — {_concept_refused}", flush=True)
+    elif _fallback_ask:
+        summary["concept_read"] = {"refused": _fallback_ask}
+        summary.setdefault("review_flags", []).append(
+            f"CONCEPT READ NOT RUN: {_fallback_ask}. One design is read per book; say which.")
+        print(f"   [concept] not run — {_fallback_ask}", flush=True)
+    elif _sight_run and (_no_parts or _is_render_pack or _client_document):
+        try:
+            import concept_scan
+            _pack: List[str] = [str(p) for p in (summary.get("scanned_documents") or [])]
+            if not _pack and pdf_path is not None:
+                _pack = [str(pdf_path)]
+            if not _pack and job_folder is not None:
+                _pack = [str(p) for p in sorted(Path(job_folder).glob("*.pdf"))]
+            if _fallback_sheets:
+                # THE CHOSEN DESIGN'S SHEET(S), NOT THE PACK (D-413).
+                _pack = list(_fallback_sheets)
+                print(f"   [concept] reading one design: {_fallback_pick.get('design')} "
+                      f"({_fallback_pick.get('chosen_by')}) — "
+                      f"{', '.join(Path(p).name for p in _pack)}"
+                      + (f"; other designs in the pack, not read: "
+                         f"{', '.join(_fallback_pick.get('other_designs') or [])}"
+                         if _fallback_pick.get("other_designs") else ""), flush=True)
+            _fresh = os.getenv("SDI_VISION_REFRESH", "").strip().lower() in {"1", "true",
+                                                                             "yes", "on"}
+            # A STANDARDS MANUAL STATES REQUIREMENTS, NEVER PARTS (D-474; enforced at the
+            # scan by D-477). scan_folder_job holds a declared reference document out of the
+            # product read entirely — extraction, geometry, the BOM vision read and the
+            # roots never see it — and stashes its path here for the standards channel.
+            # The split below remains for any path that did not come through that scan.
+            _ref_pack: List[str] = [str(p) for p in
+                                    (summary.get("reference_pack_paths") or [])]
+            _ref_names = set() if _ref_pack else set(
+                concept_scan.reference_documents_declared(
+                    [job_folder, summary.get("job_folder")]
+                    + [Path(str(p)).parent for p in _pack]))
+            if _ref_pack:
+                print(f"   [concept] reference document(s) ride as REQUIREMENTS, never "
+                      f"parts: {', '.join(Path(p).name for p in _ref_pack)}", flush=True)
+            elif _ref_names:
+                _ref_pack = [p for p in _pack if Path(p).name in _ref_names]
+                _product_pack = [p for p in _pack if Path(p).name not in _ref_names]
+                if _product_pack and _ref_pack:
+                    _pack = _product_pack
+                    print(f"   [concept] reference document(s) ride as REQUIREMENTS, never "
+                          f"parts: {', '.join(Path(p).name for p in _ref_pack)}", flush=True)
+                else:
+                    # A read must have a product. Declared-everything, or names matching
+                    # nothing staged, sets the declaration aside and says so — the portal
+                    # refuses the all-reference submission before it gets here.
+                    _why = ("every staged document is declared reference"
+                            if _ref_pack else
+                            "the declared reference documents are not among the staged files")
+                    _ref_pack = []
+                    summary.setdefault("review_flags", []).append(
+                        "CONCEPT: " + _why + " — the declaration was set aside so the "
+                        "read has a product; stage the product's pack or brief beside "
+                        "the standards document and run again")
+                    print(f"   [concept] {_why} — declaration set aside", flush=True)
+            # THE ENQUIRY BRIEF FILED WITH THE PACK (D-360): stated facts for the model.
+            _run_folders = ([job_folder, summary.get("job_folder")]
+            + [_render_source_dir(p) for p in
+               (list(summary.get("scanned_documents") or [])
+                + list(summary.get("staged_inputs") or [])
+                + ([str(pdf_path)] if pdf_path is not None else []))]
+                # THE STAGED RENDER'S OWN FOLDER — the PDF scanned is a copy in the output tree
+                + ([Path(str(summary["source_image_path"])).parent]
+                   if summary.get("source_image_path") else [])
+                + [Path(str(p)).parent for p in (summary.get("staged_inputs") or [])]
+                + [Path(str(p)).parent for p in (summary.get("scanned_documents") or [])]
+                + ([Path(str(pdf_path)).parent] if pdf_path is not None else []))
+            _brief, _brief_file = concept_scan.find_brief(_run_folders)
+            if _brief:
+                summary["enquiry_brief"] = {"text": _brief, "file": _brief_file}
+                summary.setdefault("review_flags", []).append(
+                    "ENQUIRY BRIEF USED — stated facts given to the model, outranking the "
+                    "render: " + " ".join(_brief.split())[:300]
+                    + ("…" if len(_brief) > 300 else ""))
+                print(f"   [concept] enquiry brief read ({len(_brief)} chars) — stated "
+                      f"facts outrank what the render suggests", flush=True)
+            else:
+                # NO BRIEF IS SAID ON THE BOOK (D-473), not only in the run log: the read
+                # still prices — a concept budget from the documents alone — but what it
+                # lacked joins the confirm list every surface shows.
+                _nb = concept_scan.missing_brief_flag(bool(_client_document))
+                summary.setdefault("review_flags", []).append(_nb)
+                print(f"   [concept] {_nb}", flush=True)
+            # A DRAWING SHEET IS READ AS A DRAWING (D-415). Design-intent pages go to the model
+            # with their own printed text, under a preamble that makes the sheet's dimensions
+            # and notes facts; the bill that comes back is held against the body and weight the
+            # sheet states, put back once with what broke, and a fitting it does not draw is
+            # asked, not costed. A render is read exactly as before.
+            _sheet_read = bool(_design_intent_pages)
+            _sheet_check: Dict[str, Any] = {}
+            _set_aside: List[Dict[str, Any]] = []
+            # THE PREVIOUS READ, KEPT UNLESS THE PAGES SAY OTHERWISE (D-492): a re-read asked
+            # because the question changed is shown the bill it priced last time; a cached
+            # answer to the same question still replays untouched.
+            _bill_job = (Path(job_folder).name if job_folder else "") or (
+                Path(_pack[0]).stem if _pack else "CONCEPT")
+            _prev_bill = concept_scan.load_previous_bill(job_folder, _bill_job)
+            _prev_text = concept_scan.previous_bill_text(_prev_bill)
+            if _prev_text:
+                print(f"   [concept] the previous read's bill ({len(_prev_bill.get('parts') or [])} "
+                      f"line(s), prompt {_prev_bill.get('prompt_version') or '?'}) goes with any "
+                      f"new read, to keep unless the pages say otherwise", flush=True)
+            # AN ACCEPTED CONSTRUCTION IS PRICED, NOT RE-READ (D-534): a member schedule a person
+            # checked against the drawing, filed beside the pack, is the read — in its shape, so
+            # everything downstream prices it as it would the model's; the model is not asked.
+            _acc, _acc_file, _acc_problems = concept_scan.find_accepted_construction(
+                _run_folders, job=_bill_job)
+            if _acc_file and not _acc:
+                _acc_note = ("ACCEPTED CONSTRUCTION REFUSED — " + _acc_file + ": "
+                             + "; ".join(_acc_problems) + " — the drawing was read by the model "
+                             "instead")
+                summary.setdefault("review_flags", []).append(_acc_note)
+                print(f"   [concept] {_acc_note}", flush=True)
+            if _acc:
+                _ac = _acc["accepted_construction"]
+                _answer = _acc
+                _read = {"parsed": _acc, "accepted_construction": _acc_file}
+                _sr = {"read": _read, "answer": _acc, "check": {}, "set_aside": [],
+                       "base_key": "accepted:" + Path(_acc_file).name}
+                summary["accepted_construction"] = dict(_ac)
+                _acc_note = (f"ACCEPTED CONSTRUCTION — {len(_acc.get('parts') or [])} line(s) from "
+                             f"{Path(_acc_file).name}, accepted by {_ac.get('accepted_by')}"
+                             + (f" on {_ac['accepted_on']}" if _ac.get("accepted_on") else "")
+                             + " — the member schedule checked against the drawing is priced; "
+                               "the model was not asked to read the pack")
+                summary.setdefault("review_flags", []).append(_acc_note)
+                for _ex in _ac.get("excluded") or []:
+                    summary.setdefault("review_flags", []).append(
+                        f"ACCEPTED CONSTRUCTION — not part of the product: {_ex}")
+                print(f"   [concept] {_acc_note}", flush=True)
+            elif _sheet_read:
+                _door_rec = (summary.get("model_takeoff_door")
+                             if isinstance(summary.get("model_takeoff_door"), dict) else {})
+                # THE STANDARDS RIDE ON A SHEET READ TOO (D-483): the manual's requirements
+                # apply whatever the product's pages are, and only the render read was given
+                # them — the K-Wellness 12:31 book priced no test, documentation or project row.
+                _sr = concept_scan.read_sheet_concept(
+                    _pack, refresh=_fresh, brief=_brief,
+                    envelope=list(_door_rec.get("model_envelope_mm") or []),
+                    envelope_of=str(_door_rec.get("model_envelope_of") or ""),
+                    reference_pack=_ref_pack, previous=_prev_text,
+                    previous_base_key=str(_prev_bill.get("base_key") or ""),
+                    previous_read_key=str(_prev_bill.get("read_key") or ""))
+                _read, _answer = _sr["read"], _sr["answer"]
+                _sheet_check, _set_aside = _sr["check"], _sr["set_aside"]
+            else:
+                _read = concept_scan.read_concept(
+                    _pack, refresh=_fresh, brief=_brief, reference_pack=_ref_pack,
+                    previous=_prev_text,
+                    previous_base_key=str(_prev_bill.get("base_key") or ""),
+                    previous_read_key=str(_prev_bill.get("read_key") or ""))
+                _answer = _read.get("parsed") or {}
+            if (_read or {}).get("cache_hit"):
+                run_timing.count("vision read", cache_hit=True)     # a partner run only (D-529)
+            # WHAT THIS READ CHANGED, SAID (D-492): parts added or dropped, counts and sizes
+            # moved against the previous read — on the book, not only in the log.
+            _changes = concept_scan.bill_changes(_prev_bill, _answer) if _answer else []
+            if _changes:
+                _ch = ("CONCEPT READ CHANGED FROM THE PREVIOUS READ: " + "; ".join(_changes[:20])
+                       + (f"; and {len(_changes) - 20} more" if len(_changes) > 20 else ""))
+                summary.setdefault("review_flags", []).append(_ch)
+                print(f"   [concept] {_ch}", flush=True)
+            elif _prev_bill and _answer:
+                print("   [concept] the bill is unchanged from the previous read", flush=True)
+            if _read.get("baseline"):
+                print(f"   [concept] baseline: {_read['baseline']}", flush=True)
+            if _read.get("replayed_from"):
+                # A REPLAYED READ IS SAID (D-595): this book prices a saved answer, not a read
+                # of these pages today.
+                _rp_note = (f"CONCEPT READ REPLAYED from {Path(str(_read['replayed_from'])).name} "
+                            f"({concept_scan.CONCEPT_REPLAY_ENV}) — no model was asked; "
+                            f"this book prices the saved answer")
+                summary.setdefault("review_flags", []).append(_rp_note)
+                print(f"   [concept] {_rp_note}", flush=True)
+            _bill_base_key = str((_sr.get("base_key") if _sheet_read else _read.get("base_key"))
+                                 or "")
+            if _ref_pack and not _read.get("standards_text_chars"):
+                summary.setdefault("review_flags", []).append(
+                    "CONCEPT: the declared reference document(s) have no readable text "
+                    "layer, so no requirement reached the model — the standards remain "
+                    "the estimator's own list this run")
+            _sc = (_read.get("standards_coverage")
+                   if isinstance(_read.get("standards_coverage"), dict) else None)
+            if _sc:
+                # PARTIAL STANDARDS COVERAGE IS ON THE BOOK (D-476): the manual rides as
+                # words only, so a trimmed page's diagram-only requirement may be missed.
+                _sc_note = (f"STANDARDS TEXT TRIMMED TO FIT — {_sc.get('sent')} of "
+                            f"{_sc.get('total')} extracted character(s) of the reference "
+                            f"document(s) went to the model; its pages are not read as "
+                            f"images, so a requirement carried only by a trimmed page's "
+                            f"diagram may be missed — walk the manual's checklist "
+                            f"sections against the requirement lines before issue")
+                summary.setdefault("review_flags", []).append(_sc_note)
+                print(f"   [concept] {_sc_note}", flush=True)
+            if not _sheet_read and _read.get("document_text_chars"):
+                # THE PACK'S PRINTED WORDS WENT WITH ITS PICTURES (D-462): a tech brief's
+                # stated footprint, construction and counts are facts, not visual cues.
+                summary["concept_document_text_chars"] = int(_read["document_text_chars"])
+                print(f"   [concept] the pack's own words went to the model with its "
+                      f"pages ({_read['document_text_chars']} chars) — a figure, material "
+                      f"or count stated in them is a fact, not a visual cue", flush=True)
+            # A REQUIREMENT THE STANDARDS DOCUMENT STATES IS A NAMED ALLOWANCE (D-474):
+            # design development, testing, assessments and documentation are project costs
+            # the estimator prices SEPARATELY, never parts and never silently buried in the
+            # unit — each lands on the confirm list with the manual's own words and place.
+            _reqs = concept_scan.standards_requirements(_answer, brief=_brief or "")
+            if _reqs:
+                summary["standards_requirements"] = [dict(r) for r in _reqs]
+                for _rf in concept_scan.requirement_flags(_reqs):
+                    summary.setdefault("review_flags", []).append(_rf)
+                print(f"   [concept] {len(_reqs)} requirement(s) of the customer's standards "
+                      f"document apply — each is a named allowance on the confirm list, "
+                      f"never a part", flush=True)
+            _tc = (_read.get("text_coverage")
+                   if isinstance(_read.get("text_coverage"), dict) else None)
+            if _tc:
+                # WHAT DID NOT GO IS NAMED (D-466, D-597): whole pages only, and a page that
+                # did not fit is said by name — never trimmed and called included.
+                _tc_note = (f"DOCUMENT TEXT NOT SENT WHOLE — {_tc.get('sent')} of "
+                            f"{_tc.get('total')} extracted character(s) went to the model"
+                            + (f"; pages NOT sent as text: "
+                               f"{', '.join(_tc.get('omitted_pages') or [])}"
+                               if _tc.get("omitted_pages") else "")
+                            + (f"; cut: {', '.join(_tc.get('cut_pages') or [])}"
+                               if _tc.get("cut_pages") else "")
+                            + " — those pages were read from their images only")
+                summary.setdefault("review_flags", []).append(_tc_note)
+                print(f"   [concept] {_tc_note}", flush=True)
+            # THE JOB'S NAME, NOT THE WRAPPER'S. A render is scanned as a content-keyed PDF
+            # in the output tree, so the anchor's stem is a hash — and every sighted part
+            # was numbered `5E09BE03B9741E5F-BDAB4AD-C01 …`, a code no estimator would type
+            # into a confirmations file and nobody can match to a job by eye.
+            _job_name = (Path(job_folder).name if job_folder else "") or (
+                Path(_pack[0]).stem if _pack else "CONCEPT")
+            # THE RESPONSE'S IDENTITY, TAKEN ONCE AT THE READ (D-598): every record's read ID
+            # names it, and the ledger holds each record to it.
+            try:
+                from read_charge_contract import response_id as _response_id
+                _resp_id = _response_id((_read or {}).get("parsed") or _answer)
+            except Exception:                                        # noqa: BLE001
+                _resp_id = ""
+            _sighted = concept_scan.parts_from_concept(_answer, _job_name, sheet=_sheet_read,
+                                                          brief=_brief or "",
+                                                          source_answer=(_read or {}).get("parsed"),
+                                                          source_response=_resp_id)
+            if _acc:
+                # EVERY LINE SAYS WHOSE SCHEDULE IT CAME FROM (D-534).
+                for _rec in _sighted:
+                    _rec["accepted_construction"] = Path(_acc_file).name
+                    _rec.setdefault("review_flags", []).append(
+                        f"ACCEPTED CONSTRUCTION: this line is from {Path(_acc_file).name}, "
+                        f"accepted by {_acc['accepted_construction'].get('accepted_by')} — its "
+                        f"sizes are the schedule's; anything the schedule marks CONFIRM is "
+                        f"still an assumption")
+            _unit_ops = concept_scan.unit_operations(_answer)
+            # ── THE ANSWERS FILE, APPLIED TO THE PARTS IT WAS WRITTEN ABOUT ──────────
+            #
+            # The confirmations pass runs before this hook, against a parts list that does
+            # not yet hold a single sighted part — so every entry an estimator wrote about
+            # this render would have reported "NO part of this job carries that number" and
+            # done nothing. The pass is not moved: it runs where it does so that what it
+            # displaces is recorded against fully-populated records. It is run AGAIN here,
+            # over the sighted parts only, which is the list its entries name.
+            if _ec_data.get("parts"):
+                try:
+                    import estimator_confirmed as _ec2                 # noqa: WPS433
+                    _rep2 = _ec2.apply_estimator_confirmed(_sighted, _ec_data)
+                    if _rep2.get("stamped") or _rep2.get("agreed"):
+                        print(f"   [confirmed] {_rep2.get('stamped', 0)} sighted part(s), "
+                              f"{_rep2.get('fields', 0)} field(s) confirmed from "
+                              f"{_ec_src or 'the answers file'} — the render's assumption is "
+                              f"displaced by the estimator's figure", flush=True)
+                    _offs2 = ((summary.get("estimator_decisions") or {})
+                              .get("operations_off") or {})
+                    for _sp in _sighted:
+                        _spc = str(_sp.get("part_number") or "").strip().upper()
+                        if _spc in _offs2:
+                            _sp["_estimator_operations_off"] = list(_offs2[_spc])
+                except Exception as _ec2_err:                          # noqa: BLE001
+                    print(f"   [confirmed] the answers file could not be applied to the "
+                          f"sighted parts: {type(_ec2_err).__name__}: {_ec2_err}", flush=True)
+                _kept_strip = concept_scan.keep_approved_strip_lines(_sighted)
+                if _kept_strip:
+                    print(f"   [confirmed] an approved edging line stands whole — per-host "
+                          f"line(s) withdrawn: {', '.join(_kept_strip)}", flush=True)
+            # A COUNT THE BRIEF STATES OUTRANKS THE READ'S (D-502), after the answers file so an
+            # estimator's figure still stands above it, and before anything counts from the
+            # lines; a count no source states that moved between reads is asked on its line.
+            _bc = concept_scan.apply_brief_counts(_sighted, _brief or "")
+            for _a in _bc["applied"]:
+                print(f"   [concept] count stated by the enquiry brief: {_a} — the read's figure "
+                      f"is disclosed on the line", flush=True)
+            if _bc["asked"]:
+                print(f"   [concept] brief count not matched to one line: "
+                      f"{'; '.join(_bc['asked'])} — a question on the lines", flush=True)
+            _drift = concept_scan.question_unstated_count_changes(_sighted, _changes,
+                                                                  _brief or "",
+                                                                  previous=_prev_bill)
+            if _drift:
+                print(f"   [concept] count moved between reads and no source states it: "
+                      f"{'; '.join(_drift)} — a question on the line", flush=True)
+            # A COMPONENT STILL FOLDED INTO ANOTHER LINE (D-500, D-501): priced once as a
+            # provisional allowance where the previous read sized it, else a question on the line.
+            _inside = concept_scan.allow_components_inside(_sighted, _prev_bill, _job_name,
+                                                           brief=_brief or "")
+            _sighted.extend(_inside["minted"])
+            for _m in _inside["minted"]:
+                print(f"   [concept] named inside another line and listed by none: "
+                      f"{_m['description']} x{_m.get('quantity')} — a PROVISIONAL ALLOWANCE "
+                      f"{_m['part_number']}, charged once: "
+                      f"{_m['provisional_allowance']['basis']}", flush=True)
+            if _inside["asked"]:
+                print(f"   [concept] named inside another line, costed by none and with nothing "
+                      f"to size it: {'; '.join(_inside['asked'])} — a question on the line",
+                      flush=True)
+            # HOW MANY PIECES A SET HOLDS (D-502), from the bill, so a set the research prices
+            # one piece of is a reasoned allowance rather than nothing.
+            for _sp in concept_scan.set_pieces_for(_sighted, _brief or ""):
+                print(f"   [concept] set line: {_sp}", flush=True)
+            # A CUT-OUT READ AT A STATED PITCH IS ASKED (D-501): a spacing is not a size.
+            _pitch_q = concept_scan.pitch_as_size_questions(_sighted, _brief or "")
+            if _pitch_q:
+                print(f"   [concept] cut-out size equal to a stated pitch: "
+                      f"{'; '.join(_pitch_q)} — a question on the line, priced as read",
+                      flush=True)
+            # THE BILL, SAVED AFTER THE ANSWERS FILE (review of D-492): each line says which
+            # values an estimator APPROVED, and the bill names the question and the answer it
+            # came from, so the next read can tell an unchanged read from a new one.
+            if _answer:
+                concept_scan.save_bill(job_folder, _bill_job, _answer, records=_sighted,
+                                       base_key=_bill_base_key,
+                                       read_key=str(_read.get("read_key") or ""))
+            _welded = concept_scan.brief_stated_welds(_sighted)
+            if _welded:
+                # A WELD THE BRIEF STATES IS A STATED WELD (D-467), on the parts the model
+                # attributed it to (D-469) — never a pack-level word made part-level evidence.
+                print(f"   [concept] welded per the enquiry brief: "
+                      f"{', '.join(_welded)} — the stated joint is charged on the parts "
+                      f"the brief names, not spread across the pack", flush=True)
+            _unit = concept_scan.unit_assembly_part(_sighted, _answer, _job_name)
+            # WHAT THIS READ CHANGED, ON THE BOOK (D-500): the unit carries the change list,
+            # each dropped line as its own decision, and whether the read was a replay.
+            _chg_host = _unit or (_sighted[0] if _sighted else None)
+            if _chg_host is not None and (_changes or _prev_bill):
+                _chg_host.setdefault("review_flags", []).extend(concept_scan.change_flags(
+                    _changes, str(_read.get("baseline") or "") if _prev_bill else "",
+                    allowed=_inside.get("allowed") if isinstance(_inside, dict) else None))
+            if _sheet_read and _unit:
+                # THE SHEET'S OWN WELD NOTE IS THE UNIT'S (D-418): "WELDED AND FINISHED FLUSH"
+                # is a stated weld on the product the sheet draws, not an inference.
+                try:
+                    from weld_symbols import sheet_weld_facts as _swf
+                    if concept_scan.apply_sheet_notes_to_unit(_unit, _swf(_pack)):
+                        print(f"   [concept] welded per the design sheet's own note: "
+                              f"'{_unit.get('weld_stated_by_note')}' — stated on "
+                              f"{_unit.get('part_number')}, not inferred", flush=True)
+                except Exception as _sw_exc:                       # noqa: BLE001
+                    print(f"   [concept] the sheet's weld note could not be read "
+                          f"({type(_sw_exc).__name__}: {_sw_exc})", flush=True)
+            # ONE LOCATED JOINT IS ONE CHARGE whatever stated it (D-471, widened by D-472):
+            # a sighted concept weld is priced now, so a "welded to" pair the read placed on
+            # both pieces must collapse to one charge with or without a brief.
+            _once = concept_scan.price_the_joint_once(_sighted)
+            if _once:
+                print(f"   [concept] the located joint is priced once, on the attaching "
+                      f"part — the duplicate weld attribution was removed from: "
+                      f"{', '.join(_once)}", flush=True)
+            if _brief:
+                # A STATED JOINT ALWAYS RECEIVES ONE TRACEABLE CHARGE (D-471): the model's
+                # own placements stand, deduplicated to one charge per joint; where none
+                # landed, the brief's affirmative weld statement is put to the unit through
+                # the sheet-note reader, with the located pieces stated — never a bare
+                # question over a known requirement.
+                _ja = concept_scan.ensure_stated_joint_charged(_sighted, _unit, _brief)
+                if _ja:
+                    summary.setdefault("review_flags", []).append(_ja)
+                    print(f"   [concept] {_ja}", flush=True)
+            if _sheet_read:
+                # WHAT THE SHEET CHECK COULD NOT SETTLE IS ASKED (D-415), on the unit, in the
+                # channel the book's "to settle" count already reads.
+                concept_scan.raise_sheet_questions(([_unit] if _unit else []) + _sighted,
+                                                   _sheet_check, _set_aside)
+            # FAITHFUL TRANSFER (D-595): what the read and the brief state reaches the records
+            # — the finish, the polish, the weld process — and what the engine cannot charge
+            # is asked. Every such change is listed on the record beside the raw answer.
+            _transfer: List[Dict[str, Any]] = []
+            try:
+                _transfer += concept_scan.carry_stated_finish(_unit, _sighted, _answer,
+                                                              _brief or "")
+                _transfer += concept_scan.carry_weld_process(_unit, _sighted, _answer,
+                                                             _brief or "")
+                for _sp_d in _sighted:
+                    if _sp_d.get("concept_dropped_operations"):
+                        _transfer.append({
+                            "kind": "dropped",
+                            "item": ", ".join(_sp_d["concept_dropped_operations"]),
+                            "to": [str(_sp_d.get("part_number") or "")],
+                            "why": "the rate card has no operation for it — asked, not priced"})
+                _du = concept_scan.dropped_unit_operations(_answer)
+                _du_host = _unit or (_sighted[0] if _sighted else None)
+                if _du and _du_host is not None:
+                    from source_precedence import raise_manufacturing_question as _ask_du
+                    _ask_du(_du_host,
+                            f"Work on {_du_host.get('part_number')} the engine cannot charge: "
+                            + ", ".join(_du),
+                            "the read named it for the unit and the rate card has no operation "
+                            "for it, so it is NOT in the price",
+                            "say which department does it and how long it takes, or confirm it "
+                            "is not needed", "file_scan.concept_read")
+                    _transfer.append({"kind": "dropped", "item": ", ".join(_du),
+                                      "to": [str(_du_host.get("part_number") or "")],
+                                      "why": "unit work the rate card has no operation for — "
+                                             "asked, not priced"})
+            except Exception as _tr_exc:                             # noqa: BLE001
+                print(f"   [transfer] the read's finish and weld process could not be carried "
+                      f"({type(_tr_exc).__name__}: {_tr_exc})", flush=True)
+            for _t in _transfer:
+                print(f"   [transfer] {_t['kind']}: {_t['item']} -> "
+                      f"{', '.join(_t.get('to') or []) or 'the job'} ({_t['why']})", flush=True)
+            _assumed = concept_scan.assumption_register(_sighted)
+            _answers_path = concept_scan.write_assumptions_file(
+                _sighted, folder=job_folder, job=_job_name)
+            summary["concept_read"] = dict(concept_scan.concept_note(_answer),
+                                           parts=len(_sighted),
+                                           unit_assembly=(_unit or {}).get("part_number", ""),
+                                           unit_operations=_unit_ops,
+                                           assumptions=_assumed,
+                                           assumptions_file=(str(_answers_path)
+                                                             if _answers_path else ""),
+                                           cache_hit=bool(_read.get("cache_hit")),
+                                           input_documents=[Path(p).name for p in _pack],
+                                           reference_documents=[Path(p).name
+                                                                for p in _ref_pack],
+                                           standards_requirements=len(_reqs),
+                                           brief_used=bool(_brief),
+                                           document_text_chars=int(
+                                               _read.get("document_text_chars") or 0),
+                                           client_document=bool(_client_document))
+            # THE READ AS THE MODEL GAVE IT, AND WHAT THE ENGINE MADE OF IT (D-595): kept on the
+            # record so a book can be traced back to the answer without another model call.
+            # WHOLE, NOT CUT (D-596): the read ledger's sha256 is of these exact words, so the
+            # record can always be checked against what the model sent.
+            summary["concept_read"].update(
+                raw_response=str(_read.get("raw_response") or ""),
+                read_key=str(_read.get("read_key") or ""),
+                read_changes=list(_transfer),
+                stated_finish=concept_scan.stated_finish(_answer, _brief or "").get("plate", ""),
+                replayed_from=str(_read.get("replayed_from") or ""),
+                # WHICH PAGES WENT AS IMAGES AND AS TEXT (D-597), for the page coverage record.
+                pages_rendered=list(_read.get("pages_rendered") or []),
+                text_coverage=dict(_read.get("text_coverage") or {}))
+            if _sheet_read:
+                summary["concept_read"].update(
+                    sheet_read=True, sheet_check=_sheet_check, set_aside_undrawn=_set_aside,
+                    sheet_facts=(_answer.get("sheet_facts")
+                                 if isinstance(_answer.get("sheet_facts"), dict) else {}))
+                _sc_flag = concept_scan.sheet_check_sentence(_sheet_check)
+                if _sc_flag:
+                    summary.setdefault("review_flags", []).append(_sc_flag)
+                    print(f"   [concept] {_sc_flag}", flush=True)
+                for _sa in _set_aside:
+                    summary.setdefault("review_flags", []).append(
+                        f"NOT COSTED — LISTED BUT NOT DRAWN: {_sa.get('name')}"
+                        f"{' x' + str(_sa.get('quantity')) if _sa.get('quantity') else ''} — the read "
+                        f"listed it and the sheet does not draw or label it; asked, not priced")
+            # ── THE UNIT ITSELF, SO SOMEBODY ASSEMBLES IT ───────────────────────────
+            #
+            # This wrote the unit's work to `summary["assembly_events"]`, and NOTHING IN
+            # THIS ENGINE READS THAT KEY — the route compiler builds its assembly events
+            # from its own payload and the workbook costs from the part records. So the
+            # first full concept book cut, banded and routed a bin that nobody put
+            # together. The honest fix is a part: an assembly parent whose children are
+            # the sighted panels, which the existing board-assembly rule then fits and
+            # times off the shop's own measured rate. See unit_assembly_part.
+            _replacement = len(_sighted) + (1 if _unit else 0)
+            _stood_down = concept_scan.stand_down_reader_rows(
+                summary, _client_document, replacement_parts=_replacement)
+            if _stood_down:
+                summary.setdefault("review_flags", []).append(_stood_down)
+                print(f"   [concept] {_stood_down}", flush=True)
+            elif (_client_document and not _replacement
+                  and summary["manufacturing_writeup"]["parts"]):
+                # A FAILED READ NEVER MINTS AN EMPTY BOOK (D-464): the earlier rows stand,
+                # said out loud, instead of being traded for nothing.
+                _kept = ("CLIENT DOCUMENT READ RETURNED NO PARTS — the readers' "
+                         f"{len(summary['manufacturing_writeup']['parts'])} row(s) are kept "
+                         "and the read must be repaired before this book is trusted")
+                summary.setdefault("review_flags", []).append(_kept)
+                print(f"   [concept] {_kept}", flush=True)
+            if _unit:
+                summary["manufacturing_writeup"]["parts"].append(_unit)
+            summary["manufacturing_writeup"]["parts"].extend(_sighted)
+            # NOT VISIBLE MUST NOT MEAN UNPRICED (D-468). A consumable the read names gets a
+            # provisional bought-in line down the ordinary price chain; a design unknown is
+            # asked on the record — and neither lives only in this log any more.
+            _nv_cons, _nv_ship, _nv_unknown = concept_scan.split_not_visible(
+                _answer.get("not_visible") or [])
+            for _s in _nv_ship:
+                # PRICED ONCE (D-469): the commercial PACKAGING and DELIVERY lines carry
+                # shipment scope; a second line here would charge the pallet twice.
+                summary.setdefault("review_flags", []).append(
+                    f"NOT VISIBLE — SHIPMENT SCOPE: {_s} — carried by the commercial "
+                    f"PACKAGING/DELIVERY lines, not duplicated as a parts line")
+            # A WELD ON THE UNIT IS NOT EVIDENCE FOR EACH PIECE (review of D-595): a piece is
+            # welded on its own words or a brief sentence naming its weld, else it is counted
+            # and its fixings are asked.
+            _mech = concept_scan.mechanically_fitted(_sighted, brief=_brief or "")
+            _nv_lines = concept_scan.consumable_lines(
+                _nv_cons, _job_name,
+                pieces_fitted=int((_unit or {}).get("pieces_fitted") or 0),
+                fixed_pieces=(_mech["pieces"] if _unit else None),
+                components=((_unit or {}).get("components_labelled") if _unit else None))
+            # THE FIXINGS THE READ DID NOT NAME ARE ASKED, NOT BOUGHT (D-595, replacing D-499's
+            # automatic allowance). Four M6 screws were bought for 0320730's welded bar on no
+            # evidence at all; a fixing the read or the brief names is still priced as named.
+            if (_unit and _mech.get("pieces")
+                    and not concept_scan.read_names_fixings(_nv_cons, _sighted)):
+                from source_precedence import raise_manufacturing_question as _ask_fx
+                _fx_pcs = ", ".join(sorted((_mech.get("counted") or {}).keys()))
+                _ask_fx(_unit,
+                        f"Fixings for {_unit.get('part_number')}: {_mech['pieces']} piece(s) "
+                        f"fitted by hand and the read names no fixings",
+                        f"no fixings are charged — an allowance is not added without evidence "
+                        f"({_fx_pcs})",
+                        "name the fixings and how many, or confirm the pieces need none",
+                        "file_scan.concept_read")
+                summary.setdefault("concept_read", {}).setdefault("read_changes", []).append(
+                    {"kind": "asked", "item": "fixings", "to": [str(_unit.get("part_number"))],
+                     "why": f"{_mech['pieces']} piece(s) fitted by hand, none named — asked, "
+                            f"not bought"})
+                print(f"   [concept] the read named no fixings for {_mech['pieces']} piece(s) "
+                      f"fitted by hand — asked, not bought", flush=True)
+            # A BONDED JOINT IS PRICED TOO (D-501): its adhesive, not screws, by a method
+            # suited to the joint (D-502).
+            if _unit:
+                for _adh in concept_scan.adhesive_allowance_lines(_sighted, _job_name,
+                                                                  len(_nv_lines) + 1):
+                    _nv_lines = list(_nv_lines) + [_adh]
+                    print(f"   [concept] bonded piece(s): a provisional {_adh.get('joining_method')}"
+                          f" allowance of {_adh.get('quantity')} {_adh.get('unit_of_measure')}",
+                          flush=True)
+            if _nv_lines:
+                summary["manufacturing_writeup"]["parts"].extend(_nv_lines)
+                if _unit:
+                    # THE CONSUMABLES GO ON THE UNIT (D-487): owned in the hierarchy, not
+                    # orphans the consistency check blocks on.
+                    _unit.setdefault("assembly_fitted_items", []).extend(
+                        str(_l.get("part_number")) for _l in _nv_lines)
+                    # AND APPLYING THEM IS THE UNIT'S WORK, ONCE (D-491).
+                    _to_apply = sum(int(_l.get("items_to_apply") or 0) for _l in _nv_lines)
+                    if _to_apply:
+                        _unit["items_to_apply"] = _to_apply
+                print(f"   [concept] {len(_nv_lines)} provisional consumable line(s) minted "
+                      f"from the read's not-visible list — priced by the ordinary bought-in "
+                      f"chain, flagged for confirmation", flush=True)
+            _nv_host = _unit or (_sighted[0] if _sighted else None)
+            for _u in _nv_unknown:
+                summary.setdefault("review_flags", []).append(
+                    f"NOT VISIBLE ON THE RENDER — NOT PRICED: {_u} — a design unknown, not "
+                    f"a consumable; name it as a part and it prices itself")
+                # AN UNRESOLVED REQUIREMENT IS A DECISION (D-595), not only a flag: a thing the
+                # product receives or is used with is asked whether SDI supplies it, never bought.
+                if _nv_host is not None:
+                    from source_precedence import raise_manufacturing_question as _ask_nv
+                    _ask_nv(_nv_host, f"Named by the read, not shown: {_u}",
+                            "not priced — nothing shows SDI supplies it",
+                            "say whether SDI supplies it; name it as a part and it is priced",
+                            "file_scan.concept_read")
+                summary.setdefault("concept_read", {}).setdefault("read_changes", []).append(
+                    {"kind": "asked", "item": str(_u), "to": [str((_nv_host or {}).get(
+                        "part_number") or "")], "why": "not visible and not a named consumable — "
+                                                       "asked, not bought"})
+            if _design_intent_fallback and _fallback_pick and _fallback_pick.get("design"):
+                # THE BOOK SAYS WHAT IT IS, IN THE TAKE-OFF'S OWN WORDS (D-411, D-413): the
+                # report's callout, the sheet's banner and the quote's gate all read this.
+                summary["concept_takeoff"] = {
+                    "source": "vision_concept", "design": _fallback_pick.get("design"),
+                    "design_title": ", ".join(Path(p).name for p in _pack),
+                    "chosen_by": _fallback_pick.get("chosen_by"),
+                    "other_designs": list(_fallback_pick.get("other_designs") or []),
+                    "excluded": [], "parts": len(_sighted), "sheets": list(_pack),
+                    "model_takeoff_why_not": (_di_pending[2] if _di_pending else ""),
+                    "brief_used": bool(_brief),
+                    "sheet_check": {k: _sheet_check.get(k) for k in (
+                        "checked", "agrees", "verdict", "failures", "unverified",
+                        "stated_weight_kg", "net_weight_kg", "sighted_weight_kg",
+                        "second_read_taken")} if _sheet_check else {},
+                }
+                summary.setdefault("review_flags", []).append(
+                    f"CONCEPT READ OF A DESIGN-INTENT SHEET — not a drawings estimate. The model "
+                    f"gave no take-off, so the vision model read the parts of "
+                    f"{_fallback_pick.get('design')} ({', '.join(Path(p).name for p in _pack)}) "
+                    f"off the sheet{' with the enquiry brief' if _brief else ''}: "
+                    f"{len(_sighted)} part(s), every size, material and count an assumption."
+                    + (f" Other designs in the pack, not read: "
+                       f"{', '.join(_fallback_pick.get('other_designs') or [])} — run with "
+                       f"SDI_PRODUCT=<name> for each." if _fallback_pick.get("other_designs") else ""))
+            # THE READ LEDGER (D-596): every item the read returned, with an identity and the
+            # record it became, captured once every line is minted. After Excel,
+            # read_charge_contract holds each to charged, covered, excluded or unresolved.
+            try:
+                import read_charge_contract as _rcc
+                summary["read_ledger"] = _rcc.capture(
+                    (_read or {}).get("parsed") or _answer,
+                    records=([_unit] if _unit else []) + list(_sighted) + list(_nv_lines or []),
+                    raw_response=str((_read or {}).get("raw_response") or ""),
+                    read_key=str((_read or {}).get("read_key") or ""),
+                    said_by=("accepted_construction" if _acc else "llm_read"),
+                    brief=_brief or "", set_aside=_set_aside,
+                    replayed_from=str((_read or {}).get("replayed_from") or ""),
+                    response=_resp_id)
+                _led = summary["read_ledger"]
+                print(f"   [read-ledger] {sum(1 for _i in _led['items'] if _i.get('work'))} "
+                      f"item(s) of work and {sum(1 for _i in _led['items'] if not _i.get('work'))} "
+                      f"fact(s) from the read, each to be charged, covered, excluded or held",
+                      flush=True)
+            except Exception as _rl_exc:                             # noqa: BLE001
+                summary["read_ledger"] = {"schema": "read_ledger.v1", "items": [],
+                                          "error": f"{type(_rl_exc).__name__}: {_rl_exc}"}
+                print(f"   [read-ledger] NOT CAPTURED ({type(_rl_exc).__name__}: {_rl_exc}) — "
+                      f"the read cannot be held to the sheet on this run", flush=True)
+            print("")
+            print("   " + "=" * 68)
+            print("   CONCEPT READ. This pack is a visual, not a drawing pack, so the")
+            print(f"   parts below are SIGHTED by the vision model: {len(_sighted)} part(s),")
+            print("   every dimension an assumption that names the cue it was scaled from.")
+            print("   They are priced by the ordinary waterfall — the model never prices.")
+            if _unit:
+                print(f"   The unit itself is {_unit['part_number']} — "
+                      f"{len(_unit.get('assembly_children') or [])} made part(s) to fit "
+                      f"together, so the shop's own bench rule times the build.")
+            # THE BILL, BEFORE THE PRICING (D-481). The banner promised "the parts below"
+            # and listed none, so the only place to see the proposed bill was the finished
+            # book an hour later. A read that is not the product is visible here, in the
+            # first minutes, and the run can be stopped before a single price is looked up.
+            print("   THE PROPOSED BILL — check it now; if it is not the product, stop the "
+                  "run here:")
+            for _bl in concept_scan.bill_lines(
+                    ([_unit] if _unit else []) + list(_sighted) + list(_nv_lines or [])):
+                print(f"     {_bl}", flush=True)
+            # WHAT IT ASSUMED, AND WHERE TO ANSWER IT. A concept budget is only honest if
+            # the assumptions are a list somebody can work through, not stamps on twelve
+            # records that have to be opened one at a time.
+            if _assumed:
+                print(f"   {len(_assumed)} assumption(s) went into the price — every size, "
+                      f"material and count is sighted, not measured.")
+            if _answers_path:
+                print(f"   Confirm or correct them in {_answers_path}")
+                print("   (state your reasoning against each one; an entry with none is "
+                      "refused and the render's own assumption stands)")
+            for _uv in (summary["concept_read"].get("not_visible") or [])[:6]:
+                print(f"   Not visible on the render, for the estimator: {_uv}")
+            for _oc in (summary["concept_read"].get("options_not_costed") or [])[:4]:
+                summary.setdefault("review_flags", []).append(
+                    f"ENQUIRY BRIEF OPTION NOT COSTED: {_oc} — this book prices the brief's "
+                    f"first option only; run the other as its own estimate with its own brief "
+                    f"(estimator to confirm which the customer wants)")
+                print(f"   Brief option NOT costed in this book: {_oc}")
+            print("   " + "=" * 68)
+            print("")
+        except concept_scan.ConceptUnavailable as _cu:
+            # NOTHING WAS READ, AND THE BOOK MUST SAY SO. An empty estimate whose cause is
+            # a missing key reads identically to a pack with nothing in it — the exact
+            # illusion D-157 buried for the delivery notes.
+            summary["concept_read"] = {"error": str(_cu)}
+            summary.setdefault("review_flags", []).append(
+                f"CONCEPT READ COULD NOT RUN: {_cu} — this book is empty because nothing "
+                f"was read, not because the pack has no parts")
+            print(f"   !! concept read could not run: {_cu}", flush=True)
+        except Exception as _ce:                                     # noqa: BLE001
+            summary["concept_read"] = {"error": f"{type(_ce).__name__}: {_ce}"}
+            summary.setdefault("review_flags", []).append(
+                f"CONCEPT READ FAILED ({type(_ce).__name__}: {_ce}) — this book is empty "
+                f"because the read failed, not because the pack has no parts")
+            print(f"   !! concept read failed: {type(_ce).__name__}: {_ce}", flush=True)
+
+    # THE PAGE COVERAGE RECORD (D-597): every page of every document, what read it, and what
+    # nothing read — built once the whole-pack read and any concept read have run.
+    try:
+        import page_coverage as _pcov
+        _pc_pages = None
+        if not (summary.get("llm_full_extract_coverage") or {}).get("pages"):
+            from llm_full_extract import pack_pages as _pack_pages
+            _pc_pages = [{k: p.get(k) for k in ("document", "page", "chars", "has_text",
+                                                 "width_pt", "height_pt")}
+                         for p in _pack_pages(job_documents(summary, pdf_path))]
+        summary["page_coverage"] = _pcov.build(summary, _pc_pages)
+        _pcg = summary["page_coverage"]["gaps"]
+        print(f"   [page-coverage] {len(summary['page_coverage']['pages'])} page(s) across "
+              f"{len(summary['page_coverage']['documents'])} document(s), content read on "
+              f"{summary['page_coverage'].get('pages_content_read', 0)}; "
+              + ("NO LLM READING RAN — the rule-based readers alone saw these pages"
+                 + (f"; {len(_pcg)} gap(s)" if _pcg else "")
+                 if not summary["page_coverage"].get("llm_read") else
+                 f"{len(_pcg)} gap(s): " + "; ".join(
+                     f"{g['document']} page {g['page']} {g['kind']}" for g in _pcg[:6])
+                 if _pcg else "every page reached an LLM reading"), flush=True)
+    except Exception as _pc_exc:                                     # noqa: BLE001
+        summary["page_coverage"] = {"schema": "page_coverage.v1", "pages": [], "gaps": [],
+                                    "error": f"{type(_pc_exc).__name__}: {_pc_exc}"}
+        print(f"   [page-coverage] NOT BUILT ({type(_pc_exc).__name__}: {_pc_exc})", flush=True)
+
+    # A DESIGN-INTENT PACK THAT NEITHER THE MODEL NOR THE CONCEPT READ COULD PRICE STOPS HERE,
+    # as the fact on the record (D-409), with the reasons both doors gave (D-411).
+    if _di_pending and not summary["manufacturing_writeup"]["parts"]:
+        from run_stop import record as _record_stop
+        # BOTH DOORS' REASONS GO ON THE RECORD (D-413): the 10:40 page said "take the design
+        # off the model" and never why the run had not — the one thing a reader needed.
+        _record_stop(summary, "design_intent_pack_on_engine_run", _di_pending[0],
+                     next_step=_di_pending[1], pages=[str(p) for p in _design_intent_pages],
+                     model_takeoff=str(_di_pending[2] or ""),
+                     concept_read=(str(_concept_refused) if _concept_refused else
+                                   str(_fallback_ask or (summary.get("concept_read") or {}).get("error")
+                                       or "the concept read produced no part")))
+        print("   !! this pack is design-intent sheets on an ENGINE run — nothing to cost. "
+              "Take the chosen design off from its own model, or have Design detail it.", flush=True)
+    # A PACK THAT GAVE NO PART AT ALL STOPS HERE TOO (D-598e), whatever the reason none of the
+    # stops above named. 0320730's 15:36 engine run read an eight-page drawing with no parts
+    # list, costed nothing, and its book said "0 item(s) to confirm: nothing outstanding" beside
+    # a unit cost of 0, while the refusal note blamed the read-back. No part is added after
+    # this point, so the stop is a fact about the finished record.
+    if not summary["manufacturing_writeup"]["parts"] and not summary.get("run_stop"):
+        from run_stop import record as _record_stop
+        _cr = summary.get("concept_read") if isinstance(summary.get("concept_read"), dict) else {}
+        _why_none = ((f"the drawing read was refused: {str(_cr['refused']).rstrip('.')}"
+                      if _cr.get("refused") else
+                      f"the drawing read was tried and did not answer: "
+                      f"{str(_cr['error']).rstrip('.')}" if _cr.get("error") else
+                      "the drawing read ran and gave no part either")
+                     if _sight_run else
+                     "this was an engine run, and the drawing read that takes parts off a pack "
+                     "with no parts list runs only on an LLM-only run")
+        # THE PAGES NOTHING READ ARE NAMED (D-598f): 0320730's drawing was its one page with no
+        # text layer, and the only LLM reading that ran was of text. An empty book beside an
+        # unread page is a reading failure until shown otherwise.
+        _unread = [f"{g.get('document')} page {g.get('page')}"
+                   for g in ((summary.get("page_coverage") or {}).get("gaps") or [])
+                   if isinstance(g, dict) and g.get("kind") == "image_only"]
+        _record_stop(summary, "no_parts_read",
+                     f"NOTHING TO COST: no reader found a part in this pack — {_why_none}"
+                     + (f"; no reading took the content of {', '.join(_unread[:6])}, which has "
+                        f"no text layer" if _unread else "") + ".",
+                     next_step=("Check the pack is the right one and carries a parts list or "
+                                "part drawings. A pack with neither is priced by an LLM-only "
+                                "run with the enquiry brief, or from a parts list supplied "
+                                "with it."),
+                     pages_not_read=_unread[:20],
+                     concept_read="" if _sight_run else _why_none)
+        print(f"   !! no part was read from this pack — nothing to cost ({_why_none}).",
+              flush=True)
+    # EVERY READING THAT MUST LAND BEFORE A PRICE, in one function the replay runs too (D-454).
+    pre_costing_passes(summary)
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)
     _debug("done estimate_document")
+
+    # UNCONDITIONAL recon probe (temporary): proves this branch is reached and shows the env +
+    # _dp state here, independent of the dual-path gate below. Remove once diagnosed.
+    try:
+        _dp_probe_state = f"defined rows={len((_dp or {}).get('rows') or [])}" if isinstance(_dp, dict) else f"defined non-dict:{type(_dp).__name__}"
+    except NameError:
+        _dp_probe_state = "NOT-DEFINED"
+    print(f"   [recon-probe] post-estimate_document reached | scan_mode={summary.get('scan_mode')!r} | "
+          f"dual_path={_dual_path_enabled()} | _dp={_dp_probe_state}", flush=True)
+
+    # Dual-path -> part_estimates reconcile: runs HERE, AFTER estimate_document has built
+    # part_estimates, so the fastener corrections (self-clinch 1->4, knob 1->2, add
+    # BI-PEMSTUD) land on the FINAL list the sheet reads. The earlier inline copy ran
+    # before part_estimates existed and silently no-op'd (STATUS doc S3.3).
+    if _dual_path_enabled():
+        run_timing.mark("start dual_path_reconcile_and_recost")
+        try:
+            _dp_after = _dp  # defined above when the dual path ran; NameError-guarded
+            # DIAGNOSTIC (temporary): show the runtime inputs so a silent no-op is explainable.
+            _dp_rows_diag = (_dp_after.get("rows") or []) if isinstance(_dp_after, dict) else None
+            _pe_diag = (summary.get("estimate_summary") or {}).get("part_estimates")
+            _fast_diag = [str(r.get("description") or r.get("part_number") or "?")
+                          for r in (_dp_rows_diag or [])][:14]
+            _a_cnt = _dp_after.get("a_count") if isinstance(_dp_after, dict) else "?"
+            _b_cnt = _dp_after.get("b_count") if isinstance(_dp_after, dict) else "?"
+            _pdf_cnt = len(_dp_after.get("pdf_paths") or []) if isinstance(_dp_after, dict) else "?"
+            print(f"   [dual-path recon:diag] _dp rows={len(_dp_rows_diag) if _dp_rows_diag is not None else 'NOT-A-DICT'} "
+                  f"pathA_tables={_a_cnt} pathB_tables={_b_cnt} pdfs_found={_pdf_cnt} "
+                  f"part_estimates={len(_pe_diag) if isinstance(_pe_diag, list) else 'NONE'} "
+                  f"dp_row_descs={_fast_diag}", flush=True)
+            _u, _a = _reconcile_dualpath_into_part_estimates(summary, _dp_after)
+            print(f"   [dual-path recon] part_estimates: {_u} qty-corrected, {_a} added from BOM table read", flush=True)
+            # A RECORD ADDED HERE IS COSTED HERE. estimate_document ran before this pass, so a
+            # record the reconcile appends had never been through estimate_part: no price
+            # chain, no system_cost stamp, no fitting rule — BI-SCREW and BI-PEMSTUD reached
+            # 12567's sheet as "no catalogue, price file or quote we can query holds this item"
+            # without a query ever being made (D-296). The same routine every other part had.
+            if _a:
+                try:
+                    from estimator import cost_uncosted_bought_in_records as _cost_late
+                    _n_costed = _cost_late(summary)
+                    print(f"   [dual-path recon] {_n_costed} added record(s) costed through "
+                          f"estimate_part", flush=True)
+                except Exception as _late_exc:                       # noqa: BLE001
+                    print(f"   [dual-path recon] added records NOT costed "
+                          f"({type(_late_exc).__name__}: {_late_exc}) — they reach the sheet "
+                          f"unpriced", flush=True)
+        except NameError:
+            print("   [dual-path recon:diag] _dp is NOT DEFINED at reconcile point (dual-path reader did not run this path)", flush=True)
+        except Exception as _dpr2_err:
+            print(f"   [dual-path recon:diag] reconcile errored: {type(_dpr2_err).__name__}: {_dpr2_err}", flush=True)
+        run_timing.mark("done dual_path_reconcile_and_recost")
+
+    # ── THE OTHER TIMING BOUNDARY ─────────────────────────────────────────────────────
+    # The dual-path table reader adds bought-ins AFTER the route was compiled, which is how
+    # 11350's wing nuts and PEM studs reached the Estimate tab and the reports while the
+    # canonical BOM had never heard of them. Two BOM authorities, and the one an estimator
+    # reads was the one outside the graph. Recompile from the final population.
+    run_timing.mark("start recompile_canonical_route")
+    try:
+        from route_compiler import refresh_canonical_route_after_reconciliation
+        _canon_final = refresh_canonical_route_after_reconciliation(summary)
+        print(f"   [canonical-part-graph] refreshed after BOM reconciliation: "
+              f"{len(_canon_final.get('nodes') or [])} node(s)", flush=True)
+    except Exception as _canon_refresh_err:
+        print(f"   [canonical-part-graph] post-reconcile refresh failed: "
+              f"{type(_canon_refresh_err).__name__}: {_canon_refresh_err}", flush=True)
+    run_timing.mark("done recompile_canonical_route")
 
     try:
         import bay_rollup
@@ -1833,6 +6127,23 @@ def _finalize_scan_summary(
         print(f"   [bay] rollup skipped: {_be_err}", flush=True)
 
     _debug("start _build_additive_summary_sections")
+    # THE DELIVERABLE MUST DESCRIBE THE RECORD AS IT FINALLY STANDS. The write-up's
+    # observations are composed at line ~1912, before the SolidWorks connector applies the
+    # model's material at ~2352 — so a sentence naming its source named whichever source
+    # happened to hold the field halfway through arbitration. Job 12392 printed "material
+    # MILD STEEL (from drawing_deterministic)" about a record whose own trail says
+    # solidworks_api: the value right, the attribution naming a source that had lost, and
+    # an estimator sent to a title block that does not hold the answer.
+    try:
+        from document_builder import restate_material_observations as _restate_mat
+        _n_restated = _restate_mat(summary)
+        if _n_restated:
+            print(f"   [observations] restated {_n_restated} material line(s) from the "
+                  f"finished record — they were composed before the strongest source ran",
+                  flush=True)
+    except Exception as _e_obs:
+        print(f"   [observations] material restatement skipped ({_e_obs})", flush=True)
+
     _build_additive_summary_sections(summary)
     _debug("done _build_additive_summary_sections")
     _debug("start normalise_json")

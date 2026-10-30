@@ -4,11 +4,17 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from source_precedence import apply_field as _apply_field
+
 from estimator import extract_bought_in_items_from_assembly
 try:
     from extractor_patterns import infer_operations_from_text as _infer_ops_from_text
 except ImportError:
     _infer_ops_from_text = None
+try:
+    from extractor_patterns import _primary_thickness_mm as _primary_thickness_mm
+except ImportError:
+    _primary_thickness_mm = None
 from feature_synthesis import infer_bend_count as _infer_bend_count_impl
 from feature_synthesis import infer_hole_count as _infer_hole_count_impl
 from feature_synthesis import synthesize_manufacturing_features as _synthesize_manufacturing_features_impl
@@ -17,94 +23,10 @@ from part_index import PartIndexDeps, build_part_index as _build_part_index_impl
 from document_validation import build_document_validation as _build_document_validation_impl
 
 
-_SECTION_HOLLOW_KW = ("TUBE", "RHS", "SHS", "BOX SECTION", "BOX-SECTION", "HOLLOW SECTION")
-_SECTION_PROFILE_RE = re.compile(
-    r"(\d+(?:\.\d+)?)\s*[xX\u00d7]\s*(\d+(?:\.\d+)?)\s*[xX\u00d7]\s*(\d+(?:\.\d+)?)(?:\s*MM)?",
-    re.IGNORECASE,
-)
-
-
-def _detect_section_stock(text: str) -> Optional[Dict[str, Any]]:
-    """Pull a hollow-section profile + cut length from page / cutting-list text.
-
-    Two genuine detection paths, both reading the drawing's own text:
-
-    PATH 1 — canonical cutting-list form, e.g. '30 x 60 x 1.50mm TUBE 1125'.
-      Gated on a hollow-section keyword AND a parseable a x b x t profile.
-      High confidence.
-
-    PATH 2 — 'WALL'-notation detail form, e.g. a leg detail that states
-      '60.0 EXT  30.0 EXT  1.5 WALL ... 1072.0 EXT' with no 'TUBE' keyword and
-      no 'AxBxC' string (common on SDI leg/upright detail sheets). The 'n.n WALL'
-      callout is an unambiguous tube signal (only hollow sections have a wall
-      thickness). Section sides are read as the unqualified 'EXT' dimensions
-      adjacent to WALL, EXCLUDING feature callouts tagged FROM TOP / FROM BOTTOM /
-      PITCH (those are hole offsets, not section dims), and excluding the large
-      (>300mm) EXT which is the cut length. Lower confidence than PATH 1 → carries
-      review_section_profile=True so the estimate flags it for human verification.
-
-    Returns None when neither path can read a profile (honest gap — caller flags).
-    """
-    if not text:
-        return None
-    up = str(text).upper()
-
-    # ── PATH 1: canonical 'AxBxC <keyword>' ─────────────────────────────────
-    if any(kw in up for kw in _SECTION_HOLLOW_KW):
-        m = _SECTION_PROFILE_RE.search(up)
-        if m:
-            dims = sorted(float(m.group(i)) for i in (1, 2, 3))
-            wall, side_a, side_b = dims[0], dims[1], dims[2]
-            if not (wall <= 0 or wall > 12 or side_a <= wall * 2 or side_b <= wall * 2):
-                tail_nums = [float(n) for n in re.findall(r"\d+(?:\.\d+)?", up[m.end():])]
-                length = next((n for n in tail_nums if n >= max(side_a, side_b) * 2), None)
-                if length is None:
-                    all_nums = [float(n) for n in re.findall(r"\d+(?:\.\d+)?", up)]
-                    cand = [n for n in all_nums if n >= max(side_a, side_b) * 3]
-                    length = max(cand) if cand else None
-                return {
-                    "a": side_a,
-                    "b": side_b,
-                    "t": wall,
-                    "length_mm": length,
-                    "profile_form": "SHS" if abs(side_a - side_b) < 1e-6 else "RHS",
-                    "keyword": next(kw for kw in _SECTION_HOLLOW_KW if kw in up),
-                    "detection_path": "canonical_profile",
-                    "source_text": text[m.start():m.start() + 60].strip(),
-                }
-
-    # ── PATH 2: 'n.n WALL' notation (no keyword / no AxBxC) ──────────────────
-    wm = re.search(r"(\d+(?:\.\d+)?)\s*WALL", up)
-    if wm:
-        wall = float(wm.group(1))
-        if 0 < wall <= 12:
-            # All 'EXT' dimensions with any trailing qualifier captured.
-            ext_tokens = []  # (value, qualifier)
-            for em in re.finditer(r"(\d+(?:\.\d+)?)\s*EXT(\s+(?:FROM\s+\w+|TOP|BOTTOM))?", up):
-                ext_tokens.append((float(em.group(1)), (em.group(2) or "").strip()))
-            # Section sides: unqualified EXT dims, larger than 2x wall, section-sized (<=300mm).
-            side_vals = sorted(
-                {v for (v, q) in ext_tokens if not q and wall * 2 < v <= 300},
-                reverse=True,
-            )[:2]
-            # Cut length: the large unqualified EXT (>300mm).
-            length_cands = [v for (v, q) in ext_tokens if not q and v > 300]
-            if len(side_vals) >= 2:
-                side_a, side_b = sorted(side_vals)
-                length = max(length_cands) if length_cands else None
-                return {
-                    "a": side_a,
-                    "b": side_b,
-                    "t": wall,
-                    "length_mm": length,
-                    "profile_form": "SHS" if abs(side_a - side_b) < 1e-6 else "RHS",
-                    "keyword": "WALL",
-                    "detection_path": "wall_notation",
-                    "review_section_profile": True,  # less certain than canonical — flag for verify
-                    "source_text": text[max(0, wm.start() - 40):wm.start() + 20].strip(),
-                }
-
-    return None
+# THE SECTION READER MOVED TO A LEAF MODULE (D-383), unchanged, so part_identity and the
+# parts-list cut-list reader can ask it without importing this module. The old name stays.
+from section_profile import _SECTION_HOLLOW_KW  # noqa: E402,F401  (weldment reader agrees)
+from section_profile import detect_section_stock as _detect_section_stock  # noqa: E402
 
 
 def _dedupe(values: List[Any]) -> List[Any]:
@@ -149,7 +71,17 @@ def _is_good_description(value: Any) -> bool:
         "SHEET SIZE:",
         "SCALE:",
     ]
-    return not any(token in upper for token in bad_tokens)
+    if any(token in upper for token in bad_tokens):
+        return False
+    # THE GATE EVERY READER'S DESCRIPTION PASSES. A value beginning with a parts-table column
+    # header ("QTY 1 12173-03-202 FRONT FRAME ASSEMBLY 1 …", 12173-02) is the table's head
+    # read as a title, whichever reader produced it — the title block, the layout zones or
+    # the model's extract. The column vocabulary is config (PARTS_TABLE_COLUMN_WORDS).
+    try:
+        from extractor_patterns import starts_with_a_table_column
+    except Exception:                                            # noqa: BLE001
+        return True
+    return not starts_with_a_table_column(normalized)
 
 
 def _is_reference_like_part(part_number: Any) -> bool:
@@ -239,7 +171,9 @@ def _effective_part_page_role(page_role: Any, title_block_drawing_numbers: List[
 
 
 # Values that appear in M&S/SDI GENERAL TOLERANCES blocks (+/-0.5mm, +/-1.0mm etc.)
-# and must not be treated as actual sheet thicknesses.
+# and must not be treated as actual sheet thicknesses. Kept as a local mirror only so this
+# module still names the band when the extractor import is unavailable — the live decision is
+# _primary_thickness_mm's, so costing and observation cannot drift apart.
 _TOLERANCE_TABLE_VALUES = {0.5, 1.0, 1.5, 2.0}
 
 # Minimum plausible sheet metal thickness — filters sub-0.8mm noise
@@ -247,20 +181,35 @@ _MIN_SHEET_THICKNESS_MM = 0.8
 
 
 def _first_numeric_thickness(values: List[Any]) -> Any:
-    """Return first plausible sheet thickness, skipping tolerance-table bleed."""
+    """The stated sheet gauge, with a general tolerance table filtered out.
+
+    This is the SECOND place a drawing_deterministic gauge is applied (the title block's own
+    reading is the first). It must decide exactly as the title-block picker does, or the two
+    disagree on the same drawing: 8352's tolerance table (0.5/1.0/1.5/2.0 by length band) was
+    read here as a real 1.5mm gauge and stamped on parts the model then had to overrule, every
+    overrule a noise flag. The band is a gauge only when it is NOT the whole band — a lone 2.0
+    survives; the whole band sitting together is a tolerance table and names no gauge.
+
+    Delegates to extractor_patterns._primary_thickness_mm so there is one algorithm and one
+    band. The local branch is only reached if that import failed, and it now returns None (not
+    1.5) for a pure table, matching the shared picker.
+    """
+    if _primary_thickness_mm is not None:
+        return _primary_thickness_mm(values)
+
     floats = []
-    for v in values:
+    for v in values or ():
         try:
-            floats.append(float(v))
+            f = float(v)
         except (TypeError, ValueError):
             continue
-
-    # If every value is a tolerance-table value the list is contaminated —
-    # return the most common sheet thickness (1.5mm) if present, else None.
-    if floats and all(f in _TOLERANCE_TABLE_VALUES for f in floats):
-        return 1.5 if 1.5 in floats else None
-
-    # Otherwise return first value that isn't a sub-0.8mm noise reading
+        if f > 0:
+            floats.append(f)
+    if not floats:
+        return None
+    # Strip the band only when the WHOLE of it is present — a lone band value is a real gauge.
+    if _TOLERANCE_TABLE_VALUES <= {round(f, 1) for f in floats}:
+        floats = [f for f in floats if round(f, 1) not in _TOLERANCE_TABLE_VALUES]
     for f in floats:
         if f >= _MIN_SHEET_THICKNESS_MM:
             return f
@@ -335,13 +284,37 @@ def _build_normalized_geometry(part: Dict[str, Any]) -> Dict[str, Any]:
     bend_count = features.get("bend_count", 0) or 0
     flat_length = length
     flat_width = width
-    if length is not None and width is not None:
+    # The blank allowance ESTIMATES a developed size from formed dimensions. It must not be
+    # applied when the developed size is already known, nor when there is nothing to develop:
+    #
+    #  - MEASURED FLAT PATTERN. A DXF flat pattern (or a SolidWorks cut-list flat) IS the
+    #    developed blank — that is what a flat pattern is. Adding an allowance to it inflates
+    #    a known-correct number. Proven on 12120: the DXFs measure exactly the model's flat
+    #    (03M 45.00x20.00 both), and this allowance costed them at 51x26 — 47% more material
+    #    area on a small part, on every DXF-backed job.
+    #  - NO BENDS. A part with no bends does not develop; formed size IS blank size. The old
+    #    max(1, bend_count) charged a full bend's allowance to every flat blank.
+    #
+    # Where neither holds — formed dimensions read off a PDF, with bends — the allowance is
+    # a genuine estimate and still applies, scaled by bend count and thickness. It is
+    # recorded so an estimated blank is never mistaken for a measured one.
+    _measured_flat = bool(
+        part.get("flat_pattern_detected")
+        or part.get("dxf_augmented")
+        or part.get("native_flat_pattern")
+        or "dxf" in str(part.get("geometry_source") or "").lower()
+        or str(part.get("geometry_source") or "").lower() == "solidworks_flat_pattern"
+    )
+    blank_allowance_mm = 0.0
+    blank_basis = "measured_flat_pattern" if _measured_flat else "no_bends_formed_equals_blank"
+    if length is not None and width is not None and not _measured_flat and bend_count > 0:
         # Scale bend/blank allowance with bend count and thickness rather than fixed +20mm.
         thickness_for_allowance = thickness if thickness is not None else 1.5
         bend_radius = max(1.0, thickness_for_allowance)
-        allowance = max(6.0, min(40.0, 2.0 * bend_radius * max(1, bend_count)))
-        flat_length = round(length + allowance, 2)
-        flat_width = round(width + allowance, 2)
+        blank_allowance_mm = max(6.0, min(40.0, 2.0 * bend_radius * bend_count))
+        flat_length = round(length + blank_allowance_mm, 2)
+        flat_width = round(width + blank_allowance_mm, 2)
+        blank_basis = "estimated_from_formed_dimensions"
 
     formed_height = None
     if bend_angles:
@@ -388,6 +361,10 @@ def _build_normalized_geometry(part: Dict[str, Any]) -> Dict[str, Any]:
         },
         "developed_length_mm": flat_length,
         "developed_width_mm": flat_width,
+        # How the blank was arrived at, and how much (if any) was added to the measured or
+        # drawn size. An estimated blank must never be indistinguishable from a measured one.
+        "blank_basis": blank_basis,
+        "blank_allowance_mm": round(blank_allowance_mm, 2),
         "projected_area_m2": round((length * width) / 1_000_000.0, 4) if length is not None and width is not None else None,
         "blank_area_m2": blank_area_m2,
         "smallest_enclosing_rectangle_mm": {
@@ -485,7 +462,25 @@ def _empty_geometry_rollup() -> Dict[str, Any]:
 
 
 def _empty_part_record(part_number: str, item_number: Any = None, description: Any = None, quantity: Any = 1) -> Dict[str, Any]:
-    return {
+    """A blank part record. The default quantity of ONE is an ASSUMPTION, and it is born
+    saying so.
+
+    Every caller that knows the quantity passes None here and submits the real figure through
+    the resolver immediately afterwards — part_index does it from the BOM row, document_builder
+    does it twice, drawing_job_merge does it for a synthesised part. One caller does not:
+    part_index creates a record for a part it has only seen NAMED on a page, and takes this
+    default. That record then carried a quantity of 1 with no source at all.
+
+    An unattributed datum is invisible to arbitration. The next pass has nothing to weigh
+    itself against, so it either overwrites a real reading or leaves a guess standing, and
+    nothing anywhere says which happened — 11650-04 came back with three parts in exactly that
+    state. `inference` is rank 20, the bottom of the table, so any real observation of the
+    quantity beats it and the assumption survives only where nothing better was ever read.
+
+    Not "the caller should attribute it". The caller that supplies no quantity has no source to
+    supply either; the honest source is the one this line is: an assumption made here.
+    """
+    record = {
         "part_number": part_number,
         "item_number": item_number,
         "description": description,
@@ -542,6 +537,12 @@ def _empty_part_record(part_number: str, item_number: Any = None, description: A
         "normalized_geometry": {},
         "risk_flags": [],
     }
+    # STAMPED ONLY WHERE THIS FUNCTION SUPPLIED THE NUMBER. A caller that passes None is about
+    # to submit the real quantity through the resolver and must not find a source already
+    # sitting there — apply_field would then be arbitrating against a claim nobody made.
+    if quantity is not None:
+        record["quantity_source"] = "inference"
+    return record
 
 
 def _rollup_geometry(target: Dict[str, Any], geometry: Dict[str, Any]) -> None:
@@ -557,7 +558,7 @@ def _rollup_geometry(target: Dict[str, Any], geometry: Dict[str, Any]) -> None:
             if isinstance(source, dict):
                 for subkey, value in source.items():
                     if isinstance(target[key].get(subkey, 0.0), (int, float)) and isinstance(value, (int, float)):
-                        target[key][subkey] = max(target[key].get(subkey, 0.0), value)
+                        target[key][subkey] = max(target[key].get(subkey, 0.0), value)   # precedence: direct-write ok — rolls up a geometry maximum, not a part field
             continue
         incoming = geometry.get(key, 0)
         if isinstance(target[key], (int, float)) and isinstance(incoming, (int, float)):
@@ -578,6 +579,83 @@ def _infer_bend_count(part: Dict[str, Any], geometry_confidence: float) -> int:
 
 def _synthesize_manufacturing_features(part: Dict[str, Any]) -> Dict[str, Any]:
     return _synthesize_manufacturing_features_impl(part)
+
+
+def _one_reading(part: Dict[str, Any]) -> bool:
+    """Whether this part's blank length and width came from the SAME reader.
+
+    ── A BLANK IS A PAIR, AND IT WAS ARBITRATED AS TWO SCALARS ──────────────────────────
+    #
+    0355255, the phantom "DXF flat 792 x 760.3mm is 377% of the model flat", reported twice
+    and hunted three times. Neither number is wrong and neither came from the DXF:
+
+        760.3   page 1 — the ACRYLIC L-STAND's flat length. The DXF agrees: 760.252 x 210.
+        792     page 2 — the PAPER GRAPHIC. Material PAPER, weight 3g. A different part.
+
+    `source_precedence` writes one FIELD at a time, each winning its own arbitration, so
+    `blank_length_mm` can be taken from the reading that won for length while
+    `blank_width_mm` is taken from the one that won for width. Two parts' dimensions, from
+    two pages, assembled into one "blank" that was never measured off anything — and then
+    handed to `_dxf_blank_mm`, which labelled it DXF because that is what its caller is for.
+
+    The 377% is arithmetic on a pair that does not exist. It survived three fixes to the DXF
+    reader because the DXF was never involved.
+
+    NARROW ON PURPOSE. A pair is refused only where both halves carry a RECORDED source and
+    the two differ. Where nothing recorded a source — a legacy record, a reader that predates
+    the stamps — the pair is taken as it always was, because refusing it would throw away
+    every blank the engine has rather than the ones it assembled.
+    """
+    if not isinstance(part, dict):
+        return True
+    ls = str(part.get("blank_length_mm_source") or "").strip().lower()
+    ws = str(part.get("blank_width_mm_source") or "").strip().lower()
+    if not ls or not ws:
+        return True
+    return ls == ws
+
+
+def flat_blank_mm(part: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
+    """The DEVELOPED blank on a part record, whichever of the three shapes it is in.
+
+    ONE RECORD, THREE SPELLINGS, AND A RULE THAT ONLY KNEW ONE OF THEM. This module builds
+    normalized_geometry with bounding_box_flat_mm {length, width, height} and
+    developed_length_mm/developed_width_mm; apply_dxf_geometry_to_part writes
+    blank_length_mm/blank_width_mm; geometry_inference writes the latter too. Every reader
+    has to resolve all three, and the mirror rule resolved only the last — so it found
+    nothing on a real record and the right arm reached costing with no blank, while a
+    fixture that invented the shape it was looking for passed.
+
+    NEVER overall_length_mm/overall_width_mm. On a folded part those carry the FORMED
+    bounding box, not the blank (12120-01-01M: 126.39x82.2 formed, 132.39x88.2 developed).
+    Falling back to them reports a blank on a part that has none, which is worse than
+    finding nothing.
+    """
+    ng = part.get("normalized_geometry") if isinstance(part, dict) else None
+    ng = ng if isinstance(ng, dict) else {}
+
+    def _n(v):
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f if f == f and abs(f) != float("inf") and f > 0 else None
+
+    l, w = _n(ng.get("blank_length_mm")), _n(ng.get("blank_width_mm"))
+    if l and w:
+        return l, w
+    l, w = _n((part or {}).get("blank_length_mm")), _n((part or {}).get("blank_width_mm"))
+    if l and w and _one_reading(part):
+        return l, w
+    box = ng.get("bounding_box_flat_mm")
+    if isinstance(box, dict):
+        l, w = _n(box.get("length")), _n(box.get("width"))
+        if l and w:
+            return l, w
+    l, w = _n(ng.get("developed_length_mm")), _n(ng.get("developed_width_mm"))
+    if l and w:
+        return l, w
+    return None, None
 
 
 def _interpret_part(part: Dict[str, Any]) -> Dict[str, Any]:
@@ -749,6 +827,28 @@ _ASSEMBLY_PC_PHRASES = [
     "EPOXY COAT",
 ]
 
+# ── THE SPECIFICATION LEGEND IS NOT WORK ─────────────────────────────────────────────
+# Every sheet of an M&S / SDI pack carries the same boilerplate border: "WELD
+# SPECIFICATION: ALL WELDS TO BE TIG UNLESS STATED", "POWDERCOATING: BETWEEN 80-120
+# MICRON", the China material table, the tolerance block. Those are conditions for work
+# the drawing might call up, not calls for work — and on 10975-02 the part that claimed
+# the GA page was three strips of EPDM tape, which then collected welding, weld dressing
+# and £91 of powder coating from the border text. Operation cues are read from the page
+# with the legend removed; everything else (materials, dimensions, part numbers) still
+# reads the full text.
+#
+# ONE READER, NOT TWO. The page-level operation scan (extractor_patterns) needed the same
+# rule — on 12173-02 it painted the border's weld onto 29 parts — so the reader lives there,
+# with its vocabulary in config, and this pass calls it. It also removes the legend's default
+# sentence ("ALL WELDS TO BE TIG UNLESS STATED") where a read has lost the heading.
+from extractor_patterns import strip_specification_legend as _shared_strip_legend  # noqa: E402
+
+
+def _strip_specification_legend(text: Any) -> str:
+    """The page text with the boilerplate specification legend removed, for operation-cue
+    scanning only (extractor_patterns.strip_specification_legend)."""
+    return _shared_strip_legend(text)
+
 
 def _page_lookup_key(page: Dict[str, Any], summary: Dict[str, Any]) -> Optional[int]:
     """Stable page key for merged folder jobs — job_page_number wins over colliding PDF locals."""
@@ -785,6 +885,7 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         page_lookup[pnum] = {
             "text": merged,
             "role": (page.get("page_role") or {}).get("primary_role", ""),
+            "page": page,          # the sheet itself, for its figures (D-584)
         }
         if os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"} and "PETG" in merged.upper():
             bom = (page.get("region_text") or {}).get("bom") or ""
@@ -793,15 +894,152 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 f"region_text.bom len={len(str(bom))} preview_len={len(str(page.get('text_preview') or ''))}"
             )
 
+    # THE MATERIAL AS PRINTED, AVAILABLE HERE. The BOM row's own material cell reaches the
+    # part record 1,150 lines later (apply_bom_row_evidence_to_parts, in _finalize_scan_summary)
+    # — long after this pass has decided what stock form the part is. So classification was
+    # reading part["materials"], which on a PDF-primary pack is EMPTY at this point, and the
+    # printed cell that says "Steel, Mild Wire Ø8mm" in black and white was not consulted.
+    # The rows are already on the summary, so the evidence was here the whole time.
+    # AGREEING ROWS CORROBORATE; DISAGREEING ROWS ARE A DECISION. Keyed with setdefault, the
+    # FIRST row silently governed the whole classification pass — so a pack listing a part
+    # twice with different specifications resolved by table order, and the second reading
+    # vanished without ever being seen. Every distinct cell is kept, and where they conflict
+    # the part is NOT classified from either: both are put to an estimator instead.
+    from json_normaliser import read_material_as_printed as _read_printed_material
+    from part_code_conventions import bare_code as _bare_code
+    _printed_material_rows: Dict[str, List[str]] = {}
+    for _row in ((summary.get("document_analysis") or {}).get("bom_rows") or []):
+        if not isinstance(_row, dict):
+            continue
+        _text = str(_row.get("material_text") or "").strip()
+        _code = _bare_code(str(_row.get("part_number") or ""))
+        if not _text or not _code:
+            continue
+        _seen = _printed_material_rows.setdefault(_code, [])
+        if not any(_t.upper() == _text.upper() for _t in _seen):
+            _seen.append(_text)
+    # THE ROW'S PRINTED DIMENSION, COLLECTED THE SAME WAY (D-587). One cell per part, kept
+    # only where every row that lists the part prints the same figure: two rows printing
+    # different stock is a question for the estimator, never a choice by table order.
+    _printed_dimension_rows: Dict[str, List[str]] = {}
+    for _row in ((summary.get("document_analysis") or {}).get("bom_rows") or []):
+        if not isinstance(_row, dict):
+            continue
+        _dim = str(_row.get("dimension") or "").strip()
+        _code = _bare_code(str(_row.get("part_number") or ""))
+        if not _dim or not _code:
+            continue
+        _seen = _printed_dimension_rows.setdefault(_code, [])
+        if not any(re.sub(r"\s+", "", _t).upper() == re.sub(r"\s+", "", _dim).upper()
+                   for _t in _seen):
+            _seen.append(_dim)
+
     for part in parts:
+        _dims_printed = _printed_dimension_rows.get(
+            _bare_code(str(part.get("part_number") or ""))) or []
+        if len(_dims_printed) == 1:
+            part.setdefault("bom_dimension", _dims_printed[0])
+        elif len(_dims_printed) > 1:
+            part["bom_dimension_candidates"] = list(_dims_printed)
+            part.setdefault("review_flags", []).append(
+                "the parts lists print this part's stock more than once and the cells differ — "
+                + " / ".join(f"'{_d}'" for _d in _dims_printed)
+                + ". Neither is used to decide its stock form; confirm which is right")
         page_nums: List[int] = part.get("pages", [])
         page_roles: List[str] = part.get("page_roles", [])
         materials: List[str] = part.get("materials", [])
+
+        # Read once, kept as separate facts. The TEXT is preserved even when the lexicon does
+        # not know the material: "we do not recognise this" and "there was no material" are
+        # different answers and only one of them needs an estimator. 0359342 prints four the
+        # book has never heard of — Corian, Mirror, "Lamainate Edging", Flexi MDF.
+        # TWO SPELLINGS OF ONE STOCK ARE NOT A DISAGREEMENT. Comparing the raw cells (even
+        # case-insensitively) made "Steel, Mild Wire Ø8mm" and "Mild Steel Wire Ø8mm" a
+        # conflict, and a spurious conflict is not a harmless one: it refuses to classify a
+        # part the drawing describes perfectly well, twice. Rows are compared on the FACTS
+        # they parse to — material, form, diameter — and every original text is kept.
+        _printed_cells = _printed_material_rows.get(
+            _bare_code(str(part.get("part_number") or ""))) or []
+        _printed_reads = [_read_printed_material(_c) for _c in _printed_cells]
+        # UNKNOWN, ABSENT AND CONFLICTING ARE THREE ANSWERS, NOT ONE.
+        # Comparing on (material, form, diameter) collapsed all three into None, so two rows
+        # naming DIFFERENT materials the lexicon cannot place read as agreeing — "Corian, 6mm"
+        # and "Mirror, 6mm" corroborating each other — and a row stating no diameter matched a
+        # row stating two irreconcilable ones. material_key keeps an unresolved material
+        # distinct by its own words; the diameter is compared as a labelled outcome.
+        _printed_facts = {
+            (_r["material_key"], _r["stock_form"],
+             ("conflict", _r["diameter_unresolved"]) if _r["diameter_unresolved"]
+             else ("value", _r["diameter_mm"]))
+            for _r in _printed_reads}
+        _printed_conflict = len(_printed_facts) > 1
+        _printed = _read_printed_material(
+            "" if _printed_conflict
+            else (_printed_cells[0] if _printed_cells else (materials[0] if materials else "")))
+        if _printed_cells:
+            part["material_text_as_printed_candidates"] = list(_printed_cells)
+        if _printed_conflict:
+            part.setdefault("review_flags", []).append(
+                "the bill of materials states this part's material more than once and the "
+                "readings disagree — "
+                + " / ".join(
+                    f"'{_c}' (" + ", ".join(
+                        str(_v) for _v in (_r["material"] or "material unresolved",
+                                           _r["stock_form"] or "form unstated",
+                                           _r["diameter_mm"]) if _v is not None) + ")"
+                    for _c, _r in zip(_printed_cells, _printed_reads))
+                + ". Neither is used to classify it, because choosing by table order is not "
+                  "a reading. Confirm which row is right")
+        elif _printed["text"]:
+            part.setdefault("material_text_as_printed", _printed["text"])
+            if _printed["material"] is None:
+                part.setdefault("review_flags", []).append(
+                    f"material '{_printed['text']}' is printed on the drawing but is not in "
+                    f"the material lexicon — it is recorded, not resolved, and carries no "
+                    f"rate of its own. Name the stock it should be bought as")
+        if _printed.get("diameter_unresolved"):
+            part.setdefault("review_flags", []).append(
+                f"diameter not taken from '{_printed['text']}': "
+                f"{_printed['diameter_unresolved']}")
 
         combined_text = " ".join(
             page_lookup[pn]["text"] for pn in page_nums if pn in page_lookup
         )
         combined_upper = combined_text.upper()
+
+        # THE SHEET'S OWN BANDING STATEMENT RIDES THE RECORD (D-513). 12343-01J's drawing
+        # says "EDGED ALL AROUND" and "2S/SL"; the finish box kept "EDGED" alone and the note
+        # snippets keep only deburr/weld/tap words, so the statement never reached a field the
+        # edging reader consults — the labour was flagged a CEILING and no edging material
+        # line was built, on a part whose drawing had answered the question. Harvested from
+        # the part's own DETAIL pages only (a note stays on the sheet it is written on; an
+        # assembly sheet's note names a member this pass cannot resolve), with the pack-wide
+        # specification legend stripped first.
+        _detail_text = " ".join(
+            page_lookup[pn]["text"] for pn in page_nums
+            if pn in page_lookup
+            and str(page_lookup[pn].get("role") or "") == "detail")
+        if not part.get("banding_statements") and _detail_text:
+            try:
+                from edge_banding import harvest_banding_statements as _harvest_banding
+                _stmts = _harvest_banding(_strip_specification_legend(_detail_text))
+                if _stmts:
+                    part["banding_statements"] = _stmts
+            except Exception:                                        # noqa: BLE001
+                pass
+        # THE DRAWING'S OWN BORE CALLOUTS, AS EVIDENCE (D-515). 12343-01J states
+        # "2 x Ø8.5 ↧11" and "2 x Ø6.5 ↧10"; the Ø and depth glyphs do not survive the text
+        # layer, so the Ø-anchored hole reader saw nothing and the record reached costing
+        # with half the boring. The surviving count-x-diameter-depth shape is kept as
+        # stated_bore_callouts — flags and questions only, never charged time.
+        if not part.get("stated_bore_callouts") and _detail_text:
+            try:
+                from extractor_patterns import extract_stated_bore_callouts as _bores
+                _calls = _bores(_strip_specification_legend(_detail_text))
+                if _calls:
+                    part["stated_bore_callouts"] = _calls
+            except Exception:                                        # noqa: BLE001
+                pass
 
         # Linear stock (tube / RHS / SHS / box section): capture the cutting-list
         # profile + cut length from the page text so the estimator's section path
@@ -809,8 +1047,153 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         # base upright leg, a 30x60x1.5mm tube listed only on its detail page).
         if not part.get("section_stock"):
             _sec = _detect_section_stock(combined_text)
+            # A SECTION READ OFF A SHARED PAGE BELONGS TO THE PART IT DESCRIBES, NOT TO
+            # EVERY PART ON THAT PAGE.
+            #
+            # combined_text is the text of the part's PAGES. On a single-sheet pack — one GA
+            # carrying the parts table and every detail view — all three parts share it, so
+            # a section callout anywhere on the drawing is offered to all of them. M&S 2085
+            # prints "12.7  1.2 WALL" for its tubes, and the BRACKET PLATE took it: it left
+            # the Sheet Steel block, its nesting and laser calculator went blank, and the
+            # only measured part in the job stopped being costed as sheet.
+            #
+            # Two guards, both keyed on evidence rather than on the drawing:
+            #   - measured flat geometry says the part is sheet. A flat pattern is not tube.
+            #   - the lower-confidence detections (a WALL callout with no cutting-list line)
+            #     need the part to look like section stock on its own account. PATH 1's
+            #     canonical "30 x 60 x 1.5mm TUBE 1125" is unambiguous and still applies.
             if _sec:
-                part["section_stock"] = _sec
+                _measured_flat = bool(part.get("flat_pattern_detected")
+                                      or part.get("dxf_measured_outline")
+                                      or part.get("native_flat_pattern")
+                                      or part.get("dxf_augmented"))
+                _path = str(_sec.get("detection_path") or "")
+                _needs_corroboration = _path in ("wall_notation", "round_wall_notation")
+                _fam = str(part.get("material_family") or "").strip().lower()
+                _desc = " ".join(str(part.get(k) or "") for k in
+                                 ("description", "part_name", "title")).upper()
+                _looks_like_section = (
+                    _fam in ("tube", "wire")
+                    or any(w in _desc for w in ("TUBE", "RHS", "SHS", "CHS", "BOX SECTION",
+                                                "SECTION", "BAR", "ROD", "UPRIGHT", "LEG",
+                                                "RAIL", "POST"))
+                )
+                # THE PART'S OWN PRINTED ROW SAYS WHAT STOCK IT IS (D-584). A canonical
+                # "30X20X2MM … TUBE" anywhere on a SHARED sheet was offered to every part on
+                # it, and four 2 mm top blanks became 20 x 30 x 2 tube. The row the parts list
+                # prints for THIS part is the authority on its stock: a row stating a section
+                # takes the profile; a row stating a plain gauge ("2 mm", "MILD STEEL - RAW")
+                # with no section word is sheet, and the callout is another part's. A sheet
+                # bound to this part alone (its own detail page) still speaks for it.
+                _own_row = " ".join(str(part.get(k) or "") for k in
+                                    ("material_text_as_printed", "dimension", "stock_size",
+                                     "bom_dimension")).upper()
+                _row_says_section = any(w in _own_row for w in
+                                        ("TUBE", "RHS", "SHS", "CHS", "BOX", "SECTION", "BAR",
+                                         "ROD", "ANGLE", "CHANNEL"))
+                _row_says_sheet = bool(_own_row) and not _row_says_section and bool(
+                    re.search(r"\b\d+(?:\.\d+)?\s*MM\b", _own_row)) and not re.search(
+                    r"\d\s*X\s*\d+(?:\.\d+)?\s*X\s*\d", _own_row)
+                _detail_pages = [pn for pn in page_nums if pn in page_lookup
+                                 and str(page_lookup[pn].get("role") or "") == "detail"]
+                _shared = len(page_nums) != 1 or len(_detail_pages) != 1
+                # THE PART'S OWN DETAIL SHEET SPEAKS FOR IT WITHOUT A ROW (D-584, fourth
+                # tranche). The top blank is bound to the rail sheet that lists it AND to its
+                # own sheet; with no printed row the guard above was inert and the rail's
+                # "30X20X2MM TUBE" became the blank's stock. A part with exactly one detail
+                # sheet whose text names no section is sheet, whatever a shared page says.
+                _own_detail_text = (str(page_lookup[_detail_pages[0]].get("text") or "").upper()
+                                    if len(_detail_pages) == 1 else "")
+                try:
+                    from section_profile import _SECTION_HOLLOW_KW as _hollow_kw
+                except Exception:                                    # noqa: BLE001
+                    _hollow_kw = ("TUBE", "RHS", "SHS", "BOX SECTION")
+                _own_detail_silent = bool(_own_detail_text) and not any(
+                    kw in _own_detail_text for kw in _hollow_kw) and not re.search(
+                    r"\d\s*X\s*\d+(?:\.\d+)?\s*X\s*\d", _own_detail_text)
+                # A PROFILE BELONGS TO THE ROW THAT PRINTS IT, AND A BOUGHT ITEM TAKES NO
+                # STOCK FORM FROM A PAGE (D-587). On 0351292's 09:48 book the rail sheet's
+                # "30X20X2MM ROL2021-2405" reached the top blanks AND a hex nut listed on the
+                # same sheet. The callout's own text names the part it belongs to: where it
+                # names a drawing number that is not this part's, it is another row's, unless
+                # this part's own row or name says it is section stock too. A purchased
+                # article — a nut, a screw, a Hafele foot — is bought as it is, never cut.
+                try:
+                    from part_code_conventions import (is_supplier_article as _is_article,
+                                                       looks_like_a_drawing_number as _is_dwg)
+                except Exception:                                    # noqa: BLE001
+                    _is_article = _is_dwg = (lambda _t: False)        # noqa: E731
+                _mine = _bare_code(str(part.get("part_number") or "")).upper()
+                _src_codes = sorted({
+                    _c for _c in re.findall(r"[A-Z0-9][A-Z0-9.\-]{4,}",
+                                            str(_sec.get("source_text") or "").upper())
+                    if _is_dwg(_c)})
+                _names_another = bool(_src_codes) and not any(
+                    _bare_code(_c).upper() == _mine for _c in _src_codes)
+                _is_assembly_rec = bool(part.get("is_assembly_parent")
+                                        or "assembly" in page_roles)
+                _own_section_word = _row_says_section or (
+                    _looks_like_section and not _is_assembly_rec)
+                # An article by its number (a designation, a supplier's dotted code), or a
+                # bought-in that is not an assembly record — the GA retags its own sub-
+                # assemblies "bought_in", and those are refused below by ownership instead.
+                _bought_line = (_is_article(str(part.get("part_number") or ""))
+                                or ("bought_in" in page_roles and not _is_assembly_rec))
+                if _measured_flat:
+                    part.setdefault("review_flags", []).append(
+                        f"section '{_path}' read from this part's page text was NOT applied — "
+                        f"the part has measured flat geometry, so it is sheet, not section. "
+                        f"The callout belongs to another part on the same drawing")
+                elif _needs_corroboration and not _looks_like_section:
+                    part.setdefault("review_flags", []).append(
+                        f"section '{_path}' read from this part's page text was NOT applied — "
+                        f"nothing about this part says it is section stock, and the callout is "
+                        f"shared page text that describes a different part on the drawing")
+                elif _bought_line and not _row_says_section:
+                    part.setdefault("review_flags", []).append(
+                        f"section '{_path}' read from this part's page was NOT applied — "
+                        f"this line is a bought-in article, bought as it is and never cut "
+                        f"from stock; the callout belongs to a made part on the same sheet")
+                elif _shared and _names_another and not _own_section_word:
+                    part.setdefault("review_flags", []).append(
+                        f"section '{_path}' read from a shared page was NOT applied — the "
+                        f"callout names {', '.join(_src_codes[:3])}, another part on the "
+                        f"sheet, and nothing on this part's own row or name says it is "
+                        f"section stock")
+                elif _shared and _row_says_sheet and not _looks_like_section:
+                    part.setdefault("review_flags", []).append(
+                        f"section '{_path}' read from a shared page was NOT applied — this "
+                        f"part's own parts-list row states a sheet gauge ({_own_row.strip()}) "
+                        f"and no section, so the callout is another part's on the same drawing")
+                elif _shared and _own_detail_silent and not _looks_like_section and not _row_says_section:
+                    part.setdefault("review_flags", []).append(
+                        f"section '{_path}' read from a shared page was NOT applied — this "
+                        f"part's own detail sheet (page {_detail_pages[0]}) names no section, "
+                        f"so the callout is another part's on the drawing that lists them both")
+                else:
+                    # THE CUT LENGTH IS THE SHEET'S FIGURE, NOT A NUMBER IN ITS PROSE (D-584):
+                    # on a part's own detail page the largest leading figure printed along an
+                    # axis is its length — 703 for the cross rail, 1395 for the upright —
+                    # where the text read gave the date, the drawing number or nothing.
+                    # One detail sheet is enough, whatever else the part is bound to: the
+                    # cross rail is listed on the support sheet and drawn on its own, and the
+                    # text path across both read 120 and then 304 from the notes block.
+                    if len(_detail_pages) == 1:
+                        try:
+                            from detail_page_geometry import read_sheet_figures as _figs
+                            _fig = _figs(page_lookup[_detail_pages[0]].get("page") or {})
+                            _vals = [v for v, _a in (_fig.get("figures") or [])]
+                            _long = max(_vals) if _vals else None
+                            _side = max(float(_sec.get("a") or 0), float(_sec.get("b") or 0))
+                            if _long and _long >= _side * 2:
+                                _text_len = _sec.get("length_mm")
+                                if _text_len is None or abs(float(_text_len) - _long) > 1.0:
+                                    _sec = dict(_sec, length_mm=_long,
+                                                length_source="detail_sheet_figure",
+                                                length_from_text=_text_len)
+                        except Exception:                            # noqa: BLE001
+                            pass
+                    part["section_stock"] = _sec
 
         geo_reliability = float(
             (part.get("geometry_rollup") or {})
@@ -820,11 +1203,23 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         )
 
         mat_upper_joined = " ".join(str(m).upper() for m in materials)
+        # THE PART'S OWN PAGES, NOT THE WHOLE PACK (D-390). The text test read
+        # doc_page_text_upper — every sheet in the job — so on 12173 one hook arm's "MILD
+        # STEEL WIRE" made every part wire: the MDF spinner plate, the MFC back and the screws
+        # carried wire_forming and "welding on this wire part is the wire route's assumption",
+        # and both sheet-metal bases took the `_wire_part_override` that the Robomac guard
+        # then mistook for evidence. A part is wire when ITS material says so or ITS OWN pages
+        # say so, which is the test the bar-schedule rule below already applies.
+        _own_pages_w = set(part.get("pages") or [])
+        _own_text_upper = (" ".join(
+            str(_get_page_text(pg)) for pg in summary.get("pages", [])
+            if (pg.get("page_number") or pg.get("page")) in _own_pages_w).upper()
+            if _own_pages_w else "")
         _is_wire_part = any(
             kw in mat_upper_joined for kw in ("WIRE", "MILD STEEL WIRE", "STEEL WIRE")
         ) or (
-            "MILD STEEL WIRE" in doc_page_text_upper
-            or ("WIRE" in doc_page_text_upper and "LOOP" in doc_page_text_upper)
+            "MILD STEEL WIRE" in _own_text_upper
+            or ("WIRE" in _own_text_upper and "LOOP" in _own_text_upper)
         )
 
         # ROUND BAR / STUD (added 2026-07-13). The test above keys on the literal word
@@ -836,6 +1231,7 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         # so testing it would make the HOOK PLATE wire as well — one stud would turn every
         # part in the job into a bar. We look ONLY at this part's own pages.
         _bar_sched = []
+        _bar_sched_bare = False
         if not _is_wire_part and not part.get("flat_pattern_detected"):
             _own_pages = set(part.get("pages") or [])
             if _own_pages:
@@ -845,16 +1241,217 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                     if (pg.get("page_number") or pg.get("page")) in _own_pages
                 )
                 _bar_sched = _parse_bar_schedule(_own_text)
+                # A DIAMETER AND A LENGTH WITH NO BLANK IS A BAR (D-391). 12173-06-01M, the
+                # hook ARM, is a Ø6 bar 119.93 long: its own sheet prints "6.00mm DIA 119.93"
+                # in its parts table and no overall length-by-width, SolidWorks gave it no
+                # flat, and nothing else on its page calls it wire. Until D-390 it was wire
+                # only because another part's "MILD STEEL WIRE" was read over the whole pack;
+                # read on its own pages it fell to the sheet path — lasered, folded and priced
+                # from a 1 mm gauge it never stated. The item/qty-prefixed schedule above is
+                # the strong form; the bare "Ø x length" form is admitted only where nothing
+                # was measured that says sheet, the page states no sheet thickness, and the
+                # callout is not a hole.
+                if not _bar_sched and not (part.get("dxf_measured_outline")
+                                           or part.get("native_flat_pattern")
+                                           or part.get("dxf_augmented")):
+                    _bar_sched = _parse_bar_schedule(_own_text, bare=True)
+                    _bar_sched_bare = bool(_bar_sched)
         if _bar_sched:
             _is_wire_part = True
             _b0 = _bar_sched[0]
+            if _bar_sched_bare:
+                part.setdefault("review_flags", []).append(
+                    f"{part.get('part_number') or 'this part'} is round stock per its own "
+                    f"sheet: Ø{_b0['gauge_mm']:g} x {_b0['length_mm']:g} mm is printed on it "
+                    f"and no blank or flat pattern was measured — priced as bar, not sheet")
             part["wire_gauge_mm"] = _b0["gauge_mm"]
             part["wire_length_mm"] = _b0["length_mm"]
             part["bar_schedule"] = _bar_sched
             # The "8" in "8mm DIA" is a DIAMETER, not a sheet thickness. Leaving it set is
             # exactly what let this part masquerade as 8mm sheet steel.
-            part["normalized_thickness_mm"] = None
+            part["normalized_thickness_mm"] = None   # precedence: direct-write ok — clears a diameter misread as a gauge — removal, not evidence
             part.setdefault("_bar_recognised", True)
+
+        # ── WIRE/BAR BY ROUTE OR NAME, not only by the word in the material list ──────────
+        # 11762-17-03M "U WIRE" / -04M "WIRE STAND" (Milwaukee MX holder) carried a wire_forming
+        # op and welding, but material "MILD STEEL" — so the WIRE-in-materials tests above missed
+        # them and they fell to the sheet path: penny material on an 8mm DIAMETER read as a sheet
+        # THICKNESS, plus a laser row a solid wire never gets. A part the engine ROUTES as wire,
+        # or whose drawing NAMES it wire/bar/rod, is wire stock even when its material only says
+        # MILD STEEL. STUD is deliberately excluded (bought-in studs); WIRE MESH stays a section;
+        # a real flat-pattern DXF means the part is sheet, not wire, so it is left alone.
+        #
+        # This sets ONLY the shared signals — _bar_recognised + manufacturing_interpretation
+        # stock_form "wire" — so the three stock_form readers agree: the estimator bar formula
+        # prices it (or asks for the missing datum), and route_compiler's stock_form impossibility
+        # marks laser/fold NOT_APPLICABLE on it. Robomac/weld/dress are not impossible for wire and
+        # survive. No fourth laser-writer patch: the strip anchors on stock_form == "wire".
+        # THE SIGNAL AVAILABLE HERE IS THE NAME, NOT THE OPS. This pass runs BEFORE
+        # textual_operations are inferred from the drawing notes (that happens further down at
+        # the infer_operations_from_text block), so keying off a wire_forming op here would read
+        # an empty list — which is exactly why the first version of this fix never fired on
+        # 11762-17. The part's DESCRIPTION / number is set from the BOM and model at build time,
+        # so it is what we can rely on now; a wire_forming op, if it is already present, only
+        # reinforces it. WIRE and ROD are decisive on their own; BAR is ambiguous with a flat
+        # bar / crossbar sheet part, so it needs an explicit diameter callout to qualify.
+        if (not _is_wire_part and not part.get("_bar_recognised")
+                and not part.get("flat_pattern_detected")):
+            _desc_pn = (str(part.get("description") or "") + " "
+                        + str(part.get("part_number") or "")).upper()
+            _ops_seen = {str(o).strip().lower() for o in
+                         ((part.get("textual_operations") or [])
+                          + (part.get("operations") or [])
+                          + (part.get("inferred_operations") or []))}
+            _name_wire = (re.search(r"\b(WIRE|ROD)\b", _desc_pn) is not None
+                          and "WIRE MESH" not in _desc_pn)
+            _name_bar = re.search(r"\bBAR\b", _desc_pn) is not None
+            _has_wire_op = "wire_forming" in _ops_seen
+            # DIAMETER, not gauge. An explicit "N DIA" / "Ø N" callout is trusted anywhere.
+            _dia_explicit = None
+            if _name_wire or _name_bar or _has_wire_op:
+                _m = (re.search(r"(?:Ø\s*|\bDIA\s*)(\d+(?:\.\d+)?)", _desc_pn)
+                      or re.search(r"(\d+(?:\.\d+)?)\s*(?:MM)?\s*DIA\b", _desc_pn))
+                if _m:
+                    _dia_explicit = _safe_float(_m.group(1))
+            # AND THE PRINTED MATERIAL CELL, WHICH STATES THE SECTION OUTRIGHT. The tests
+            # above read the part's NAME, because a name is what this pass could rely on. But
+            # a drawing office states the stock in the material column — "Steel, Mild Wire
+            # Ø8mm" — and MBY432 is called "Edition Sunglasses Prong", which says nothing.
+            # Read through the shared reader so the form is decided in ONE place; the
+            # diameter comes with it, off the same cell, and is never a sheet thickness.
+            _printed_wire = _printed["stock_form"] == "wire"
+
+            # ARBITRATE EVERY CANDIDATE BEFORE WRITING ANY, WHATEVER FIELD SUPPLIED IT.
+            #
+            # The conflict guard protected the thickness fallback and nothing else, so a
+            # diameter read off the DESCRIPTION walked straight past it: description
+            # "WIRE Ø6" against a material cell reading "Ø8mm / Ø10mm" produced a gauge of 6
+            # on a record that simultaneously said "none is used until an estimator says
+            # which applies". Two answers on one line, and the wrong one was the one costed.
+            #
+            # A diameter is a single physical fact. Every reading of it is pooled here and
+            # settled once: agreeing sources corroborate, disagreeing sources cancel, and a
+            # cell that already states an irreconcilable pair poisons the whole callout —
+            # a drawing contradicting itself is not resolved by finding a third opinion.
+            _dia_candidates: List[float] = []
+            for _cand in (_dia_explicit, _printed["diameter_mm"] if _printed_wire else None):
+                _cv = _safe_float(_cand)
+                if _cv and _cv not in _dia_candidates:
+                    _dia_candidates.append(_cv)
+            if _printed.get("diameter_unresolved") and _dia_candidates:
+                part.setdefault("review_flags", []).append(
+                    f"{part.get('part_number') or 'this part'}: the "
+                    f"{', '.join(f'{_v:g} mm' for _v in _dia_candidates)} read elsewhere on "
+                    f"this part does NOT settle the diameter its material cell leaves open. "
+                    f"A drawing that contradicts itself is not resolved by a third reading")
+                _dia_explicit = None
+            elif len(_dia_candidates) > 1:
+                part.setdefault("review_flags", []).append(
+                    f"{part.get('part_number') or 'this part'}: its description and its "
+                    f"material cell state different diameters ("
+                    + " and ".join(f"{_v:g} mm" for _v in sorted(_dia_candidates))
+                    + ") — neither is used. Confirm the stock size")
+                _dia_explicit = None
+            elif _dia_candidates:
+                _dia_explicit = _dia_candidates[0]
+
+            # QUALIFY on a wire_forming op, a decisive WIRE/ROD name, a BAR name WITH a
+            # diameter, or the printed material cell naming the section. Not on BAR alone,
+            # and not on a bare gauge — that would sweep in sheet.
+            if _has_wire_op or _name_wire or (_name_bar and _dia_explicit) or _printed_wire:
+                # Diameter: the explicit callout, else the SolidWorks min-bbox value misread into
+                # the thickness field — safe to take as the Ø only now the part is confirmed wire
+                # (a solid round bar's min bounding box IS its diameter). May be absent (04M
+                # WIRE STAND gives none); the estimator then asks for it rather than inventing one.
+                #
+                # BUT NOT WHEN THE ONLY THING CALLING IT ROUND IS THE MATERIAL CELL.
+                #
+                # The reasoning above — a solid round bar's min bounding box IS its diameter —
+                # rests on the figure belonging to THIS PART's geometry. That holds for
+                # 11762-17-03M "U WIRE", whose own name says round and whose 8.0 is its model's
+                # bbox misfiled as a thickness. It does NOT hold when wire-ness was established
+                # only by a printed material cell: 0359342 stamped ONE document-level 6 mm
+                # across two dozen parts, so "Mild Steel Wire" with no Ø would have promoted a
+                # document note to a Ø6 bar — an invented gauge wearing a measurement's
+                # provenance, and on wire the gauge IS the mass.
+                #
+                # So the per-part evidence (its NAME, or a wire_forming op) still admits the
+                # fallback exactly as before; the material cell alone does not. A
+                # document-level thickness is refused either way.
+                # ONE WARRANT ONLY: THE FIGURE WAS MEASURED OFF THE SOLID.
+                #
+                # An earlier version also admitted "the part's own name says WIRE". That was
+                # wrong and it was pointed out: a name establishes the part's FORM, it says
+                # nothing about where an unstamped thickness came from, and keeping an old
+                # fixture green is not evidence that the inference is valid. The min-bounding-
+                # box argument is a claim about GEOMETRY — only a model or a DXF can support
+                # it. Everything else asks the estimator, which on a linear part is the
+                # cheap outcome: the gauge is the mass.
+                #
+                # AND A CONTESTED DIAMETER IS NOT AN ABSENT ONE. Falling through to the
+                # thickness merely because `_dia is None` would let the fallback quietly
+                # settle a conflict the reader deliberately refused to settle — Ø8 against
+                # Ø10 resolved by a gauge field. Arbitration is explicit: where the cell
+                # states a diameter it cannot reconcile, NOTHING substitutes for it.
+                _DIA_FROM_GEOMETRY = {"solidworks_api", "solidworks_flat_pattern",
+                                      "dxf", "dxf_flat_pattern"}
+                _thickness_measured = (
+                    str(part.get("thickness_source") or "") in _DIA_FROM_GEOMETRY)
+                _thickness_inherited = (
+                    str(part.get("material_inherited_from") or "") == "document_level"
+                    or str(part.get("thickness_source") or "") == "document_repeated")
+                _dia_contested = bool(_printed.get("diameter_unresolved"))
+                _dia = _dia_explicit
+                if _dia is None and part.get("normalized_thickness_mm"):
+                    if _dia_contested:
+                        part.setdefault("review_flags", []).append(
+                            f"{part.get('part_number') or 'this part'}: the "
+                            f"{_safe_float(part.get('normalized_thickness_mm')):g} mm gauge on "
+                            f"record is NOT used to settle the diameter the drawing leaves "
+                            f"open — a contested figure is not an absent one")
+                    elif _thickness_measured and not _thickness_inherited:
+                        _dia = _safe_float(part.get("normalized_thickness_mm"))
+                    else:
+                        part.setdefault("review_flags", []).append(
+                            f"{part.get('part_number') or 'this part'} is round stock with no "
+                            f"diameter printed on it. The "
+                            f"{_safe_float(part.get('normalized_thickness_mm')):g} mm on record "
+                            + ("is a document-level figure" if _thickness_inherited else
+                               f"came from {part.get('thickness_source') or 'no stated source'}, "
+                               f"not from measuring the bar")
+                            + " — so it is NOT read as a diameter. State the stock size")
+                part["_bar_recognised"] = True
+                # stock_form on manufacturing_interpretation is the SURVIVING channel — the
+                # estimator and route both read it, and unlike the top-level _bar_recognised flag
+                # it reaches costing intact (it is what drops the laser). Carry the Ø the same way
+                # so the estimator can name the gauge even when the top-level field is lost.
+                _mi = part.setdefault("manufacturing_interpretation", {})
+                if isinstance(_mi, dict):
+                    _mi["stock_form"] = "wire"
+                if _dia:
+                    part["wire_gauge_mm"] = _dia
+                    # A DIAMETER is not a sheet THICKNESS — the misread that priced it as plate.
+                    part["normalized_thickness_mm"] = None   # precedence: direct-write ok — clears a diameter misread as a gauge — removal, not evidence
+                    if isinstance(_mi, dict):
+                        _mi["wire_gauge_mm"] = _dia
+                # LENGTH IS NOT THE PDF CUT PATH. 5496 / 6364 mm are inflated vector outlines
+                # (pdf_geometry_inflation_suspected), not developed wire length; on Ø8 that is
+                # kilograms, not pennies. Leave wire_length_mm UNSET unless a bar/wire schedule
+                # already gave one — the estimator then asks for the length rather than pricing
+                # kilos off an outline. (Length order: schedule > SW body length > CL dim > ask.)
+                #
+                # AND SAY SO. Unset was silent, which on a linear part is the one gap that
+                # cannot be allowed to pass quietly: the length IS the money. An absent figure
+                # and a figure of zero look identical in a total, so the omission is stated as
+                # a decision rather than left for someone to notice.
+                if not _safe_float(part.get("wire_length_mm")):
+                    part.setdefault("review_flags", []).append(
+                        f"{part.get('part_number') or 'this part'} is round stock and its "
+                        f"LENGTH is not known — it is priced per metre, so the length is the "
+                        f"money. No length is inferred from a drawing outline (a PDF vector "
+                        f"path is not a developed length). State the cut length from the "
+                        f"detail sheet")
+
         # Sheet mild steel inheritance — wire detection wins over bare MILD STEEL on drawing
         inherited_steel = (
             "MILD STEEL" in mat_upper_joined
@@ -865,10 +1462,29 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         # Assembly-only, zero-geometry parts: page text is for the whole weldment, not this line.
         # Skip Fix 1 (text inference) and Fix 2 (weld/P/C propagation) — keep ops/cost at zero.
         # Wire hooks still run (document may label wire pages as assembly).
+        #
+        # "bought_in" COUNTS AS ASSEMBLY-ONLY HERE, AND USED NOT TO. The test was
+        # `all(r == "assembly")`, so a line carrying BOTH roles fell straight past this guard
+        # into the text inference below — and the tag that disqualified it is the strongest
+        # statement in the record that the line needs no fabrication at all. The block a few
+        # lines down ADDS that tag itself, so the guard was undoing its own work: retag a
+        # commodity as bought_in on one pass, lose its protection on the next.
+        #
+        # 12552-01-01X is what that cost. A 62012RS ball bearing, page_roles
+        # ['assembly', 'bought_in'], geometry reliability 0.0 — nothing about it was ever
+        # measured — took the SHARED assembly page's text through infer_operations_from_text.
+        # The page describes a laser-cut mild steel drawer, so the bearing came out of the run
+        # with a laser_cutting op and no material, and was costed at GBP 1.84 x 8.
+        #
+        # Zero geometry means nothing on this line was measured; roles that are only assembly
+        # and/or bought_in mean every word of that page belongs to something else. Neither
+        # tag on its own is new here — the change is that holding both no longer forfeits the
+        # protection either one earns. A part with a "detail" role still takes this path, so
+        # 12552-01-02X (['detail','bought_in']) is untouched and keeps costing as it does now.
         if (
             geo_reliability == 0.0
             and page_roles
-            and all(r == "assembly" for r in page_roles)
+            and all(r in ("assembly", "bought_in") for r in page_roles)
             and not _is_wire_part
         ):
             # Before dropping this assembly-only, zero-geometry line: if it is a
@@ -887,9 +1503,21 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 or part.get("overall_length_mm")
                 or (part.get("dxf_raw_geometry") or {}).get("blank_area_mm2")
             )
+            # THE ENGINE'S SHAPE TEST, NOT A PRIVATE ONE (D-589, the D-584 class again). A
+            # digit-led regex here retagged 0351292's rail, base and supports — ROL2021-2466,
+            # -2467, -2468, sub-assemblies with sheets and members of their own — as bought
+            # commodities: the rail and base were then researched at market, £24.50 and
+            # £14.50, as if SDI bought them, and the provenance counted both beside their
+            # members' charged rows. A drawing number by the shared rule is never a commodity.
+            try:
+                from part_code_conventions import looks_like_a_drawing_number as _is_dwg_bi
+                _names_a_drawing_bi = (bool(_re_bi.match(r"^\d{3,6}-", _pn_bi))
+                                       or _is_dwg_bi(_pn_bi))
+            except Exception:                                        # noqa: BLE001
+                _names_a_drawing_bi = bool(_re_bi.match(r"^\d{3,6}-", _pn_bi))
             if (
                 _pn_bi
-                and not _re_bi.match(r"^\d{3,5}-", _pn_bi)
+                and not _names_a_drawing_bi
                 and not _has_geom_bi
                 and _is_good_description(part.get("description"))
                 and "bought_in" not in page_roles
@@ -901,44 +1529,83 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             continue
 
         current_ops: List[str] = part.get("textual_operations", [])
-        if geo_reliability == 0.0 and not current_ops and combined_text.strip():
+        # OPERATION CUES ARE READ WITH THE LEGEND REMOVED — see _strip_specification_legend.
+        cue_text = _strip_specification_legend(combined_text)
+        cue_upper = cue_text.upper()
+        if geo_reliability == 0.0 and not current_ops and cue_text.strip():
             finishes = part.get("surface_finishes", [])
             try:
                 inferred = _infer_ops_from_text(
-                    combined_text,
+                    cue_text,
                     finishes=finishes,
                     has_fold_geometry=False,
                     has_cut_length=False,
                 )
             except TypeError:
                 try:
-                    inferred = _infer_ops_from_text(combined_text)
+                    inferred = _infer_ops_from_text(cue_text)
                 except Exception:
                     inferred = []
             except Exception:
                 inferred = []
             if inferred:
                 part["textual_operations"] = list(inferred)
+                # THE WORDS TRAVEL WITH THE OPERATION (D-586). An op inferred here reached
+                # the route as "a note on the drawing" with nothing quoted, so a repeated op
+                # name and a genuine callout read identically. Each inferred op carries the
+                # sheet's own words; an op whose cue the text does not print carries none,
+                # and the route compiler will not call it a note.
+                try:
+                    from extractor_patterns import operation_evidence_in_text
+                    _op_ev = operation_evidence_in_text(cue_text, inferred)
+                except Exception:                                    # noqa: BLE001
+                    _op_ev = {}
+                for _op, _snippet in _op_ev.items():
+                    part.setdefault("operation_evidence", {}).setdefault(_op, _snippet)
+                    part.setdefault("operation_sources", {}).setdefault(_op, "drawing_notes")
                 _interpret_part(part)
 
         is_assembly_part = (
             "assembly" in page_roles
             or part.get("assembly_candidate", False)
         )
-        if is_assembly_part and combined_text.strip():
+        # WELD-DECISION DIAGNOSTIC (env-gated): a part is welded only if it is an
+        # assembly part AND its extracted text carries a weld phrase. When 103-style
+        # brackets read poorly (low OCR confidence, no weld callout captured), they
+        # miss on one/both and get no weld op. Print the two inputs so a missing weld
+        # is explainable (bad classification vs missed callout) without guessing.
+        if os.getenv("SDI_WELD_DEBUG", "").lower() in {"1", "true", "yes"}:
+            _wp_hit = next((p for p in _ASSEMBLY_WELD_PHRASES
+                            if p in (combined_text or "").upper()), None)
+            _pn_dbg = str(part.get("part_number") or part.get("description") or "?")
+            print(f"   [weld-decision] {_pn_dbg}: assembly_part={is_assembly_part} "
+                  f"page_roles={list(page_roles)} weld_phrase={_wp_hit!r} "
+                  f"-> weld={'YES' if (is_assembly_part and _wp_hit) else 'no'}", flush=True)
+        if is_assembly_part and cue_text.strip():
             ops_set = set(part.get("textual_operations", []))
             changed = False
 
-            if any(phrase in combined_upper for phrase in _ASSEMBLY_WELD_PHRASES):
+            _weld_phrase = next(
+                (p for p in _ASSEMBLY_WELD_PHRASES if p in cue_upper), None)
+            if _weld_phrase:
                 for op in ("welding", "dress_welds"):
                     if op not in ops_set:
                         ops_set.add(op)
                         changed = True
+                    # The phrase that put the weld here is the weld's evidence (D-586).
+                    part.setdefault("operation_evidence", {}).setdefault(op, _weld_phrase)
+                    part.setdefault("operation_sources", {}).setdefault(op, "drawing_notes")
 
-            if any(phrase in combined_upper for phrase in _ASSEMBLY_PC_PHRASES):
+            _pc_phrase = next(
+                (p for p in _ASSEMBLY_PC_PHRASES if p in cue_upper), None)
+            if _pc_phrase:
                 if "powder_coating" not in ops_set:
                     ops_set.add("powder_coating")
                     changed = True
+                part.setdefault("operation_evidence", {}).setdefault(
+                    "powder_coating", _pc_phrase)
+                part.setdefault("operation_sources", {}).setdefault(
+                    "powder_coating", "drawing_notes")
 
             if changed:
                 part["textual_operations"] = list(ops_set)
@@ -959,7 +1626,22 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             _ops = set(part.get("textual_operations") or [])
             _ops -= _sheet_metal_ops
             _ops.add("wire_forming")
+            # THE WIRE ROUTE'S WELD IS THE ROUTE'S ASSUMPTION, AND IT IS SAID TO BE ONE. Every
+            # wire part is given a weld here whatever its sheet says; it then reached the book
+            # as "a note on the drawing" (12173-04-06M, a formed riser in a tab-and-slot
+            # pocket). Where the part's own text (legend removed) names no weld, the weld is
+            # kept — priced, as every inference is — and recorded as an inference, so the
+            # estimator is asked with its money rather than shown a note nobody wrote.
+            _weld_cued = ("welding" in _ops
+                          or re.search(r"\bWELD", cue_upper) is not None
+                          or re.search(r"\b(?:TIG|MIG)\b", cue_upper) is not None)
             _ops.add("welding")
+            if not _weld_cued:
+                part.setdefault("operation_sources", {}).setdefault("welding", "inference")
+                part.setdefault("review_flags", []).append(
+                    "welding on this wire part is the wire route's assumption — its own sheet "
+                    "names no weld (the pack's weld specification is not one); priced and "
+                    "asked, not read")
             if part.get("_bar_recognised"):
                 # Bars are cut on the Robomac (WB dept ROBO, £31.45/hr) — Tim charges
                 # £0.17 on 1310. Not a forming op: a solid bar is cut, not looped.
@@ -1028,7 +1710,7 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                         part["wire_length_mm"] = float(_l)
                         # A DIAMETER is not a sheet THICKNESS. 4mm dia was being read as
                         # 4mm plate — the same misread that costed the 1310 stud as sheet.
-                        part["normalized_thickness_mm"] = None
+                        part["normalized_thickness_mm"] = None   # precedence: direct-write ok — clears a wire diameter, adds no evidence
                         _me = part.setdefault("material_estimate", {})
                         _me["stock_form"] = "wire"
                         _me["wire_gauge_mm"] = float(_g)
@@ -1065,7 +1747,10 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             ]
             if _valid_thick:
                 part["thicknesses_mm"] = _valid_thick
-                part["normalized_thickness_mm"] = _safe_float(_valid_thick[0])
+                # A gauge read from the drawing's own thickness list — rank 70, below the
+                # model's cut list and a measured DXF, above any default.
+                _apply_field(part, "normalized_thickness_mm",
+                             _safe_float(_valid_thick[0]), "drawing_deterministic")
             elif not part.get("normalized_thickness_mm"):
                 _thick_defaults = {
                     "MDF": 18.0,
@@ -1079,10 +1764,17 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 }
                 for _mk, _mv in _thick_defaults.items():
                     if _mk in mat_upper_joined:
-                        part["normalized_thickness_mm"] = _mv
-                        part["thicknesses_mm"] = [
-                            str(int(_mv)) if float(_mv) == int(_mv) else str(_mv)
-                        ]
+                        # A family DEFAULT (18mm for MDF) — not a reading of this part at
+                        # all, so it fills a gap and never displaces anything.
+                        #
+                        # AND IT IS NEVER WRITTEN INTO THE DRAWING'S OWN LIST (D-402). This
+                        # used to put the default into part["thicknesses_mm"] as well, where
+                        # the estimator reads it back as the drawing's reading
+                        # ("thicknesses_mm_list") — so on 9598-02-02G the model's 0.4 mm,
+                        # refused below the board floor for a material the page scan had
+                        # got wrong, gave way to an 18 that no sheet printed, and the card
+                        # was nested at 18 mm with the advisory saying it was costed at 0.4.
+                        _apply_field(part, "normalized_thickness_mm", _mv, "inference")
                         break
             _blank_l = _safe_float(part.get("blank_length_mm"))
             _blank_w = _safe_float(part.get("blank_width_mm"))
@@ -1096,24 +1788,88 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 if _own_l and _own_w:
                     part["blank_length_mm"] = _own_l
                     part["blank_width_mm"] = _own_w
+                    # The part's OWN measured overall dims. Stamped so arbitration can
+                    # weigh it, and so a wrong blank can be traced to whoever wrote it.
+                    part["blank_length_mm_source"] = "overall_dimensions"
+                    part["blank_width_mm_source"] = "overall_dimensions"
                     _blank_l, _blank_w = _own_l, _own_w
             if not _blank_l or not _blank_w:
-                _pt_dims = re.findall(
-                    r"\b(\d{3,4}(?:\.\d{1,2})?)\b",
-                    " ".join(str(_get_page_text(p)) for p in summary.get("pages", [])),
-                )
+                # THE GA'S OVERALL IS THE ONE NUMBER ON THE PACK THAT IS CERTAINLY NOT THIS
+                # PART'S. A general arrangement prints the size of the finished unit; every
+                # leaf inside it is smaller, by definition. Scanning "the whole document"
+                # for the largest numbers therefore does not merely risk the assembly's
+                # envelope — on any pack where the GA prints its overall, it PREFERS it,
+                # because the biggest number in a drawing pack is nearly always the GA's.
+                #
+                # 12349-02-69-01A is what that costs. Its seven acrylic flats had gone to
+                # the wrong parent, so it reached here with no blank, and took 2120 x 2120
+                # off the GA — a 4.5 m2 square of high-impact acrylic, on a drawer front.
+                # James, looking at the quote: "2120x2120 is not a feeder."
+                #
+                # So read the DETAIL pages only. A pack with nothing but assembly sheets
+                # gives this part no blank, which is the honest outcome: there is no
+                # drawing of it to size it from.
+                _detail_pages = []
+                for _p in summary.get("pages", []) or []:
+                    _r = (_p.get("page_role") or {})
+                    _r = _r.get("primary_role") if isinstance(_r, dict) else _r
+                    if str(_r or "").strip().lower() not in ("assembly", "ga", "general_arrangement"):
+                        _detail_pages.append(_p)
+                # A DATE IS NOT A DIMENSION.
+                #
+                # "largest panel 2026 x 1144mm" on a gravity feeder whose biggest part is
+                # 1145mm, and "2026 x 400mm" on a 390mm sunglasses tray. The same number on
+                # two unrelated jobs is not a drawing, it is the YEAR — printed on every title
+                # block, every revision line and every date stamp in the pack, and 2026 sits
+                # neatly inside the 50–3000 band this scan accepts. The comment a few lines up
+                # already recorded it giving RISER "a garbage 2026x2026 square"; it was read as
+                # a one-off rather than as the rule it is.
+                #
+                # It is not a small error. That phantom became the largest blank on the job, so
+                # it set the shipping envelope: packaging and delivery were asked of the market
+                # against a 2026mm panel and came back at GBP 25 and GBP 12 a unit on a tray
+                # that fits in a carton — the two largest bought-in lines on both jobs.
+                #
+                # Dates are stripped by shape first, which removes the actual cause. The year
+                # band then goes as well, because this is the context-blind last resort and a
+                # bare four-digit year survives in forms no pattern catches ("REV A 2026",
+                # "(C) 2026"). The cost of that is a genuine 1990–2099mm part refused HERE —
+                # correct, for a guess of last resort: a part that size has to come from a
+                # measurement, not from the largest number anybody printed on the page.
+                _page_text = " ".join(str(_get_page_text(p)) for p in _detail_pages)
+                _page_text = re.sub(
+                    r"\b\d{1,4}\s*[/.\-]\s*\d{1,2}\s*[/.\-]\s*\d{1,4}\b", " ", _page_text)
+                _page_text = re.sub(
+                    r"\b(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\s*\d{2,4}\b",
+                    " ", _page_text, flags=re.IGNORECASE)
+                _pt_dims = re.findall(r"\b(\d{3,4}(?:\.\d{1,2})?)\b", _page_text)
                 _nums = sorted(
-                    [float(v) for v in _pt_dims if 50 <= float(v) <= 3000],
+                    [float(v) for v in _pt_dims
+                     if 50 <= float(v) <= 3000 and not (1990 <= float(v) <= 2099)],
                     reverse=True,
                 )
-                if len(_nums) >= 2 and not _blank_l:
-                    part["blank_length_mm"] = _nums[0]
-                    part["blank_width_mm"] = _nums[1]
-                    part["overall_length_mm"] = _nums[0]
-                    part["overall_width_mm"] = _nums[1]
-                elif len(_nums) == 1 and not _blank_l:
-                    part["blank_length_mm"] = _nums[0]
-                    part["overall_length_mm"] = _nums[0]
+                # The two largest numbers anywhere in the document text. Context-blind by
+                # construction, which is why it is last and why saying so matters more here
+                # than anywhere else: a blank from this source is a guess wearing a
+                # measurement's clothes, and only the stamp tells them apart.
+                #
+                # ONE NUMBER READ TWICE IS ONE DIMENSION, NOT TWO. `_nums` is a sorted list
+                # of every occurrence, so a dimension printed on two views arrives as two
+                # entries and became a perfect square — 2120 x 2120 was 2120 seen twice, not
+                # a length and a width. It is the same defect the arbitrator names elsewhere:
+                # one observation counted as two. Take DISTINCT values.
+                _distinct = sorted(set(_nums), reverse=True)
+                if len(_distinct) >= 2 and not _blank_l:
+                    part["blank_length_mm"] = _distinct[0]
+                    part["blank_width_mm"] = _distinct[1]
+                    part["overall_length_mm"] = _distinct[0]
+                    part["overall_width_mm"] = _distinct[1]
+                    part["blank_length_mm_source"] = "document_text_largest_numbers"
+                    part["blank_width_mm_source"] = "document_text_largest_numbers"
+                elif len(_distinct) == 1 and not _blank_l:
+                    part["blank_length_mm"] = _distinct[0]
+                    part["overall_length_mm"] = _distinct[0]
+                    part["blank_length_mm_source"] = "document_text_largest_numbers"
 
         if _is_non_metal_mat and not inherited_steel:
             _fab_ops = {
@@ -1156,14 +1912,93 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 # call _interpret_part — it does not rewrite part["operations"].
                 part["textual_operations"] = _kept_m
                 part["operations"] = sorted(_kept_ops)
-            if any(k in mat_upper_joined for k in ("MDF", "TIMBER", "PLYWOOD", "BOARD")):
-                _joinery = set(part.get("textual_operations") or [])
-                if "EDGING" in combined_upper or "EDGE BAND" in combined_upper:
-                    _joinery.add("edge_banding")
-                _joinery.add("cnc_routing")
-                _joinery.add("handling")
+                pass
+
+        # ── JOINERY WORK IS DERIVED FOR JOINERY PARTS, WHICH SHOULD NOT NEED SAYING ──────
+        #
+        # This block lived INSIDE the metal branch above — a branch whose whole purpose is
+        # "metal parts do not get a separate hole/drill op". So joinery operations were only
+        # ever derived for parts the engine had decided were METAL, and its board-word test
+        # was catching parts MIS-classified as steel that were really board. A board part
+        # correctly identified as board never reached it at all.
+        #
+        # 12422-24's MFC end cap is what that costs: the largest joinery part on the job,
+        # whose route came from the model's guess instead of its own stated finish.
+        import config as _cfg
+        _board_words = (tuple(getattr(_cfg, "SHEET_BOARD_TOKENS", ()))
+                        + tuple(getattr(_cfg, "FACED_BOARD_TOKENS", ()))
+                        + tuple(getattr(_cfg, "SOLID_TIMBER_TOKENS", ()))
+                        + ("BOARD",))
+        if any(k in mat_upper_joined for k in _board_words):
+            _joinery = set(part.get("textual_operations") or [])
+            # THE DRAWING SAYS "LAMINATED AND EDGED" AND WE READ NEITHER WORD.
+            # "EDGING"/"EDGE BAND" do not match "EDGED", so a finish the drawing states in
+            # plain English produced no operation — and LAMINATED produced none at all, so
+            # the lamination on that panel was never costed. Both are real work with a real
+            # department: EDGE and GLUE.
+            # THE PART'S OWN FINISH, NOT ONLY THE PAGE IT SITS ON. combined_upper is the
+            # whole page — every part drawn on that sheet shares it — while
+            # surface_finishes is the finish extracted FOR THIS PART, and the run log
+            # already prints it: "12422-24-01J: finish detected (LAMINATED AND EDGED)".
+            # Reading the page alone means a panel's finish can be read off its neighbour,
+            # and a part whose finish came from a BOM or a model rather than page text is
+            # not read at all.
+            _finish_text = " ".join([
+                combined_upper,
+                " ".join(str(f) for f in (part.get("surface_finishes") or [])).upper(),
+                str(part.get("normalized_finish") or "").upper(),
+                " ".join(str(n) for n in (part.get("process_notes") or [])).upper(),
+                str(part.get("description") or "").upper(),
+            ])
+            if re.search(r"\bEDG(?:E|ED|ING)\b|\bEDGE\s*BAND", _finish_text):
+                _joinery.add("edge_banding")
+            if re.search(r"\bLAMINAT(?:E|ED|ING|ION)\b", _finish_text):
+                _joinery.add("laminating")
+            if re.search(r"\bVENEER(?:ED|ING)?\b", _finish_text):
+                _joinery.add("veneering")
+            # SAW AND SPINDLE — "no machining saw/spindle", Tony Ford on 11908-21. The
+            # department (MC J, "Machines Joinery") has always existed and nothing ever
+            # minted the operation, so 4.67 of his 42 hours had nowhere to land.
+            #
+            # MINTED ONLY ON THE DRAWING'S OWN EVIDENCE, because that is the difference
+            # between reading a route and inventing one. A rebate, groove, housing, mortice,
+            # tenon, moulding or profile is spindle work and the drawing says so — SDI's own
+            # SolidWorks export even carries a REBATE layer, so it is stated in the CAD as
+            # well as in the words. A board part with none of that gets no such line: the
+            # engine does not know that every panel is sawn, and guessing it would put an
+            # hour on every joinery job in the shop.
+            _mcj = re.search(
+                r"\bREBATE[SD]?\b|\bGROOVE[SD]?\b|\bHOUSING[S]?\b|\bMORTICE\b|"
+                r"\bMORTISE\b|\bTENON\b|\bMOULD(?:ED|ING)?\b|\bSPINDLE\b|"
+                r"\bPROFILED?\b|\bMITRE[SD]?\b|\bMITER[SD]?\b",
+                _finish_text)
+            if not _mcj:
+                _layers = " ".join(
+                    str(_l) for _l in ((part.get("normalized_geometry") or {}).get("layers")
+                                       or part.get("dxf_layers") or [])).upper()
+                _mcj = bool(re.search(r"\bREBATE\b|\bGROOVE\b", _layers))
+            if _mcj:
+                _joinery.add("machining_joinery")
+            _joinery.add("cnc_routing")
+            _joinery.add("handling")
+            if sorted(_joinery) != sorted(part.get("textual_operations") or []):
                 part["textual_operations"] = sorted(_joinery)
+                # _interpret_part REBUILDS normalized_geometry, and rebuilding it from a
+                # part's raw fields discards anything a DXF or a model measured. That was
+                # invisible while this block only ran on parts mis-read as steel; hoisting it
+                # to run on real board parts pointed it straight at the one panel on the job
+                # whose blank is the whole material cost — 1434 x 748 became None, and the
+                # GBP 37.95 sheet price with it.
+                #
+                # A re-interpretation must not be able to delete a measurement. The measured
+                # keys are put back exactly as they were; anything the rebuild ADDED is kept.
+                _pre_ng = dict(part.get("normalized_geometry") or {})
                 _interpret_part(part)
+                _post_ng = part.get("normalized_geometry")
+                if isinstance(_post_ng, dict):
+                    for _k, _v in _pre_ng.items():
+                        if _v not in (None, "", [], {}) and _post_ng.get(_k) in (None, "", [], {}):
+                            _post_ng[_k] = _v
 
         if inherited_steel:
             page_mat_match = re.search(
@@ -1178,11 +2013,71 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             pn_upper = str(part.get("part_number") or "").upper()
             extra_text = f"{desc_upper} {pn_upper}"
 
-            is_non_metal = (
-                any(kw in declared_mat for kw in _NON_METAL_KEYWORDS)
-                or any(kw in combined_upper for kw in _NON_METAL_KEYWORDS)
-                or any(kw in extra_text for kw in _NON_METAL_KEYWORDS)
-            )
+            # THE PAGE'S WORDS FLIP ONLY A MATERIAL THE PART DID NOT STATE FOR ITSELF. This
+            # scanned the whole sheet for non-metal words, and on 12567 every sheet carries
+            # the project title "DIGITAL LED GCMP HEADER": nineteen mild-steel parts were
+            # flipped to LED. The DXF-backed ones were rescued below; the two case
+            # assemblies (02-101, 03-101 — "MILD STEEL (CR4)", "POWDER COATED" in their own
+            # title blocks) were not, lost welding and powder from their routes and were
+            # tagged bought-in, so the side header frame reached the book uncoated and the
+            # end header case was called a purchase (D-269). A material the part carries as
+            # its own reading — not one inherited from the document — is the part's
+            # statement; only the part's own words (its MATERIAL field, its description, its
+            # code) may overrule it. An inherited material has no such standing and the page
+            # scan still applies to it, which is what catches a bought-in on a steel GA.
+            _field_hit = any(kw in declared_mat for kw in _NON_METAL_KEYWORDS)
+            _name_hit = any(kw in extra_text for kw in _NON_METAL_KEYWORDS)
+            _page_hit = any(kw in combined_upper for kw in _NON_METAL_KEYWORDS)
+            _material_is_its_own = bool(mat_upper_joined) and not part.get("material_inherited_from")
+            # A NAME IS NOT A MATERIAL (D-391). "CARD POCKET ASSEMBLY" (12173-04-201) is a
+            # welded steel assembly — seven fillets and POWDER COATED - MATT on its own sheet —
+            # named after what it HOLDS. Its description was read as its material: the record
+            # was flipped to CARD, tagged bought-in, and the 4 Oct 21:12 book stripped its
+            # weld, its dressing and its coat (eight off) and then ruled its parent's coat out
+            # because its one member was "bought in". The MATERIAL field names the material;
+            # the description names the thing, and a thing is often named for what it carries
+            # (a card pocket, a ticket holder, an LED housing). So a non-metal word in the
+            # NAME overrules the part's material only where the part has no statement of its
+            # own to overrule — a steel it merely inherited from the document — and never on
+            # an assembly, whose material is its members'. Where the name is overruled the
+            # disagreement is written on the record for the reader.
+            _desc_only_upper = str(part.get("description") or "").upper()
+            _named_assembly = bool(part.get("is_assembly_parent") or part.get("is_sub_assembly")
+                                   or part.get("assembly_children")
+                                   or re.search(r"\b(?:ASSEMBLY|ASSY|WELDMENT)\b", _desc_only_upper))
+            _name_overrules = _name_hit and not _material_is_its_own and not _named_assembly
+            _page_overrules = _page_hit and not _material_is_its_own and not _named_assembly
+            if not _field_hit and ((_name_hit and not _name_overrules)
+                                   or (_page_hit and _named_assembly)):
+                _kw = next((kw for kw in sorted(_NON_METAL_KEYWORDS, key=len, reverse=True)
+                            if kw in extra_text or kw in combined_upper), "")
+                _nm_flag = (f"named '{part.get('description') or part.get('part_number')}' — "
+                            f"'{_kw}' on it is read as what it holds or displays, not what "
+                            f"it is made of: "
+                            + ("an assembly's material is its members'"
+                               if _named_assembly else
+                               f"its own sheet states {mat_upper_joined.strip()}, which is kept")
+                            + ". Confirm if the part itself is " + _kw.lower())
+                if _nm_flag not in (part.get("review_flags") or []):
+                    part.setdefault("review_flags", []).append(_nm_flag)
+                if _named_assembly and not _material_is_its_own:
+                    # Nothing of its own settles it: no stated material, a word on its sheet
+                    # naming a non-metal. The steel it inherited and the route it carries
+                    # stand, and a person is asked — a made assembly or a purchased item.
+                    try:
+                        from source_precedence import raise_manufacturing_question as _ask_nm
+                        _ask_nm(part,
+                                f"Is {part.get('part_number')} ({part.get('description')}) a "
+                                f"steel assembly of its members, or a purchased {_kw.lower()} "
+                                f"item? Its own sheet states no material and names {_kw}",
+                                "a made assembly: it keeps the steel it inherited and the "
+                                "joining and finishing on its route",
+                                "if it is bought complete, say so and its fabrication comes off; "
+                                "if it is made here, confirm its members' material",
+                                "document_builder.non_metal_name")
+                    except Exception:                                # noqa: BLE001
+                        pass
+            is_non_metal = _field_hit or _name_overrules or _page_overrules
             # The MATERIAL: field is authoritative. Steel fab drawings routinely
             # mention non-metal terms incidentally — vinyl-logo application notes
             # ("WITH OR WITHOUT VINYL - CHECK ORDER"), LED bend-tabs / foam tape on
@@ -1219,23 +2114,59 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 if non_metal_label:
                     cleaned_materials = _dedupe(cleaned_materials + [non_metal_label])
                 part["materials"] = cleaned_materials
-                part["normalized_material"] = (
-                    non_metal_label.replace(" ", "_").upper() if non_metal_label else None
-                )
-                part["normalized_thickness_mm"] = None
+                _nm = non_metal_label.replace(" ", "_").upper() if non_metal_label else None
+                if _nm:
+                    # The drawing states a non-metal; this is a reading of it, rank 70.
+                    _apply_field(part, "normalized_material", _nm, "drawing_deterministic")
+                else:
+                    part["normalized_material"] = None   # precedence: direct-write ok — clears a wrong metal, adds no evidence
+                # A NON-METAL SHEET WITH ITS OWN DETAIL SHEET IS CUT HERE, NOT BOUGHT (D-398).
+                # Harrods 9439-01-04-004, an A4 GRAPHIC LENS: PETG, 297 x 212 x 2, 151 g on
+                # its own sheet. This block read "not steel" as "purchased": it tagged the
+                # lens bought-in, stripped its laser and cleared its gauge, and the two lenses
+                # were priced from the parts table at £1.68 instead of cut on the acrylic
+                # side. Not metal and not made are different facts. A material the Other Sheet
+                # block prices (plastic sheet, board — costed_facts.is_other_sheet_material)
+                # on a part with a detail sheet of its own is a part we cut: it keeps its
+                # laser, loses only the metal joining and coating, and is never tagged bought.
+                # An LED, a vinyl, a paper graphic — no sheet material — is still a purchase.
+                try:
+                    from costed_facts import is_other_sheet_material as _is_other_sheet
+                    _cut_sheet = (bool(non_metal_label) and bool(_is_other_sheet(non_metal_label))
+                                  and any(r in ("detail", "flat_pattern", "fabricated")
+                                          for r in page_roles))
+                except Exception:                                    # noqa: BLE001
+                    _cut_sheet = False
+                if not _cut_sheet:
+                    part["normalized_thickness_mm"] = None   # precedence: direct-write ok — a metal gauge cannot describe this part
                 part["material_inherited_from"] = None
                 fabrication_ops = {
                     "laser_cutting", "folding", "welding", "hole_machining",
                     "tapping", "countersinking", "dress_welds", "powder_coating",
                 }
+                if _cut_sheet:
+                    fabrication_ops = {"welding", "dress_welds", "powder_coating",
+                                       "tapping", "countersinking"}
                 kept_ops = [
                     op
                     for op in (part.get("textual_operations") or [])
                     if op not in fabrication_ops
                 ]
+                if _cut_sheet and "laser_cutting" not in kept_ops:
+                    kept_ops.append("laser_cutting")
+                    part.setdefault("operation_sources", {}).setdefault("laser_cutting", "inference")
                 if kept_ops != part.get("textual_operations"):
                     part["textual_operations"] = kept_ops
-                if "bought_in" not in page_roles:
+                if _cut_sheet:
+                    part["page_roles"] = [r for r in page_roles if r != "bought_in"]
+                    part.setdefault("review_flags", [])
+                    _cs_flag = (f"{non_metal_label} with a detail sheet of its own: a sheet "
+                                f"material SDI cuts, so it is made on the acrylic side and "
+                                f"never bought — the laser stays; metal joining and coating "
+                                f"come off")
+                    if _cs_flag not in part["review_flags"]:
+                        part["review_flags"].append(_cs_flag)
+                elif "bought_in" not in page_roles:
                     part["page_roles"] = list(page_roles) + ["bought_in"]
                 part.setdefault("review_flags", [])
                 if "non_metal_material_corrected" not in part["review_flags"]:
@@ -1278,10 +2209,16 @@ _WIRE_BAR_SCHED_RE = re.compile(
 )
 
 
-def _parse_bar_schedule(page_text: str):
-    """Round bar / stud rows from a part's OWN page. Returns [{gauge_mm, length_mm, qty}]."""
+def _parse_bar_schedule(page_text: str, bare: bool = False):
+    """Round bar / stud rows from a part's OWN page. Returns [{gauge_mm, length_mm, qty}].
+
+    The strong form is a schedule row — item, quantity, "Ø x length". With ``bare`` the
+    "<d>mm DIA <length>" callout alone is read too (D-391), for a detail that prints its stock
+    that way and nothing else; a hole callout ("4 HOLES 6mm DIA 100 PCD") is not a bar, and a
+    page that states a sheet thickness describes sheet, so neither yields a row."""
     out, seen = [], set()
-    for m in _WIRE_BAR_SCHED_RE.finditer(page_text or ""):
+    text = page_text or ""
+    for m in _WIRE_BAR_SCHED_RE.finditer(text):
         qty = int(m.group(2))
         gauge = float(m.group(3))
         length = float(m.group(4))
@@ -1294,7 +2231,37 @@ def _parse_bar_schedule(page_text: str):
             continue
         seen.add(key)
         out.append({"gauge_mm": gauge, "length_mm": length, "qty": qty})
+    if out or not bare:
+        return out
+    if _SHEET_THICKNESS_STATED_RE.search(text):
+        return out
+    for m in _WIRE_SIMPLE_RE.finditer(text):
+        gauge = float(m.group(1))
+        length = float(m.group(2))
+        if not (1.0 <= gauge <= 25.0) or not (5.0 <= length <= 6000.0):
+            continue
+        before = text[max(0, m.start() - 24):m.start()].upper()
+        after = text[m.end():m.end() + 24].upper()
+        if _HOLE_CALLOUT_RE.search(before) or _HOLE_CALLOUT_RE.search(after):
+            continue
+        key = (gauge, length, 1)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"gauge_mm": gauge, "length_mm": length, "qty": 1})
     return out
+
+
+# A sheet thickness stated on the page: the part is sheet, whatever else it prints.
+_SHEET_THICKNESS_STATED_RE = re.compile(
+    r"\b\d{1,2}(?:\.\d+)?\s*MM\s*(?:THK|THICK|THICKNESS|GAUGE|SHEET|PLATE)\b|\bMATL\s+THK\b",
+    re.IGNORECASE,
+)
+# The words beside a diameter that make it a hole, not a stock size.
+_HOLE_CALLOUT_RE = re.compile(
+    r"\b(?:HOLES?|PCD|THRU|THROUGH|CSK|C'?BORE|COUNTERSUNK|COUNTERBORE|TAPPED|DRILL|REAM|SLOTS?)\b",
+    re.IGNORECASE,
+)
 
 
 _WIRE_SIMPLE_RE = re.compile(
@@ -1499,7 +2466,7 @@ def _parse_bom_from_page_text(page_text: str) -> List[Dict[str, Any]]:
 
     _sdi_re = re.compile(
         r"(?:^|\s)(\d{1,3})\s+"
-        r"(\d{4,5}-\d{2}-\d{2,3}[A-Z]?)"
+        r"(\d{4,6}-\d{2}-\d{2,3}[A-Z]?)"
         r"\s+([A-Z][A-Z0-9 /\-\.&()]{0,60}?)"
         r"\s+(\d{1,4})"
         r"(?=\s+\d|\s*$|\s+[A-Z])",
@@ -1520,7 +2487,7 @@ def _parse_bom_from_page_text(page_text: str) -> List[Dict[str, Any]]:
 
     _JUNK_KW = (
         "MICRON", "THICKNESS", "PLATING", "COPYRIGHT", "TOLERANCE",
-        "DIMENSION", "MARKS &", "SPENCER", "USING TAPE", "TICKET TAPED",
+        "DIMENSION", "PROPERTY OF", "ALL RIGHTS", "USING TAPE", "TICKET TAPED",
         "COVERAGE", "NICKEL", "CHROME", "POWDERCOAT", "PROTOTYPE",
         "TIMBER-BASED", "TIMBER BASED", "ALUMINIUM-BASED",
     )
@@ -1531,7 +2498,7 @@ def _parse_bom_from_page_text(page_text: str) -> List[Dict[str, Any]]:
     # This pass captures the top-level bay GA BOM (e.g. 1282-GA's seven lines).
     _ga_re = re.compile(
         r"(?:^|\s)(\d{1,3})\s+"
-        r"(\d{4,5}(?:-[A-Z0-9]{1,4}|\s-\s[A-Z0-9]{1,4}){1,3})-?"
+        r"(\d{4,6}(?:-[A-Z0-9]{1,4}|\s-\s[A-Z0-9]{1,4}){1,3})-?"
         r"\s+([A-Z0-9][A-Z0-9 /\-\.&()']{2,60}?)"
         r"\s+(\d{1,4})"
         r"(?=\s+\d|\s*$|\s+[A-Z])",
@@ -1634,6 +2601,256 @@ def _parse_fixing_bom_rows_from_page_text(page_text: str) -> List[Dict[str, Any]
     return out
 
 
+_MATERIAL_OBSERVATION_PREFIX = ": material "
+
+
+def material_observation(pn: str, part: Dict[str, Any]) -> str:
+    """The one sentence that tells an estimator what this part is made of, and who said so.
+
+    WHAT WE CONCLUDED, AND ONLY THEN WHAT WE READ. This printed the raw material tokens as
+    though they were the answer, so job 12392 told an estimator four times that a part we
+    cut in mild steel was "Card" — the scrambled text the arbitration had already rejected
+    in favour of the SolidWorks material. The costing was right on every one of them.
+
+    Nothing was wrong with the engine and everything was wrong with the sentence. An
+    estimator reading "material detected (Card)" against a steel bracket has been given a
+    reason to distrust a sheet that was correct, and a report that shows the loser of an
+    arbitration is worse than one that shows nothing.
+
+    A FUNCTION, so the sentence can be rebuilt later from the finished record. See
+    restate_material_observations: this runs long before the strongest sources have
+    spoken, and a sentence naming a source is a claim that has to stay true.
+    """
+    _read = ", ".join(part.get("materials") or [])
+    _costed = str(part.get("normalized_material") or "").strip()
+    if _costed and _costed.upper().replace("_", " ") not in _read.upper():
+        return (f"{pn}{_MATERIAL_OBSERVATION_PREFIX}{_costed} "
+                f"(from {part.get('material_source') or 'the strongest source'}); "
+                f"the drawing text read as '{_read}' and was not used.")
+    return f"{pn}: material detected ({_read})."
+
+
+def restate_material_observations(summary: Dict[str, Any]) -> int:
+    """Rebuild every material observation from the record as it finally stands.
+
+    THE SENTENCE WAS A SNAPSHOT OF AN UNFINISHED ARBITRATION. build_document_writeup runs
+    at file_scan.py:1912; the SolidWorks connector applies the model's material at 2352.
+    So the observation was composed while the strongest source had not yet spoken, and on
+    job 12392 it told the estimator
+
+        12392-02-01M: material MILD STEEL (from drawing_deterministic)
+
+    about a record whose own provenance trail says solidworks_api. The value was right and
+    the attribution named a source that had lost. An estimator who goes to the title block
+    to check that will not find the answer there — the model supplied it.
+
+    Runs after every applier, over the same part objects, and rewrites only the material
+    line. Returns how many sentences changed, so a run that silently restates nothing can
+    be told from one that had nothing to restate.
+    """
+    writeup = summary.get("manufacturing_writeup") or {}
+    obs = writeup.get("manufacturing_observations")
+    parts = writeup.get("parts") or summary.get("parts") or []
+    if not isinstance(obs, list) or not parts:
+        return 0
+
+    by_pn = {}
+    for p in parts:
+        if isinstance(p, dict) and p.get("part_number"):
+            by_pn[str(p["part_number"])] = p
+
+    changed = 0
+    for i, line in enumerate(obs):
+        text = str(line)
+        if _MATERIAL_OBSERVATION_PREFIX not in text and ": material detected (" not in text:
+            continue
+        pn = text.split(":", 1)[0].strip()
+        part = by_pn.get(pn)
+        if part is None or not (part.get("materials") or []):
+            continue
+        fresh = material_observation(pn, part)
+        if fresh != text:
+            obs[i] = fresh
+            changed += 1
+    return changed
+
+
+def cut_list_member_records(bom_rows: Any, parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """A made record for each piece of a several-section cut list (D-548).
+
+    part_identity.mint_cut_list_member_identities names each row "<weldment>-CL<n>"; this is
+    where the row becomes the part SDI cuts: its section and its one cut length from its own
+    words (drawing_deterministic, the table being the drawing's own statement), a saw cut, and
+    its weldment as the parent the graph hangs it from. Never bought in, never put to the
+    catalogue, never sized as sheet. Its quantity is the row's; the tree multiplies it by its
+    weldment's as for any other child."""
+    from section_profile import detect_section_stock
+    # The part index may already hold a bare record for the code (it harvests every code the
+    # rows print); that record is the member, and is completed here rather than duplicated.
+    _existing = {str(p.get("part_number") or "").upper(): p for p in parts if isinstance(p, dict)}
+    out: List[Dict[str, Any]] = []
+    for row in bom_rows or []:
+        if not isinstance(row, dict) or str(row.get("identity_source") or "") != "cut_list_member":
+            continue
+        pn = str(row.get("part_number") or "").strip()
+        if not pn:
+            continue
+        desc = " ".join(str(row.get("description") or "").split())
+        sec = detect_section_stock(desc)
+        if not sec or not sec.get("length_mm"):
+            continue
+        rec = _existing.get(pn.upper())
+        _new = rec is None
+        if _new:
+            rec = _empty_part_record(pn, item_number=row.get("item_number"), description=desc,
+                                     quantity=None)
+            _apply_field(rec, "quantity", row.get("quantity") or 1, "bom_tree")
+        elif not str(rec.get("description") or "").strip() or rec.get("description") == pn:
+            rec["description"] = desc
+        rec["page_roles"] = ["section"]
+        rec["pages"] = []
+        rec["source"] = "cut_list_member"
+        rec["identity_source"] = "cut_list_member"
+        rec["printed_code"] = str(row.get("printed_code") or "")
+        rec["is_bought_in"] = False
+        rec["stock_form"] = "tube"
+        rec["cut_list_member_of"] = str(row.get("cut_list_member_of") or row.get("bom_parent") or "")
+        rec["bom_parent"] = rec["cut_list_member_of"]
+        stock = {k: sec.get(k) for k in ("a", "b", "t", "profile_form", "keyword")}
+        stock.update({"length_mm": float(sec["length_mm"]),
+                      "cut_lengths_mm": [float(sec["length_mm"])],
+                      "detection_path": "canonical_profile",
+                      "source": "drawing_deterministic", "source_text": desc})
+        rec["section_stock"] = stock
+        rec["textual_operations"] = ["saw"]
+        # A PIECE HAS NO SHEET OF ITS OWN; ITS WELDMENT'S SHEET IS ITS SHEET. 03M states FINISH:
+        # WELDED — how the frame leaves its sheet, coated later as 201 — and its pieces say the
+        # same, so the document's powder is not stamped onto each length of tube beside the
+        # assembly that is coated whole.
+        _par = _existing.get(rec["cut_list_member_of"].upper())
+        if isinstance(_par, dict):
+            if _par.get("surface_finishes") and not rec.get("surface_finishes"):
+                rec["surface_finishes"] = list(_par.get("surface_finishes") or [])
+                rec["finish_from_weldment"] = rec["cut_list_member_of"]
+            if _par.get("pages") and not rec.get("pages"):
+                rec["pages"] = list(_par.get("pages") or [])
+            for _k in ("normalized_material", "materials"):
+                if _par.get(_k) and not rec.get(_k):
+                    rec[_k] = _par.get(_k)
+        rec.setdefault("review_flags", []).append(
+            f"cut-list member of {rec['cut_list_member_of']}: its parts table lists pieces of "
+            f"more than one section, so each piece is a line of its own, cut and charged by "
+            f"length (D-548)")
+        if _new:
+            out.append(rec)
+            _existing[pn.upper()] = rec
+    return out
+
+
+def bought_in_rows_without_records(bom_rows: Any, parts: List[Dict[str, Any]]
+                                   ) -> List[Dict[str, Any]]:
+    """A bought-in record for every table row no record already stands for.
+
+    THE PRINTED CODE IS NOT THE IDENTITY OF A CLASS-CODED ROW. This pass keyed rows on the
+    code the drawing printed, and 12567-02-GA prints "P/P" against twelve different
+    articles: the first P/P row took the name, every other P/P row was "already present",
+    and the two EPDM tape lengths — read by the deterministic reader only, so never in the
+    extract — had no record, no cost and no line on the Estimate while sitting in full on
+    BOMs & Routes (D-277). A bare "FIXING" row (the M6 washer) was refused as reference-like
+    for the same reason. Each class-coded row takes the per-article identity the whole
+    pipeline already uses (part_identity.category_code_identities), so it is one record, one
+    graph node and one line; a row that names only its class and no article stays out.
+    Rows with a real non-SDI code behave as before.
+    """
+    from part_identity import category_code_identities, synthesise_bought_in_code
+    from part_code_conventions import is_category_not_a_code
+    _rows = [r for r in (bom_rows or []) if isinstance(r, dict)]
+    _article_ids = category_code_identities(_rows)
+    _existing_pns = {str(p.get("part_number") or "").upper() for p in parts
+                     if isinstance(p, dict)}
+    _SDI_PN_RE = re.compile(r"^\d{4,6}-\d{2}-\d{2,3}[A-Z]?$")
+    out: List[Dict[str, Any]] = []
+    for _i, row in enumerate(_rows):
+        if str(row.get("identity_source") or "") == "cut_list_member":
+            continue                  # a piece SDI cuts, made by cut_list_member_records (D-548)
+        _article = _article_ids.get(_i) or ""
+        pn = _article or str(row.get("part_number") or "").strip()
+        # A ROW SPLIT UPSTREAM ALREADY CARRIES ITS PER-ARTICLE IDENTITY. file_scan applies
+        # part_identity.split_category_code_rows to the reconciled rows IN PLACE before this
+        # pass sees them, so a class-coded row arrives here as part_number "P/P-<slug>" with
+        # printed_code "P/P". category_code_identities recognises a CODE that is a category;
+        # a split identity is not one, so those rows fell through to the identifier rules
+        # below, and _is_valid_part_identifier refuses anything over 40 characters — a cap
+        # written for junk codes, not for articles under a class word. 12567-02-GA's two EPDM
+        # tape lengths, at 45 and 46 characters, were the only P/P rows refused and the only
+        # two with no line on the Estimate (D-290). The printed class word says what the row
+        # is; the identity the split gave it is the article.
+        _printed = str(row.get("printed_code") or "").strip()
+        if (not _article and _printed and pn and is_category_not_a_code(_printed)
+                and pn.upper() != _printed.upper()):
+            _article = pn
+        dsc = str(row.get("description") or "").strip()
+        qty = row.get("quantity") or 1
+        if not _article and is_category_not_a_code(pn):
+            # ONE row under the class word: no siblings to tell it apart from, so the
+            # shared minter names it from its words (a lone "FIXING  M6 WASHER" is
+            # BI-WASHER, as the fastener pass would spell it). Words that name nothing
+            # leave a class word standing alone, and that is not a line.
+            _article = synthesise_bought_in_code(dsc, pn) or ""
+            if not _article:
+                continue
+            pn = _article
+        if not pn or pn.upper() in _existing_pns:
+            continue
+        # A WRAPPED CELL IS ONE ROW HERE TOO (D-443). This is the minter that first saw the
+        # table reader's whole-cell "FIXING M6X12MM THREADED INSERT, HEADED HEX DRIVE" beside
+        # the record "FIXING M6x12mm" / "THREADED INSERT, HEADED HEX DRIVE" and, keyed on the
+        # exact code, minted a second line — the reconcile's own check came too late to undo
+        # a record already in the writeup. One shared predicate, asked where the record is born.
+        try:
+            from part_identity import same_row_read_as_one_cell as _one_cell
+            from part_identity import same_bom_occurrence as _same_occ
+            if any(isinstance(p, dict) and _one_cell(pn, dsc if dsc != pn else "",
+                                                     p.get("part_number"), p.get("description"))
+                   and _same_occ(row, p) for p in parts):
+                continue
+        except Exception:                                                # noqa: BLE001
+            pass
+        if _SDI_PN_RE.match(pn) or pn.upper().endswith("-GA"):
+            continue
+        if not _article and not _is_valid_part_identifier(pn):
+            continue
+        if not _is_good_description(pn) and not _is_good_description(dsc):
+            continue
+        effective_pn = pn if len(pn) >= 3 else dsc[:40]
+        effective_desc = dsc or pn
+        rec = _empty_part_record(effective_pn, description=effective_desc, quantity=None)
+        # Born with a source, so the next pass has something to weigh itself against.
+        _apply_field(rec, "quantity", qty, "bom_tree")
+        rec["page_roles"] = ["bought_in"]
+        rec["pages"] = []
+        rec["materials"] = []
+        rec["source"] = "non_sdi_bom_row"
+        if _article:
+            rec["printed_code"] = _printed or str(row.get("part_number") or "").strip()
+            rec["is_bought_in"] = True
+        # A CODE THE ENGINE MINTED STAYS RECOGNISABLY OURS ON ITS RECORD (D-383). A clash in
+        # part_identity.mint_uncoded_row_identities keeps the row's figures in the code
+        # ("BI-DOWEL8MMX30MM"), which by shape reads as somebody's part number; the record
+        # carries the row's identity_source so every reader asks is_engine_minted_record.
+        if row.get("identity_source"):
+            rec["identity_source"] = str(row["identity_source"])
+            rec["is_bought_in"] = True
+            rec["printed_code"] = str(row.get("printed_code") or "")
+        # WHICH TABLE LISTED IT, so the graph can hang it where the drawing says.
+        _bp = str(row.get("bom_parent") or row.get("source_pdf") or "").strip()
+        if _bp:
+            rec["bom_parent"] = _bp
+        out.append(rec)
+        _existing_pns.add(effective_pn.upper())
+    return out
+
+
 def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
     parts = build_part_index(summary)
 
@@ -1731,31 +2948,20 @@ def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
                 f"-> {[b.get('part_number') for b in bought_in_items]}"
             )
 
+    # The pieces of a several-section cut list are parts SDI cuts (D-548), made before the
+    # bought-in pass below could take them for purchases.
+    _cl_members = cut_list_member_records(
+        (summary.get("document_analysis") or {}).get("bom_rows") or [], parts)
+    if _cl_members:
+        parts.extend(_cl_members)
+
     # Fix B: bought_in records for non-SDI BOM rows (e.g. WINDMILL 1164: WSF45 ticket strip)
-    _existing_pns = {str(p.get("part_number") or "").upper() for p in parts}
-    _SDI_PN_RE = re.compile(r"^\d{4,5}-\d{2}-\d{2,3}[A-Z]?$")
-    _non_sdi_bought_in: List[Dict[str, Any]] = []
-    for row in (summary.get("document_analysis") or {}).get("bom_rows") or []:
-        pn = str(row.get("part_number") or "").strip()
-        dsc = str(row.get("description") or "").strip()
-        qty = row.get("quantity") or 1
-        if not pn or pn.upper() in _existing_pns:
-            continue
-        if _SDI_PN_RE.match(pn) or pn.upper().endswith("-GA"):
-            continue
-        if not _is_valid_part_identifier(pn):
-            continue
-        if not _is_good_description(pn) and not _is_good_description(dsc):
-            continue
-        effective_pn = pn if len(pn) >= 3 else dsc[:40]
-        effective_desc = dsc or pn
-        rec = _empty_part_record(effective_pn, description=effective_desc, quantity=qty)
-        rec["page_roles"] = ["bought_in"]
-        rec["pages"] = []
-        rec["materials"] = []
-        rec["source"] = "non_sdi_bom_row"
-        _non_sdi_bought_in.append(rec)
-        _existing_pns.add(effective_pn.upper())
+    _non_sdi_bought_in = bought_in_rows_without_records(
+        (summary.get("document_analysis") or {}).get("bom_rows") or [], parts)
+    # Fix C below reads both of these: the names now on the record, and the SDI code shape.
+    _existing_pns = {str(p.get("part_number") or "").upper() for p in parts} | {
+        str(r.get("part_number") or "").upper() for r in _non_sdi_bought_in}
+    _SDI_PN_RE = re.compile(r"^\d{4,6}-\d{2}-\d{2,3}[A-Z]?$")
     if _non_sdi_bought_in:
         parts.extend(_non_sdi_bought_in)
         if os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}:
@@ -1773,7 +2979,10 @@ def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
     # overviews are excluded. Material is inferred downstream from the suffix;
     # missing geometry is flagged for manual dimensioning.
     _bom_meta: Dict[str, Dict[str, Any]] = {}
-    for row in (summary.get("document_analysis") or {}).get("bom_rows") or []:
+    # One reading per (table, code): a code printed at two item numbers of one table is the
+    # table's total, as bom_tree's effective pass reads it (12173-07-2-02M, items 1 and 3).
+    from bom_tree import rows_combined_per_table as _rows_per_table
+    for row in _rows_per_table((summary.get("document_analysis") or {}).get("bom_rows") or []):
         _rpn = str(row.get("part_number") or "").strip().upper()
         if _rpn:
             _bom_meta[_rpn] = row
@@ -1801,7 +3010,8 @@ def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
         if any(k in dsc.upper() for k in _PARENT_KW):
             continue  # parent / sub-assembly — its components are costed individually
         rec = _empty_part_record(pn, item_number=_meta.get("item_number"),
-                                 description=dsc or pn, quantity=qty)
+                                 description=dsc or pn, quantity=None)
+        _apply_field(rec, "quantity", qty, "bom_tree")
         rec["page_roles"] = ["bom_only"]
         rec["source"] = "sdi_bom_row_no_geometry"
         rec["review_flags"] = ["no_geometry_estimate_incomplete"]
@@ -1866,7 +3076,17 @@ def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
         if part["surface_finishes"]:
             observations.append(f"{pn}: finish detected ({', '.join(part['surface_finishes'])}).")
         if part["materials"]:
-            observations.append(f"{pn}: material detected ({', '.join(part['materials'])}).")
+            # WHAT WE CONCLUDED, AND ONLY THEN WHAT WE READ. This printed the raw material
+            # tokens as though they were the answer, so job 12392 told an estimator four
+            # times that a part we cut in mild steel was "Card" — the scrambled text the
+            # arbitration had already rejected in favour of the SolidWorks material. The
+            # costing was right on every one of them.
+            #
+            # Nothing was wrong with the engine and everything was wrong with the sentence.
+            # An estimator reading "material detected (Card)" against a steel bracket has
+            # been given a reason to distrust a sheet that was correct, and a report that
+            # shows the loser of an arbitration is worse than one that shows nothing.
+            observations.append(material_observation(pn, part))
         if part["slot_detected"] or part["geometry_rollup"]["estimated_slot_like_features"]:
             observations.append(f"{pn}: slot-like geometry or text cues detected.")
         if part["process_notes"]:

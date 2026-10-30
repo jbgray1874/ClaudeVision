@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Portfolio Command Centre — Alba PIP</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Spectral:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/alba.css">
+</head>
+<!-- Demo script: SCREEN 1.  Source design: Alba screen1.png -->
+<body data-section="portfolio" data-rail="0" data-screen="1">
+
+  <div class="crumb"><b>Portfolio</b> <span>/</span> Command Centre</div>
+
+  <div class="pagehead">
+    <div class="ttl">
+      <h1>Portfolio Command Centre</h1>
+      <div class="sub">Live operating intelligence across 24 portfolio companies</div>
+      <div class="meta">Updated 2 min ago &nbsp;•&nbsp; 24 sources connected</div>
+    </div>
+    <div class="acts">
+      <div class="kpis k4" style="margin:0;grid-template-columns:repeat(4,minmax(108px,1fr));gap:10px">
+        <div class="kpi">
+          <div class="lab">Portfolio Companies</div>
+          <div class="val">24</div>
+        </div>
+        <div class="kpi">
+          <div class="lab">Healthy</div>
+          <div class="val ok">18</div>
+        </div>
+        <div class="kpi">
+          <div class="lab">Attention</div>
+          <div class="val warn">4</div>
+        </div>
+        <div class="kpi">
+          <div class="lab">Critical</div>
+          <div class="val bad">2</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ---------- health / runway / growth ---------- -->
+  <div class="grid g-3">
+
+    <div class="panel">
+      <div class="ph">Portfolio Health</div>
+      <div style="display:flex;align-items:center;gap:20px">
+        <svg viewBox="0 0 120 120" style="width:106px;height:106px;flex:none">
+          <circle cx="60" cy="60" r="48" fill="none" stroke="#26262b" stroke-width="11"/>
+          <!-- 24 companies: 18 healthy, 4 attention, 2 critical. r=48 => C=301.6 -->
+          <circle cx="60" cy="60" r="48" fill="none" stroke="#4ec97f" stroke-width="11"
+                  stroke-dasharray="226.2 75.4" stroke-dashoffset="0"
+                  transform="rotate(-90 60 60)" stroke-linecap="butt"/>
+          <circle cx="60" cy="60" r="48" fill="none" stroke="#e8a33d" stroke-width="11"
+                  stroke-dasharray="50.3 251.3" stroke-dashoffset="-226.2"
+                  transform="rotate(-90 60 60)" stroke-linecap="butt"/>
+          <circle cx="60" cy="60" r="48" fill="none" stroke="#e8544f" stroke-width="11"
+                  stroke-dasharray="25.1 276.5" stroke-dashoffset="-276.5"
+                  transform="rotate(-90 60 60)" stroke-linecap="butt"/>
+          <text x="60" y="58" text-anchor="middle" fill="#f0efec"
+                style="font:600 27px Inter,sans-serif">81</text>
+          <text x="60" y="75" text-anchor="middle" fill="#6a6a72"
+                style="font:400 11px Inter,sans-serif">/ 100</text>
+        </svg>
+        <div style="flex:1;min-width:0">
+          <div class="deltas">
+            <div class="row"><div class="lbl"><span class="dot ok"></span>Healthy</div><div class="v">18</div></div>
+            <div class="row"><div class="lbl"><span class="dot warn"></span>Attention</div><div class="v">4</div></div>
+            <div class="row"><div class="lbl"><span class="dot bad"></span>Critical</div><div class="v">2</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="ph">Cash Runway</div>
+      <div class="headline">17.4</div>
+      <div style="font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-faint);margin-top:4px">Months</div>
+      <div style="margin-top:22px;font-size:11.5px;color:var(--ink-faint)">
+        Weighted across 24 companies. Two below the 9-month threshold.
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="ph">Revenue Growth</div>
+      <div class="headline ok">+14.8%</div>
+      <svg class="chart" viewBox="0 0 300 74" preserveAspectRatio="none" style="height:74px;margin-top:12px">
+        <path class="sparkline" d="M0,64 L20,61 L40,63 L60,56 L80,58 L100,50 L120,45 L140,47 L160,38
+                                   L180,33 L200,35 L220,26 L240,22 L260,17 L280,12 L300,6"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- ---------- priority map + intelligence ---------- -->
+  <div class="grid g-11">
+
+    <div class="panel">
+      <div class="ph">Portfolio Priority Map</div>
+      <table>
+        <thead>
+          <tr><th style="width:52px">Rank</th><th>Company</th><th>Status</th><th>Primary Issue</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="rank">1</span></td>
+            <td><div class="cellflex"><span class="co">N</span><b>NovaTech Solutions</b></div></td>
+            <td><span style="color:var(--warn);display:inline-flex;align-items:center;gap:7px">
+                <span class="dot warn"></span>Attention</span></td>
+            <td>Revenue</td>
+          </tr>
+          <tr>
+            <td><span class="rank">2</span></td>
+            <td><div class="cellflex"><span class="co">A</span><b>Apex Manufacturing</b></div></td>
+            <td><span style="color:var(--bad);display:inline-flex;align-items:center;gap:7px">
+                <span class="dot bad"></span>Critical</span></td>
+            <td>Liquidity</td>
+          </tr>
+          <tr>
+            <td><span class="rank">3</span></td>
+            <td><div class="cellflex"><span class="co">B</span><b>BrightWave Digital</b></div></td>
+            <td><span style="color:var(--ok);display:inline-flex;align-items:center;gap:7px">
+                <span class="dot ok"></span>Healthy</span></td>
+            <td>Growth</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <div class="ph">Priority Intelligence</div>
+
+      <a class="sig" href="02-revenue-performance.html" style="text-decoration:none">
+        <i class="ico bad">⚠</i>
+        <div class="body">
+          <div class="t" style="color:var(--bad)">Revenue Risk</div>
+          <div style="font-size:12.5px;color:var(--ink);margin-top:3px;font-weight:600">NovaTech Solutions</div>
+          <div class="d">Forecast Q4 miss: $1.2M</div>
+        </div>
+        <div class="r">
+          <span class="pill warn">92%</span>
+          <div style="font-size:10px;color:var(--ink-faint);margin-top:7px">CRM + Finance</div>
+        </div>
+      </a>
+
+      <div class="sig">
+        <i class="ico bad">⚠</i>
+        <div class="body">
+          <div class="t" style="color:var(--bad)">Liquidity</div>
+          <div style="font-size:12.5px;color:var(--ink);margin-top:3px;font-weight:600">Apex Manufacturing</div>
+          <div class="d">Runway: 7.6 months</div>
+        </div>
+        <div class="r">
+          <span class="pill warn">88%</span>
+          <div style="font-size:10px;color:var(--ink-faint);margin-top:7px">Xero + Payroll</div>
+        </div>
+      </div>
+
+      <a class="sig" href="06-opportunity-radar.html" style="text-decoration:none">
+        <i class="ico ok">↗</i>
+        <div class="body">
+          <div class="t" style="color:var(--ok)">Value Creation</div>
+          <div style="font-size:12.5px;color:var(--ink);margin-top:3px;font-weight:600">BrightWave Digital</div>
+          <div class="d">Expansion potential: $1.8M ARR</div>
+        </div>
+        <div class="r">
+          <span class="pill ok">84%</span>
+          <div style="font-size:10px;color:var(--ink-faint);margin-top:7px">CRM + Product</div>
+        </div>
+      </a>
+    </div>
+  </div>
+
+<script src="assets/alba.js"></script>
+</body>
+</html>

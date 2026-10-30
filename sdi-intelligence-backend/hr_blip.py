@@ -13,6 +13,7 @@ import os
 import sys
 import datetime
 import time
+import threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -21,6 +22,9 @@ import hr_config as cfg
 
 BLIP_URL = "https://api.bright.hr/blip/v1/clockings/query"
 MAX_WORKERS = 5   # concurrent requests — stays well under BrightHR rate limit
+MAX_ATTEMPTS = 6  # per employee, counting rate-limited tries
+MAX_PAUSE = 60    # seconds, the longest single rate-limit pause
+LOCK_STALE_MINUTES = 30   # a lock older than this was left by a run that died
 
 
 def _now():
@@ -53,85 +57,243 @@ def _get_token() -> str:
     return bh.get_access_token()
 
 
-def _load_active_employees() -> list:
-    p = Path(cfg.HR_SNAPSHOT_DIR) / "latest.json"
-    if not p.exists():
-        raise RuntimeError("No employee snapshot — run hr_pull.py first.")
-    return json.loads(p.read_text(encoding="utf-8")).get("records") or []
+STAFF_LIST_ATTEMPTS = 3   # reading BrightHR's staff list, with a longer pause each time
+STAFF_LIST_PAUSE = 15     # seconds before the second try; doubled before the third
 
 
-def _query_one(token: str, employee_id: str, from_dt: str) -> list:
+def _current_staff(token: str) -> list:
+    """Everyone BrightHR lists as employed, read fresh on every run.
+
+    Only these people are asked about, so anyone missing here is missing from
+    the on-site list however long they have been clocked in. There is no saved
+    list to fall back on, on purpose: the one this used to read was months old
+    and kept only staff with an email address, so new starters and warehouse
+    staff were never asked about. A list that can be out of date is worse than
+    none, so if BrightHR's cannot be read the run fails, says why, and changes
+    nothing. The clockings lookup needs only the BrightHR id, so that is all
+    this requires; leavers are left out.
+    """
+    import hr_brighthr as bh
+    import hr_managers
+    problem = "could not be read"
+    for attempt in range(STAFF_LIST_ATTEMPTS):
+        if attempt:
+            time.sleep(STAFF_LIST_PAUSE * attempt)
+        try:
+            everyone = hr_managers.apply(bh.name_managers(
+                [bh.normalise_employee(r) for r in bh.fetch_employees(token)]))
+            staff = [e for e in everyone if e["id"] and not e["terminated"]]
+        except Exception as exc:
+            problem = f"could not be read ({exc})"
+            _log(f"  staff list attempt {attempt + 1}: {problem}")
+            continue
+        if staff:
+            return staff
+        problem = "came back empty"
+    raise RuntimeError(f"BrightHR's staff list {problem}, so nobody was checked and nothing "
+                       f"was changed. Try again in a few minutes.")
+
+
+class _Throttle:
+    """One rate-limit pause shared by every worker.
+
+    When BrightHR answers 429, every worker waits, not just the one that was
+    refused. Workers backing off one at a time kept the other four hammering,
+    so on a busy afternoon nearly every query was refused three times and the
+    run came back degraded.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._resume_at = 0.0
+
+    def wait(self):
+        while True:
+            with self._lock:
+                delay = self._resume_at - time.monotonic()
+            if delay <= 0:
+                return
+            time.sleep(delay)
+
+    def pause(self, seconds: float) -> bool:
+        """Hold every worker for seconds. True if this extended the pause."""
+        with self._lock:
+            until = time.monotonic() + seconds
+            if until <= self._resume_at:
+                return False
+            self._resume_at = until
+            return True
+
+
+def _retry_after(response, attempt: int) -> float:
+    """BrightHR's Retry-After if it gives one, else 10s, 20s, 30s... capped."""
+    try:
+        wait = float(response.headers.get("Retry-After", ""))
+    except (TypeError, ValueError):
+        wait = 10 * (attempt + 1)
+    return max(1.0, min(wait, MAX_PAUSE))
+
+
+def _acquire_lock():
+    """One Blip run at a time. Two at once double the request rate and both
+    get rate-limited: the portal button pressed during a scheduled run, or
+    twice. Returns the lock path, or None if another run holds it."""
+    path = Path(cfg.HR_SNAPSHOT_DIR) / "blip.lock"
+    for _ in range(2):
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                age = time.time() - path.stat().st_mtime
+            except OSError:
+                continue                     # released as we looked: try again
+            if age < LOCK_STALE_MINUTES * 60:
+                return None
+            _log(f"  removing a Blip lock left {age / 60:.0f} min ago by a run that did not finish")
+            try:
+                path.unlink()
+            except OSError:
+                return None
+            continue
+        os.write(fd, f"{os.getpid()} {_now().isoformat()}".encode())
+        os.close(fd)
+        return path
+    return None
+
+
+def _query_one(token: str, employee_id: str, from_dt: str, throttle=None) -> tuple:
     """
     Query clockings for one employee at a point in time.
-    Returns clockings active at that moment (i.e. still clocked in).
+    Returns (clockings, ok) where clockings are active at that moment (i.e.
+    still clocked in) and ok is False if the query itself failed.
+
+    The distinction matters: a failed query looks identical to "not clocked in"
+    if you only return a list, so a bad token or a BrightHR outage would report
+    an empty building instead of an error — and anything downstream would
+    publish that as the fire roll call.
     """
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
     body = {"filters": {"employeeId": employee_id, "from": from_dt}}
-    for attempt in range(3):
+    throttle = throttle or _Throttle()
+    for attempt in range(MAX_ATTEMPTS):
+        throttle.wait()
         try:
             r = requests.post(BLIP_URL, json=body, headers=headers,
                               timeout=cfg.BH_TIMEOUT)
             if r.status_code == 404:
-                return []
+                return [], True          # no clockings for this employee
             if r.status_code == 429:
-                wait = 10 * (attempt + 1)
-                _log(f"  [429] employee {employee_id} — backing off {wait}s")
-                time.sleep(wait)
+                wait = _retry_after(r, attempt)
+                if throttle.pause(wait):
+                    _log(f"  [429] BrightHR rate limit - all workers pausing {wait:.0f}s")
                 continue
             if r.status_code != 200:
-                return []
-            items = r.json().get("items") or []
-            return items
-        except requests.RequestException:
-            return []
-    return []
+                _log(f"  [{r.status_code}] employee {employee_id} — query failed")
+                return [], False
+            return r.json().get("items") or [], True
+        except requests.RequestException as exc:
+            _log(f"  [error] employee {employee_id} — {exc}")
+            return [], False
+    return [], False                     # rate limited on every attempt
 
 
 def _write_output_file(on_site: list, summary: dict):
     """
     Write a clean, dated, browsable output file to HR_OUTPUT_DIR
     so the COO can view who is on site in the portal Files view.
-    Email stripped — names only. NON-FATAL.
+    Email stripped — names only.
+
+    NON-FATAL, but never silent: returns (path, error). The snapshot is already
+    saved by the time this runs, so a failure here loses nothing - but it used
+    to vanish from the response entirely, leaving a run that said OK with no
+    file to show for it. The caller now surfaces the reason.
     """
     out_dir = getattr(cfg, "HR_OUTPUT_DIR", "").strip()
     if not out_dir:
         _log("HR_OUTPUT_DIR not set — skipping browsable output file.")
-        return None
+        return None, "HR_OUTPUT_DIR is not set."
+    # Built before any I/O so the fallback copy below still has it if the
+    # share turns out to be unreachable.
+    payload = {
+        "generated": summary["timestamp"],
+        "query_type": "point_in_time",
+        "employees_checked": summary["employees_checked"],
+        "on_site": summary["on_site"],
+        "status": summary["status"],
+        "staff_on_site": [
+            {
+                "first_name": e.get("first_name", ""),
+                "surname": e.get("surname", ""),
+                "clocked_in": e.get("clocking", {}).get("start", ""),
+            }
+            for e in on_site
+        ],
+    }
     try:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
         out_path = Path(out_dir) / f"blip_onsite_{_stamp()}.json"
-        payload = {
-            "generated": summary["timestamp"],
-            "query_type": "point_in_time",
-            "employees_checked": summary["employees_checked"],
-            "on_site": summary["on_site"],
-            "status": summary["status"],
-            "staff_on_site": [
-                {
-                    "first_name": e.get("first_name", ""),
-                    "surname": e.get("surname", ""),
-                    "clocked_in": e.get("clocking", {}).get("start", ""),
-                }
-                for e in on_site
-            ],
-        }
         _atomic_write_json(out_path, payload)
         _log(f"Output file written -> {out_path}")
-        return str(out_path)
+        return str(out_path), None
     except OSError as exc:
-        _log(f"OUTPUT FILE FAILED ({out_dir}): {exc}.")
+        reason = f"Could not write to HR_OUTPUT_DIR ({out_dir}): {exc}"
+        # A drive letter is the usual culprit: a Windows service runs under an
+        # account that has no user drive mappings, so K:\ simply does not exist
+        # for it even though it works interactively.
+        if _looks_like_mapped_drive(out_dir):
+            reason += (
+                f". {out_dir[:2]} is a mapped drive - a Windows service cannot see user "
+                f"drive mappings. Set HR_OUTPUT_DIR to the UNC path instead "
+                f"(e.g. \\\\sdi-dc01\\shareddata$\\Shared\\IT\\HRSystemsOutput)."
+            )
+        _log(f"OUTPUT FILE FAILED: {reason}")
+        fallback = _write_fallback_copy(payload)
+        if fallback:
+            reason += f" A local copy was written to {fallback} instead."
+        return None, reason
+
+
+def _looks_like_mapped_drive(path: str) -> bool:
+    r"""True for a drive-letter path like K:\..., false for a UNC \\server\share."""
+    return len(path) > 1 and path[1] == ":" and path[0].isalpha()
+
+
+def _write_fallback_copy(payload: dict):
+    """Keep a copy beside the snapshot when the output share is unreachable."""
+    try:
+        path = Path(cfg.HR_SNAPSHOT_DIR) / f"blip_onsite_{_stamp()}.json"
+        _atomic_write_json(path, payload)
+        return str(path)
+    except OSError:
         return None
 
 
 def run_blip() -> dict:
     Path(cfg.HR_SNAPSHOT_DIR).mkdir(parents=True, exist_ok=True)
+    lock = _acquire_lock()
+    if lock is None:
+        reason = ("A BrightHR Blip query is already running (the scheduled task or "
+                  "another press). Wait for it to finish, then try again.")
+        _log(f"BLIP busy: {reason}")
+        return {"timestamp": _now().isoformat(), "status": "busy", "on_site": 0,
+                "employees_checked": 0, "query_failures": 0, "warnings": [reason]}
+    try:
+        return _run_blip()
+    finally:
+        try:
+            lock.unlink()
+        except OSError:
+            pass
+
+
+def _run_blip() -> dict:
     _log("BLIP start — querying current clockings (concurrent)")
 
     token = _get_token()
-    employees = _load_active_employees()
+    employees = _current_staff(token)
     emp_index = {e["id"]: e for e in employees if e.get("id")}
     _log(f"  {len(employees)} active employees to check")
 
@@ -141,28 +303,44 @@ def run_blip() -> dict:
     _log(f"  Querying at point-in-time {from_dt} with {MAX_WORKERS} workers")
 
     on_site = []
+    # Whose query failed, not just how many. A failed lookup is "unknown", and
+    # the push must not read it as "clocked out" - with sign-out live, that
+    # would take someone in the building off the fire roll for a cycle.
+    query_failed = []
     checked = 0
+    failures = 0
     emp_list = [e for e in employees if e.get("id")]
 
     # ── concurrent queries ──
+    throttle = _Throttle()
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
         futures = {
-            pool.submit(_query_one, token, emp["id"], from_dt): emp
+            pool.submit(_query_one, token, emp["id"], from_dt, throttle): emp
             for emp in emp_list
         }
         for future in as_completed(futures):
             emp = futures[future]
             checked += 1
             try:
-                clockings = future.result()
+                clockings, ok = future.result()
             except Exception:
-                clockings = []
+                clockings, ok = [], False
+            if not ok:
+                failures += 1
+                query_failed.append({
+                    "id": emp.get("id"),
+                    "first_name": emp.get("first_name", ""),
+                    "surname": emp.get("surname", ""),
+                    "email": emp.get("email", ""),
+                    "manager": emp.get("manager_name", ""),
+                })
             if clockings:
                 on_site.append({
                     "id": emp.get("id"),
                     "first_name": emp.get("first_name", ""),
                     "surname": emp.get("surname", ""),
                     "email": emp.get("email", ""),
+                    "manager": emp.get("manager_name", ""),
                     "clocking": clockings[0],
                 })
             if checked % 40 == 0:
@@ -170,32 +348,69 @@ def run_blip() -> dict:
 
     on_site.sort(key=lambda x: x.get("first_name", "").lower())
 
+    fail_pct = (failures / len(emp_list) * 100) if emp_list else 0.0
     summary = {
         "timestamp": _now().isoformat(),
         "employees_checked": len(emp_list),
         "on_site": len(on_site),
+        "query_failures": failures,
+        "fail_pct": round(fail_pct, 2),
         "status": "ok",
+        "warnings": [],
+        # For grouping by manager: how many BrightHR gave one for, and from
+        # which field, so "nobody has a manager" is visibly a setup question.
+        "staff_with_manager": sum(1 for e in emp_list if e.get("manager_name")),
+        "manager_fields": sorted({e.get("manager_field") for e in emp_list
+                                  if e.get("manager_field")}),
     }
+
+    import hr_managers
+    if hr_managers.LAST_PROBLEM:
+        summary["warnings"].append(hr_managers.LAST_PROBLEM)
+
+    # A snapshot built from failed queries under-reports who is in the building.
+    # Mark it degraded so the InVentry load refuses it rather than publishing an
+    # incomplete evacuation list.
+    if failures and fail_pct > cfg.BLIP_MAX_FAIL_PCT:
+        summary["status"] = "degraded"
+        summary["warnings"].append(
+            f"{failures} of {len(emp_list)} employee queries failed ({fail_pct:.1f}% > "
+            f"BLIP_MAX_FAIL_PCT {cfg.BLIP_MAX_FAIL_PCT}%); on-site list may be incomplete."
+        )
+        _log(f"BLIP DEGRADED: {summary['warnings'][-1]}")
+    elif failures:
+        summary["warnings"].append(f"{failures} employee query(s) failed but within tolerance.")
 
     # ── audit snapshot ──
     snap_path = Path(cfg.HR_SNAPSHOT_DIR) / f"blip_{_stamp()}.json"
-    _atomic_write_json(snap_path, {"summary": summary, "on_site": on_site})
-    _atomic_write_json(Path(cfg.HR_SNAPSHOT_DIR) / "blip_latest.json",
-                       {"summary": summary, "on_site": on_site})
+    # Every current employee's manager, by name, so the roll call can group
+    # people InVentry shows on site who are not clocked in on BrightHR.
+    managers = {" ".join(f"{e.get('first_name', '')} {e.get('surname', '')}".lower().split()):
+                e.get("manager_name", "") for e in emp_list if e.get("manager_name")}
+    snapshot = {"summary": summary, "on_site": on_site, "query_failed": query_failed,
+                "managers": managers}
+    _atomic_write_json(snap_path, snapshot)
+    _atomic_write_json(Path(cfg.HR_SNAPSHOT_DIR) / "blip_latest.json", snapshot)
 
     # ── browsable output for the COO ──
-    out_file = _write_output_file(on_site, summary)
+    out_file, out_error = _write_output_file(on_site, summary)
     if out_file:
         summary["output_file"] = out_file
+    if out_error:
+        # Visible in the portal and in hr_status.json, rather than a run that
+        # claims success with no file to show for it.
+        summary["warnings"].append(out_error)
+        summary["output_file_error"] = out_error
 
-    _log(f"BLIP ok: {len(on_site)} on site of {len(emp_list)} -> {snap_path}")
+    _log(f"BLIP {summary['status']}: {len(on_site)} on site of {len(emp_list)} "
+         f"({failures} query failure(s)) -> {snap_path}")
     return summary
 
 
 if __name__ == "__main__":
     try:
         s = run_blip()
-        sys.exit(0 if s["status"] == "ok" else 2)
+        sys.exit(0 if s["status"] in ("ok", "busy") else 2)
     except Exception as exc:
         _log(f"BLIP CRITICAL: {exc}")
         sys.exit(1)

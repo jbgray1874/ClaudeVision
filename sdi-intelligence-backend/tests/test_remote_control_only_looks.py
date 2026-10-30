@@ -1,0 +1,159 @@
+"""SDI Remote Control Intelligence: it looks, and that is all it does.
+
+"We need to set up a tunnel also for me to run these commands on the laptop and
+server from my phone." Most of what that meant was four read-only checks that
+cost a trip to the laptop all day: which commit is running, is the service up,
+can it reach the shares, and what does the log say.
+
+So it answers those four and is given no way to do anything else. An
+authenticated "run anything" route on the public address would be the
+highest-value target in the estate, and would undo the boundaries the rest of
+this service spends its time holding.
+
+The property that needed finding rather than designing: the access log carries
+OAuth authorization codes, because uvicorn records whole request lines and the
+private assistant's sign-in callback has code= in its query string. Serving a
+log tail without redaction would have published them.
+"""
+import ast
+import os
+import sys
+import unittest
+from pathlib import Path
+
+BACKEND = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BACKEND))
+
+import sdi_ops_routes as ops  # noqa: E402
+
+SOURCE = (BACKEND / "sdi_ops_routes.py").read_text(encoding="utf-8")
+PAGE = (BACKEND / "appportal" / "sdi-remote-control.html").read_text(encoding="utf-8")
+APP = (BACKEND / "app.py").read_text(encoding="utf-8")
+DEPLOY = (BACKEND / "deploy" / "Deploy-AMCRM.ps1").read_text(encoding="utf-8")
+
+
+class ItCannotActTests(unittest.TestCase):
+    def test_every_route_is_a_get(self):
+        verbs = {node.attr for node in ast.walk(ast.parse(SOURCE))
+                 if isinstance(node, ast.Attribute)
+                 and isinstance(node.value, ast.Name) and node.value.id == "router"}
+        self.assertEqual(verbs, {"get"}, f"a non-GET route exists: {verbs}")
+
+    def test_it_cannot_run_a_command_or_touch_a_service(self):
+        for forbidden in ("subprocess", "os.system", "popen", "sc.exe",
+                          "Restart-Service", "shutil", "os.remove", "rmtree"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, SOURCE)
+
+    def test_it_cannot_write_anything(self):
+        for writing in ("write_text", "write_bytes", '"w"', "'w'", "mkdir"):
+            with self.subTest(writing=writing):
+                self.assertNotIn(writing, SOURCE)
+
+    def test_the_caller_cannot_name_a_file(self):
+        """The log path is configuration. A caller supplies a line count and a
+        search term, and nothing that is a location."""
+        tree = ast.parse(SOURCE)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                names = {a.arg for a in node.args.args}
+                self.assertEqual(names & {"path", "file", "url", "cmd", "command"},
+                                 set(), f"{node.name} accepts a location")
+
+    def test_the_page_says_it_is_read_only(self):
+        self.assertIn("This page cannot restart anything", PAGE)
+        self.assertIn("Remote Desktop", PAGE)
+
+
+class TheLogIsRedactedTests(unittest.TestCase):
+    """Found in today's own log, not imagined."""
+
+    REAL = ('INFO:     10.0.0.5:58091 - "GET /api/private-email/auth/callback'
+            '?code=1.ARAAklm08JRCIkma1YKZ7-D1f8ygfyb3OMJMmi1-zENq0jsAAJAQAA.BQAB'
+            '&client_info=eyJ1aWQiOiI1YWNmNmIzNy0xNDdmIn0&state=4cRJOPwm HTTP/1.1" 302 Found')
+
+    def test_an_authorization_code_never_leaves_the_machine(self):
+        out = ops.redact(self.REAL)
+        self.assertNotIn("1.ARAAklm08JRCIkma", out)
+        self.assertNotIn("code=", out)
+        self.assertNotIn("eyJ1aWQiOi", out)
+        # Still useful: the path, the verb and the outcome survive.
+        self.assertIn("/api/private-email/auth/callback", out)
+        self.assertIn("302 Found", out)
+
+    def test_named_secrets_are_removed_wherever_they_appear(self):
+        # ── THE EXAMPLES ARE MADE UP, AND THAT IS NOT FUSSINESS ──────────────
+        # The first draft of this test used the REAL client secret, copied from
+        # where it should never have been either. GitHub's push protection
+        # refused the commit and was right to. A test about not leaking secrets
+        # is the last place to paste one.
+        invented = "NOT-A-REAL-SECRET-0000000000000000000000"
+        for line in (f"client_secret: {invented}",
+                     "token=abc123def456", "PASSWORD: hunter2hunter2",
+                     "sig=deadbeef"):
+            with self.subTest(line=line):
+                out = ops.redact(line)
+                self.assertIn("[removed]", out)
+                self.assertNotIn("hunter2hunter2", out)
+                self.assertNotIn(invented, out)
+
+    def test_a_long_token_shaped_string_goes_even_unnamed(self):
+        out = ops.redact("bearer " + "A" * 60)
+        self.assertNotIn("A" * 60, out)
+
+    def test_an_ordinary_line_is_left_alone(self):
+        plain = "[private-email] no usable session: the sign-in has expired."
+        self.assertEqual(ops.redact(plain), plain)
+
+    def test_redaction_happens_on_the_server_not_in_the_page(self):
+        self.assertIn("redact(l)", SOURCE)
+        self.assertNotIn("redact", PAGE)
+
+
+class NamedPeopleTests(unittest.TestCase):
+    def test_access_is_by_object_id_and_never_a_shared_key(self):
+        gate = SOURCE.split("def allowed(", 1)[1].split("def log_path", 1)[0]
+        self.assertIn("SDI_OPS_OIDS", gate)
+        self.assertNotIn("x_sdi_key", gate)
+        self.assertNotIn("API_KEY", gate)
+
+    def test_nobody_named_means_nobody_in(self):
+        os.environ.pop("SDI_OPS_OIDS", None)
+        self.assertFalse(ops.allowed(object()))
+
+    def test_every_route_is_gated(self):
+        for handler in ("def console(", "def status(", "def health(", "def tail("):
+            with self.subTest(handler=handler):
+                self.assertIn("who(request)", SOURCE.split(handler, 1)[1][:200])
+
+    def test_it_is_mounted_only_when_switched_on(self):
+        self.assertIn('env.get("SDI_OPS_ENABLED", "").lower() != "yes"', SOURCE)
+        self.assertIn("install_ops(app)", APP)
+        self.assertIn('"/api/ops"', APP)
+
+
+class SettingsAreNamedNotShownTests(unittest.TestCase):
+    def test_status_reports_whether_a_setting_is_set_not_its_value(self):
+        status = SOURCE.split("def status(", 1)[1].split("@router.get", 1)[0]
+        self.assertIn('bool((os.getenv(name) or "").strip())', status)
+        # No os.getenv result reaches the response as a value.
+        self.assertNotIn('os.getenv(name)}', status)
+        self.assertIn("never their values", status)
+
+    def test_the_secret_settings_are_among_those_only_named(self):
+        self.assertIn('"SDI_API_KEY"', SOURCE)
+        self.assertNotIn("SDI_PRIVATE_CLIENT_SECRET", PAGE)
+
+
+class ItReachesTheServerTests(unittest.TestCase):
+    def test_the_module_and_the_page_are_on_the_deploy(self):
+        for name in ("sdi_ops_routes.py", "appportal/sdi-remote-control.html"):
+            with self.subTest(file=name):
+                self.assertIn(f'"{name}"', DEPLOY)
+
+    def test_the_page_is_checked_for_at_startup(self):
+        self.assertIn("must be deployed with the code", SOURCE)
+
+
+if __name__ == "__main__":
+    unittest.main()
