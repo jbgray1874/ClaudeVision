@@ -5318,6 +5318,11 @@ def _blank_turned_to_fit(part: Dict[str, Any], material: Any,
     return bw, bl
 
 
+# Blank sources that no drawing printed: the vision read's sighted figure and the brief's stated
+# one. Neither may be passed off as a printed overall (D-598z).
+_UNPRINTED_BLANK_SOURCES = frozenset({"vision_concept", "enquiry_brief"})
+
+
 def _blank_that_could_have_been_cut(
     part: Dict[str, Any],
     blank_length: Optional[float],
@@ -5529,6 +5534,20 @@ def _blank_that_could_have_been_cut(
         developed_length_mm=part.get("developed_length_mm"),
         bbox_mm=_bbox_raw,
     )
+    # A SIZE NOTHING PRINTED IS NOT A PRINTED OVERALL (D-598z). With no overall printed, the
+    # rule above is handed the recorded blank itself; where that blank was sighted by the
+    # vision read or stated in the brief, it came back as pdf_overall_dims, "the detail's
+    # printed overall", ranked 65 where the read's own figure ranks 20. The HPP column's
+    # 1884 x 1580 is pi x 600 worked by the read, and no sheet prints it. It is kept as the
+    # figure it is, under its own source, with the reason it was questioned.
+    if (_inf.get("usable") and not (_orig_overall_l and _orig_overall_w)
+            and str(_blank_src or "").strip().lower() in _UNPRINTED_BLANK_SOURCES):
+        from source_precedence import display_name as _src_name
+        _inf = dict(_inf, source=str(_blank_src).strip().lower(), reason=(
+            f"{verdict['reason']}; kept as {_src_name(_blank_src)}: "
+            f"{_inf['blank_length_mm']:g} x {_inf['blank_width_mm']:g} x "
+            f"{_safe_thickness_mm(part):g} mm — no drawing prints this size, confirm before "
+            f"a firm quote"))
     if _inf.get("usable"):
         part["blank_length_mm"] = _inf["blank_length_mm"]
         part["blank_width_mm"] = _inf["blank_width_mm"]
@@ -5537,8 +5556,10 @@ def _blank_that_could_have_been_cut(
         part["geometry_source"] = _inf["source"]
         part["blank_is_inferred"] = True
         part["blank_inferred_reason"] = _inf["reason"]
-        if "blank_inferred_from_drawing_overalls" not in _flags:
-            _flags.append("blank_inferred_from_drawing_overalls")
+        _flag = ("blank_inferred_from_drawing_overalls" if _inf["source"] == "pdf_overall_dims"
+                 else "blank_kept_from_an_unprinted_size")
+        if _flag not in _flags:
+            _flags.append(_flag)
         print(f"   [blank] {_pn}: {_inf['reason']} "
               f"({_inf['blank_length_mm']:g} x {_inf['blank_width_mm']:g} mm).", flush=True)
         return _inf["blank_length_mm"], _inf["blank_width_mm"]
