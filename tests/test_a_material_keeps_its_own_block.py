@@ -8,7 +8,9 @@ or a material nobody holds a rate for, and charging it at the one mild-steel £/
 
 These tests run the real workbook writer on a template fixture: the estimating template is
 not in the repo, so the fixture carries the block labels and totals formula the writer
-reads, at the template's own rows. Each part's charged cells are read back from the book.
+reads, at the template's own rows. Each part's workbook INPUT cells are read back from the
+book: the block it lands in, its price, its sheet price. The charges Excel recalculates from
+them are not tested here; that needs a checked replay on the laptop.
 """
 from __future__ import annotations
 
@@ -130,7 +132,7 @@ def _cell(book, pn, block_key, col_key):
     return book["ws"].cell(r, wb_populate.CELL_MAP[block_key][col_key]).value
 
 
-# ── the reviewer's four cases, read back from the charged cells ───────────────────
+# ── the reviewer's four cases, read back from the workbook's input cells ──────────
 
 def test_a_timber_batten_is_charged_as_timber(book):
     assert _block(book, "TIMBER-BATTEN") == "bom"
@@ -221,3 +223,29 @@ def test_density_follows_the_key_the_price_resolves_to():
     assert estimator._density_for_material("Aluminium, 3mm") == 2700
     assert estimator._density_for_material("ALUMINIUM") == 2700
     assert estimator._density_for_material("GLASS") is None
+
+
+# ── D-602a: a named material with no density is not weighed as steel ──────────────
+
+def test_a_named_sheet_material_with_no_density_is_not_weighed_as_steel():
+    p = _sheet_part("P-TI", "TITANIUM")
+    got = estimator.estimate_material(p)
+    assert got["unit_material_mass_kg"] is None and got["unit_material_cost_gbp"] is None
+    assert "density" in (got.get("unpriced_inputs") or [])
+    ask = [f for f in p.get("review_flags", []) if "NOT weighed as steel" in f]
+    assert ask and "Confirm the material" in ask[0]
+
+
+def test_a_named_section_with_no_density_is_not_weighed_or_priced_as_steel():
+    p = _concept_part("COPPER BAR", "flat_bar", [50, 10], "COPPER")
+    got = estimator.estimate_material(p)
+    assert got["unit_material_mass_kg"] is None, "not 3.9 kg of steel"
+    assert got["unit_material_cost_gbp"] is None, "not the steel section trade rate"
+    assert any("NOT weighed as steel" in f for f in p.get("review_flags", []))
+
+
+def test_a_section_whose_material_has_a_density_is_weighed_as_before():
+    p = _concept_part("PVC STRIP", "flat_bar", [50, 10], "PVC")
+    got = estimator.estimate_material(p)
+    assert 0.3 < got["unit_material_mass_kg"] < 0.5, "600 x 50 x 10 PVC at 1400 kg/m3"
+    assert not any("NOT weighed as steel" in f for f in p.get("review_flags", []))
