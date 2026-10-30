@@ -346,6 +346,7 @@ class ExcelStore:
             drive_id, item_id = self._located
             return {"base": f"{GRAPH}/drives/{drive_id}/items/{item_id}/workbook",
                     "sheets": [self.sheet or self._chosen_sheet],
+                    "remembered_sheet": not self.sheet,
                     "version": "", "modified": "", "light": True}, None
         site_id = self._site_id
         if not site_id:
@@ -386,7 +387,23 @@ class ExcelStore:
 
         base = f"{GRAPH}/drives/{drive_id}/items/{meta.get('id')}/workbook"
 
-        names = [self.sheet] if self.sheet else []
+        # ── THE SHEET'S NAME, WHEN WE ALREADY KNOW IT ─────────────────────────
+        # Listing the worksheets is an EXCEL ONLINE call, and a sessionless one
+        # makes Microsoft open the workbook before it can answer - for Nick's
+        # 913-row tracker, seconds. With SDI_VOICECRM_SHEET unset, as it is on
+        # the server, it ran on EVERY lookup, including the ones then answered
+        # from the cache. On 30 October the "nothing has changed" path took 8.5
+        # seconds, almost all of it Microsoft opening a workbook to tell us
+        # sheet names we already had.
+        #
+        # So: the configured sheet; else the one the headings were found on last
+        # time; and only when neither is known, ask. If the remembered sheet
+        # has gone or no longer holds the headings, _load forgets it and asks.
+        #
+        # The tests had always run with the sheet CONFIGURED, which skips this
+        # call - so the slow path was the one place they never went.
+        known = self.sheet or self._chosen_sheet
+        names = [known] if known else []
         if not names:
             ws = client.get(f"{base}/worksheets", params={"$select": "name"}, headers=headers)
             if ws.status_code != 200:
@@ -402,6 +419,7 @@ class ExcelStore:
         version = str(meta.get("eTag") or meta.get("cTag") or "") \
             + "|" + str(meta.get("lastModifiedDateTime") or "")
         return {"base": base, "sheets": names, "version": version.strip("|"),
+                "remembered_sheet": bool(known) and not self.sheet,
                 "modified": meta.get("lastModifiedDateTime", "")}, None
 
     def _find_by_name(self, client: httpx.Client, headers: dict, site_id: str,
@@ -589,6 +607,16 @@ class ExcelStore:
             if fallback is None:
                 fallback = {**wb, "sheet": name, "used": used, "hdr": off,
                             "headers": headers, "found": False}
+        if wb.get("remembered_sheet"):
+            # The sheet remembered from last time no longer holds the headings,
+            # or no longer exists - a tab renamed, reordered, or the data moved.
+            # It was only ever a shortcut, so drop it and look through the
+            # whole workbook once, rather than answer from the wrong tab.
+            print("[voicecrm.excel] the remembered worksheet no longer holds the "
+                  "tracker's headings; looking through the workbook again", flush=True)
+            self._chosen_sheet = None
+            return self._load(client, token, with_formulas=with_formulas,
+                              may_reuse=may_reuse, light=False)
         if fallback:
             self._chosen_sheet = fallback["sheet"]
             return self._remember(fallback), None
@@ -923,9 +951,20 @@ class ExcelStore:
         the read-back untrustworthy, and `_verify` then declines to call a mismatch a
         failure rather than risk repeating that.
         """
+        # ── ONE SESSION PER PERSON, NEVER SHARED ─────────────────────────────────
+        # There was one session for the whole service, reused by whoever wrote
+        # next within SESSION_SECONDS. With one writer that was harmless. On 30
+        # October five people were given write access, and Andy's change could
+        # then be sent through a session Nick had opened: Microsoft either
+        # refuses it (a wasted round trip and a retry) or accepts it, and an
+        # edit is made inside somebody else's session - which is not a question
+        # this app should leave to Microsoft to answer. So a session is reused
+        # only by the token that opened it. A hash, so no token is kept here.
+        who = hashlib.sha256(str(token).encode("utf-8")).hexdigest()[:24]
         with self._seen_lock:
             held = self._live_session
-        if held and held["base"] == wb["base"] and time.monotonic() < held["until"]:
+        if (held and held["base"] == wb["base"] and held.get("who") == who
+                and time.monotonic() < held["until"]):
             return held["id"]
         try:
             res = client.post(f"{wb['base']}/createSession",
@@ -937,7 +976,7 @@ class ExcelStore:
                 if made:
                     with self._seen_lock:
                         self._live_session = {
-                            "id": made, "base": wb["base"],
+                            "id": made, "base": wb["base"], "who": who,
                             "until": time.monotonic() + self.SESSION_SECONDS}
                 return made
             print(f"[voicecrm.excel] no workbook session ({res.status_code} "
