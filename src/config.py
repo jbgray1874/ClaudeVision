@@ -2607,6 +2607,11 @@ READ_OPERATION_CHARGED_BY = {
     "powder_coating": ("powder_coating", "oven"),
     "wet_spray": ("wet_spray",),
     "welding": ("welding", "spot_welding", "resistance_welding"),
+    # THE READ SAYS ROLLING; THE SHEET'S ROW IS ROLL (D-603). With no entry the ledger looked
+    # for a "rolling" row that no sheet has, so the HPP halo and guard rail read "no calculated
+    # row charges it" beside a £23.74 Roll row that charged both. Tube bending is a different
+    # machine and does not cover a rolled skin, so it is not in the family.
+    "rolling": ("rolling", "roll"),
     "assembly": ("assembly", "assembly_acrylic", "bench_work"),
     "bench_work": ("bench_work", "assembly", "assembly_acrylic"),
     # A POLISHING SEQUENCE IS CHARGED ONLY BY POLISHING. Brushing before plating is a

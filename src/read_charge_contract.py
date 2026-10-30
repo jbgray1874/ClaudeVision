@@ -1308,7 +1308,9 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                            "part": a.get("part") or "", "class": a["class"],
                            "minutes_per_product": a.get("minutes_per_product"),
                            "gbp_per_unit": a.get("gbp_per_unit"),
-                           "hours_at": a.get("hours_at"), "basis": a.get("basis")})
+                           "hours_at": a.get("hours_at"), "basis": a.get("basis"),
+                           "row": a.get("row"), "cell": a.get("cell"),
+                           "row_value_gbp": a.get("row_value_gbp")})
     for line in result["engine_lines"]:
         if line.get("holds"):
             issues.append({"code": "engine_line_unconfirmed", "item": f"line:{line['record']}",
@@ -1398,6 +1400,9 @@ def _allowances(summary: Mapping[str, Any], book: _Book, ledger: Mapping[str, An
                                  if minutes is not None else {}),
                     "rate_gbp_per_hour": rate, "gbp_per_unit": gbp,
                     "gbp_per_unit_on_sheet": l["value"] if dedicated else None,
+                    # THE ROW'S OWN CHARGE, whoever shares it (D-603): where the part records no
+                    # run minutes the finding names the row and its money, never "0 min".
+                    "row_value_gbp": l["value"],
                     "confirmed": (f"confirmed for this job by {book.decided_by}: "
                                   f"{ruling.get('reason')}" if confirmed else ""),
                     "holds": cls in holding and not confirmed})

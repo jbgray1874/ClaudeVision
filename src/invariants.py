@@ -2486,7 +2486,17 @@ def check_what_the_read_returned_is_accounted_for(summary: Any) -> List[Dict[str
             by_op.setdefault(str(i.get("item")), []).append(i)
     for item, group in by_op.items():
         op = item.split(":", 1)[-1]
-        minutes = round(sum(float(g.get("minutes_per_product") or 0) for g in group), 2)
+        # AN UNKNOWN IS NOT ZERO (D-603). The minutes come from the part's own run times; where
+        # none is recorded this said "roll, 0 min a unit" beside a Roll row charging £23.74.
+        # Then the finding names the sheet's row and its charge instead.
+        _known = [g for g in group if g.get("minutes_per_product") is not None]
+        minutes = round(sum(float(g.get("minutes_per_product") or 0) for g in _known), 2)
+        _rows = {(str(g.get("row") or ""), str(g.get("cell") or "")): g.get("row_value_gbp")
+                 for g in group if g.get("row")}
+        _on_sheet = "; ".join(
+            f"the sheet's {r} row" + (f" ({c})" if c else "")
+            + (f" charges £{float(v):.2f}" if isinstance(v, (int, float)) else "")
+            for (r, c), v in sorted(_rows.items()))
         hours: Dict[str, float] = {}
         for g in group:
             for q, h in (g.get("hours_at") or {}).items():
@@ -2497,9 +2507,11 @@ def check_what_the_read_returned_is_accounted_for(summary: Any) -> List[Dict[str
         gbp = round(sum(float(g.get("gbp_per_unit") or 0) for g in group), 2)
         out.append(_violation(
             "engine_allowance_unconfirmed", BLOCKING,
-            f"Engine allowance not confirmed for this job: {op.replace('_', ' ')}, {minutes:g} "
-            f"min a unit on {', '.join(parts) or 'the job'}"
+            f"Engine allowance not confirmed for this job: {op.replace('_', ' ')}, "
+            + (f"{minutes:g} min a unit" if _known else "run minutes not recorded on the part")
+            + f" on {', '.join(parts) or 'the job'}"
             + (f", £{gbp:.2f} a unit" if gbp else "") + (f" ({at})" if at else "")
+            + (f"; {_on_sheet}" if _on_sheet else "")
             + f". Basis: {group[0].get('basis')}. Confirm it for this job with the reason "
               f"(read_rulings 'allowance:{op}'), or take it off (operations_off).",
             target_id=(parts[0] if len(parts) == 1 else ""), identities=parts, operation=op,
