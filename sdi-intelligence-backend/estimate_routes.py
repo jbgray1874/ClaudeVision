@@ -1708,8 +1708,10 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
         raise HTTPException(400, "Client-document costing requires the LLM read method.")
     _ref_docs = [Path(str(f)).name for f in (req.reference_documents or [])
                  if str(f or "").strip()]
-    if _ref_docs and method != "llm":
-        raise HTTPException(400, "Reference/standards documents ride on the LLM read method.")
+    # A DECLARED REFERENCE DOCUMENT RIDES EVERY METHOD (D-599a, SCRUM-107). The engine holds a
+    # declared file out of every reader on any run (D-474) and gives its words to the vision
+    # read; refused here, an estimate of the HPP pack had to drop the screen maker's guide or
+    # read it as part of the product.
     if req.construction and method != "llm":
         raise HTTPException(400, "A member schedule rides on the LLM read method only.")
     if _ref_docs and req.files:

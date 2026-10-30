@@ -41,3 +41,23 @@ def test_the_fallback_reads_a_brief_filed_in_the_job_folder(tmp_path):
     text, where = concept_scan.find_brief([None, tmp_path])
     assert text.startswith("Customer: Pixel")
     assert where.endswith(concept_scan.BRIEF_FILENAME)
+
+
+# ── D-599a, SCRUM-107: a declared reference document rides an estimate too ─────────────────
+
+def test_the_service_takes_a_reference_declaration_on_every_method():
+    assert "Reference/standards documents ride on the LLM read method." not in ROUTES
+    assert 'if _ref_docs and method != "llm":' not in ROUTES
+
+
+def test_the_estimate_button_sends_the_ticked_reference_documents():
+    engine = PAGE[PAGE.index("runBtn.onclick"):PAGE.index('api("/api/estimate",{method:"POST"')]
+    assert "reference_documents: refDocs.size ? [...refDocs] : null" in engine
+
+
+def test_the_engine_holds_a_declared_file_out_of_the_readers_on_any_run():
+    scan = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    i = scan.index("_ref_names = set(_cs_ref.reference_documents_declared([job_folder]))")
+    held = scan[i:i + 900]
+    assert "reference_pdfs, pdfs = _held, _product_pdfs" in held
+    assert "SDI_LLM_ONLY" not in held[:held.index("reference_pdfs, pdfs")]

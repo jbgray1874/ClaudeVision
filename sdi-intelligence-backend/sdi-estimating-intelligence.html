@@ -3268,6 +3268,9 @@ runBtn.onclick = async () => {
     // THE ENQUIRY BRIEF (D-598y): filed with every run, read only if the run falls back to
     // the vision read because no reader could read the drawings.
     enquiry_brief: (document.getElementById("enquiryBrief").value || "").trim() || null,
+    // A TICKED REFERENCE DOCUMENT (D-599a): held out of every reader; its words reach the
+    // vision read as the customer's requirements.
+    reference_documents: refDocs.size ? [...refDocs] : null,
     // THE DELIVERY DECLARATION (D-524): the checkbox and postcode above. Always sent — the
     // ticked default keeps today's pricing; unticked is the deliberate £0; the postcode is
     // the future per-mile calculator's destination.
