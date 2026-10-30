@@ -36,10 +36,10 @@ def test_the_box_no_longer_says_llm_read_only():
 
 def test_the_fallback_reads_a_brief_filed_in_the_job_folder(tmp_path):
     import concept_scan
-    (tmp_path / concept_scan.BRIEF_FILENAME).write_text("Customer: Pixel. 1 unit.\n",
+    (tmp_path / concept_scan.BRIEF_FILENAME).write_text("Customer: Example Ltd. 1 unit.\n",
                                                        encoding="utf-8")
     text, where = concept_scan.find_brief([None, tmp_path])
-    assert text.startswith("Customer: Pixel")
+    assert text.startswith("Customer: Example Ltd")
     assert where.endswith(concept_scan.BRIEF_FILENAME)
 
 

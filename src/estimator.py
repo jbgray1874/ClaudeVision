@@ -5318,6 +5318,10 @@ def _blank_turned_to_fit(part: Dict[str, Any], material: Any,
     return bw, bl
 
 
+# Words that make a material a metal, for the rules that only hold for metal section (D-599c).
+_METAL_WORDS = ("STEEL", "ALUMIN", "ZINTEC", "GALV", "BRASS", "COPPER", "IRON", "ZINC", "STAINLESS")
+
+
 # Blank sources that no drawing printed: the vision read's sighted figure and the brief's stated
 # one. Neither may be passed off as a printed overall (D-598z).
 _UNPRINTED_BLANK_SOURCES = frozenset({"vision_concept", "enquiry_brief"})
@@ -6895,7 +6899,12 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         # drawings the deterministic reader sometimes tags a tube 'TIMBER' off a nearby spec note,
         # which mis-costs it ~13x (timber density + rate vs steel). With a real a×b×t profile in
         # hand, coerce a non-metal material to mild steel so mass and £/kg are right.
-        if side_a_mm and side_b_mm and wall_t_mm and str(material or "").upper().replace("_", " ") in (
+        # ONLY A HOLLOW SECTION (D-599c). A solid bar's "wall" is its whole thickness: the HPP
+        # fixture's 600 x 50 x 38 timber blocking came in as a flat bar with t = 38, was forced
+        # to steel here, and was priced at 8.9 kg of steel section, GBP 67.85 a piece.
+        _hollow = bool(side_a_mm and side_b_mm and wall_t_mm
+                       and 2 * wall_t_mm < min(side_a_mm, side_b_mm))
+        if _hollow and str(material or "").upper().replace("_", " ") in (
                 "TIMBER", "WOOD", "MDF", "PLYWOOD", "SOFTWOOD", "OAK", "MDF / OAK VENEER"):
             part.setdefault("review_flags", []).append(
                 f"material '{material}' overridden to MILD STEEL — part is a "
@@ -7092,6 +7101,9 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             _sec_rate = getattr(config, "SECTION_STOCK_PRICE_GBP_PER_KG", None)
             if isinstance(_sec_rate, dict):
                 _sec_rate = _sec_rate.get(str(material or "").upper())
+            # THE TRADE RATE IS FOR METAL SECTION (D-599c): a timber batten keeps its own rate.
+            if not any(_m in str(material or "").upper() for _m in _METAL_WORDS):
+                _sec_rate = None
             _sec_rate = _safe_float(_sec_rate)
             if _sec_rate and _sec_rate > 0:
                 price_per_kg = _sec_rate
