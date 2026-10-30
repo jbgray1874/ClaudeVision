@@ -693,6 +693,7 @@ The real load needs one fresh extract of everything, on one day.
 | Product-supplier links for products not in the product file | 575 products (106 bought in 2026; products_bought_2026_not_loaded.sql has their grades) | not loaded | Follows the OLD products decision |
 | Alternative suppliers | 3,150 | not loaded: the template has no priority column | Ethan: a PIO column |
 | VAT numbers missing | 221 accounts: 194 suppliers (185 dummy numbers removed), 27 customers | `VAT_numbers_needed.xlsx` (out_sue), with a column for the correct number | **Push back on the users / Finance for the real numbers** (27 Oct). Don't load dummies again |
+| Products with no standard cost (YITC) | 6,902 of 16,499: 3,522 bought (RAWML / FGSL), 3,380 made (FGML / PHANT). 860 hold stock (£1.86m at lot cost). E.g. FIXING49, FIXING29, FIXING2685, FIXING443, PLASCOAT002, PLASCOAT004 (30 Oct) | YITC has only 9,597 costs: the cost source covered only products with an Access cost | A cost is available for 2,689 bought products: the stock lot cost (655) or the last purchase price (2,034). 833 bought products have none. Made products: ask Marc whether X3 rolls their cost up from BOM and route |
 | Rows held in Track 2 | 33 shared product codes, 12 BOM lines, 71 route lines, 28 costs | V8_track2_report.xlsx | SDI decisions below |
 
 **Waiting on Marc:** whether October is open in UAT; the go-live date; carriage as lines or
