@@ -157,6 +157,9 @@ def status(request: Request, user: dict = Depends(auth.require_user)):
     """What is wired up and what is not — used by the app screen to explain itself."""
     user = auth.current_user(request)
     return {**_status_payload(), "sso_enabled": auth.sso_applies(request),
+            # The person's own view. _status_payload() says SDI_VOICECRM_OWNER,
+            # which told Kayleigh "Owner = NG" on her own screen.
+            "owner_filter": owner_for(user),
             "writes_enabled": WRITE_ENABLED and _may_write(user or {}),
             # ── TWO DIFFERENT REASONS, AND THEY NEEDED TELLING APART ────────
             # The page had only writes_enabled, so it explained every
@@ -489,8 +492,31 @@ def _fetch_item(token: str, item_id: str) -> tuple[dict | None, dict | None]:
         return None, {"state": "unreachable", "detail": f"Could not reach Microsoft Graph: {exc}"}
 
 
-def _owner_ok(fields: dict) -> bool:
-    return not OWNER or str(fields.get(OWNER_FIELD, "")).strip().upper() == OWNER.upper()
+def _row_is_theirs(fields: dict, owner: str | None) -> bool:
+    """Is this row inside `owner`'s view of the tracker?
+
+    None is nobody's view - an unmapped person - so nothing is. "*" is the
+    whole sheet. An empty owner is the old "no filter configured" case.
+    """
+    if owner is None:
+        return False
+    if not owner or owner == ALL_RECORDS:
+        return True
+    return str(fields.get(OWNER_FIELD, "")).strip().upper() == owner.upper()
+
+
+def _owner_ok(fields: dict, user: dict | None) -> bool:
+    """May THIS person change THIS row?
+
+    ── IT ASKED ABOUT THE SERVICE, NOT THE PERSON ──────────────────────────
+    This compared the row with SDI_VOICECRM_OWNER - "NG" for everybody - long
+    after the record list had become per person. So on 30 October Andy, a
+    writer, would have been refused a change to any row that was not Nick's:
+    "That record's AM Owner is not NG". The check is enforced here rather
+    than by the list the person was shown, because an item id comes from the
+    caller; it now asks the same question the list does.
+    """
+    return _row_is_theirs(fields, owner_for(user))
 
 
 def _project_ref(fields: dict) -> str:
@@ -574,10 +600,13 @@ def propose_change(user: dict, get_token, item_id: str, field: str, new_value: s
         return err
 
     fields = item.get("fields", {}) or {}
-    if not _owner_ok(fields):
+    if not _owner_ok(fields, user):
         # The owner check is enforced here, not by the view the records came from.
+        mine = owner_for(user)
         return {"state": "not_your_record",
-                "detail": f"That record's {OWNER_FIELD} is not {OWNER}."}
+                "detail": (f"That record is not one of yours to change "
+                           f"({OWNER_FIELD} is not {mine})." if mine else
+                           "Your account is not mapped to any records in the tracker.")}
     if field not in fields:
         return {"state": "field_not_editable", "field": field,
                 "detail": f"There is no column called {field} in the tracker."}
@@ -677,7 +706,7 @@ def confirm_change(user: dict, get_token, proposal_id: str, confirmed: bool) -> 
         return err
 
     fields = item.get("fields", {}) or {}
-    if not _owner_ok(fields):
+    if not _owner_ok(fields, user):
         _journal.finish(proposal_id, "failed", "Owner changed since the proposal.")
         return {"state": "not_your_record", "detail": "That record is no longer yours."}
 
@@ -1281,8 +1310,25 @@ def _interpret_events(body: InterpretIn, user: dict):
 # limited to the pilot writers. See morning_review.py.
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _review_for(request: Request) -> tuple[dict | None, dict | None]:
+def _first_name(user: dict | None) -> str:
+    return str((user or {}).get("name") or "").split(" ")[0] or "there"
+
+
+def _review_for(request: Request, user: dict | None) -> tuple[dict | None, dict | None]:
+    """Today's review, for THIS person's view of the tracker.
+
+    ── IT WAS NICK'S, WHOEVER ASKED ────────────────────────────────────────
+    This built the review for SDI_VOICECRM_OWNER - "NG" - for everybody, and
+    compared it with the 07:50 job's snapshot, which is also Nick's. So Matt
+    pressing "Show today's review" read Nick's slice of the sheet, greeted as
+    Nick. It is now built for the person's own view ("*" being the whole
+    team's sheet), against their own last review, in their name.
+    """
     import morning_review
+    owner = owner_for(user)
+    if owner is None:
+        return None, {"state": "no_owner",
+                      "detail": "Your account is not mapped to any records in the tracker."}
     if not EXCEL:
         return None, {"state": "not_excel", "detail": "The review reads the Excel tracker."}
     if not auth.sso_applies(request):
@@ -1295,20 +1341,23 @@ def _review_for(request: Request) -> tuple[dict | None, dict | None]:
     if data.get("state") != "ok":
         return None, data
     return morning_review.compose([i["fields"] for i in data["items"]], data.get("headers", []),
-                                  OWNER_FIELD, OWNER or "NG"), None
+                                  OWNER_FIELD, owner, first_name=_first_name(user)), None
 
 
 @router.get("/api/voicecrm/review")
 def review_preview(request: Request, user: dict = Depends(auth.require_user)):
     """Today's morning review, built now from the sheet. Nothing is sent or saved."""
     import morning_review
-    composed, err = _review_for(request)
+    composed, err = _review_for(request, user)
     if err:
         return err
     r = composed["review"]
     return {"state": "ok", "counts": r["counts"], "previous_date": r["previous_date"],
             "subject": composed["email"]["subject"], "text": composed["email"]["text"],
-            "html": composed["email"]["html"], "recipients": morning_review.recipients(),
+            "html": composed["email"]["html"],
+            # Where "Email it now" sends it: the person pressing it. It used to
+            # name SDI_REVIEW_TO - Nick and James - whoever was looking.
+            "recipients": [a for a in [str((user or {}).get("email") or "")] if "@" in a],
             "can_send": _may_write(user)}
 
 
@@ -1326,30 +1375,95 @@ def briefing(request: Request, user: dict = Depends(auth.require_user)):
     token = auth.graph_token(request)
     if not token:
         return {"state": "no_token", "detail": "No Microsoft Graph token for this session."}
+    # ── WHOSE BRIEFING ───────────────────────────────────────────────────────
+    # It greeted the person by name and then read them NICK's slice of the
+    # sheet: filtered to SDI_VOICECRM_OWNER, compared with Nick's snapshot, and
+    # with every change saved by anybody in the last day. "Good morning Matt"
+    # followed by somebody else's pipeline, in a voice that sounds personal.
+    # Now all three come from the person's own view - for Andy and Matt, the
+    # whole team's sheet.
+    owner = owner_for(user)
+    if owner is None:
+        return {"state": "no_owner",
+                "detail": "Your account is not mapped to any records in the tracker."}
     data = EXCEL.rows(token)
     if data.get("state") != "ok":
         return data
     today = date.today()
     review = morning_review.build_review([i["fields"] for i in data["items"]],
-                                         data.get("headers", []), OWNER_FIELD, OWNER or "NG",
-                                         today, morning_review.last_snapshot(today))
-    changes = _journal.applied_since(time.time() - 24 * 3600)
-    first = str((user or {}).get("name") or "").split(" ")[0] or "there"
-    return {"state": "ok", "say": morning_review.spoken_briefing(review, changes, first),
+                                         data.get("headers", []), OWNER_FIELD, owner,
+                                         today, morning_review.last_snapshot(today, owner))
+    changes = _changes_in_view(owner, data["items"], user, time.time() - 24 * 3600)
+    return {"state": "ok",
+            "say": morning_review.spoken_briefing(review, changes, _first_name(user)),
             "changes": len(changes), "counts": review["counts"]}
+
+
+def _changes_in_view(owner: str, items: list, user: dict | None, since: float) -> list[dict]:
+    """Changes saved through the app since `since`, to records inside this
+    person's view.
+
+    Matched on the record's NAME, not only its row id: ids are sheet row
+    numbers, so a row inserted above would shift them and read one person's
+    change out to another. A person's own change to a row in their view is
+    always included, so editing a record's description does not hide it.
+    For "*" - the whole sheet - every change counts.
+    """
+    changes = _journal.applied_since(since)
+    if owner == ALL_RECORDS or not owner:
+        return changes
+    mine = {i["id"]: _project_ref(i.get("fields") or {}) for i in items
+            if _row_is_theirs(i.get("fields") or {}, owner)}
+    names = {ref for ref in mine.values() if ref}
+    oid = str((user or {}).get("oid") or "")
+    return [c for c in changes
+            if (c.get("project_ref") and c["project_ref"] in names)
+            or (oid and c.get("user_oid") == oid and c.get("item_id") in mine)]
+
+
+def _mailbox_for(request: Request, user: dict | None) -> str:
+    """The address THIS person's mail actually arrives at.
+
+    Not necessarily their sign-in name: Nick signs in as @sdidisplays.co.uk and
+    his mailbox is @wearesdi.com. Mail sent to a sign-in name that is not also
+    an address is accepted by Graph and then bounces, so "sent" would be
+    reported for an email nobody received. Graph is asked, as them, for their
+    own mailbox; the sign-in name is used only if it cannot say.
+    """
+    fallback = str((user or {}).get("email") or "")
+    token = auth.graph_token(request)
+    if not token:
+        return fallback
+    try:
+        res = httpx.get(f"{GRAPH}/me", params={"$select": "mail,userPrincipalName"},
+                        headers={"Authorization": f"Bearer {token}"}, timeout=10)
+        if res.status_code == 200:
+            return str(res.json().get("mail") or "") or fallback
+    except httpx.HTTPError:
+        pass
+    return fallback
 
 
 @router.post("/api/voicecrm/review/send")
 def review_send(request: Request, user: dict = Depends(auth.require_user)):
-    """Build the review now and email it to SDI_REVIEW_TO. Pilot writers only."""
+    """Build THIS person's review now and email it to THEM. Pilot writers only.
+
+    ── IT WENT TO NICK AND JAMES, WHOEVER PRESSED IT ───────────────────────
+    It used to send to SDI_REVIEW_TO - the 07:50 list - so once reviews became
+    per person, Andy pressing "Email it now" would have mailed Andy's review
+    to Nick and James. The user guide has always said "Email it now sends it
+    to you"; now it does. The scheduled 07:50 email is unchanged.
+    """
     import morning_review
     if not _may_write(user):
         return {"state": "not_a_writer", "detail": "Only the pilot's named people can send the review."}
-    if not morning_review.recipients():
-        return {"state": "no_recipients", "detail": "SDI_REVIEW_TO is empty in the service .env."}
-    composed, err = _review_for(request)
+    composed, err = _review_for(request, user)
     if err:
         return err
-    result = morning_review.send(composed)
+    to = _mailbox_for(request, user)
+    if "@" not in to:
+        return {"state": "no_recipients",
+                "detail": "Could not tell which mailbox to send it to. Sign in again."}
+    result = morning_review.send(composed, to=[to])
     return {"state": "sent" if result.get("sent") else "not_sent", **result,
-            "subject": composed["email"]["subject"]}
+            "recipients": [to], "subject": composed["email"]["subject"]}

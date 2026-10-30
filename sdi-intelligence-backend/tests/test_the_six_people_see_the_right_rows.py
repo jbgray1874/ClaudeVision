@@ -25,7 +25,10 @@ sys.path.insert(0, str(BACKEND))
 
 import crm_owners                                                   # noqa: E402
 
-# What the laptop is told to write into .env, character for character.
+# Per-owner mapping, exercised with initials. The team's LIVE setting is
+# everyone on "*" (one team's sheet, 30 October) - that is run in
+# test_whoever_listens_hears_their_own_briefing.py. This file keeps the
+# initials case working for when a second sheet or team arrives.
 # Both of Nick's addresses: he signs in as @sdidisplays.co.uk (found by the
 # Entra audit on 30 October) and may have a second account on @wearesdi.com.
 # Ian Jones is PM on Nick's accounts and sees Nick's rows.
