@@ -25,23 +25,47 @@ def code() -> str:
     return "\n".join(l for l in body.splitlines() if not l.strip().startswith("#"))
 
 
+# The one Set-Mg command allowed, and the only way it may be called. It sets
+# how THIS laptop's Graph module signs in; it writes nothing to Entra.
+LOCAL_OPTION = "Set-MgGraphOption -DisableLoginByWAM $true"
+
+
 class ItOnlyReadsTests(unittest.TestCase):
     def test_it_asks_for_read_scopes_and_nothing_else(self):
-        connect = re.search(r"Connect-MgGraph\s+-Scopes\s+(.+?)`", code(), re.S)
-        self.assertIsNotNone(connect, "the Connect-MgGraph call has changed shape")
-        scopes = re.findall(r'"([A-Za-z.]+)"', connect.group(1))
+        declared = re.search(r"\$scopes\s*=\s*(.+)", code())
+        self.assertIsNotNone(declared, "the scope list has changed shape")
+        scopes = re.findall(r'"([A-Za-z.]+)"', declared.group(1))
         self.assertTrue(scopes)
         for scope in scopes:
             with self.subTest(scope=scope):
                 self.assertTrue(scope.endswith(".Read.All"),
                                 f"{scope} is not a read-only scope")
 
+    def test_every_sign_in_route_uses_that_one_list(self):
+        """There are two routes now - browser and device code. A second
+        literal scope list on either is how a ReadWrite slips in unseen."""
+        connects = re.findall(r"Connect-MgGraph[^\n]*", code())
+        self.assertGreaterEqual(len(connects), 2)
+        for line in connects:
+            with self.subTest(call=line.strip()[:60]):
+                self.assertIn("-Scopes $scopes", line)
+
     def test_it_calls_no_graph_command_that_changes_anything(self):
-        """Graph PowerShell names every write with a verb. None may appear."""
+        """Graph PowerShell names every write with a verb. None may appear -
+        apart from the one local sign-in preference, removed before checking
+        so that it cannot hide anything else."""
+        body = code().replace(LOCAL_OPTION, "")
         for verb in ("New-Mg", "Set-Mg", "Update-Mg", "Remove-Mg", "Add-Mg",
                      "Invoke-Mg", "Restore-Mg", "Grant-Mg", "Revoke-Mg"):
             with self.subTest(verb=verb):
-                self.assertNotIn(verb, code())
+                self.assertNotIn(verb, body)
+
+    def test_the_one_set_command_only_ever_switches_wam_off(self):
+        """Set-MgGraphOption can set other things. Here it may set exactly
+        one, to exactly one value."""
+        calls = re.findall(r"Set-MgGraphOption[^\n]*", code())
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0].startswith(LOCAL_OPTION))
 
     def test_it_does_not_touch_the_servers_settings(self):
         """It reads .env to compare. Writing it is Set-Setting's job, which
@@ -91,6 +115,22 @@ class ItChecksTheThingsThatFailSilentlyTests(unittest.TestCase):
 
     def test_it_catches_a_read_only_person_on_the_writers_list(self):
         self.assertIn("Is READ-ONLY but IS on the writers list", SCRIPT)
+
+    def test_wam_is_switched_off_before_anything_signs_in(self):
+        """── 30 OCTOBER ───────────────────────────────────────────────────
+        Signing in through Windows' Web Account Manager inside Windows
+        Terminal took the whole PowerShell process down - "process exited
+        with code 5", after the sign-in, with no output and nothing a
+        try/catch could see. It also offered to make the ADMIN account the
+        laptop's default sign-in for every app. Off first, then sign in.
+        """
+        body = code()
+        self.assertIn(LOCAL_OPTION, body)
+        self.assertLess(body.index(LOCAL_OPTION), body.index("Connect-MgGraph"))
+
+    def test_there_is_a_route_that_needs_no_browser_window_at_all(self):
+        self.assertIn("[switch]$DeviceCode", SCRIPT)
+        self.assertIn("-UseDeviceCode", code())
 
     def test_a_missing_module_is_explained_not_crashed_into(self):
         self.assertIn("Install-Module Microsoft.Graph", SCRIPT)
