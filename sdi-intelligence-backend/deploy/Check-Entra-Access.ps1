@@ -63,6 +63,14 @@ $ErrorActionPreference = "Continue"
 $remote  = "\\$Server\c$\ClaudeVision\sdi-intelligence-backend"
 $envPath = "$remote\.env"
 
+# ── EVERYTHING IS ALSO WRITTEN TO A FILE, AS IT HAPPENS ──────────────────────
+# Twice on 30 October this printed nothing anybody could paste: the sign-in
+# took the whole PowerShell process down and the window's output went with
+# it. A transcript is written as the script runs, so whatever it reached is
+# still on disk afterwards, and the last lines say where.
+$transcript = Join-Path $env:TEMP ("Check-Entra-Access-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".txt")
+try { Start-Transcript -Path $transcript -Force | Out-Null } catch { $transcript = "" }
+
 # ── Helpers. All defined before anything calls them: PowerShell resolves ─────
 # functions at RUNTIME, so one defined further down parses fine and then
 # throws "is not recognized" half way through the audit.
@@ -78,6 +86,15 @@ function Warn([string]$Text) { Write-Host "  [check] $Text" -ForegroundColor Yel
 function Say ([string]$Text, [string]$Colour = "Gray") { Write-Host "          $Text" -ForegroundColor $Colour }
 
 $script:Blockers = 0
+
+function Done([int]$Code) {
+    if ($transcript) {
+        try { Stop-Transcript | Out-Null } catch { }
+        Write-Host "  A copy of everything above is in: $transcript" -ForegroundColor DarkGray
+        Write-Host ""
+    }
+    exit $Code
+}
 function Block([string]$Text) { No $Text; $script:Blockers++ }
 
 # Where a service writes its log, read from the service's own configuration
@@ -172,6 +189,8 @@ foreach ($source in @(
         Warn "Could not find the $($source.Service) log - its users are not counted here."
         continue
     }
+    $mb = [math]::Round(((Get-Item -LiteralPath $log).Length / 1MB), 1)
+    Say "Reading the $($source.Service) log ($mb MB) - a large one takes a minute..."
     foreach ($hit in (Select-String -LiteralPath $log -Pattern $source.Pattern -ErrorAction SilentlyContinue)) {
         $who = $hit.Matches[0].Groups[1].Value.Trim().ToLower()
         if ($who -match "@") { $usedBy[$who] = $true }
@@ -195,7 +214,7 @@ if ($usedBy.Count -eq 0) {
 if ($ConfigOnly) {
     Head "Entra half skipped (-ConfigOnly)"
     Write-Host ""
-    exit ([int]($script:Blockers -gt 0))
+    Done ([int]($script:Blockers -gt 0))
 }
 
 # ── 2. Entra ─────────────────────────────────────────────────────────────────
@@ -209,7 +228,7 @@ if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Users)) {
     Say "Until then the Entra half is unchecked. Re-run with -ConfigOnly to" Yellow
     Say "audit just the server, or do section 4's manual steps." Yellow
     Write-Host ""
-    exit 2
+    Done 2
 }
 
 try {
@@ -229,12 +248,32 @@ try {
     # preference for the Graph module on THIS laptop only - nothing in Entra,
     # nothing on the server - and it persists, which is what you want for the
     # next run too. An older module without the option just carries on.
-    try { Set-MgGraphOption -DisableLoginByWAM $true -ErrorAction Stop } catch { }
+    #
+    # THE FIRST VERSION OF THIS LINE DID NOTHING. It used -DisableLoginByWAM,
+    # the module wanted -EnableLoginByWAM $false, the error was swallowed, and
+    # the 07:34 run still printed "WAM is enabled by default" and got through
+    # on luck. So both spellings are tried, it is recorded whether either
+    # worked - and if neither did, this does not go near WAM at all: it signs
+    # in with a code instead, which never opens a Windows sign-in window.
+    $wamOff = $false
+    try { Set-MgGraphOption -EnableLoginByWAM $false -ErrorAction Stop; $wamOff = $true } catch { }
+    if (-not $wamOff) {
+        try { Set-MgGraphOption -DisableLoginByWAM $true -ErrorAction Stop; $wamOff = $true } catch { }
+    }
+    # $useCode, never $DeviceCode: that is a [switch] parameter, and writing
+    # to a parameter's own name is the class of bug that broke Ship-It on 29
+    # October ($check shadowing [switch]$Check).
+    $useCode = $DeviceCode.IsPresent
+    if (-not $wamOff -and -not $useCode) {
+        Warn "This Graph module would not switch off the Windows sign-in (WAM),"
+        Say  "which is what crashed PowerShell. Signing in with a code instead." Yellow
+        $useCode = $true
+    }
 
     # READ-ONLY SCOPES. Nothing here creates, assigns or changes anything.
     # One list, used by both sign-in routes, so they cannot drift apart.
     $scopes = "User.Read.All", "Application.Read.All", "Directory.Read.All"
-    if ($DeviceCode) {
+    if ($useCode) {
         # For when the browser route is blocked too. Prints a code; you type
         # it at microsoft.com/devicelogin in any browser, on any device.
         Connect-MgGraph -Scopes $scopes -UseDeviceCode -NoWelcome -ErrorAction Stop
@@ -249,7 +288,7 @@ try {
     Block "Could not sign in to Entra: $($_.Exception.Message)"
     Say "You need an account that can READ users and applications." White
     Write-Host ""
-    exit 1
+    Done 1
 }
 
 # Which service principal does the portal use? Found by APPLICATION ID.
@@ -451,4 +490,4 @@ if ($script:Blockers -eq 0) {
 }
 Write-Host ("=" * 74) -ForegroundColor DarkGray
 Write-Host ""
-exit ([int]($script:Blockers -gt 0))
+Done ([int]($script:Blockers -gt 0))
