@@ -148,13 +148,22 @@ class ItChecksTheThingsThatFailSilentlyTests(unittest.TestCase):
         self.assertIn("$wamOff = $true", body)
         self.assertIn("if (-not $wamOff)", body)
 
-    def test_if_wam_cannot_be_switched_off_it_is_not_used_at_all(self):
-        """A sign-in code never opens a Windows sign-in window, so it cannot
-        take PowerShell down. If WAM stays on, that is the route taken."""
+    def test_code_sign_in_is_never_chosen_automatically(self):
+        """── THE SECOND FIX THAT WAS WRONG ────────────────────────────────
+        It fell back to code sign-in when WAM would not switch off. SDI's
+        Conditional Access blocks code sign-in for admin accounts - "You don't
+        have access to this ... an authentication flow that is restricted by
+        your admin" - so the fallback led straight into a wall. It is only
+        ever used when asked for by name.
+        """
         body = code()
-        branch = body.split("if (-not $wamOff -and -not $useCode)", 1)[1][:400]
-        self.assertIn("$useCode = $true", branch)
-        self.assertLess(body.index("$useCode = $true"), body.index("Connect-MgGraph"))
+        self.assertNotIn("$useCode = $true", body)
+        self.assertIn("$useCode = $DeviceCode.IsPresent", body)
+
+    def test_when_wam_stays_on_it_says_how_to_avoid_the_crash(self):
+        self.assertIn("plain", SCRIPT)
+        self.assertIn("Windows PowerShell window", SCRIPT)
+        self.assertIn("rather", SCRIPT)
 
     def test_the_output_survives_a_crash(self):
         """Twice it printed nothing anybody could paste."""

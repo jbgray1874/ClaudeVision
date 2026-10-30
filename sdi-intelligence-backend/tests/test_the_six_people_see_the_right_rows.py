@@ -36,7 +36,10 @@ SETTING = ("nick.garrish@sdidisplays.co.uk=NG,"
            "andy.baxter@wearesdi.com=AB,"
            "charlotte.blackwell@wearesdi.com=CB,"
            "matt.evans@wearesdi.com=ME,"
-           "james.gray@wearesdi.com=JG")
+           "james.gray@wearesdi.com=JG,"
+           "jack.calow@wearesdi.com=*,"
+           "muhammad.yazir@wearesdi.com=*,"
+           "yogesh.kumar@wearesdi.com=*")
 
 PEOPLE = {
     "Nick Garrish":       "Nick.Garrish@sdidisplays.co.uk",
@@ -355,6 +358,37 @@ class NickAndIanTests(unittest.TestCase):
                         "charlotte.blackwell@wearesdi.com", "matt.evans@wearesdi.com"):
             with self.subTest(address=address):
                 self.assertFalse(self.vc._may_write({"email": address}))
+
+
+class ReadOnlyToEverythingTests(unittest.TestCase):
+    """Jack Calow, Muhammad Yazir and Yogesh Kumar: "read only to everything",
+    30 October. They own no rows, so initials mean nothing for them - "*" gives
+    every row, and they are not on the writers list."""
+
+    @classmethod
+    def setUpClass(cls):
+        import os
+        os.environ["SDI_VOICECRM_WRITERS"] = WRITERS
+        cls.vc = load_voicecrm(SETTING)
+
+    THREE = ("jack.calow@wearesdi.com", "muhammad.yazir@wearesdi.com",
+             "yogesh.kumar@wearesdi.com")
+
+    def test_they_see_every_row(self):
+        for address in self.THREE:
+            with self.subTest(person=address):
+                out = self.vc.records_for("fake-token", self.vc.owner_for({"email": address}))
+                self.assertEqual(len(out["items"]), len(SHEET))
+
+    def test_they_cannot_change_anything(self):
+        for address in self.THREE:
+            with self.subTest(person=address):
+                self.assertFalse(self.vc._may_write({"email": address}))
+
+    def test_seeing_everything_did_not_widen_anyone_elses_view(self):
+        out = self.vc.records_for("fake-token",
+                                  self.vc.owner_for({"email": "kayleigh.thornhill@wearesdi.com"}))
+        self.assertEqual(accounts(out), ["Carrowbridge Leisure", "Milbourne Group"])
 
 
 if __name__ == "__main__":
