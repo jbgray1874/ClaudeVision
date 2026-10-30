@@ -389,6 +389,32 @@ def _json_default(value: Any) -> Any:
     return str(value)
 
 
+def _is_vector_path_list(value: Any) -> bool:
+    """A page's raw vector paths as PyMuPDF gives them: a list of dicts each with 'items'."""
+    return (isinstance(value, list) and bool(value) and isinstance(value[0], dict)
+            and "items" in value[0])
+
+
+def persisted_summary(value: Any) -> Any:
+    """The summary as the run's files save it: every page's raw vector paths become their count.
+
+    THE SAVED RUN KEEPS WHAT THE VECTORS MEASURED, NOT EVERY VECTOR (D-598x). An 18-page pack
+    printed to PDF with its lettering as outlines carries 4,600 to 28,000 paths a page; each
+    page's list was saved twice (the page's vision record, and again inside its analysis), so one
+    run wrote a 513 MB JSON, a 141 MB text file and a 990 MB SQL script, each copied again to the
+    archive. The readers measure the paths in memory during the run, and the geometry summary
+    keeps what they found; no reader of a saved run reads the raw paths. The run's own summary
+    is not changed: containers are rebuilt on the way down, and everything else is shared."""
+    if isinstance(value, dict):
+        return {k: ({"raw_vector_paths": len(v),
+                     "not_saved": "measured during the run; the geometry summary keeps the result"}
+                    if k == "drawings" and _is_vector_path_list(v) else persisted_summary(v))
+                for k, v in value.items()}
+    if isinstance(value, list):
+        return [persisted_summary(v) for v in value]
+    return value
+
+
 def _is_excluded_doc(path: Path) -> bool:
     """A7: True if the file is a non-part document (setup/route/MO sheet) that must
     never be ingested as a drawing. Driven by config so future patterns inherit."""
@@ -1808,6 +1834,8 @@ def _write_primary_outputs(
     variance_rows: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     failures: List[Dict[str, Any]] = []
+    # The files carry the saved form (D-598x); the run's own summary keeps its paths.
+    run_summary, summary = summary, persisted_summary(summary)
 
     try:
         with json_path.open("w", encoding="utf-8") as handle:
@@ -1936,6 +1964,9 @@ def _write_primary_outputs(
         write_postgres_insert_sql(summary, sql_path)
     except Exception as exc:
         failures.append({"stage": "write_sql", "error": str(exc)})
+    # The SQL writer files the variance rows it built on the summary it was given.
+    if "pricing_variance_rows" in summary and "pricing_variance_rows" not in run_summary:
+        run_summary["pricing_variance_rows"] = summary["pricing_variance_rows"]
 
     return failures
 

@@ -25,6 +25,9 @@ def client():
     pytest.importorskip("fastapi", reason="fastapi not installed")
     out = tempfile.mkdtemp()
     os.environ["SDI_FILE_ROOTS"] = out
+    # The app validates its origins at import; without one it refused, and the refusal
+    # was caught as a skip, so this page went untested on every machine (SCRUM-137).
+    os.environ.setdefault("SDI_ALLOWED_ORIGINS", "http://localhost")
     os.environ["SDI_ESTIMATE_OUTPUT_ROOT"] = out
     _clash = ("config", "estimate_routes", "app", "log_filters", "hr_routes")
     saved = {n: sys.modules.pop(n) for n in _clash if n in sys.modules}

@@ -1210,11 +1210,12 @@ def main() -> None:
                 _canon = (summary.get("saved_output_paths") or {}).get("json")
                 if _canon and Path(_canon).exists():
                     try:
-                        from file_scan import _json_default as _jd
+                        from file_scan import _json_default as _jd, persisted_summary as _saved
                     except Exception:
-                        _jd = str
+                        _jd, _saved = str, (lambda s: s)
+                    # The saved form, as the first write made it: vector counts, not paths (D-598x).
                     with open(_canon, "w", encoding="utf-8") as _fh_rw:
-                        json.dump(summary, _fh_rw, indent=2, ensure_ascii=False, default=_jd)
+                        json.dump(_saved(summary), _fh_rw, indent=2, ensure_ascii=False, default=_jd)
                     print(f"  Reconciled JSON re-written (material +\u00a3{_bought_in_total:.2f}, labour +\u00a3{_assembly_cost:.2f})")
             except Exception as _exc_rc:
                 print(f"  (totals reconciliation skipped: {_exc_rc})")

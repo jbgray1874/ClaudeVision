@@ -11,9 +11,9 @@ message was not loud: four skips inside a 4,600-test run is indistinguishable fr
 passes, so both frozen packs sat unprotected for weeks while every push reported green. The
 difference between "this pack is protected" and "nobody froze it" has to be a red result.
 
-Set SDI_REPLAY_ALLOW_MISSING=1 to downgrade that to a skip. That is for working locally on a
-checkout without the packs; CI must never set it, which is why it is an explicit opt-out
-rather than a default.
+Set SDI_REPLAY_ALLOW_MISSING=1 to downgrade that to a skip. It is an explicit opt-out, not a
+default. A frozen record is job data and never committed, so GitHub CI sets it and prints each
+skip by name; the laptop's acceptance run, which holds the records, never does (SCRUM-137).
 
 AND A FROZEN RECORD MUST SAY WHERE IT CAME FROM. A summary.json with no provenance is an
 unlabelled number: nobody can tell the accepted run from whichever run last passed, which is

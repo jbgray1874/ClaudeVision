@@ -98,10 +98,11 @@ def test_every_detail_sheet_in_12552_reads_as_mild_steel():
     the failure was a property of how that title block extracts and no invented sample would
     have reproduced it."""
     pymupdf = pytest.importorskip("pymupdf")
-    pdf = Path("/root/.claude/uploads/09b98f42-bd9e-534a-8993-f8eb3975326c/"
-               "cd0141e6-1255200GA_Infinity_Drawer_Rev_C.PDF")
-    if not pdf.exists():
-        pytest.skip("the 12552 GA is not on this machine")
+    # A customer drawing, never committed: read from SDI_PRIVATE_CORPUS or skipped by name.
+    from private_evidence import corpus_file, missing_reason
+    pdf = corpus_file("cd0141e6-1255200GA_Infinity_Drawer_Rev_C.PDF")
+    if pdf is None:
+        pytest.skip(missing_reason("the 12552 GA"))
     doc = pymupdf.open(str(pdf))
     # Detail sheets: one part each, 4-11 and 14-25. Sheets 1-3 and 12-13 are GA/BOM pages.
     detail = [3, 4, 5, 6, 7, 8, 13, 14, 16, 17, 20, 21, 22, 23, 24]
