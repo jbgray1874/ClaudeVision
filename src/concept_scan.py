@@ -64,7 +64,11 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 #       cut-outs, and one line per size for a part that follows parts of different sizes (D-490)
 #   c6  a part's stock form, with a section's size and wall, a mesh's grid and wire, and a wire's
 #       diameter in fields of their own — never in the blank's thickness (D-528)
-CONCEPT_PROMPT_VERSION = "c6"
+#   c7  a round body is its skin, rims and formers, a curved metal part is rolled, and a frame
+#       that hangs a part is its members (D-599: the HPP fixture's base, column and halo)
+#   c8  a curved flat part is blanked by the rectangle it is cut from, not its arc (D-599b: the
+#       HPP shelves' quarter segments blanked 1571 x 700 where they are cut from 1000 x 1000)
+CONCEPT_PROMPT_VERSION = "c8"
 
 SOURCE = "vision_concept"
 
@@ -648,6 +652,9 @@ SIGHTABLE_OPERATIONS = {
     # the subcontract plating line prices it (or asks for the plater's price).
     "plating":          "electroplated finish — chrome, nickel or zinc, by a subcontract plater",
     "polishing":        "polished or ground surface, by grit, before plating or as the finish",
+    # A RING IS ROLLED, NOT FOLDED (D-599). The HPP halo and guard rail were read as folded
+    # strip and sawn tube; the ROLL department was on the rate card with no word to reach it.
+    "rolling":          "rolled to a curve or ring — tube, bar, strip or plate on rolls",
 }
 
 _PROMPT = """You are looking at {n} image(s): customer-supplied renders or photos of ONE retail
@@ -660,6 +667,14 @@ This is a bill of materials a manufacturer would price, not a list of the things
 THE DIFFERENCE MATTERS AND IT IS THE WHOLE TASK:
 - An enclosure is NOT one part. A cabinet is its PANELS — front, two sides, back, base, top —
   each its own line with its own blank size. Never return a carcass as a single blank.
+- A ROUND BODY IS NOT ONE PART EITHER. A drum, plinth, column, ring or halo is its curved skin
+  (length = pi x its diameter, width = its height), its top and bottom or its two rims, and the
+  formers, blocking or ribs inside it, each its own line. A curved metal part (a ring, a rolled
+  tube, bar or strip) names rolling; a curved board skin is flexible or kerfed board, and says so
+  in why_size. A frame that carries or hangs a part (posts, cross beams, plates) is its members.
+- A CURVED FLAT PART IS BLANKED BY ITS BOX, NOT ITS ARC. A ring segment, arc or quarter circle
+  cut from sheet takes as assumed_blank_mm the rectangle it is cut from (a quarter of a ring of
+  outer radius R is R x R), never its arc length by its depth; give the arc length in why_size.
 - A printed face is TWO lines where it is a print applied to a board: the board, and the
   applied graphic.
 - PRINT IS ALWAYS ITS OWN LINE, even when it goes straight onto the board: one "graphic"
@@ -734,7 +749,7 @@ Return ONLY valid JSON, no markdown, exactly this shape:
 
 # The prompt's own hash, so a change without a version bump cannot pass silently. If a test
 # tells you this is wrong: bump CONCEPT_PROMPT_VERSION above, then put the new hash here.
-_PROMPT_FINGERPRINT = "0ec971544c51"
+_PROMPT_FINGERPRINT = "d498cc8f0392"
 
 
 class ConceptUnavailable(RuntimeError):
@@ -792,7 +807,9 @@ not in the brief" in why_size. Do not describe visual cues: there are none.
 #       from what the sheet prints (D-417)
 #   s4  a face with a window is still a panel; an internal divider spans the inside of the body
 #       (D-418: the 14:42 read dropped the front and back and sized the divider off a bag)
-SHEET_PROMPT_VERSION = "s4"
+#   s5  a sheet whose lettering is outlines carries no text: the lettering is read off the image
+#       (D-599: the HPP pack, 18 sheets printed to PDF, every word drawn as paths)
+SHEET_PROMPT_VERSION = "s5"
 # THE BUDGET FITS A WHOLE DOCUMENT (D-466). 6,000 characters was sized for single drawing
 # sheets and silently cut a sixteen-page tech brief at page six; 24,000 held such a document
 # entire. D-597 raises it to 120,000 — well inside the model's window beside the page images —
@@ -803,8 +820,10 @@ SHEET_PROMPT_VERSION = "s4"
 SHEET_TEXT_MAX_CHARS = 120000
 
 _SHEET_PREAMBLE = """THESE ARE DRAWING SHEETS, NOT PHOTOGRAPHS. Each image is a general-arrangement or
-design-intent drawing with a title block, dimensions and notes; the text printed on the sheets
-is given at the end of this request. READ THE SHEET BEFORE YOU LOOK AT THE PICTURE. Where these
+design-intent drawing with a title block, dimensions and notes; the text printed on the sheets,
+where the file carries it, is given at the end of this request. Where it does not, read the
+lettering from the images: it may be drawn as outlines and turned on its side. READ THE SHEET
+BEFORE YOU LOOK AT THE PICTURE. Where these
 rules and the ones after them differ, THESE RULES WIN.
 
 1. A DIMENSION ON THE SHEET IS A FACT. Size every part from the dimensions drawn and the notes,
@@ -896,7 +915,7 @@ in that part's why_size.
 
 # The sheet prompt's own hash (preamble + text, recheck and envelope sections), pinned beside
 # SHEET_PROMPT_VERSION as _PROMPT_FINGERPRINT is pinned beside the render prompt's version.
-_SHEET_PROMPT_FINGERPRINT = "72a1d6c427c9"
+_SHEET_PROMPT_FINGERPRINT = "d92e3153cb9e"
 
 
 # ── A PACK'S PRINTED WORDS ARE READ WITH ITS PICTURES (D-462) ────────────────────────────
