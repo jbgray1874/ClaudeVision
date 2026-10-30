@@ -16,3 +16,18 @@ pytest-randomly>=4.0
 # quietly turned the whole module off. A skip is not a pass, and a suite that reports 24 of them
 # is not saying so loudly enough to notice.
 httpx>=0.27
+
+# ── AND THE SERVICE'S OWN MANIFEST, OR HALF THE SUITE DOES NOT RUN ───────────
+# These dev dependencies alone are not enough. voicecrm, auth and the route
+# tests import httpx, msal, itsdangerous and openpyxl, which are declared in
+# sdi-intelligence-backend/requirements.txt - and WITHOUT THEM those modules
+# fail to import and unittest reports them as errors rather than failures. On
+# 30 October that was 26 modules and about 500 tests, quietly not running,
+# while the remaining 435 reported "OK". The same trap as the skips above, one
+# level up: an error at import is not a failing test, and a suite that cannot
+# load half of itself is not saying so loudly enough.
+#
+#   python -m pip install -r requirements-dev.txt
+#   python -m pip install -r sdi-intelligence-backend/requirements.txt
+#
+# Then the whole suite runs: 936 tests and ~1,550 subtests.
