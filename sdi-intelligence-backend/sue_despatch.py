@@ -183,10 +183,10 @@ def schedule_date(raw: Any, *, as_of: date) -> ScheduleDate:
                 return ScheduleDate(
                     None,
                     "weekday disagrees with date" if weekday
-                    else "no year near this snapshot fits the date",
+                    else "no year near when the plan was saved fits the date",
                     tentative, text)
             return ScheduleDate(inferred,
-                                _said(misspelt, month, "year inferred from snapshot"),
+                                _said(misspelt, month, "year taken from when the plan was saved"),
                                 tentative, text)
     except ValueError:
         pass

@@ -118,7 +118,8 @@ def test_somebody_signed_in_but_not_on_the_list_is_refused_every_view(client, ur
     client.who["user"] = SOMEBODY_ELSE
     answer = client.get(url)
     assert answer.status_code == 403
-    detail = answer.json()["detail"]
+    # The page answers on a page; the views answer in JSON.
+    detail = answer.text if url == "/api/tti/despatch" else answer.json()["detail"]
     # It says which wall was hit and where to look, rather than a fixed
     # sentence a reworded refusal would silently drift away from.
     assert "not on the list" in detail
@@ -257,3 +258,31 @@ def test_no_view_offers_a_way_to_change_anything(client):
     exist. A POST to any of them is Method Not Allowed, not a surprise."""
     for url in VIEWS:
         assert client.post(url.split("?")[0]).status_code == 405
+
+
+# ── The page itself: a link from an email ────────────────────────────────────
+# Sue opened the link she was emailed, arrived with no session, and was shown
+# a line of JSON. The page sends her to sign in, and anyone refused gets a
+# page that says why, never JSON.
+
+def test_not_signed_in_is_sent_to_sign_in_and_straight_back(client):
+    client.who["user"] = None
+    went = client.get("/api/tti/despatch", follow_redirects=False)
+    assert went.status_code == 302
+    assert went.headers["location"] == "/auth/login?next=%2Fapi%2Ftti%2Fdespatch"
+
+
+def test_someone_refused_gets_a_page_with_a_way_forward_not_json(client):
+    client.who["user"] = SOMEBODY_ELSE
+    answer = client.get("/api/tti/despatch")
+    assert answer.status_code == 403
+    assert answer.headers["content-type"].startswith("text/html")
+    assert '"detail"' not in answer.text
+    assert "/auth/login?next=%2Fapi%2Ftti%2Fdespatch" in answer.text
+
+
+def test_a_service_or_office_visitor_is_refused_on_a_page_too(client):
+    client.who["user"] = {"name": "Office network (not signed in)", "email": "", "oid": "",
+                          "kind": "anonymous"}
+    answer = client.get("/api/tti/despatch")
+    assert answer.status_code == 403 and answer.headers["content-type"].startswith("text/html")

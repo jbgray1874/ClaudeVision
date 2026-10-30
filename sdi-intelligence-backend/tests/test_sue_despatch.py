@@ -18,7 +18,7 @@ class DespatchQuestions(unittest.TestCase):
         self.assertEqual(result["line_count"], 1)
         self.assertEqual(result["lines"][0]["source"], "Nov week 1!row 11")
         self.assertTrue(result["lines"][0]["tentative"])
-        self.assertEqual(result["lines"][0]["date_basis"], "year inferred from snapshot")
+        self.assertEqual(result["lines"][0]["date_basis"], "year taken from when the plan was saved")
         self.assertEqual(result["pallet_total"], 30)
         self.assertIn("not confirmation", result["caveat"])
 
