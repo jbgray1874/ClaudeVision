@@ -28,6 +28,7 @@ main{max-width:1280px;margin:0 auto;padding:28px 22px 70px}.eyebrow{font-size:11
 .steer:focus{outline:none;border-color:var(--yellow)}
 .files a{word-break:break-all}
 @media(max-width:850px){.hero{display:block}.safety{max-width:none;margin-top:18px}.layout{grid-template-columns:1fr}.items{max-height:330px}.topnav{margin-left:0;width:100%}.detail{padding:18px}.tools input{max-width:none}}
+.filing .tick{white-space:normal;margin:6px 0;color:var(--text)}.filing a.primary{display:inline-block;text-decoration:none;margin-top:10px}.filing .steer{margin:6px 0}
 </style></head>
 <body>
 <header class="top"><div class="logo" aria-hidden="true">S</div><div><div class="brand">SDI INTELLIGENCE</div><div class="subbrand">PRIVATE ASSISTANT</div></div><nav class="topnav" aria-label="Workspace"><a href="/app/">← App portal</a><button id="reconnect" type="button">Reconnect Microsoft</button><button id="signout" type="button">Sign out</button></nav></header>
@@ -68,7 +69,46 @@ function fileSize(n){n=Number(n)||0;return n<1024?n+' B':n<1048576?Math.round(n/
 async function listFiles(box,m){const mine=m.id;box.replaceChildren();el('div','ATTACHMENTS',box,'label');el('p','Looking…',box,'hint');let r;try{r=await api('/attachments/'+encodeURIComponent(m.id));}catch(e){if(state.selected?.id!==mine)return;box.replaceChildren();el('div','ATTACHMENTS',box,'label');el('p',e.message,box,'hint');return;}
 if(state.selected?.id!==mine)return;box.replaceChildren();const list=(r.attachments||[]).filter(a=>!a.isInline);if(!list.length)return;
 el('div','ATTACHMENTS',box,'label');const ul=el('ul',null,box);for(const a of list){const li=el('li',null,ul);if(a.kind==='fileAttachment'){const link=el('a',a.name+' · '+fileSize(a.size),li);link.href=root+'/attachments/'+encodeURIComponent(m.id)+'/'+encodeURIComponent(a.id);link.download=a.name;link.rel='noopener';}else{el('span',a.name+' — an attached email or a link; open this one in Outlook',li);}}
-el('p','These download rather than open here, so a file cannot run as a page on this address.',box,'hint');}
+el('p','These download rather than open here, so a file cannot run as a page on this address.',box,'hint');offerFiling(box,m,list);}
+// ── SAVE FOR ESTIMATING (30 Oct 2026) ───────────────────────────────────────
+// "save that down to the file system and then go to the other app, open up the
+// estimate and run an estimate." The ticked drawings go to Live Enquiry ›
+// client › job on the share - never into the mailbox, never over a file - and
+// the answer carries the link that opens estimating on that pack. Offered only
+// for files the engine runs from; the server checks the same list again.
+const DRAWINGS=['.pdf','.dxf','.dwg','.sldprt','.sldasm','.slddrw','.step','.stp'];
+function isDrawing(name){const n=String(name||'').toLowerCase();return DRAWINGS.some(x=>n.endsWith(x));}
+// A job or enquiry number from the subject, as a suggestion to check - never
+// filed without the person seeing it in the box.
+function guessJob(subject){const found=String(subject||'').match(/\b\d{4,7}(?:-\d{1,3}){0,2}\b/);return found?found[0]:'';}
+function offerFiling(box,m,list){
+  const drawings=list.filter(a=>a.kind==='fileAttachment'&&isDrawing(a.name));
+  if(!drawings.length)return;
+  const sec=el('section',null,box,'filing');
+  el('div','SAVE FOR ESTIMATING',sec,'label');
+  el('p','Saves the ticked drawings to Live Enquiry › client › job on the share, then gives you the link to estimate them. Nothing in the mailbox changes, and nothing on the share is overwritten.',sec,'hint');
+  const picks=[];
+  for(const a of drawings){const lab=el('label',null,sec,'tick');const cb=el('input',null,lab);cb.type='checkbox';cb.checked=true;lab.append(a.name+' · '+fileSize(a.size));picks.push([cb,a]);}
+  const client=el('input',null,sec,'steer');client.type='text';client.maxLength=120;client.placeholder='Client — e.g. Boots';client.setAttribute('aria-label','Client');
+  const job=el('input',null,sec,'steer');job.type='text';job.maxLength=120;job.placeholder='Job or enquiry number — e.g. 12552';job.setAttribute('aria-label','Job or enquiry number');job.value=guessJob(m.subject);
+  const actions=el('div',null,sec,'actions');const go=el('button','Save to Live Enquiry',actions,'primary');go.type='button';const said=el('span','',actions,'hint');
+  const result=el('div',null,sec);
+  go.onclick=async()=>{
+    const ids=picks.filter(([cb])=>cb.checked).map(([,a])=>a.id);
+    if(!ids.length){said.textContent='Tick at least one drawing.';return;}
+    if(!client.value.trim()||!job.value.trim()){said.textContent='Give it a client and a job number — they are the two folders it is filed under.';return;}
+    go.disabled=true;said.textContent='Saving…';result.replaceChildren();
+    try{
+      const r=await api('/file-for-estimating',{message_id:m.id,attachment_ids:ids,client:client.value.trim(),reference:job.value.trim()});
+      said.textContent='';
+      const names=Object.fromEntries(drawings.map(a=>[a.id,a.name]));
+      el('p',(r.saved.length?'Saved '+r.saved.length+(r.saved.length===1?' drawing':' drawings'):'Nothing new saved')+' to Live Enquiry › '+r.client+' › '+r.reference+'.',result,'summary');
+      for(const s of r.skipped||[])el('p',(s.name||names[s.id]||'One attachment')+' — '+s.why,result,'hint');
+      const link=el('a','Estimate it →',result,'primary');link.href=r.estimate_url;link.target='_blank';link.rel='noopener';
+    }catch(e){said.textContent=e.message;}
+    finally{go.disabled=false;}
+  };
+}
 function showProposal(box,p){box.querySelector('.proposal')?.remove();const review=el('section',null,box,'proposal');el('h3',p.new_message?'Confirm the exact email':'Confirm the exact draft',review);el('p','To: '+(p.recipients||[]).map(r=>r.emailAddress?.address||'').join(', '),review);if(p.subject)el('p','Subject: '+p.subject,review);el('pre',p.body,review);el('p','Saving creates an unsent Outlook draft. Check it in Outlook before sending.',review,'hint');const actions=el('div',null,review,'actions');const save=el('button','Confirm · save to Drafts',actions,'primary');save.type='button';const result=el('span','',actions,'hint');save.onclick=async()=>{save.disabled=true;result.textContent='Saving once…';try{await api('/confirm',{proposal_id:p.proposal_id,digest:p.digest});result.className='success';result.textContent='Saved to Outlook Drafts. Not sent.';}catch(e){result.textContent=e.message+' Check Outlook before creating another proposal.';}};}
 // ── THE ANSWER ALWAYS SAYS WHERE IT LOOKED ──────────────────────────────────
 // "Nothing from Charlotte this morning" is a sentence that can be wrong in a

@@ -67,6 +67,13 @@ class Suggestion(BaseModel):
     instruction: str = Field(default="", max_length=1000)
 
 
+class FileForEstimating(BaseModel):
+    message_id: str = Field(min_length=1, max_length=2048)
+    attachment_ids: list[str] = Field(min_length=1, max_length=40)
+    client: str = Field(min_length=1, max_length=120)
+    reference: str = Field(min_length=1, max_length=120)
+
+
 READONLY_PAGE = "private-email-readonly.html"
 DRAFT_PAGE = "private-email.html"
 
@@ -218,6 +225,57 @@ def make_router(auth, policy, database, origin, drafts_enabled=False, page_dir=N
                 # label, never a decision.
                 "X-Sdi-Stated-Type": got["contentType"][:120],
             })
+
+    @router.post("/file-for-estimating")
+    def file_for_estimating(request: Request, data: FileForEstimating):
+        """Save this email's drawings into Live Enquiry, and say where.
+
+        "save that down to the file system and then go to the other app, open
+        up the estimate and run an estimate" - 30 October 2026. A write, so it
+        takes the same-origin confirmation the drafts do. It writes to the
+        SHARE, never the mailbox, and never over a file - enquiry_filing.py has
+        the rules. The answer carries the link that opens estimating on the pack.
+
+        Imported here, not at the top: an import error in a side feature must
+        not take the mailbox - or the portal - down with it."""
+        _, mailbox = context(request, True)
+        try:
+            import enquiry_filing
+        except Exception as missing:                               # noqa: BLE001
+            print(f"[private-email] saving to Live Enquiry unavailable - "
+                  f"{type(missing).__name__}: {missing}", flush=True)
+            raise HTTPException(503, "Saving to Live Enquiry is not installed on this "
+                                     "server. Save the drawings from Outlook.")
+        # One file Microsoft will not hand over (over 25 MB, or an attached
+        # email rather than a file) must not cost the others: it is listed as
+        # not saved, by id, and the page names it from its own list.
+        files, unreadable = [], []
+        for one in data.attachment_ids:
+            try:
+                files.append(mailbox.attachment(data.message_id, one))
+            except Denied as exc:
+                unreadable.append({"id": one, "name": "", "why": str(exc)})
+        if not files:
+            raise HTTPException(409, "None of those attachments could be read: "
+                                + "; ".join(u["why"] for u in unreadable))
+        try:
+            out = enquiry_filing.file_for_estimating(
+                enquiry_filing.live_enquiry_root(), data.client, data.reference,
+                [(f["name"], f["content"]) for f in files])
+        except enquiry_filing.Refused as exc:
+            raise HTTPException(409, str(exc))
+        except PermissionError:
+            raise HTTPException(403, "The service's own account cannot write to Live "
+                                     "Enquiry. IT needs to give it Modify on that folder.")
+        except OSError as exc:
+            raise HTTPException(503, f"Live Enquiry could not be written to "
+                                     f"({type(exc).__name__}). Nothing was overwritten.")
+        out["skipped"] = unreadable + out["skipped"]
+        out["estimate_url"] = "/estimating?pack=" + quote(out["relative"], safe="")
+        print(f"[private-email] saved {len(out['saved'])} drawing(s) to Live Enquiry "
+              f"{out['relative']}", flush=True)
+        from fastapi.responses import JSONResponse
+        return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
     @router.post("/proposals")
     def propose(request: Request, data: Proposal):
