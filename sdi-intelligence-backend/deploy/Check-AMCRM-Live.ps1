@@ -398,9 +398,39 @@ if ($logPath -and (Test-Path -LiteralPath $logPath)) {
     $lines = Select-String -LiteralPath $logPath -Pattern "\[voicecrm\.tracker\]" |
              Select-Object -Last 12
     if ($lines) {
+        # ── WHERE THE RESTART WAS ────────────────────────────────────────────
+        # The service prints [config] once, as it starts. Lines below it were
+        # read by the code running NOW; lines above it by the process before.
+        # Without this marker, 30 October, two runs showed the same six lines
+        # and nothing said they all came from before the restart.
         Write-Host ""
-        $lines | ForEach-Object { Write-Host "         $($_.Line.Trim())" -ForegroundColor White }
+        $since = 0
+        $marked = $false
+        $first = $true
+        foreach ($l in $lines) {
+            $after = $config -and $l.LineNumber -gt $config.LineNumber
+            if ($after -and -not $marked) {
+                # Only twelve lines are shown, so the start can be further up.
+                if ($first) { $where = "(the service started before all of these)" }
+                else        { $where = "the service last started here" }
+                Write-Host "         ---- $where ----" -ForegroundColor DarkGray
+                $marked = $true
+            }
+            $first = $false
+            if ($after) { $since++ }
+            Write-Host "         $($l.Line.Trim())" -ForegroundColor White
+        }
+        if ($config -and -not $marked) {
+            Write-Host "         ---- the service last started here ----" -ForegroundColor DarkGray
+        }
         Say ""
+        if ($config -and $since -eq 0) {
+            Hm "Every line above is from BEFORE the last restart."
+            Say "Nobody has opened AM CRM since the service started. Open it, wait"
+            Say "for the records, reload twice, then run this again."
+        } elseif ($config) {
+            Yes "$since read(s) since the service last started"
+        }
         Say "Send these lines to Claude. 'write ... outcome=saved' is a save that"
         Say "worked; 'outcome=not_saved' carries Microsoft's request id."
     } else {
