@@ -290,9 +290,7 @@ def sheets(existing, rows, bpcdl, report, held):
         ["Names and addresses", "Ethan's character rule, as the rest of the file. Emails and phones untouched"],
     ]
     out = f"{BASE}/out_sheets"
-    bp.build("YA004BPC", "Customers", bp.CUSTOMER, rows, [], notes + [["Load", "Into UAT now, on top of the 217 "
-             "customers already there"]], path=f"{out}/YA004BPC_customers_NEW_ACCOUNTS_MAPPED.xlsx",
-             extra=[("Check", check_head, check)])
+    # Complete files only - no new-accounts-only file (runbook, rule 1b)
     bp.build("YA004BPC", "Customers", bp.CUSTOMER, existing + rows, bp.read(f"{BASE}/upl2/bpc.txt"), [
         ["Tax rule", "10 EU customers (56 address rows) set to ROW / ROWC, as UNI100 which loaded. Finance to confirm"],
         ["VAT number", "ROL100's GB76361992 is 8 digits - blanked. Finance to supply the real one"],
@@ -302,8 +300,7 @@ def sheets(existing, rows, bpcdl, report, held):
              path=f"{out}/YA004BPC_customers_MAPPED.xlsx", extra=[("Check new accounts", check_head, check)])
 
     from openpyxl import load_workbook
-    for data, name, what in ((bpcdl, "YA004BPCDL_delivery_addresses_NEW_ACCOUNTS_MAPPED.xlsx", "new accounts only"),
-                             (read_v8(f"{V8}/YA004BPCDL_load2_delivery_addresses.txt") + bpcdl,
+    for data, name, what in ((read_v8(f"{V8}/YA004BPCDL_load2_delivery_addresses.txt") + bpcdl,
                               "YA004BPCDL_delivery_addresses_MAPPED.xlsx", "clean run, all customers")):
         wb = load_workbook(f"{BASE}/tmpl_t2/YA004BPCDL.xlsx")
         ws = wb["Data with headings"]

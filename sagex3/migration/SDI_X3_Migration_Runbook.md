@@ -53,7 +53,7 @@ what happens to each:
 
 | # | Exclusion | Effect | Decision |
 |---|---|---|---|
-| 1 | **Costs:** only products with a non-zero Access standard cost got a cost | 6,902 of 16,499 products have no cost. 860 of them hold stock, and the stock load stops on them (FIXING49 etc., 30 Oct) | **Switched off, 30 Oct (`scripts/build_yitc_topup.py`).** 5,965 costs added: 778 stock lot cost; 2,049 last purchase price (393 of them EUR / USD converted at Access's own ledger rate, EUR 0.8643, USD 0.7484); 3,138 BOM material roll-up for made products. `YITC_product_costs_TOPUP_MAPPED.xlsx` loads now; the full file has 15,562. Still on the Check tab: 73 products that hold stock at zero cost in Access (SDI to give a cost), and 864 with nothing in Access (no stock, purchases or costed BOM) |
+| 1 | **Costs:** only products with a non-zero Access standard cost got a cost | 6,902 of 16,499 products have no cost. 860 of them hold stock, and the stock load stops on them (FIXING49 etc., 30 Oct) | **Switched off, 30 Oct (`scripts/build_yitc.py`).** One complete cost file of 15,562: 9,597 Access standard costs, plus 778 stock lot cost, 2,049 last purchase price (393 of them EUR / USD converted at Access's own ledger rate, EUR 0.8643, USD 0.7484) and 3,138 BOM material roll-up for made products. Each cost's source is on the Cost source tab. Still on the Check tab: 73 products that hold stock at zero cost in Access (SDI to give a cost), and 864 with nothing in Access (no stock, purchases or costed BOM) |
 | 2 | **Products:** OLD grade ignores stock, purchases and open orders | 1,681 live products, £603k stock, about 620 order lines held | **Switch off.** Any product with stock, open orders or recent purchases goes in |
 | 3 | **Customers / suppliers:** GOOD grade only | 98 customers and 161 suppliers missed (fixed 27 Oct) | **Switched off.** Every live account goes in |
 | 4 | **Order and invoice views** inner-joined to the cross-reference | 1,428 / 124 / 255 / 241 rows dropped silently | **Switch off.** LEFT JOIN: a missing account shows on Held back. STOP check in section 9 |
@@ -327,8 +327,8 @@ other is held back. **SDI to decide which product keeps each code.**
   code. Load order: the customer import (which creates the accounts) before BICX and SOHPJ.
 - `scripts/build_new_customers.py` turns the output of `sql/new_customer_details.sql` (vw_BPC
   plus SL_ADDRESSES) into customer rows and delivery addresses for the new accounts (27 Oct: 86
-  customers, 3,901 addresses). It writes `YA004BPC_customers_NEW_ACCOUNTS_MAPPED.xlsx` and
-  `YA004BPCDL_delivery_addresses_NEW_ACCOUNTS_MAPPED.xlsx` for UAT now, plus the full clean-run
+  customers, 3,901 addresses). It writes only the complete customer and delivery address files
+  (rule 1b; the new-accounts-only files of 27 Oct are withdrawn), the full clean-run
   files with the new rows after the existing 2,268, which are left unchanged. Its rules:
   - the address code is the Access AD_CODE (three digits); the address Access flags as main is the default;
   - one SL_ADDRESSES field can hold several lines, padded to 30 or run together, so it's split;
@@ -713,7 +713,7 @@ The real load needs one fresh extract of everything, on one day.
 
 | Gap | Size | Where it shows | Status |
 |---|---|---|---|
-| Live products graded OLD (section 6.1) | 1,681 products: 1,473 with stock, 250 on open orders | SMR Held back: 2,176 lots, £603,151. SOHPJ Held back: 418 lines. POH Held back: 204 lines | **Must be fixed before go-live (James, 27 Oct).** Products are already loaded in UAT, so add them as a top-up product load wherever they hold stock, and make sure their stock comes through in SMR. Stock in X3 has to match Access |
+| Live products graded OLD (section 6.1) | 1,681 products: 1,473 with stock, 250 on open orders | SMR Held back: 2,176 lots, £603,151. SOHPJ Held back: 418 lines. POH Held back: 204 lines | **Must be fixed before go-live (James, 27 Oct).** Rebuild the complete product file with them in (rule 1b, no top-up file), and make sure their stock comes through in SMR. Stock in X3 has to match Access |
 | Order lines with a negative value (a credit on an order) | 4 SO lines, 1 PO line | SOHPJ / POH Held back | X3 needs a credit note. SDI to decide |
 | Accounts left out on purpose | Customers: 4 intercompany, ESD01, FSC01, IBS01 (no address). Suppliers: 72 employee expense accounts, 6 non-suppliers | Customers_to_add.xlsx, Suppliers_to_add.xlsx. Their 56 open sales order lines and 1 customer item are not loaded | Finance to confirm |
 | Product-supplier links for products not in the product file | 575 products (106 bought in 2026; products_bought_2026_not_loaded.sql has their grades) | not loaded | Follows the OLD products decision |
@@ -880,7 +880,7 @@ error logs; the original BPC and BPS template workbooks, to keep with this runbo
    has 1,207) took over an hour in UAT on 27 Oct. Records were being created; X3 builds every
    address. For go-live:
    - allow the time in the cut-over plan;
-   - load only new rows on a top-up (the NEW_ACCOUNTS files);
+   - always load the complete file (rule 1b). Ask Marc how the import treats rows for records that already exist (skip or update);
    - ask Marc whether rows for existing customers are skipped or updated, and whether the import
      can run faster (for example without the address checks).
 9. **Product category PHANT is set mechanically.** In `migration.vw_ITM` a product is PHANT if

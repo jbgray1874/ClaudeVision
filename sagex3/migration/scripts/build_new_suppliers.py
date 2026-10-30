@@ -282,9 +282,7 @@ def sheets(existing, rows, plan, report, counts, out):
              ["No address", f"{by['address']} suppliers have no address in Access (listed on the Check tab)"],
              ["Names and addresses", "Ethan's character rule. Emails, phones and websites untouched"]]
     sh = f"{BASE}/out_sheets"
-    bp.build("YA004BPS", "Suppliers", bp.SUPPLIER, rows, [], notes + [["Load", "Into UAT now, on top of the 623 "
-             "suppliers already there"]], path=f"{sh}/YA004BPS_suppliers_NEW_ACCOUNTS_MAPPED.xlsx",
-             extra=[("Check", head, report)])
+    # Complete files only - no new-accounts-only file (runbook, rule 1b)
     bp.build("YA004BPS", "Suppliers", bp.SUPPLIER, existing + rows, bp.read(f"{BASE}/upl2/bps.txt"), [
         ["VAT numbers", "Dummy numbers removed - the PL numbers copied across 117 suppliers, TEMPJAF placeholders, GB "
                         "numbers on overseas companies. 185 suppliers. UK suppliers load with a blank"],

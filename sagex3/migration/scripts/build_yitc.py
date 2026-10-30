@@ -13,11 +13,11 @@ Anything still without a value is listed on the Check tab for SDI to supply - ne
 figure. Costs are per unit, the same scale as the existing YITC (checked: median ratio 1.0
 against lot cost on 2,528 products).
 
-Writes YITC_product_costs_TOPUP_MAPPED.xlsx (the new rows only, to load now) and rebuilds
-YITC_product_costs_MAPPED.xlsx with the existing rows unchanged plus the new ones.
+Writes one complete file, YITC_product_costs_MAPPED.xlsx: Access's own standard costs and the
+new ones in a single list, sorted by product, built from scratch every run. No top-up files.
 
 Usage:
-    python build_yitc_topup.py
+    python build_yitc.py
 """
 import csv
 import re
@@ -32,7 +32,15 @@ BASE = "/tmp/claude-0/-home-user-ClaudeVision/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dad
 V8, OUT = f"{BASE}/out_v8", f"{BASE}/out_sheets"
 PURCHASES = [f"{BASE}/psup3/out.txt",                         # product_suppliers_v3 grid 2
              "/root/.claude/uploads/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dadea/ba9c5378-productsql.txt"]  # new suppliers
-FULL_MARK = "Costs for every product (30 Oct)"
+GUIDE = [("Field", "Heading", "Value", "Note"), ("Line Indicator", "Line Indicator", "I", "Hard code to letter I"),
+         ("STOFCY", "Site", "S01A", "Hardcode to S01A"), ("ITMREF", "Product", "", "Product code for this cost record"),
+         ("CSTTYP", "Cost Type", 1, "Hard code to 1"), ("ITCSEQ", "Sequence no.", 1, "Hard code to 1"),
+         ("ITCDAT", "Date Calculated", 20260101, "First day of financial year"),
+         ("ITCSTRDAT", "To", 20260101, "First day of financial year"),
+         ("ITCENDDAT", "To", 20261231, "Last day of financial year"), ("FIYNUM", "Fiscal year", 3, "Hard code to 3"),
+         ("MATCST", "Material Cost", "", "Total cost of product, per unit"),
+         ("CLCQTY", "Calculation Quantity", 100, "Calculation quantity"),
+         ("MATLEVCST", "Material Cost Level", "", "Same as Material Cost")]
 YITC = [("Line Indicator", "Line Indicator"), ("STOFCY", "Site"), ("ITMREF", "Product"), ("CSTTYP", "Cost Type"),
         ("ITCSEQ", "Sequence no."), ("ITCDAT", "Date Calculated"), ("ITCSTRDAT", "To"), ("ITCENDDAT", "To"),
         ("FIYNUM", "Fiscal year"), ("MATCST", "Material Cost"), ("CLCQTY", "Calculation Quantity"),
@@ -42,6 +50,11 @@ YITC = [("Line Indicator", "Line Indicator"), ("STOFCY", "Site"), ("ITMREF", "Pr
 def read(p):
     with open(p, newline="", encoding="cp850") as f:
         return [r for r in csv.reader(f, delimiter=";") if r and r[0].strip()]
+
+
+def typed(r):
+    """The 12 YITC values as the template holds them: codes as text, the rest as numbers."""
+    return [x if i < 3 else (float(x) if i in (9, 11) else int(float(x))) for i, x in enumerate(r[:12])]
 
 
 def clean(c):
@@ -54,6 +67,9 @@ def main():
     cat = {r[1]: r[0] for r in prods}
     desc = {r[1]: (r[4] or r[2]) for r in prods}
     existing = read(f"{V8}/YITC_load8_product_costs.txt")
+    from openpyxl import load_workbook as _lw
+    held = [list(r) for r in _lw(f"{V8}/V8_track2_report.xlsx", read_only=True)["Held - Costs"].iter_rows(values_only=True)
+            if r and r[0] is not None]
     have = {r[2] for r in existing}
 
     lot = defaultdict(lambda: [0.0, 0.0])
@@ -140,85 +156,70 @@ def main():
         new.append(["I", "S01A", c, 1, 1, 20260101, 20260101, 20261231, 3, v, 100, v, source[c]])
 
     hf, fill = Font(bold=True, color="FFFFFF"), PatternFill("solid", fgColor="44546A")
-    counts = Counter(r[12].split(" (")[0] for r in new)
+    # One complete file, built clean: every cost - Access's own and the new ones - in one list
+    # sorted by product. Never a top-up or add-on file (runbook, rule 1b).
+    allrows = sorted([r[:12] + ["Access standard cost"] for r in existing] + new, key=lambda r: r[2])
+    assert len({r[2] for r in allrows}) == len(allrows)
+    counts = Counter(r[12].split(" (")[0] if "ledger rate" not in r[12] else "last purchase price, converted"
+                     for r in allrows)
 
-    def book(rows, title, extra_note):
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "YITC"
-        ws.append([c for c, _ in YITC])
-        ws.append([h for _, h in YITC])
-        for r in rows:
-            ws.append([float(x) if i in (9, 11) else x for i, x in enumerate(r[:12])])
-        ws.freeze_panes = "A3"
-        src = wb.create_sheet("Cost source")
-        src.append(["Product", "Description", "Category", "Material cost", "Where the cost came from"])
-        for r in new:
-            src.append([r[2], desc[r[2]], cat[r[2]], float(r[9]), r[12]])
-        ck = wb.create_sheet("Check")
-        ck.append(["Product", "Description", "Category", "Why there is no cost"])
-        for r in check:
-            ck.append(r)
-        for s_, w in ((src, (20, 32, 9, 13, 60)), (ck, (20, 32, 9, 70))):
-            for c in s_[1]:
-                c.font, c.fill = hf, fill
-            for i, x in enumerate(w, 1):
-                s_.column_dimensions[get_column_letter(i)].width = x
-            s_.freeze_panes = "A2"
-            s_.auto_filter.ref = s_.dimensions
-        n = wb.create_sheet("Notes", 0)
-        for line in [[title], [],
-                     ["Why", "The original cost file only held products with an Access standard cost, so 6,902 products had "
-                             "no cost and X3 would not take their stock. Every product now gets the best cost Access has."],
-                     ["New costs", f"{len(new)}: " + ", ".join(f"{k} {v}" for k, v in counts.most_common())],
-                     ["Order of sources", "1 stock lot cost (average of the product's stock lots), 2 last purchase price "
-                                          "(GBP), 3 for made products the BOM material roll-up of their components"],
-                     ["Check tab", f"{len(check)} products with no cost anywhere in Access - SDI to supply"],
-                     ["Layout", "As YITC: cost type 1, the whole cost as Material Cost, per unit"], extra_note]:
-            n.append(line)
-        n["A1"].font = Font(bold=True, size=13)
-        n.column_dimensions["A"].width, n.column_dimensions["B"].width = 18, 110
-        for r in n.iter_rows(min_row=3):
-            for c in r:
-                c.alignment = Alignment(wrap_text=True, vertical="top")
-        return wb
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "YITC"
+    ws.append([c for c, _ in YITC])
+    ws.append([h for _, h in YITC])
+    for r in allrows:
+        ws.append(typed(r))
+    ws.freeze_panes = "A3"
+    g = wb.create_sheet("Guide")
+    for row in GUIDE:
+        g.append(list(row))
+    src = wb.create_sheet("Cost source")
+    src.append(["Product", "Description", "Category", "Material cost", "Where the cost came from"])
+    for r in allrows:
+        src.append([r[2], desc[r[2]], cat[r[2]], float(r[9]), r[12]])
+    ck = wb.create_sheet("Check")
+    ck.append(["Product", "Description", "Category", "Why there is no cost"])
+    for r in check:
+        ck.append(r)
+    hb = wb.create_sheet("Held back")
+    hb.append([h for _, h in YITC] + ["Why"])
+    for r in held[1:]:
+        hb.append(typed(r) + list(r[12:]))
+    for s_, w in ((src, (20, 32, 9, 13, 60)), (ck, (20, 32, 9, 70)), (hb, [14] * 13)):
+        for c in s_[1]:
+            c.font, c.fill = hf, fill
+        for k, x in enumerate(w, 1):
+            s_.column_dimensions[get_column_letter(k)].width = x
+        s_.freeze_panes = "A2"
+        s_.auto_filter.ref = s_.dimensions
+    n = wb.create_sheet("Notes", 0)
+    for line in [["YITC - product standard costs, clean run"], [],
+                 ["Rows", f"{len(allrows)}: one cost for every product that has any cost in Access - a complete file, "
+                          "not a top-up. Load it as the cost file"],
+                 ["Where costs come from", ", ".join(f"{k} {v}" for k, v in counts.most_common())],
+                 ["Order of sources", "1 Access standard cost; 2 the average cost of the product's stock lots; 3 the "
+                                      "last purchase price (EUR / USD at Access's own ledger rate); 4 for made "
+                                      "products, the BOM material roll-up of their components"],
+                 ["Check tab", f"{len(check)} products with no cost anywhere in Access - SDI to supply. "
+                               f"{sum(1 for r in check if r[3].startswith('HOLDS'))} of them hold stock at zero cost"],
+                 ["Held back", f"{len(held)} second costs for codes that were on two products - one cost per product"],
+                 ["Layout", "Cost type 1, the whole cost as Material Cost, per unit - as Ethan's notes ask"]]:
+        n.append(line)
+    n["A1"].font = Font(bold=True, size=13)
+    n.column_dimensions["A"].width, n.column_dimensions["B"].width = 22, 110
+    for r in n.iter_rows(min_row=3):
+        for c in r:
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+    path = f"{OUT}/YITC_product_costs_MAPPED.xlsx"
+    wb.save(path)
 
-    top = f"{OUT}/YITC_product_costs_TOPUP_MAPPED.xlsx"
-    book(new, "YITC - costs for products that had none (top-up, 30 Oct)",
-         ["Load", "Into UAT now, on top of the 9,597 costs already loaded. Then reload the stock file"]).save(top)
-    # The full clean-run file: the existing workbook (its Guide and Held back tabs kept), with the
-    # new rows added under the existing ones and the two new tabs.
     from openpyxl import load_workbook
-    full = f"{OUT}/YITC_product_costs_MAPPED.xlsx"
-    wb = load_workbook(full)
-    ws = wb["YITC"]
-    before = [list(r) for r in ws.iter_rows(min_row=3, values_only=True) if r[0] is not None]
-    assert len(before) == len(existing), (len(before), len(existing))
-    if FULL_MARK not in [c.value for c in wb["Notes"]["A"]]:
-        for r in new:
-            ws.append([float(x) if i in (9, 11) else x for i, x in enumerate(r[:12])])
-        t = book(new, "", ["", ""])
-        for name in ("Cost source", "Check"):
-            src, dst = t[name], wb.create_sheet(name)
-            for r in src.iter_rows(values_only=True):
-                dst.append(list(r))
-            for c in dst[1]:
-                c.font, c.fill = hf, fill
-            dst.freeze_panes = "A2"
-            dst.auto_filter.ref = dst.dimensions
-        n = wb["Notes"]
-        n.insert_rows(3, 3)
-        n.cell(3, 1, FULL_MARK).font = Font(bold=True)
-        n.cell(4, 1, f"{len(new)} costs added for products that had none ("
-                     + ", ".join(f"{k} {v}" for k, v in counts.most_common())
-                     + f"). {len(check)} products still without a cost are on the Check tab. The {len(existing)} "
-                       "costs from the cost source are unchanged.")
-        wb.save(full)
-    after = [list(r) for r in load_workbook(full, read_only=True)["YITC"].iter_rows(min_row=3, values_only=True)
-             if r[0] is not None]
-    assert after[:len(before)] == before and len(after) == len(existing) + len(new)
-    print(len(new), "new costs", dict(counts), "|", len(check), "on Check |", len(after), "in the full file")
-    return new, check
+    got = [list(r) for r in load_workbook(path, read_only=True)["YITC"].iter_rows(min_row=3, values_only=True)
+           if r[0] is not None]
+    assert [g_[:12] for g_ in got] == [typed(r) for r in allrows], "read-back mismatch"
+    print(len(allrows), "costs", dict(counts), "|", len(check), "on Check |", len(held), "held back")
+    return allrows, check
 
 
 if __name__ == "__main__":
