@@ -62,6 +62,15 @@ param(
         "yogesh.kumar@wearesdi.com"
     ),
     [string]$Server = "10.0.0.5",
+    # ── THE DOOR IN FRONT OF THE DOOR ────────────────────────────────────────
+    # The Entra APPLICATION PROXY app that publishes the public address. Every
+    # request from outside passes it BEFORE the portal's own sign-in, and it is
+    # a separate enterprise application with its own "assignment required".
+    # On 30 October this audit checked only the portal's sign-in app, reported
+    # "nobody can be locked out by a missing assignment" - and Kayleigh was
+    # locked out here: AADSTS50105, "blocked because they are not a direct
+    # member of a group with access", naming this id. It is read, never changed.
+    [string]$ProxyAppId = "a671a29f-7e29-4e34-a993-a3f8261266f5",
     # Skip the Entra half and audit only the server's .env.
     [switch]$ConfigOnly,
     # Sign in with a code typed at microsoft.com/devicelogin, for when the
@@ -310,40 +319,57 @@ try {
     Done 1
 }
 
-# Which service principal does the portal use? Found by APPLICATION ID.
-$sp = $null
-if ($clientId) {
+# ── Both doors, outer first ──────────────────────────────────────────────────
+# Somebody from outside reaches the app through TWO enterprise applications:
+# the Application Proxy (the public address) and then the portal's own
+# sign-in. Each has its own "assignment required", and either can refuse. A
+# person passes only if BOTH let them through, so both are checked - the one
+# that refused Kayleigh first.
+$gates = @()
+foreach ($door in @(
+        @{ Name = "Application Proxy (the public address)"; AppId = $ProxyAppId;
+           Refusal = "AADSTS50105 'blocked because they are not a direct member of a group with access'" },
+        @{ Name = "Portal sign-in"; AppId = $clientId;
+           Refusal = "the sign-in page, again and again, with no error" })) {
+    Write-Host ""
+    Say "$($door.Name)" White
+    if (-not $door.AppId) {
+        Block "  No application id for this door - cannot check it."
+        continue
+    }
+    $doorSp = $null
     try {
-        $sp = Get-MgServicePrincipal -Filter "appId eq '$clientId'" -ErrorAction Stop |
-              Select-Object -First 1
+        $doorSp = Get-MgServicePrincipal -Filter "appId eq '$($door.AppId)'" -ErrorAction Stop |
+                  Select-Object -First 1
     } catch { }
-}
-if ($sp) {
-    Yes "Enterprise application: '$($sp.DisplayName)'"
-    $required = $sp.AppRoleAssignmentRequired
-    if ($required) {
-        Say "Assignment IS required - every person must be assigned individually or by group."
-    } else {
-        Say "Assignment is NOT required - any tenant user can sign in, so nobody" Green
-        Say "can be locked out by a missing assignment." Green
+    if (-not $doorSp) {
+        Block "  No enterprise application found for $($door.AppId)."
+        continue
     }
-} else {
-    Block "No enterprise application found for application id $clientId."
-    Say "Check SDI_CLIENT_ID is the one the portal really uses." White
-    $required = $true
-}
-
-# Who is assigned, by object id. One call, then everybody is checked against it.
-$assigned = @{}
-if ($sp) {
+    $doorRequired = [bool]$doorSp.AppRoleAssignmentRequired
+    Yes "  '$($doorSp.DisplayName)' ($($door.AppId))"
+    $doorAssigned = @{}
+    $doorGroups = @()
     try {
-        foreach ($a in (Get-MgServicePrincipalAppRoleAssignedTo -ServicePrincipalId $sp.Id -All -ErrorAction Stop)) {
-            $assigned[[string]$a.PrincipalId] = $a.PrincipalType
+        foreach ($a in (Get-MgServicePrincipalAppRoleAssignedTo -ServicePrincipalId $doorSp.Id -All -ErrorAction Stop)) {
+            $doorAssigned[[string]$a.PrincipalId] = $a.PrincipalType
+            if ($a.PrincipalType -eq "Group") { $doorGroups += $a.PrincipalDisplayName }
         }
-        Yes "$($assigned.Count) assignment(s) on that application (people and groups)"
     } catch {
-        Warn "Could not read the assignment list: $($_.Exception.Message)"
+        Warn "  Could not read who is assigned: $($_.Exception.Message)"
     }
+    if ($doorRequired) {
+        Say "  Assignment IS required: a person must be assigned, directly or through" Yellow
+        Say "  a group they are DIRECTLY in. $($doorAssigned.Count) assignment(s)." Yellow
+        if ($doorGroups.Count -gt 0) {
+            Say "  Groups that open this door - adding someone to one of these is the fix:" White
+            foreach ($g in ($doorGroups | Sort-Object -Unique)) { Say "    $g" White }
+        }
+    } else {
+        Say "  Assignment is NOT required here - this door lets any SDI account through." Green
+    }
+    $gates += [pscustomobject]@{ Name = $door.Name; Required = $doorRequired;
+                                 Assigned = $doorAssigned; Refusal = $door.Refusal }
 }
 
 # ── 3. Person by person ──────────────────────────────────────────────────────
@@ -443,28 +469,24 @@ foreach ($person in $everyone) {
         Say "    If they might sign in with it, give it the same settings as $upn." Yellow
     }
 
-    # Assigned to the application?
-    if (-not $required) {
-        Yes "  Can sign in (the application does not require assignment)"
-    } elseif ($assigned.ContainsKey([string]$user.Id)) {
-        Yes "  Assigned to the application directly"
-    } else {
-        $viaGroup = $false
-        # DIRECT membership on purpose, not transitive. Entra application
-        # assignment does not flow through nested groups: somebody in a group
-        # that is inside the assigned group is NOT assigned. "Improving" this
-        # to Get-MgUserTransitiveMemberOf would report people as fine who then
-        # get the endless sign-in page.
-        try {
-            foreach ($g in (Get-MgUserMemberOf -UserId $user.Id -All -ErrorAction Stop)) {
-                if ($assigned.ContainsKey([string]$g.Id)) { $viaGroup = $true; break }
-            }
-        } catch { }
-        if ($viaGroup) {
-            Yes "  Assigned through a group"
+    # Through every door? Their DIRECT groups are read once and used for both.
+    # Direct, not transitive: Entra assignment does not flow through nested
+    # groups, so somebody in a group inside the assigned group is NOT assigned,
+    # and "improving" this to transitive would pass people who are locked out.
+    $direct = @()
+    try {
+        $direct = @(Get-MgUserMemberOf -UserId $user.Id -All -ErrorAction Stop |
+                    ForEach-Object { [string]$_.Id })
+    } catch { Warn "  Could not read their groups - assignment through a group is unchecked." }
+    foreach ($gate in $gates) {
+        if (-not $gate.Required) {
+            Yes "  $($gate.Name): open to every SDI account"
+        } elseif ($gate.Assigned.ContainsKey([string]$user.Id)) {
+            Yes "  $($gate.Name): assigned directly"
+        } elseif (@($direct | Where-Object { $gate.Assigned.ContainsKey($_) }).Count -gt 0) {
+            Yes "  $($gate.Name): assigned through a group"
         } else {
-            Block "  NOT assigned to the application - they would get the sign-in"
-            Say "  page back forever, with no error. It looks broken." Red
+            Block "  $($gate.Name): NOT assigned - they would see $($gate.Refusal)."
         }
     }
 

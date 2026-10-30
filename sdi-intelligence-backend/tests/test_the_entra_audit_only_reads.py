@@ -99,7 +99,7 @@ class ItChecksTheThingsThatFailSilentlyTests(unittest.TestCase):
     def test_it_finds_the_application_by_id_not_by_name(self):
         """Two registrations in this tenant both read as "SDI Intelligence",
         and on 29 October a claim went on the wrong one."""
-        self.assertIn("appId eq '$clientId'", code())
+        self.assertIn("appId eq '$($door.AppId)'", code())
         self.assertNotRegex(code(), r"displayName eq '.*SDI")
 
     def test_it_compares_the_real_sign_in_address_with_the_one_we_hold(self):
@@ -302,6 +302,55 @@ class ItFindsSecondAccountsTests(unittest.TestCase):
     def test_a_name_with_an_apostrophe_cannot_break_the_query(self):
         """O'Brien would end the OData string early."""
         self.assertIn(""".Replace("'", "''")""", code())
+
+
+class BothDoorsAreCheckedTests(unittest.TestCase):
+    """── 30 OCTOBER, KAYLEIGH ─────────────────────────────────────────────
+    The audit checked the portal's sign-in app (9cb2810e...), found
+    "assignment NOT required", and reported "nobody can be locked out by a
+    missing assignment". Kayleigh then clicked the link and was refused by
+    the APPLICATION PROXY app in front of it - a671a29f..., a separate
+    enterprise application, assignment required: AADSTS50105, "blocked
+    because they are not a direct member of a group with access".
+
+    The audit had checked the inner door and reported the building open.
+    """
+
+    PROXY = "a671a29f-7e29-4e34-a993-a3f8261266f5"
+
+    def test_the_application_proxy_is_checked(self):
+        self.assertIn(f'[string]$ProxyAppId = "{self.PROXY}"', SCRIPT)
+        self.assertIn("AppId = $ProxyAppId", code())
+
+    def test_it_is_checked_before_the_portal_because_it_comes_first(self):
+        body = code()
+        self.assertLess(body.index("AppId = $ProxyAppId"), body.index("AppId = $clientId"))
+
+    def test_every_person_is_checked_at_every_door(self):
+        self.assertIn("foreach ($gate in $gates)", code())
+
+    def test_nobody_is_told_the_door_is_open_on_the_strength_of_one_app(self):
+        """The sentence that was wrong must not come back."""
+        # code(), not SCRIPT: the comment recording the incident quotes the old
+        # sentence on purpose, and a history lesson is not a claim to anyone.
+        self.assertNotIn("nobody can be locked out by a missing assignment", code())
+        self.assertNotIn("nobody", "".join(
+            l for l in code().splitlines() if "Assignment is NOT required" in l).lower())
+
+    def test_the_refusal_named_is_the_one_people_actually_see(self):
+        self.assertIn("AADSTS50105", SCRIPT)
+
+    def test_it_names_the_groups_that_open_each_door(self):
+        """So the fix is "add Kayleigh to this group", not a hunt through Entra."""
+        self.assertIn('PrincipalType -eq "Group"', code())
+        self.assertIn("Groups that open this door", SCRIPT)
+
+    def test_it_still_only_reads(self):
+        """The proxy app is checked, never changed - it was off limits before
+        this audit existed, and it stays that way."""
+        body = code().replace(LOCAL_OPTIONS[0], "").replace(LOCAL_OPTIONS[1], "")
+        for verb in ("New-Mg", "Set-Mg", "Update-Mg", "Remove-Mg", "Add-Mg"):
+            self.assertNotIn(verb, body)
 
 
 if __name__ == "__main__":
