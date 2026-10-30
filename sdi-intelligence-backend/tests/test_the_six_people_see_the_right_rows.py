@@ -26,7 +26,12 @@ sys.path.insert(0, str(BACKEND))
 import crm_owners                                                   # noqa: E402
 
 # What the laptop is told to write into .env, character for character.
-SETTING = ("nick.garrish@wearesdi.com=NG,"
+# Both of Nick's addresses: he signs in as @sdidisplays.co.uk (found by the
+# Entra audit on 30 October) and may have a second account on @wearesdi.com.
+# Ian Jones is PM on Nick's accounts and sees Nick's rows.
+SETTING = ("nick.garrish@sdidisplays.co.uk=NG,"
+           "nick.garrish@wearesdi.com=NG,"
+           "ian.jones@wearesdi.com=NG,"
            "kayleigh.thornhill@wearesdi.com=KT,"
            "andy.baxter@wearesdi.com=AB,"
            "charlotte.blackwell@wearesdi.com=CB,"
@@ -34,13 +39,20 @@ SETTING = ("nick.garrish@wearesdi.com=NG,"
            "james.gray@wearesdi.com=JG")
 
 PEOPLE = {
-    "Nick Garrish":       "Nick.Garrish@wearesdi.com",
+    "Nick Garrish":       "Nick.Garrish@sdidisplays.co.uk",
     "Kayleigh Thornhill": "kayleigh.thornhill@wearesdi.com",
     "Andy Baxter":        "Andy.Baxter@wearesdi.com",
     "Charlotte Blackwell": "charlotte.blackwell@wearesdi.com",
     "Matt Evans":         "Matt.Evans@wearesdi.com",
     "James Gray":         "James.Gray@wearesdi.com",
+    "Ian Jones":          "ian.jones@wearesdi.com",
 }
+
+WRITERS = ("james.gray@wearesdi.com,"
+           "nick.garrish@sdidisplays.co.uk,"
+           "nick.garrish@wearesdi.com,"
+           "andy.baxter@wearesdi.com,"
+           "ian.jones@wearesdi.com")
 
 # A tracker with rows for several owners, some blank, and some with the casing
 # and stray spaces a hand-maintained sheet actually contains.
@@ -270,13 +282,11 @@ class WritingIsStillSeparateTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         import os
-        os.environ["SDI_VOICECRM_WRITERS"] = ("james.gray@wearesdi.com,"
-                                              "nick.garrish@wearesdi.com,"
-                                              "andy.baxter@wearesdi.com")
+        os.environ["SDI_VOICECRM_WRITERS"] = WRITERS
         cls.vc = load_voicecrm(SETTING)
 
-    def test_the_three_writers_may_write(self):
-        for name in ("Nick Garrish", "Andy Baxter", "James Gray"):
+    def test_the_writers_may_write(self):
+        for name in ("Nick Garrish", "Andy Baxter", "James Gray", "Ian Jones"):
             with self.subTest(person=name):
                 self.assertTrue(self.vc._may_write({"email": PEOPLE[name]}))
 
@@ -291,6 +301,60 @@ class WritingIsStillSeparateTests(unittest.TestCase):
         kayleigh = {"email": PEOPLE["Kayleigh Thornhill"]}
         self.assertEqual(self.vc.owner_for(kayleigh), "KT")
         self.assertFalse(self.vc._may_write(kayleigh))
+
+
+class NickAndIanTests(unittest.TestCase):
+    """── 30 OCTOBER ───────────────────────────────────────────────────────
+    Nick signs in as nick.garrish@sdidisplays.co.uk - the old domain - with
+    his mailbox on @wearesdi.com. The settings were first written with the
+    mailbox, and he was locked out of his own records. Both addresses are in
+    now, so whichever he signs in with, he gets the same rows and can save.
+
+    Ian Jones is PM on Nick's accounts and Nick asked for him to have write
+    access. His own initials are in the PM Owner column, which the filter
+    does not read, so mapping him to "IJ" would show him an empty list. He
+    sees Nick's rows instead, which is what he works on.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import os
+        os.environ["SDI_VOICECRM_WRITERS"] = WRITERS
+        cls.vc = load_voicecrm(SETTING)
+
+    def rows(self, email):
+        return accounts(self.vc.records_for("fake-token",
+                                            self.vc.owner_for({"email": email})))
+
+    NICKS = ["Ashby & Co", "Northgate Retail", "Thornbury Retail"]
+
+    def test_nick_gets_his_rows_under_either_address(self):
+        for address in ("nick.garrish@sdidisplays.co.uk", "Nick.Garrish@wearesdi.com"):
+            with self.subTest(address=address):
+                self.assertEqual(self.rows(address), self.NICKS)
+
+    def test_nick_can_save_under_either_address(self):
+        for address in ("nick.garrish@sdidisplays.co.uk", "nick.garrish@wearesdi.com"):
+            with self.subTest(address=address):
+                self.assertTrue(self.vc._may_write({"email": address}))
+
+    def test_ian_sees_nicks_rows(self):
+        self.assertEqual(self.rows("ian.jones@wearesdi.com"), self.NICKS)
+
+    def test_ian_can_save(self):
+        self.assertTrue(self.vc._may_write({"email": "ian.jones@wearesdi.com"}))
+
+    def test_ian_does_not_see_the_row_his_initials_would_point_at(self):
+        """The IJ row in the fake sheet stands for an AM Owner of IJ. Ian is
+        mapped to NG, so it is not his - which is the point of not guessing
+        "IJ" from his name."""
+        self.assertNotIn("Somebody else's job", self.rows("ian.jones@wearesdi.com"))
+
+    def test_the_read_only_three_are_still_read_only(self):
+        for address in ("kayleigh.thornhill@wearesdi.com",
+                        "charlotte.blackwell@wearesdi.com", "matt.evans@wearesdi.com"):
+            with self.subTest(address=address):
+                self.assertFalse(self.vc._may_write({"email": address}))
 
 
 if __name__ == "__main__":

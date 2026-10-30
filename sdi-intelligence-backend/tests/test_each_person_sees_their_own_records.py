@@ -35,12 +35,12 @@ SOURCE = (BACKEND / "voicecrm.py").read_text(encoding="utf-8")
 CONNECTOR = (BACKEND / "voicecrm_connector.py").read_text(encoding="utf-8")
 PAGE = (BACKEND / "appportal" / "voice-crm.html").read_text(encoding="utf-8")
 
-NICK = {"email": "Nick.Garrish@wearesdi.com", "name": "Nick Garrish"}
+NICK = {"email": "Nick.Garrish@sdidisplays.co.uk", "name": "Nick Garrish"}
 KAYLEIGH = {"email": "kayleigh.thornhill@wearesdi.com", "name": "Kayleigh Thornhill"}
 ANDY = {"email": "andy.baxter@wearesdi.com", "name": "Andy Baxter"}
 STRANGER = {"email": "someone.else@wearesdi.com", "name": "Someone Else"}
 
-MAPPING = ("nick.garrish@wearesdi.com=NG,"
+MAPPING = ("nick.garrish@sdidisplays.co.uk=NG,"
            "kayleigh.thornhill@wearesdi.com=KT,"
            "andy.baxter@wearesdi.com=*")
 
@@ -75,8 +75,8 @@ class EachPersonGetsTheirOwnTests(unittest.TestCase):
 
     def test_the_email_match_ignores_case(self):
         """Entra returns the address in whatever case it was typed in."""
-        self.assertEqual(self.vc.owner_for({"email": "NICK.GARRISH@WEARESDI.COM"}), "NG")
-        self.assertEqual(self.vc.owner_for({"email": "  Nick.Garrish@wearesdi.com "}), "NG")
+        self.assertEqual(self.vc.owner_for({"email": "NICK.GARRISH@SDIDISPLAYS.CO.UK"}), "NG")
+        self.assertEqual(self.vc.owner_for({"email": "  Nick.Garrish@sdidisplays.co.uk "}), "NG")
 
     def test_somebody_whose_job_is_the_whole_pipeline_can_have_all_of_it(self):
         self.assertEqual(self.vc.owner_for(ANDY), self.vc.ALL_RECORDS)

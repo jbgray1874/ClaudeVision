@@ -39,8 +39,12 @@
 param(
     [string[]]$Writers = @(
         "james.gray@wearesdi.com",
-        "nick.garrish@wearesdi.com",
-        "andy.baxter@wearesdi.com"
+        "nick.garrish@sdidisplays.co.uk",
+        "andy.baxter@wearesdi.com",
+        # Ian Jones - PM on Nick's accounts. Write access asked for by Nick,
+        # 30 October. He sees Nick's rows (NG): his own initials live in the
+        # PM Owner column, which this app does not filter on yet.
+        "ian.jones@wearesdi.com"
     ),
     [string[]]$ReadOnly = @(
         "kayleigh.thornhill@wearesdi.com",
@@ -75,6 +79,20 @@ function Say ([string]$Text, [string]$Colour = "Gray") { Write-Host "          $
 
 $script:Blockers = 0
 function Block([string]$Text) { No $Text; $script:Blockers++ }
+
+# Where a service writes its log, read from the service's own configuration
+# on the server rather than assumed - the same way Check-AMCRM-Live finds it.
+function LogFor([string]$Service) {
+    try {
+        $hive = [Microsoft.Win32.RegistryKey]::OpenRemoteBaseKey("LocalMachine", $Server)
+        $sub  = $hive.OpenSubKey("SYSTEM\CurrentControlSet\Services\$Service\Parameters")
+        if ($sub) {
+            $out = [string]$sub.GetValue("AppStdout")
+            if ($out) { return ($out -replace "^([A-Za-z]):", "\\$Server\`$1`$") }
+        }
+    } catch { }
+    return ""
+}
 
 function SettingLine([string]$Name) {
     if (-not $script:EnvLines) { return $null }
@@ -134,6 +152,44 @@ if ($clientId) {
     Yes "Portal signs in with application $clientId"
 } else {
     Block "SDI_CLIENT_ID is not in .env - cannot tell which application to check."
+}
+
+# ── 1b. Who has actually used it? ────────────────────────────────────────────
+# "It doesn't affect any other user... who also had read-only access?"
+#
+# It does, deliberately. Before SDI_VOICECRM_OWNERS existed, EVERYBODY who
+# opened AM CRM was shown Nick's records. Now anyone not in the map sees
+# nothing. That is the fix - but somebody who was legitimately using it would
+# lose it, and the only honest way to know who that is, is to ask the logs:
+# every AM CRM request records who made it.
+Head "1b. Everyone who has used AM CRM, according to its own logs"
+$usedBy = @{}
+foreach ($source in @(
+        @{ Service = "SDIIntelligence";     Pattern = "\[voicecrm\.[a-z]+\].*?\buser=(\S+)" },
+        @{ Service = "SDITrackerConnector"; Pattern = "\[connector\].*?\buser=(\S+)" })) {
+    $log = LogFor $source.Service
+    if (-not $log -or -not (Test-Path -LiteralPath $log)) {
+        Warn "Could not find the $($source.Service) log - its users are not counted here."
+        continue
+    }
+    foreach ($hit in (Select-String -LiteralPath $log -Pattern $source.Pattern -ErrorAction SilentlyContinue)) {
+        $who = $hit.Matches[0].Groups[1].Value.Trim().ToLower()
+        if ($who -match "@") { $usedBy[$who] = $true }
+    }
+}
+if ($usedBy.Count -eq 0) {
+    Warn "Nobody found in the current logs."
+} else {
+    Yes "$($usedBy.Count) different sign-in(s) have used AM CRM (current logs):"
+    foreach ($who in ($usedBy.Keys | Sort-Object)) {
+        if ($ownerMap.ContainsKey($who)) {
+            $how = if ($writerSet -contains $who) { "can change records" } else { "read-only" }
+            Say "  $who  ->  sees '$($ownerMap[$who])', $how" Green
+        } else {
+            Warn "  $who has used AM CRM and is NOT mapped - since the last restart"
+            Say  "    they see nothing. Add them, or confirm they should not have it." Yellow
+        }
+    }
 }
 
 if ($ConfigOnly) {
@@ -288,6 +344,45 @@ foreach ($person in $everyone) {
         Say "  anything you send them." White
     } else {
         Yes "  Sign-in address matches exactly"
+    }
+    if ($user.Mail -and $user.Mail.ToLower() -ne $upn.ToLower()) {
+        Say "  Mailbox is $($user.Mail) - a different address from the sign-in name."
+        Say "  The app matches on the SIGN-IN name, so that is what the settings need."
+    }
+
+    # ── ONE PERSON, TWO ACCOUNTS ─────────────────────────────────────────────
+    # SDI moved from sdidisplays.co.uk to wearesdi.com, and Nick still signs in
+    # on the old domain with his mailbox on the new one. Somebody may also
+    # have a SEPARATE account on each - and whichever one they happen to sign
+    # in with is the one the settings must name. So every account with the
+    # same name before the @, on any domain, is listed. Two queries rather than
+    # one "or", so that neither can quietly fail the other.
+    $local = $wanted.Split("@")[0].Replace("'", "''")
+    $siblings = @{}
+    $lookedOk = $true
+    foreach ($property in @("userPrincipalName", "mail")) {
+        try {
+            foreach ($s in @(Get-MgUser -Filter "startswith($property,'$local@')" `
+                                        -Property "displayName,userPrincipalName,mail,accountEnabled" `
+                                        -Top 10 -ErrorAction Stop)) {
+                $siblings[$s.UserPrincipalName.ToLower()] = $s
+            }
+        } catch { $lookedOk = $false }
+    }
+    if (-not $lookedOk) {
+        Warn "  Could not check for a second account under another domain."
+    }
+    foreach ($sKey in @($siblings.Keys | Where-Object { $_ -ne $upn.ToLower() })) {
+        $s = $siblings[$sKey]
+        if (-not $s.AccountEnabled) {
+            Say "  Also has $($s.UserPrincipalName), which is DISABLED - cannot sign in, ignore."
+            continue
+        }
+        Warn "  A SECOND account that can sign in: $($s.UserPrincipalName)"
+        $sOwner = if ($ownerMap.ContainsKey($sKey)) { "mapped to '$($ownerMap[$sKey])'" } else { "NOT in SDI_VOICECRM_OWNERS" }
+        $sWrite = if ($writerSet -contains $sKey) { "on the writers list" } else { "not on the writers list" }
+        Say "    That account is $sOwner and $sWrite." Yellow
+        Say "    If they might sign in with it, give it the same settings as $upn." Yellow
     }
 
     # Assigned to the application?

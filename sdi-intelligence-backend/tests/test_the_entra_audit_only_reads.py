@@ -139,5 +139,117 @@ class ItChecksTheThingsThatFailSilentlyTests(unittest.TestCase):
         self.assertIn("SHAREPOINT", SCRIPT)
 
 
+class TheAuditChecksTheIdentityTheAppActuallyUsesTests(unittest.TestCase):
+    """── 30 OCTOBER, THE FIRST REAL RUN ───────────────────────────────────
+    Nick's mailbox is nick.garrish@wearesdi.com. He signs in as
+    nick.garrish@sdidisplays.co.uk. The settings had been written with the
+    mailbox, every check that compared the settings with themselves passed,
+    and he was locked out of his own records.
+
+    The audit caught it because it compares Entra's SIGN-IN name - which is
+    right only because the app also identifies people by sign-in name. If
+    either side ever moved to the e-mail claim, the audit would go on
+    reporting green against an identity the app no longer uses. So the
+    three are pinned together.
+    """
+
+    def test_the_web_app_identifies_people_by_sign_in_name(self):
+        source = (BACKEND / "auth.py").read_text(encoding="utf-8")
+        self.assertIn('"email": c.get("preferred_username")', source)
+
+    def test_the_chatgpt_connector_does_too(self):
+        source = (BACKEND / "voicecrm_connector.py").read_text(encoding="utf-8")
+        self.assertIn('email = c.get("preferred_username")', source)
+
+    def test_and_the_audit_compares_the_sign_in_name(self):
+        self.assertIn("$upn = $user.UserPrincipalName", code())
+        self.assertIn("$key = $upn.ToLower()", code())
+
+    def test_the_documented_example_uses_a_sign_in_name_that_differs(self):
+        """The example people copy from is where the mistake started. It
+        now shows the case that bites, with two domains in one setting."""
+        owners = (BACKEND / "crm_owners.py").read_text(encoding="utf-8")
+        self.assertIn("nick.garrish@sdidisplays.co.uk=NG", owners)
+        self.assertNotIn("nick.garrish@wearesdi.com=NG", owners)
+
+
+class ItFindsEveryoneTheChangeAffectsTests(unittest.TestCase):
+    """"it doesn't affect any other user ... who also had read-only access?"
+
+    It does, by design: before the owner map, everybody who opened AM CRM saw
+    Nick's records; now anyone not in the map sees nothing. The audit answers
+    "who is that?" from the logs instead of from memory.
+    """
+
+    def test_it_reads_who_has_used_am_crm_from_both_front_doors(self):
+        body = code()
+        self.assertIn('Service = "SDIIntelligence"', body)
+        self.assertIn('Service = "SDITrackerConnector"', body)
+
+    def test_it_only_counts_am_crm_lines(self):
+        """The service log carries every app on the portal. Counting a TTI or
+        estimating user as an AM CRM user would send somebody chasing access
+        nobody needs."""
+        self.assertIn(r"\[voicecrm\.[a-z]+\]", SCRIPT)
+        self.assertIn(r"\[connector\]", SCRIPT)
+
+    def test_the_log_tags_it_counts_are_the_only_ones_that_record_a_user(self):
+        """If a new AM CRM log line starts recording users under another tag,
+        the audit would silently stop counting those people."""
+        tags = set()
+        for path in BACKEND.glob("*.py"):
+            for tag in re.findall(r'print\(f"\[([a-z_.]+)\][^"\n]*user=',
+                                  path.read_text(encoding="utf-8")):
+                tags.add(tag)
+        for tag in tags:
+            with self.subTest(tag=tag):
+                self.assertTrue(tag.startswith("voicecrm.") or tag == "connector",
+                                f"[{tag}] records a user and the audit does not count it")
+
+    def test_it_finds_the_log_from_the_service_not_from_a_guess(self):
+        self.assertIn("function LogFor(", SCRIPT)
+        self.assertIn('GetValue("AppStdout")', SCRIPT)
+
+    def test_an_unmapped_past_user_is_flagged_not_hidden(self):
+        self.assertIn("has used AM CRM and is NOT mapped", SCRIPT)
+
+    def test_its_variables_do_not_shadow_powershells_own(self):
+        """$matches IS $Matches - PowerShell names are case-insensitive, and
+        $Matches is what -match fills in. SettingLine reads it. Reusing the
+        name for a list of log hits would hand SettingLine the wrong value on
+        the next call. Same class of bug as $check shadowing [switch]$Check."""
+        for name in ("$matches =", "$Matches =", "$input =", "$args =", "$error ="):
+            with self.subTest(name=name):
+                self.assertNotIn(name, code())
+
+
+class ItFindsSecondAccountsTests(unittest.TestCase):
+    """SDI moved from sdidisplays.co.uk to wearesdi.com. Nick signs in on the
+    old domain with his mailbox on the new one, and somebody may have a
+    separate account on each - whichever they use is the one that must be
+    in the settings."""
+
+    def test_it_searches_every_domain_by_the_name_before_the_at(self):
+        self.assertIn("startswith($property,'$local@')", code())
+
+    def test_by_sign_in_name_and_by_mailbox_separately(self):
+        """Two queries, so one failing cannot hide the other."""
+        self.assertIn('@("userPrincipalName", "mail")', code())
+
+    def test_a_failed_lookup_says_so(self):
+        self.assertIn("Could not check for a second account", SCRIPT)
+
+    def test_a_disabled_second_account_is_not_raised_as_a_problem(self):
+        """It cannot sign in. Flagging it would be crying wolf."""
+        self.assertIn("which is DISABLED - cannot sign in, ignore", SCRIPT)
+
+    def test_it_says_when_the_mailbox_differs_from_the_sign_in_name(self):
+        self.assertIn("a different address from the sign-in name", SCRIPT)
+
+    def test_a_name_with_an_apostrophe_cannot_break_the_query(self):
+        """O'Brien would end the OData string early."""
+        self.assertIn(""".Replace("'", "''")""", code())
+
+
 if __name__ == "__main__":
     unittest.main()

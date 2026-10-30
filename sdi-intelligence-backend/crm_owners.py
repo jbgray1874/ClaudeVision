@@ -14,9 +14,22 @@ person's pipeline labelled as their own is not a missing feature - it is a
 false statement about whose numbers they are reading, and through ChatGPT's
 voice mode there is not even a screen to notice it on.
 
-So the mapping is from a person's e-mail to their owner token in the tracker:
+So the mapping is from a person's SIGN-IN NAME to their owner token in the
+tracker:
 
-    SDI_VOICECRM_OWNERS=nick.garrish@wearesdi.com=NG,kayleigh.thornhill@wearesdi.com=KT
+    SDI_VOICECRM_OWNERS=nick.garrish@sdidisplays.co.uk=NG,kayleigh.thornhill@wearesdi.com=KT
+
+── THE SIGN-IN NAME, WHICH IS NOT ALWAYS THE E-MAIL ADDRESS ─────────────────
+Look at that example: two domains. Nick's mailbox is @wearesdi.com, but he
+signs in as nick.garrish@sdidisplays.co.uk - an account from before the
+rebrand. The app identifies people by the token's preferred_username, which
+is the SIGN-IN name, so that is what has to go here.
+
+On 30 October this was written with his e-mail address instead. The setting
+looked right, every check that compared the setting with itself passed, and
+Nick - the pilot's own user - was locked out of his own records with "your
+records aren't mapped yet". Check-Entra-Access.ps1 caught it by asking Entra.
+Run it after any change to this setting.
 
 ALL_RECORDS ("*") means every row, for the people whose job is the whole
 pipeline rather than a queue:
