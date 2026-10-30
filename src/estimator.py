@@ -369,6 +369,30 @@ def _price_per_kg_for_material(part: Optional[Dict[str, Any]], material) -> Opti
     return rate
 
 
+def _density_for_material(material) -> Optional[float]:
+    """The kg/m3 for this material, under the same key its price resolves to (D-602).
+
+    "Aluminium, 3mm" was priced under ALUMINIUM by the function above and weighed under its
+    own name, which the density table does not hold, so it fell to steel's 7850: a 600 x 300
+    x 3 aluminium panel weighed 4.24 kg instead of 1.46 and cost GBP 12.12 instead of 4.17.
+    The price and the weight now read the material the same way. None when neither name has
+    a density; the caller decides what that means."""
+    d = (MATERIAL_DENSITY_KG_PER_M3.get(material)
+         or MATERIAL_DENSITY_KG_PER_M3.get(str(material or "").upper()))
+    if d is not None:
+        return d
+    try:
+        import config as _cfg_d
+        key = _cfg_d.resolve_material_rate_key(material)
+    except Exception:                                        # noqa: BLE001
+        key = None
+    if not key:
+        return None
+    k = str(key).upper()
+    return (MATERIAL_DENSITY_KG_PER_M3.get(k) or MATERIAL_DENSITY_KG_PER_M3.get(k.replace(" ", "_"))
+            or MATERIAL_DENSITY_KG_PER_M3.get(k.replace("_", " ")))
+
+
 def _weight_source_label(part: Dict[str, Any]) -> str:
     if part.get("dxf_weight_g") or part.get("dxf_weight_kg"):
         return "dxf_flat_pattern"
@@ -7030,7 +7054,9 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                         applied=True, applied_basis=f"catalogue {_cat.get('part_code')} @ £{_cat_unit:.2f}/{_cat.get('uom') or 'EA'}",
                     ),
                 }
-            density = MATERIAL_DENSITY_KG_PER_M3.get(material or "", MATERIAL_DENSITY_KG_PER_M3.get("MILD STEEL"))
+            # Under the key the price resolves to (D-602); steel only when neither name has one.
+            density = (_density_for_material(material)
+                       or MATERIAL_DENSITY_KG_PER_M3.get("MILD STEEL"))
             # A ROUND TUBE IS NOT A SQUARE ONE.
             #
             # This was the only formula: A = outer - inner, on the sides of a rectangle. Round
@@ -7596,8 +7622,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     # A board with no density recorded now returns None, which lands in the `no_price`
     # branch below and reaches the sheet as a visible unpriced line. Metals keep the steel
     # default: an unlisted alloy really is about that dense, and the guess is defensible.
-    density = (MATERIAL_DENSITY_KG_PER_M3.get(material)
-               or MATERIAL_DENSITY_KG_PER_M3.get((material or "").upper()))
+    density = _density_for_material(material)
     if density is None:
         _mat_u = str(material or "").upper().replace("_", " ")
         _is_board_mat = any(
