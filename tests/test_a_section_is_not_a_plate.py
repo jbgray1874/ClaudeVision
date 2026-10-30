@@ -204,7 +204,7 @@ def test_the_shipment_weighs_a_section_by_its_costed_mass():
 # ── the prompt asks for the stock ─────────────────────────────────────────────────────────
 
 def test_the_read_is_asked_for_the_stock_and_its_sizes():
-    assert cs.CONCEPT_PROMPT_VERSION == "c6"
+    assert cs.CONCEPT_PROMPT_VERSION in ("c6", "c7")   # c7 (D-599) keeps the stock rules
     for word in ('"stock"', "section_mm", "wall_mm", "aperture_mm", "wire_mm",
                  "NEVER a count", "NEVER a thickness"):
         assert word in cs._PROMPT, word

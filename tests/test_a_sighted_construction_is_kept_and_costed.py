@@ -171,7 +171,7 @@ def test_slots_and_openings_are_cut():
 
 def test_the_read_is_asked_for_folds_flanges_basis_cutouts_and_one_line_per_size():
     # c5 added these; c6 (D-528, a part's stock form and sizes) keeps every one of them.
-    assert cs.CONCEPT_PROMPT_VERSION in ("c5", "c6")
+    assert cs.CONCEPT_PROMPT_VERSION in ("c5", "c6", "c7")
     assert hashlib.sha256(cs._PROMPT.encode()).hexdigest()[:12] == cs._PROMPT_FINGERPRINT
     text = cs._PROMPT.format(n=1, ops="x")
     for word in ('"folds"', '"flange_mm"', '"blank_basis"', '"cutouts"',

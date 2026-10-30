@@ -1217,6 +1217,32 @@ def image_only_pages(summary: Any) -> List[str]:
     return out
 
 
+# A page with no text layer and at least this many vector paths is a drawing whose lettering
+# was printed as outlines. The HPP pack's lightest sheet carries 3,927; a raster scan, a
+# photo or a render placed on a page carries a handful.
+OUTLINED_SHEET_MIN_PATHS = 1000
+
+
+def outlined_drawing_pages(summary: Any) -> List[str]:
+    """The pages that are drawing sheets with their lettering printed as outlines (D-599).
+
+    No text layer, so no reader finds a word and the page role is never design intent; but the
+    line work is a CAD drawing's, thousands of paths, and its dimensions are printed facts. The
+    vision read takes it as a drawing sheet, not a picture to size by eye."""
+    out: List[str] = []
+    for pg in ((summary or {}).get("pages") or []) if isinstance(summary, dict) else []:
+        if not isinstance(pg, dict) or str(pg.get("pdfplumber_text")
+                                           or pg.get("normalized_text") or "").strip():
+            continue
+        drawn = (pg.get("vision_extraction") or {}).get("drawings")
+        paths = (len(drawn) if isinstance(drawn, list)
+                 else int(drawn.get("raw_vector_paths") or 0) if isinstance(drawn, dict) else 0)
+        if paths >= OUTLINED_SHEET_MIN_PATHS:
+            doc = re.split(r"[\\/]", str(pg.get("source_pdf_path") or ""))[-1] or "the pack"
+            out.append(f"{doc} page {pg.get('page_number')}")
+    return out
+
+
 def design_intent_pages(summary: Any) -> List[Any]:
     """The page numbers whose role is design_intent (D-406), in order."""
     out: List[Any] = []
@@ -5359,7 +5385,20 @@ def _finalize_scan_summary(
             # and notes facts; the bill that comes back is held against the body and weight the
             # sheet states, put back once with what broke, and a fitting it does not draw is
             # asked, not costed. A render is read exactly as before.
-            _sheet_read = bool(_design_intent_pages)
+            # A SHEET WHOSE LETTERING IS OUTLINES IS STILL A SHEET (D-599). No text layer means no
+            # page role, and the HPP pack's 18 dimensioned sheets went to the render prompt and
+            # were sized "from human-scale cues".
+            _outlined = outlined_drawing_pages(summary)
+            if _outlined and not _design_intent_pages:
+                print(f"   [concept] {len(_outlined)} page(s) are drawing sheets with their "
+                      f"lettering printed as outlines ({', '.join(_outlined[:4])}"
+                      f"{'…' if len(_outlined) > 4 else ''}) — read as drawings, their "
+                      f"dimensions facts", flush=True)
+                summary.setdefault("review_flags", []).append(
+                    f"READ AS DRAWING SHEETS: {len(_outlined)} page(s) carry no text layer but are "
+                    f"CAD line work with the lettering drawn as outlines; the vision read took "
+                    f"their printed dimensions as facts. Check the sizes against the sheets.")
+            _sheet_read = bool(_design_intent_pages) or bool(_outlined)
             _sheet_check: Dict[str, Any] = {}
             _set_aside: List[Dict[str, Any]] = []
             # THE PREVIOUS READ, KEPT UNLESS THE PAGES SAY OTHERWISE (D-492): a re-read asked
