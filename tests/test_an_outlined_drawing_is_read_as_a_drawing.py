@@ -52,9 +52,18 @@ def test_a_round_body_is_its_skin_rims_and_formers():
     assert "pi x its diameter" in p and "formers, blocking or ribs" in p
     assert "names rolling" in p
     assert "A frame that carries or hangs a part" in p
-    assert concept_scan.CONCEPT_PROMPT_VERSION == "c7"
+    assert concept_scan.CONCEPT_PROMPT_VERSION in ("c7", "c8")
 
 
 def test_rolling_is_work_the_read_may_name_and_it_reaches_the_roll_department():
     assert "rolling" in concept_scan.SIGHTABLE_OPERATIONS
     assert department_codes.code_for("rolling") == "ROLL"
+
+
+def test_a_curved_flat_part_is_blanked_by_its_box_not_its_arc():
+    """D-599b: the HPP shelves' quarter segments came back 1571 x 700 (arc by depth) where each
+    is cut from 1000 x 1000, about twice the board."""
+    p = concept_scan._PROMPT
+    assert "A CURVED FLAT PART IS BLANKED BY ITS BOX, NOT ITS ARC" in p
+    assert "a quarter of a ring of\n  outer radius R is R x R" in p
+    assert concept_scan.CONCEPT_PROMPT_VERSION == "c8"

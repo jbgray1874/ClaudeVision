@@ -66,7 +66,9 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 #       diameter in fields of their own — never in the blank's thickness (D-528)
 #   c7  a round body is its skin, rims and formers, a curved metal part is rolled, and a frame
 #       that hangs a part is its members (D-599: the HPP fixture's base, column and halo)
-CONCEPT_PROMPT_VERSION = "c7"
+#   c8  a curved flat part is blanked by the rectangle it is cut from, not its arc (D-599b: the
+#       HPP shelves' quarter segments blanked 1571 x 700 where they are cut from 1000 x 1000)
+CONCEPT_PROMPT_VERSION = "c8"
 
 SOURCE = "vision_concept"
 
@@ -670,6 +672,9 @@ THE DIFFERENCE MATTERS AND IT IS THE WHOLE TASK:
   formers, blocking or ribs inside it, each its own line. A curved metal part (a ring, a rolled
   tube, bar or strip) names rolling; a curved board skin is flexible or kerfed board, and says so
   in why_size. A frame that carries or hangs a part (posts, cross beams, plates) is its members.
+- A CURVED FLAT PART IS BLANKED BY ITS BOX, NOT ITS ARC. A ring segment, arc or quarter circle
+  cut from sheet takes as assumed_blank_mm the rectangle it is cut from (a quarter of a ring of
+  outer radius R is R x R), never its arc length by its depth; give the arc length in why_size.
 - A printed face is TWO lines where it is a print applied to a board: the board, and the
   applied graphic.
 - PRINT IS ALWAYS ITS OWN LINE, even when it goes straight onto the board: one "graphic"
@@ -744,7 +749,7 @@ Return ONLY valid JSON, no markdown, exactly this shape:
 
 # The prompt's own hash, so a change without a version bump cannot pass silently. If a test
 # tells you this is wrong: bump CONCEPT_PROMPT_VERSION above, then put the new hash here.
-_PROMPT_FINGERPRINT = "8da174c7a405"
+_PROMPT_FINGERPRINT = "d498cc8f0392"
 
 
 class ConceptUnavailable(RuntimeError):

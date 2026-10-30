@@ -87,9 +87,9 @@ def test_a_render_keeps_its_prompt_and_its_cache_key():
     """No render pack re-asks the model because of this: the render prompt, its version and
     its cache key are exactly what they were. (c5 is D-490's deliberate change — folds, flanges,
     blank basis, cut-outs — and c6 D-528's, a part's stock form and its section, grid and wire
-    sizes; c7 D-599's, a round body is its skin, rims and formers; each re-asks every pack once;
+    sizes; c7 D-599's, a round body is its skin, rims and formers; c8 D-599b's, a curved flat part blanked by its box; each re-asks every pack once;
     the sheet read still adds nothing to a render's prompt or key.)"""
-    assert cs.CONCEPT_PROMPT_VERSION == "c7"
+    assert cs.CONCEPT_PROMPT_VERSION == "c8"
     assert hashlib.sha256(cs._PROMPT.encode()).hexdigest()[:12] == cs._PROMPT_FINGERPRINT
     render = cs.concept_prompt_text([b"png"])
     assert "THESE ARE DRAWING SHEETS" not in render
