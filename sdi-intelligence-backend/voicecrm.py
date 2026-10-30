@@ -75,7 +75,10 @@ OWNER = _opt("SDI_VOICECRM_OWNER", "NG")
 #
 # So: a mapping from a person's e-mail to their owner token in the tracker.
 #
-#   SDI_VOICECRM_OWNERS=nick.garrish@wearesdi.com=NG,kayleigh.thornhill@wearesdi.com=KT
+#   SDI_VOICECRM_OWNERS=nick.garrish@sdidisplays.co.uk=NG,kayleigh.thornhill@wearesdi.com=KT
+#
+# The SIGN-IN name, not the e-mail address - they differ for Nick, and
+# getting that wrong locked him out on 30 October. See crm_owners.py.
 #
 # "*" as the token means every row, for the people whose job is the whole
 # pipeline rather than a queue:

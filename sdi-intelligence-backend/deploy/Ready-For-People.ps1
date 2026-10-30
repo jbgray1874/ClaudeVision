@@ -38,8 +38,12 @@ param(
     # Who should be able to CHANGE records.
     [string[]]$Writers = @(
         "james.gray@wearesdi.com",
-        "nick.garrish@wearesdi.com",
-        "andy.baxter@wearesdi.com"
+        "nick.garrish@sdidisplays.co.uk",
+        "andy.baxter@wearesdi.com",
+        # Ian Jones - PM on Nick's accounts. Write access asked for by Nick,
+        # 30 October. He sees Nick's rows (NG): his own initials live in the
+        # PM Owner column, which this app does not filter on yet.
+        "ian.jones@wearesdi.com"
     ),
     # Who should be able to ASK but not change.
     [string[]]$ReadOnly = @(
