@@ -30,6 +30,10 @@
 
     It needs the Microsoft.Graph PowerShell module. If it is missing it says
     so and gives you the one-line install rather than failing obscurely.
+
+    The sign-in opens in the BROWSER. If that will not work, use a code:
+
+        .\sdi-intelligence-backend\deploy\Check-Entra-Access.ps1 -DeviceCode
 #>
 [CmdletBinding()]
 param(
@@ -45,7 +49,10 @@ param(
     ),
     [string]$Server = "10.0.0.5",
     # Skip the Entra half and audit only the server's .env.
-    [switch]$ConfigOnly
+    [switch]$ConfigOnly,
+    # Sign in with a code typed at microsoft.com/devicelogin, for when the
+    # browser sign-in will not open or is blocked.
+    [switch]$DeviceCode
 )
 
 $ErrorActionPreference = "Continue"
@@ -150,11 +157,36 @@ if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Users)) {
 }
 
 try {
-    # READ-ONLY SCOPES. Nothing here creates, assigns or changes anything.
     Import-Module Microsoft.Graph.Users -ErrorAction Stop
     Import-Module Microsoft.Graph.Applications -ErrorAction Stop
-    Connect-MgGraph -Scopes "User.Read.All", "Application.Read.All", "Directory.Read.All" `
-                    -NoWelcome -ErrorAction Stop
+
+    # ── NOT THROUGH WAM ──────────────────────────────────────────────────────
+    # Graph PowerShell signs in through Windows' Web Account Manager by
+    # default. On 30 October, inside Windows Terminal, that took the WHOLE
+    # PowerShell process down straight after the sign-in - "process exited
+    # with code 5", no error, no output, nothing a try/catch can see. WAM also
+    # asks "Sign in to all apps and websites on this device?", where the
+    # highlighted answer makes an ADMIN account the laptop's default sign-in
+    # and registers the device with Entra.
+    #
+    # So WAM is switched off and the sign-in happens in the browser. That is a
+    # preference for the Graph module on THIS laptop only - nothing in Entra,
+    # nothing on the server - and it persists, which is what you want for the
+    # next run too. An older module without the option just carries on.
+    try { Set-MgGraphOption -DisableLoginByWAM $true -ErrorAction Stop } catch { }
+
+    # READ-ONLY SCOPES. Nothing here creates, assigns or changes anything.
+    # One list, used by both sign-in routes, so they cannot drift apart.
+    $scopes = "User.Read.All", "Application.Read.All", "Directory.Read.All"
+    if ($DeviceCode) {
+        # For when the browser route is blocked too. Prints a code; you type
+        # it at microsoft.com/devicelogin in any browser, on any device.
+        Connect-MgGraph -Scopes $scopes -UseDeviceCode -NoWelcome -ErrorAction Stop
+    } else {
+        Say "A browser tab opens for the Microsoft sign-in. Use the cadmin- account," White
+        Say "then come back to this window." White
+        Connect-MgGraph -Scopes $scopes -NoWelcome -ErrorAction Stop
+    }
     $ctx = Get-MgContext
     Yes "Signed in to Entra as $($ctx.Account)"
 } catch {
