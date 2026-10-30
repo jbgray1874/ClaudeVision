@@ -40,6 +40,30 @@ The consequence worth keeping is unchanged and still bites: **what is deployed o
 `C:\ClaudeVision` is whatever was last pulled, not what is on the branch.** Verify against run
 output before reasoning about behaviour.
 
+**TWO GITHUB REPOSITORIES, KEPT IN SYNC — ALWAYS (JG, standing rule).** The same code lives in two
+places, and both must carry every change before anyone is told to pull or run:
+
+  * `jbgray1874/ClaudeVision` — where cloud sessions commit and push (`main-2026`).
+  * `jbgraysdi2026/ClaudeVision` — what the laptop pulls: `C:\ClaudeVision` runs the portal branch
+    `claude/app-portal-main-2026`, which takes the engine by merging `main-2026`.
+
+A cloud session attached to `jbgray1874` cannot push to `jbgraysdi2026`: it holds no login for that
+account, and two repositories with the same name cannot be attached to one session. So a session
+that has pushed engine work says so plainly, and the sync is done from the laptop, in this order:
+
+    cd C:\ClaudeVision
+    git fetch https://github.com/jbgray1874/ClaudeVision.git main-2026
+    git push origin FETCH_HEAD:refs/heads/main-2026
+    git pull --no-edit origin main-2026
+    git push origin HEAD
+
+The first two lines bring `jbgraysdi2026`'s `main-2026` level with `jbgray1874`'s; the last two merge
+it into the portal branch and publish that. Then prove it before any run, with the last commit the
+session named: `git merge-base --is-ancestor <commit> HEAD; if ($?) { "fixes in" } else { "NOT in" }`.
+30 Oct 2026 lost two hours to this: `git pull origin main-2026` said "Already up to date" because the
+laptop's `origin` is `jbgraysdi2026`, which had none of the day's six commits, and the rerun replayed
+the old read. A session never tells JG to rerun until the check prints "fixes in".
+
 **§2 is still right that the venv is the only interpreter** — and this is now enforced rather than
 remembered. `src/dependency_preflight.py` parses the "Core pipeline (required)" block of
 `requirements.txt`, imports each module, and refuses to start the scan when a fatal package is
