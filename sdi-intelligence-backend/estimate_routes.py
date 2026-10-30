@@ -376,6 +376,18 @@ _RUNNERS: Dict[str, Runner] = {}
 _LOCK = threading.Lock()
 
 
+def work_in_hand() -> List[Dict[str, Any]]:
+    """Runs this service would lose track of if it restarted: queued or running.
+
+    _RUNS is memory, not disk. The estimate itself is filed on the share by the
+    runner, but the queue, the claim and the e-mail on completion are here, so
+    Remote Control refuses its restart while this is not empty."""
+    with _LOCK:
+        return [{"run_id": r.run_id, "client": r.client,
+                 "drawing_number": r.drawing_number, "status": r.status}
+                for r in _RUNS.values() if r.status in ("queued", "running")]
+
+
 def _expire_dead_claims() -> None:
     """A GATE NOBODY ASKS REPORTS NOTHING, so this is called on every request that
     reads or changes the queue rather than left to a timer that might not be

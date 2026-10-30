@@ -33,11 +33,20 @@ DEPLOY = (BACKEND / "deploy" / "Deploy-AMCRM.ps1").read_text(encoding="utf-8")
 
 
 class ItCannotActTests(unittest.TestCase):
-    def test_every_route_is_a_get(self):
-        verbs = {node.attr for node in ast.walk(ast.parse(SOURCE))
-                 if isinstance(node, ast.Attribute)
-                 and isinstance(node.value, ast.Name) and node.value.id == "router"}
-        self.assertEqual(verbs, {"get"}, f"a non-GET route exists: {verbs}")
+    def test_the_only_write_is_the_restart(self):
+        """Phase two, agreed 30 October: exactly one action. A second POST
+        appearing here is a new remote control, and needs agreeing too."""
+        posts = [node for node in ast.walk(ast.parse(SOURCE))
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                 and isinstance(node.func.value, ast.Name) and node.func.value.id == "router"
+                 and node.func.attr not in ("get",)]
+        self.assertEqual(len(posts), 1, "a second non-GET route exists")
+        self.assertEqual(posts[0].func.attr, "post")
+        self.assertEqual(posts[0].args[0].value, "/restart")
+
+    def test_the_restart_route_exists_only_when_switched_on(self):
+        guarded = SOURCE.split("if restart_on:", 1)[1]
+        self.assertIn('@router.post("/restart")', guarded[:80])
 
     def test_it_cannot_run_a_command_or_touch_a_service(self):
         for forbidden in ("subprocess", "os.system", "popen", "sc.exe",
@@ -60,8 +69,9 @@ class ItCannotActTests(unittest.TestCase):
                 self.assertEqual(names & {"path", "file", "url", "cmd", "command"},
                                  set(), f"{node.name} accepts a location")
 
-    def test_the_page_says_it_is_read_only(self):
-        self.assertIn("This page cannot restart anything", PAGE)
+    def test_the_page_says_what_it_can_and_cannot_do(self):
+        self.assertIn("can restart this one service and\n    nothing else", PAGE)
+        self.assertIn("cannot run a command, change a setting or deploy", PAGE)
         self.assertIn("Remote Desktop", PAGE)
 
 
@@ -122,9 +132,25 @@ class NamedPeopleTests(unittest.TestCase):
         self.assertFalse(ops.allowed(object()))
 
     def test_every_route_is_gated(self):
-        for handler in ("def console(", "def status(", "def health(", "def tail("):
-            with self.subTest(handler=handler):
-                self.assertIn("who(request)", SOURCE.split(handler, 1)[1][:200])
+        """who(request) is the first thing each route does, after its
+        docstring - not merely somewhere in it."""
+        found = {}
+        for node in ast.walk(ast.parse(SOURCE)):
+            if isinstance(node, ast.FunctionDef) and any(
+                    isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)
+                    and getattr(d.func.value, "id", "") == "router"
+                    for d in node.decorator_list):
+                body = [s for s in node.body if not (isinstance(s, ast.Expr)
+                        and isinstance(getattr(s, "value", None), ast.Constant))]
+                found[node.name] = ast.unparse(body[0])
+        # The switched-off stub names two settings and nothing else, to anyone:
+        # that is what SwitchedOffSaysSoTests below is about.
+        found.pop("off", None)
+        self.assertEqual(set(found), {"console", "status", "health", "tail",
+                                      "person", "restart"})
+        for name, first in found.items():
+            with self.subTest(route=name):
+                self.assertEqual(first, "who(request)")
 
     def test_it_is_mounted_only_when_switched_on(self):
         self.assertIn('env.get("SDI_OPS_ENABLED", "").lower() != "yes"', SOURCE)

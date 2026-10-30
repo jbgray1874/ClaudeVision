@@ -197,18 +197,38 @@ if ($svc) {
 # The port, from the service's own command line, so nobody has to guess it.
 $port = ""
 $nssmParams = ""
+$readService = $false
+$appExit = ""
 try {
     $key = "SYSTEM\CurrentControlSet\Services\SDIIntelligence\Parameters"
     $hive = [Microsoft.Win32.RegistryKey]::OpenRemoteBaseKey("LocalMachine", $Server)
     $sub  = $hive.OpenSubKey($key)
     if ($sub) {
+        $readService = $true
         $nssmParams = [string]$sub.GetValue("AppParameters")
         $stdout     = [string]$sub.GetValue("AppStdout")
+        $exitKey    = $sub.OpenSubKey("AppExit")
+        if ($exitKey) { $appExit = [string]$exitKey.GetValue("") }
     }
 } catch { }
 if ($nssmParams -match "--port[= ]+(\d+)") { $port = $Matches[1] }
 if ($port) { Yes "Listening on port $port  (from the service's own command line)" }
 else { Hm "Could not read the port from the service configuration" }
+
+# ── WILL IT COME BACK BY ITSELF? ─────────────────────────────────────────────
+# Remote Control's Restart button ends the process and relies on NSSM to start
+# it again. Restart is NSSM's own default; "Exit" or "Ignore" here would turn
+# that button into an OFF switch, pressed from a phone, with nobody in the
+# office to turn it back on.
+if ($readService) {
+    if (-not $appExit -or $appExit -eq "Restart") {
+        $how = if ($appExit) { $appExit } else { "Restart, NSSM's default" }
+        Yes "If the service ends, Windows starts it again (AppExit: $how)"
+    } else {
+        No "If the service ends, NSSM will '$appExit' - Remote Control's Restart would leave it DOWN"
+        Say "On the SERVER, over Remote Desktop:  & C:\Tools\nssm.exe set SDIIntelligence AppExit Default Restart"
+    }
+}
 
 if ($port) {
     try {

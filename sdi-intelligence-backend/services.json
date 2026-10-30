@@ -1013,15 +1013,15 @@
     {
       "id": "remote-control",
       "name": "SDI Remote Control Intelligence",
-      "status": "Phase one · read only",
+      "status": "Phase two · one action",
       "cls": "c-prog",
       "category": "Apps",
       "app_category": "Meta",
       "surface": "app",
       "app_url": "/api/ops",
-      "desc": "What the SDI Intelligence service is doing, from your phone — running version, uptime, which apps mounted, which shares it can reach, and the log.",
+      "desc": "What the SDI Intelligence service is doing, from your phone — running version, uptime, which apps mounted, which shares it can reach, and the log. Checks whether a person is set up for AM CRM, and restarts the service.",
       "requires": "Named people only (SDI_OPS_OIDS), through Microsoft sign-in with MFA.",
-      "detail": "Every one of these checks was a trip to the laptop. None of them needs a shell, so none is given one. <b>It is read only: it cannot restart anything, run a command, or change a setting.</b> An authenticated \"run anything\" route on the public address would be the highest-value target in the estate and would undo the boundaries the rest of the service spends its time holding. For a real shell on the server, Remote Desktop is already gated and already audited.",
+      "detail": "Every one of these checks was a trip to the laptop. None of them needs a shell, so none is given one. It can do exactly one thing: restart this service. That is the process ending itself and Windows starting it again, not a command, so it can do nothing a crash could not; it has its own switch (SDI_OPS_RESTART), refuses while an estimate is queued or running, and refuses within three minutes of the last start. It cannot run a command, change a setting or deploy. An authenticated \"run anything\" route on the public address would be the highest-value target in the estate. For a real shell on the server, Remote Desktop is already gated and already audited.",
       "sections": [
         {
           "title": "What it shows",
@@ -1032,7 +1032,7 @@
           "body": "The access log records whole request lines, and the private assistant's sign-in callback carries an OAuth authorization code in its query string. Single-use and short-lived, and still no business on a web page. Query strings are stripped and anything token-shaped is replaced, on the server, before the text is sent."
         }
       ],
-      "next": "A small, fixed set of named actions — restart this one service, and nothing else — once it is designed and agreed. Absent until then rather than half-present."
+      "next": "Ship-It from the phone is deliberately not here: a deploy copies code from the laptop, and a phone that could do it would be a remote code-change button. Anything further is designed and agreed before it is built, as the restart was."
     }
   ]
 }
