@@ -90,6 +90,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 # which used to answer it privately and disagreed with the rest of the engine.
 import bought_in_policy as _bought_in_policy
 import costed_facts as _costed_facts
+import material_preservation as _material_preservation
 
 # What goes next to a price nobody can reproduce. Short enough for a spreadsheet cell and
 # blunt enough that it cannot be read as a supplier quote.
@@ -2004,7 +2005,15 @@ def _board_sheet_price_from_kg_rate(material, thickness_mm, sheet_l_mm, sheet_w_
     rates = getattr(config, "MATERIAL_PRICE_GBP_PER_KG", {}) or {}
     dens = getattr(config, "MATERIAL_DENSITY_KG_PER_M3", {}) or {}
     rate = density = None
-    for k in (name, name.replace(" ", "_"), name.replace("_", " ")):
+    try:
+        # And under the key the price resolves to (D-602): "Aluminium, 3mm" is ALUMINIUM.
+        _resolved = str(config.resolve_material_rate_key(material) or "").upper()
+    except Exception:                                        # noqa: BLE001
+        _resolved = ""
+    for k in (name, name.replace(" ", "_"), name.replace("_", " "),
+              _resolved, _resolved.replace(" ", "_"), _resolved.replace("_", " ")):
+        if not k:
+            continue
         rate = rate if rate is not None else rates.get(k)
         density = density if density is not None else dens.get(k)
     try:
@@ -2037,6 +2046,17 @@ def _own_sheet_rate(mat: str) -> Optional[float]:
     rate = None
     for k in (name, name.replace(" ", "_"), name.replace("_", " ")):
         rate = rate if rate is not None else rates.get(k)
+    if not rate:
+        # UNDER THE KEY THE PRICE RESOLVES TO (D-602). "Aluminium, 3mm" is priced as
+        # ALUMINIUM by the estimator; missed here, it fell to the Sheet Steel block and was
+        # charged at the mild-steel £/tonne.
+        try:
+            _key = config.resolve_material_rate_key(mat)
+        except Exception:                                    # noqa: BLE001
+            _key = None
+        if _key:
+            _k = str(_key).upper()
+            rate = rates.get(_k) or rates.get(_k.replace(" ", "_")) or rates.get(_k.replace("_", " "))
     if not rate:
         return None
     try:
@@ -5832,6 +5852,18 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                       f"own cost per sheet (D-559).", flags)
             else:
                 steel_parts.append(pe)
+        # 3a. NOT STEEL THE SHEET STEEL BLOCK CAN PRICE (D-602). That block prices every row at
+        #     one mild-steel £/tonne, so brass, copper, glass or a material nobody holds a rate
+        #     for was charged as mild steel there, silently. It goes to the BOM as a per-each
+        #     line at its own price or none, with the question asked.
+        elif (stock_form in STEEL_STOCK_FORMS and not _is_board(mat)
+              and not _material_preservation.sheet_steel_can_price(mat)):
+            bom_parts.append(pe)
+            _q3a = _material_preservation.sheet_steel_question(pe)
+            if _q3a:
+                _flag(_q3a, flags)
+                if _q3a not in (pe.get("review_flags") or []):
+                    pe.setdefault("review_flags", []).append(_q3a)
         # 3. steel (sheet or stated-weight, with real geometry) — but NOT a board/timber part.
         #    A timber panel costed by stated weight has stock_form 'stated_weight' (in
         #    STEEL_STOCK_FORMS); without the board guard it would be dumped in Sheet Steel and
@@ -5897,6 +5929,26 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                   f"blankL={blank_l}) — written to the BOM as a per-each line so it "
                   f"cannot silently read as free. Add its material/geometry to cost it "
                   f"as sheet or board.", flags)
+
+    # ── THE MATERIAL IS PRESERVED WHERE THE MONEY IS PLACED (D-602) ─────────────────
+    # The last word, whichever rule above placed the part. A Sheet Steel row must be steel
+    # that block can price; anything else leaves it for the BOM with the question asked.
+    # And every charged line must be the material it was stated as, unless a recorded
+    # decision changed it: an unrecorded change is asked, never fixed silently here.
+    for _pe_ss in list(steel_parts):
+        _q_ss = _material_preservation.sheet_steel_question(_pe_ss)
+        if _q_ss:
+            steel_parts.remove(_pe_ss)
+            bom_parts.append(_pe_ss)
+            _flag(_q_ss, flags)
+            if _q_ss not in (_pe_ss.get("review_flags") or []):
+                _pe_ss.setdefault("review_flags", []).append(_q_ss)
+    for _pe_mp in bom_parts + steel_parts + board_parts + wire_parts:
+        _q_mp = _material_preservation.material_question(_pe_mp)
+        if _q_mp:
+            _flag(_q_mp, flags)
+            if _q_mp not in (_pe_mp.get("review_flags") or []):
+                _pe_mp.setdefault("review_flags", []).append(_q_mp)
 
     # ── BOM block: desc, code, PRICE (engine), qty, scrap ──────────────────
     # Holds true bought-ins (fixings, vinyl, electricals) AND tube sections

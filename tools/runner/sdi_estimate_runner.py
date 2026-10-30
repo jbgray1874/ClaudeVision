@@ -1116,9 +1116,13 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
     flush(force=True)
 
     try:
+        # WHO CLAIMED IT, ON THE BOOK (D-601). The engine names its own machine; only the
+        # runner knows its runner id and the portal's run id, so it hands them down.
         proc = subprocess.Popen(cmd, cwd=str(engine_root), stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-                                errors="replace", bufsize=1)
+                                errors="replace", bufsize=1,
+                                env={**os.environ, "SDI_CLAIMED_BY_RUNNER": str(runner_id),
+                                     "SDI_SERVICE_RUN_ID": str(run_id)})
     except OSError as exc:
         _finish(requests, base, headers, run_id, runner_id, "error",
                 f"Could not start the engine: {exc}", log)

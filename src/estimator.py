@@ -369,6 +369,30 @@ def _price_per_kg_for_material(part: Optional[Dict[str, Any]], material) -> Opti
     return rate
 
 
+def _density_for_material(material) -> Optional[float]:
+    """The kg/m3 for this material, under the same key its price resolves to (D-602).
+
+    "Aluminium, 3mm" was priced under ALUMINIUM by the function above and weighed under its
+    own name, which the density table does not hold, so it fell to steel's 7850: a 600 x 300
+    x 3 aluminium panel weighed 4.24 kg instead of 1.46 and cost GBP 12.12 instead of 4.17.
+    The price and the weight now read the material the same way. None when neither name has
+    a density; the caller decides what that means."""
+    d = (MATERIAL_DENSITY_KG_PER_M3.get(material)
+         or MATERIAL_DENSITY_KG_PER_M3.get(str(material or "").upper()))
+    if d is not None:
+        return d
+    try:
+        import config as _cfg_d
+        key = _cfg_d.resolve_material_rate_key(material)
+    except Exception:                                        # noqa: BLE001
+        key = None
+    if not key:
+        return None
+    k = str(key).upper()
+    return (MATERIAL_DENSITY_KG_PER_M3.get(k) or MATERIAL_DENSITY_KG_PER_M3.get(k.replace(" ", "_"))
+            or MATERIAL_DENSITY_KG_PER_M3.get(k.replace("_", " ")))
+
+
 def _weight_source_label(part: Dict[str, Any]) -> str:
     if part.get("dxf_weight_g") or part.get("dxf_weight_kg"):
         return "dxf_flat_pattern"
@@ -7030,7 +7054,12 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                         applied=True, applied_basis=f"catalogue {_cat.get('part_code')} @ £{_cat_unit:.2f}/{_cat.get('uom') or 'EA'}",
                     ),
                 }
-            density = MATERIAL_DENSITY_KG_PER_M3.get(material or "", MATERIAL_DENSITY_KG_PER_M3.get("MILD STEEL"))
+            # Under the key the price resolves to (D-602). A named material with neither is
+            # not weighed as steel and not priced (D-602a); it is asked, below.
+            _sec_no_density = (bool(str(material or "").strip())
+                               and _density_for_material(material) is None)
+            density = (_density_for_material(material)
+                       or MATERIAL_DENSITY_KG_PER_M3.get("MILD STEEL"))
             # A ROUND TUBE IS NOT A SQUARE ONE.
             #
             # This was the only formula: A = outer - inner, on the sides of a rectangle. Round
@@ -7152,6 +7181,12 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                     f"{'the indicative section rate' if (_sec_rate and _sec_rate > 0) else 'the flat-product rate'} "
                     f"GBP {price_per_kg:.2f}/kg at the stadium section's {kg_per_m:.3f} kg/m "
                     f"({_section_words(_ss)}), confirm against a stockist's FSO price")
+            if _sec_no_density:
+                price_per_kg = None
+                part.setdefault("review_flags", []).append(
+                    f"{material}: no density recorded under this name or the one its rate "
+                    f"resolves to, so this section is NOT weighed as steel and NOT costed. "
+                    f"Confirm the material, and set a density and a rate for it.")
             unit_cost = (unit_mass_kg * price_per_kg * waste_factor) if price_per_kg is not None else None
             extended = (unit_cost * quantity) if unit_cost is not None else None
             # TAG THE PART ITSELF, not only the material estimate. The route compiler's
@@ -7166,7 +7201,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 "blank_length_mm": blank_length,
                 "blank_width_mm": blank_width,
                 "blank_area_m2": None,
-                "unit_material_mass_kg": round(unit_mass_kg, 3),
+                "unit_material_mass_kg": None if _sec_no_density else round(unit_mass_kg, 3),
                 "unit_material_cost_gbp": round(unit_cost, 2) if unit_cost is not None else None,
                 "cost_per_part_gbp": round(unit_cost, 2) if unit_cost is not None else None,
                 "extended_material_cost_gbp": round(extended, 2) if extended is not None else None,
@@ -7596,8 +7631,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     # A board with no density recorded now returns None, which lands in the `no_price`
     # branch below and reaches the sheet as a visible unpriced line. Metals keep the steel
     # default: an unlisted alloy really is about that dense, and the guess is defensible.
-    density = (MATERIAL_DENSITY_KG_PER_M3.get(material)
-               or MATERIAL_DENSITY_KG_PER_M3.get((material or "").upper()))
+    density = _density_for_material(material)
     if density is None:
         _mat_u = str(material or "").upper().replace("_", " ")
         _is_board_mat = any(
@@ -7655,6 +7689,15 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 f"{material}: no density recorded, so its material cannot be massed and is "
                 f"NOT costed. Board is deliberately not defaulted to steel's 7850 kg/m3 — "
                 f"that would be a 10x error. Set a sheet rate or a density for this board.")
+        elif str(material or "").strip():
+            # A NAMED MATERIAL WITH NO DENSITY IS NOT WEIGHED AS STEEL (D-602a). Neither its
+            # own name nor the key its price resolves to has one, so steel's 7850 would be a
+            # guess presented as a weight: glass, rubber or a titanium are nothing like it. No
+            # mass, no price, and the question asked.
+            part.setdefault("review_flags", []).append(
+                f"{material}: no density recorded under this name or the one its rate resolves "
+                f"to, so it is NOT weighed as steel and NOT costed. Confirm the material, and "
+                f"set a density and a rate for it.")
         else:
             density = 7850.0
     fallback_price_per_kg = _price_per_kg_for_material(part, material)
