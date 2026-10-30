@@ -40,16 +40,29 @@ LIVE_ENQUIRY_ROOT = Path(os.getenv(
 ))
 
 
+# ── AND A THIRD: WHERE THE ESTIMATES THEMSELVES ARE FILED ─────────────────────
+# "we should be able to read all the directories with the live enquiry drawing
+# packs and the estimates" - James Gray, 30 October 2026. Every run files its
+# workbook, report and quotation under AISheets; from outside the office there
+# was no way to open one. The same setting and default as estimate_routes'
+# OUTPUT_ROOT, which is where the runs write.
+ESTIMATES_ROOT = Path(os.getenv(
+    "SDI_ESTIMATE_OUTPUT_ROOT",
+    r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\AISheets",
+))
+
+
 def areas() -> dict:
     """The approved trees, by the name the page asks for them with."""
-    return {"briefs": BRIEFS_ROOT, "enquiries": LIVE_ENQUIRY_ROOT}
+    return {"briefs": BRIEFS_ROOT, "enquiries": LIVE_ENQUIRY_ROOT,
+            "estimates": ESTIMATES_ROOT}
 
 
 def area_root(area: str) -> Path:
     found = areas().get(str(area or "briefs"))
     if found is None:
-        raise ValueError("Unknown area. The scanner browses the completed "
-                         "estimates and the live enquiries, and nothing else.")
+        raise ValueError("Unknown area. The scanner browses the live enquiries, the "
+                         "completed briefs and the filed estimates, and nothing else.")
     return found
 
 

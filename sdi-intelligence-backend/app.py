@@ -332,8 +332,9 @@ async def _public_surface_guard(request, call_next):
                 if path in ("/api/files", "/api/file") and not _under_the_briefs(
                         request.query_params.get("path", "")):
                     return JSONResponse(status_code=403, content={
-                        "detail": "Only the completed AI briefs folder can be browsed from "
-                                  "outside the office."})
+                        "detail": "From outside the office, only the live enquiries, the "
+                                  "completed AI briefs and the filed estimates (AISheets) "
+                                  "can be opened."})
                 if path == "/api/estimate" or path.startswith("/api/estimate/"):
                     # Existing queue endpoints require a service key; translate the
                     # authenticated user inside the service, never in browser JS.
@@ -688,7 +689,18 @@ def estimating_page(request: Request):
         # 302 and no-store, NOT a permanent redirect: the answer depends on the
         # device, and one cached 301 would send a laptop to the phone page for
         # as long as the browser kept it.
-        return RedirectResponse(url="/app/estimating-pocket.html", status_code=302,
+        #
+        # ?pack= rides along: it is how "saved from an email, now estimate it"
+        # arrives (the private assistant's link), and dropping it here would land
+        # a phone on the Ask screen with the pack nowhere in sight. Only that one
+        # parameter, re-quoted - the page reads it as a folder under Live Enquiry
+        # and the server resolves it there, never as a path.
+        target = "/app/estimating-pocket.html"
+        pack = request.query_params.get("pack", "")
+        if pack:
+            from urllib.parse import quote as _q
+            target += "?pack=" + _q(pack[:512], safe="")
+        return RedirectResponse(url=target, status_code=302,
                                 headers={"Cache-Control": "no-store"})
     if _ESTIMATOR.exists():
         return FileResponse(str(_ESTIMATOR), headers=_PAGE_HEADERS)
