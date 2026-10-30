@@ -107,6 +107,8 @@ const pretty = s => { const d = new Date(s + "T00:00:00");
 
 const short = s => { const d = new Date(s + "T00:00:00");
   return isNaN(d) ? s : d.toLocaleDateString("en-GB", {weekday:"short", day:"numeric", month:"short"}); };
+// "Oct 26 WK 40!row 5" is how the answer cites a row; on screen it reads as words.
+const cite = s => String(s || "").replace("!row ", ", row ");
 const nextWorkingDay = d => { const n = new Date(d);
   do { n.setDate(n.getDate() + 1); } while(n.getDay() === 0 || n.getDay() === 6); return n; };
 const mondayOf = d => { const m = new Date(d); m.setDate(m.getDate() - (m.getDay() + 6) % 7); return m; };
@@ -171,7 +173,7 @@ function card(line, parent, cls){
   if(paper.length) el("p", paper.join("  ·  "), c, "meta");
 
   if(line.comments) el("p", "Comments: " + line.comments, c, "meta");
-  el("p", line.source, c, "meta");
+  el("p", cite(line.source), c, "meta");
   return c;
 }
 
@@ -188,7 +190,7 @@ function foldaway(parent, label, list, truncated, cls, open){
 function provenance(j){
   $("foot").textContent = "Plan last saved "
     + new Date(j.plan_saved).toLocaleString("en-GB")
-    + "  ·  version " + j.plan_version + "  ·  " + j.rows_read + " rows read"
+    + "  ·  " + j.rows_read + " rows read"
     + (j.plan_reused_from_cache ? " (reusing this save's reading)" : "")
     + ".  This answer is only as current as that save.";
 }
@@ -261,13 +263,22 @@ day: {
     const note = el("div", null, $("out"), "caveat");
     el("p", j.caveat, note);
     if(j.line_count){
-      const left = [];
-      if(j.pallet_lines_as_text && j.pallet_lines_as_text.length)
-        left.push(some(j.pallet_lines_as_text.length) + " with pallets written as text ("
-          + j.pallet_lines_as_text.map(t => "“" + t.pallets_as_recorded + "”, " + t.source).join("; ") + ")");
-      if(j.pallet_lines_blank) left.push(some(j.pallet_lines_blank) + " with no pallet count");
-      el("p", "Pallets: " + pal(j.pallet_total || 0) + ". " + j.pallet_total_reason
-         + (left.length ? "  Not counted: " + left.join(", and ") + "." : ""), note, "hint");
+      // "0 pallets" over a line whose PALLETS cell is empty reads as "nothing
+      // to send". When nothing could be counted, say that, not a total of 0.
+      const asText = (j.pallet_lines_as_text || []).map(t =>
+        "“" + t.pallets_as_recorded + "”, " + cite(t.source)).join("; ");
+      if(j.pallet_lines_counted){
+        const left = [];
+        if(asText) left.push(some(j.pallet_lines_as_text.length)
+          + " with pallets written as text (" + asText + ")");
+        if(j.pallet_lines_blank) left.push(some(j.pallet_lines_blank) + " with no pallet count");
+        el("p", "Pallets: " + pal(j.pallet_total || 0) + ". " + j.pallet_total_reason
+           + (left.length ? "  Not counted: " + left.join(", and ") + "." : ""), note, "hint");
+      } else {
+        el("p", "Pallets: no total. The PALLETS column has no number for "
+           + (j.line_count === 1 ? "this line" : "these lines")
+           + (asText ? " (written as text: " + asText + ")" : "") + ".", note, "hint");
+      }
     }
     foldaway($("out"), some(unread) + have(unread)
       + " a date this cannot read — check these in the workbook",
@@ -413,7 +424,7 @@ quality: {
         el("h3", (item.order ? "Order " + item.order : "(no order number)")
                + (item.part ? "  ·  " + item.part : ""), c);
         el("p", item.what, c, "because");
-        el("p", item.source, c, "meta");
+        el("p", cite(item.source), c, "meta");
       }
       if(g.truncated) el("p", "Only the first 40 are shown.", $("out"), "hint");
     }
@@ -424,7 +435,7 @@ quality: {
       for(const d of j.duplicate_order_lines){
         const c = el("div", null, $("out"), "card");
         el("h3", "Order " + d.order + "  ·  part " + d.part, c);
-        el("p", d.count + " rows: " + d.sources.join(", "), c, "meta");
+        el("p", d.count + " rows: " + d.sources.map(cite).join("; "), c, "meta");
       }
     }
     if(j.spelling_correction_count){
@@ -438,11 +449,71 @@ quality: {
         el("p", s.column + " reads “" + s.cell + "” and was read as " + s.read_as
               + " — " + s.basis + ". Fix the cell rather than relying on this.",
            c, "because");
-        el("p", s.source, c, "meta");
+        el("p", cite(s.source), c, "meta");
       }
     }
     el("p", j.note, $("out"), "hint");
   }},
+
+// ── Liam's project tracker, from his SharePoint, read as you ────────────────
+projects: {
+  label: "Project tracker",
+  busy: "Reading the project tracker from SharePoint…",
+  tools: `<input id="pq" type="search" maxlength="80"
+            placeholder="Filter: any words in a row (a name, a part, a status)"
+            aria-label="Filter the project tracker">
+          <button class="secondary" data-run>Refresh</button>`,
+  data: null,
+  ready(){ $("pq").addEventListener("input", () => {
+      if(VIEWS.projects.data){ $("out").replaceChildren(); VIEWS.projects.draw(VIEWS.projects.data); } });
+    return true; },
+  url(){ return "/api/tti/despatch/projects"; },
+  draw(j){
+    VIEWS.projects.data = j;
+    const words = $("pq").value.toLowerCase().split(/\s+/).filter(Boolean);
+    let total = 0, shown = 0;
+    for(const t of j.trackers || []) for(const f of t.files || []){
+      el("h2", t.label + " — " + f.name, $("out"), "dayhead");
+      const about = el("p", "Last saved " + (f.saved ? new Date(f.saved).toLocaleString("en-GB") : "?") + ".  ",
+                       $("out"), "hint");
+      if(f.web_url){ const a = el("a", "Open it in SharePoint", about); a.href = f.web_url; a.target = "_blank"; a.rel = "noopener"; }
+      for(const sh of f.sheets || []){
+        const rows = sh.rows.filter(r => words.every(w =>
+          (sh.sheet + " " + Object.values(r.cells).join(" ")).toLowerCase().includes(w)));
+        total += sh.rows.length; shown += rows.length;
+        if(!rows.length && words.length) continue;
+        el("h3", sh.sheet + "  ·  " + rows.length + (rows.length === 1 ? " row" : " rows"), $("out"));
+        for(const r of rows){
+          const c = el("div", null, $("out"), "card");
+          const vals = Object.values(r.cells);
+          el("h3", vals.slice(0, 2).join("  ·  ") || "(row " + r.row + ")", c);
+          for(const [k, v] of Object.entries(r.cells).slice(2))
+            el("p", k + ": " + v, c, "meta");
+          for(const p of r.paths || []){
+            const line = el("p", null, c);
+            if(p.is_file){
+              const open = el("a", "Open", line, "primary");
+              open.href = "/api/tti/despatch/files/open?path=" + encodeURIComponent(p.path);
+              open.target = "_blank"; open.rel = "noopener";
+            } else {
+              const find = el("button", "Find in TTi files", line, "secondary");
+              find.type = "button";
+              find.onclick = () => { show("files"); $("fq").value = p.path.split(/[\\/]/).filter(Boolean).pop() || p.path; run(); };
+            }
+            // The path beside the button only when the cell does not already show it
+            // (a hyperlink labelled "see drawing", say).
+            if(!vals.some(v => v.replace(/\//g, "\\").includes(p.path)))
+              el("span", "  " + p.path, line, "meta");
+          }
+          el("p", f.name + " › " + sh.sheet + " › row " + r.row, c, "meta");
+        }
+      }
+    }
+    setStatus(words.length
+      ? shown + " of " + total + " rows have “" + words.join(" ") + "”."
+      : total + (total === 1 ? " row" : " rows") + " in the project tracker.", shown ? "ok" : "");
+  },
+  foot(){ $("foot").textContent = "Read from SharePoint as you, just now. Nothing here changes the tracker."; }},
 
 // ── Liam's TTi folders: names only, from an index built on a schedule ──────
 files: {
@@ -537,12 +608,15 @@ async function run(){
     // Despatch Plan. Every despatch tab said only "error"; this says what still
     // works and what would open the rest.
     if(e.reason === "access" && current !== "files"){
+      const tracker = current === "projects";
       const note = el("div", null, $("out"), "caveat");
-      el("p", "This tab reads Sue's TTI Despatch Plan in SharePoint as you, and your account "
-         + "cannot open it, so there is nothing to show here. That is about access to the "
-         + "plan, not a fault in the app.", note);
-      el("p", "Find TTi files does not need the plan: drawings and files in the TTi folders "
-         + "on W: work for you now. For the despatch tabs, ask Sue to share the plan with you.",
+      el("p", (tracker ? "This tab reads the project tracker in the TTi Projects SharePoint site"
+                       : "This tab reads Sue's TTI Despatch Plan in SharePoint")
+         + " as you, and your account cannot open it, so there is nothing to show here. That is "
+         + "about access to the file, not a fault in the app.", note);
+      el("p", "Find TTi files does not need it: drawings and files in the TTi folders on W: work "
+         + "for you now. " + (tracker ? "For the tracker, ask Liam to share it with you."
+                                      : "For the despatch tabs, ask Sue to share the plan with you."),
          note, "hint");
       const go = el("button", "Go to Find TTi files", note, "primary");
       go.type = "button"; go.style.marginTop = "10px"; go.onclick = () => show("files");

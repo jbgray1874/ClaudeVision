@@ -75,7 +75,7 @@ def started(tmp_path_factory):
 def test_all_eight_tools_are_listed_and_each_says_it_only_reads(started):
     assert started["tools"] == {name: True for name in (
         "tti_find", "tti_leaving_on", "tti_leaving_this_week", "tti_chase", "tti_overdue",
-        "tti_morning", "tti_data_quality", "tti_find_files")}
+        "tti_morning", "tti_data_quality", "tti_find_files", "tti_project_tracker")}
 
 
 def test_chatgpt_is_sent_to_the_connectors_own_sign_in(started):
