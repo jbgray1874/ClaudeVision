@@ -200,5 +200,32 @@ class TheFullScreenStillDoesFullRunsTests(unittest.TestCase):
         self.assertIn("/app/estimating-pocket.html", FULL)
 
 
+class TheCardSaysWhatAPhoneCanDoTests(unittest.TestCase):
+    """── 30 OCTOBER, READ ON A PHONE OVER 4G ──────────────────────────────
+    The portal card said starting a job from outside the office "opens once
+    the server is live behind Microsoft sign-in and MFA; until then, in the
+    office only" - read through that very sign-in, four days after starting
+    a job from outside had opened. The card is what a director reads; it must
+    say what public_surface.py actually allows."""
+
+    def card(self):
+        services = json.loads((BACKEND / "services.json").read_text(encoding="utf-8"))
+        items = services if isinstance(services, list) else services.get("services", [])
+        return next(s for s in items if s.get("id") == "estimating")
+
+    def test_it_no_longer_says_office_only(self):
+        self.assertNotIn("in the office only", self.card()["requires"])
+
+    def test_what_it_promises_from_outside_is_what_is_allowed(self):
+        import public_surface
+        requires = self.card()["requires"]
+        self.assertIn("/api/estimate", public_surface.PUBLIC_POST)
+        self.assertIn("/api/estimate/brief", public_surface.PUBLIC_POST)
+        self.assertIn("start a job", requires)
+        self.assertIn("from a brief", requires)
+        self.assertIn("/api/estimate/release", public_surface.NEVER_PUBLIC_POST)
+        self.assertIn("Releasing a quotation", requires)
+
+
 if __name__ == "__main__":
     unittest.main()
