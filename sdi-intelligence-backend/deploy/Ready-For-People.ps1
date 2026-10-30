@@ -49,7 +49,12 @@ param(
     [string[]]$ReadOnly = @(
         "kayleigh.thornhill@wearesdi.com",
         "charlotte.blackwell@wearesdi.com",
-        "matt.evans@wearesdi.com"
+        "matt.evans@wearesdi.com",
+        # Read-only to EVERY row ("*"), 30 October. Found by the audit in
+        # AM CRM's own logs, so these are the sign-in names the app sees.
+        "jack.calow@wearesdi.com",
+        "muhammad.yazir@wearesdi.com",
+        "yogesh.kumar@wearesdi.com"
     ),
     [string]$Server = "10.0.0.5"
 )

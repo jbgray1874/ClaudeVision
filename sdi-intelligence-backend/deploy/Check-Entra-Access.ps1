@@ -31,9 +31,12 @@
     It needs the Microsoft.Graph PowerShell module. If it is missing it says
     so and gives you the one-line install rather than failing obscurely.
 
-    The sign-in opens in the BROWSER. If that will not work, use a code:
+    The sign-in opens in the BROWSER. Run it from a plain Windows PowerShell
+    window (Start menu > Windows PowerShell), not Windows Terminal.
 
-        .\sdi-intelligence-backend\deploy\Check-Entra-Access.ps1 -DeviceCode
+    -DeviceCode signs in with a code instead - but SDI's Conditional Access
+    BLOCKS code sign-in for admin accounts, so in this tenant it only works
+    for an account that is allowed to use it.
 #>
 [CmdletBinding()]
 param(
@@ -49,7 +52,12 @@ param(
     [string[]]$ReadOnly = @(
         "kayleigh.thornhill@wearesdi.com",
         "charlotte.blackwell@wearesdi.com",
-        "matt.evans@wearesdi.com"
+        "matt.evans@wearesdi.com",
+        # Read-only to EVERY row ("*"), 30 October. Found by the audit in
+        # AM CRM's own logs, so these are the sign-in names the app sees.
+        "jack.calow@wearesdi.com",
+        "muhammad.yazir@wearesdi.com",
+        "yogesh.kumar@wearesdi.com"
     ),
     [string]$Server = "10.0.0.5",
     # Skip the Entra half and audit only the server's .env.
@@ -263,11 +271,20 @@ try {
     # $useCode, never $DeviceCode: that is a [switch] parameter, and writing
     # to a parameter's own name is the class of bug that broke Ship-It on 29
     # October ($check shadowing [switch]$Check).
+    #
+    # NOT a fallback to code sign-in. That was the first idea, and SDI's
+    # Conditional Access refuses code sign-in for admin accounts ("You don't
+    # have access to this ... an authentication flow that is restricted by
+    # your admin", 30 October) - correctly, as it is a common phishing route.
+    # Falling back to it would walk straight into that wall. So if WAM stays
+    # on, carry on and say how to avoid the crash: it happens in an embedded
+    # terminal, which is exactly what Microsoft's own warning names.
     $useCode = $DeviceCode.IsPresent
     if (-not $wamOff -and -not $useCode) {
-        Warn "This Graph module would not switch off the Windows sign-in (WAM),"
-        Say  "which is what crashed PowerShell. Signing in with a code instead." Yellow
-        $useCode = $true
+        Warn "This Graph module would not switch off the Windows sign-in (WAM)."
+        Say  "If PowerShell closes after you sign in, run this again from a plain" Yellow
+        Say  "Windows PowerShell window (Start menu > Windows PowerShell) rather" Yellow
+        Say  "than Windows Terminal - that is where WAM loses its window." Yellow
     }
 
     # READ-ONLY SCOPES. Nothing here creates, assigns or changes anything.
