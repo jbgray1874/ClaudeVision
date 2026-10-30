@@ -107,6 +107,8 @@ const pretty = s => { const d = new Date(s + "T00:00:00");
 
 const short = s => { const d = new Date(s + "T00:00:00");
   return isNaN(d) ? s : d.toLocaleDateString("en-GB", {weekday:"short", day:"numeric", month:"short"}); };
+// "Oct 26 WK 40!row 5" is how the answer cites a row; on screen it reads as words.
+const cite = s => String(s || "").replace("!row ", ", row ");
 const nextWorkingDay = d => { const n = new Date(d);
   do { n.setDate(n.getDate() + 1); } while(n.getDay() === 0 || n.getDay() === 6); return n; };
 const mondayOf = d => { const m = new Date(d); m.setDate(m.getDate() - (m.getDay() + 6) % 7); return m; };
@@ -171,7 +173,7 @@ function card(line, parent, cls){
   if(paper.length) el("p", paper.join("  ·  "), c, "meta");
 
   if(line.comments) el("p", "Comments: " + line.comments, c, "meta");
-  el("p", line.source, c, "meta");
+  el("p", cite(line.source), c, "meta");
   return c;
 }
 
@@ -188,7 +190,7 @@ function foldaway(parent, label, list, truncated, cls, open){
 function provenance(j){
   $("foot").textContent = "Plan last saved "
     + new Date(j.plan_saved).toLocaleString("en-GB")
-    + "  ·  version " + j.plan_version + "  ·  " + j.rows_read + " rows read"
+    + "  ·  " + j.rows_read + " rows read"
     + (j.plan_reused_from_cache ? " (reusing this save's reading)" : "")
     + ".  This answer is only as current as that save.";
 }
@@ -261,13 +263,22 @@ day: {
     const note = el("div", null, $("out"), "caveat");
     el("p", j.caveat, note);
     if(j.line_count){
-      const left = [];
-      if(j.pallet_lines_as_text && j.pallet_lines_as_text.length)
-        left.push(some(j.pallet_lines_as_text.length) + " with pallets written as text ("
-          + j.pallet_lines_as_text.map(t => "“" + t.pallets_as_recorded + "”, " + t.source).join("; ") + ")");
-      if(j.pallet_lines_blank) left.push(some(j.pallet_lines_blank) + " with no pallet count");
-      el("p", "Pallets: " + pal(j.pallet_total || 0) + ". " + j.pallet_total_reason
-         + (left.length ? "  Not counted: " + left.join(", and ") + "." : ""), note, "hint");
+      // "0 pallets" over a line whose PALLETS cell is empty reads as "nothing
+      // to send". When nothing could be counted, say that, not a total of 0.
+      const asText = (j.pallet_lines_as_text || []).map(t =>
+        "“" + t.pallets_as_recorded + "”, " + cite(t.source)).join("; ");
+      if(j.pallet_lines_counted){
+        const left = [];
+        if(asText) left.push(some(j.pallet_lines_as_text.length)
+          + " with pallets written as text (" + asText + ")");
+        if(j.pallet_lines_blank) left.push(some(j.pallet_lines_blank) + " with no pallet count");
+        el("p", "Pallets: " + pal(j.pallet_total || 0) + ". " + j.pallet_total_reason
+           + (left.length ? "  Not counted: " + left.join(", and ") + "." : ""), note, "hint");
+      } else {
+        el("p", "Pallets: no total. The PALLETS column has no number for "
+           + (j.line_count === 1 ? "this line" : "these lines")
+           + (asText ? " (written as text: " + asText + ")" : "") + ".", note, "hint");
+      }
     }
     foldaway($("out"), some(unread) + have(unread)
       + " a date this cannot read — check these in the workbook",
@@ -413,7 +424,7 @@ quality: {
         el("h3", (item.order ? "Order " + item.order : "(no order number)")
                + (item.part ? "  ·  " + item.part : ""), c);
         el("p", item.what, c, "because");
-        el("p", item.source, c, "meta");
+        el("p", cite(item.source), c, "meta");
       }
       if(g.truncated) el("p", "Only the first 40 are shown.", $("out"), "hint");
     }
@@ -424,7 +435,7 @@ quality: {
       for(const d of j.duplicate_order_lines){
         const c = el("div", null, $("out"), "card");
         el("h3", "Order " + d.order + "  ·  part " + d.part, c);
-        el("p", d.count + " rows: " + d.sources.join(", "), c, "meta");
+        el("p", d.count + " rows: " + d.sources.map(cite).join("; "), c, "meta");
       }
     }
     if(j.spelling_correction_count){
@@ -438,7 +449,7 @@ quality: {
         el("p", s.column + " reads “" + s.cell + "” and was read as " + s.read_as
               + " — " + s.basis + ". Fix the cell rather than relying on this.",
            c, "because");
-        el("p", s.source, c, "meta");
+        el("p", cite(s.source), c, "meta");
       }
     }
     el("p", j.note, $("out"), "hint");
