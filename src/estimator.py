@@ -5318,6 +5318,11 @@ def _blank_turned_to_fit(part: Dict[str, Any], material: Any,
     return bw, bl
 
 
+# What makes a section hollow, read from its stock (D-599c): the forms the readers write, and
+# the words a parts list prints. Open (angle, channel) and solid (flat or round bar) are neither.
+_HOLLOW_SECTION_FORMS = frozenset({"box_section", "tube", "oval_tube"})
+_HOLLOW_PROFILE_WORDS = ("TUBE", "RHS", "SHS", "CHS", "BOX SECTION", "HOLLOW", "ERW")
+
 # Words that make a material a metal, for the rules that only hold for metal section (D-599c).
 _METAL_WORDS = ("STEEL", "ALUMIN", "ZINTEC", "GALV", "BRASS", "COPPER", "IRON", "ZINC", "STAINLESS")
 
@@ -6902,13 +6907,28 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         # ONLY A HOLLOW SECTION (D-599c). A solid bar's "wall" is its whole thickness: the HPP
         # fixture's 600 x 50 x 38 timber blocking came in as a flat bar with t = 38, was forced
         # to steel here, and was priced at 8.9 kg of steel section, GBP 67.85 a piece.
-        _hollow = bool(side_a_mm and side_b_mm and wall_t_mm
+        # THREE CHECKS, KEPT APART (review of D-599c): the SHAPE is hollow only where the stock
+        # says so (a tube, box or oval form, or a hollow word on a line with no form) and the
+        # wall leaves a bore; the MATERIAL is checked on its own below; only the two together
+        # are a conflict. A thin wall alone is not a tube: a timber angle or channel is open.
+        _form_now = str(_ss.get("form") or "").strip().lower()
+        _profile_now = str(_ss.get("profile_form") or "").strip().upper()
+        _hollow_shape = (_form_now in _HOLLOW_SECTION_FORMS
+                         or _profile_now in _HOLLOW_PROFILE_WORDS
+                         or (not _form_now and any(
+                             _w in str(part.get("description") or "").upper()
+                             for _w in _HOLLOW_PROFILE_WORDS)))
+        _hollow = bool(_hollow_shape and side_a_mm and side_b_mm and wall_t_mm
                        and 2 * wall_t_mm < min(side_a_mm, side_b_mm))
         if _hollow and str(material or "").upper().replace("_", " ") in (
                 "TIMBER", "WOOD", "MDF", "PLYWOOD", "SOFTWOOD", "OAK", "MDF / OAK VENEER"):
+            # ASKED, NOT SILENT (D-599c): the reading and the profile disagree, and which is
+            # wrong is the estimator's to say. Priced as steel meanwhile, because a hollow
+            # section priced at timber's weight and rate under-reads about 13 times.
             part.setdefault("review_flags", []).append(
-                f"material '{material}' overridden to MILD STEEL — part is a "
-                f"{side_a_mm:g}x{side_b_mm:g}x{wall_t_mm:g} hollow section (cannot be timber)")
+                f"MATERIAL CONFLICT: the reading says '{material}', but the part is a "
+                f"{side_a_mm:g}x{side_b_mm:g}x{wall_t_mm:g} hollow section, which cannot be "
+                f"timber — priced as MILD STEEL meanwhile; confirm the material")
             material = "MILD STEEL"
 
         # ── Wire path (workbook rows 28-35) ──────────────────────────────────
