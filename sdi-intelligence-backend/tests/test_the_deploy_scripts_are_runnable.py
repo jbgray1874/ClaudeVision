@@ -129,11 +129,34 @@ class TheScriptsSayWhereToRunThemTests(unittest.TestCase):
     """"I can't guess where to run commands" - and every one of these is for
     the laptop, which the file should say before anybody has to ask."""
 
-    def test_the_am_crm_scripts_name_the_machine_in_their_first_lines(self):
-        for name in ("Deploy-AMCRM.ps1", "Check-AMCRM-Live.ps1", "Ship-It.ps1"):
-            head = (BACKEND / "deploy" / name).read_text(encoding="utf-8")[:1200]
-            with self.subTest(script=name):
-                self.assertRegex(head.upper(), r"ON THE LAPTOP")
+    def test_every_script_that_reaches_the_server_says_to_run_it_here(self):
+        """── GENERALISED, BUT NOT TO EVERYTHING ──────────────────────────
+        This named three scripts by hand. Ready-For-People.ps1 was added and
+        no rule in this file covered it - and a script nobody checks is the
+        one that gets run on the wrong machine.
+
+        The first fix was "every .ps1 must say", which flagged thirteen
+        working scripts: the scheduled-task installers and the service
+        start/stop scripts, which run ON the server and are a different
+        category. A test that is wrong about working code is worse than no
+        test, because the next real failure is the one nobody believes.
+
+        So the rule is the one that actually matters: a script that reaches
+        the server over UNC is, by definition, being run from somewhere else,
+        and has to say where. That selects the hand-run set and nothing else,
+        and a new one cannot opt out of it.
+        """
+        reaching = [p for p in SCRIPTS
+                    if "\\\\$Server" in p.read_text(encoding="utf-8")
+                    or "\\\\10.0.0." in p.read_text(encoding="utf-8")]
+        self.assertGreaterEqual(len(reaching), 5, "the UNC rule matched almost "
+                                "nothing - has the share path changed?")
+        for path in reaching:
+            head = path.read_text(encoding="utf-8")[:1600].upper()
+            with self.subTest(script=path.name):
+                self.assertRegex(head, r"(ON|FROM) THE LAPTOP",
+                                 f"{path.name} reaches the server over UNC, so "
+                                 f"it runs from the laptop - and does not say so")
 
 
 if __name__ == "__main__":
@@ -352,9 +375,8 @@ class TheCheckReportsOnWhatWasDeployedTests(unittest.TestCase):
         how `Live` shipped broken for about four minutes.
         """
         import re
-        for name in ("Check-AMCRM-Live.ps1", "Ship-It.ps1", "Set-Setting.ps1",
-                     "Deploy-AMCRM.ps1"):
-            source = (BACKEND / "deploy" / name).read_text(encoding="utf-8")
+        for path in SCRIPTS:
+            name, source = path.name, path.read_text(encoding="utf-8")
             # Strip comments: a function named in a comment is not a call.
             code = "\n".join(l for l in source.splitlines()
                               if not l.strip().startswith("#"))

@@ -1603,23 +1603,41 @@ async function _loadRecords(){
     h=explain(d);
   }else if(!d.items.length){
     PROJECTS=[];
-    h=panel('No matching records',
-      '<p>The '+(ST.store==='excel'?'sheet':'List')+' was read successfully, but no record has '
-      +'<code>'+esc(ST.owner_field)+'</code> set to <b>'+esc(d.owner_filter)+'</b>.'
-      +(d.skipped_other_owner?' '+d.skipped_other_owner+' record(s) belong to other owners.':'')
-      +'</p>'
-      +(d.sheet?'<p style="margin-top:10px">Read worksheet <b>'+esc(d.sheet)+'</b>'
+    // ── WRITTEN FOR THE PERSON, NOT FOR WHOEVER CONFIGURED IT ───────────────
+    // This panel used to open with "no record has AM Owner set to CB" and
+    // then list SDI_VOICECRM_OWNER, SDI_VOICECRM_OWNER_FIELD and a dump of
+    // every column. That is troubleshooting, shown to whoever happens to be
+    // looking - and to a director opening the app for the first time it reads
+    // as half-built rather than as one initial being wrong.
+    //
+    // The diagnostics are genuinely useful and are all still here. They are
+    // just folded away, under a heading that says who they are for.
+    h=panel('Nothing is filed against you yet',
+      '<p>The tracker was read without any trouble — there is simply no row in it '
+      +'recorded against <b>'+esc(d.owner_filter)+'</b>, which is how this app has been '
+      +'told to find your work.</p>'
+      +(d.skipped_other_owner?'<p style="margin-top:10px">There are <b>'
+        +d.skipped_other_owner+'</b> record(s) belonging to other people, which you are '
+        +'not shown.</p>':'')
+      +'<p style="margin-top:10px">Usually this means the initials are not quite the ones '
+      +'used in the sheet. Send this screen to <b>James Gray</b> and it is a one-minute '
+      +'change — nothing needs reinstalling.</p>'
+      +'<details style="margin-top:12px"><summary style="cursor:pointer;color:var(--ink-faint);'
+      +'font-size:12px;font-family:var(--mono)">FOR IT — what the app actually read</summary>'
+      +'<div style="margin-top:8px">'
+      +(d.sheet?'<p>Read worksheet <b>'+esc(d.sheet)+'</b>'
         +(d.sheets&&d.sheets.length>1?' (of: '+d.sheets.map(esc).join(', ')+')':'')
         +(d.header_row?', headings taken from row <b>'+esc(d.header_row)+'</b>':'')+'.</p>':'')
-      +(d.owner_field_found===false?'<p style="margin-top:10px">No column called <code>'
+      +(d.owner_field_found===false?'<p style="margin-top:8px">No column called <code>'
         +esc(ST.owner_field)+'</code> was found. Columns seen:</p><p style="margin-top:6px">'
         +(d.headers_seen||[]).map(h=>'<code>'+esc(h)+'</code>').join(' ')+'</p>'
         +'<p style="margin-top:8px">Set <code>SDI_VOICECRM_OWNER_FIELD</code> to the owner '
         +'column\'s heading exactly as shown.</p>':'')
-      +(d.owner_field_found&&d.owner_values?'<p style="margin-top:10px">Values in <code>'
+      +(d.owner_field_found&&d.owner_values?'<p style="margin-top:8px">Values present in <code>'
         +esc(ST.owner_field)+'</code>: '+d.owner_values.map(v=>'<b>'+esc(v[0])+'</b> ×'+v[1]).join(', ')
-        +'</p><p style="margin-top:8px">If Nick appears under a different value, set '
-        +'<code>SDI_VOICECRM_OWNER</code> to it.</p>':''));
+        +'</p><p style="margin-top:8px">If this person owns rows under one of those, correct '
+        +'their entry in <code>SDI_VOICECRM_OWNERS</code>.</p>':'')
+      +'</div></details>');
   }else{
     PROJECTS=d.items; COLUMNS=d.columns||[];
     h=(d.source==='copy'?'<p style="text-align:left;font-size:14px;margin:6px 0 4px;padding:10px 12px;border-left:3px solid #c77700;background:rgba(199,119,0,.08)">'
@@ -1639,13 +1657,26 @@ async function _loadRecords(){
       +'<p style="margin-top:10px">Editable in this pilot: '
       +((ST.editable_fields||[]).join()==='*'?esc(ST.editable_label||'any column')
         :(ST.editable_fields||[]).map(f=>'<code>'+esc(f)+'</code>').join(' '))+'</p>');
+  }else if(ST.writes_switched_on && !ST.may_write){
+    // ── NOT THE SAME AS "NOT SWITCHED ON YET" ───────────────────────────────
+    // This person simply is not on the writers list. Telling them the feature
+    // is unfinished is false AND makes a deliberate permission read as a
+    // half-built app - to a director, the difference between "I'm not set up
+    // for that" and "this doesn't work".
+    h+=panel('You can ask anything — changes are limited',
+      '<p>Everything you can see here is yours to ask about, by voice or by typing. '
+      +'<b>Changing</b> a record is limited to named people, and you are not on that '
+      +'list at the moment — so nothing you say can alter the tracker.</p>'
+      +'<p style="margin-top:10px">If you need to make changes, ask James Gray to add '
+      +'you. It takes a minute and does not need anything reinstalling.</p>');
   }else{
-    h+=panel('Why this is read-only',
-      '<p>The write loop (propose → read back → confirm → journal) is built, but switched '
-      +'off until the sandbox pilot is approved: <code>SDI_VOICECRM_WRITE=yes</code> and '
-      +'<code>SDI_VOICECRM_APPROVED_BY</code> on the server turn it on.</p>'
-      +'<p style="margin-top:10px">Until then you can ask questions by voice; updates are '
-      +'refused at the server. The live tracker is untouched either way.</p>');
+    h+=panel('Changes are switched off for everyone',
+      '<p>The write loop — propose, read back, confirm, journal — is built and tested, '
+      +'but switched off for the whole pilot at the moment. That is a setting on the '
+      +'server, not a fault, and it applies to everybody including the people who would '
+      +'otherwise be able to change records.</p>'
+      +'<p style="margin-top:10px">You can ask questions by voice as normal. The live '
+      +'tracker is untouched either way.</p>');
   }
 
   $('body').innerHTML=h;

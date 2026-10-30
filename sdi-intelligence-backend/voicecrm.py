@@ -155,6 +155,16 @@ def status(request: Request, user: dict = Depends(auth.require_user)):
     user = auth.current_user(request)
     return {**_status_payload(), "sso_enabled": auth.sso_applies(request),
             "writes_enabled": WRITE_ENABLED and _may_write(user or {}),
+            # ── TWO DIFFERENT REASONS, AND THEY NEEDED TELLING APART ────────
+            # The page had only writes_enabled, so it explained every
+            # read-only case the same way: "the write loop is switched off
+            # until the pilot is approved". For somebody who is simply not on
+            # the writers list that is FALSE - writing is on, it is just not
+            # theirs - and it reads as a half-built app rather than a
+            # deliberate permission. Kayleigh, Charlotte and Matt are all in
+            # that case by design.
+            "writes_switched_on": WRITE_ENABLED,
+            "may_write": _may_write(user or {}),
             "writers_restricted": True,
             "signed_in": bool(user) and user.get("kind") == "user",
             "user": (user or {}).get("name", "")}
