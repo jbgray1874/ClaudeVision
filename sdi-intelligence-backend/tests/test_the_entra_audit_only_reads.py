@@ -25,9 +25,13 @@ def code() -> str:
     return "\n".join(l for l in body.splitlines() if not l.strip().startswith("#"))
 
 
-# The one Set-Mg command allowed, and the only way it may be called. It sets
-# how THIS laptop's Graph module signs in; it writes nothing to Entra.
-LOCAL_OPTION = "Set-MgGraphOption -DisableLoginByWAM $true"
+# The one Set-Mg command allowed, and the only ways it may be called. It sets
+# how THIS laptop's Graph module signs in; it writes nothing to Entra. Two
+# spellings because the first version used one the module did not accept,
+# swallowed the error, and left WAM on - see the script.
+LOCAL_OPTIONS = ("Set-MgGraphOption -EnableLoginByWAM $false",
+                 "Set-MgGraphOption -DisableLoginByWAM $true")
+LOCAL_OPTION = LOCAL_OPTIONS[0]
 
 
 class ItOnlyReadsTests(unittest.TestCase):
@@ -54,7 +58,9 @@ class ItOnlyReadsTests(unittest.TestCase):
         """Graph PowerShell names every write with a verb. None may appear -
         apart from the one local sign-in preference, removed before checking
         so that it cannot hide anything else."""
-        body = code().replace(LOCAL_OPTION, "")
+        body = code()
+        for allowed in LOCAL_OPTIONS:
+            body = body.replace(allowed, "")
         for verb in ("New-Mg", "Set-Mg", "Update-Mg", "Remove-Mg", "Add-Mg",
                      "Invoke-Mg", "Restore-Mg", "Grant-Mg", "Revoke-Mg"):
             with self.subTest(verb=verb):
@@ -64,8 +70,11 @@ class ItOnlyReadsTests(unittest.TestCase):
         """Set-MgGraphOption can set other things. Here it may set exactly
         one, to exactly one value."""
         calls = re.findall(r"Set-MgGraphOption[^\n]*", code())
-        self.assertEqual(len(calls), 1)
-        self.assertTrue(calls[0].startswith(LOCAL_OPTION))
+        self.assertEqual(len(calls), 2)
+        for call in calls:
+            with self.subTest(call=call[:50]):
+                self.assertTrue(call.startswith(LOCAL_OPTIONS),
+                                f"Set-MgGraphOption used for something else: {call}")
 
     def test_it_does_not_touch_the_servers_settings(self):
         """It reads .env to compare. Writing it is Set-Setting's job, which
@@ -127,6 +136,41 @@ class ItChecksTheThingsThatFailSilentlyTests(unittest.TestCase):
         body = code()
         self.assertIn(LOCAL_OPTION, body)
         self.assertLess(body.index(LOCAL_OPTION), body.index("Connect-MgGraph"))
+
+    def test_it_knows_whether_switching_wam_off_worked(self):
+        """── THE BUG IN THE FIRST FIX ─────────────────────────────────────
+        "try { Set-MgGraphOption -DisableLoginByWAM $true } catch { }" - the
+        parameter was wrong, the catch was empty, and WAM stayed on. The 07:34
+        run printed "WAM is enabled by default" and survived on luck; the next
+        crashed again. Whether it worked is now recorded, not assumed.
+        """
+        body = code()
+        self.assertIn("$wamOff = $true", body)
+        self.assertIn("if (-not $wamOff)", body)
+
+    def test_if_wam_cannot_be_switched_off_it_is_not_used_at_all(self):
+        """A sign-in code never opens a Windows sign-in window, so it cannot
+        take PowerShell down. If WAM stays on, that is the route taken."""
+        body = code()
+        branch = body.split("if (-not $wamOff -and -not $useCode)", 1)[1][:400]
+        self.assertIn("$useCode = $true", branch)
+        self.assertLess(body.index("$useCode = $true"), body.index("Connect-MgGraph"))
+
+    def test_the_output_survives_a_crash(self):
+        """Twice it printed nothing anybody could paste."""
+        self.assertIn("Start-Transcript", code())
+        self.assertLess(code().index("Start-Transcript"), code().index("Head \"1."))
+
+    def test_every_way_out_closes_the_transcript_and_says_where_it_is(self):
+        body = code()
+        self.assertIn("function Done(", body)
+        exits = re.findall(r"^\s*exit\b.*$", body, re.M)
+        self.assertEqual(exits, ["    exit $Code"],
+                         f"an exit that skips Done, so the transcript path is never shown: {exits}")
+
+    def test_a_slow_log_read_says_it_is_reading(self):
+        """A long silent pause is indistinguishable from a hang."""
+        self.assertIn("a large one takes a minute", SCRIPT)
 
     def test_there_is_a_route_that_needs_no_browser_window_at_all(self):
         self.assertIn("[switch]$DeviceCode", SCRIPT)
