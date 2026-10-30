@@ -322,6 +322,28 @@ class TheCheckReportsOnWhatWasDeployedTests(unittest.TestCase):
                 self.assertIn(f'"{filename}"', deploy,
                               f"{filename} is checked but never deployed")
 
+    def test_every_local_module_the_app_imports_is_deployed(self):
+        """── A MISSING FILE HERE IS NOT A MISSING FEATURE ─────────────────
+        Deploy-AMCRM copies a NAMED list. A new module that voicecrm.py
+        imports, but the list does not name, is an ImportError the moment the
+        service restarts - so the deploy "succeeds" and the app is down, which
+        is worse than the change simply not landing.
+        """
+        deploy = (BACKEND / "deploy" / "Deploy-AMCRM.ps1").read_text(encoding="utf-8")
+        local = {p.stem for p in BACKEND.glob("*.py")}
+        for module in ("voicecrm", "voicecrm_connector"):
+            source = (BACKEND / f"{module}.py").read_text(encoding="utf-8")
+            imported = set(re.findall(r"^\s*import\s+([a-z_][a-z0-9_]*)",
+                                      source, re.M))
+            for name in sorted(imported & local):
+                with self.subTest(module=module, imports=name):
+                    self.assertTrue(
+                        f'"{name}.py"' in deploy or name in self.NOT_COPIED,
+                        f"{module}.py imports {name}.py, and Deploy-AMCRM "
+                        f"neither copies it nor warns that it does not")
+
+    NOT_COPIED = ("app", "config", "auth", "public_surface")
+
     def test_the_settings_it_reports_are_the_ones_the_apps_actually_ask(self):
         """Two lists that can disagree is one more than there should be."""
         for setting, filename in (("SDI_ESTIMATOR_OIDS", "app.py"),

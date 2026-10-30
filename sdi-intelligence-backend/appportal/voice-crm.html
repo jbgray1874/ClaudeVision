@@ -289,6 +289,19 @@ function explain(d){
         +'For Nick\'s spreadsheet sandbox: <code>SDI_VOICECRM_STORE=excel</code>, '
         +'<code>SDI_VOICECRM_SITE</code> as <code>hostname:/sites/SiteName</code>, and '
         +'<code>SDI_VOICECRM_XLSX</code> as the workbook\'s path in the document library.</p>',true);
+    case 'no_owner':
+      // ── NOT "NO RECORDS". NOT SOMEBODY ELSE'S RECORDS EITHER ─────────────
+      // An empty list here would read as "you have no live work", which is a
+      // statement about the pipeline rather than about the setting. And the
+      // old behaviour - falling back to the service's single owner - showed
+      // one person's accounts to everybody who signed in.
+      return panel('Your records aren\'t mapped yet',
+        '<p>'+esc(d.detail||'Your account is not mapped to an owner in the tracker.')+'</p>'
+        +'<p style="margin-top:10px">This is <b>not</b> "you have no live jobs" — the tracker '
+        +'was read successfully, but nothing tells this app which initials in the '
+        +'<code>'+esc(ST.owner_field||'AM Owner')+'</code> column are yours. Until it does, it '
+        +'shows you nothing rather than guessing, because the only other answer would be '
+        +'somebody else\'s pipeline.</p>',true);
     case 'no_access':
       return panel('This pilot uses a tracker you don\'t have access to',
         '<p>AM CRM is currently a pilot running on Nick Garrish\'s sandbox tracker'

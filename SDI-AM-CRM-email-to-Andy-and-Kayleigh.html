@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AM CRM — email to Andy and Kayleigh</title>
+<style>
+  /* Light and plain on purpose. This is correspondence, not the app: it gets
+     pasted into Outlook, forwarded and printed, and the app's dark theme
+     survives none of those well. */
+  body{margin:0;background:#f4f4f2;color:#1c1c1e;
+       font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .sheet{max-width:760px;margin:0 auto;background:#fff;padding:34px 38px 42px;
+         border:1px solid #e2e2de}
+  .meta{border-bottom:2px solid #1c1c1e;padding-bottom:14px;margin-bottom:26px;
+        font-size:14.5px;color:#55555c}
+  .meta b{color:#1c1c1e}
+  .subject{font-size:20px;font-weight:700;color:#1c1c1e;margin-top:8px;line-height:1.3}
+  h2{font-size:17px;margin:30px 0 9px;padding-top:16px;border-top:1px solid #e8e8e4}
+  h2:first-of-type{border-top:0;padding-top:0}
+  p{margin:0 0 13px}
+  ul{margin:0 0 13px;padding-left:22px}
+  li{margin-bottom:7px}
+  a{color:#0b5ea8}
+  .ask{background:#fffbe6;border:1px solid #f0dd8a;border-left:4px solid #e8c200;
+       padding:14px 16px;margin:18px 0;border-radius:0 3px 3px 0}
+  .ask p:last-child{margin-bottom:0}
+  .quiet{color:#55555c;font-size:14.5px}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:15px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid #e8e8e4;vertical-align:top}
+  th{background:#f7f7f5;font-weight:600;width:34%}
+  code{background:#f2f2ef;padding:1px 5px;border-radius:3px;font-size:14px}
+  .sig{margin-top:30px;padding-top:16px;border-top:1px solid #e8e8e4}
+  .note{margin-top:34px;padding:16px 18px;background:#f7f7f5;border:1px dashed #cfcfca;
+        font-size:14.5px;color:#44444a}
+  .note h3{margin:0 0 9px;font-size:15px}
+  @media print{body{background:#fff}.sheet{border:0;max-width:none}.note{display:none}}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<div class="meta">
+  <div><b>To:</b> Andy &nbsp;·&nbsp; Kayleigh</div>
+  <div><b>From:</b> James Gray, AI &amp; Systems Controller</div>
+  <div><b>Attached:</b> SDI-AM-CRM-User-Guide.html</div>
+  <div class="subject">AM CRM — a working pilot, and the CRM decision behind it</div>
+</div>
+
+<p>Andy, Kayleigh,</p>
+
+<p>I have built an account-management app with Nick Garrish that is running now.
+It reads the account and project tracker you already use, answers questions
+about it out loud, and changes cells when told to — by speaking or typing, at a
+desk, on a phone, or hands-free in the car. It also works inside ChatGPT, so it
+runs in voice mode and on CarPlay.</p>
+
+<p>I am sending it to you both for two different reasons. <b>Kayleigh</b> — I
+would like you to use it on your own accounts and tell me where it does not fit
+them, because it has only ever been shaped around Nick's. <b>Andy</b> — the
+bigger question is whether this becomes SDI's CRM, and what that has to look
+like alongside Sage X3. That decision wants making deliberately rather than by
+drift.</p>
+
+<h2>Where it is</h2>
+
+<table>
+  <tr><th>The app</th><td><a href="https://sdiintelligence-sdidisplays.msappproxy.net/app">sdiintelligence-sdidisplays.msappproxy.net/app</a> — sign in with your usual SDI Microsoft account, then <b>Open SDI Intelligence AM CRM →</b></td></tr>
+  <tr><th>User guide</th><td>Attached, and the <b>User guide</b> button sits next to the app button on the portal</td></tr>
+  <tr><th>In ChatGPT</th><td>the connector is called <b>SDI Tracker CRM</b></td></tr>
+</table>
+
+<p class="quiet">No VPN — it works on mobile data or any Wi-Fi. On a phone use
+<b>Add to Home Screen</b> so it opens like an app and keeps its microphone
+permission.</p>
+
+<h2>What it does today</h2>
+
+<ul>
+  <li><b>Ask it anything about your accounts.</b> "What's due this week?",
+      "What's overdue?", "Tell me about Barbour.", "What's my biggest job by
+      value?", "What am I waiting on?"</li>
+  <li><b>Change things by speaking a normal sentence</b>, several at once:
+      <i>"Set Barbour's status to live and the next step to chase the PO, due
+      Friday."</i></li>
+  <li><b>It reads every change back before saving.</b> <i>"Two changes.
+      Barbour: Status from Quoted to Live. Barbour: NEXT STEPS from Awaiting
+      sign-off to Chase the PO. Shall I save them?"</i> — and only a plain yes
+      saves it.</li>
+  <li><b>A morning briefing</b> by email at 07:50 each weekday: what is due,
+      what has slipped, what is worth chasing. Its <b>Listen</b> link reads the
+      same thing aloud.</li>
+  <li><b>Drive mode</b> for hands-free use, and the same four operations inside
+      ChatGPT — look up, propose, confirm, recent activity.</li>
+</ul>
+
+<p>Two details that matter more than they sound. It matches client names
+<b>by sound as well as spelling</b>, because speech recognition mangles them —
+"barber" finds Barbour. And it reads dates back <b>in words</b>, "the
+fourteenth of November" rather than 11/14/2026, because a date read as numbers
+is easy to mishear and agree to.</p>
+
+<h2>Why it is safe to let it write</h2>
+
+<p>This is the part I would want to be asked about, so here it is plainly.</p>
+
+<ul>
+  <li><b>It only sees your own rows</b> — the ones where you are the owner.</li>
+  <li><b>It reads the tracker as you</b>, through your own Microsoft sign-in
+      with MFA, so SharePoint's permissions apply as well as ours.</li>
+  <li><b>A save is one cell</b>, written by Excel Online itself, so formulas
+      recalculate and co-authoring sees it as if a person typed it. The app
+      never uploads or replaces the workbook — that rule is what protects
+      everything else.</li>
+  <li><b>It checks the row has not moved first.</b> If somebody edited it while
+      you were talking, the save is abandoned and you are told. That is what
+      stops your change quietly overwriting theirs.</li>
+  <li><b>It refuses the owner column and any calculated cell</b> — margin, for
+      instance. If it cannot tell whether a cell holds a formula it still
+      refuses, rather than flatten a calculation nobody notices for a month.</li>
+  <li><b>Every proposal, save, cancellation and refusal is journalled</b> with
+      who and when.</li>
+</ul>
+
+<h2>The actual question: is this SDI's CRM?</h2>
+
+<p>What exists is a working, used thing rather than a demonstration — which
+makes it a reasonable starting point for a CRM, and a bad thing to let grow by
+accident. It is built to evolve: the records live in the tracker today, and the
+same update service already supports a <b>SharePoint List</b>, which is what I
+would move to for anything beyond a two-person pilot. A List gives each project
+a permanent ID, a true version check on every save, per-item history and proper
+column validation. That is configuration and a one-off migration, not a rebuild.</p>
+
+<p>What it is <i>not</i> yet is a CRM in the sense you would mean it: no
+opportunity pipeline as a first-class thing, no contact history beyond the
+tracker's own columns, no forecasting. Whether it should grow those, or whether
+SDI buys something and this becomes the voice and mobile layer on top of it, is
+exactly the decision I would like to put in front of you rather than answer by
+myself.</p>
+
+<h2>Sage X3 — the part that needs settling first</h2>
+
+<p>I know there is an appetite to join this up with Sage, and I agree with it.
+One thing has to be settled before any of it is built, and it is not technical:</p>
+
+<p><b>Anything Sage owns has to become read-only here</b> — or the two will
+quietly disagree and neither can be trusted. A CRM and an ERP holding the same
+field, both editable, is the single most reliable way to end up with two
+versions of a number and an argument about which is right.</p>
+
+<div class="ask">
+  <p><b>So the useful thing I could do with twenty minutes of your time:</b>
+  go down the tracker's columns — CLIENT, JOB, STATUS, NEXT STEPS, KEY DATES,
+  BUDGET COST, CONFIDENCE, MARGIN, and the rest — and mark each one
+  <b>ours</b>, <b>Sage's</b>, or <b>both</b>.</p>
+  <p>Where you say <i>both</i>, tell me who gets the last word when they
+  disagree. That one exercise decides most of the integration design, and
+  without it anything I build is a guess.</p>
+</div>
+
+<p class="quiet"><b>Fair warning on timing.</b> X3 is still loading area by
+area and nothing for sales exists to read yet. So this is a "what should it
+look like" conversation now, and a build later — not something I can deliver
+this month, and I would rather say that than imply otherwise.</p>
+
+<h2>What is honestly not built</h2>
+
+<ul>
+  <li><b>Per-person queues.</b> It serves one owner today. Kayleigh's and
+      Ian's queues are the next build item, along with setting up their
+      access.</li>
+  <li><b>A permanent project ID.</b> Rows have no fixed identity, so a row is
+      found by position plus a fingerprint of its contents. That is safe — a
+      mismatch refuses the save rather than writing to the wrong place — but it
+      is not right for the long run.</li>
+  <li><b>Separate dated columns</b> for production complete, delivered to
+      stock, delivered to customer and invoice date. Today those live inside
+      Status and notes, which means the stages cannot be told apart reliably,
+      and any reporting built on them inherits that.</li>
+</ul>
+
+<p>It is running as a <b>sandbox pilot</b> against a copy of the tracker, not
+the live one, and today only Nick and I can change anything — everyone else can
+ask it things. The screenshots in the guide use sample accounts and figures,
+not live data.</p>
+
+<h2>What I would like from each of you</h2>
+
+<ul>
+  <li><b>Kayleigh:</b> use it for a week on your own accounts and tell me where
+      it does not fit them. It has only ever been shaped around Nick's, so the
+      gaps will be real ones. I will need to add you to the list before you can
+      change anything — say the word.</li>
+  <li><b>Andy:</b> the columns exercise above, and a view on the bigger
+      question — grow this into the CRM, or buy one and make this the voice and
+      mobile layer on it.</li>
+</ul>
+
+<p>Happy to walk either of you through it, but ten minutes with it in your hand
+tends to land better than any description. I would rather you both pushed back
+on it early than politely later.</p>
+
+<div class="sig">
+  <p>James<br>
+  <span class="quiet">James Gray · AI &amp; Systems Controller</span></p>
+</div>
+
+<div class="note">
+  <h3>Notes for James — before sending</h3>
+  <ul>
+    <li><b>Surnames.</b> Andy and Kayleigh are addressed by first name only
+        because I do not have theirs. Fix the To: line.</li>
+    <li><b>They must be assigned to the portal's enterprise application</b> in
+        Entra, or both links give them a sign-in loop rather than the app. Test
+        it before sending, not after.</li>
+    <li><b>Neither can change anything</b> until added to the writers list. The
+        app says so plainly, but they will read it as a fault unless warned.</li>
+    <li><b>Barbour is a real client name</b>, used in the examples. Fine
+        internally; swap it if this ever goes outside.</li>
+    <li><b>"Sandbox, not live" stays in.</b> It is the sentence that stops a
+        figure from here being quoted as fact.</li>
+    <li><b>Attach</b> SDI-AM-CRM-User-Guide.html — it is one self-contained
+        file with the screenshots inside, so it survives forwarding.</li>
+  </ul>
+</div>
+
+</div>
+</body>
+</html>

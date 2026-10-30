@@ -45,6 +45,7 @@ $ErrorActionPreference = "Continue"
 
 $Files = @(
     "voicecrm.py",
+    "crm_owners.py",
     "voicecrm_excel.py",
     "voicecrm_speech.py",
     "journal.py",
@@ -241,7 +242,8 @@ Say "Version stamp updated, so /api/health reports $commit." Green
 # or estimating_job_tools.py deploys "successfully" here, restarts, and is not on the
 # server at all. Checked by name, because silence is what cost the afternoon.
 $NotCopied = @("app.py", "estimate_routes.py", "estimating_job_tools.py",
-               "public_surface.py", "auth.py", "config.py")
+               "public_surface.py", "auth.py", "config.py",
+               "device.py", "access.py")
 $missed = @()
 foreach ($name in $NotCopied) {
     if ((Get-Sha (Join-Path $src $name)) -ne (Get-Sha (Join-Path $dest $name))) {

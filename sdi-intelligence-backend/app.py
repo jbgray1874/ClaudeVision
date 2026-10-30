@@ -43,6 +43,7 @@ except ImportError:                    # loaded by path, without this folder on 
 config = the_service_config(config)   # this service's, even where the engine's holds the name
 import access
 import auth
+import device
 import quote_release
 
 config.validate()
@@ -650,11 +651,45 @@ _GUIDE = Path(__file__).with_name("sdi-estimating-guide.html")
 _PAGE_HEADERS = {"Cache-Control": "no-store, must-revalidate"}
 
 
+# ── ONE DOOR INTO ESTIMATING ────────────────────────────────────────────────
+# "I don't want links all over the shop.. they need to be centralised."
+#
+# There were three ways to the phone-shaped page: a second button on the
+# portal card, a link in the full screen's subtitle, and the bare URL. Three
+# doors to one app, and the one you wanted depended on which device you were
+# holding - which the app can work out for itself.
+#
+# So there is now ONE address, /estimating, and it serves the shape that suits
+# the device. Nothing else links to the pocket page: it is the same app, not a
+# second one, and it is not on the portal grid either (see services.json).
+#
+# ?full=1 is the escape hatch, and it is what the pocket page's own "Full
+# screen" link carries - without it that link would bounce a phone straight
+# back here and the two pages would volley.
+def _is_a_phone(request) -> bool:
+    """Is this a phone, as opposed to a desk? See device.py for the rule.
+
+    It lives in its own module because app.py cannot be imported without
+    FastAPI installed, so a rule left in here is a rule no test can exercise.
+    """
+    return device.is_a_phone(request.headers.get("user-agent", ""),
+                             request.headers.get("sec-ch-ua-mobile", ""))
+
+
 @app.get("/estimating")
 def estimating_page(request: Request):
-    """The estimator's page, same-origin with the API it calls."""
+    """The estimator's page, same-origin with the API it calls.
+
+    On a phone this hands over to the pocket page instead, unless ?full=1.
+    """
     if auth.current_user(request) is None:
         return auth.login_redirect(request)
+    if request.query_params.get("full") != "1" and _is_a_phone(request):
+        # 302 and no-store, NOT a permanent redirect: the answer depends on the
+        # device, and one cached 301 would send a laptop to the phone page for
+        # as long as the browser kept it.
+        return RedirectResponse(url="/app/estimating-pocket.html", status_code=302,
+                                headers={"Cache-Control": "no-store"})
     if _ESTIMATOR.exists():
         return FileResponse(str(_ESTIMATOR), headers=_PAGE_HEADERS)
     return JSONResponse(status_code=404,

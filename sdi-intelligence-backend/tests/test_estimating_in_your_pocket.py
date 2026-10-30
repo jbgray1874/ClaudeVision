@@ -286,9 +286,19 @@ class ItReachesTheServerTests(unittest.TestCase):
         catalogue = json.loads((BACKEND / "services.json").read_text(encoding="utf-8"))
         ids = {s["id"] for s in catalogue["services"]}
         self.assertNotIn("estimating-pocket", ids, "it has a card of its own again")
+
+    def test_there_is_one_door_into_estimating(self):
+        """── "I don't want links all over the shop.. they need to be
+        centralised." ───────────────────────────────────────────────────────
+        There were three ways in: a second button on the portal card, a link in
+        the full screen's subtitle, and the bare URL. The card's second button
+        has gone; /estimating now decides by device.
+        """
+        catalogue = json.loads((BACKEND / "services.json").read_text(encoding="utf-8"))
         (card,) = [s for s in catalogue["services"] if s["id"] == "estimating"]
-        self.assertEqual(card["link"], "/app/estimating-pocket.html")
-        self.assertIn("phone", card["linkLabel"].lower())
+        self.assertNotIn("link", card, "the card has a second button again")
+        self.assertNotIn("linkLabel", card)
+        self.assertEqual(card["app_url"], "/estimating", "the one door moved")
 
     def test_the_estimating_screen_links_to_it(self):
         """The way in, for somebody who opened the full screen on a phone."""
@@ -296,8 +306,10 @@ class ItReachesTheServerTests(unittest.TestCase):
         self.assertIn("/app/estimating-pocket.html", full)
         self.assertIn("On a phone", full)
 
-    def test_and_it_links_back(self):
-        self.assertIn('href="/estimating"', PAGE)
+    def test_and_it_links_back_carrying_the_escape_hatch(self):
+        """?full=1 or the two pages volley: /estimating sends a phone to the
+        pocket page, and the pocket page would send it straight back."""
+        self.assertIn('href="/estimating?full=1"', PAGE)
         self.assertIn("Full screen", PAGE)
 
 
@@ -428,6 +440,125 @@ class EveryNameThePageCallsIsDeclaredTests(unittest.TestCase):
         """Silently e-mailing the finished book to nobody is an hour of the
         engine's time that nobody hears about."""
         self.assertIn("could not read which account", PAGE)
+
+
+class TheJobCardTests(unittest.TestCase):
+    """── "it's not that useful.. it's just a question / prompt box." ───────
+    Picking a job gave you an empty box, so the only way to find out whether
+    the record held anything was to type a question and see. The figures are
+    now shown on sight, and the box underneath is for the follow-ups.
+    """
+
+    def test_it_reports_the_headline_figures(self):
+        s = tools.summarise_record(RECORD)
+        self.assertEqual(s["unit_gbp"], 1234.5)
+        self.assertEqual(s["material_gbp"], 400.0)
+        self.assertEqual(s["labour_gbp"], 700.25)
+        self.assertEqual(s["other_gbp"], 134.25)
+        self.assertEqual(s["unit_cell"], "Estimate!H42")
+
+    def test_it_counts_the_parts_and_the_operations(self):
+        s = tools.summarise_record(RECORD)
+        self.assertEqual(s["part_count"], 1)
+        self.assertEqual(s["operations"], ["laser", "fold", "weld"])
+        self.assertEqual(s["operation_count"], 3)
+
+    def test_an_operation_listed_twice_is_counted_once(self):
+        twice = json.loads(json.dumps(RECORD))
+        twice["costed_job"]["lines"].append(
+            {"part_number": "ABC-2", "route_operations": ["laser", "paint"]})
+        s = tools.summarise_record(twice)
+        self.assertEqual(s["operations"], ["laser", "fold", "weld", "paint"])
+        self.assertEqual(s["part_count"], 2)
+
+    def test_being_held_is_flagged_not_left_in_a_string(self):
+        """The one thing on the card that must be impossible to miss."""
+        s = tools.summarise_record(RECORD)
+        self.assertTrue(s["held"])
+        self.assertEqual(s["release_status"], "held")
+        self.assertEqual(s["release_reasons"], ["Material not confirmed"])
+
+    def test_a_released_job_is_not_flagged_as_held(self):
+        ok = json.loads(json.dumps(RECORD))
+        ok["costed_job"]["release"] = {"status": "released", "reasons": []}
+        self.assertFalse(tools.summarise_record(ok)["held"])
+
+    def test_a_missing_figure_is_none_and_never_zero(self):
+        """── THE SAME RULE AS THE SENTENCE READER ─────────────────────────
+        An absent total shown as £0.00 is a calculated fact that nobody
+        calculated. None is the only honest answer, and the page prints "not
+        recorded" for it.
+        """
+        thin = {"final_estimate": {"totals": {"unit_gbp": None}},
+                "costed_job": {"lines": []}}
+        s = tools.summarise_record(thin)
+        for key in ("unit_gbp", "material_gbp", "labour_gbp", "other_gbp",
+                    "unit_cell", "release_status"):
+            with self.subTest(key=key):
+                self.assertIsNone(s[key])
+        self.assertEqual(s["part_count"], 0)
+        self.assertFalse(s["held"])
+
+    def test_an_empty_or_rubbish_record_does_not_explode(self):
+        for bad in ({}, {"final_estimate": None, "costed_job": None},
+                    {"costed_job": {"lines": "not a list"}},
+                    {"costed_job": {"release": {"reasons": "not a list"}}}):
+            with self.subTest(record=str(bad)[:40]):
+                s = tools.summarise_record(bad)
+                self.assertIsNone(s["unit_gbp"])
+                self.assertIsInstance(s["operations"], list)
+
+    def test_it_computes_nothing_of_its_own(self):
+        """── WHY THE CARD IS SAFE TO PUT A PRICE ON ───────────────────────
+        The engine is correct because it mirrors the workbook to the cell. A
+        figure this card arrived at itself would be a second answer. So the
+        totals are read straight across and never summed, scaled or derived.
+        """
+        source = (BACKEND / "estimating_job_tools.py").read_text(encoding="utf-8")
+        body = source.split("def summarise_record(", 1)[1].split("\ndef ", 1)[0]
+        code = "\n".join(l for l in body.splitlines()
+                         if not l.strip().startswith("#"))
+        code = code.split('"""', 2)[-1]
+        for arithmetic in ("+ ", " * ", " / ", "sum("):
+            with self.subTest(pattern=arithmetic):
+                self.assertNotIn(arithmetic, code)
+
+    def test_the_card_rides_the_call_the_page_already_makes(self):
+        """── WHY NOT A NEW ENDPOINT ───────────────────────────────────────
+        Picking a job already fetches the folder. Putting the summary on that
+        reply costs no extra round trip on a mobile connection, and adds
+        nothing to the public surface.
+        """
+        source = (BACKEND / "estimating_job_tools.py").read_text(encoding="utf-8")
+        browse = source.split("def browse_briefs(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('out["summary"] = summarise_record(', browse)
+        self.assertEqual(public_surface.PUBLIC_POST,
+                         ("/api/estimate", "/api/estimate/brief",
+                          "/api/estimate/tools/ask"))
+
+    def test_a_folder_with_no_record_still_browses(self):
+        """Browsing must not fail because a folder holds no estimate - the
+        listing is still correct and still what was asked for."""
+        source = (BACKEND / "estimating_job_tools.py").read_text(encoding="utf-8")
+        browse = source.split("def browse_briefs(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("except (ValueError, OSError, KeyError, TypeError):", browse)
+
+    def test_the_page_shows_the_figures_before_asking_anything(self):
+        self.assertIn("function jobCard(", PAGE)
+        self.assertIn("data.summary", PAGE)
+        self.assertIn("s.part_count", PAGE)
+        self.assertIn("s.release_reasons", PAGE)
+
+    def test_the_page_names_the_workbook_cell_beside_the_price(self):
+        """A figure quoted to a customer has to be checkable against the
+        sheet it came from."""
+        self.assertIn("s.unit_cell", PAGE)
+
+    def test_the_page_hides_the_question_box_when_nothing_is_filed(self):
+        """The endpoint would refuse anyway, so inviting the question is
+        inviting a dead end."""
+        self.assertIn("No estimate record is filed in this folder", PAGE)
+        self.assertIn('$("ask-box").style.display = filed', PAGE)
 
 
 class StartingFromAWrittenBriefTests(unittest.TestCase):
