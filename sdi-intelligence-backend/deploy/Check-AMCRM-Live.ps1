@@ -56,6 +56,18 @@ function No ([string]$Text) { Write-Host "  [NO]   $Text" -ForegroundColor Red }
 function Hm ([string]$Text) { Write-Host "  [?]    $Text" -ForegroundColor Yellow }
 function Say([string]$Text) { Write-Host "         $Text" -ForegroundColor Gray }
 
+# Is a file on the server, and does it carry a marker proving it is the NEW
+# copy rather than an older one? Defined up here with the other helpers
+# because PowerShell resolves functions at RUNTIME: used in section 5 and
+# defined in section 7, this threw "Live is not recognized" and took the rest
+# of the check down with it.
+function Live([string]$File, [string]$Marker) {
+    $path = Join-Path $remote $File
+    if (-not (Test-Path -LiteralPath $path)) { return $false }
+    if (-not $Marker) { return $true }
+    return (Get-Content -LiteralPath $path -Raw) -like "*$Marker*"
+}
+
 # The lines that exist only in the fixed version. Checked in the FILES rather
 # than by commit, because the file on the server is the thing that runs - a
 # commit says what should be there, a file says what is.
@@ -335,6 +347,37 @@ if ($seen.ContainsKey("SDI_VOICECRM_SHEET") -and $seen["SDI_VOICECRM_SHEET"]) {
     Say "found by looking for the header row. Setting it to the tracker's tab name"
     Say "saves one call to Microsoft on the first question after a restart."
 }
+# ── WHO SEES WHOSE RECORDS ───────────────────────────────────────────────────
+# SDI_VOICECRM_OWNER is ONE value. With more than one person signed in it is
+# wrong in the worst way available: the second person sees the FIRST person's
+# accounts, presented as their own, with nothing on screen to say so.
+#
+# SDI_VOICECRM_OWNERS maps each e-mail to their initials and closes that. The
+# ORDER matters and is the reason this check exists: the setting does nothing
+# until the code that reads it is on the server, so writing it first and
+# deploying later leaves exactly the silent state it was meant to prevent.
+Say ""
+if (Live "crm_owners.py" "def owner_for") {
+    if ($seen.ContainsKey("SDI_VOICECRM_OWNERS") -and $seen["SDI_VOICECRM_OWNERS"]) {
+        Yes "SDI_VOICECRM_OWNERS is set - each person sees their OWN records"
+        Say "  Anyone not named in it sees nothing and is told why, which is correct."
+    } else {
+        No  "SDI_VOICECRM_OWNERS is not set, so EVERYONE signed in sees the same"
+        Say "  owner's records (SDI_VOICECRM_OWNER). Fine for a one-person pilot."
+        Say "  The moment a second person signs in, set it:" White
+        Say "    .\sdi-intelligence-backend\deploy\Set-Setting.ps1 SDI_VOICECRM_OWNERS ""a@x=AA,b@x=BB""" White
+    }
+} else {
+    if ($seen.ContainsKey("SDI_VOICECRM_OWNERS") -and $seen["SDI_VOICECRM_OWNERS"]) {
+        No  "SDI_VOICECRM_OWNERS is set but crm_owners.py is NOT on the server."
+        Say "  The setting is being IGNORED and everyone signed in is seeing the" Red
+        Say "  same person's records. Deploy, then restart:" Red
+        Say "    .\sdi-intelligence-backend\deploy\Ship-It.ps1" White
+    } else {
+        Say "crm_owners.py is not on the server yet - per-person records need a deploy."
+    }
+}
+
 Say ""
 Say "Nick cannot save a change unless SDI_VOICECRM_WRITE is yes, APPROVED_BY has"
 Say "a name in it, and his email is in WRITERS. Any one missing is a polite"
@@ -383,12 +426,6 @@ if ($logPath -and (Test-Path -LiteralPath $logPath)) {
 # that needed six sections.
 Head "7. The other apps on this server"
 
-function Live([string]$File, [string]$Marker) {
-    $path = Join-Path $remote $File
-    if (-not (Test-Path -LiteralPath $path)) { return $false }
-    if (-not $Marker) { return $true }
-    return (Get-Content -LiteralPath $path -Raw) -like "*$Marker*"
-}
 
 # The shared access rule - groups as well as people - that every gated app now
 # asks. If this is not on the server, a GROUP id in any setting matches nobody
