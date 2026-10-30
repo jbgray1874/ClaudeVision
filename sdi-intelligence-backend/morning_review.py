@@ -55,6 +55,11 @@ from typing import Any, Optional
 from urllib.parse import quote
 
 
+# The whole tracker, as one owner value. Imported rather than written again:
+# two copies of "*" is one more than can be allowed to disagree.
+from crm_owners import ALL_RECORDS                                  # noqa: E402
+
+
 def _opt(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
@@ -299,8 +304,13 @@ def build_review(rows: list[dict], headers: list[str], owner_field: str, owner: 
     contact_days = int(_opt("SDI_REVIEW_CONTACT_DAYS", "14") or 14)
     due_days = int(_opt("SDI_REVIEW_DUE_DAYS", "7") or 7)
 
-    mine = [r for r in rows
-            if str(r.get(col["am"], "")).strip().upper() == owner.upper()]
+    # "*" is the whole tracker - one team's sheet, as Andy and Matt read it.
+    # Any other value is one owner's slice of it.
+    if owner == ALL_RECORDS:
+        mine = list(rows)
+    else:
+        mine = [r for r in rows
+                if str(r.get(col["am"], "")).strip().upper() == owner.upper()]
     assessed = []
     for r in mine:
         a = assess(r, col, today, contact_days, due_days)
@@ -347,7 +357,7 @@ def build_review(rows: list[dict], headers: list[str], owner_field: str, owner: 
         "previous_counts": prev_counts, "previous_date": (previous or {}).get("date"),
         "movement": movement, "top": top,
         "columns_used": col,
-        "snapshot": {"date": today.isoformat(), "counts": counts,
+        "snapshot": {"date": today.isoformat(), "owner": owner, "counts": counts,
                      "flags": {a["key"]: a["flags"] for a in active}},
     }
 
@@ -528,13 +538,19 @@ def spoken_briefing(review: dict, changes: list[dict], first_name: str = "Nick",
     return " ".join(s.replace("..", ".") for s in out)
 
 
+def owner_label(owner: str) -> str:
+    """How an owner value reads in a sentence. "*" is the whole team's sheet."""
+    return "team" if owner == ALL_RECORDS else str(owner)
+
+
 def render(review: dict, words: dict, first_name: str = "Nick") -> dict:
     """Subject, plain text and HTML, laid out like Nick's own review."""
     d = date.fromisoformat(review["date"])
+    label = owner_label(review["owner"])
     listen, ask = listen_url(), chatgpt_url()
     c, p = review["counts"], review["previous_counts"]
     lines = [
-        ("Active NG records reviewed", c["active"], p.get("active")),
+        (f"Active {label} records reviewed", c["active"], p.get("active")),
         ("Completion/invoice or PO/status conflicts", c["conflicts"], p.get("conflicts")),
         ("Overdue actions", c["overdue"], p.get("overdue")),
         ("Ordered projects past their end date", c["ordered_past_end"], p.get("ordered_past_end")),
@@ -542,7 +558,7 @@ def render(review: dict, words: dict, first_name: str = "Nick") -> dict:
         ("Contact-review triggers", c["contact"], p.get("contact")),
         ("Due within seven days", c["due"], p.get("due")),
     ]
-    subject = f"NG Sandbox CRM — Morning Review ({d.day} {d:%B})"
+    subject = f"{label[:1].upper() + label[1:]} Sandbox CRM — Morning Review ({d.day} {d:%B})"
     text = [f"Morning {first_name},", ""]
     if listen:
         text += [f"Listen to this briefing: {listen}", ""]
@@ -551,7 +567,7 @@ def render(review: dict, words: dict, first_name: str = "Nick") -> dict:
                  "  It answers in writing. To hear it, tap the speaker icon under the "
                  "answer — the voice button starts a new conversation instead.",
                  f'  Or in ChatGPT voice mode just say: "{CHATGPT_ASK}"', ""]
-    text += [f"{d:%A} sandbox-only {review['owner']} review:", ""]
+    text += [f"{d:%A} sandbox-only {label} review:", ""]
     text += [f"• {label}: {n}{_delta(n, b)}" for label, n, b in lines]
     text += ["", f"New movement: {words['movement']}", "", "Today's five questions", ""]
     blocks = []
@@ -595,7 +611,7 @@ def render(review: dict, words: dict, first_name: str = "Nick") -> dict:
                         f"&ldquo;{e(CHATGPT_ASK)}&rdquo;")
         h.append(f"<p style='font-size:12px;color:#666;margin-top:0;line-height:1.5'>"
                  f"{' '.join(note)}</p>")
-    h += [f"<p>{d:%A} sandbox-only {e(review['owner'])} review:</p><ul>"]
+    h += [f"<p>{d:%A} sandbox-only {e(label)} review:</p><ul>"]
     h += [f"<li>{e(label)}: <b>{n}</b>{e(_delta(n, b))}</li>" for label, n, b in lines]
     h += [f"</ul><p><b>New movement:</b> {e(words['movement'])}</p><p><b>Today's five questions</b></p><ol>"]
     for head, meta, w in blocks:
@@ -612,12 +628,29 @@ def _snapshot_file() -> Path:
     return estimate_email.state_dir() / "morning_review_snapshots.json"
 
 
-def last_snapshot(before: date) -> Optional[dict]:
+def _legacy_owner() -> str:
+    """Snapshots written before they carried an owner were all the scheduled
+    07:50 review's, which is SDI_VOICECRM_OWNER's."""
+    return _opt("SDI_VOICECRM_OWNER", "NG") or "NG"
+
+
+def last_snapshot(before: date, owner: Optional[str] = None) -> Optional[dict]:
+    """The most recent review before `before` - for THIS owner.
+
+    ── WHOSE "SINCE THE LAST REVIEW" ───────────────────────────────────────
+    There used to be one stream of snapshots, the 07:50 job's, which is Nick's
+    slice of the sheet. Compared against anybody else's rows it reported every
+    one of their records as "new" and Nick's as "no longer active" - read out
+    in a director's briefing as fact. So a snapshot belongs to an owner, and
+    nobody is compared against somebody else's.
+    """
     try:
         snaps = json.loads(_snapshot_file().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     earlier = [s for s in snaps if s.get("date", "") < before.isoformat()]
+    if owner is not None:
+        earlier = [s for s in earlier if s.get("owner", _legacy_owner()) == owner]
     return earlier[-1] if earlier else None
 
 
@@ -627,9 +660,14 @@ def save_snapshot(snap: dict) -> None:
         snaps = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         snaps = []
-    snaps = [s for s in snaps if s.get("date") != snap["date"]] + [snap]
+    mine = snap.get("owner", _legacy_owner())
+    # Replace only THIS owner's snapshot for the day. Keyed on the date alone,
+    # saving the team's snapshot would have deleted Nick's for the same day.
+    snaps = [s for s in snaps
+             if not (s.get("date") == snap["date"]
+                     and s.get("owner", _legacy_owner()) == mine)] + [snap]
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(snaps[-40:], indent=1), encoding="utf-8")
+    path.write_text(json.dumps(snaps[-120:], indent=1), encoding="utf-8")
 
 
 def recipients() -> list[str]:
@@ -637,16 +675,19 @@ def recipients() -> list[str]:
 
 
 def compose(rows: list[dict], headers: list[str], owner_field: str, owner: str,
-            today: Optional[date] = None) -> dict:
+            today: Optional[date] = None, first_name: str = "Nick") -> dict:
     today = today or date.today()
-    review = build_review(rows, headers, owner_field, owner, today, last_snapshot(today))
+    review = build_review(rows, headers, owner_field, owner, today,
+                          last_snapshot(today, owner))
     words = word_items(review)
-    return {"review": review, "email": render(review, words)}
+    return {"review": review, "email": render(review, words, first_name)}
 
 
-def send(composed: dict) -> dict:
+def send(composed: dict, to: Optional[list[str]] = None) -> dict:
+    """Email a composed review. `to` defaults to SDI_REVIEW_TO, which is the
+    scheduled 07:50 review's list; "Email it now" passes the person asking."""
     import estimate_email
-    to = recipients()
+    to = list(to) if to else recipients()
     e = composed["email"]
     if _opt("SDI_REVIEW_FROM"):
         result = send_via_graph(to, e["subject"], e["html"])
@@ -778,6 +819,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 1
     result = send(composed)
     print("Sent to " + ", ".join(recipients()) if result.get("sent") else f"NOT sent: {result.get('reason')}")
+    if result.get("sent"):
+        # ── THE WHOLE SHEET'S BASELINE TOO ───────────────────────────────────
+        # Andy and Matt hear the team's briefing, not Nick's. Its "in the sheet
+        # since the last review" needs a team snapshot to compare with, and
+        # this is the one moment each weekday that the sheet is read anyway.
+        team = build_review(rows, headers, voicecrm.OWNER_FIELD, ALL_RECORDS, date.today())
+        save_snapshot(team["snapshot"])
     return 0 if result.get("sent") else 1
 
 

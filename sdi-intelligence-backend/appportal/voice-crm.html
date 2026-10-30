@@ -1699,7 +1699,8 @@ async function main(){
       badge(ST.store==='excel'?'Excel workbook':'SharePoint List','c-off')
     + badge(ST.configured?'Connected':'Not configured', ST.configured?'c-ok':'c-warn')
     + badge(ST.sso_enabled?'SSO on':'SSO off', ST.sso_enabled?'c-ok':'c-warn')
-    + badge('Owner = '+(ST.owner_filter||'—'),'c-off')
+    // "*" is the whole team's sheet - shown as words, not as a wildcard.
+    + badge(ST.owner_filter==='*'?'All records':'Owner = '+(ST.owner_filter||'—'),'c-off')
     + badge(ST.writes_enabled?'Writes on · confirmed & journalled':'Read-only',
             ST.writes_enabled?'c-ok':'c-off')
     + badge(ST.interpret_ready?'Voice brain ready':'Voice brain off',

@@ -43,13 +43,15 @@ param(
         # Ian Jones - PM on Nick's accounts. Write access asked for by Nick,
         # 30 October. He sees Nick's rows (NG): his own initials live in the
         # PM Owner column, which this app does not filter on yet.
-        "ian.jones@wearesdi.com"
+        "ian.jones@wearesdi.com",
+        # Matt Evans - Andy reports to him. May meet the same clients and
+        # save to the sheet, 30 October.
+        "matt.evans@wearesdi.com"
     ),
     # Who should be able to ASK but not change.
     [string[]]$ReadOnly = @(
         "kayleigh.thornhill@wearesdi.com",
         "charlotte.blackwell@wearesdi.com",
-        "matt.evans@wearesdi.com",
         # Read-only to EVERY row ("*"), 30 October. Found by the audit in
         # AM CRM's own logs, so these are the sign-in names the app sees.
         "jack.calow@wearesdi.com",
