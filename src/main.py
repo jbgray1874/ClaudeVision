@@ -1006,6 +1006,15 @@ def main() -> None:
         summary["llm_only"] = bool(getattr(args, "llm_only", False))
         _time_stage("enrichment_reader_provenance", True)
         summary["fresh_read"] = bool(getattr(args, "fresh_read", False))
+        # WHICH MACHINE, WHICH RUNNER, WHICH BUILD — onto the run, for the book's first page
+        # (D-601). Stamped by the process that costs the job, so a report re-rendered
+        # elsewhere still names the machine that ran it.
+        try:
+            from run_provenance import record as _record_run
+            _record_run(summary)
+        except Exception as _rp_exc:                             # noqa: BLE001
+            print(f"   [run] could not record the run's machine and build ({_rp_exc})",
+                  flush=True)
         try:
             from run_readers import readers_that_ran as _readers
             summary["readers_that_ran"] = _readers(
@@ -2256,24 +2265,39 @@ def main() -> None:
             # none of that. A file that cannot say how it was produced will eventually be
             # read as an ordinary estimate, which for an LLM-only run is the one outcome
             # every warning in this engine exists to prevent.
-            if getattr(args, "llm_only", False) and _canon_json2:
+            #
+            # AND WHICH RUN, MACHINE AND BUILD, ON EVERY RUN (D-601). The report is built from
+            # this file, and the run ID, the run provenance and the fresh-read flag are set on
+            # the summary after the scan first wrote it — so the 30 Oct HPP report printed none
+            # of them. They go on the file here, before the report reads it.
+            if _canon_json2:
                 try:
                     _p = Path(_canon_json2)
                     _d = json.loads(_p.read_text(encoding="utf-8"))
-                    _d["llm_only"] = True
-                    _d["read_by"] = ("BOM from the vision model alone (--llm-only); "
-                                     "title-block text still read by pdfplumber; DXF flat "
-                                     "patterns and the SolidWorks extract off — a MEASUREMENT "
-                                     "of the model's BOM reading, not an estimate; its total "
-                                     "must not be quoted")
-                    _p.write_text(json.dumps(_d, indent=2, ensure_ascii=False),
+                    # The run ID rides INSIDE run_provenance, not as the top-level key: the
+                    # customer quotation prints that key as its reference, and putting
+                    # SDI's run detail on the customer's document is not this change.
+                    _rp = summary.get("run_provenance")
+                    if isinstance(_rp, dict):
+                        _d["run_provenance"] = dict(
+                            _rp, run_id=str(summary.get("run_id") or _rp.get("run_id") or ""))
+                    if "fresh_read" in summary:
+                        _d["fresh_read"] = bool(summary["fresh_read"])
+                    if getattr(args, "llm_only", False):
+                        _d["llm_only"] = True
+                        _d["read_by"] = ("BOM from the vision model alone (--llm-only); "
+                                         "title-block text still read by pdfplumber; DXF flat "
+                                         "patterns and the SolidWorks extract off — a "
+                                         "MEASUREMENT of the model's BOM reading, not an "
+                                         "estimate; its total must not be quoted")
+                    _p.write_text(json.dumps(_d, indent=2, ensure_ascii=False, default=str),
                                   encoding="utf-8")
                 except Exception as _se:
                     # SAID, NOT SWALLOWED. Downstream readers decide what to suppress from
                     # this flag; if it did not land they are deciding without it.
-                    print(f"   [deliverables] WARNING could not stamp llm_only on the JSON "
-                          f"({_se}) — anything reading it later cannot tell this was a "
-                          f"measurement run.", flush=True)
+                    print(f"   [deliverables] WARNING could not stamp the run's mode and "
+                          f"identity on the JSON ({_se}) — anything reading it later cannot "
+                          f"tell a measurement run, or name the machine and build.", flush=True)
 
             # Resolve the pinned manual estimate ONCE (explicit-only, no discovery) so
             # both the client quote (customer name from the ...\<CUSTOMER>\... path) and

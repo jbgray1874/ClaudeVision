@@ -814,17 +814,10 @@ def _reads_line(summary: Dict[str, Any]) -> str:
     """"Reads: pdf_readings 3 reused / 0 made; vision_bom 11 reused / 2 made" — what each store
     gave back on the run that costed this book (D-553/D-554), from the estimate's own record,
     else from this process; "" when nothing was read through a store. A cache that never hits
-    looks exactly like one that works, and the book is where somebody looks."""
-    counts = ((summary or {}).get("estimate_summary") or {}).get("reads_reused")
-    if not isinstance(counts, dict) or not counts:
-        try:
-            import run_timing
-            counts = run_timing.reuse_counts()
-        except Exception:                                    # noqa: BLE001
-            counts = {}
-    parts = [f"{store} {int(c.get('reused', 0))} reused / {int(c.get('computed', 0))} made"
-             for store, c in sorted((counts or {}).items()) if isinstance(c, dict)]
-    return ("Reads: " + "; ".join(parts)) if parts else ""
+    looks exactly like one that works, and the book is where somebody looks. One wording,
+    shared with the job report's run panel (D-601)."""
+    from run_provenance import reads_line
+    return reads_line(summary)
 
 
 def add_provenance_sheet(wb, summary: Dict[str, Any],
@@ -913,11 +906,22 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     _reads_txt = _reads_line(summary)
     if _reads_txt:
         _build_txt += f"   |   {_reads_txt}"
+    # WHICH RUN, WHICH MACHINE, WHICH MODE — FIRST, AND ON A LINE OF ITS OWN (D-601). The
+    # build was here, at the far end of one centred line wider than the screen, so Excel
+    # clipped it from view. Four Altavio books on 30 Oct each needed the log to say which
+    # machine and which build made them. The same stamp now opens the header.
+    try:
+        from run_provenance import workbook_line as _run_line
+        _run_txt = _run_line(summary)
+    except Exception:                                            # noqa: BLE001
+        _run_txt = ""
     cell(2, 1,
+         (f"{_run_txt}{_build_txt}\n" if _run_txt else "") +
          f"Drawing: {pdf_name}   |   Job: {job_no}   |   Scanned: {scan_dt}   |   "
-         f"Parts: {len(provenance)}   |   {_tot_txt}{_build_txt}",
-         bg="2F5496", fg=C_HEADER_FG, align="center", size=10)
-    ws.row_dimensions[2].height = 18
+         f"Parts: {len(provenance)}   |   {_tot_txt}" + ("" if _run_txt else _build_txt),
+         bg="2F5496", fg=C_HEADER_FG, align="left" if _run_txt else "center", size=10,
+         wrap=bool(_run_txt))
+    ws.row_dimensions[2].height = 48 if _run_txt else 18
     # ── Legend ─────────────────────────────────────────────────────────────────
     ws.merge_cells("A3:P3")
     cell(3, 1,

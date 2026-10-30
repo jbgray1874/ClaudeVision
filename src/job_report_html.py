@@ -3373,6 +3373,7 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
     ])
     body = "\n".join([
         _render_header(h, has_parity, summary),
+        _render_run_panel(summary, record),
         _render_run_stop(summary),
         _render_concept_takeoff(summary),
         _render_product_scope(summary),
@@ -3666,6 +3667,25 @@ def _clip_names(reason: Any, n: int = 6) -> str:
     if len(items) <= n:
         return str(reason)
     return f"{head}: {', '.join(items[:n])} and {len(items) - n} more"
+
+
+def _render_run_panel(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
+    """WHICH RUN THIS IS, before any number (D-601).
+
+    Run ID, runner machine, engine build, mode, reference documents, reads and the final
+    review status. Each of the four Altavio HPP books of 30 Oct needed the run log to answer
+    one of these. The build is the stamp AI Provenance prints, recorded at run time; the
+    status is the Summary's own release line, so the panel and the Summary say one thing.
+    Internal: the customer quotation carries none of it."""
+    try:
+        from run_provenance import facts
+        rows = facts(summary, review_status=_release_words(record, summary)[1])
+    except Exception:                                            # noqa: BLE001
+        return ""
+    body = "".join(f"<tr><td><b>{_esc(k)}</b></td><td>{_esc(v)}</td></tr>" for k, v in rows)
+    return (f'<div class="card run-provenance"><div class="mini"><b>Run provenance</b> '
+            f'&mdash; internal; not on the customer quotation</div>'
+            f'<table><tbody>{body}</tbody></table></div>')
 
 
 def _render_summary(summary: Dict[str, Any], record: Dict[str, Any],
