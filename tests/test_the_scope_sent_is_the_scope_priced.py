@@ -259,3 +259,27 @@ def test_the_service_and_the_engine_fingerprint_a_brief_alike():
     import estimate_routes as er
     for text in ("", "a", "Customer: Pixel.\nOne unit.", "  spaced   out  ", "x" * 4000):
         assert er.brief_fingerprint(text) == rp.brief_fingerprint(text), text
+
+
+# ── D-604b: a check that could not run is not agreement ────────────────────────────────
+
+def test_a_received_brief_with_no_fingerprint_is_not_verified(tmp_path, monkeypatch):
+    """The reviewer's reproduction: the received fingerprint missing read "as submitted"."""
+    _submit(monkeypatch)
+    s = _job(tmp_path, brief="x" * 20, refs=["Samsung guide.pdf"])
+    rp.record(s)
+    s["run_provenance"]["received_scope"].pop("brief_sha256")
+    bad = rp.scope_mismatches(s)
+    assert any(b.startswith(rp.UNVERIFIED) and "none to compare it with" in b for b in bad)
+    text = rp.scope_text(s)
+    assert "⚠ NOT VERIFIED:" in text and not text.endswith(" · as submitted")
+    assert "NOT AS SUBMITTED" not in text, "a check that failed to run is not a difference found"
+
+
+def test_nothing_recorded_of_what_arrived_is_not_verified(tmp_path, monkeypatch):
+    _submit(monkeypatch)
+    s = _job(tmp_path, brief="x" * 20, refs=["Samsung guide.pdf"])
+    rp.record(s)
+    s["run_provenance"].pop("received_scope")
+    text = rp.scope_text(s)
+    assert "⚠ NOT VERIFIED: nothing was recorded of what reached the job folder" in text
