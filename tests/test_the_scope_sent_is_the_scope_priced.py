@@ -2,8 +2,9 @@
 
 THE HPP 01:12 RUN OF 31 OCT. The main estimator went out as Samsung / TG_Standalone, with no
 enquiry brief and no reference document, after a day of agreeing Pixel Inspiration, HPP unit
-Design, the Samsung guide as a reference and a customer-only brief. The boxes still held an
-earlier job's values, and a reload had cleared the brief and the ticks. The LLM button had
+Design, the Samsung guide as a reference and a customer-only brief. Why is not known: an
+earlier job's values left in the boxes and a reload clearing the brief and the ticks is a
+plausible explanation, not a proven one, and nothing recorded what was meant. The LLM button had
 shown a receipt of what it would send since D-479; the main estimator sent whatever was on the
 page without a word, and nothing between the page and the book could say what had been meant.
 
@@ -73,8 +74,9 @@ def test_the_service_keeps_the_scope_as_submitted():
     scope = er.submitted_scope(_Run(), "both", "  Customer brief text  ", "filed",
                                ["Samsung guide.pdf"])
     assert scope == {"client": "Pixel Inspiration", "drawing_number": "HPP unit Design",
-                     "units": 1, "method": "both", "brief_chars": 19, "brief_status": "filed",
-                     "reference_documents": ["Samsung guide.pdf"]}
+                     "units": 1, "method": "both", "brief_chars": 19,
+                     "brief_sha256": er.brief_fingerprint("Customer brief text"),
+                     "brief_status": "filed", "reference_documents": ["Samsung guide.pdf"]}
     said = er.scope_sentence(scope)
     assert "customer Pixel Inspiration" in said and "drawing HPP unit Design" in said
     assert "brief 19 chars (filed)" in said and "reference documents: Samsung guide.pdf" in said
@@ -141,8 +143,8 @@ def _job(tmp_path, brief="", refs=()):
 
 def _submit(monkeypatch, **over):
     scope = {"client": "Pixel Inspiration", "drawing_number": "HPP unit Design", "units": 1,
-             "method": "both", "brief_chars": 20, "brief_status": "filed",
-             "reference_documents": ["Samsung guide.pdf"]}
+             "method": "both", "brief_chars": 20, "brief_sha256": rp.brief_fingerprint("x" * 20),
+             "brief_status": "filed", "reference_documents": ["Samsung guide.pdf"]}
     scope.update(over)
     monkeypatch.setenv(rp.SUBMITTED_SCOPE_ENV, json.dumps(scope))
 
@@ -156,8 +158,9 @@ def test_a_scope_that_arrived_whole_says_as_submitted(tmp_path, monkeypatch):
                                 " · as submitted")
 
 
-def test_the_overnight_run_would_have_said_what_was_lost(tmp_path, monkeypatch):
-    """Pixel submitted, Samsung received, no brief and no reference in the folder."""
+def test_a_scope_lost_in_transit_is_named_item_by_item(tmp_path, monkeypatch):
+    """Had Pixel been submitted and Samsung received, with no brief and no reference in the
+    folder, as the 01:12 book received: each loss is named."""
     _submit(monkeypatch)
     s = _job(tmp_path)
     s.update(customer="Samsung", declared_product="TG_Standalone")
@@ -200,3 +203,59 @@ def test_the_saved_record_keeps_the_customer_the_run_was_given():
     s = {"run_provenance": {"machine": "M", "received_customer": "Pixel Inspiration",
                             "submitted_scope": {"client": "Samsung"}, "received_scope": {}}}
     assert rp.scope_mismatches(s) == ["customer submitted as Samsung, received as Pixel Inspiration"]
+
+
+# ── D-604a: content, not presence; a missing field is a mismatch; the exact list ──────────
+
+def test_a_brief_of_200_characters_received_as_one_is_not_as_submitted(tmp_path, monkeypatch):
+    """The reviewer's first reproduction."""
+    sent = "Pixel Inspiration. " * 10 + "x"
+    _submit(monkeypatch, brief_chars=len(sent.strip()), brief_sha256=rp.brief_fingerprint(sent))
+    s = _job(tmp_path, brief="y", refs=["Samsung guide.pdf"])
+    rp.record(s)
+    bad = rp.scope_mismatches(s)
+    assert any(m.startswith("the brief in the job folder is not the brief submitted") for m in bad)
+    assert "NOT AS SUBMITTED" in rp.scope_text(s)
+
+
+def test_the_same_brief_with_different_line_breaks_is_the_same_brief(tmp_path, monkeypatch):
+    sent = "Customer: Pixel Inspiration.\nOne unit."
+    _submit(monkeypatch, brief_chars=len(sent), brief_sha256=rp.brief_fingerprint(sent))
+    s = _job(tmp_path, brief="Customer: Pixel Inspiration.  One unit.\n",
+             refs=["Samsung guide.pdf"])
+    rp.record(s)
+    assert not any("brief" in m for m in rp.scope_mismatches(s))
+
+
+def test_a_missing_customer_or_quantity_is_not_as_submitted(tmp_path, monkeypatch):
+    """The reviewer's second reproduction."""
+    _submit(monkeypatch)
+    s = _job(tmp_path, brief="x" * 20, refs=["Samsung guide.pdf"])
+    s.pop("customer"); s.pop("requested_order_quantity")
+    rp.record(s)
+    bad = rp.scope_mismatches(s)
+    assert "customer submitted as Pixel Inspiration, none received" in bad
+    assert "quantity submitted as 1, none received" in bad
+
+
+def test_a_missing_drawing_is_not_as_submitted(tmp_path, monkeypatch):
+    _submit(monkeypatch)
+    s = _job(tmp_path, brief="x" * 20, refs=["Samsung guide.pdf"])
+    s["declared_product"] = ""
+    rp.record(s)
+    assert "drawing submitted as HPP unit Design, none received" in rp.scope_mismatches(s)
+
+
+def test_the_reference_list_must_match_exactly(tmp_path, monkeypatch):
+    _submit(monkeypatch, reference_documents=["Samsung guide.pdf", "Spec sheet.pdf"])
+    s = _job(tmp_path, brief="x" * 20, refs=["Samsung guide.pdf", "Other.pdf"])
+    rp.record(s)
+    bad = rp.scope_mismatches(s)
+    assert "declared reference not received: Spec sheet.pdf" in bad
+    assert "reference declared in the folder but not submitted: Other.pdf" in bad
+
+
+def test_the_service_and_the_engine_fingerprint_a_brief_alike():
+    import estimate_routes as er
+    for text in ("", "a", "Customer: Pixel.\nOne unit.", "  spaced   out  ", "x" * 4000):
+        assert er.brief_fingerprint(text) == rp.brief_fingerprint(text), text

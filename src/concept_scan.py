@@ -5876,18 +5876,17 @@ def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
 
 _WELD_WORDS = ("welding", "spot_welding")
 
-# The metals a weld joins. The same convention as the estimator's section rule (D-599c).
-_METAL_WORDS = ("STEEL", "ALUMIN", "ZINTEC", "GALV", "BRASS", "COPPER", "IRON", "ZINC",
-                "STAINLESS", "CR4")
-
-
 def _material_of(rec: Mapping[str, Any]) -> str:
     return str(rec.get("normalized_material") or rec.get("material") or "").strip().upper()
 
 
 def _is_metal(rec: Mapping[str, Any]) -> bool:
-    mat = _material_of(rec)
-    return bool(mat) and any(w in mat for w in _METAL_WORDS)
+    """The engine's one controlled answer (D-605a): IRONWOOD is timber, not iron."""
+    try:
+        from material_preservation import is_metal                 # noqa: WPS433
+        return is_metal(_material_of(rec))
+    except Exception:                                               # noqa: BLE001
+        return False
 
 
 def _not_a_weldment(unit: Mapping[str, Any]) -> bool:
@@ -5903,15 +5902,82 @@ def _not_a_weldment(unit: Mapping[str, Any]) -> bool:
         return False
 
 
-def _metal_weldment_inside(unit: Dict[str, Any], made: List[Dict[str, Any]]) -> List[str]:
-    """The welded METAL members of a non-metal unit are their own weldment (D-605).
+# Where another reader records which assembly a part belongs to (D-605a).
+_PARENT_FIELDS = ("parent", "parent_assembly", "parent_part_number", "assembly_parent",
+                  "sub_assembly", "bom_parent")
 
-    Their joints are charged once, on one of them: the longest welded metal member hosts the
-    Weld and Dress rows with at least N-1 joints for N welded pieces, and the others point to
-    it, so one joint is never charged again against every member. The unit stays unwelded,
-    and so does any timber, board or plastic member. Each member keeps its own coat: the unit
-    does not go through the booth. A member whose weld the brief states keeps it, as on a
-    metal unit."""
+
+def _parent_of(rec: Mapping[str, Any]) -> str:
+    for f in _PARENT_FIELDS:
+        v = rec.get(f)
+        if isinstance(v, str) and v.strip():
+            return v.strip().upper()
+    return ""
+
+
+def weld_groups(metal: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The welded metal members, grouped by what joins them (D-605a).
+
+    A STATED JOINT OR A SHARED PARENT IS A CONNECTION; NOTHING ELSE IS. Members joined by a
+    named joint (welded_to_hosts) or recorded under the same parent assembly are one weldment,
+    an established one. Members with neither are pooled into ONE ASSUMED weldment, and the
+    book says it is an assumption: nothing shows which of them are joined to which. A separate
+    halo and base frame, each with its own parent, are never joined into one."""
+    idx = {id(p): i for i, p in enumerate(metal)}
+    by_pn = {str(p.get("part_number") or ""): p for p in metal}
+    root = list(range(len(metal)))
+
+    def find(i: int) -> int:
+        while root[i] != i:
+            root[i] = root[root[i]]
+            i = root[i]
+        return i
+
+    def join(a: int, b: int) -> None:
+        root[find(a)] = find(b)
+
+    evidenced = set()
+    first_of_parent: Dict[str, int] = {}
+    for p in metal:
+        i = idx[id(p)]
+        par = _parent_of(p)
+        if par:
+            evidenced.add(i)
+            if par in first_of_parent:
+                join(i, first_of_parent[par])
+            else:
+                first_of_parent[par] = i
+        for h in p.get("welded_to_hosts") or []:
+            hp = by_pn.get(str(h))
+            if hp is not None:
+                evidenced.update({i, idx[id(hp)]})
+                join(i, idx[id(hp)])
+    unknown = [i for i in range(len(metal)) if i not in evidenced]
+    for i in unknown[1:]:
+        join(i, unknown[0])
+    groups: Dict[int, List[Dict[str, Any]]] = {}
+    for i, p in enumerate(metal):
+        groups.setdefault(find(i), []).append(p)
+    out = []
+    for members in groups.values():
+        assumed = all(idx[id(m)] in unknown for m in members)
+        pars = sorted({_parent_of(m) for m in members if _parent_of(m)})
+        basis = ("assumed" if assumed else
+                 "the same parent assembly " + ", ".join(pars) if pars else "a stated joint")
+        out.append({"members": members, "assumed": assumed, "basis": basis})
+    return out
+
+
+def _metal_weldment_inside(unit: Dict[str, Any], made: List[Dict[str, Any]]) -> List[str]:
+    """The welded METAL members of a non-metal unit are their own weldments (D-605, D-605a).
+
+    Each weldment's joints are charged once, on one of its members: the longest hosts the
+    Weld and Dress rows with at least N-1 joints for its N welded pieces, and the others point
+    to it, so one joint is never charged again against every member. Weldments are grouped by
+    what joins them (weld_groups): an assumed grouping is said to be one. The unit stays
+    unwelded, and so does any timber, board or plastic member. Each member keeps its own coat,
+    which the sheet books once per material and gauge. A member whose weld the brief states
+    keeps it, as on a metal unit."""
     welded = [p for p in made or []
               if set(p.get("inferred_operations") or []) & set(_WELD_WORDS)]
     metal = [p for p in welded if _is_metal(p)]
@@ -5920,30 +5986,48 @@ def _metal_weldment_inside(unit: Dict[str, Any], made: List[Dict[str, Any]]) -> 
 
     def _length(p: Mapping[str, Any]) -> float:
         return max(_num(p.get("blank_length_mm")), _num(p.get("blank_width_mm")))
-    host = max(metal, key=lambda p: (_length(p), -_qty_of(p), str(p.get("part_number") or "")))
-    hid = str(host.get("part_number") or "")
-    pieces = sum(_qty_of(p) for p in metal)
     moved: List[str] = []
-    for p in metal:
-        if p is host or p.get("weld_stated_by_brief"):
-            continue
-        p["inferred_operations"] = [o for o in (p.get("inferred_operations") or [])
-                                    if o not in _WELD_WORDS]
-        p["weld_charged_on"] = hid
-        p.setdefault("review_flags", []).append(
-            f"CONCEPT: welded into the metal weldment — the joint is charged once, on {hid}'s "
-            f"Weld and Dress rows, not again on this line")
-        moved.append(str(p.get("part_number")))
-    if pieces >= 2:
-        host["weld_joint_count"] = max(int(_num(host.get("weld_joint_count"))), pieces - 1)
+    said: List[str] = []
     _mat = _material_of(unit)
-    _say = (f"CONCEPT: the unit is {_mat}, which is not welded; its welded metal members "
-            f"({', '.join(str(p.get('part_number')) for p in metal)}) are their own weldment, "
-            f"charged once on {hid}: {pieces} welded piece(s), so at least {max(pieces - 1, 0)} "
-            f"joint(s) at the shop's per-joint rate. Confirm the members are welded and the "
-            f"joint count")
-    unit.setdefault("review_flags", []).append(_say)
-    host.setdefault("review_flags", []).append(_say)
+    for g in weld_groups(metal):
+        members = g["members"]
+        pieces = sum(_qty_of(p) for p in members)
+        if pieces < 2:
+            continue                       # one piece, nothing to join it to: its own weld
+        host = max(members, key=lambda p: (_length(p), -_qty_of(p),
+                                           str(p.get("part_number") or "")))
+        hid = str(host.get("part_number") or "")
+        for p in members:
+            if p is host or p.get("weld_stated_by_brief"):
+                continue
+            p["inferred_operations"] = [o for o in (p.get("inferred_operations") or [])
+                                        if o not in _WELD_WORDS]
+            p["weld_charged_on"] = hid
+            p.setdefault("review_flags", []).append(
+                f"CONCEPT: welded into the metal weldment hosted on {hid} — the joint is "
+                f"charged once, on {hid}'s Weld and Dress rows, not again on this line")
+            moved.append(str(p.get("part_number")))
+        host["weld_joint_count"] = max(int(_num(host.get("weld_joint_count"))), pieces - 1)
+        host["weld_group"] = {"members": [str(m.get("part_number")) for m in members],
+                              "assumed": g["assumed"], "basis": g["basis"]}
+        names = ", ".join(str(m.get("part_number")) for m in members)
+        if g["assumed"]:
+            _say = (f"CONCEPT: ASSUMED weldment — {names} are read as welded, and nothing shows "
+                    f"which of them are joined to which; priced as one weldment on {hid}: "
+                    f"{pieces} welded piece(s), so at least {pieces - 1} joint(s) at the shop's "
+                    f"per-joint rate. This grouping is an assumption, not an established "
+                    f"connection. Confirm which members are welded together and the joint count")
+        else:
+            _say = (f"CONCEPT: a metal weldment of {names}, joined by {g['basis']}, charged once "
+                    f"on {hid}: {pieces} welded piece(s), so at least {pieces - 1} joint(s) at "
+                    f"the shop's per-joint rate. Confirm the joint count")
+        host.setdefault("review_flags", []).append(_say)
+        said.append(_say)
+    if said:
+        unit.setdefault("review_flags", []).append(
+            f"CONCEPT: the unit is {_mat}, which is not welded; its welded metal members are "
+            f"their own weldment(s), each charged once on one of its members — "
+            + " | ".join(said))
     return moved
 
 

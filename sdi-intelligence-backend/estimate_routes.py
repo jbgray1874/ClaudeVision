@@ -854,12 +854,22 @@ def _file_enquiry_brief(run: "Run", job: Any, brief: Optional[str]) -> str:
                  f"render alone.")
         return "failed"
 
+def brief_fingerprint(text: Any) -> str:
+    """The brief's content as a short hash, whitespace collapsed (D-604a). Identical to
+    run_provenance.brief_fingerprint in the engine; a test holds the two together."""
+    import hashlib
+    norm = " ".join(str(text or "").split())
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16] if norm else ""
+
+
 def submitted_scope(run: "Run", method: str, brief: Optional[str], brief_status: str,
                     reference_documents: List[str]) -> Dict[str, Any]:
-    """What this run was asked to price, as the page sent it (D-604)."""
+    """What this run was asked to price, as the page sent it (D-604), the brief by its
+    content's fingerprint as well as its length (D-604a)."""
+    _text = str(brief or "").strip()[:_BRIEF_MAX_CHARS]
     return {"client": run.client, "drawing_number": run.drawing_number,
             "units": int(run.units), "method": str(method or ""),
-            "brief_chars": len(str(brief or "").strip()[:_BRIEF_MAX_CHARS]),
+            "brief_chars": len(_text), "brief_sha256": brief_fingerprint(_text),
             "brief_status": str(brief_status or ""),
             "reference_documents": [str(n) for n in (reference_documents or [])]}
 

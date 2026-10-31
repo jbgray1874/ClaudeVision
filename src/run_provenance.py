@@ -70,6 +70,15 @@ def _build_line() -> Tuple[str, str]:
     return line, warn
 
 
+def brief_fingerprint(text: Any) -> str:
+    """The brief's content as a short hash, whitespace collapsed (D-604a). The service computes
+    the same, so the book compares what was sent with what arrived, not just whether a brief
+    exists. Kept identical to estimate_routes.brief_fingerprint; a test holds them together."""
+    import hashlib
+    norm = " ".join(str(text or "").split())
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16] if norm else ""
+
+
 def _submitted() -> Dict[str, Any]:
     try:
         import json
@@ -84,15 +93,16 @@ def _received(summary: Mapping[str, Any]) -> Dict[str, Any]:
     Read from the folder itself, because a measured pack never uses the brief and so never
     records it — and the question here is whether it ARRIVED, not whether it was used."""
     folders = [summary.get("job_folder")] if isinstance(summary, Mapping) else []
-    brief_chars, refs = 0, []
+    brief_chars, brief_sha, refs = 0, "", []
     try:
         import concept_scan
         text, _f = concept_scan.find_brief(folders)
         brief_chars = len(str(text or "").strip())
+        brief_sha = brief_fingerprint(text)
         refs = list(concept_scan.reference_documents_declared(folders))
     except Exception:                                                # noqa: BLE001
         pass
-    return {"brief_chars": brief_chars, "reference_documents": refs}
+    return {"brief_chars": brief_chars, "brief_sha256": brief_sha, "reference_documents": refs}
 
 
 def record(summary: Dict[str, Any]) -> Dict[str, Any]:
@@ -171,30 +181,52 @@ def scope_mismatches(summary: Any) -> List[str]:
         return []
     rec = p.get("received_scope") if isinstance(p.get("received_scope"), dict) else {}
     out: List[str] = []
+    # A MISSING EXPECTED FIELD IS A MISMATCH (D-604a): a customer, drawing or quantity that was
+    # submitted and is absent on the record did not arrive, which is not "as submitted".
     got_cust = s.get("customer") or p.get("received_customer")
-    if sub.get("client") and got_cust and _norm(sub["client"]) != _norm(got_cust):
-        out.append(f"customer submitted as {sub['client']}, received as {got_cust}")
+    if sub.get("client"):
+        if not got_cust:
+            out.append(f"customer submitted as {sub['client']}, none received")
+        elif _norm(sub["client"]) != _norm(got_cust):
+            out.append(f"customer submitted as {sub['client']}, received as {got_cust}")
     got_dwg = s.get("declared_product")
-    if sub.get("drawing_number") and got_dwg is not None and _norm(sub["drawing_number"]) != _norm(got_dwg):
-        out.append(f"drawing submitted as {sub['drawing_number']}, received as {got_dwg or 'nothing'}")
+    if sub.get("drawing_number"):
+        if not got_dwg:
+            out.append(f"drawing submitted as {sub['drawing_number']}, none received")
+        elif _norm(sub["drawing_number"]) != _norm(got_dwg):
+            out.append(f"drawing submitted as {sub['drawing_number']}, received as {got_dwg}")
     got_qty = s.get("requested_order_quantity")
-    try:
-        if sub.get("units") and got_qty and int(sub["units"]) != int(got_qty):
+    if sub.get("units"):
+        try:
+            if not got_qty:
+                out.append(f"quantity submitted as {sub['units']}, none received")
+            elif int(sub["units"]) != int(got_qty):
+                out.append(f"quantity submitted as {sub['units']}, received as {got_qty}")
+        except (TypeError, ValueError):
             out.append(f"quantity submitted as {sub['units']}, received as {got_qty}")
-    except (TypeError, ValueError):
-        pass
+    # THE BRIEF'S CONTENT, NOT ITS PRESENCE (D-604a): 200 characters sent and one received
+    # read "as submitted". Compared by fingerprint where the service sent one, else by length.
     sent_b, got_b = int(sub.get("brief_chars") or 0), int(rec.get("brief_chars") or 0)
+    sent_h, got_h = str(sub.get("brief_sha256") or ""), str(rec.get("brief_sha256") or "")
     if sent_b and not got_b:
         out.append(f"a brief of {sent_b} characters was submitted and none reached the job folder")
     elif got_b and not sent_b:
         out.append(f"no brief was submitted, yet one of {got_b} characters is in the job folder")
-    sent_r = {_file_name(n) for n in (sub.get("reference_documents") or [])}
-    got_r = {_file_name(n) for n in (rec.get("reference_documents") or [])}
-    if sent_r - got_r:
-        out.append("declared reference not received: " + ", ".join(sorted(sent_r - got_r)))
-    if got_r - sent_r:
-        out.append("reference declared in the folder but not submitted: "
-                   + ", ".join(sorted(got_r - sent_r)))
+    elif sent_b and ((sent_h and got_h and sent_h != got_h) or (not sent_h and sent_b != got_b)):
+        out.append(f"the brief in the job folder is not the brief submitted ({sent_b} "
+                   f"characters submitted, {got_b} received)")
+    # THE EXACT REFERENCE LIST (D-604a): every declared name, each one, on both sides.
+    sent_r = sorted(_file_name(n) for n in (sub.get("reference_documents") or []))
+    got_r = sorted(_file_name(n) for n in (rec.get("reference_documents") or []))
+    if sent_r != got_r:
+        missing = sorted(set(sent_r) - set(got_r))
+        extra = sorted(set(got_r) - set(sent_r))
+        if missing:
+            out.append("declared reference not received: " + ", ".join(missing))
+        if extra:
+            out.append("reference declared in the folder but not submitted: " + ", ".join(extra))
+        if not missing and not extra:
+            out.append(f"reference list differs: submitted {sent_r}, received {got_r}")
     return out
 
 

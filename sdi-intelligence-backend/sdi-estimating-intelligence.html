@@ -3234,8 +3234,9 @@ $("release").onclick = async () => {
 runBtn.onclick = async () => {
   if(running || runBtn.disabled) return;
   /* THE SCOPE, SHOWN BEFORE IT IS SENT (D-604). The HPP 01:12 run of 31 Oct went out as
-     Samsung / TG_Standalone with no brief and no reference document: the boxes still held an
-     earlier job's values and a reload had cleared the brief and the ticks. The LLM button has
+     Samsung / TG_Standalone with no brief and no reference document. Why is not known (old
+     values left in the boxes and a reload clearing the brief and ticks is plausible, not
+     proven), because nothing showed what was about to be sent. The LLM button has
      shown this receipt since D-479; the main estimator sent whatever was on the page without
      a word. Computed HERE, from the state that will be sent, so a lost tick or an emptied
      brief shows as "(none)" before staging, before the engine, before the hour. */
