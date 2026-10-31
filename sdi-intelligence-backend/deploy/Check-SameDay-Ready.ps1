@@ -92,7 +92,13 @@ Write-Host "  $(Get-Date -Format 'dddd d MMMM yyyy, HH:mm')  -  reads only" -For
 
 # -- 1. The code on K: --------------------------------------------------------
 Head "1. The code Muhammad left on K:"
+# Two layouts: K: has SDI_Automation\brief_lite, and the copy on the laptop
+# (C:\ClaudeVision\SameDayIntelligence) has brief_lite straight inside it.
 $auto = Join-Path $Source "SDI_Automation"
+if (-not (Test-Path -LiteralPath (Join-Path $auto "brief_lite")) -and
+    (Test-Path -LiteralPath (Join-Path $Source "brief_lite"))) {
+    $auto = $Source
+}
 $app = Join-Path $auto "brief_lite\lite_app.py"
 if (-not (Test-Path -LiteralPath $app)) {
     Block "Cannot see $app"

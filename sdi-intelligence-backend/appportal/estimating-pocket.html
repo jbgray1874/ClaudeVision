@@ -96,6 +96,9 @@
         padding:12px 13px;margin:7px 0}
   .pick:hover{border-color:var(--accent)}
   a.pick{text-decoration:none;color:inherit}
+  .tickrow{display:flex;align-items:center;gap:9px;padding:7px 0;font-size:14px;
+           border-top:1px solid var(--line-soft)}
+  .tickrow input{width:20px;height:20px;flex:0 0 auto}
   .pick .open{flex:0 0 auto;font-size:12px;color:var(--accent)}
   .pick .ic{color:var(--ink-faint);flex:0 0 auto;display:flex}
   .pick .ic svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.9}
@@ -200,6 +203,7 @@
         <div class="card">
           <h3 id="start-folder"></h3>
           <p class="mono" id="start-drawings"></p>
+          <div id="start-files"></div>
           <label class="muted" for="start-client">Client</label>
           <input id="start-client" type="text" placeholder="e.g. Boots">
           <label class="muted" for="start-units" style="display:block;margin-top:9px">How many</label>
@@ -631,23 +635,62 @@ function offerStart(data){
   // only when empty - what somebody typed is never overwritten.
   if(!$("start-client").value.trim())
     $("start-client").value = String(data.relative || "").split("/")[0];
+
+  // ── WHICH DRAWINGS GO IN ─────────────────────────────────────────────────
+  // Starting from the folder prices EVERY drawing in it. Saving a revision
+  // from an email puts it beside the old one as "GA (2).pdf", so a folder run
+  // would price both. Every drawing is listed and ticked - all ticked is the
+  // folder exactly as before - and anything unticked is left out: the run is
+  // then sent the ticked files by name, as the desk's "Select drawing files"
+  // sends them. A picture is offered unticked: in a chosen folder staging
+  // skips images, and chosen by name it reads them.
+  const list = $("start-files");
+  list.replaceChildren();
+  chosen.start.files = [];
+  for(const entry of data.entries){
+    if(entry.is_dir || !entry.path) continue;
+    const ext = (entry.name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
+    const drawing = DRAWING_TYPES.includes(ext), picture = PICTURE_TYPES.includes(ext);
+    if(!drawing && !picture) continue;
+    const row = el("label", null, list, "tickrow");
+    const box = el("input", null, row);
+    box.type = "checkbox"; box.checked = drawing;
+    el("span", entry.name + (picture ? "  (picture - tick to include)" : ""), row);
+    chosen.start.files.push({box: box, path: entry.path, drawing: drawing});
+  }
   say("start-state", "");
+}
+
+const DRAWING_TYPES = [".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step", ".stp"];
+const PICTURE_TYPES = [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"];
+
+// What to send for the ticks: the whole folder when nothing was changed, so a
+// run started without touching a box is exactly what it always was.
+function packSources(start){
+  const picks = start.files || [];
+  if(!picks.length) return {job_folder: start.folder_path};
+  const ticked = picks.filter(p => p.box.checked);
+  if(!ticked.length) return null;
+  const asListed = picks.every(p => p.box.checked === p.drawing);
+  return asListed ? {job_folder: start.folder_path} : {files: ticked.map(p => p.path)};
 }
 
 async function startIt(){
   if(!chosen.start){ say("start-state", "Pick a job folder first.", "err"); return; }
+  const sources = packSources(chosen.start);
+  if(!sources){ say("start-state", "Tick at least one drawing.", "err"); return; }
   $("start-go").disabled = true;
   say("start-state", "Starting…");
   try{
     // The real shape of EstimateRequest: a client, something to call the
-    // drawing, how many, and where the pack is. email_to is filled in with the
-    // signed-in person below, which is the whole point of starting one from a
-    // phone - you are told when it is done rather than watching for it.
-    const body = {client: $("start-client").value.trim() || chosen.start.name,
-                  drawing_number: chosen.start.name,
-                  units: Number($("start-units").value) || 1,
-                  job_folder: chosen.start.folder_path,
-                  email_to: me.email || ""};
+    // drawing, how many, and where the pack is - the folder, or the ticked
+    // drawings by name. email_to is filled in with the signed-in person below,
+    // which is the whole point of starting one from a phone - you are told
+    // when it is done rather than watching for it.
+    const body = Object.assign({client: $("start-client").value.trim() || chosen.start.name,
+                                drawing_number: chosen.start.name,
+                                units: Number($("start-units").value) || 1,
+                                email_to: me.email || ""}, sources);
     const r = await api("/api/estimate", body);
     say("start-state", "Started. " + (r.run_id ? "Run " + r.run_id + ". " : "")
         + "You can close this — it will email you when it finishes.", "ok");

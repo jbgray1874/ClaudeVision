@@ -3266,9 +3266,14 @@ def completed_briefs(relative: str = "", area: str = "briefs",
     # Live Enquiry cannot script this origin.
     from urllib.parse import quote as _q
     for entry in out.get("entries", []):
-        if not entry.get("is_dir") and Path(entry["name"]).suffix.lower() in config.ALLOWED_EXTENSIONS:
-            entry["open_url"] = "/api/file?path=" + _q(
-                str(Path(out["folder_path"]) / entry["name"]), safe="")
+        if entry.get("is_dir"):
+            continue
+        where = str(Path(out["folder_path"]) / entry["name"])
+        # The phone picks drawings by these, exactly as the desk picks them by
+        # /api/files' paths: server-made, and checked again by /api/estimate.
+        entry["path"] = where
+        if Path(entry["name"]).suffix.lower() in config.ALLOWED_EXTENSIONS:
+            entry["open_url"] = "/api/file?path=" + _q(where, safe="")
     return out
 
 
