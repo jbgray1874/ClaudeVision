@@ -444,5 +444,91 @@ def test_a_restart_names_another_service_on_this_machine_running_other_code():
     after = ps[ps.index('"  serving commit $serving'):]
     after = after[:after.index("\n} catch {")]
     assert "foreach ($other in @(8071, 8072, 8073))" in after
-    assert 'Invoke-RestMethod "http://localhost:$other/api/health"' in after
+    assert 'Invoke-WebRequest "http://localhost:$other/api/health"' in after
     assert "$otherCommit -ne $head" in after and "ALSO SERVING" in after
+
+
+# ── a brief that cannot be saved is not queued (D-607a) ──────────────────────────────────
+
+def _refuse_brief_writes(monkeypatch, er, method):
+    import pathlib
+    real = getattr(pathlib.Path, method)
+
+    def _deny(self, *a, **k):
+        if self.name == er._BRIEF_FILENAME:
+            raise PermissionError("the share is read-only")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(pathlib.Path, method, _deny)
+
+
+def test_a_brief_that_cannot_be_saved_refuses_the_run_and_queues_nothing(api, monkeypatch):
+    """The review of D-607: the brief's save failure returned "failed", and the route queued
+    the run anyway, to read the pack without the customer's words."""
+    er, tmp_path = api
+    _check_in(er)
+    _refuse_brief_writes(monkeypatch, er, "write_text")
+    req = _request(er, tmp_path)
+    req.enquiry_brief = "Pixel Inspiration HPP unit, one off, customer brief"
+    with pytest.raises(er.HTTPException) as refused:
+        er.start(req)
+    assert refused.value.status_code == 500
+    assert "could not be saved" in refused.value.detail
+    assert "NOT queued" in refused.value.detail
+    assert er._RUNS == {}, "nothing is left in the queue"
+    assert _check_in(er)["run"] is None, "and nothing can be claimed"
+
+
+def test_a_stale_brief_that_cannot_be_cleared_refuses_the_run_too(api, monkeypatch):
+    """No brief typed, and an earlier run's brief that cannot be removed: queued, the read
+    would take a brief nobody typed for this run."""
+    er, tmp_path = api
+    _check_in(er)
+    import pathlib
+    real_exists = pathlib.Path.exists
+    monkeypatch.setattr(pathlib.Path, "exists",
+                        lambda self: True if self.name == er._BRIEF_FILENAME
+                        else real_exists(self))
+    _refuse_brief_writes(monkeypatch, er, "unlink")
+    with pytest.raises(er.HTTPException) as refused:
+        er.start(_request(er, tmp_path))
+    assert "cleared of the one an earlier run left" in refused.value.detail
+    assert er._RUNS == {} and _check_in(er)["run"] is None
+
+
+def test_a_brief_that_is_saved_still_queues_the_run(api):
+    er, tmp_path = api
+    _check_in(er)
+    req = _request(er, tmp_path)
+    req.enquiry_brief = "Pixel Inspiration HPP unit"
+    assert er.start(req)["enquiry_brief"] == "filed"
+    assert _check_in(er)["run"]["submitted_scope"]["brief_status"] == "filed"
+
+
+# ── a refusal is an answer, not a dead service (D-607a) ─────────────────────────────────
+
+def _ps(name):
+    return (ROOT / "tools" / "start" / name).read_text(encoding="utf-8")
+
+
+def test_the_service_check_tells_a_refusal_from_a_service_that_is_down():
+    ps = _ps("check-services.ps1")
+    assert ps.isascii()
+    body = ps[ps.index("foreach ($p in $Ports)"):]
+    assert "Invoke-WebRequest" in body and "$_.Exception.Response" in body
+    assert 'refused (HTTP $([int]$refusal.StatusCode))' in body
+    assert "down - nothing answered" in body
+    assert "$refusal.Headers['X-SDI-Commit']" in body, "the commit is read off the refusal too"
+    assert "NOT HEAD" in body and "matches HEAD" in body
+
+
+def test_the_restart_scripts_count_a_refusal_as_an_answer():
+    svc = _ps("restart-service.ps1")
+    after = svc[svc.index('"  serving commit $serving'):]
+    after = after[:after.index("\n} catch {")]
+    assert "refused the request (HTTP" in after and "$_.Exception.Response" in after
+    run = _ps("restart-runner.ps1")
+    pick = run[run.index("if (-not $Service) {"):run.index("$Service = ($Service -split")]
+    assert '@("http://localhost:8071", "http://localhost:8072")' in pick
+    assert "if ($_.Exception.Response) { $answered = $true }" in pick
+    assert svc.isascii() and run.isascii()

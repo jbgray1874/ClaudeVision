@@ -850,8 +850,9 @@ def _file_enquiry_brief(run: "Run", job: Any, brief: Optional[str]) -> str:
         run.line("No enquiry brief with this run — the model reads the pack alone.")
         return "none"
     except OSError as exc:
-        run.line(f"WARNING — the enquiry brief could not be filed ({exc}); this run reads the "
-                 f"render alone.")
+        # The route refuses the run on "failed" (D-607a), so this line is the reason it gives.
+        run.line(f"The enquiry brief could not be "
+                 f"{'saved' if text else 'cleared of the one an earlier run left'} ({exc}).")
         return "failed"
 
 def brief_fingerprint(text: Any) -> str:
@@ -2056,6 +2057,13 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     # filed only on LLM runs, a customer's change could never reach it. On a measured pack the
     # engine sets the brief aside and the book says so.
     _brief_status = _file_enquiry_brief(run, job, req.enquiry_brief)
+    # A BRIEF THAT COULD NOT BE SAVED IS NOT QUEUED (D-607a). Queued, the run would read the
+    # pack without the customer's words, or with a stale brief nobody typed for it. The run is
+    # not in the queue yet, so refusing here leaves nothing a runner can claim.
+    if _brief_status == "failed":
+        raise HTTPException(500, (run.log[-1] if run.log else "The enquiry brief could not be "
+                                  "saved.") + " The run was NOT queued. Check the job folder "
+                                 "can be written, then run again.")
     # THE SCOPE AS SUBMITTED, kept on the run and said on its log (D-604).
     run.submitted_scope = submitted_scope(run, method, req.enquiry_brief, _brief_status,
                                           _ref_docs)

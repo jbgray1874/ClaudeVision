@@ -314,10 +314,23 @@ try {
     foreach ($other in @(8071, 8072, 8073)) {
         if ($other -eq $Port) { continue }
         if (@(Get-NetTCPConnection -LocalPort $other -State Listen -ErrorAction SilentlyContinue).Count -eq 0) { continue }
+        # A REFUSAL IS AN ANSWER (D-607a). A 401 is a service turning away a request without
+        # the key, not a service that is down, and the commit header rides on the refusal too.
         $otherCommit = ""
-        try { $otherCommit = "$((Invoke-RestMethod "http://localhost:$other/api/health" -TimeoutSec 4).commit)".Trim() } catch { }
+        $otherState = "did not answer"
+        try {
+            $reply = Invoke-WebRequest "http://localhost:$other/api/health" -UseBasicParsing -TimeoutSec 4
+            $otherState = "answered"
+            $otherCommit = "$($reply.Headers['X-SDI-Commit'])".Trim()
+        } catch {
+            $refusal = $_.Exception.Response
+            if ($refusal) {
+                $otherState = "refused the request (HTTP $([int]$refusal.StatusCode))"
+                try { $otherCommit = "$($refusal.Headers['X-SDI-Commit'])".Trim() } catch { }
+            }
+        }
         if (-not $otherCommit -or $otherCommit -eq "unknown") {
-            Write-Host ("  note: {0} is also serving here and did not say which commit it runs." -f $other) -ForegroundColor Yellow
+            Write-Host ("  note: {0} is also listening here; it {1} and did not say which commit it runs." -f $other, $otherState) -ForegroundColor Yellow
             Write-Host ("    find it:  " + ($whatIsOn -f $other)) -ForegroundColor Yellow
         } elseif ($head -and $otherCommit -ne $head) {
             Write-Host ""
