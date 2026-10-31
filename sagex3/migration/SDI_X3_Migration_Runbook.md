@@ -658,6 +658,25 @@ run that rebuilds every complete file from current Access data and writes `WHAT_
 against the previous run. See `rebuild/README.md` for status. Until each part is in the kit, the
 steps below still apply.
 
+**Products are in the kit (31 Oct):**
+1. Run `rebuild/sql/extract_products.sql` on SDILive (read-only, temporary tables only). Save it
+   with Results To File, tab delimited, as `<run>/extract/extract_products.txt`.
+2. `python rebuild/run.py <run> --previous <last loaded set> --today <yyyymmdd>`.
+3. It writes the complete `ZSDIITM_products_MAPPED.xlsx` and `WHAT_CHANGED.md`.
+
+The product rule is rule 1a, written into `products.py`. A product goes in if it does any of these:
+- holds stock;
+- is on an open sales, purchase or works order;
+- was sold, bought or made in the last 2 years;
+- is graded GOOD or INCOMPLETE;
+- is a component, at any depth, of a BOM that goes in.
+
+Every other product is on the "Not migrated" tab with its last activity. The run stops if a
+stocked or ordered product, or a BOM component, is left out. PHANT uses the usage test (`--phant
+access` keeps vw_ITM's category). Tested on the original vw_ITM data: it reproduces the loaded
+file, apart from the 137 V6 additions that weren't in the test data and 108 descriptions it
+keeps longer, within 30 characters.
+
 
 1. **Fresh extract** (all on one day): views_v2.sql export grids; bins_and_delivery.sql grid
    1; product_suppliers_v3.sql grid 2; works_orders_extract.sql grid 2; plus the cleansed

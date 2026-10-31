@@ -8,6 +8,9 @@ import re
 import unicodedata
 from pathlib import Path
 
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+
 ENC = "cp850"                       # Access exports and X3 load files are DOS cp850
 
 
@@ -22,14 +25,30 @@ def write_semi(path, rows):
         csv.writer(f, delimiter=";", lineterminator="\r\n").writerows(rows)
 
 
+def decode(raw):
+    """SSMS saves results as UTF-16 (with a byte-order mark), UTF-8 or the Windows code page,
+    depending on its settings. Read whichever it is, so a £ or an accent isn't lost."""
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw.decode("utf-16")
+    if raw[:3] == b"\xef\xbb\xbf":
+        return raw[3:].decode("utf-8")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("cp1252", errors="replace")
+
+
 def read_grids(path):
     """A SQL Server 'Results To File' export: grids separated by blank lines, tab-delimited.
     Returns {label: rows} for grids whose first column is a label (the extract SQL puts one
     on every grid), and a list of unlabelled grids in order."""
-    text = open(path, encoding="utf-8", errors="replace").read().replace("\r\n", "\n")
+    text = decode(Path(path).read_bytes()).replace("\r\n", "\n")
     labelled, plain = {}, []
     for block in text.split("\n\n"):
         rows = [line.split("\t") for line in block.strip("\n").split("\n") if line.strip()]
+        # SSMS can be set to print column headings, a line of dashes and "(n rows affected)"
+        rows = [r for r in rows if r[0] != "grid" and not set(r[0]) <= set("- ")
+                and not re.fullmatch(r"\(\d+ rows? affected\)", r[0].strip())]
         if not rows:
             continue
         label = rows[0][0]
@@ -93,3 +112,36 @@ def clip(v, n):
 def ensure_dir(p):
     Path(p).mkdir(parents=True, exist_ok=True)
     return Path(p)
+
+
+# ---- spreadsheet tabs, styled the same in every file -----------------------------------
+HEAD_FONT, HEAD_FILL = Font(bold=True, color="FFFFFF"), PatternFill("solid", fgColor="44546A")
+
+
+def add_sheet(wb, title, head, rows, widths=None, index=None):
+    ws = wb.create_sheet(title, index)
+    ws.append(list(head))
+    for c in ws[1]:
+        c.font, c.fill = HEAD_FONT, HEAD_FILL
+        c.alignment = Alignment(wrap_text=True, vertical="top")
+    for r in rows:
+        ws.append(list(r))
+    for i, w in enumerate(widths or [18] * len(head), 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.freeze_panes = "A2"
+    if rows:
+        ws.auto_filter.ref = ws.dimensions
+    return ws
+
+
+def notes(wb, lines, index=None):
+    ws = wb.create_sheet("Notes", index)
+    for line in lines:
+        ws.append(list(line))
+    ws["A1"].font = Font(bold=True, size=13)
+    ws.column_dimensions["A"].width = 34
+    ws.column_dimensions["B"].width = 110
+    for row in ws.iter_rows():
+        for c in row:
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+    return ws

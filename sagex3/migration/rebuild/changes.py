@@ -21,7 +21,7 @@ from openpyxl.styles import Font, PatternFill
 FILES = {
     "ZSDIITM_products_MAPPED": ("Data with Headings", 4, (1,), "product"),
     "YITC_product_costs_MAPPED": ("YITC", 3, (2,), "product cost"),
-    "YA00408BOM_boms_MAPPED": ("BOM", 3, (0, 1, 7), "BOM line"),
+    "YA00408BOM_boms_MAPPED": ("Data with Headings", 3, (0, 1, 7), "BOM line"),
     "ZSDIROU2_routes_MAPPED": ("ZSDROU2", 4, (0, 1, 6), "route operation"),
     "ZSDIITMSUP_product_suppliers_MAPPED": ("Template", 3, (0,), "product-supplier"),
     "YA004BPS_suppliers_MAPPED": ("Data with Headings", 3, (1,), "supplier"),
@@ -48,7 +48,11 @@ def norm(v):
 def rows_of(path, sheet, first):
     wb = load_workbook(path, read_only=True)
     ws = wb[sheet] if sheet in wb.sheetnames else wb.worksheets[0]
-    head = [norm(v) for v in next(ws.iter_rows(min_row=1, max_row=1, values_only=True))]
+    # the headings are the row above the data; the X3 field codes, where there is one, above that
+    head = [norm(v) for v in next(ws.iter_rows(min_row=first - 1, max_row=first - 1, values_only=True))]
+    if first > 2:
+        codes = [norm(v) for v in next(ws.iter_rows(min_row=first - 2, max_row=first - 2, values_only=True))]
+        head = [f"{h} ({c})" if c and h and c != h else h or c for h, c in zip(head, codes)]
     out = []
     for r in ws.iter_rows(min_row=first, values_only=True):
         r = [norm(v) for v in r]

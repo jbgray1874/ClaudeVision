@@ -1,0 +1,3 @@
+# run folders hold SDI data: extracts and the built spreadsheets stay out of git
+runs/
+__pycache__/
