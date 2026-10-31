@@ -3233,6 +3233,39 @@ $("release").onclick = async () => {
 
 runBtn.onclick = async () => {
   if(running || runBtn.disabled) return;
+  /* THE SCOPE, SHOWN BEFORE IT IS SENT (D-604). The HPP 01:12 run of 31 Oct went out as
+     Samsung / TG_Standalone with no brief and no reference document: the boxes still held an
+     earlier job's values and a reload had cleared the brief and the ticks. The LLM button has
+     shown this receipt since D-479; the main estimator sent whatever was on the page without
+     a word. Computed HERE, from the state that will be sent, so a lost tick or an emptied
+     brief shows as "(none)" before staging, before the engine, before the hour. */
+  { const _fl = drawings.filter(d => !d.is_dir);
+    const _refNames = _fl.filter(f => refDocs.has(f.name)).map(f => f.name);
+    const _prodNames = _fl.filter(f => !refDocs.has(f.name)).map(f => f.name);
+    const _dir = drawings.find(d => d.is_dir);
+    const _bLen = ($("enquiryBrief").value || "").trim().length;
+    if(!confirm("Main SDI estimator.\n\nTHIS SUBMISSION:\n"
+              + "  CUSTOMER: " + (safe(client.value).trim() || "(none)") + "\n"
+              + "  DRAWING NUMBER: " + (safe(drawing.value).trim() || "(none)") + "\n"
+              + "  QUANTITY: " + unitList().join(", ") + "\n"
+              + "  PRODUCT: " + (_prodNames.join(", ") || (_dir ? "folder " + _dir.name : "(none)")) + "\n"
+              + "  REFERENCE/STANDARDS: " + (_refNames.join(", ") || "(none)") + "\n"
+              + "  ENQUIRY BRIEF: " + (_bLen ? _bLen + " chars" : "(none)") + "\n"
+              + "  DELIVERY: " + ($("delivRequired").checked ? "required" : "not required") + "\n\n"
+              + "Every reader runs: the BOM reader, DXF flat patterns and SolidWorks where the "
+              + "pack has them, and the vision read where it does not.\n\nRun it?")) return; }
+  /* AN EMPTY BRIEF BOX IS A DECISION, NOT A DEFAULT (D-473, D-604): the service removes the
+     brief an earlier run filed, so an emptied box changes what the vision read is told. */
+  if(!($("enquiryBrief").value || "").trim()
+     && !confirm("No enquiry brief is typed.\n\nWhere the drawings cannot be read by the "
+               + "other readers, the vision read prices the pack alone. An empty box also "
+               + "removes the brief an earlier run filed with this job.\n\nRun without a brief?")) return;
+  /* A STANDARDS MANUAL ALONE IS NOT A PRODUCT (D-474), refused before anything is staged. */
+  { const _files = drawings.filter(d => !d.is_dir);
+    if(refDocs.size && _files.length && _files.every(f => refDocs.has(f.name))){
+      line("Every added file is ticked as reference/standards — there is no product to "
+         + "cost. Add the product's pack beside it, or untick one.", "e");
+      return; } }
   blockedBy = ""; $("release").hidden = true;   // last run's blocker is not this run's
   runDest = null;              // the previous run's folder is not this run's
   running = true; refresh();
@@ -3305,6 +3338,24 @@ runBtn.onclick = async () => {
     // start time, and the page must show the folder that exists rather than the
     // one it guessed a second earlier.
     if(started.output_path){ runDest = started.output_path; refresh(); }
+    /* WHAT WAS SENT MUST BE WHAT WAS FILED (D-604), the guards the LLM button already has.
+       A typed brief the service did not file, or ticked references it did not acknowledge,
+       is a run answering a different question: stopped now, not discovered on the book. */
+    const _typedMain = ($("enquiryBrief").value || "").trim();
+    if(_typedMain && started.enquiry_brief !== "filed"){
+      await api("/api/estimate/"+encodeURIComponent(runId)+"/abandon", {method:"POST"});
+      throw new Error("The service did not file the enquiry brief (it answered '"
+        + (started.enquiry_brief === undefined ? "nothing" : started.enquiry_brief)
+        + "'). The run was stopped. Update and restart the service, then run again.");
+    }
+    if(refDocs.size && !Array.isArray(started.reference_documents)){
+      await api("/api/estimate/"+encodeURIComponent(runId)+"/abandon", {method:"POST"});
+      throw new Error("The service did not acknowledge the reference/standards documents. "
+        + "The run was stopped. Update and restart the service, then run again.");
+    }
+    line("Scope sent: " + safe(client.value) + " · " + safe(drawing.value) + " · "
+       + unitList().join(", ") + " off · brief " + (_typedMain ? _typedMain.length + " chars"
+       : "none") + " · reference " + ([...refDocs].join(", ") || "none"));
     /* A RUN HOLDING THE DESKTOP THAT NOTHING ON SCREEN CAN RELEASE.
        The lease is 900s, deliberately, so a quiet engine is not killed mid-estimate. The
        cost is that a runner which has actually DIED leaves its claim looking busy for a

@@ -35,10 +35,12 @@ from __future__ import annotations
 import os
 import platform
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 # Set by the portal runner on the engine process it starts (tools/runner/sdi_estimate_runner.py).
 RUNNER_ID_ENV = "SDI_CLAIMED_BY_RUNNER"
+# The scope the portal submitted, handed down by the runner as JSON (D-604).
+SUBMITTED_SCOPE_ENV = "SDI_SUBMITTED_SCOPE"
 # Not SDI_RUNNER_ID: that is the runner's own setting, and a shell that has it set would make
 # a run started by hand claim a runner it never had.
 SERVICE_RUN_ID_ENV = "SDI_SERVICE_RUN_ID"
@@ -68,6 +70,31 @@ def _build_line() -> Tuple[str, str]:
     return line, warn
 
 
+def _submitted() -> Dict[str, Any]:
+    try:
+        import json
+        got = json.loads(os.environ.get(SUBMITTED_SCOPE_ENV) or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return got if isinstance(got, dict) else {}
+
+
+def _received(summary: Mapping[str, Any]) -> Dict[str, Any]:
+    """What reached the engine's job folder: the brief file and the reference declaration.
+    Read from the folder itself, because a measured pack never uses the brief and so never
+    records it — and the question here is whether it ARRIVED, not whether it was used."""
+    folders = [summary.get("job_folder")] if isinstance(summary, Mapping) else []
+    brief_chars, refs = 0, []
+    try:
+        import concept_scan
+        text, _f = concept_scan.find_brief(folders)
+        brief_chars = len(str(text or "").strip())
+        refs = list(concept_scan.reference_documents_declared(folders))
+    except Exception:                                                # noqa: BLE001
+        pass
+    return {"brief_chars": brief_chars, "reference_documents": refs}
+
+
 def record(summary: Dict[str, Any]) -> Dict[str, Any]:
     """Stamp this run's identity onto `summary["run_provenance"]` and return it.
 
@@ -84,6 +111,8 @@ def record(summary: Dict[str, Any]) -> Dict[str, Any]:
         "service_run_id": (os.environ.get(SERVICE_RUN_ID_ENV) or "").strip(),
         "engine_build": build,
         "build_warning": warn,
+        "submitted_scope": _submitted(),
+        "received_scope": _received(summary) if isinstance(summary, dict) else {},
     }
     if isinstance(summary, dict):
         summary["run_provenance"] = prov
@@ -123,6 +152,67 @@ def build_text(summary: Any) -> str:
     line = str(p.get("engine_build") or "").strip() or "the build could not be identified"
     warn = str(p.get("build_warning") or "").strip()
     return f"{line} · ⚠ {warn}" if warn else line
+
+
+def _norm(v: Any) -> str:
+    return " ".join(str(v or "").split()).casefold()
+
+
+def scope_mismatches(summary: Any) -> List[str]:
+    """Each way the scope that reached the engine differs from the scope submitted (D-604).
+
+    Empty when they agree, and empty when nothing was submitted (a run started by hand, or a
+    service older than this record): there is nothing to compare against, and the Scope row
+    says so instead."""
+    s = summary if isinstance(summary, dict) else {}
+    p = _prov(s)
+    sub = p.get("submitted_scope") if isinstance(p.get("submitted_scope"), dict) else {}
+    if not sub:
+        return []
+    rec = p.get("received_scope") if isinstance(p.get("received_scope"), dict) else {}
+    out: List[str] = []
+    got_cust = s.get("customer") or p.get("received_customer")
+    if sub.get("client") and got_cust and _norm(sub["client"]) != _norm(got_cust):
+        out.append(f"customer submitted as {sub['client']}, received as {got_cust}")
+    got_dwg = s.get("declared_product")
+    if sub.get("drawing_number") and got_dwg is not None and _norm(sub["drawing_number"]) != _norm(got_dwg):
+        out.append(f"drawing submitted as {sub['drawing_number']}, received as {got_dwg or 'nothing'}")
+    got_qty = s.get("requested_order_quantity")
+    try:
+        if sub.get("units") and got_qty and int(sub["units"]) != int(got_qty):
+            out.append(f"quantity submitted as {sub['units']}, received as {got_qty}")
+    except (TypeError, ValueError):
+        pass
+    sent_b, got_b = int(sub.get("brief_chars") or 0), int(rec.get("brief_chars") or 0)
+    if sent_b and not got_b:
+        out.append(f"a brief of {sent_b} characters was submitted and none reached the job folder")
+    elif got_b and not sent_b:
+        out.append(f"no brief was submitted, yet one of {got_b} characters is in the job folder")
+    sent_r = {_file_name(n) for n in (sub.get("reference_documents") or [])}
+    got_r = {_file_name(n) for n in (rec.get("reference_documents") or [])}
+    if sent_r - got_r:
+        out.append("declared reference not received: " + ", ".join(sorted(sent_r - got_r)))
+    if got_r - sent_r:
+        out.append("reference declared in the folder but not submitted: "
+                   + ", ".join(sorted(got_r - sent_r)))
+    return out
+
+
+def scope_text(summary: Any) -> str:
+    """The scope this book priced, and whether it is the scope that was submitted."""
+    s = summary if isinstance(summary, dict) else {}
+    qty = s.get("requested_order_quantity") or s.get("assumed_job_quantity")
+    cust = s.get("customer") or _prov(s).get("received_customer")
+    got = (f"customer {cust or '—'} · drawing {s.get('declared_product') or '—'}"
+           f" · {qty or '—'} off")
+    p = _prov(s)
+    if not p:
+        return got
+    if not p.get("submitted_scope"):
+        return got + " · no submission recorded to compare with"
+    bad = scope_mismatches(s)
+    return got + (" · ⚠ NOT AS SUBMITTED: " + "; ".join(bad) if bad
+                  else " · as submitted")
 
 
 def mode_text(summary: Any) -> str:
@@ -188,6 +278,7 @@ def facts(summary: Any, review_status: Optional[str] = None) -> List[Tuple[str, 
     own release line, passed in so the panel and the Summary cannot disagree; the workbook
     has no final status when it is written, so it passes none."""
     rows = [("Run ID", run_text(summary)),
+            ("Scope", scope_text(summary)),
             ("Runner machine", machine_text(summary)),
             ("Engine build", build_text(summary)),
             ("Mode", mode_text(summary)),
@@ -202,6 +293,7 @@ def workbook_line(summary: Any) -> str:
     """The run's identity as one line for AI Provenance's header, beside the build it already
     states. Machine, mode and references only: the build and the reads have their own places
     in that header, and the review status there would be the provisional count."""
-    return (f"Run: {run_text(summary)}   |   Machine: {machine_text(summary)}   |   "
+    return (f"Run: {run_text(summary)}   |   Scope: {scope_text(summary)}   |   "
+            f"Machine: {machine_text(summary)}   |   "
             f"Mode: {mode_text(summary).split(' — ')[0]}   |   "
             f"References: {references_text(summary)}")

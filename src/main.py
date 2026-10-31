@@ -1011,7 +1011,15 @@ def main() -> None:
         # elsewhere still names the machine that ran it.
         try:
             from run_provenance import record as _record_run
-            _record_run(summary)
+            _rp_now = _record_run(summary)
+            # WHAT ARRIVED AGAINST WHAT WAS SENT (D-604), in the log before any costing.
+            _sub, _got = _rp_now.get("submitted_scope") or {}, _rp_now.get("received_scope") or {}
+            if _sub:
+                print(f"   [scope] submitted: brief {_sub.get('brief_chars') or 0} chars, "
+                      f"reference {', '.join(_sub.get('reference_documents') or []) or 'none'}"
+                      f" — received: brief {_got.get('brief_chars') or 0} chars, reference "
+                      f"{', '.join(_got.get('reference_documents') or []) or 'none'}",
+                      flush=True)
         except Exception as _rp_exc:                             # noqa: BLE001
             print(f"   [run] could not record the run's machine and build ({_rp_exc})",
                   flush=True)
@@ -2280,7 +2288,10 @@ def main() -> None:
                     _rp = summary.get("run_provenance")
                     if isinstance(_rp, dict):
                         _d["run_provenance"] = dict(
-                            _rp, run_id=str(summary.get("run_id") or _rp.get("run_id") or ""))
+                            _rp, run_id=str(summary.get("run_id") or _rp.get("run_id") or ""),
+                            # THE CUSTOMER THE RUN WAS GIVEN (D-604), beside the scope
+                            # submitted, so the book can compare the two.
+                            received_customer=str(summary.get("customer") or ""))
                     if "fresh_read" in summary:
                         _d["fresh_read"] = bool(summary["fresh_read"])
                     if getattr(args, "llm_only", False):

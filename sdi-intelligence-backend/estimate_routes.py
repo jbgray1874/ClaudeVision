@@ -289,6 +289,12 @@ class Run:
     # network card), so a runner restarted mid-job comes back under the same id; only the
     # process tells the two apart. Empty for a runner too old to say.
     claimed_by_process: str = ""
+    # THE SCOPE AS SUBMITTED (D-604): customer, drawing, quantity, method, how long the brief
+    # was and which documents were declared reference. Handed to the engine through the
+    # runner, so the book can show whether what arrived is what was sent. The HPP 01:12 run
+    # of 31 Oct went out as Samsung / TG_Standalone with no brief and no reference, and
+    # nothing between the page and the book could say what had been meant.
+    submitted_scope: Dict[str, Any] = field(default_factory=dict)
     log: List[str] = field(default_factory=list)
     deliverables: List[Dict[str, str]] = field(default_factory=list)
 
@@ -312,6 +318,7 @@ class Run:
             "log": self.log, "deliverables": self.deliverables,
             "email_to": list(self.email_to), "email_result": dict(self.email_result),
             "requested_by": self.requested_by,
+            "submitted_scope": dict(self.submitted_scope),
             "queued_at": self.queued_at, "started_at": self.started_at,
             "finished_at": self.finished_at,
             "seconds": round((self.finished_at or time.time()) - ref, 1),
@@ -804,6 +811,8 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         "quantity_breaks": [int(q) for q in (run.quantity_breaks or [])],
         "llm_only": bool(run.llm_only),
         "fresh_read": bool(run.fresh_read),
+        # WHAT WAS SUBMITTED (D-604), for the engine to compare with what it receives.
+        "submitted_scope": dict(run.submitted_scope),
     }}
 
 
@@ -844,6 +853,26 @@ def _file_enquiry_brief(run: "Run", job: Any, brief: Optional[str]) -> str:
         run.line(f"WARNING — the enquiry brief could not be filed ({exc}); this run reads the "
                  f"render alone.")
         return "failed"
+
+def submitted_scope(run: "Run", method: str, brief: Optional[str], brief_status: str,
+                    reference_documents: List[str]) -> Dict[str, Any]:
+    """What this run was asked to price, as the page sent it (D-604)."""
+    return {"client": run.client, "drawing_number": run.drawing_number,
+            "units": int(run.units), "method": str(method or ""),
+            "brief_chars": len(str(brief or "").strip()[:_BRIEF_MAX_CHARS]),
+            "brief_status": str(brief_status or ""),
+            "reference_documents": [str(n) for n in (reference_documents or [])]}
+
+
+def scope_sentence(scope: Dict[str, Any]) -> str:
+    """One line a person reads: who, which drawing, how many, which method, brief, references."""
+    refs = ", ".join(scope.get("reference_documents") or []) or "none declared"
+    brief = (f"brief {scope.get('brief_chars')} chars ({scope.get('brief_status')})"
+             if scope.get("brief_chars") else "no brief")
+    return (f"customer {scope.get('client') or '—'} · drawing {scope.get('drawing_number') or '—'}"
+            f" · {scope.get('units')} off · method {scope.get('method') or '—'} · {brief}"
+            f" · reference documents: {refs}")
+
 
 def _check_the_engine_was_told(run: "Run", text: str) -> None:
     """THE RUNNER IS A LONG-LIVED PROCESS AND `git pull` DOES NOT RELOAD IT.
@@ -2015,6 +2044,10 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     # filed only on LLM runs, a customer's change could never reach it. On a measured pack the
     # engine sets the brief aside and the book says so.
     _brief_status = _file_enquiry_brief(run, job, req.enquiry_brief)
+    # THE SCOPE AS SUBMITTED, kept on the run and said on its log (D-604).
+    run.submitted_scope = submitted_scope(run, method, req.enquiry_brief, _brief_status,
+                                          _ref_docs)
+    run.line("SCOPE AS SUBMITTED — " + scope_sentence(run.submitted_scope))
     # WHICH CONSTRUCTION THIS RUN PRICES, said where the estimator is looking (D-535): a
     # schedule on file changes what the run is, and a run that silently priced last week's
     # schedule — or silently asked the model again — is the failure this panel exists to end.
