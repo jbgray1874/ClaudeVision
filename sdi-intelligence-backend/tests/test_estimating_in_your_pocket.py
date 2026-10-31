@@ -388,6 +388,7 @@ BROWSER_GLOBALS = {
     # browser
     "fetch", "setTimeout", "clearTimeout", "setInterval", "clearInterval",
     "alert", "confirm", "document", "window", "location", "console",
+    "URLSearchParams",
     # the page's own two-character helpers, declared as arrow consts
     "$", "el", "icon", "api", "say",
 }

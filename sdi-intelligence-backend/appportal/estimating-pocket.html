@@ -41,7 +41,7 @@
 
   /* Bottom bar: thumbs reach the bottom of a phone, not the top. */
   .bar{position:fixed;left:0;right:0;bottom:0;z-index:30;display:grid;
-       grid-template-columns:repeat(3,1fr);background:rgba(13,13,15,.96);
+       grid-template-columns:repeat(4,1fr);background:rgba(13,13,15,.96);
        backdrop-filter:blur(12px);border-top:1px solid var(--line);
        padding-bottom:var(--safe-b)}
   .bar button{background:none;border:0;padding:11px 4px 12px;color:var(--ink-faint);
@@ -95,6 +95,8 @@
         background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
         padding:12px 13px;margin:7px 0}
   .pick:hover{border-color:var(--accent)}
+  a.pick{text-decoration:none;color:inherit}
+  .pick .open{flex:0 0 auto;font-size:12px;color:var(--accent)}
   .pick .ic{color:var(--ink-faint);flex:0 0 auto;display:flex}
   .pick .ic svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.9}
   .pick .nm{flex:1 1 auto;min-width:0;font-size:14.5px}
@@ -153,6 +155,24 @@
       <span class="muted" id="today-when"></span></div>
     <div class="state" id="today-state" role="status" aria-live="polite">Loading…</div>
     <div id="today-out"></div>
+  </section>
+
+  <!-- ── FOLDERS ─────────────────────────────────────────────────────────── -->
+  <!-- "we should be able to read all the directories with the live enquiry
+       drawing packs and the estimates" - 30 October 2026. The three trees that
+       may be read from outside, each file opening where it can, and a pack in
+       Live Enquiry one tap from being estimated. -->
+  <section class="screen" id="s-files">
+    <h1>The folders</h1>
+    <p class="hint">Read-only. Drawings and reports open in a new tab; workbooks download.
+      SolidWorks models are listed but open only at a desk.</p>
+    <div class="chips" id="files-area">
+      <button type="button" data-area="enquiries" aria-pressed="true">Live enquiries</button>
+      <button type="button" data-area="estimates" aria-pressed="false">Estimates</button>
+      <button type="button" data-area="briefs" aria-pressed="false">Completed briefs</button>
+    </div>
+    <div id="files-browser"></div>
+    <div class="state" id="files-state" role="status" aria-live="polite" hidden></div>
   </section>
 
   <!-- ── START ───────────────────────────────────────────────────────────── -->
@@ -223,6 +243,8 @@
     <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>Ask</button>
   <button data-screen="today" role="tab" aria-selected="false">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Running</button>
+  <button data-screen="files" role="tab" aria-selected="false">
+    <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>Folders</button>
   <button data-screen="start" role="tab" aria-selected="false">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10 8.5l6 3.5-6 3.5z"/></svg>Start</button>
 </nav>
@@ -295,36 +317,53 @@ function show(name){
   if(name === "today") loadToday();
   if(name === "start" && !startLoaded){ startLoaded = true; browse("start", ""); }
   if(name === "ask" && !askLoaded){ askLoaded = true; browse("ask", ""); }
+  if(name === "files" && !filesLoaded){ filesLoaded = true; browse("files", ""); }
 }
 for(const b of document.querySelectorAll(".bar button"))
   b.onclick = () => show(b.dataset.screen);
 
-// ── Browsing the two approved trees ─────────────────────────────────────────
+// ── Browsing the approved trees ─────────────────────────────────────────────
 // "ask" walks the completed briefs; "start" walks the live enquiries. They are
 // different folders answering different questions, so they are separate walks
-// rather than one browser with a toggle somebody has to notice.
-const AREA = {ask:"briefs", start:"enquiries"};
-let askLoaded = false, startLoaded = false;
-let chosen = {ask:null, start:null};
+// rather than one browser with a toggle somebody has to notice. "files" is the
+// third walk, for READING - and there the toggle is the point: one place to look
+// through all three trees.
+const AREA = {ask:"briefs", start:"enquiries", files:"enquiries"};
+const AREA_NAME = {briefs:"Completed briefs", enquiries:"Live enquiries",
+                   estimates:"Estimates (AISheets)"};
+const HOST = {ask:"ask-browser", start:"start-browser", files:"files-browser"};
+const STATE = {ask:"ask-state", start:"start-state", files:"files-state"};
+let askLoaded = false, startLoaded = false, filesLoaded = false;
+let chosen = {ask:null, start:null, files:null};
+
+for(const b of document.querySelectorAll("#files-area button"))
+  b.onclick = () => {
+    AREA.files = b.dataset.area;
+    for(const o of document.querySelectorAll("#files-area button"))
+      o.setAttribute("aria-pressed", String(o === b));
+    browse("files", "");
+  };
 
 async function browse(which, relative){
-  const host = $(which === "ask" ? "ask-browser" : "start-browser");
+  const host = $(HOST[which]);
   host.replaceChildren();
   el("p", "Loading…", host, "muted");
+  if(which === "files") $("files-state").hidden = true;
   let data;
   try{
     data = await api("/api/estimate/tools/briefs?area=" + AREA[which]
                      + "&relative=" + encodeURIComponent(relative));
   }catch(e){
     host.replaceChildren();
-    say(which === "ask" ? "ask-state" : "start-state", e.message, "err");
+    if(which === "files") $("files-state").hidden = false;
+    say(STATE[which], e.message, "err");
     if(which === "ask") $("ask-box").style.display = "block";
     return;
   }
   host.replaceChildren();
 
   el("div", (relative ? relative.split("/").join("  ›  ")
-                      : (which === "ask" ? "Completed estimates" : "Live enquiries")),
+                      : (which === "ask" ? "Completed estimates" : AREA_NAME[AREA[which]])),
      host, "crumbs");
 
   if(relative){
@@ -334,12 +373,33 @@ async function browse(which, relative){
     up.onclick = () => browse(which, data.parent || "");
   }
 
+  // A pack in Live Enquiry, found while reading: one tap to estimate it, at
+  // the TOP, because a pack is dozens of files and the button must not be
+  // forty rows down.
+  if(which === "files" && AREA.files === "enquiries" && data.can_select){
+    const go = el("button", "Estimate this pack →", host, "go");
+    go.type = "button"; go.style.margin = "8px 0";
+    go.onclick = () => goToPack(data.relative);
+  }
+
   for(const entry of data.entries){
     if(!entry.is_dir && which === "start") continue;       // start picks folders
+    // ── A FILE YOU CAN SEE SHOULD OPEN ──────────────────────────────────────
+    // The server says which files it will serve and gives the address; a
+    // model it will not serve stays listed, greyed, and says where it opens.
+    if(!entry.is_dir && entry.open_url){
+      const a = el("a", null, host, "pick");
+      a.href = entry.open_url; a.target = "_blank"; a.rel = "noopener";
+      const ic = el("span", null, a, "ic"); icon(ic, SHEET);
+      el("span", entry.name, a, "nm");
+      el("span", "Open", a, "open");
+      continue;
+    }
     const b = el("button", null, host, "pick");
     const ic = el("span", null, b, "ic"); icon(ic, entry.is_dir ? FOLDER : SHEET);
     el("span", entry.name, b, "nm");
     if(entry.is_dir){ const c = el("span", null, b, "ct"); icon(c, "M9 6l6 6-6 6"); }
+    else el("span", "at a desk", b, "muted");
     b.onclick = () => entry.is_dir ? choose(which, entry) : null;
     if(!entry.is_dir) b.disabled = true;
   }
@@ -352,7 +412,28 @@ async function browse(which, relative){
 
   // A folder deep enough to BE a job, with drawings in it, can be started.
   if(which === "start" && data.can_select) offerStart(data);
+  if(which === "start" && !data.can_select && pendingPack === relative && relative){
+    // Arrived by a link and the folder has no drawings the engine reads, or is
+    // not deep enough to be a job: say so, rather than an unexplained listing.
+    say("start-state", "This folder has no drawings the engine can read yet ("
+        + "PDF, DXF, DWG or SolidWorks). Add them, then come back to it.", "err");
+  }
+  pendingPack = null;
   if(which === "ask" && relative) offerAsk(data, relative);
+}
+
+// ── A PACK, BY LINK OR BY TAP ───────────────────────────────────────────────
+// The Folders screen's button and the private assistant's "saved - now
+// estimate it" link both land here: the Start screen, on the drawing-pack
+// route, opened at that folder. The folder is always a place in Live Enquiry,
+// resolved by the server; nothing here is a path.
+let pendingPack = null;
+function goToPack(relative){
+  pendingPack = relative;
+  setHow("pack");
+  startLoaded = true;
+  show("start");
+  browse("start", relative);
 }
 
 function choose(which, entry){
@@ -546,6 +627,10 @@ function offerStart(data){
   $("start-folder").textContent = data.folder_name;
   $("start-drawings").textContent = data.drawing_count
     + (data.drawing_count === 1 ? " drawing" : " drawings") + " in this folder";
+  // Live Enquiry is Client / Job, so the first folder IS the client. Filled in
+  // only when empty - what somebody typed is never overwritten.
+  if(!$("start-client").value.trim())
+    $("start-client").value = String(data.relative || "").split("/")[0];
   say("start-state", "");
 }
 
@@ -640,8 +725,13 @@ async function startBrief(){
 $("b-go").onclick = startBrief;
 
 whoAmI();
-browse("ask", "");
-askLoaded = true;
+{
+  // /estimating?pack=Client/Job arrives here with the pack named. Validated
+  // again by the server, which resolves it inside Live Enquiry or refuses.
+  const pack = new URLSearchParams(location.search).get("pack");
+  if(pack) goToPack(pack);
+  else { browse("ask", ""); askLoaded = true; }
+}
 </script>
 </body>
 </html>

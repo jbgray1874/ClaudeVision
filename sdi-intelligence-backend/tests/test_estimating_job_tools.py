@@ -1,5 +1,6 @@
 """Focused, offline checks for the mobile estimating additions."""
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -214,8 +215,24 @@ class TwoAreasTests(unittest.TestCase):
     one of them, and answered the other with an empty folder.
     """
 
-    def test_both_areas_are_offered_and_nothing_else_is(self):
-        self.assertEqual(sorted(tools.areas()), ["briefs", "enquiries"])
+    def test_the_three_areas_are_offered_and_nothing_else_is(self):
+        """The third, 30 October 2026: "we should be able to read all the
+        directories with the live enquiry drawing packs and the estimates"."""
+        self.assertEqual(sorted(tools.areas()), ["briefs", "enquiries", "estimates"])
+
+    def test_the_estimates_area_is_where_runs_file_them(self):
+        """One setting, one default, three places that read it. If they ever
+        disagreed, the phone would browse a folder no run writes to."""
+        import public_surface
+        routes = (Path(tools.__file__).with_name("estimate_routes.py")
+                  .read_text(encoding="utf-8"))
+        default = r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\AISheets"
+        self.assertIn(default, routes)
+        self.assertEqual(public_surface.ESTIMATES_DEFAULT, default)
+        if not os.getenv("SDI_ESTIMATE_OUTPUT_ROOT"):
+            self.assertEqual(str(tools.ESTIMATES_ROOT), default)
+        self.assertIn(default, public_surface.approved_roots()
+                      if not os.getenv("SDI_ESTIMATE_OUTPUT_ROOT") else (default,))
 
     def test_an_unknown_area_is_refused_rather_than_quietly_substituted(self):
         """A name nobody recognises must not resolve to a real folder."""

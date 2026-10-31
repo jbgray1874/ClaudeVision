@@ -62,14 +62,14 @@ h2{font-size:16px;margin:24px 0 10px;letter-spacing:.04em}
   <nav class="topnav"><a href="/app/">← App portal</a></nav>
 </header>
 <main>
-  <div class="eyebrow">Systems · phase one</div>
+  <div class="eyebrow">Systems · phase two</div>
   <h1>The service, from your phone</h1>
   <p class="hint">What is running, what it can reach, which apps mounted, and what the
     log says — without reaching for the laptop.</p>
 
-  <div class="readonly"><b>Read only.</b> This page cannot restart anything, run a
-    command, or change a setting. For a real shell on the server, use Remote Desktop —
-    it is already gated and already audited.</div>
+  <div class="readonly"><b>One action.</b> This page can restart this one service and
+    nothing else. It cannot run a command, change a setting or deploy. For a real shell
+    on the server, use Remote Desktop — it is already gated and already audited.</div>
 
   <div class="tools">
     <button class="primary" id="refresh" type="button">Refresh</button>
@@ -91,6 +91,21 @@ h2{font-size:16px;margin:24px 0 10px;letter-spacing:.04em}
   <p class="hint">Whether each is set — never its value.</p>
   <div class="card" id="configured"></div>
   <h2>Shares</h2><div class="card" id="roots"></div>
+
+  <h2>Can this person use AM CRM?</h2>
+  <p class="hint">Type the address they sign in to Microsoft with. The answer is what the
+    running service will do for them — yes or no; the lists themselves never leave the
+    server.</p>
+  <div class="tools">
+    <input id="person" type="search" inputmode="email" autocomplete="off"
+           placeholder="kayleigh.thornhill@wearesdi.com" aria-label="Sign-in address">
+    <button class="secondary" id="check" type="button">Check</button>
+  </div>
+  <div class="card" id="personout" hidden></div>
+
+  <h2>Restart the service</h2>
+  <div class="card" id="restartbox"><p class="hint">Reading…</p></div>
+
   <h2>Log <span class="hint" id="logmeta"></span></h2>
   <pre id="log">—</pre>
 </main>
@@ -113,6 +128,109 @@ async function get(path){
   if(!r.ok) throw new Error(typeof j.detail === "string" ? j.detail
                             : "Request failed (" + r.status + ").");
   return j;
+}
+
+// The one write this page makes. Same-origin, and a header a plain form cannot
+// send, as every other write on this address is.
+async function post(path, body){
+  const r = await fetch(path, {method:"POST", cache:"no-store", credentials:"same-origin",
+    headers:{"Content-Type":"application/json", "X-SDI-Ops-Action":"1"},
+    body:JSON.stringify(body)});
+  let j = {}; try{ j = await r.json(); }catch(e){}
+  if(!r.ok) throw new Error(typeof j.detail === "string" ? j.detail
+                            : "Request failed (" + r.status + ").");
+  return j;
+}
+
+// ── CAN THIS PERSON USE AM CRM? ─────────────────────────────────────────────
+async function checkPerson(){
+  const email = $("person").value.trim();
+  const out = $("personout");
+  out.hidden = false; out.replaceChildren();
+  if(!email.includes("@")){ el("p", "Type the whole address, with the @.", out, "no"); return; }
+  $("check").disabled = true;
+  el("p", "Checking…", out, "hint");
+  try{
+    const p = await get("/api/ops/person?email=" + encodeURIComponent(email));
+    out.replaceChildren();
+    if(!p.checked){ el("p", p.why, out, "no"); return; }
+    let sees, good;
+    if(!p.per_person){ sees = "the same records as everyone — no per-person map is set"; }
+    else if(p.sees === "*"){ sees = "every row on the sheet"; good = true; }
+    else if(p.sees){ sees = "rows owned by " + p.sees; good = true; }
+    else { sees = "nothing — not in SDI_VOICECRM_OWNERS"; good = false; }
+    row(out, "Sees", sees, good);
+    let can, ok;
+    if(p.may_write && p.writes_switched_on){ can = "yes"; ok = true; }
+    else if(p.may_write){ can = "on the list, but changes are switched off for everyone"; ok = false; }
+    else { can = "no — read only"; }
+    row(out, "Can change records", can, ok);
+    if((p.elsewhere || []).length)
+      el("p", "Set up under " + p.elsewhere.join(", ") + ". Check which address they "
+         + "actually sign in with — it is not always their mailbox.", out, "hint");
+    el("p", "Two gates are outside this server and cannot be seen from here: Microsoft's "
+       + "own door (the app assignment in Entra — the 'not assigned' AADSTS50105 error) "
+       + "and Nick's SharePoint site. The laptop's Check-Entra-Access.ps1 checks the first.",
+       out, "hint");
+  }catch(e){ out.replaceChildren(); el("p", e.message, out, "no"); }
+  finally{ $("check").disabled = false; }
+}
+
+// ── RESTART ─────────────────────────────────────────────────────────────────
+// The service ends itself and Windows starts it again, reading .env afresh.
+// The page then watches for a NEW start time rather than trusting the answer:
+// "restarting" is a promise, a different start time is the fact.
+function renderRestart(s){
+  const box = $("restartbox"), r = s.restart || {};
+  box.replaceChildren();
+  el("p", "Ends this service; Windows starts it again, normally within half a minute, "
+     + "and it reads its settings afresh as it starts. You stay signed in. Use it after a "
+     + "setting has changed, or when an app has stopped answering. It does not deploy "
+     + "new code — Ship-It on the laptop does that.", box, "hint");
+  if(r.refusal){
+    el("p", r.refusal, box, r.switched_on ? "no" : "hint").style.marginTop = "10px";
+    return;
+  }
+  const tools = el("div", null, box, "tools");
+  const word = el("input", null, tools);
+  word.type = "search"; word.placeholder = 'Type "restart"';
+  word.setAttribute("aria-label", "Type restart to confirm"); word.autocomplete = "off";
+  const go = el("button", "Restart now", tools, "primary"); go.type = "button";
+  go.onclick = async () => {
+    if(word.value.trim().toLowerCase() !== "restart"){ word.focus(); return; }
+    go.disabled = true;
+    $("status").className = "status";
+    $("status").textContent = "Asking it to restart…";
+    try{
+      await post("/api/ops/restart", {confirm: word.value.trim()});
+      await waitForReturn(s.started);
+    }catch(e){
+      $("status").className = "status error";
+      $("status").textContent = e.message;
+      go.disabled = false;
+    }
+  };
+}
+
+async function waitForReturn(before){
+  const began = Date.now();
+  while(Date.now() - began < 120000){
+    await new Promise(done => setTimeout(done, 3000));
+    $("status").textContent = "Restarting — waiting for it to come back ("
+                            + Math.round((Date.now() - began) / 1000) + "s)…";
+    try{
+      const s = await get("/api/ops/status");
+      if(s.started !== before){
+        await load();
+        $("status").className = "status";
+        $("status").textContent = "Back up after " + Math.round((Date.now() - began) / 1000)
+                                + " seconds, on commit " + s.commit + ".";
+        return;
+      }
+    }catch(e){ /* down, or the proxy answering for it: keep watching */ }
+  }
+  throw new Error("It has not come back after two minutes. From the laptop: "
+                  + "Check-AMCRM-Live.ps1 -Restart, or Remote Desktop to the server.");
 }
 
 function ago(seconds){
@@ -148,6 +266,7 @@ async function load(){
       row($("configured"), name, set ? "set" : "not set", set);
 
     $("status").textContent = "Service up, commit " + s.commit + ".";
+    renderRestart(s);
 
     // Health is a separate call: it touches the shares and the database, and a
     // slow share should not stop the rest of this page rendering.
@@ -182,6 +301,8 @@ async function load(){
   }finally{ $("refresh").disabled = false; }
 }
 
+$("check").onclick = checkPerson;
+$("person").addEventListener("keydown", e => { if(e.key === "Enter") checkPerson(); });
 $("refresh").onclick = load;
 $("lines").onchange = load;
 $("find").addEventListener("keydown", e => { if(e.key === "Enter") load(); });

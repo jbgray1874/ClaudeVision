@@ -378,6 +378,18 @@ _RUNNERS: Dict[str, Runner] = {}
 _LOCK = threading.Lock()
 
 
+def work_in_hand() -> List[Dict[str, Any]]:
+    """Runs this service would lose track of if it restarted: queued or running.
+
+    _RUNS is memory, not disk. The estimate itself is filed on the share by the
+    runner, but the queue, the claim and the e-mail on completion are here, so
+    Remote Control refuses its restart while this is not empty."""
+    with _LOCK:
+        return [{"run_id": r.run_id, "client": r.client,
+                 "drawing_number": r.drawing_number, "status": r.status}
+                for r in _RUNS.values() if r.status in ("queued", "running")]
+
+
 def _expire_dead_claims() -> None:
     """A GATE NOBODY ASKS REPORTS NOTHING, so this is called on every request that
     reads or changes the queue rather than left to a timer that might not be
@@ -3248,11 +3260,24 @@ def completed_briefs(relative: str = "", area: str = "briefs",
         raise HTTPException(503, f"The {area} folder ({known[area]}) must be added "
                                  f"to SDI_FILE_ROOTS.")
     try:
-        return browse_briefs(relative, area)
+        out = browse_briefs(relative, area)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except OSError as exc:
         raise HTTPException(503, "The completed AI briefs share is unavailable to this service.") from exc
+    # ── A FILE YOU CAN SEE AND NOT OPEN IS HALF A FOLDER ────────────────────
+    # The phone listed every file and opened none of them. Each one the file
+    # route will actually serve gets its address here, from the path this
+    # listing resolved - so the page never builds a path, and a SolidWorks
+    # model, which /api/file would refuse, is not offered as a link at all.
+    # /api/file sandboxes whatever it shows, so a customer's .htm opened from
+    # Live Enquiry cannot script this origin.
+    from urllib.parse import quote as _q
+    for entry in out.get("entries", []):
+        if not entry.get("is_dir") and Path(entry["name"]).suffix.lower() in config.ALLOWED_EXTENSIONS:
+            entry["open_url"] = "/api/file?path=" + _q(
+                str(Path(out["folder_path"]) / entry["name"]), safe="")
+    return out
 
 
 class SavedRunQuestion(BaseModel):

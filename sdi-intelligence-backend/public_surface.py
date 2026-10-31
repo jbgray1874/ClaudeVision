@@ -15,10 +15,11 @@ delivery-note splitter. Allowing the prefix allows all of it. So reads are
 allowed by method and writes only where named below - and a POST added next
 month is refused until somebody puts it on this list deliberately.
 
-THE FILE BROWSER IS NOT OPENED, ONE FOLDER IS. /api/files and /api/file read
-every configured share. On the public surface they are held to the approved
-completed-AI-briefs tree, so the drawings picker still works on a phone and the
-rest of the shares stay where they are.
+THE FILE BROWSER IS NOT OPENED, THREE FOLDERS ARE. /api/files and /api/file
+read every configured share. On the public surface they are held to the live
+enquiries, the completed AI briefs and the filed estimates (approved_roots), so
+the drawings picker works on a phone, a finished estimate can be opened, and
+the rest of the shares stay where they are.
 """
 import ntpath
 import os
@@ -50,6 +51,10 @@ BRIEFS_DEFAULT = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed"
                   r"\Live Enquiries\completed AI briefs")
 ENQUIRY_DEFAULT = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed"
                    r"\AI Estimating\Live Enquiry")
+# Where every run files its workbook, report and quotation - estimate_routes'
+# OUTPUT_ROOT, under the same setting.
+ESTIMATES_DEFAULT = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed"
+                     r"\AI Estimating\AISheets")
 
 
 def briefs_root() -> str:
@@ -57,11 +62,14 @@ def briefs_root() -> str:
 
 
 def approved_roots() -> tuple:
-    """The two trees the scanner may browse: finished estimates, and the
-    drawings waiting to be priced. Everything else on every share stays inside
-    the office, whoever is asking."""
+    """The three trees that may be read from outside: the drawings waiting to be
+    priced, the completed briefs, and the filed estimates (30 October 2026: "we
+    should be able to read all the directories with the live enquiry drawing
+    packs and the estimates"). Everything else on every share stays inside the
+    office, whoever is asking."""
     return (briefs_root(),
-            (os.getenv("SDI_LIVE_ENQUIRY_ROOT", "") or ENQUIRY_DEFAULT).strip())
+            (os.getenv("SDI_LIVE_ENQUIRY_ROOT", "") or ENQUIRY_DEFAULT).strip(),
+            (os.getenv("SDI_ESTIMATE_OUTPUT_ROOT", "") or ESTIMATES_DEFAULT).strip())
 
 
 def post_allowed(path: str) -> bool:

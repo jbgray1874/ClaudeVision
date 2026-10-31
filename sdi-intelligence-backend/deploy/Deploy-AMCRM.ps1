@@ -59,6 +59,8 @@ $Files = @(
     "private_email_routes.py",
     "private_email_integration.py",
     "private_draft_writer.py",
+    # Saves an email's drawings into Live Enquiry for estimating, 30 Oct.
+    "enquiry_filing.py",
     "sue_despatch.py",
     "tracker_snapshot.py",
     "tti_despatch_routes.py",
