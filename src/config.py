@@ -5411,11 +5411,12 @@ PARTS_TABLE_COLUMN_WORDS = ("ITEM", "DWG", "NO", "NO.", "DESCRIPTION", "QTY", "Q
 LIVE_ENQUIRY_ROOT = os.getenv(
     "SDI_LIVE_ENQUIRY_ROOT",
     r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\Live Enquiry")
-# The workbook itself. JG named it on 31 Oct 2026 (D-608): the AI Live Enquiry sheet in the
-# checkout's chatgptdropoff folder, C:\ClaudeVision\chatgptdropoff\AI-Live-Enquiry.xlsx on
-# the estimating laptop. SDI_LIVE_ENQUIRY_WORKBOOK still wins where it is set.
-LIVE_ENQUIRY_WORKBOOK = os.getenv("SDI_LIVE_ENQUIRY_WORKBOOK", "") or str(
-    BASE_DIR / "chatgptdropoff" / "AI-Live-Enquiry.xlsx")
+# The workbook itself: the AI Live Enquiry sheet, in the Live Enquiry folder beside the
+# customer folders (JG, 31 Oct 2026, D-608b: K:\Estimating\Completed\AI Estimating\Live
+# Enquiry\AI-Live-Enquiry.xlsx). Built on LIVE_ENQUIRY_ROOT, so it is UNC like the root and is
+# reached by a scheduled task that has no K: drive. SDI_LIVE_ENQUIRY_WORKBOOK wins where set.
+LIVE_ENQUIRY_WORKBOOK = os.getenv("SDI_LIVE_ENQUIRY_WORKBOOK", "") or (
+    LIVE_ENQUIRY_ROOT.rstrip("\\/") + "\\AI-Live-Enquiry.xlsx")
 # WHICH SHEET (D-608a). SDI_LIVE_ENQUIRY_SHEET names it where set. Otherwise the first of these
 # the workbook has; otherwise its only sheet. A workbook with several sheets and none of these
 # names is refused, never read at its first tab: the AI Live Enquiry workbook's first tab is
