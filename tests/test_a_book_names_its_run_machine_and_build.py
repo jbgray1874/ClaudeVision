@@ -105,7 +105,8 @@ def test_a_run_without_the_record_never_borrows_the_readers_machine():
 def test_the_panel_rows_come_in_the_order_named(by_the_runner):
     s = _stamped(run_id="HPP-20261030-145936-036ba94")
     labels = [k for k, _ in rp.facts(s, review_status="Estimator review — 42 item(s)")]
-    assert labels == ["Run ID", "Runner machine", "Engine build", "Mode",
+    # Scope joined second in D-604: what was priced, and whether it is what was submitted.
+    assert labels == ["Run ID", "Scope", "Runner machine", "Engine build", "Mode",
                       "Reference documents", "Reads", "Final review status"]
     assert dict(rp.facts(s))["Run ID"] == "HPP-20261030-145936-036ba94 · portal run 27d315c6"
     assert "Final review status" not in dict(rp.facts(s)), (
