@@ -164,6 +164,10 @@ def build_text(summary: Any) -> str:
     return f"{line} · ⚠ {warn}" if warn else line
 
 
+# The prefix that marks a check which could not run, not a difference it found (D-604b).
+UNVERIFIED = "could not verify: "
+
+
 def _norm(v: Any) -> str:
     return " ".join(str(v or "").split()).casefold()
 
@@ -181,6 +185,11 @@ def scope_mismatches(summary: Any) -> List[str]:
         return []
     rec = p.get("received_scope") if isinstance(p.get("received_scope"), dict) else {}
     out: List[str] = []
+    # NOTHING RECORDED OF WHAT ARRIVED IS NOT AGREEMENT (D-604b): the brief and the references
+    # cannot be checked, so the check failed; it did not pass.
+    if not isinstance(p.get("received_scope"), dict):
+        out.append(UNVERIFIED + "nothing was recorded of what reached the job folder, so the "
+                   "brief and the reference documents were not checked")
     # A MISSING EXPECTED FIELD IS A MISMATCH (D-604a): a customer, drawing or quantity that was
     # submitted and is absent on the record did not arrive, which is not "as submitted".
     got_cust = s.get("customer") or p.get("received_customer")
@@ -212,6 +221,11 @@ def scope_mismatches(summary: Any) -> List[str]:
         out.append(f"a brief of {sent_b} characters was submitted and none reached the job folder")
     elif got_b and not sent_b:
         out.append(f"no brief was submitted, yet one of {got_b} characters is in the job folder")
+    elif sent_b and sent_h and not got_h and isinstance(p.get("received_scope"), dict):
+        # A FINGERPRINT SENT AND NONE TO COMPARE IT WITH (D-604b): the reviewer reproduced
+        # "as submitted" here. Verification failed; it is not agreement.
+        out.append(UNVERIFIED + f"a brief of {sent_b} characters was submitted with its "
+                   f"fingerprint, and the brief received has none to compare it with")
     elif sent_b and ((sent_h and got_h and sent_h != got_h) or (not sent_h and sent_b != got_b)):
         out.append(f"the brief in the job folder is not the brief submitted ({sent_b} "
                    f"characters submitted, {got_b} received)")
@@ -243,8 +257,13 @@ def scope_text(summary: Any) -> str:
     if not p.get("submitted_scope"):
         return got + " · no submission recorded to compare with"
     bad = scope_mismatches(s)
-    return got + (" · ⚠ NOT AS SUBMITTED: " + "; ".join(bad) if bad
-                  else " · as submitted")
+    if not bad:
+        return got + " · as submitted"
+    # A CHECK THAT COULD NOT RUN IS SAID AS ONE (D-604b), apart from a difference it found.
+    differ = [b for b in bad if not b.startswith(UNVERIFIED)]
+    unver = [b[len(UNVERIFIED):] for b in bad if b.startswith(UNVERIFIED)]
+    return (got + (" · ⚠ NOT AS SUBMITTED: " + "; ".join(differ) if differ else "")
+            + (" · ⚠ NOT VERIFIED: " + "; ".join(unver) if unver else ""))
 
 
 def mode_text(summary: Any) -> str:
