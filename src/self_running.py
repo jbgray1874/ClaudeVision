@@ -32,9 +32,11 @@ ONE CYCLE, WHILE THE SWITCH IS ON:
   4. Report what it read, collected and ran, then read the sheet again after
      LIVE_ENQUIRY_POLL_MINUTES — or at once, when the button is pressed again.
 
-NOTHING HERE PRICES ANYTHING, and the workbook is read, never written. What ran is in the
-runner's ledger; this watcher shares the runner's lock, so it and `live_enquiry_runner.py
-watch` can never both drive one sheet.
+NOTHING HERE PRICES ANYTHING. The workbook is read, and written in one place only (D-608a):
+when a row's run finishes, its AICompleted cell is set to YES so it is not run again until a
+person resets it. That write waits while the workbook is open in Excel and is tried again on
+each read. What ran is in the runner's ledger; this watcher shares the runner's lock, so it and
+`live_enquiry_runner.py watch` can never both drive one sheet.
 """
 
 from __future__ import annotations
@@ -187,6 +189,39 @@ def collect_missing_packs(decisions: Sequence[ler.Decision], root: Path,
     return results
 
 
+# ── AICompleted, WRITTEN BACK ────────────────────────────────────────────────────────
+def write_back(workbook: Path, row: ler.EnquiryRow, attempt: Dict[str, Any],
+               say: Callable[[str], None] = print) -> bool:
+    """Set the row's AICompleted to YES for a finished attempt (D-608a), and record on the
+    attempt whether it reached the sheet. The ledger's own "done" stops a repeat meanwhile."""
+    ok, note = ler.mark_completed(workbook, row)
+    if ok:
+        attempt["sheet_marked"] = ler._now()
+        attempt.pop("sheet_mark_note", None)
+    else:
+        attempt["sheet_mark_note"] = note
+    say(f"   {row.drawing}: {note}")
+    return ok
+
+
+def write_back_pending(workbook: Path, ledger: Dict[str, Any],
+                       say: Callable[[str], None] = print) -> int:
+    """Every finished run on the AI Live Enquiry sheet whose YES has not reached the sheet yet:
+    the workbook was open, or the run finished while nobody waited on it. Returns how many
+    were written."""
+    written = 0
+    for job in (ledger.get("jobs") or {}).values():
+        attempts = job.get("attempts") or []
+        last = attempts[-1] if attempts else {}
+        if (last.get("marks_sheet") and last.get("status") == "done"
+                and not last.get("sheet_marked")):
+            row = ler.EnquiryRow(row=int(last.get("row") or 0),
+                                 customer=str(job.get("customer") or ""),
+                                 drawing=str(job.get("drawing") or ""))
+            written += write_back(workbook, row, last, say)
+    return written
+
+
 # ── ONE CYCLE ────────────────────────────────────────────────────────────────────────
 def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool = False,
           say: Callable[[str], None] = print, collector: Any = None,
@@ -195,6 +230,9 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
     ledger = ler.load_ledger(s["ledger"])
     if not dry_run:
         ler.refresh_open_runs(ledger, portal)
+        # A YES THAT COULD NOT BE WRITTEN LAST TIME IS TRIED FIRST (D-608a), before the sheet
+        # is read, so a row it reaches reads YES and is not asked.
+        write_back_pending(Path(s["workbook"]), ledger, say=say)
         ler.save_ledger(s["ledger"], ledger)
     sources = ler._sources(s["root"])
     switch.beat(report("reading the sheet", str(s["workbook"])))
@@ -247,8 +285,13 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
         time.sleep(seconds)
         switch.beat(_running())
 
+    def after_each(d: ler.Decision, attempt: Dict[str, Any]) -> None:
+        if attempt.get("status") == "done" and d.row.completed_column:
+            write_back(Path(s["workbook"]), d.row, attempt, say=say)
+            ler.save_ledger(s["ledger"], ledger)
+
     out["ran"] = ler.run_ready(decisions, portal, ledger, s["ledger"], say=say,
-                               before_each=before_each,
+                               before_each=before_each, after_each=after_each,
                                **(wait if wait is not None else {"sleep": sleep_and_beat}))
     after = ler.plan(ler.read_sheet(s["workbook"]), sources, ledger)
     ler.write_status(after, s["ledger"])

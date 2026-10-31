@@ -25,10 +25,12 @@ person queues it from the page — same staging, same runner, same deliverables,
 same place — and the next row is queued only when that one has finished. Nothing here prices
 anything; if this file has an opinion about costing, that is a bug.
 
-THE WORKBOOK IS READ, NEVER WRITTEN. It is the estimators' working file and is often open.
-What ran, when, on which pack and at what figure is kept in this runner's own ledger, and every
-scan writes a status table beside it (live_enquiry_status.csv) saying, for every row, what it
-did and why.
+THE WORKBOOK IS READ, AND WRITTEN IN ONE PLACE ONLY. It is the estimators' working file and is
+often open. What ran, when, on which pack and at what figure is kept in this runner's own
+ledger, and every scan writes a status table beside it (live_enquiry_status.csv) saying, for
+every row, what it did and why. The one write (D-608a): AI Estimate Self-Running sets the AI
+Live Enquiry sheet's AICompleted to YES on a row whose run finished, and only while the
+workbook is not open in Excel (mark_completed).
 
 A ROW THAT CANNOT RUN SAYS WHY, AND WHO MOVES IT:
     not asked   AI CHECK is not YES
@@ -160,17 +162,21 @@ def _columns(header: Sequence[Any]) -> Dict[str, int]:
     return found
 
 
-def rows_from_table(table: Sequence[Sequence[Any]]) -> List[EnquiryRow]:
-    """Enquiry rows from a sheet's cells. The header is the first row naming both a Customer
-    and a Drawing column; a cell under no header is a note on its row."""
-    header_at, cols = None, {}
+def _header(table: Sequence[Sequence[Any]]) -> Tuple[int, Dict[str, int]]:
+    """(index of the header row, column of each field): the first row naming both a Customer
+    and a Drawing column. One function, so reading the sheet and writing AICompleted back
+    find the same columns."""
     for i, line in enumerate(table[:15]):
         cols = _columns(line)
         if "customer" in cols and "drawing" in cols:
-            header_at = i
-            break
-    if header_at is None:
-        raise ValueError("No header row naming both a Customer and a Drawing No. column.")
+            return i, cols
+    raise ValueError("No header row naming both a Customer and a Drawing No. column.")
+
+
+def rows_from_table(table: Sequence[Sequence[Any]]) -> List[EnquiryRow]:
+    """Enquiry rows from a sheet's cells. The header is the first row naming both a Customer
+    and a Drawing column; a cell under no header is a note on its row."""
+    header_at, cols = _header(table)
     header = table[header_at]
     headed = {i for i, cell in enumerate(header) if _text(cell)}
     out: List[EnquiryRow] = []
@@ -198,15 +204,106 @@ def completed_word(text: str) -> str:
     return re.sub(r"[\s\-_]+", "", str(text or "").upper())
 
 
+def pick_sheet(names: Sequence[str], wanted: str = "") -> str:
+    """The sheet to read (D-608a): the one asked for, else the first of
+    config.LIVE_ENQUIRY_SHEET_NAMES the workbook has, else its only sheet. Never its first tab
+    by default: the AI Live Enquiry workbook's first tab is "Archived"."""
+    by_fold = {str(n).casefold(): str(n) for n in names}
+    wanted = (wanted or config.LIVE_ENQUIRY_SHEET or "").strip()
+    if wanted:
+        if wanted.casefold() in by_fold:
+            return by_fold[wanted.casefold()]
+        raise ValueError(f"The workbook has no sheet '{wanted}'; its sheets are "
+                         f"{', '.join(names)}. Set SDI_LIVE_ENQUIRY_SHEET to one of them.")
+    for name in config.LIVE_ENQUIRY_SHEET_NAMES:
+        if name.casefold() in by_fold:
+            return by_fold[name.casefold()]
+    if len(names) == 1:
+        return str(names[0])
+    raise ValueError(f"The workbook has sheets {', '.join(names)} and none is called "
+                     f"{' or '.join(config.LIVE_ENQUIRY_SHEET_NAMES)}. Set SDI_LIVE_ENQUIRY_SHEET "
+                     f"to the sheet the jobs are on.")
+
+
 def read_sheet(path: Path, sheet: str = "") -> List[EnquiryRow]:
     import openpyxl
     wb = openpyxl.load_workbook(_open_workbook_bytes(path), read_only=True, data_only=True)
     try:
-        name = sheet or config.LIVE_ENQUIRY_SHEET
-        ws = wb[name] if name in wb.sheetnames else wb.worksheets[0]
+        ws = wb[pick_sheet(wb.sheetnames, sheet)]
         return rows_from_table([list(r) for r in ws.iter_rows(values_only=True)])
     finally:
         wb.close()
+
+
+def mark_completed(path: Path, row: "EnquiryRow", sheet: str = "") -> Tuple[bool, str]:
+    """Write config.LIVE_ENQUIRY_COMPLETED_MARK into the row's AICompleted cell (D-608a): JG,
+    31 Oct 2026, "when we complete the run for that row, we populate the AICompleted column J
+    with YES, so it is not re-ran unless re-set". (True, what was written) or (False, why not).
+
+    THE ONE WRITE TO THE WORKBOOK, and it is careful about whose file it is:
+      * not while the workbook is open in Excel (its ~$ lock file is beside it): Excel would
+        save over the YES, or the person would be editing a file changed under them. The
+        caller tries again on a later read;
+      * only on the row that still holds this customer and drawing. A row moved by a sort or
+        an insert is found again by its customer and drawing; two rows holding the job, or
+        none, are left alone and said;
+      * formulas, formats and every other cell are kept (openpyxl loads the formulas, not
+        their values), and the file is replaced in one step, never half-written.
+    A password-protected workbook cannot be written back, and says so."""
+    import openpyxl
+    path = Path(path)
+    lock = path.with_name("~$" + path.name)
+    if lock.exists():
+        return False, (f"the workbook is open in Excel ({lock.name} beside it); AICompleted is "
+                       f"written on a later read, once it is closed")
+    try:
+        if path.read_bytes()[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+            return False, "the workbook is password-protected, so AICompleted cannot be written"
+        wb = openpyxl.load_workbook(path)
+    except OSError as exc:
+        return False, f"the workbook could not be opened to write AICompleted ({exc})"
+    try:
+        ws = wb[pick_sheet(wb.sheetnames, sheet)]
+        table = [list(r) for r in ws.iter_rows(values_only=True)]
+        header_at, cols = _header(table)
+        if "ai_completed" not in cols:
+            return False, "the sheet has no AICompleted column"
+        want = (customer_key(row.customer), drawing_key(row.drawing))
+
+        def holds(n: int) -> bool:
+            line = table[n - 1] if 0 < n <= len(table) else []
+            def cell(name: str) -> Any:
+                i = cols.get(name)
+                return line[i] if i is not None and i < len(line) else None
+            return (customer_key(_text(cell("customer"))),
+                    drawing_key(_text(cell("drawing")))) == want
+
+        target = row.row if holds(row.row) else None
+        if target is None:
+            found = [n for n in range(header_at + 2, len(table) + 1) if holds(n)]
+            if len(found) != 1:
+                return False, (f"row {row.row} no longer holds {row.drawing} for {row.customer}, "
+                               f"and {len(found) or 'no'} other row(s) do; AICompleted not "
+                               f"written")
+            target = found[0]
+        ws.cell(row=target, column=cols["ai_completed"] + 1,
+                value=config.LIVE_ENQUIRY_COMPLETED_MARK)
+        tmp = path.with_name(path.stem + ".sdi-writing" + path.suffix)
+        wb.save(tmp)
+    except (OSError, ValueError) as exc:
+        return False, f"AICompleted could not be written ({exc})"
+    finally:
+        wb.close()
+    try:
+        os.replace(tmp, path)
+    except OSError as exc:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return False, (f"the workbook could not be replaced ({exc}); AICompleted is written on "
+                       f"a later read")
+    return True, (f"AICompleted on row {target} set to {config.LIVE_ENQUIRY_COMPLETED_MARK}")
 
 
 # ── NAMES ON THE SHARE ───────────────────────────────────────────────────────────────
@@ -591,9 +688,9 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
     last = attempts[-1] if attempts else {}
     d = Decision(row, "ready", "first run", located=located, quantities=qty,
                  quantity_source=qsource, fingerprint=fp, last=last, rerun=rerun)
-    # RE-RUN RUNS ONCE PER MARKING (D-608). The sheet is never written, so the cell still says
-    # Re-Run after the run; the ledger remembers it was taken, and forgets when the cell is
-    # seen saying anything else (plan()), so marking it Re-Run again runs it again.
+    # RE-RUN RUNS ONCE PER MARKING (D-608). Until AICompleted is written back the cell still
+    # says Re-Run after the run; the ledger remembers it was taken, and forgets when the cell
+    # is seen saying anything else (plan()), so marking it Re-Run again runs it again.
     rerun_due = rerun and not job.get("rerun_taken")
     if not last:
         if job.get("baseline"):
@@ -608,11 +705,17 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
         d.reason = "Re-Run asked for on the sheet"
         return d
     if same and last.get("status") == "done":
+        if row.completed_column and last.get("sheet_marked"):
+            # RESET BY A PERSON (D-608a): this run's YES reached the sheet, and the cell now
+            # asks for a run again, so somebody cleared or changed it on purpose.
+            d.reason = (f"AICompleted reset since this run was marked "
+                        f"{config.LIVE_ENQUIRY_COMPLETED_MARK} at {last.get('sheet_marked')}")
+            return d
         d.status, d.reason = "done", f"estimated {last.get('finished_at')} — " \
                                      f"{last.get('output_path') or 'no output path'}"
         if row.completed_column:
-            d.reason += (" (the sheet is not written: AICompleted still reads "
-                         f"'{row.ai_completed}'; Re-Run runs it again)")
+            d.reason += (f" (AICompleted not yet written: "
+                         f"{last.get('sheet_mark_note') or 'waiting for the next read'})")
         return d
     if not same:
         d.reason = ("the pack has changed since the last run"
@@ -785,6 +888,10 @@ def run_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: Pa
         "queued_at": _now(), "status": "queued", "row": d.row.row,
         "folder": str(d.located.folder), "fingerprint": d.fingerprint,
         "quantities": list(d.quantities), "quantity_source": d.quantity_source,
+        # A ROW ON THE AI LIVE ENQUIRY SHEET HAS AICompleted WRITTEN BACK when it finishes
+        # (D-608a); kept on the attempt so a run that finishes while nobody waits on it is
+        # still written on a later read.
+        "marks_sheet": bool(d.row.completed_column),
     }
     started = portal.start(request_body(d))           # refused: nothing is recorded here
     job = ledger["jobs"].setdefault(job_key(d.row), {
@@ -827,12 +934,14 @@ def run_ready(decisions: Sequence[Decision], portal: Portal, ledger: Dict[str, A
               ledger_path: Path, limit: Optional[int] = None,
               say: Callable[[str], None] = print,
               before_each: Optional[Callable[[Decision], bool]] = None,
+              after_each: Optional[Callable[[Decision, Dict[str, Any]], None]] = None,
               **wait: Any) -> List[Dict[str, Any]]:
     """Every ready row, one after another. Stops when no runner is connected or a run is
     still going at its time limit — a queue built behind work that is not moving helps no
     one. `before_each` is asked before each row is queued (D-588): the self-running watcher
     reports the row it is about to run and answers False once the portal's switch is off, so
-    the run in progress finishes and nothing more is queued."""
+    the run in progress finishes and nothing more is queued. `after_each` is told each
+    attempt as it ends (D-608a): the watcher writes AICompleted back for a finished one."""
     done: List[Dict[str, Any]] = []
     for d in decisions:
         if d.status != "ready":
@@ -867,6 +976,8 @@ def run_ready(decisions: Sequence[Decision], portal: Portal, ledger: Dict[str, A
         say(f"   {d.row.drawing}: {attempt['status']}"
             + (f" — £{price:,.2f} a unit at {d.quantities[0]} off" if price else "")
             + (f" — {attempt.get('error')}" if attempt.get("error") else ""))
+        if after_each is not None:
+            after_each(d, attempt)
         if attempt["status"] not in {"done", "error"}:
             break
     return done
