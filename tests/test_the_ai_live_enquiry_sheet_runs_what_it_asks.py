@@ -98,9 +98,23 @@ def test_the_sheet_is_read_by_its_headers_with_qty_and_aicompleted():
 
 
 def test_the_workbook_defaults_to_the_one_james_named():
+    """D-608b: K:\\Estimating\\Completed\\AI Estimating\\Live Enquiry\\AI-Live-Enquiry.xlsx, by
+    its UNC path, beside the customer folders under the Live Enquiry root."""
     if os.getenv("SDI_LIVE_ENQUIRY_WORKBOOK"):
         pytest.skip("SDI_LIVE_ENQUIRY_WORKBOOK is set on this machine and wins")
-    assert Path(config.LIVE_ENQUIRY_WORKBOOK) == ROOT / "chatgptdropoff" / "AI-Live-Enquiry.xlsx"
+    assert config.LIVE_ENQUIRY_WORKBOOK == (config.LIVE_ENQUIRY_ROOT.rstrip("\\/")
+                                            + "\\AI-Live-Enquiry.xlsx")
+    if not os.getenv("SDI_LIVE_ENQUIRY_ROOT"):
+        assert config.LIVE_ENQUIRY_WORKBOOK.startswith("\\\\sdi-dc01\\"), "UNC, never K:"
+    assert ":" not in config.LIVE_ENQUIRY_WORKBOOK[:3], "never a drive letter"
+
+
+def test_the_workbook_beside_the_customer_folders_is_not_taken_for_one(root):
+    """It sits in the Live Enquiry folder itself; only folders are customers."""
+    (root / "AI-Live-Enquiry.xlsx").write_bytes(b"PK")
+    _pack(root, "M&S", "12678-01-GA")
+    d = _plan(_rows(_line("M&S", "12678-01-GA")), root)[0][0]
+    assert d.status == "ready" and d.located.client_folder_name == "M&S"
 
 
 # ── what runs ──────────────────────────────────────────────────────────────────────────

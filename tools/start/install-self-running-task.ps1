@@ -63,11 +63,11 @@ if (-not (Test-Path $python)) { $python = Join-Path $Root ".venv\Scripts\python.
 if (-not (Test-Path $python)) { throw "No engine virtualenv under $Root\.venv" }
 $log = Join-Path $Root "output\live_enquiry\self_running.log"
 
-# WHICH WORKBOOK THE TASK WILL READ (D-608). A task reads C:\ClaudeVision\.env, never this
-# window. SDI_LIVE_ENQUIRY_WORKBOOK there wins; without it, the AI Live Enquiry sheet JG named
-# on 31 Oct 2026 is read: <Root>\chatgptdropoff\AI-Live-Enquiry.xlsx.
+# WHICH WORKBOOK THE TASK WILL READ (D-608b). A task reads C:\ClaudeVision\.env, never this
+# window. SDI_LIVE_ENQUIRY_WORKBOOK there wins; without it, AI-Live-Enquiry.xlsx in the Live
+# Enquiry folder is read, by its UNC path: a task has no K: drive.
 $envFile = Join-Path $Root ".env"
-$book = Join-Path $Root "chatgptdropoff\AI-Live-Enquiry.xlsx"
+$book = "\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\Live Enquiry\AI-Live-Enquiry.xlsx"
 $fromEnv = $null
 if (Test-Path $envFile) {
     $fromEnv = Select-String -Path $envFile -Pattern '^\s*SDI_LIVE_ENQUIRY_WORKBOOK\s*=\s*(.+?)\s*$' |
