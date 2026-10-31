@@ -1020,6 +1020,8 @@ def main() -> None:
                       f" — received: brief {_got.get('brief_chars') or 0} chars, reference "
                       f"{', '.join(_got.get('reference_documents') or []) or 'none'}",
                       flush=True)
+            elif _rp_now.get("submission_gap"):
+                print(f"   [scope] no submitted scope: {_rp_now['submission_gap']}", flush=True)
         except Exception as _rp_exc:                             # noqa: BLE001
             print(f"   [run] could not record the run's machine and build ({_rp_exc})",
                   flush=True)

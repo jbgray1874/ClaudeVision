@@ -32,6 +32,10 @@ ROUTES = (ROOT / "sdi-intelligence-backend" / "estimate_routes.py").read_text(en
 
 import run_provenance as rp  # noqa: E402
 
+sys.path.insert(0, str(ROOT / "tests"))
+# The queue's own fixture: the routes module with a stub config and a staged drawing.
+from test_estimate_queue import _check_in, _request, api  # noqa: E402,F401
+
 
 def _main_button() -> str:
     return PAGE[PAGE.index("runBtn.onclick = async"):PAGE.index("let seen = 0;",
@@ -125,8 +129,44 @@ def test_the_runner_hands_it_to_the_engine(tmp_path, monkeypatch):
     job = {"run_id": "r1", "client": "Pixel Inspiration", "units": 1,
            "drawing_number": "HPP unit Design", "job_folder": str(tmp_path),
            "output_path": str(tmp_path / "share"), "submitted_scope": scope}
-    runner._execute(_Req(), "http://x/api/estimate", {}, job, tmp_path, Path("python"), "rnr")
+    claimed = {"service": "http://localhost:8071", "commit": "33e6cc0"}
+    runner._execute(_Req(), "http://x/api/estimate", {}, job, tmp_path, Path("python"), "rnr",
+                    claimed_from=claimed)
     assert json.loads(seen[rp.SUBMITTED_SCOPE_ENV]) == scope
+    assert json.loads(seen[rp.CLAIMED_FROM_ENV]) == claimed
+    # A service that sent no scope field at all is passed as null, apart from an empty one.
+    seen.clear()
+    del job["submitted_scope"]
+    runner._execute(_Req(), "http://x/api/estimate", {}, job, tmp_path, Path("python"), "rnr")
+    assert seen[rp.SUBMITTED_SCOPE_ENV] == "null"
+
+
+def test_the_runner_notes_which_service_it_claimed_from_and_its_commit(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "tools" / "runner"))
+    import sdi_estimate_runner as runner
+
+    class _Reply:
+        status_code = 200
+        headers = {"X-SDI-Commit": "33e6cc0"}
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def json():
+            return {"run": {"run_id": "r1"}}
+
+    class _Req:
+        @staticmethod
+        def post(*a, **k):
+            return _Reply()
+
+    job, _ = runner._ask_for_work(_Req(), "http://localhost:8071", {}, "rnr", "pid 1", "b", None)
+    assert job == {"run_id": "r1"}, "the job is the claim's own fields"
+    assert runner._SERVICE_COMMIT["http://localhost:8071"] == "33e6cc0"
+    source = (ROOT / "tools" / "runner" / "sdi_estimate_runner.py").read_text(encoding="utf-8")
+    assert '"commit": _SERVICE_COMMIT.get(server, "")' in source, "and handed to the engine"
 
 
 # ── the engine and the book ──────────────────────────────────────────────────────────────
@@ -182,10 +222,84 @@ def test_a_stale_brief_nobody_submitted_is_named(tmp_path, monkeypatch):
 
 def test_a_run_with_no_submission_says_so_and_compares_nothing(tmp_path, monkeypatch):
     monkeypatch.delenv(rp.SUBMITTED_SCOPE_ENV, raising=False)
+    monkeypatch.delenv(rp.SERVICE_RUN_ID_ENV, raising=False)
     s = _job(tmp_path)
     rp.record(s)
     assert rp.scope_mismatches(s) == []
+    assert rp.scope_text(s).endswith("no submission recorded to compare with: started by "
+                                     "hand, so nothing was submitted")
+
+
+def test_a_book_saved_before_the_gap_was_recorded_reads_as_it_did(tmp_path, monkeypatch):
+    monkeypatch.delenv(rp.SUBMITTED_SCOPE_ENV, raising=False)
+    s = _job(tmp_path)
+    rp.record(s)
+    s["run_provenance"].pop("submission_gap")
     assert rp.scope_text(s).endswith("no submission recorded to compare with")
+
+
+# ── which link sent no scope (D-607) ─────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("passed, says", [
+    (None, "the runner passed none: a runner process started before D-604 passes none"),
+    ("null", "the portal service sent no scope with the job: a service started before D-604"),
+    ("{}", "the portal service sent no scope or an empty one"),
+    ("{not json", "the scope the runner passed could not be read"),
+])
+def test_a_portal_run_with_no_scope_names_the_link_and_is_not_verified(
+        tmp_path, monkeypatch, passed, says):
+    """The HPP 03:18 book said "no submission recorded to compare with" on a portal run, and
+    an old service, an old runner and a route that records none all read the same."""
+    monkeypatch.setenv(rp.SERVICE_RUN_ID_ENV, "483dae8a401c")
+    if passed is None:
+        monkeypatch.delenv(rp.SUBMITTED_SCOPE_ENV, raising=False)
+    else:
+        monkeypatch.setenv(rp.SUBMITTED_SCOPE_ENV, passed)
+    s = _job(tmp_path)
+    rp.record(s)
+    assert says in s["run_provenance"]["submission_gap"]
+    text = rp.scope_text(s)
+    assert "⚠ NOT VERIFIED: no submitted scope reached the engine; " + says in text
+    assert not text.endswith(" · as submitted")
+
+
+def test_a_run_whose_scope_arrived_records_no_gap(tmp_path, monkeypatch):
+    monkeypatch.setenv(rp.SERVICE_RUN_ID_ENV, "483dae8a401c")
+    _submit(monkeypatch)
+    s = _job(tmp_path, brief="x" * 20, refs=["Samsung guide.pdf"])
+    rp.record(s)
+    assert s["run_provenance"]["submission_gap"] == ""
+    assert rp.scope_text(s).endswith(" · as submitted")
+
+
+def test_a_run_is_not_claimable_until_its_brief_is_filed_and_its_scope_recorded(api,
+                                                                                monkeypatch):
+    """Queued first and briefed after, a runner polling in between took a job with no brief
+    filed and no scope recorded. Now the run is queued only once both are done."""
+    er, tmp_path = api
+    _check_in(er)
+    filing = er._file_enquiry_brief
+    seen = {}
+
+    def _file_and_poll(run, job, brief):
+        seen["claim_while_filing"] = _check_in(er)["run"]
+        return filing(run, job, brief)
+
+    monkeypatch.setattr(er, "_file_enquiry_brief", _file_and_poll)
+    req = _request(er, tmp_path)
+    req.enquiry_brief = "Pixel Inspiration HPP unit, one off, customer brief"
+    run_id = er.start(req)["run_id"]
+    assert seen["claim_while_filing"] is None, "claimed before its brief was filed"
+    job = _check_in(er)["run"]
+    assert job["run_id"] == run_id
+    assert job["submitted_scope"]["brief_status"] == "filed"
+    assert job["submitted_scope"]["brief_sha256"] == er.brief_fingerprint(req.enquiry_brief)
+
+
+def test_a_batch_run_records_its_scope_too():
+    batch = ROUTES[ROUTES.index("def batch("):ROUTES.index("def _scan_batch(")]
+    scoped = batch.index("run.submitted_scope = submitted_scope(run, method, None, \"none\", [])")
+    assert scoped < batch.index("_RUNS[run.run_id] = run"), "recorded before it is queued"
 
 
 def test_the_scope_row_is_on_the_books_first_page(tmp_path, monkeypatch):
@@ -283,3 +397,52 @@ def test_nothing_recorded_of_what_arrived_is_not_verified(tmp_path, monkeypatch)
     s["run_provenance"].pop("received_scope")
     text = rp.scope_text(s)
     assert "⚠ NOT VERIFIED: nothing was recorded of what reached the job folder" in text
+
+
+# ── which service queued it, on which build (D-607) ──────────────────────────────────────
+
+def _claimed(monkeypatch, tmp_path, commit, engine="2be3423 · src ab12 (717 modules)"):
+    monkeypatch.setenv(rp.CLAIMED_FROM_ENV, json.dumps(
+        {"service": "http://localhost:8071", "commit": commit}))
+    monkeypatch.setattr(rp, "_build_line", lambda: (engine, ""))
+    s = _job(tmp_path)
+    rp.record(s)
+    return s
+
+
+def test_a_service_on_another_commit_is_named_on_the_build_row(tmp_path, monkeypatch):
+    """HPP 03:18: the engine was on 2be3423, the service that queued the job on 33e6cc0a."""
+    s = _claimed(monkeypatch, tmp_path, "33e6cc0a")
+    text = rp.build_text(s)
+    assert "portal service http://localhost:8071 on 33e6cc0a" in text
+    assert "⚠ NOT the engine's commit 2be3423" in text
+    assert "Service: portal service http://localhost:8071 on 33e6cc0a" in rp.workbook_line(s)
+
+
+def test_a_service_on_the_engines_commit_is_named_without_a_warning(tmp_path, monkeypatch):
+    s = _claimed(monkeypatch, tmp_path, "2be3423")
+    assert rp.build_text(s).endswith("portal service http://localhost:8071 on 2be3423")
+
+
+def test_an_unknown_commit_is_neither_a_match_nor_a_mismatch(tmp_path, monkeypatch):
+    s = _claimed(monkeypatch, tmp_path, "unknown")
+    assert "⚠" not in rp.build_text(s)
+    s = _claimed(monkeypatch, tmp_path, "")
+    assert rp.build_text(s).endswith("which reported no commit")
+
+
+def test_a_run_started_by_hand_names_no_service(tmp_path, monkeypatch):
+    monkeypatch.delenv(rp.CLAIMED_FROM_ENV, raising=False)
+    s = _job(tmp_path)
+    rp.record(s)
+    assert "portal service" not in rp.build_text(s)
+
+
+def test_a_restart_names_another_service_on_this_machine_running_other_code():
+    """Restarting 8072 left 8071 on 33e6cc0a, and the script said nothing about it."""
+    ps = (ROOT / "tools" / "start" / "restart-service.ps1").read_text(encoding="utf-8")
+    after = ps[ps.index('"  serving commit $serving'):]
+    after = after[:after.index("\n} catch {")]
+    assert "foreach ($other in @(8071, 8072, 8073))" in after
+    assert 'Invoke-RestMethod "http://localhost:$other/api/health"' in after
+    assert "$otherCommit -ne $head" in after and "ALSO SERVING" in after
