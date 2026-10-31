@@ -76,6 +76,7 @@ except ImportError:                    # loaded by path, without this folder on 
 config = the_service_config(config)   # this service's, even where the engine's holds the name
 import docmgr
 import estimate_email
+import estimate_walkthrough
 import quote_release
 import self_running_switch
 import staging
@@ -94,6 +95,7 @@ _OVERRIDE_CLI = str(_REPO_ROOT / "src" / "client_quote_regen.py")
 _PARITY_CLI = str(_REPO_ROOT / "src" / "parity_run.py")
 _PRINT_CLI = str(_REPO_ROOT / "src" / "drawings_print.py")
 _MATERIAL_CLI = str(_REPO_ROOT / "src" / "material_confirmation.py")
+_QA_CLI = str(_REPO_ROOT / "src" / "estimate_qa.py")
 _PRODUCT_CLI = str(_REPO_ROOT / "src" / "product_identity.py")
 _EXTRACT_CLI = str(_REPO_ROOT / "src" / "bom_and_route_extract.py")
 _MAX_OVERRIDE_UPLOAD_BYTES = int(os.getenv("SDI_MAX_OVERRIDE_UPLOAD_MB", "20")) * 1024 * 1024
@@ -232,6 +234,10 @@ class Run:
     llm_price_gbp: Optional[float] = None
     llm: Dict[str, Any] = field(default_factory=dict)
     engine_price_gbp: Optional[float] = None
+    # THE PRICE AT EVERY QUANTITY THE RUN PRICED (D-610): [{"quantity": 5, "unit_gbp": ...}].
+    quantity_prices: List[Dict[str, Any]] = field(default_factory=list)
+    # THE WALKTHROUGH PAGE'S TOKEN (D-610), when the run filed a walkthrough.
+    walkthrough: str = ""
     # WHETHER A RUNNER SHOULD EVER PICK THIS UP. Nothing sets this False any more: an
     # LLM-only enquiry used to end at the fast text read — no runner, no workbook — and
     # since 22 Sep 2026 it queues a runner job like every other method, because "populate
@@ -315,6 +321,9 @@ class Run:
             "pdf_path": self.pdf_path, "batch_id": self.batch_id,
             "llm_price_gbp": self.llm_price_gbp, "llm": self.llm,
             "engine_price_gbp": self.engine_price_gbp,
+            "quantity_prices": list(self.quantity_prices),
+            "walkthrough_url": (estimate_walkthrough.url_for(self.walkthrough)
+                                if self.walkthrough else ""),
             "log": self.log, "deliverables": self.deliverables,
             "email_to": list(self.email_to), "email_result": dict(self.email_result),
             "requested_by": self.requested_by,
@@ -664,6 +673,8 @@ class CompleteRequest(BaseModel):
     # runner because the runner is the machine that has the summary JSON; this service has
     # never read an estimate and is not about to start.
     unit_cost_gbp: Optional[float] = None
+    # AND AT EVERY QUANTITY ASKED FOR (D-610).
+    quantity_prices: List[Dict[str, Any]] = []
 
 
 # ══ THE RUNNER'S ENDPOINTS ═══════════════════════════════════════════════════
@@ -1049,9 +1060,24 @@ def complete(run_id: str, req: CompleteRequest,
                 run.engine_price_gbp = round(float(req.unit_cost_gbp), 2)
             except (TypeError, ValueError):
                 pass
+        run.quantity_prices = []
+        for _qp in req.quantity_prices or []:
+            try:
+                run.quantity_prices.append({"quantity": int(_qp.get("quantity")),
+                                            "unit_gbp": round(float(_qp.get("unit_gbp")), 2)})
+            except (AttributeError, TypeError, ValueError):
+                continue
         run.deliverables = list(req.deliverables)
         run.finished_at = now
         run.lease_until = 0.0
+        # THE WALKTHROUGH PAGE, ON DISK (D-610): the e-mail links to a record that outlives a
+        # restart of this service, never to the run id held in memory.
+        if run.status == "done":
+            try:
+                run.walkthrough = estimate_walkthrough.make(run.as_json(),
+                                                            run.deliverables) or ""
+            except OSError as _wexc:
+                run.line(f"The walkthrough page could not be recorded ({_wexc}).")
         r = _RUNNERS.get(req.runner_id)
         if r is not None:
             r.last_seen, r.run_id = now, ""
@@ -1104,6 +1130,8 @@ def _email_finished_run(snapshot: Dict[str, Any], deliverables: List[Dict[str, s
         paths, held = estimate_email.choose_attachments(
             deliverables, provisional=provisional, include_quote=include_quote)
         note = estimate_email.compose(snapshot, deliverables, provisional=provisional)
+        if snapshot.get("walkthrough_url"):
+            note = estimate_walkthrough.email_button(note, snapshot["walkthrough_url"])
         result = estimate_email.send(recipients, note["subject"], note["html"],
                                      note["text"], paths)
         if held:
@@ -2251,6 +2279,82 @@ async def start_llm_estimate(
                  "quotation, and the workbook says so."),
     })
     return out
+
+
+# ══ THE WALKTHROUGH PAGE (D-610) ═════════════════════════════════════════════
+# Behind the e-mail's button: /estimating/walkthrough/<token> is the page; these are its data,
+# its files and its question box. Keyed by the record on disk, so a link survives a restart.
+
+def _walkthrough_or_404(token: str) -> Dict[str, Any]:
+    rec = estimate_walkthrough.load(token)
+    if rec is None:
+        raise HTTPException(404, "This walkthrough is not known here. It was recorded by the "
+                                 "service that ran the estimate; open the link on the SDI "
+                                 "network, from the e-mail it came in.")
+    return rec
+
+
+@router.get("/walkthrough/{token}")
+def walkthrough_view(token: str, x_sdi_key: Optional[str] = Header(default=None)):
+    _check_key(x_sdi_key)
+    return estimate_walkthrough.public_view(_walkthrough_or_404(token))
+
+
+@router.get("/walkthrough/{token}/file/{name}")
+def walkthrough_file(token: str, name: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """One of the run's own files, by name, as listed in its record; nothing else."""
+    _check_key(x_sdi_key)
+    path = estimate_walkthrough.file_for(_walkthrough_or_404(token), name)
+    if path is None:
+        raise HTTPException(404, f"{name!r} is not one of this estimate's files, or it has "
+                                 f"been moved.")
+    if quote_release.looks_like_a_quote(path) and not quote_release.may_go_to_a_customer(path):
+        raise HTTPException(403, "That is the customer quotation and it has not been released: "
+                                 + (quote_release.why_held(path) or "an estimator releases it "
+                                    "on the estimating page."))
+    media, _ = mimetypes.guess_type(path.name)
+    return FileResponse(str(path), media_type=media or "application/octet-stream",
+                        filename=path.name)
+
+
+class AskRequest(BaseModel):
+    question: str = ""
+
+
+@router.post("/walkthrough/{token}/ask")
+def walkthrough_ask(token: str, req: AskRequest,
+                    x_sdi_key: Optional[str] = Header(default=None)):
+    """A question about the estimate, answered from its own record by the engine
+    (src/estimate_qa.py), in its own interpreter like the other engine calls here."""
+    _check_key(x_sdi_key)
+    rec = _walkthrough_or_404(token)
+    question = str(req.question or "").strip()[:1000]
+    if not question:
+        raise HTTPException(400, "Type a question about the estimate first.")
+    if not Path(_ENGINE_PYTHON).exists():
+        return {"status": "unavailable",
+                "answer": "Questions are answered on the machine that runs estimates, and "
+                          "this one has no engine. Open the link on the estimating laptop."}
+    payload = {"question": question, "records": estimate_walkthrough.records_json(rec),
+               "commentary": estimate_walkthrough.commentary(rec),
+               "quantity_prices": rec.get("quantity_prices") or [],
+               "drawing_number": rec.get("drawing_number"), "client": rec.get("client")}
+    try:
+        proc = subprocess.run([_ENGINE_PYTHON, _QA_CLI], input=json.dumps(payload),
+                              capture_output=True, text=True, encoding="utf-8", timeout=150)
+    except subprocess.TimeoutExpired:
+        return {"status": "unavailable", "answer": "The answer took too long. Ask again, or "
+                                                   "more narrowly."}
+    for line in reversed((proc.stdout or "").strip().splitlines()):
+        try:
+            got = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(got, dict) and "answer" in got:
+            return got
+    return {"status": "unavailable",
+            "answer": "No answer came back: " + ((proc.stderr or "").strip()[-300:]
+                                                 or "the engine said nothing")}
 
 
 @router.get("/{run_id}/summary")

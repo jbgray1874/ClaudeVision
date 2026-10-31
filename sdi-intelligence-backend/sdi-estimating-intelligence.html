@@ -3418,6 +3418,10 @@ runBtn.onclick = async () => {
     clearInterval(poll); poll=null; running=false; refresh();
     if(s.status === "done"){
       setStatus("ok","Complete");
+      /* WHAT IT CAME TO, AT EVERY QUANTITY ASKED FOR (D-610), and the walkthrough page. */
+      const _priced = pricesText(s.quantity_prices, s.engine_price_gbp, s.units);
+      if(_priced) line("Priced: " + _priced + " (ex VAT, internal cost estimate)");
+      if(s.walkthrough_url) line("Walkthrough, with its commentary and questions: " + s.walkthrough_url);
       (s.deliverables||[]).forEach(d => {
         const a=document.createElement("a");
         a.href="/api/file?path="+encodeURIComponent(d.path);
@@ -4255,11 +4259,25 @@ function renderSelf(v){
     html += "<div style='margin-top:6px'><b>Latest runs:</b></div><ul style='margin:4px 0 0 18px'>"
       + recent.map(r => "<li>" + selfEsc(r.drawing) + " (" + selfEsc(r.customer) + ") — "
         + selfEsc(r.status)
-        + (r.unit_gbp ? " — £" + Number(r.unit_gbp).toFixed(2) + " a unit" : "")
+        + (pricesText(r.quantity_prices, r.unit_gbp, (r.quantities || [])[0])
+           ? " — " + selfEsc(pricesText(r.quantity_prices, r.unit_gbp, (r.quantities || [])[0])) : "")
+        + (r.walkthrough_url ? " — <a href='" + selfEsc(r.walkthrough_url)
+           + "' target='_blank' rel='noopener'>walkthrough</a>" : "")
         + (r.error ? " — " + selfEsc(String(r.error).slice(0, 160)) : "") + "</li>").join("")
       + "</ul>";
   }
   $("selfOut").innerHTML = html;
+}
+/* THE PRICE AT EVERY QUANTITY THE RUN PRICED (D-610): "1 off £538.06 · 5 off £401.20 ·
+   10 off £377.00", not one unit price for a run asked for three. One quantity, or a run filed
+   before the quantities were reported, reads as before. */
+function pricesText(prices, unit, units){
+  const money = v => "£" + Number(v).toLocaleString("en-GB",
+                                                   {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  if(prices && prices.length > 1)
+    return prices.map(p => p.quantity + " off " + money(p.unit_gbp)).join(" · ");
+  if(unit) return money(unit) + " a unit" + (units ? " at " + units + " off" : "");
+  return "";
 }
 async function refreshSelf(){
   try{

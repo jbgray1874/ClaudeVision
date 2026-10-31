@@ -535,6 +535,23 @@ def estimating_page(request: Request):
                                            "is not next to app.py"})
 
 
+# THE WALKTHROUGH PAGE (D-610), behind the e-mail's button: the spoken walkthrough, its words,
+# the price at every quantity, the run's files and a box to ask about the estimate. Signed in
+# like the estimating page; the token in the URL is checked by the API the page calls, and this
+# route only serves the page.
+_WALKTHROUGH_PAGE = Path(__file__).with_name("sdi-walkthrough.html")
+
+
+@app.get("/estimating/walkthrough/{token}")
+def walkthrough_page(token: str, request: Request):
+    if auth.current_user(request) is None:
+        return auth.login_redirect(request)
+    if _WALKTHROUGH_PAGE.exists():
+        return FileResponse(str(_WALKTHROUGH_PAGE), headers=_PAGE_HEADERS)
+    return JSONResponse(status_code=404,
+                        content={"detail": "sdi-walkthrough.html is not next to app.py"})
+
+
 # THE TECHNICAL DESIGN WORKFLOW MAPS. Two standalone pages from Technical Design (full and
 # compact), served from workflows/ beside this file so they travel with the portal to every
 # box it runs on. A fixed list, not a path parameter read from disk: nothing a URL names can
