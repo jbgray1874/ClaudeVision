@@ -69,9 +69,11 @@ and never force-push or discard anything. Then publish and restart:
 The first block merges `jbgray1874`'s `main-2026` straight into the portal branch, with the commit
 the session named as the proof. `git push origin HEAD` publishes the portal branch to
 `jbgraysdi2026`. The next two lines keep `jbgraysdi2026`'s `main-2026` carrying every engine change:
-it has held the portal branch's merges and three AM CRM connector commits since before 31 Oct, so it
-can never be made identical to `jbgray1874`'s `main-2026` without discarding them. It is kept a
-SUPERSET instead, moved forward to the portal tip, and only when that is a fast-forward.
+it has held the portal branch's merges and three AM CRM connector commits since before 31 Oct, so
+its history differs from `jbgray1874`'s `main-2026`. Both histories are preserved through merges,
+never by force: it is moved forward to the portal tip, and only when that is a fast-forward. The two
+`main-2026` branches point at one commit only if one is merged into the other, which would put the
+portal history on the engine branch; that is a decision for JG, not a step of this sync.
 `check-services.ps1` then reads every service on the machine, and nothing runs until each one that
 answers is on HEAD.
 
