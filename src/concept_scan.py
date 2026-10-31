@@ -5876,6 +5876,76 @@ def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
 
 _WELD_WORDS = ("welding", "spot_welding")
 
+# The metals a weld joins. The same convention as the estimator's section rule (D-599c).
+_METAL_WORDS = ("STEEL", "ALUMIN", "ZINTEC", "GALV", "BRASS", "COPPER", "IRON", "ZINC",
+                "STAINLESS", "CR4")
+
+
+def _material_of(rec: Mapping[str, Any]) -> str:
+    return str(rec.get("normalized_material") or rec.get("material") or "").strip().upper()
+
+
+def _is_metal(rec: Mapping[str, Any]) -> bool:
+    mat = _material_of(rec)
+    return bool(mat) and any(w in mat for w in _METAL_WORDS)
+
+
+def _not_a_weldment(unit: Mapping[str, Any]) -> bool:
+    """The unit is positively non-metal: board, timber or plastic. An unread material is not
+    evidence either way, and a metal unit is the weldment as before."""
+    mat = _material_of(unit)
+    if not mat or _is_metal(unit):
+        return False
+    try:
+        import costed_facts                                         # noqa: WPS433
+        return bool(costed_facts.is_other_sheet_material(mat))
+    except Exception:                                               # noqa: BLE001
+        return False
+
+
+def _metal_weldment_inside(unit: Dict[str, Any], made: List[Dict[str, Any]]) -> List[str]:
+    """The welded METAL members of a non-metal unit are their own weldment (D-605).
+
+    Their joints are charged once, on one of them: the longest welded metal member hosts the
+    Weld and Dress rows with at least N-1 joints for N welded pieces, and the others point to
+    it, so one joint is never charged again against every member. The unit stays unwelded,
+    and so does any timber, board or plastic member. Each member keeps its own coat: the unit
+    does not go through the booth. A member whose weld the brief states keeps it, as on a
+    metal unit."""
+    welded = [p for p in made or []
+              if set(p.get("inferred_operations") or []) & set(_WELD_WORDS)]
+    metal = [p for p in welded if _is_metal(p)]
+    if not metal:
+        return []
+
+    def _length(p: Mapping[str, Any]) -> float:
+        return max(_num(p.get("blank_length_mm")), _num(p.get("blank_width_mm")))
+    host = max(metal, key=lambda p: (_length(p), -_qty_of(p), str(p.get("part_number") or "")))
+    hid = str(host.get("part_number") or "")
+    pieces = sum(_qty_of(p) for p in metal)
+    moved: List[str] = []
+    for p in metal:
+        if p is host or p.get("weld_stated_by_brief"):
+            continue
+        p["inferred_operations"] = [o for o in (p.get("inferred_operations") or [])
+                                    if o not in _WELD_WORDS]
+        p["weld_charged_on"] = hid
+        p.setdefault("review_flags", []).append(
+            f"CONCEPT: welded into the metal weldment — the joint is charged once, on {hid}'s "
+            f"Weld and Dress rows, not again on this line")
+        moved.append(str(p.get("part_number")))
+    if pieces >= 2:
+        host["weld_joint_count"] = max(int(_num(host.get("weld_joint_count"))), pieces - 1)
+    _mat = _material_of(unit)
+    _say = (f"CONCEPT: the unit is {_mat}, which is not welded; its welded metal members "
+            f"({', '.join(str(p.get('part_number')) for p in metal)}) are their own weldment, "
+            f"charged once on {hid}: {pieces} welded piece(s), so at least {max(pieces - 1, 0)} "
+            f"joint(s) at the shop's per-joint rate. Confirm the members are welded and the "
+            f"joint count")
+    unit.setdefault("review_flags", []).append(_say)
+    host.setdefault("review_flags", []).append(_say)
+    return moved
+
 
 def joints_once_on_the_unit(unit: Dict[str, Any], made: List[Dict[str, Any]]) -> List[str]:
     """A WELDED UNIT OWNS ITS JOINTS (D-531). The read marks the unit welded and every member
@@ -5900,6 +5970,12 @@ def joints_once_on_the_unit(unit: Dict[str, Any], made: List[Dict[str, Any]]) ->
     that is not welded in — a bar hung on hooks — keeps its own coat and hangs on its own."""
     if not isinstance(unit, dict):
         return []
+    # A JOINERY UNIT IS NOT THE WELDMENT (D-605, SCRUM-104). The HPP 01:12 book: the read
+    # marked the halo top rim, the posts and the guard rail welded; the unit is MDF, the
+    # material of most of its panels. Their joints moved onto the unit, the board gate took
+    # welding off an MDF record, and no weld row was charged anywhere for a steel halo.
+    if _not_a_weldment(unit):
+        return _metal_weldment_inside(unit, made)
     if not (set(unit.get("inferred_operations") or []) & set(_WELD_WORDS)):
         _welded_lines = [p for p in made or []
                          if set(p.get("inferred_operations") or []) & set(_WELD_WORDS)]
