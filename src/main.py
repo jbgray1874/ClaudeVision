@@ -2614,6 +2614,15 @@ def main() -> None:
                 _sop["covering_email"] = str(_note_path)
                 print(f"   [covering-note] {_note_path.name} — {_note['subject']}",
                       flush=True)
+                # THE SAME NOTE, SPOKEN (D-609): its words beside the workbook, and the sound
+                # where this machine has a speech synthesiser. Never stops the run.
+                if _note.get("spoken"):
+                    try:
+                        from walkthrough_audio import write_walkthrough as _walkthrough
+                        _wt_ok, _wt_said = _walkthrough(_note["spoken"], Path(xlsx_path))
+                        print(f"   [walkthrough] {_wt_said}", flush=True)
+                    except Exception as _wt_exc:                    # noqa: BLE001
+                        print(f"   [walkthrough] not written ({_wt_exc})", flush=True)
             except Exception as _note_exc:
                 print(f"   [covering-note] not written ({_note_exc}) — the mail service will "
                       f"fall back to its own short note.", flush=True)
