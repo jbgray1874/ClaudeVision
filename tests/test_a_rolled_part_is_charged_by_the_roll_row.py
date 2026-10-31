@@ -111,3 +111,14 @@ def test_an_allowance_with_recorded_minutes_still_says_them():
                  if v["code"] == "engine_allowance_unconfirmed"
                  and v["detail"]["operation"] == "brush_before_plate")
     assert "40 min a unit" in brush["message"]
+
+
+# ── D-603a: a finding states this job's facts, counted as it names them ─────────────────────
+
+def test_the_market_price_finding_carries_no_other_jobs_history_and_counts_what_it_names():
+    """The HPP covering email said "one cable line moving from GBP 4.54 to GBP 8.54" on a job
+    with no such cable, and "8 priced line(s)" beside two names."""
+    src = (ROOT / "src" / "invariants.py").read_text(encoding="utf-8")
+    body = src.split('"price_not_reproducible", BLOCKING,')[1][:900]
+    assert "4.54" not in body and "8.54" not in body and "cable" not in body.lower()
+    assert 'f"{len(_names)} item(s) priced into the total' in body
