@@ -8,9 +8,12 @@ Estimating\\Live Enquiry\\ matching off the customer in Column D with the direct
 then a pattern match for the Drawing No. Field F in the name of the folder in the directory
 below the client name."
 
-The sheet is still read and never written: what ran is in the runner's ledger. So AICompleted
-still says NO after its run, and the ledger is what stops it running again; Re-Run runs it once
-per marking.
+Then (D-608a): "Runs a row when [QTY] will be like the same that we put into the number of
+units area like 1,5,10, and AICompleted (J) is NO, N or Re-Run or Blank. Also, when we complete
+the run for that row, we populate the AICompleted column J with YES, so it is not re-ran
+unless re-set." The YES is the one write to the workbook, made only while it is not open in
+Excel; until it lands, the ledger stops a repeat. The workbook's tabs are Archived and Live,
+and Live is the sheet read.
 """
 from __future__ import annotations
 
@@ -102,7 +105,8 @@ def test_the_workbook_defaults_to_the_one_james_named():
 
 # ── what runs ──────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("done", ["NO", "No", "N", "n", "Re-Run", "re run", "RERUN", "Re_Run"])
+@pytest.mark.parametrize("done", ["", "NO", "No", "N", "n", "Re-Run", "re run", "RERUN",
+                                  "Re_Run"])
 def test_yes_a_qty_and_aicompleted_no_n_or_rerun_runs(root, done):
     _pack(root, "M&S", "12678-01-GA")
     d = _plan(_rows(_line("M&S", "12678-01-GA", done=done)), root)[0][0]
@@ -110,12 +114,18 @@ def test_yes_a_qty_and_aicompleted_no_n_or_rerun_runs(root, done):
     assert d.quantities == [1, 5, 10] and d.quantity_source == "the sheet's QTY column"
 
 
-@pytest.mark.parametrize("done", ["", "YES", "Y", "Done", "Manual"])
+@pytest.mark.parametrize("done", ["YES", "Y", "Done", "Manual"])
 def test_any_other_aicompleted_is_not_a_request_to_run(root, done):
     _pack(root, "M&S", "12678-01-GA")
     d = _plan(_rows(_line("M&S", "12678-01-GA", done=done)), root)[0][0]
     assert d.status == "not_asked"
     assert "AICompleted is" in d.reason and "NO, N or Re-Run runs it" in d.reason
+
+
+def test_qty_reads_as_the_units_box_does(root):
+    _pack(root, "M&S", "12676-01-GA2")
+    d = _plan(_rows(_line("M&S", "12676-01-GA2", qty="1,10,20,30,50", done="")), root)[0][0]
+    assert d.quantities == [1, 10, 20, 30, 50], "the first is the run, the rest are breaks"
 
 
 def test_ai_check_not_yes_is_not_asked_whatever_aicompleted_says(root):
@@ -152,14 +162,27 @@ def test_ready_rows_run_from_the_top_of_the_sheet(root, tmp_path):
 
 # ── not run twice, and Re-Run once per marking ─────────────────────────────────────────
 
-def test_no_after_its_run_is_done_not_run_again(root, tmp_path):
+def test_a_finished_row_is_not_run_again_while_its_yes_is_not_on_the_sheet(root, tmp_path):
+    """The workbook was open, so the YES could not be written: the ledger stops a repeat."""
     _pack(root, "M&S", "12678-01-GA")
-    rows = _rows(_line("M&S", "12678-01-GA", done="NO"))
+    rows = _rows(_line("M&S", "12678-01-GA", done=""))
     decisions, ledger = _plan(rows, root)
     assert len(_run(decisions, ledger, tmp_path)) == 1
     again = L.plan(rows, L._sources(root), ledger)[0]
-    assert again.status == "done"
-    assert "the sheet is not written" in again.reason and "Re-Run runs it again" in again.reason
+    assert again.status == "done" and "AICompleted not yet written" in again.reason
+
+
+def test_a_row_reset_after_its_yes_reached_the_sheet_runs_again(root, tmp_path):
+    """"So it is not re-ran unless re-set": the YES landed, and a person cleared it."""
+    _pack(root, "M&S", "12678-01-GA")
+    rows = _rows(_line("M&S", "12678-01-GA", done=""))
+    decisions, ledger = _plan(rows, root)
+    _run(decisions, ledger, tmp_path)
+    ledger["jobs"][L.job_key(rows[0])]["attempts"][-1]["sheet_marked"] = "2026-10-31T19:00:00"
+    assert L.plan(_rows(_line("M&S", "12678-01-GA", done="YES")), L._sources(root),
+                  ledger)[0].status == "not_asked"
+    d = L.plan(rows, L._sources(root), ledger)[0]
+    assert d.status == "ready" and "AICompleted reset" in d.reason
 
 
 def test_rerun_runs_once_per_marking(root, tmp_path):
@@ -234,3 +257,129 @@ def test_the_number_inside_is_looked_for_only_under_the_customers_folder(root):
     _pack(root, ".", "Copy of 12678-01-GA")
     d = _plan(_rows(_line("M&S", "12678-01-GA")), root)[0][0]
     assert d.status == "waiting"
+
+
+
+# ── which sheet ────────────────────────────────────────────────────────────────────────
+
+def test_the_live_tab_is_read_never_archived():
+    assert L.pick_sheet(["Archived", "Live"]) == "Live"
+    assert L.pick_sheet(["Sheet1", "Sheet2"]) == "Sheet1"
+    assert L.pick_sheet(["Jobs"]) == "Jobs", "a workbook's only sheet"
+
+
+def test_several_sheets_and_none_named_is_refused_not_read_at_the_first_tab():
+    with pytest.raises(ValueError) as refused:
+        L.pick_sheet(["Archived", "October"])
+    assert "Archived, October" in str(refused.value) and "SDI_LIVE_ENQUIRY_SHEET" in str(refused.value)
+    with pytest.raises(ValueError):
+        L.pick_sheet(["Archived", "Live"], "Current")
+
+
+# ── AICompleted written back ───────────────────────────────────────────────────────────
+
+def _workbook(tmp_path, *lines, formula=True):
+    openpyxl = pytest.importorskip("openpyxl")
+    wb = openpyxl.Workbook()
+    arch = wb.active
+    arch.title = "Archived"
+    arch.append(HEADER)
+    arch.append(_line("M&S", "12678-01-GA", done=""))        # an old row, never touched
+    live = wb.create_sheet("Live")
+    live.append(HEADER)
+    live.append([None] * 11)
+    for line in lines:
+        live.append(line)
+    if formula:
+        live["M3"] = "=1+1"
+    path = tmp_path / "chatgptdropoff" / "AI-Live-Enquiry.xlsx"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(path)
+    return path
+
+
+def _cell(path, sheet, ref):
+    import openpyxl
+    return openpyxl.load_workbook(path)[sheet][ref].value
+
+
+def test_a_finished_rows_aicompleted_is_set_to_yes_and_nothing_else_changes(tmp_path):
+    path = _workbook(tmp_path, _line("M&S", "12678-01-GA", done=""),
+                     _line("M&S", "12684-01-GA", done="N"))
+    row = [r for r in L.read_sheet(path) if r.drawing == "12684-01-GA"][0]
+    ok, note = L.mark_completed(path, row)
+    assert ok, note
+    assert _cell(path, "Live", "J4") == "YES"
+    assert _cell(path, "Live", "J3") is None, "only that row"
+    assert _cell(path, "Live", "M3") == "=1+1", "formulas are kept, not their values"
+    assert _cell(path, "Archived", "J2") is None, "the Archived tab is never touched"
+    assert not list(path.parent.glob("*.sdi-writing*")), "no half-written file left behind"
+
+
+def test_nothing_is_written_while_the_workbook_is_open_in_excel(tmp_path):
+    path = _workbook(tmp_path, _line("M&S", "12678-01-GA", done=""))
+    (path.parent / ("~$" + path.name)).write_bytes(b"lock")
+    before = path.read_bytes()
+    ok, note = L.mark_completed(path, L.read_sheet(path)[0])
+    assert not ok and "open in Excel" in note
+    assert path.read_bytes() == before
+
+
+def test_a_row_moved_by_a_sort_is_found_by_its_job(tmp_path):
+    path = _workbook(tmp_path, _line("M&S", "12684-01-GA"), _line("M&S", "12678-01-GA"))
+    row = L.EnquiryRow(row=3, customer="M&S", drawing="12678-01-GA")    # it was row 3
+    ok, note = L.mark_completed(path, row)
+    assert ok and "row 4" in note
+    assert _cell(path, "Live", "J4") == "YES" and _cell(path, "Live", "J3") == "NO", \
+        "the row now at 3 is another job, left as it was"
+
+
+def test_a_job_on_two_rows_or_none_is_left_alone(tmp_path):
+    path = _workbook(tmp_path, _line("M&S", "12678-01-GA"), _line("M&S", "12678-01-GA"))
+    ok, note = L.mark_completed(path, L.EnquiryRow(row=9, customer="M&S", drawing="12678-01-GA"))
+    assert not ok and "2 other row(s)" in note
+    ok, note = L.mark_completed(path, L.EnquiryRow(row=3, customer="TTI", drawing="99999"))
+    assert not ok and "no other row(s)" in note
+
+
+def test_self_running_writes_yes_after_the_run_and_then_the_row_is_not_asked(tmp_path, root,
+                                                                            monkeypatch):
+    import self_running as sr
+    path = _workbook(tmp_path, _line("M&S", "12678-01-GA", done=""))
+    _pack(root, "M&S", "0359974 Editions Footwear Podium 12678-01-GA")
+    s = {"root": root, "ledger": tmp_path / "ledger.json", "workbook": path}
+
+    class _On:
+        def beat(self, rep):
+            return True
+
+    portal = _Portal()
+    sr.cycle(s, portal, _On(), say=lambda m: None, wait={"poll_seconds": 0,
+                                                          "sleep": lambda x: None})
+    assert portal.started == ["12678-01-GA"]
+    assert _cell(path, "Live", "J3") == "YES"
+    after = L.plan(L.read_sheet(path), L._sources(root), L.load_ledger(s["ledger"]))[0]
+    assert after.status == "not_asked"
+
+
+def test_a_yes_that_could_not_be_written_is_written_on_a_later_read(tmp_path, root):
+    import self_running as sr
+    path = _workbook(tmp_path, _line("M&S", "12678-01-GA", done=""))
+    _pack(root, "M&S", "12678-01-GA")
+    s = {"root": root, "ledger": tmp_path / "ledger.json", "workbook": path}
+    lock = path.parent / ("~$" + path.name)
+    lock.write_bytes(b"lock")
+
+    class _On:
+        def beat(self, rep):
+            return True
+
+    portal = _Portal()
+    wait = {"poll_seconds": 0, "sleep": lambda x: None}
+    sr.cycle(s, portal, _On(), say=lambda m: None, wait=wait)
+    assert _cell(path, "Live", "J3") is None, "open in Excel: not written"
+    sr.cycle(s, portal, _On(), say=lambda m: None, wait=wait)
+    assert portal.started == ["12678-01-GA"], "and not run a second time meanwhile"
+    lock.unlink()                                                  # Excel is closed
+    sr.cycle(s, portal, _On(), say=lambda m: None, wait=wait)
+    assert _cell(path, "Live", "J3") == "YES" and portal.started == ["12678-01-GA"]

@@ -5416,7 +5416,12 @@ LIVE_ENQUIRY_ROOT = os.getenv(
 # the estimating laptop. SDI_LIVE_ENQUIRY_WORKBOOK still wins where it is set.
 LIVE_ENQUIRY_WORKBOOK = os.getenv("SDI_LIVE_ENQUIRY_WORKBOOK", "") or str(
     BASE_DIR / "chatgptdropoff" / "AI-Live-Enquiry.xlsx")
-LIVE_ENQUIRY_SHEET = os.getenv("SDI_LIVE_ENQUIRY_SHEET", "Sheet1")
+# WHICH SHEET (D-608a). SDI_LIVE_ENQUIRY_SHEET names it where set. Otherwise the first of these
+# the workbook has; otherwise its only sheet. A workbook with several sheets and none of these
+# names is refused, never read at its first tab: the AI Live Enquiry workbook's first tab is
+# "Archived", and reading it would run last month's jobs.
+LIVE_ENQUIRY_SHEET = os.getenv("SDI_LIVE_ENQUIRY_SHEET", "")
+LIVE_ENQUIRY_SHEET_NAMES = ("Live", "Sheet1")
 # Header words -> the field each column carries. Matched on the header text, so a column moved
 # or inserted on the sheet is still found. A cell with no header is a note (the sheet's
 # unheaded column J: "WAIT FOR DRAWINGS", "Manual Estimate Complete 22/09/2026").
@@ -5435,13 +5440,17 @@ LIVE_ENQUIRY_COLUMNS = (
 )
 # The AI CHECK answers that ask for a run. Anything else, blank included, is not asked.
 LIVE_ENQUIRY_ASKED = ("YES", "Y")
-# THE AI LIVE ENQUIRY SHEET'S OWN RULE (D-608), for a sheet with an AICompleted column: a row
-# runs when AI CHECK is YES, the QTY column states a quantity and AICompleted says one of
-# these. Compared with spaces, hyphens and case removed, so "Re-Run", "re run" and "RERUN"
-# are one answer. Blank, YES or anything else is not a request to run.
-LIVE_ENQUIRY_RUN_WHEN_COMPLETED = ("NO", "N", "RERUN")
+# THE AI LIVE ENQUIRY SHEET'S OWN RULE (D-608, D-608a), for a sheet with an AICompleted
+# column: a row runs when AI CHECK is YES, the QTY column states quantities (as the page's
+# units box takes them: 1,5,10) and AICompleted is blank or says one of these. Compared with
+# spaces, hyphens and case removed, so "Re-Run", "re run" and "RERUN" are one answer. YES, or
+# anything else, is not a request to run.
+LIVE_ENQUIRY_RUN_WHEN_COMPLETED = ("", "NO", "N", "RERUN")
 # The answer that runs a row again although this pack at these quantities was estimated.
 LIVE_ENQUIRY_RERUN = ("RERUN",)
+# WHAT A FINISHED RUN WRITES INTO AICompleted (D-608a), so the row is not run again until a
+# person resets it. Written only when the workbook is not open in Excel.
+LIVE_ENQUIRY_COMPLETED_MARK = "YES"
 # A Drawing No. that is not one drawing: the row needs a pack made up by a person.
 LIVE_ENQUIRY_NOT_A_DRAWING = ("N/A", "NA", "VARIOUS", "TBC", "TBA", "NONE", "-", "?")
 # A note on the row that stops it, whatever else the row says. The person wrote it; the
