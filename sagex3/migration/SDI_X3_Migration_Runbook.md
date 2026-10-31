@@ -653,6 +653,12 @@ There is no data dictionary for Access; everything below was found by querying t
 
 ## 12. How to rerun
 
+**Being replaced by the rebuild kit in `rebuild/` (from 31 Oct):** read-only extract SQL plus one
+run that rebuilds every complete file from current Access data and writes `WHAT_CHANGED.md`
+against the previous run. See `rebuild/README.md` for status. Until each part is in the kit, the
+steps below still apply.
+
+
 1. **Fresh extract** (all on one day): views_v2.sql export grids; bins_and_delivery.sql grid
    1; product_suppliers_v3.sql grid 2; works_orders_extract.sql grid 2; plus the cleansed
    product, BOM, route and cost source files. For the product-suppliers, `product_suppliers_v4.sql`
