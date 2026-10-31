@@ -17,11 +17,14 @@ or a switch nobody has pressed, means nothing runs.
 ONE CYCLE, WHILE THE SWITCH IS ON:
   1. Read the Live Enquiry workbook, exactly as the Live Enquiry runner reads it (one reader:
      live_enquiry_runner.read_sheet, plan, decide). Every row says what it would do and why.
-  2. Collect the drawings for every row asked for (AI CHECK = YES) that is still WAITING for
-     its pack: the Live Enquiry collector's own search of the Production share finds the
-     drawings for the row's drawing number, and they are copied into
-     <Live Enquiry root>\\<customer>\\<drawing> — the runner's layout, so the next read finds
-     the pack. A row whose drawings are not in Production either says so and is searched again
+  2. The drawings are found where the estimators put them (D-608): under the Live Enquiry root
+     (K:\\Estimating\\Completed\\AI Estimating\\Live Enquiry), in the folder named by the row's
+     Customer and below it the folder whose name carries the row's Drawing No. A row whose
+     folder is not there yet waits and is looked for again on the next read. The endpoint that
+     will extract drawings replaces this when it is ready. Copying from the Production share
+     (the earlier provisional search) runs only with SDI_LIVE_ENQUIRY_COLLECT_FROM_PRODUCTION=1:
+     the collector's own search finds the row's drawings and copies them into
+     <Live Enquiry root>\\<customer>\\<drawing>, and a row not found there is searched again
      after LIVE_ENQUIRY_COLLECT_RETRY_HOURS.
   3. Run every ready row one after another through the portal — the same POST /api/estimate a
      person makes from the page (live_enquiry_runner.run_ready). Before each row the switch is
@@ -196,8 +199,11 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
     sources = ler._sources(s["root"])
     switch.beat(report("reading the sheet", str(s["workbook"])))
     decisions = ler.plan(ler.read_sheet(s["workbook"]), sources, ledger)
-    collected = collect_missing_packs(decisions, s["root"], ledger, dry_run=dry_run, say=say,
-                                      collector=collector)
+    # NOT FROM PRODUCTION UNLESS ASKED (D-608): the packs are looked for under the Live
+    # Enquiry root only, until the extraction endpoint is ready.
+    collected = (collect_missing_packs(decisions, s["root"], ledger, dry_run=dry_run, say=say,
+                                       collector=collector)
+                 if config.LIVE_ENQUIRY_COLLECT_FROM_PRODUCTION else [])
     if not dry_run:
         ler.save_ledger(s["ledger"], ledger)
     if any(c.get("status") == "copied" for c in collected):

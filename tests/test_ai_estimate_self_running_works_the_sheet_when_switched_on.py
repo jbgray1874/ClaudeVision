@@ -198,6 +198,8 @@ def test_a_dry_run_copies_nothing_and_records_nothing(share):
 
 
 def test_one_cycle_collects_then_runs_every_ready_job_in_turn(share, monkeypatch):
+    # Collecting from Production is switched on for this test; it is off by default (D-608).
+    monkeypatch.setattr(sr.config, "LIVE_ENQUIRY_COLLECT_FROM_PRODUCTION", True)
     rows = [_row(5, "0351292"), _row(6, "0360001")]
     monkeypatch.setattr(ler, "read_sheet", lambda path, sheet="": rows)
     portal = FakePortal()
@@ -207,6 +209,21 @@ def test_one_cycle_collects_then_runs_every_ready_job_in_turn(share, monkeypatch
     assert out["counts"].get("done") == 2
     ledger = ler.load_ledger(share["ledger"])
     assert [v["status"] for v in ledger["collected"].values()] == ["copied"]
+
+
+def test_by_default_a_cycle_takes_packs_from_the_live_enquiry_folder_only(share, monkeypatch):
+    """JG, 31 Oct 2026 (D-608): until the extraction endpoint is ready the drawings are looked
+    for under the Live Enquiry root, and nothing is copied in from Production."""
+    monkeypatch.setattr(sr.config, "LIVE_ENQUIRY_COLLECT_FROM_PRODUCTION", False)
+    rows = [_row(5, "0351292"), _row(6, "0360001")]
+    monkeypatch.setattr(ler, "read_sheet", lambda path, sheet="": rows)
+    portal = FakePortal()
+    out = sr.cycle(_settings(share), portal, FakeSwitch([]), say=lambda s: None,
+                   wait={"poll_seconds": 0, "sleep": lambda s: None})
+    assert portal.started == ["0360001"], "only the pack already in the Live Enquiry folder"
+    assert out["collected"] == []
+    assert not (share["root"] / "M&S" / "0351292").exists(), "nothing copied from Production"
+    assert out["counts"].get("waiting") == 1
 
 
 def test_switched_off_between_jobs_queues_nothing_more(share, monkeypatch):
