@@ -53,16 +53,34 @@ that has pushed engine work says so plainly, and the sync is done from the lapto
 
     cd C:\ClaudeVision
     git fetch https://github.com/jbgray1874/ClaudeVision.git main-2026
-    git push origin FETCH_HEAD:refs/heads/main-2026
-    git pull --no-edit origin main-2026
-    git push origin HEAD
+    git merge --no-edit FETCH_HEAD
+    git merge-base --is-ancestor <commit> HEAD; if ($?) { "fixes in" } else { "NOT in" }
 
-The first two lines bring `jbgraysdi2026`'s `main-2026` level with `jbgray1874`'s; the last two merge
-it into the portal branch and publish that. Then prove it before any run, with the last commit the
-session named: `git merge-base --is-ancestor <commit> HEAD; if ($?) { "fixes in" } else { "NOT in" }`.
+Stop there unless it prints "fixes in"; if the merge reports a conflict, stop and send its output,
+and never force-push or discard anything. Then publish and restart:
+
+    git push origin HEAD
+    git fetch origin main-2026
+    git merge-base --is-ancestor FETCH_HEAD HEAD; if ($?) { git push origin HEAD:main-2026 } else { "STOP: send  git log --oneline HEAD..FETCH_HEAD" }
+    .\tools\start\restart-service.ps1
+    .\tools\start\restart-runner.ps1
+    .\tools\start\check-services.ps1
+
+The first block merges `jbgray1874`'s `main-2026` straight into the portal branch, with the commit
+the session named as the proof. `git push origin HEAD` publishes the portal branch to
+`jbgraysdi2026`. The next two lines keep `jbgraysdi2026`'s `main-2026` carrying every engine change:
+it has held the portal branch's merges and three AM CRM connector commits since before 31 Oct, so it
+can never be made identical to `jbgray1874`'s `main-2026` without discarding them. It is kept a
+SUPERSET instead, moved forward to the portal tip, and only when that is a fast-forward.
+`check-services.ps1` then reads every service on the machine, and nothing runs until each one that
+answers is on HEAD.
+
 30 Oct 2026 lost two hours to this: `git pull origin main-2026` said "Already up to date" because the
 laptop's `origin` is `jbgraysdi2026`, which had none of the day's six commits, and the rerun replayed
-the old read. A session never tells JG to rerun until the check prints "fixes in".
+the old read. 31 Oct 2026 hit it again the other way: the old first block pushed `jbgray1874`'s
+`main-2026` over `jbgraysdi2026`'s, which was rejected because the two histories differ, and the
+pull that followed brought back the old code. A session never tells JG to rerun until the check
+prints "fixes in".
 
 **§2 is still right that the venv is the only interpreter** — and this is now enforced rather than
 remembered. `src/dependency_preflight.py` parses the "Core pipeline (required)" block of

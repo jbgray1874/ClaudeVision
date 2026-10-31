@@ -424,11 +424,17 @@ def test_a_service_on_the_engines_commit_is_named_without_a_warning(tmp_path, mo
     assert rp.build_text(s).endswith("portal service http://localhost:8071 on 2be3423")
 
 
-def test_an_unknown_commit_is_neither_a_match_nor_a_mismatch(tmp_path, monkeypatch):
-    s = _claimed(monkeypatch, tmp_path, "unknown")
-    assert "⚠" not in rp.build_text(s)
-    s = _claimed(monkeypatch, tmp_path, "")
-    assert rp.build_text(s).endswith("which reported no commit")
+@pytest.mark.parametrize("commit, engine", [
+    ("unknown", "2be3423 · src ab12 (717 modules)"),      # the service could not name it
+    ("", "2be3423 · src ab12 (717 modules)"),             # it named nothing
+    ("2be", "2be3423 · src ab12 (717 modules)"),          # too short to call one commit
+    ("2be3423", "no git checkout · src ab12 (717 modules)"),  # the engine could not name its own
+])
+def test_an_unavailable_commit_is_unverified_never_a_match(tmp_path, monkeypatch, commit, engine):
+    s = _claimed(monkeypatch, tmp_path, commit, engine=engine)
+    text = rp.build_text(s)
+    assert "not verified" in text, text
+    assert "NOT the engine's commit" not in text, "and not called a mismatch either"
 
 
 def test_a_run_started_by_hand_names_no_service(tmp_path, monkeypatch):
@@ -518,7 +524,7 @@ def test_the_service_check_tells_a_refusal_from_a_service_that_is_down():
     assert "Invoke-WebRequest" in body and "$_.Exception.Response" in body
     assert 'refused (HTTP $([int]$refusal.StatusCode))' in body
     assert "down - nothing answered" in body
-    assert "$refusal.Headers['X-SDI-Commit']" in body, "the commit is read off the refusal too"
+    assert "Get-CommitHeader $refusal.Headers" in body, "the commit is read off the refusal too"
     assert "NOT HEAD" in body and "matches HEAD" in body
 
 
@@ -532,3 +538,124 @@ def test_the_restart_scripts_count_a_refusal_as_an_answer():
     assert '@("http://localhost:8071", "http://localhost:8072")' in pick
     assert "if ($_.Exception.Response) { $answered = $true }" in pick
     assert svc.isascii() and run.isascii()
+
+
+
+# ── the deployment checker, run for real against stub services (D-607a) ──────────────────
+
+def _powershell():
+    import shutil
+    return os.environ.get("SDI_PWSH") or shutil.which("pwsh") or shutil.which("powershell")
+
+
+def _stub(status, commit):
+    """A service on a free local port answering /api/health with `status`, stamping `commit`."""
+    import http.server
+    import threading
+
+    class _H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(status)
+            if commit:
+                self.send_header("X-SDI-Commit", commit)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *a):
+            return None
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def _dead_port():
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def _check_services(ports):
+    import subprocess
+    script = ROOT / "tools" / "start" / "check-services.ps1"
+    out = subprocess.run([_powershell(), "-NoProfile", "-Command",
+                          f"& '{script}' -Ports {','.join(str(p) for p in ports)}; "
+                          f"exit $LASTEXITCODE"], capture_output=True, text=True, timeout=180)
+    return out.returncode, out.stdout + out.stderr
+
+
+def _head():
+    import subprocess
+    return subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+
+
+needs_powershell = pytest.mark.skipif(not _powershell(), reason="no PowerShell on this machine")
+
+
+@pytest.fixture()
+def stubs():
+    made = []
+
+    def _make(status, commit):
+        srv = _stub(status, commit)
+        made.append(srv)
+        return srv.server_address[1]
+    yield _make
+    for srv in made:
+        srv.shutdown()
+
+
+@needs_powershell
+def test_a_401_is_reachable_and_unauthorised_not_down(stubs):
+    head = _head()
+    ok, refused = stubs(200, head), stubs(401, head)
+    code, said = _check_services([ok, refused])
+    assert f"{refused}  refused (HTTP 401), commit {head} - matches HEAD" in said, said
+    assert f"{refused}  down" not in said
+    assert code == 0, "a service that refuses without the key is up, and on HEAD"
+
+
+@needs_powershell
+def test_a_401_from_old_code_is_named_as_not_head(stubs):
+    refused = stubs(401, "33e6cc0a")
+    code, said = _check_services([refused])
+    assert f"{refused}  refused (HTTP 401), commit 33e6cc0a - NOT HEAD" in said, said
+    assert code == 1
+
+
+@needs_powershell
+def test_an_unavailable_commit_is_unverified_never_matching_head(stubs):
+    head = _head()
+    none, unknown, short = stubs(200, ""), stubs(200, "unknown"), stubs(200, head[:3])
+    code, said = _check_services([none, unknown, short])
+    assert f"{none}  answering, commit ? - commit not stated, so not verified" in said, said
+    assert f"{unknown}  answering, commit ? - commit not stated, so not verified" in said
+    assert f"{short}  answering, commit {head[:3]} - commit too short to compare" in said
+    assert " - matches HEAD" not in said
+    assert code == 1
+
+
+@needs_powershell
+def test_nothing_answering_is_down_and_exits_2():
+    dead = _dead_port()
+    code, said = _check_services([dead])
+    assert f"{dead}  down - nothing answered" in said, said
+    assert code == 2
+
+
+def test_the_deployment_checker_is_read_only():
+    """It asks every port and changes nothing: no stop, start, restart, write or git change."""
+    ps = _ps("check-services.ps1")
+    code = ps[ps.index("#>") + 2:]                     # past the header block
+    code = "\n".join(l for l in code.splitlines() if not l.lstrip().startswith("#"))
+    for verb in ("Stop-Process", "Start-Process", "Stop-ScheduledTask", "Start-ScheduledTask",
+                 "Restart-Service", "Stop-Service", "Start-Service", "Remove-Item", "Set-Content",
+                 "Out-File", "Add-Content", "New-Item", "Invoke-RestMethod", "-Method",
+                 "git push", "git merge", "git reset", "git checkout", "git pull", "git fetch"):
+        assert verb not in code, verb
+    assert code.count("Invoke-WebRequest") == 1 and "rev-parse --short HEAD" in code

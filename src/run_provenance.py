@@ -210,9 +210,10 @@ def _same_commit(a: str, b: str) -> Optional[bool]:
     """Two short or long hashes of one commit agree on their common prefix. None when either
     side is unknown, which is not a match and not a mismatch."""
     a, b = a.strip().lower(), b.strip().lower()
-    if not a or not b or "unknown" in (a, b) or a == "no":
-        return None
     n = min(len(a), len(b))
+    # Fewer than seven characters is not enough to call two commits one (D-607a).
+    if "unknown" in (a, b) or a == "no" or n < 7:
+        return None
     return a[:n] == b[:n]
 
 
@@ -228,12 +229,15 @@ def service_text(summary: Any) -> str:
     where = claimed.get("service") or "an unnamed service"
     commit = claimed.get("commit") or ""
     if not commit:
-        return f"portal service {where}, which reported no commit"
+        return f"portal service {where}, which reported no commit · ⚠ its build is not verified"
     engine = str(p.get("engine_build") or "").split(" ")[0]
     same = _same_commit(engine, commit)
     text = f"portal service {where} on {commit}"
     if same is False:
         text += f" · ⚠ NOT the engine's commit {engine}: restart that service before trusting the run"
+    elif same is None:
+        # AN UNAVAILABLE COMMIT IS UNVERIFIED, NEVER A MATCH (D-607a).
+        text += " · ⚠ not verified against the engine's commit"
     return text
 
 
