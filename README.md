@@ -229,7 +229,8 @@ python src\main.py --pdf "<pack>.pdf" --generate-ai-spreadsheet --deliverables `
 | `SDI_MAX_PARITY_UPLOAD_MB` | *(portal backend)* Cap on each side of an uploaded parity comparison (default **20**). Either side may instead be a path on the share, which is not capped |
 | `SDI_BRAND_ASSETS_DIR` | *(portal backend)* Folder holding the brand logos the portal header serves — the **same folder** `src/client_quote_html.py` reads for the quotation header, so the two cannot show different marks (default `C:\ClaudeVision\assets\customer_logos`) |
 | `SDI_BRAND_LOGO_KEY` | *(portal backend)* Filename stem of SDI's own logo within that folder, matched case- and space-insensitively (default `wearesdi`) |
-| `SDI_LIVE_ENQUIRY_WORKBOOK` | *(Live Enquiry runner, `run-live-enquiry.ps1`)* UNC path of the estimators' Live Enquiry workbook. Read, never written. **No default** — where the live copy is kept is the estimators' to say |
+| `SDI_LIVE_ENQUIRY_WORKBOOK` | *(Live Enquiry runner and AI Estimate Self-Running)* Path of the Live Enquiry workbook. Read, never written. Default: the AI Live Enquiry sheet, `<checkout>\chatgptdropoff\AI-Live-Enquiry.xlsx` (D-608); set this only to read another |
+| `SDI_LIVE_ENQUIRY_COLLECT_FROM_PRODUCTION` | *(AI Estimate Self-Running)* `1` copies a waiting row's drawings in from the Production share. Default off (D-608): drawings are taken from the Live Enquiry folder only, until the extraction endpoint is ready |
 | `SDI_LIVE_ENQUIRY_SHEET` | *(Live Enquiry runner)* The tab holding the live rows (default `Sheet1`) |
 | `SDI_LIVE_ENQUIRY_PASSWORD` | *(Live Enquiry runner)* The workbook's password, if it carries one (needs `msoffcrypto-tool`). `.env` only |
 | `SDI_LIVE_ENQUIRY_ROOT` | *(Live Enquiry runner)* The packs: `<root>\<customer>\<drawing>` (default the UNC `...\AI Estimating\Live Enquiry`) |

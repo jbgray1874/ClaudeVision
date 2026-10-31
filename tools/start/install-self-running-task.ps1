@@ -6,9 +6,10 @@
         .\tools\start\install-self-running-task.ps1 -Remove
 
     WHAT IT RUNS. src\self_running.py: ask the portal every minute whether self-running is
-    switched on; while it is, read the Live Enquiry workbook, collect each waiting row's
-    drawings from Production into the Live Enquiry folder, and run every ready job through
-    the portal one after another. Switched off, it runs nothing. Its output goes to
+    switched on; while it is, read the AI Live Enquiry workbook from the top, take each row
+    with AI CHECK = YES, a QTY and AICompleted NO, N or Re-Run, find its drawings under the
+    Live Enquiry folder (customer, then the folder carrying the drawing number), and run every
+    ready job through the portal one after another (D-608). Switched off, it runs nothing. Its output goes to
     output\live_enquiry\self_running.log; every read rewrites
     output\live_enquiry\live_enquiry_status.csv.
 
@@ -62,13 +63,25 @@ if (-not (Test-Path $python)) { $python = Join-Path $Root ".venv\Scripts\python.
 if (-not (Test-Path $python)) { throw "No engine virtualenv under $Root\.venv" }
 $log = Join-Path $Root "output\live_enquiry\self_running.log"
 
-# THE WORKBOOK MUST BE IN .env, NOT ONLY IN THIS WINDOW. A task reads C:\ClaudeVision\.env.
+# WHICH WORKBOOK THE TASK WILL READ (D-608). A task reads C:\ClaudeVision\.env, never this
+# window. SDI_LIVE_ENQUIRY_WORKBOOK there wins; without it, the AI Live Enquiry sheet JG named
+# on 31 Oct 2026 is read: <Root>\chatgptdropoff\AI-Live-Enquiry.xlsx.
 $envFile = Join-Path $Root ".env"
-$hasBook = (Test-Path $envFile) -and (Select-String -Path $envFile -Pattern '^\s*SDI_LIVE_ENQUIRY_WORKBOOK\s*=' -Quiet)
-if (-not $hasBook) {
-    Write-Host "SDI_LIVE_ENQUIRY_WORKBOOK is not in $envFile." -ForegroundColor Red
-    Write-Host "Add it (no quotes round a UNC path) and run this again:" -ForegroundColor Red
-    Write-Host '  SDI_LIVE_ENQUIRY_WORKBOOK=\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Live Enquiries\Live Enquiry (no password).xlsx'
+$book = Join-Path $Root "chatgptdropoff\AI-Live-Enquiry.xlsx"
+$fromEnv = $null
+if (Test-Path $envFile) {
+    $fromEnv = Select-String -Path $envFile -Pattern '^\s*SDI_LIVE_ENQUIRY_WORKBOOK\s*=\s*(.+?)\s*$' |
+        Select-Object -First 1
+}
+if ($fromEnv) {
+    $book = $fromEnv.Matches[0].Groups[1].Value.Trim('"')
+    Write-Host "  workbook $book  (SDI_LIVE_ENQUIRY_WORKBOOK in .env)"
+} else {
+    Write-Host "  workbook $book  (the default; nothing set in .env)"
+}
+if (-not (Test-Path $book)) {
+    Write-Host "That workbook is not there: $book" -ForegroundColor Red
+    Write-Host "Put the AI Live Enquiry sheet there, or set SDI_LIVE_ENQUIRY_WORKBOOK in $envFile, and run this again." -ForegroundColor Red
     exit 2
 }
 

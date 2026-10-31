@@ -804,17 +804,19 @@
          A SWITCH, NOT A RUN. This card does not read the Drawings panel and starts nothing on
          this machine. It switches self-running on or off in the service; the watcher on the
          estimating machine (src/self_running.py) asks on every beat, reads the Live Enquiry
-         sheet, collects each waiting row's drawings from Production into the Live Enquiry
-         folder, and runs every ready job through this estimator, one after another. What it
+         sheet, finds each row's drawings under the Live Enquiry folder (customer, then the
+         folder carrying the drawing number; D-608), and runs every ready job through this
+         estimator, one after another. What it
          shows below is what that watcher last reported, and when — a watcher that has gone
          quiet is shown as not connected, never as idle. -->
     <section class="card" id="selfRunCard">
       <h2>AI Estimate Self-Running</h2>
-      <p class="sub" style="margin:0 0 12px">Works through the <b>Live Enquiry</b> sheet on its
-        own. Every row marked <b>AI CHECK = YES</b> that has not been estimated is taken in
-        turn: its drawings are collected from Production into the Live Enquiry folder when the
-        folder is empty, then it is run through this estimator, one job after another.
-        Finished books file to the usual place. <b>Nothing goes to a customer.</b></p>
+      <p class="sub" style="margin:0 0 12px">Works through the <b>AI Live Enquiry</b> sheet on
+        its own, from the top. A row runs when <b>AI CHECK = YES</b>, <b>QTY</b> states the
+        quantities and <b>AICompleted</b> is <b>NO</b>, <b>N</b> or <b>Re-Run</b>. Its drawings
+        are taken from the Live Enquiry folder: the folder named by the Customer, then the
+        folder whose name carries the Drawing No. It is run through this estimator, one job
+        after another. Finished books file to the usual place. <b>Nothing goes to a customer.</b></p>
       <button class="btn-run" id="selfRun" type="button"
               title="Switch self-running on: the watcher reads the Live Enquiry sheet at once and runs every unworked job in turn">
         AI Estimate Self-Running</button>
@@ -4289,11 +4291,11 @@ async function switchSelf(on){
   btn.disabled = false;
 }
 selfRunBtn.onclick = () => {
-  if(!confirm("Start AI Estimate Self-Running?\n\nEvery Live Enquiry row marked AI CHECK = YES "
-            + "that has not been estimated is taken in turn: its drawings are collected from "
-            + "Production into the Live Enquiry folder where the folder is empty, then it is "
-            + "estimated, one job after another. Books file to the usual place; nothing goes "
-            + "to a customer.")) return;
+  if(!confirm("Start AI Estimate Self-Running?\n\nEvery AI Live Enquiry row with AI CHECK = YES, "
+            + "a QTY and AICompleted NO, N or Re-Run is taken in turn, from the top: its "
+            + "drawings are taken from the Live Enquiry folder (the Customer's folder, then the "
+            + "folder carrying the Drawing No.), then it is estimated, one job after another. "
+            + "Books file to the usual place; nothing goes to a customer.")) return;
   switchSelf(true);
 };
 selfStopBtn.onclick = () => {

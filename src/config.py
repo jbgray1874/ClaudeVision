@@ -5411,14 +5411,18 @@ PARTS_TABLE_COLUMN_WORDS = ("ITEM", "DWG", "NO", "NO.", "DESCRIPTION", "QTY", "Q
 LIVE_ENQUIRY_ROOT = os.getenv(
     "SDI_LIVE_ENQUIRY_ROOT",
     r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\Live Enquiry")
-# The workbook itself. No default: where the estimators keep it is theirs to say, and a guess
-# that reads last month's copy would run the wrong jobs with every appearance of working.
-LIVE_ENQUIRY_WORKBOOK = os.getenv("SDI_LIVE_ENQUIRY_WORKBOOK", "")
+# The workbook itself. JG named it on 31 Oct 2026 (D-608): the AI Live Enquiry sheet in the
+# checkout's chatgptdropoff folder, C:\ClaudeVision\chatgptdropoff\AI-Live-Enquiry.xlsx on
+# the estimating laptop. SDI_LIVE_ENQUIRY_WORKBOOK still wins where it is set.
+LIVE_ENQUIRY_WORKBOOK = os.getenv("SDI_LIVE_ENQUIRY_WORKBOOK", "") or str(
+    BASE_DIR / "chatgptdropoff" / "AI-Live-Enquiry.xlsx")
 LIVE_ENQUIRY_SHEET = os.getenv("SDI_LIVE_ENQUIRY_SHEET", "Sheet1")
 # Header words -> the field each column carries. Matched on the header text, so a column moved
 # or inserted on the sheet is still found. A cell with no header is a note (the sheet's
 # unheaded column J: "WAIT FOR DRAWINGS", "Manual Estimate Complete 22/09/2026").
 LIVE_ENQUIRY_COLUMNS = (
+    # Before "ai_check", whose \bAI\b would otherwise take an "AI Completed" header (D-608).
+    ("ai_completed", r"\bAI\s*COMPLET"),
     ("customer", r"\bCUSTOMER\b"),
     ("drawing", r"\bDRAWING\b"),
     ("description", r"\bJOB\b.*\bDESC"),
@@ -5431,6 +5435,13 @@ LIVE_ENQUIRY_COLUMNS = (
 )
 # The AI CHECK answers that ask for a run. Anything else, blank included, is not asked.
 LIVE_ENQUIRY_ASKED = ("YES", "Y")
+# THE AI LIVE ENQUIRY SHEET'S OWN RULE (D-608), for a sheet with an AICompleted column: a row
+# runs when AI CHECK is YES, the QTY column states a quantity and AICompleted says one of
+# these. Compared with spaces, hyphens and case removed, so "Re-Run", "re run" and "RERUN"
+# are one answer. Blank, YES or anything else is not a request to run.
+LIVE_ENQUIRY_RUN_WHEN_COMPLETED = ("NO", "N", "RERUN")
+# The answer that runs a row again although this pack at these quantities was estimated.
+LIVE_ENQUIRY_RERUN = ("RERUN",)
 # A Drawing No. that is not one drawing: the row needs a pack made up by a person.
 LIVE_ENQUIRY_NOT_A_DRAWING = ("N/A", "NA", "VARIOUS", "TBC", "TBA", "NONE", "-", "?")
 # A note on the row that stops it, whatever else the row says. The person wrote it; the
@@ -5467,6 +5478,11 @@ DESIGN_AREA_ENDPOINT = os.getenv("SDI_DESIGN_AREA_ENDPOINT", "")
 # AI Estimate Self-Running (D-588): a row whose drawings were searched for in Production and
 # not found is searched again after this many hours, not on every read of the sheet.
 LIVE_ENQUIRY_COLLECT_RETRY_HOURS = float(os.getenv("SDI_LIVE_ENQUIRY_COLLECT_RETRY_HOURS", "6"))
+# OFF UNTIL ASKED FOR (D-608). JG, 31 Oct 2026: the drawings will come from an endpoint; until
+# it is ready they are looked for under the Live Enquiry root only. Copying from Production
+# into that share is the earlier provisional search, and runs only when this is set to 1.
+LIVE_ENQUIRY_COLLECT_FROM_PRODUCTION = os.getenv(
+    "SDI_LIVE_ENQUIRY_COLLECT_FROM_PRODUCTION", "0").strip().lower() in {"1", "true", "yes"}
 
 # The longest run of letters a title block's drawing number carries: GA, SA05, 01M, ASSY. A
 # code-shaped token with a longer run is words joined across spaces — the M&S border's

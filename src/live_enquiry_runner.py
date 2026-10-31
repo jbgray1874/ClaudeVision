@@ -91,6 +91,10 @@ class EnquiryRow:
     account_manager: str = ""
     quantities: str = ""
     notes: str = ""
+    # THE AI LIVE ENQUIRY SHEET (D-608): its AICompleted answer, and whether the sheet has that
+    # column at all. A sheet with it runs by its own rule; one without keeps D-420's.
+    ai_completed: str = ""
+    completed_column: bool = False
 
 
 def _text(value: Any) -> str:
@@ -184,8 +188,14 @@ def rows_from_table(table: Sequence[Sequence[Any]]) -> List[EnquiryRow]:
             description=_text(cell("description")), received=_as_date(cell("received")),
             due=_as_date(cell("due")), ai_check=_text(cell("ai_check")),
             estimator=_text(cell("estimator")), account_manager=_text(cell("account_manager")),
-            quantities=_text(cell("quantities")), notes=notes))
+            quantities=_text(cell("quantities")), notes=notes,
+            ai_completed=_text(cell("ai_completed")), completed_column="ai_completed" in cols))
     return out
+
+
+def completed_word(text: str) -> str:
+    """An AICompleted answer as one word: "Re-Run", "re run" and "RERUN" are all RERUN."""
+    return re.sub(r"[\s\-_]+", "", str(text or "").upper())
 
 
 def read_sheet(path: Path, sheet: str = "") -> List[EnquiryRow]:
@@ -231,6 +241,25 @@ def names_the_drawing(folder_name: str, key: str) -> bool:
         return False
     rest = flat[len(key):]
     return rest == "" or bool(re.match(r"^-(?:(?:GA|SA)\d*)?(?:-?[A-Z(]|$)", rest))
+
+
+def names_the_drawing_inside(folder_name: str, key: str) -> bool:
+    """The drawing number anywhere in the folder's name, as a whole number (D-608): JG's
+    "pattern match for the Drawing No. in the name of the folder", for a folder named
+    "0359974 Editions Footwear Podium 12678-01-GA". Not inside a longer number: the character
+    before it is not a letter or digit, and what follows obeys names_the_drawing's rule, so
+    "12678-01-02-GA" still does not name 12678-01."""
+    if not key:
+        return False
+    text = re.sub(r"\s+", " ", str(folder_name or "").upper().replace("_", "-"))
+    for m in re.finditer(re.escape(key), text):
+        if m.start() and text[m.start() - 1].isalnum():
+            continue
+        rest = text[m.end():]
+        if (rest == "" or rest[0] in " (" or
+                re.match(r"^-(?:(?:GA|SA)\d*)?(?:-?[A-Z( ]|$)", rest)):
+            return True
+    return False
 
 
 def _customer_words(name: str) -> List[str]:
@@ -335,6 +364,11 @@ class LiveEnquiryShare:
         client_dir = client[0] if client else None
         hits = ([d for d in _subfolders(client_dir) if names_the_drawing(d.name, key)]
                 if client_dir else [])
+        if not hits and client_dir is not None:
+            # A FOLDER THAT CARRIES THE NUMBER INSIDE ITS NAME (D-608), looked for only under
+            # the customer's folder and only when no folder is named by the number: the
+            # stricter match wins wherever it finds one.
+            hits = [d for d in _subfolders(client_dir) if names_the_drawing_inside(d.name, key)]
         at_root = False
         if not hits:
             # THE OLDER LAYOUT: a pack at the root named by its drawing number,
@@ -419,6 +453,11 @@ def quantities_for(row: EnquiryRow, located: Located,
                    console: Dict[str, List[int]]) -> Tuple[List[int], str]:
     """The quantities and where they were stated. Nothing stated is nothing: setup is spread
     over the run quantity, so a guessed one moves every labour line, and the row is held."""
+    if row.completed_column:
+        # THE AI LIVE ENQUIRY SHEET'S QUANTITY IS ITS QTY COLUMN (D-608), and nothing else: not
+        # the console, not a file in the folder, not the description.
+        q = parse_quantities(row.quantities)
+        return (q, "the sheet's QTY column") if q else ([], "")
     given = console.get(drawing_key(row.drawing))
     if given:
         return list(given), "given at the console (qty)"
@@ -482,6 +521,7 @@ class Decision:
     quantity_source: str = ""
     fingerprint: str = ""
     last: Dict[str, Any] = field(default_factory=dict)
+    rerun: bool = False               # AICompleted says Re-Run (D-608)
 
 
 def _hold_note(notes: str) -> str:
@@ -505,6 +545,18 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
            seen: Optional[Dict[str, int]] = None) -> Decision:
     if row.ai_check.strip().upper() not in {w.upper() for w in config.LIVE_ENQUIRY_ASKED}:
         return Decision(row, "not_asked", f"AI CHECK is '{row.ai_check or 'blank'}'")
+    # THE AI LIVE ENQUIRY SHEET'S RULE (D-608): YES, a QTY, and AICompleted NO, N or Re-Run.
+    rerun = False
+    if row.completed_column:
+        said = completed_word(row.ai_completed)
+        if said not in config.LIVE_ENQUIRY_RUN_WHEN_COMPLETED:
+            return Decision(row, "not_asked",
+                            f"AICompleted is '{row.ai_completed or 'blank'}' — NO, N or Re-Run "
+                            f"runs it")
+        if not parse_quantities(row.quantities):
+            return Decision(row, "held", "no QTY on the sheet — put the quantities in the QTY "
+                                         "column")
+        rerun = said in config.LIVE_ENQUIRY_RERUN
     note = _hold_note(row.notes)
     if note:
         return Decision(row, "held", f"the row's note says '{note}'")
@@ -538,7 +590,11 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
     fp = fingerprint(located.files)
     last = attempts[-1] if attempts else {}
     d = Decision(row, "ready", "first run", located=located, quantities=qty,
-                 quantity_source=qsource, fingerprint=fp, last=last)
+                 quantity_source=qsource, fingerprint=fp, last=last, rerun=rerun)
+    # RE-RUN RUNS ONCE PER MARKING (D-608). The sheet is never written, so the cell still says
+    # Re-Run after the run; the ledger remembers it was taken, and forgets when the cell is
+    # seen saying anything else (plan()), so marking it Re-Run again runs it again.
+    rerun_due = rerun and not job.get("rerun_taken")
     if not last:
         if job.get("baseline"):
             d.reason = "the pack has changed since it was baselined"
@@ -548,9 +604,15 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
         d.status, d.reason = "running", f"queued as run {last.get('run_id')} at " \
                                         f"{last.get('queued_at')}"
         return d
+    if rerun_due and last.get("status") in {"done", "error"}:
+        d.reason = "Re-Run asked for on the sheet"
+        return d
     if same and last.get("status") == "done":
         d.status, d.reason = "done", f"estimated {last.get('finished_at')} — " \
                                      f"{last.get('output_path') or 'no output path'}"
+        if row.completed_column:
+            d.reason += (" (the sheet is not written: AICompleted still reads "
+                         f"'{row.ai_completed}'; Re-Run runs it again)")
         return d
     if not same:
         d.reason = ("the pack has changed since the last run"
@@ -601,9 +663,18 @@ def baseline(rows: Sequence[EnquiryRow], sources: Sequence[Any], ledger: Dict[st
 
 def plan(rows: Sequence[EnquiryRow], sources: Sequence[Any],
          ledger: Dict[str, Any]) -> List[Decision]:
-    """Every row's decision, ready rows first by the date the estimate is wanted."""
+    """Every row's decision, ready rows first by the date the estimate is wanted, or, on the
+    AI Live Enquiry sheet, in the sheet's own order from the top."""
     seen: Dict[str, int] = {}
+    # A RE-RUN TAKEN IS FORGOTTEN once the cell says something else (D-608), so the next
+    # Re-Run on the same row is a new request.
+    for r in rows:
+        if r.completed_column and completed_word(r.ai_completed) not in config.LIVE_ENQUIRY_RERUN:
+            (ledger.get("jobs", {}).get(job_key(r)) or {}).pop("rerun_taken", None)
     decisions = [decide(r, sources, ledger, seen) for r in rows]
+    if any(r.completed_column for r in rows):
+        # THE AI LIVE ENQUIRY SHEET RUNS FROM THE TOP (D-608): ready rows in the sheet's order.
+        return sorted(decisions, key=lambda d: (d.status != "ready", d.row.row))
     far = date.max
     return sorted(decisions, key=lambda d: (d.status != "ready", d.row.due or far, d.row.row))
 
@@ -722,6 +793,8 @@ def run_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: Pa
     attempt["output_path"] = started.get("output_path")
     job["attempts"].append(attempt)
     job.pop("retry", None)
+    if d.rerun:
+        job["rerun_taken"] = True                 # this Re-Run has been answered (D-608)
     save_ledger(ledger_path, ledger)
     say(f"   queued {d.row.drawing} ({d.row.customer}) at {'/'.join(map(str, d.quantities))} "
         f"— run {attempt['run_id']}")
