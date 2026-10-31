@@ -3214,7 +3214,10 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                        f"(no BOM, material, labour or unit cost). Usual cause: the "
                        f"triggering email had no attachments. Re-send the job with the "
                        f"drawing pack attached.")
-        return {"subject": _empty_subject, "html": _empty_html, "text": _empty_text}
+        return {"subject": _empty_subject, "html": _empty_html, "text": _empty_text,
+                "spoken": (f"SDI Intelligence walkthrough for {job}. No estimate was produced: "
+                           f"the run received no drawings to work from, so nothing here is a "
+                           f"price. Re-send the job with its drawing pack.")}
 
     # A RULING IS A DECISION THAT NEEDS YOU TOO (D-598t). 9439-07-04's 09:10 note listed the
     # manufacturing decisions only, so the TIG rate, the glue stages, the bar's purchase basis
@@ -4035,7 +4038,115 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
 
     add("</div>")
     html = "\n".join(h)
-    return {"subject": subject, "html": html, "text": _as_text(html)}
+    # THE SAME NOTE, SPOKEN (D-609): written from the figures above, never re-derived, so the
+    # walkthrough cannot say a number the note does not.
+    spoken = spoken_walkthrough(
+        job=job, client=client, order_qty=order_qty, total=_job_total, totals=totals,
+        other=_other, by_block=_by_block, block_words=_BLOCK_WORDS, labour_rows=labour_rows,
+        quantity_rows=_qs_rows, need=_need, focus=[t for _, t in _focus],
+        provisional=provisional)
+    return {"subject": subject, "html": html, "text": _as_text(html), "spoken": spoken}
+
+
+# ── THE WALKTHROUGH, SPOKEN (D-609) ──────────────────────────────────────────────────
+# JG, 31 Oct 2026: after each self-running run, the estimate is e-mailed "with the files
+# associated with the run and a voice walk through also". The words are written here, from
+# the covering note's own figures; walkthrough_audio.py turns them into sound.
+
+def say_gbp(value: Any) -> str:
+    """Money as a voice reads it well: "538 pounds and 6 pence", "1,234 pounds"."""
+    m = _money(value)
+    if m is None:
+        return "an amount not yet known"
+    pence_total = int(round(abs(m) * 100))
+    pounds, pence = divmod(pence_total, 100)
+    words = f"{pounds:,} pound{'' if pounds == 1 else 's'}"
+    if pence:
+        words += f" and {pence} pence"
+    return ("minus " if m < 0 else "") + words
+
+
+def _speakable(text: str, keep_brackets: bool = True) -> str:
+    """Words a voice can read: tags, section marks and brackets gone, "£1,664.83" said as
+    money, "+" as a comma. Without `keep_brackets` what was in brackets goes too."""
+    text = re.sub(r"<[^>]+>", " ", str(text or ""))
+    if not keep_brackets:
+        text = re.sub(r"\([^)]*\)", " ", re.sub(r"\[[^\]]*\]", " ", text))
+    text = re.sub(r"£\s*([0-9][0-9,]*(?:\.[0-9]+)?)",
+                  lambda m: say_gbp(float(m.group(1).replace(",", ""))), text)
+    text = re.sub(r"§\s*\d+", "", text)
+    text = re.sub(r"\[[^\]]*\]", "", text)
+    text = text.replace("(", ", ").replace(")", ", ")
+    text = re.sub(r"\s*\+\s*", ", ", text)
+    text = re.sub(r"\s+([,.;:])", r"\1", re.sub(r"\s+", " ", text))
+    return re.sub(r",(?:\s*,)+", ",", text).strip(" ,.;:")       # never a number's own comma
+
+
+def _spoken_line(html_text: str) -> str:
+    """A focus item as one short sentence: its bold headline, its first sentence, at most
+    thirty words."""
+    m = re.search(r"<b>(.*?)</b>", str(html_text or ""), re.S)
+    text = _speakable(m.group(1) if m else str(html_text or ""), keep_brackets=False)
+    text = re.split(r"(?<=[.;!?])\s", text, maxsplit=1)[0].strip(" .;:")
+    words = text.split()
+    return " ".join(words[:30])
+
+
+def spoken_walkthrough(*, job: str, client: str, order_qty: Any, total: Dict[str, Any],
+                       totals: Dict[str, Any], other: Any, by_block: Dict[str, Any],
+                       block_words: Dict[str, str], labour_rows: List[Dict[str, Any]],
+                       quantity_rows: List[Dict[str, Any]], need: str, focus: List[str],
+                       provisional: bool) -> str:
+    """A short spoken walkthrough of one estimate: what it is, the unit cost and where it
+    comes from, the other quantities, and what needs a person. About a minute and a half."""
+    out: List[str] = [f"SDI Intelligence walkthrough for {job}"
+                      + (f", for {client}" if client else "") + "."]
+    if total.get("amount") is not None:
+        out.append(f"It is costed at {order_qty} off, at {say_gbp(total['amount'])} a unit, "
+                   f"excluding VAT, read from the workbook's own total.")
+    else:
+        out.append(f"It is costed at {order_qty} off, but the unit cost is pending: "
+                   f"{total.get('why') or 'the total could not be traced to a cell'}.")
+    if _money(totals.get("material")) is not None and _money(totals.get("labour")) is not None:
+        split = (f"Material comes to {say_gbp(totals.get('material'))} and labour to "
+                 f"{say_gbp(totals.get('labour'))}")
+        if _money(other):
+            split += f", with {say_gbp(other)} added by the unit price's own uplift"
+        out.append(split + ".")
+    else:
+        out.append("The sheet's material and labour totals could not be read.")
+    blocks = sorted(((k, v) for k, v in (by_block or {}).items()
+                     if _money(v) and k in block_words),
+                    key=lambda kv: -(_money(kv[1]) or 0))[:2]
+    if blocks:
+        out.append("Most of the material is " + " and ".join(
+            f"{block_words.get(k, k)} at {say_gbp(v)}" for k, v in blocks) + ".")
+    lab = sorted((r for r in labour_rows or [] if _money(r.get("total_value_gbp"))),
+                 key=lambda r: -(_money(r.get("total_value_gbp")) or 0))[:3]
+    if lab:
+        names = [f"{str(r.get('operation') or r.get('description') or 'a labour line').lower()}"
+                 f" at {say_gbp(r.get('total_value_gbp'))}" for r in lab]
+        out.append("The largest labour lines are "
+                   + (", ".join(names[:-1]) + " and " + names[-1] if len(names) > 1
+                      else names[0]) + ".")
+    others = [r for r in quantity_rows or []
+              if _money(r.get("unit")) and str(r.get("quantity")) != str(order_qty)]
+    if others:
+        out.append("At the other quantities: " + "; ".join(
+            f"{r.get('quantity')} off, {say_gbp(r.get('unit'))} a unit" for r in others) + ".")
+    if need:
+        out.append(_speakable(need.replace("To confirm:", "Still to confirm:")) + ".")
+    lines = [s for s in (_spoken_line(f) for f in focus[:3]) if s]
+    if lines:
+        order = ("First", "Second", "Third")
+        out.append("What needs your eye. " + " ".join(
+            f"{order[i]}: {s}." for i, s in enumerate(lines)))
+    if provisional:
+        out.append("This estimate is provisional. No customer quote goes with it until those "
+                   "are settled.")
+    out.append("The workbook, the report and the explanation are attached. Please check the "
+               "outstanding items before anything goes to the customer.")
+    return " ".join(out)
 
 
 def release_section_html(record: Any, summary: Any) -> str:

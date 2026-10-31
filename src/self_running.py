@@ -285,6 +285,20 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
         time.sleep(seconds)
         switch.beat(_running())
 
+    # WHO HEARS ABOUT EACH FINISHED ESTIMATE (D-609): the page's saved "Email the finished
+    # estimate to" list, asked once a cycle, so a change saved on the page applies to the next
+    # job. SDI_LIVE_ENQUIRY_EMAIL_TO, where set, wins. Unreachable or empty: sent to nobody.
+    email_to: List[str] = []
+    if not config.LIVE_ENQUIRY_EMAIL_TO:
+        try:
+            email_to = list(portal.recipients())
+        except Exception as exc:                                      # noqa: BLE001
+            say(f"   (the saved e-mail list could not be read: "
+                f"{getattr(exc, 'message', exc)}; finished estimates are filed and sent to "
+                f"nobody this cycle)")
+        say(f"   finished estimates are e-mailed to {', '.join(email_to)}" if email_to else
+            "   no saved e-mail list: finished estimates are filed and sent to nobody")
+
     def after_each(d: ler.Decision, attempt: Dict[str, Any]) -> None:
         if attempt.get("status") == "done" and d.row.completed_column:
             write_back(Path(s["workbook"]), d.row, attempt, say=say)
@@ -292,6 +306,7 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
 
     out["ran"] = ler.run_ready(decisions, portal, ledger, s["ledger"], say=say,
                                before_each=before_each, after_each=after_each,
+                               email_to=email_to,
                                **(wait if wait is not None else {"sleep": sleep_and_beat}))
     after = ler.plan(ler.read_sheet(s["workbook"]), sources, ledger)
     ler.write_status(after, s["ledger"])

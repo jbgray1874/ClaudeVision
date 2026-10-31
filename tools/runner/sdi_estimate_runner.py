@@ -84,7 +84,8 @@ from typing import Any, Dict, List, Optional, Tuple
 # be imported and tested on a machine that has neither requests nor a server.
 
 DELIVERABLE_SUFFIXES = (".xlsx", ".html", ".json", ".log", ".csv", ".txt", ".md",
-                        ".sql", ".xlsm")
+                        ".sql", ".xlsm",
+                        ".wav")         # the spoken walkthrough (D-609)
 
 # THE WORKBOOK TEMPLATE, RESOLVED THE SAME WAY THE ENGINE RESOLVES IT.
 #

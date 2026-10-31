@@ -825,15 +825,22 @@ class Portal:
     def status(self, run_id: str) -> Dict[str, Any]:
         return self._call("GET", f"/api/estimate/{run_id}")
 
+    def recipients(self) -> List[str]:
+        """The page's saved "Email the finished estimate to" list (D-609): the addresses its
+        box is pre-filled with, saved by its "Save as the default list" button."""
+        got = self._call("GET", "/api/estimate/recipients") or {}
+        return [str(a) for a in (got.get("recipients") or []) if str(a).strip()]
+
     def self_running(self, report: Dict[str, Any]) -> Dict[str, Any]:
         """Report to the portal's AI Estimate Self-Running switch and hear whether it is on
         (D-588). The answer is the only thing that lets the self-running watcher queue a job."""
         return self._call("POST", "/api/estimate/self-running/heartbeat", report)
 
 
-def request_body(d: Decision) -> Dict[str, Any]:
+def request_body(d: Decision, email_to: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """What the page sends for a pack estimate. The client is the share's folder name — the
-    spelling the output tree is filed under — and the drawing number is the row's."""
+    spelling the output tree is filed under — and the drawing number is the row's. `email_to`
+    names who the finished estimate goes to (D-609); without it, LIVE_ENQUIRY_EMAIL_TO."""
     return {
         "client": d.located.client_folder_name or d.row.customer,
         "drawing_number": d.row.drawing,
@@ -843,7 +850,8 @@ def request_body(d: Decision) -> Dict[str, Any]:
         "files": [],
         "deliverables": True,
         "method": "both",
-        "email_to": config.LIVE_ENQUIRY_EMAIL_TO or None,
+        "email_to": (", ".join(email_to) if email_to
+                     else (config.LIVE_ENQUIRY_EMAIL_TO or None)),
         "email_quote": False,
     }
 
@@ -881,7 +889,8 @@ def refresh_open_runs(ledger: Dict[str, Any], portal: Portal) -> None:
 def run_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: Path,
             say: Callable[[str], None] = print, poll_seconds: float = 30.0,
             sleep: Callable[[float], None] = time.sleep,
-            clock: Callable[[], float] = time.time) -> Dict[str, Any]:
+            clock: Callable[[], float] = time.time,
+            email_to: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """Queue one row and wait for it to finish. The attempt is in the ledger from the moment it
     is queued, so a runner stopped mid-wait finds it again on the next start."""
     attempt: Dict[str, Any] = {
@@ -893,7 +902,7 @@ def run_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: Pa
         # still written on a later read.
         "marks_sheet": bool(d.row.completed_column),
     }
-    started = portal.start(request_body(d))           # refused: nothing is recorded here
+    started = portal.start(request_body(d, email_to))  # refused: nothing is recorded here
     job = ledger["jobs"].setdefault(job_key(d.row), {
         "customer": d.row.customer, "drawing": d.row.drawing, "attempts": []})
     attempt["run_id"] = started.get("run_id")
