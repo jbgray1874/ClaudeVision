@@ -44,6 +44,9 @@ SUBMITTED_SCOPE_ENV = "SDI_SUBMITTED_SCOPE"
 # Not SDI_RUNNER_ID: that is the runner's own setting, and a shell that has it set would make
 # a run started by hand claim a runner it never had.
 SERVICE_RUN_ID_ENV = "SDI_SERVICE_RUN_ID"
+# Which portal service the runner claimed the job from, and the commit it reported (D-607).
+# Not SDI_SERVICE_URL: that is the runner's own setting for where to poll.
+CLAIMED_FROM_ENV = "SDI_CLAIMED_FROM"
 
 NOT_RECORDED = "not recorded on this run (it predates D-601)"
 
@@ -79,13 +82,46 @@ def brief_fingerprint(text: Any) -> str:
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16] if norm else ""
 
 
-def _submitted() -> Dict[str, Any]:
+def _json_env(name: str) -> Dict[str, Any]:
     try:
         import json
-        got = json.loads(os.environ.get(SUBMITTED_SCOPE_ENV) or "{}")
+        got = json.loads(os.environ.get(name) or "{}")
     except (TypeError, ValueError):
         return {}
     return got if isinstance(got, dict) else {}
+
+
+def _submitted() -> Dict[str, Any]:
+    return _json_env(SUBMITTED_SCOPE_ENV)
+
+
+def _claimed_from() -> Dict[str, str]:
+    got = _json_env(CLAIMED_FROM_ENV)
+    return {"service": str(got.get("service") or "").strip(),
+            "commit": str(got.get("commit") or "").strip()} if got else {}
+
+
+def _submission_gap(service_run_id: str) -> str:
+    """Which link sent no scope, when none arrived (D-607). The HPP 03:18 book said only "no
+    submission recorded", and a service on old code, a runner on old code and a route that
+    records none all read the same. Each leaves a different trace in the environment, so the
+    book names the one it sees. These are what the current code does, not guesses: the
+    runner always passes the variable, and the service always puts the field in the claim."""
+    if not service_run_id:
+        return "started by hand, so nothing was submitted"
+    raw = os.environ.get(SUBMITTED_SCOPE_ENV)
+    if raw is None:
+        return ("the runner passed none: a runner process started before D-604 passes none, "
+                "so restart the runner")
+    if raw.strip() in ("", "null"):
+        return ("the portal service sent no scope with the job: a service started before "
+                "D-604 sends none, so check the service's commit")
+    if raw.strip() == "{}":
+        # A runner started before D-607 passes {} for no scope as well as for an empty one.
+        return ("the portal service sent no scope or an empty one: a service started before "
+                "D-604 sends none, and before D-607 a batch run or a run claimed before its "
+                "scope was recorded had an empty one, so check the service's commit")
+    return "the scope the runner passed could not be read"
 
 
 def _received(summary: Mapping[str, Any]) -> Dict[str, Any]:
@@ -111,6 +147,8 @@ def record(summary: Dict[str, Any]) -> Dict[str, Any]:
     Called once, at the start of the run, by the process that does the costing. Never raises:
     a run that cannot name its machine still has to produce an estimate."""
     runner_id = (os.environ.get(RUNNER_ID_ENV) or "").strip()
+    service_run_id = (os.environ.get(SERVICE_RUN_ID_ENV) or "").strip()
+    submitted = _submitted()
     build, warn = _build_line()
     prov: Dict[str, Any] = {
         "machine": _machine(),
@@ -118,10 +156,12 @@ def record(summary: Dict[str, Any]) -> Dict[str, Any]:
         # The runner is this process's parent, so its pid names WHICH runner process claimed
         # the job — the question two runners on one machine left open for three days.
         "runner_pid": os.getppid() if runner_id else None,
-        "service_run_id": (os.environ.get(SERVICE_RUN_ID_ENV) or "").strip(),
+        "service_run_id": service_run_id,
+        "claimed_from": _claimed_from(),
         "engine_build": build,
         "build_warning": warn,
-        "submitted_scope": _submitted(),
+        "submitted_scope": submitted,
+        "submission_gap": "" if submitted else _submission_gap(service_run_id),
         "received_scope": _received(summary) if isinstance(summary, dict) else {},
     }
     if isinstance(summary, dict):
@@ -161,7 +201,40 @@ def build_text(summary: Any) -> str:
         return NOT_RECORDED
     line = str(p.get("engine_build") or "").strip() or "the build could not be identified"
     warn = str(p.get("build_warning") or "").strip()
-    return f"{line} · ⚠ {warn}" if warn else line
+    line = f"{line} · ⚠ {warn}" if warn else line
+    service = service_text(summary)
+    return f"{line} · {service}" if service else line
+
+
+def _same_commit(a: str, b: str) -> Optional[bool]:
+    """Two short or long hashes of one commit agree on their common prefix. None when either
+    side is unknown, which is not a match and not a mismatch."""
+    a, b = a.strip().lower(), b.strip().lower()
+    if not a or not b or "unknown" in (a, b) or a == "no":
+        return None
+    n = min(len(a), len(b))
+    return a[:n] == b[:n]
+
+
+def service_text(summary: Any) -> str:
+    """The portal service the job was claimed from and the commit it reported (D-607), with a
+    warning when that is not the engine's own commit. The service and the engine run from one
+    checkout, so two commits mean one of the two processes is not on the code on disk; the
+    HPP 03:18 run was claimed from a service on 8071 that a restart of 8072 had not touched."""
+    p = _prov(summary)
+    claimed = p.get("claimed_from") if isinstance(p.get("claimed_from"), dict) else {}
+    if not claimed:
+        return ""
+    where = claimed.get("service") or "an unnamed service"
+    commit = claimed.get("commit") or ""
+    if not commit:
+        return f"portal service {where}, which reported no commit"
+    engine = str(p.get("engine_build") or "").split(" ")[0]
+    same = _same_commit(engine, commit)
+    text = f"portal service {where} on {commit}"
+    if same is False:
+        text += f" · ⚠ NOT the engine's commit {engine}: restart that service before trusting the run"
+    return text
 
 
 # The prefix that marks a check which could not run, not a difference it found (D-604b).
@@ -255,7 +328,12 @@ def scope_text(summary: Any) -> str:
     if not p:
         return got
     if not p.get("submitted_scope"):
-        return got + " · no submission recorded to compare with"
+        gap = str(p.get("submission_gap") or "")
+        # A PORTAL RUN THAT RECEIVED NO SCOPE COULD NOT BE CHECKED (D-607), and a check that
+        # could not run is not agreement (D-604b). A run started by hand had nothing to check.
+        if gap and p.get("service_run_id"):
+            return got + " · ⚠ NOT VERIFIED: no submitted scope reached the engine; " + gap
+        return got + " · no submission recorded to compare with" + (f": {gap}" if gap else "")
     bad = scope_mismatches(s)
     if not bad:
         return got + " · as submitted"
@@ -344,7 +422,9 @@ def workbook_line(summary: Any) -> str:
     """The run's identity as one line for AI Provenance's header, beside the build it already
     states. Machine, mode and references only: the build and the reads have their own places
     in that header, and the review status there would be the provisional count."""
+    service = service_text(summary)
     return (f"Run: {run_text(summary)}   |   Scope: {scope_text(summary)}   |   "
             f"Machine: {machine_text(summary)}   |   "
-            f"Mode: {mode_text(summary).split(' — ')[0]}   |   "
+            + (f"Service: {service}   |   " if service else "")
+            + f"Mode: {mode_text(summary).split(' — ')[0]}   |   "
             f"References: {references_text(summary)}")

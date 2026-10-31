@@ -306,6 +306,40 @@ try {
     Write-Host ""
     Write-Host "  serving commit $serving$(if ($head -and $serving -eq $head) { ' - matches this checkout' })" -ForegroundColor Green
     Write-Host "  http://localhost:$Port/estimating" -ForegroundColor Green
+    # -- ANOTHER SERVICE ON THIS MACHINE, ON OTHER CODE (D-607) -------------------------
+    #
+    # HPP 03:18 was claimed by a runner reporting to 8071 while this script had restarted
+    # 8072. Each service keeps its own queue, so a page opened on 8071, or a runner polling
+    # it, kept the old code, and this script said nothing because 8071 was not its port.
+    foreach ($other in @(8071, 8072, 8073)) {
+        if ($other -eq $Port) { continue }
+        if (@(Get-NetTCPConnection -LocalPort $other -State Listen -ErrorAction SilentlyContinue).Count -eq 0) { continue }
+        # A REFUSAL IS AN ANSWER (D-607a). A 401 is a service turning away a request without
+        # the key, not a service that is down, and the commit header rides on the refusal too.
+        $otherCommit = ""
+        $otherState = "did not answer"
+        try {
+            $reply = Invoke-WebRequest "http://localhost:$other/api/health" -UseBasicParsing -TimeoutSec 4
+            $otherState = "answered"
+            $otherCommit = "$($reply.Headers['X-SDI-Commit'])".Trim()
+        } catch {
+            $refusal = $_.Exception.Response
+            if ($refusal) {
+                $otherState = "refused the request (HTTP $([int]$refusal.StatusCode))"
+                try { $otherCommit = "$($refusal.Headers['X-SDI-Commit'])".Trim() } catch { }
+            }
+        }
+        if (-not $otherCommit -or $otherCommit -eq "unknown") {
+            Write-Host ("  note: {0} is also listening here; it {1} and did not say which commit it runs." -f $other, $otherState) -ForegroundColor Yellow
+            Write-Host ("    find it:  " + ($whatIsOn -f $other)) -ForegroundColor Yellow
+        } elseif ($head -and $otherCommit -ne $head) {
+            Write-Host ""
+            Write-Host ("  ALSO SERVING: {0} is on {1}, not this checkout's {2}." -f $other, $otherCommit, $head) -ForegroundColor Red
+            Write-Host ("  A page opened on {0}, or a runner reporting to it, still gets that code." -f $other) -ForegroundColor Red
+            Write-Host "  End it and start it again from this checkout, or stop it and use this port." -ForegroundColor Yellow
+            Write-Host ("    find it:  " + ($whatIsOn -f $other)) -ForegroundColor Yellow
+        }
+    }
 } catch {
     if ($_.Exception.Response -and $_.Exception.Response.StatusCode.value__ -eq 401) {
         Write-Host "  answering on $Port (401 - key required, which is fine)" -ForegroundColor Green

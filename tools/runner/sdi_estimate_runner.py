@@ -784,7 +784,8 @@ def main() -> int:
             with _heartbeat_while_busy(requests, others, headers, runner_id, _process,
                                        _build):
                 _execute(requests, base, headers, job, engine_root, engine_python,
-                         runner_id)
+                         runner_id, claimed_from={"service": server,
+                                              "commit": _SERVICE_COMMIT.get(server, "")})
             worked = True
             consecutive = 0
             break           # back to the top of the list: no service waits behind another
@@ -806,6 +807,10 @@ def main() -> int:
                   f"also in {log_path}.", file=sys.stderr)
             return 3
         time.sleep(a.poll_seconds)
+
+
+# The commit each service reported on its last claim reply (D-607).
+_SERVICE_COMMIT: Dict[str, str] = {}
 
 
 def _ask_for_work(requests, server: str, headers: Dict[str, str], runner_id: str,
@@ -851,6 +856,12 @@ def _ask_for_work(requests, server: str, headers: Dict[str, str], runner_id: str
             f"the service at {server} answered {r.status_code} — {exc}")
     if complained:
         print(f"[{time.strftime('%H:%M:%S')}] connected to {server}.")
+    # WHICH BUILD THIS SERVICE IS ON (D-607). Two services can answer on one machine, and HPP
+    # 03:18 was claimed from one that a restart of the other had not touched. The commit is
+    # the one the service stamps on every reply; kept beside the job, not in it, because the
+    # job is the claim's own fields.
+    _SERVICE_COMMIT[server] = str(
+        (getattr(r, "headers", None) or {}).get("X-SDI-Commit") or "").strip()
     return job, None
 
 
@@ -911,7 +922,8 @@ def _say_once(current: Optional[str], kind: str, *lines: str) -> Optional[str]:
 
 
 def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
-             engine_root: Path, engine_python: Path, runner_id: str) -> None:
+             engine_root: Path, engine_python: Path, runner_id: str,
+             claimed_from: Optional[Dict[str, str]] = None) -> None:
     run_id = job["run_id"]
     dest = Path(job["output_path"])
     folder = Path(job["job_folder"])
@@ -1125,8 +1137,12 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
                                      "SDI_SERVICE_RUN_ID": str(run_id),
                                      # AND WHAT WAS SUBMITTED (D-604), so the book can say
                                      # whether what reached the engine is what was sent.
+                                     # null when the service sent no scope field at all,
+                                     # apart from an empty one (D-607).
                                      "SDI_SUBMITTED_SCOPE": json.dumps(
-                                         job.get("submitted_scope") or {})})
+                                         job.get("submitted_scope")),
+                                     # AND WHICH SERVICE, ON WHICH BUILD (D-607).
+                                     "SDI_CLAIMED_FROM": json.dumps(claimed_from or {})})
     except OSError as exc:
         _finish(requests, base, headers, run_id, runner_id, "error",
                 f"Could not start the engine: {exc}", log)

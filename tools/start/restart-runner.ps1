@@ -387,7 +387,22 @@ if ($git) {
 if (-not $Service) {
     if ($env:SDI_SERVICE_URL) { $Service = $env:SDI_SERVICE_URL }
     elseif ($env:SDI_PORT)    { $Service = "http://localhost:$($env:SDI_PORT)" }
-    else                      { $Service = "http://localhost:8071" }
+    else {
+        # THE FIRST SERVICE THAT ANSWERS, NOT 8071 BY ASSUMPTION (D-607a). With the stray 8071
+        # stopped on 31 Oct this asked a port with nothing on it for 90 seconds and failed,
+        # while the runner served 8072. Any HTTP reply is an answer, a 401 included.
+        $Service = "http://localhost:8071"
+        foreach ($candidate in @("http://localhost:8071", "http://localhost:8072")) {
+            $answered = $false
+            try {
+                Invoke-WebRequest "$candidate/api/health" -UseBasicParsing -TimeoutSec 4 | Out-Null
+                $answered = $true
+            } catch {
+                if ($_.Exception.Response) { $answered = $true }
+            }
+            if ($answered) { $Service = $candidate; break }
+        }
+    }
 }
 $Service = ($Service -split ",")[0].TrimEnd("/")
 $headSha = if ($git) { "$sha".Trim() } else { "" }

@@ -864,8 +864,9 @@ def _file_enquiry_brief(run: "Run", job: Any, brief: Optional[str]) -> str:
         run.line("No enquiry brief with this run — the model reads the pack alone.")
         return "none"
     except OSError as exc:
-        run.line(f"WARNING — the enquiry brief could not be filed ({exc}); this run reads the "
-                 f"render alone.")
+        # The route refuses the run on "failed" (D-607a), so this line is the reason it gives.
+        run.line(f"The enquiry brief could not be "
+                 f"{'saved' if text else 'cleared of the one an earlier run left'} ({exc}).")
         return "failed"
 
 def brief_fingerprint(text: Any) -> str:
@@ -2040,7 +2041,9 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                   fresh_read=bool(req.fresh_read),
                   email_to=_email_to, email_quote=bool(req.email_quote),
                   requested_by=_caller)
-        _RUNS[run.run_id] = run
+        # NOT QUEUED YET (D-607). A run in _RUNS can be claimed, and a runner polling between
+        # here and the brief below would take a job whose brief was not yet filed and whose
+        # scope was not yet recorded. It is queued once both are done.
 
     run.line(f"{drawing} · {client} · {run.units} off")
     if _caller:
@@ -2068,10 +2071,21 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     # filed only on LLM runs, a customer's change could never reach it. On a measured pack the
     # engine sets the brief aside and the book says so.
     _brief_status = _file_enquiry_brief(run, job, req.enquiry_brief)
+    # A BRIEF THAT COULD NOT BE SAVED IS NOT QUEUED (D-607a). Queued, the run would read the
+    # pack without the customer's words, or with a stale brief nobody typed for it. The run is
+    # not in the queue yet, so refusing here leaves nothing a runner can claim.
+    if _brief_status == "failed":
+        raise HTTPException(500, (run.log[-1] if run.log else "The enquiry brief could not be "
+                                  "saved.") + " The run was NOT queued. Check the job folder "
+                                 "can be written, then run again.")
     # THE SCOPE AS SUBMITTED, kept on the run and said on its log (D-604).
     run.submitted_scope = submitted_scope(run, method, req.enquiry_brief, _brief_status,
                                           _ref_docs)
     run.line("SCOPE AS SUBMITTED — " + scope_sentence(run.submitted_scope))
+    # QUEUED NOW, with its brief filed and its scope recorded, so no runner can claim it
+    # without them (D-607).
+    with _LOCK:
+        _RUNS[run.run_id] = run
     # WHICH CONSTRUCTION THIS RUN PRICES, said where the estimator is looking (D-535): a
     # schedule on file changes what the run is, and a run that silently priced last week's
     # schedule — or silently asked the model again — is the failure this panel exists to end.
@@ -2951,6 +2965,9 @@ def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
                       output_path=str(out), queued_at=queued_at,
                       pdf_path=str(path), batch_id=batch_id,
                       llm_only=(method == "llm"))
+            # ITS SCOPE AS SUBMITTED, like a single run's (D-607): a batch run takes no brief
+            # and no reference document, and its book compares what arrived with that.
+            run.submitted_scope = submitted_scope(run, method, None, "none", [])
             _RUNS[run.run_id] = run
             accepted.append(run)
             queued_at += 0.001          # keeps the queue order stable and the sort total
