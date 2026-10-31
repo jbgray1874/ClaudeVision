@@ -436,6 +436,9 @@ if (-not $resp) {
     exit 10
 }
 $fails = @()
+# AN UNKNOWN HEAD IS NOT A PASS (D-607a): the build check below compares with it, and with
+# nothing to compare the runner's build would go unchecked.
+if (-not $headSha)                                { $fails += "this checkout's HEAD is unknown, so the runner's build cannot be checked" }
 if (-not $mine)                                   { $fails += "the service sees no online runner from $me" }
 else {
     if ([int]$resp.online -ne 1)                  { $fails += "online is $($resp.online), not 1" }

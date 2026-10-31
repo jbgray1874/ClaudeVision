@@ -24,6 +24,9 @@
     Exits 0 when at least one service answers and every one that answers is on HEAD, 1 when
     any is on another commit or does not say, 2 when nothing answers.
 
+    READ-ONLY. It asks; it never stops, starts or restarts anything. Deciding what to do about
+    a stale service is for the person reading it.
+
     ASCII ONLY. See start-service.ps1 for why.
 #>
 [CmdletBinding()]
@@ -36,6 +39,16 @@ $head = ""
 try { $head = "$(& git -C $root rev-parse --short HEAD 2>$null)".Trim() } catch { }
 if ($head) { Write-Host "  this checkout: $head" } else { Write-Host "  this checkout: HEAD unknown (git not found)" -ForegroundColor Yellow }
 
+# THE COMMIT ON A REPLY OR A REFUSAL. GetValues is on the header collection in Windows
+# PowerShell 5.1 and in PowerShell 7 alike; the indexer is the fallback. Any failure leaves it
+# empty, and an empty commit is never a match.
+function Get-CommitHeader($headers) {
+    $value = ""
+    try { $value = (@($headers.GetValues("X-SDI-Commit")) -join "").Trim() } catch { }
+    if (-not $value) { try { $value = "$($headers['X-SDI-Commit'])".Trim() } catch { } }
+    return $value
+}
+
 $up = 0
 $bad = 0
 foreach ($p in $Ports) {
@@ -44,12 +57,12 @@ foreach ($p in $Ports) {
     try {
         $reply = Invoke-WebRequest "http://localhost:$p/api/health" -UseBasicParsing -TimeoutSec 4
         $state = "answering"
-        $commit = "$($reply.Headers['X-SDI-Commit'])".Trim()
+        $commit = Get-CommitHeader $reply.Headers
     } catch {
         $refusal = $_.Exception.Response
         if ($refusal) {
             $state = "refused (HTTP $([int]$refusal.StatusCode))"
-            try { $commit = "$($refusal.Headers['X-SDI-Commit'])".Trim() } catch { }
+            $commit = Get-CommitHeader $refusal.Headers
         }
     }
     if ($state -eq "down") {
@@ -57,10 +70,18 @@ foreach ($p in $Ports) {
         continue
     }
     $up++
-    $verdict = "commit not stated"
+    # AN UNAVAILABLE COMMIT IS UNVERIFIED, NEVER A MATCH: none stated, "unknown", or fewer
+    # than seven characters to compare.
+    if ($commit -eq "unknown") { $commit = "" }
     $colour = "Yellow"
-    if ($commit -and $head) {
-        $n = [Math]::Min($commit.Length, $head.Length)
+    $n = [Math]::Min($commit.Length, $head.Length)
+    if (-not $commit) {
+        $verdict = "commit not stated, so not verified"
+    } elseif (-not $head) {
+        $verdict = "HEAD unknown, so not verified"
+    } elseif ($n -lt 7) {
+        $verdict = "commit too short to compare, so not verified"
+    } else {
         if ($commit.Substring(0, $n) -eq $head.Substring(0, $n)) {
             $verdict = "matches HEAD"
             $colour = "Green"
