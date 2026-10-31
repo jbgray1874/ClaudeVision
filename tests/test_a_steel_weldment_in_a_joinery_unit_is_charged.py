@@ -47,6 +47,8 @@ def _hpp(unit_metal=False):
         _part("SHELF A", board, ["cnc_routing"], qty=2),
         _part("SHELF B", board, ["cnc_routing"], qty=2),
         _part("COLUMN SKIN", board, ["cnc_routing"]),
+        _part("COLUMN TOP CAP", board, ["cnc_routing"]),
+        _part("SHELF C", board, ["cnc_routing"], qty=2),
         _part("HALO RING TOP RIM", "MILD STEEL", ["rolling", "welding", "powder_coating"],
               L=7540, W=50, T=3, form="flat_bar", section=[50, 3]),
         _part("SUSPENSION POST", "MILD STEEL", ["saw", "welding", "powder_coating"], qty=4,
@@ -107,9 +109,80 @@ def test_each_steel_member_keeps_its_own_coat():
 
 def test_the_joints_rest_on_a_disclosed_allowance_and_are_asked():
     _a, unit, parts, n = _records()
-    said = [f for f in unit["review_flags"] if "are their own weldment" in f]
+    said = [f for f in unit["review_flags"] if "their own weldment(s)" in f]
     assert said and "at least 5 joint(s) at the shop's per-joint rate" in said[0]
-    assert "Confirm the members are welded and the joint count" in said[0]
+    assert "Confirm which members are welded together and the joint count" in said[0]
+
+
+# ── D-605a: grouped by what joins them, an assumption said to be one ──────────────────────
+
+def test_with_nothing_to_show_the_joints_the_grouping_is_an_assumption():
+    _a, unit, parts, n = _records()
+    rim = n["HALO RING TOP RIM"]
+    assert rim["weld_group"]["assumed"] is True
+    flag = next(f for f in rim["review_flags"] if "weldment" in f and "ASSUMED" in f)
+    assert "This grouping is an assumption, not an established connection" in flag
+
+
+def test_two_parent_assemblies_are_two_weldments():
+    """The reviewer's case: a separate halo and base frame must not become one weldment."""
+    answer = _hpp()
+    answer["parts"].append(_part("BASE FRAME RAIL", "MILD STEEL", ["saw", "welding"], qty=4,
+                                 L=1100, W=40, T=3, form="box_section", section=[40, 40]))
+    parts = cs.parts_from_concept(answer, "HPP", brief=BRIEF)
+    parts = parts if isinstance(parts, list) else parts.get("parts", parts)
+    named = {str(p.get("description") or "").split("  ")[0]: p for p in parts}
+    for name in ("HALO RING TOP RIM", "SUSPENSION POST", "GUARD RAIL RING"):
+        named[name]["parent"] = "HALO"
+    named["BASE FRAME RAIL"]["parent"] = "BASE FRAME"
+    unit = cs.unit_assembly_part(parts, answer, "HPP")
+    rim, rail = named["HALO RING TOP RIM"], named["BASE FRAME RAIL"]
+    assert rim["weld_joint_count"] == 5, "halo: 1 + 4 + 1 = 6 pieces, 5 joints"
+    assert rail["weld_joint_count"] == 3, "base frame: 4 rails, 3 joints, on its own"
+    assert named["SUSPENSION POST"]["weld_charged_on"] == rim["part_number"]
+    assert not rail.get("weld_charged_on"), "never joined to the halo"
+    assert rim["weld_group"]["assumed"] is False and "HALO" in rim["weld_group"]["basis"]
+
+
+def test_a_stated_joint_is_an_established_weldment_apart_from_the_unknowns():
+    """A bracket named "welded to post" joins the posts' weldment by a stated joint; the rim and
+    the rail, with nothing to show their joints, are a separate, assumed weldment."""
+    answer = _hpp()
+    answer["parts"].append(_part("POST BRACKET WELDED TO POST", "MILD STEEL",
+                                 ["laser_cutting", "welding"], qty=4, L=80, W=60, T=3))
+    _a, unit, parts, n = _records(answer)
+    post, rim = n["SUSPENSION POST"], n["HALO RING TOP RIM"]
+    bracket = n["POST BRACKET WELDED TO POST"]
+    assert bracket.get("welded_to_hosts") == [post["part_number"]]
+    assert set(post["weld_group"]["members"]) == {post["part_number"], bracket["part_number"]}
+    assert post["weld_group"]["assumed"] is False
+    assert post["weld_group"]["basis"] == "a stated joint"
+    assert post["weld_joint_count"] == 7, "4 posts + 4 brackets = 8 pieces, 7 joints"
+    assert bracket["weld_charged_on"] == post["part_number"]
+    assert rim["weld_group"]["assumed"] is True and rim["weld_joint_count"] == 1, (
+        "rim + rail: 2 pieces, 1 joint, said to be an assumption")
+    assert not rim.get("weld_charged_on") and not post.get("weld_charged_on")
+
+
+def test_ironwood_is_timber_not_iron():
+    import material_preservation as mp
+    assert not mp.is_metal("IRONWOOD") and not mp.is_metal("STEELWOOD FINISH")
+    assert mp.is_metal("CAST IRON") and mp.is_metal("ZINTEC") and mp.is_metal("BRASS")
+    answer = _hpp()
+    answer["parts"].append(_part("IRONWOOD TRIM", "IRONWOOD", ["saw", "welding"], qty=2))
+    _a, unit, parts, n = _records(answer)
+    trim = n["IRONWOOD TRIM"]
+    assert not trim.get("weld_charged_on") and not trim.get("weld_group")
+    assert trim["part_number"] not in n["HALO RING TOP RIM"]["weld_group"]["members"]
+
+
+def test_the_steel_members_coat_set_up_is_booked_once():
+    """Each member keeps its coat; the sheet books one set-up per department, material and
+    gauge, so three 3 mm steel members share one P.Coat row."""
+    import wb_populate
+    keys = {wb_populate.labour_group_key("powder_coating", "P.Coat", pn, "MILD STEEL", 3.0)
+            for pn in ("HPP-CPT05", "HPP-CPT06", "HPP-CPT07")}
+    assert len(keys) == 1
 
 
 def test_the_host_is_charged_weld_minutes():

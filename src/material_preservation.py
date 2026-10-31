@@ -88,6 +88,34 @@ def material_question(part: Dict[str, Any]) -> Optional[str]:
             f"line is relied on")
 
 
+# The metals, as whole words (D-605a): the normaliser names steel, stainless and aluminium;
+# these are the metals it does not name. "IRONWOOD" is a timber and "STEELWOOD" a finish.
+_METAL_WORDS = ("STEEL", "STAINLESS", "ALUMINIUM", "ALUMINUM", "ZINTEC", "GALVANISED",
+                "GALVANIZED", "GALV", "BRASS", "BRONZE", "COPPER", "IRON", "ZINC", "CR4",
+                "TITANIUM", "GUNMETAL")
+_METAL_KEYS = frozenset({"MILD_STEEL", "STAINLESS_STEEL", "ALUMINIUM", "ALUMINUM",
+                         "GALVANISED_STEEL", "ZINTEC", "BRASS", "COPPER"})
+
+
+def is_metal(material: Any) -> bool:
+    """Is this material a metal? One controlled answer, by whole words (D-605a).
+
+    The normaliser's own key decides first: a material it names as steel, stainless or
+    aluminium is metal, and one it names as board, timber or plastic is not. Otherwise a
+    metal word must stand as a word, so IRONWOOD and STEELWOOD are not metal."""
+    name = " ".join(str(material or "").upper().replace("_", " ").split())
+    if not name:
+        return False
+    try:
+        from json_normaliser import _key_pattern, normalise_material
+        key = str(normalise_material(name) or "").upper()
+    except Exception:                                                # noqa: BLE001
+        return False
+    if key:
+        return key in _METAL_KEYS
+    return any(_key_pattern(w).search(name) for w in _METAL_WORDS)
+
+
 def sheet_steel_can_price(material: Any) -> bool:
     """True when the Sheet Steel block's one mild-steel rate is this material's rate: a part
     whose material was never read, or a material the block's steel family covers."""
