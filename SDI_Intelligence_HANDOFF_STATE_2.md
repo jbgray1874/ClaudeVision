@@ -57,7 +57,17 @@ that has pushed engine work says so plainly, and the sync is done from the lapto
     git merge-base --is-ancestor <commit> HEAD; if ($?) { "fixes in" } else { "NOT in" }
 
 Stop there unless it prints "fixes in"; if the merge reports a conflict, stop and send its output,
-and never force-push or discard anything. Then publish and restart:
+and never force-push or discard anything.
+
+When the session has ALSO pushed portal work to `jbgray1874`'s `claude/app-portal-main-2026` (only
+with JG's permission, as D-613's guard change was on 1 Nov 2026), that branch is merged the same way,
+after checking the laptop already holds the portal commit it was built on, so nothing older rides in:
+
+    git fetch https://github.com/jbgray1874/ClaudeVision.git claude/app-portal-main-2026
+    git merge-base --is-ancestor <portal base> HEAD; if ($?) { git merge --no-edit FETCH_HEAD } else { "STOP: send  git log --oneline -5 FETCH_HEAD" }
+    git merge-base --is-ancestor <portal commit> HEAD; if ($?) { "fixes in" } else { "NOT in" }
+
+Then publish and restart:
 
     git push origin HEAD
     git fetch origin main-2026
