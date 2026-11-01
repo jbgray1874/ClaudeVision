@@ -745,6 +745,18 @@ def walkthrough_page(token: str, request: Request):
                         content={"detail": "sdi-walkthrough.html is not next to app.py"})
 
 
+# ONE VOICE SCRIPT FOR EVERY ESTIMATING PAGE (D-622): the e-mail page, the desk page and the
+# phone ask by voice and read answers aloud through the same code. Static, no job data in it.
+_VOICE_JS = Path(__file__).with_name("sdi-voice.js")
+
+
+@app.get("/estimating/sdi-voice.js")
+def estimating_voice_script():
+    if _VOICE_JS.exists():
+        return FileResponse(str(_VOICE_JS), media_type="text/javascript", headers=_PAGE_HEADERS)
+    return JSONResponse(status_code=404, content={"detail": "sdi-voice.js is not next to app.py"})
+
+
 # THE TECHNICAL DESIGN WORKFLOW MAPS. Two standalone pages from Technical Design (full and
 # compact), served from workflows/ beside this file so they travel with the portal to every
 # box it runs on. A fixed list, not a path parameter read from disk: nothing a URL names can

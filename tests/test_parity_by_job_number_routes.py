@@ -1,15 +1,14 @@
-"""The service routes for parity by job number (D-619): find, compare one, search, a period.
+"""The service routes for parity by job number (D-619, D-621), and the runner's filing.
 
 The routes run src/parity_job.py in the engine's Python; here that is this interpreter, with
-the three shares in a temporary folder, so find and search are the real thing end to end. The
-comparison itself needs real workbooks and is tested in test_parity_by_job_number.py; here the
-run route is checked for what it passes on and what it hands back.
+the three shares in a temporary folder, so find, search and a preview are the real thing end to
+end. A background comparison is started with Popen stubbed, and its status file written as the
+command line writes it.
 """
 from __future__ import annotations
 
 import json
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -35,6 +34,7 @@ def shares(api, tmp_path, monkeypatch):
         monkeypatch.setenv(name, str(path))
     monkeypatch.setattr(er, "_ENGINE_PYTHON", sys.executable)
     monkeypatch.setattr(er, "PARITY_ROOT", parity)
+    er._PARITY_RUNNING.clear()
     sheet = _touch(manual / "2026" / "Acme" / "12677 frame" / "12677-01-GA ISS 2.xls")
     run = aisheets / "Acme" / "12677-01-GA" / "2026-10-31 11-00-00 (1 off)"
     book = _touch(run / "12677_20261031_110000.xlsx")
@@ -42,12 +42,29 @@ def shares(api, tmp_path, monkeypatch):
     return er, sheet, book, parity
 
 
-def test_find_lists_both_sides_with_links(shares):
+@pytest.fixture()
+def popen(shares, monkeypatch):
+    er = shares[0]
+    started = []
+
+    class FakePopen:
+        def __init__(self, cmd, **kw):
+            started.append(cmd)
+    monkeypatch.setattr(er.subprocess, "Popen", FakePopen)
+    return started
+
+
+def _status_path(cmd):
+    return Path(cmd[cmd.index("--status-file") + 1])
+
+
+def test_find_lists_both_sides_with_links_and_the_decision(shares):
     er, sheet, book, _ = shares
     body = er.parity_find(job="12677-01-GA")
     assert body["manual"][0]["path"] == str(sheet)
     assert body["manual"][0]["url"].startswith("/api/file?path=")
     assert body["ai"][0]["workbook"] == str(book)
+    assert body["client"] == "Acme" and body["decision"]["clear"] is True
 
 
 def test_find_without_a_job_number_is_a_400_in_plain_words(shares):
@@ -65,66 +82,85 @@ def test_a_hand_picked_sheet_outside_the_shares_is_refused(shares):
     assert caught.value.status_code == 403
 
 
-def test_comparing_one_job_passes_the_choices_and_links_the_filed_files(shares, monkeypatch):
+def test_one_comparison_runs_in_the_background_and_its_result_carries_links(shares, popen):
     er, sheet, book, parity = shares
-    seen = {}
-
-    def fake(args, timeout=300):
-        seen["args"] = args
-        return {"folder": str(parity / "Acme" / "12677-01-GA" / "2026-11-01 14-05-00"),
-                "report_html": "12677.full_parity.html", "bundle_json": "b.json",
-                "bundle_csv": "", "manual": {"copied_as": "manual - x.xls"},
-                "ai": {"copied_as": "ai - y.xlsx"}, "headline": {"status": "match"}}
-    monkeypatch.setattr(er, "_parity_job", fake)
     body = er.parity_job_run(er.ParityJobRequest(job="12677-01-GA", manual_path=str(sheet),
-                                                 ai_path=str(book)))
-    assert seen["args"][:2] == ["job", "12677-01-GA"]
-    assert ["--manual", str(sheet)] == seen["args"][seen["args"].index("--manual"):][:2]
-    assert ["--ai", str(book)] == seen["args"][seen["args"].index("--ai"):][:2]
-    assert "12677.full_parity.html" in body["report_url"]
-    assert "manual%20-%20x.xls" in body["manual_url"] and "ai%20-%20y.xlsx" in body["ai_url"]
-    assert body["bundle_csv_url"] is None
+                                                 ai_path=str(book), client="Acme"))
+    cmd = popen[0]
+    assert body["started"] is True and body["status_url"].endswith(body["task_id"])
+    assert cmd[cmd.index("--manual") + 1] == str(sheet) and cmd[cmd.index("--ai") + 1] == str(book)
+    assert cmd[cmd.index("--client") + 1] == "Acme"
+    assert er.parity_task_status(body["task_id"])["state"] == "starting"
+    folder = parity / "Acme" / "12677-01-GA" / "2026-11-01 14-05-00_ab12cd34"
+    _status_path(cmd).write_text(json.dumps({"state": "done", "finished": True, "result": {
+        "folder": str(folder), "report_html": "12677.full_parity.html", "bundle_json": "b.json",
+        "bundle_csv": "", "manual": {"copied_as": "manual/x.xls"},
+        "ai": {"copied_as": "ai/y.xlsx"}, "outcome": "match"}}))
+    done = er.parity_task_status(body["task_id"])["result"]
+    assert "12677.full_parity.html" in done["report_url"]
+    assert done["manual_url"].endswith("_ab12cd34/manual/x.xls")
+    assert done["ai_url"].endswith("_ab12cd34/ai/y.xlsx")
+    assert done["bundle_csv_url"] is None
 
 
-def test_reports_lists_what_has_been_filed_and_the_periods(shares):
+def test_the_same_comparison_asked_again_while_running_is_not_started_twice(shares, popen):
+    er, sheet, book, _ = shares
+    req = er.ParityJobRequest(job="12677-01-GA", manual_path=str(sheet), ai_path=str(book))
+    first = er.parity_job_run(req)
+    again = er.parity_job_run(req)
+    assert again["already_running"] is True and again["task_id"] == first["task_id"]
+    assert len(popen) == 1
+    _status_path(popen[0]).write_text(json.dumps({"state": "done", "finished": True}))
+    assert er.parity_job_run(req)["started"] is True and len(popen) == 2
+
+
+def test_an_ambiguous_choice_comes_back_with_the_candidates_to_choose_from(shares, popen):
+    er = shares[0]
+    body = er.parity_job_run(er.ParityJobRequest(job="12677-01-GA"))
+    _status_path(popen[0]).write_text(json.dumps({
+        "state": "choose", "finished": True, "choose": True, "error": "2 sheets are equally likely",
+        "candidates": [{"path": r"\\srv\Manual\a.xls"}, {"path": r"\\srv\Manual\b.xls"}]}))
+    status = er.parity_task_status(body["task_id"])
+    assert status["state"] == "choose" and status["candidates"][0]["url"].startswith("/api/file?path=")
+
+
+def test_reports_lists_what_has_been_filed_by_outcome_and_the_periods(shares):
     er, _, _, parity = shares
-    folder = parity / "Acme" / "12677-01-GA" / "2026-11-01 14-05-00"
-    _touch(folder / "parity_index.json", json.dumps({
-        "job": "12677", "drawing": "12677-01-GA", "client": "Acme",
-        "stamp": "2026-11-01 14-05-00", "report_html": "r.html",
-        "manual": {"copied_as": "manual - a.xls"}, "ai": {"copied_as": "ai - b.xlsx"}}))
+    for name, outcome in (("2026-11-01 14-05-00_aaaa1111", "match"),
+                          ("2026-11-01 15-05-00_bbbb2222", "fail")):
+        _touch(parity / "Acme" / "12677-01-GA" / name / "parity_index.json", json.dumps({
+            "job": "12677", "drawing": "12677-01-GA", "client": "Acme",
+            "stamp": name[:19], "report_html": "r.html", "outcome": outcome,
+            "manual": {"copied_as": "manual/a.xls"}, "ai": {"copied_as": "ai/b.xlsx"}}))
     period = parity / "_periods" / "2026-10-01 to 2026-10-31 (run 2026-11-01 15-00-00)"
-    _touch(period / "period_summary.json", json.dumps({"start": "2026-10-01",
-                                                       "end": "2026-10-31", "compared": 3}))
+    _touch(period / "period_summary.json", json.dumps({"kind": "period", "start": "2026-10-01",
+                                                       "end": "2026-10-31",
+                                                       "stats": {"compared": 3}}))
     body = er.parity_reports(q="acme")
-    assert [r["drawing"] for r in body["reports"]] == ["12677-01-GA"]
+    assert [r["outcome"] for r in body["reports"]] == ["fail", "match"]
+    assert [r["outcome"] for r in er.parity_reports(outcome="match")["reports"]] == ["match"]
     assert "r.html" in body["reports"][0]["report_url"]
     assert body["periods"][0]["compared"] == 3
-    assert "period_summary.html" in body["periods"][0]["summary_url"]
-    assert er.parity_reports(q="nothing-like-it")["reports"] == []
+    assert "period_summary.portal.html" in body["periods"][0]["summary_url"]
+    with pytest.raises(er.HTTPException) as caught:
+        er.parity_reports(start="1/10/26")
+    assert caught.value.status_code == 400
 
 
-def test_a_period_runs_in_the_background_and_its_progress_is_read_back(shares, monkeypatch):
+def test_a_period_runs_in_the_background_with_its_filters(shares, popen):
     er = shares[0]
-    started = []
-
-    class FakePopen:
-        def __init__(self, cmd, **kw):
-            started.append(cmd)
-    monkeypatch.setattr(er.subprocess, "Popen", FakePopen)
-    body = er.parity_period(er.ParityPeriodRequest(start="2026-10-01", end="2026-10-31"))
-    pid = body["period_id"]
-    cmd = started[0]
-    assert cmd[cmd.index("--from") + 1] == "2026-10-01" and "--status-file" in cmd
-    assert er.parity_period_status(pid)["done"] == 0
-    # The CLI writes the same file as it goes; here, its last write.
-    status = Path(cmd[cmd.index("--status-file") + 1])
-    status.write_text(json.dumps({"finished": True, "done": 1, "of": 1,
-                                  "summary_html": r"\\srv\parity\_periods\x\period_summary.html",
-                                  "rows": [{"folder": r"\\srv\parity\Acme\1",
-                                            "report": "r.html", "outcome": "compared"}]}))
-    done = er.parity_period_status(pid)
-    assert done["finished"] is True and "period_summary.html" in done["summary_url"]
+    body = er.parity_period(er.ParityPeriodRequest(start="2026-10-01", end="2026-10-31",
+                                                   client="Acme", job="12677"))
+    cmd = popen[0]
+    assert cmd[cmd.index("--from") + 1] == "2026-10-01" and cmd[cmd.index("--client") + 1] == "Acme"
+    assert cmd[cmd.index("--job") + 1] == "12677" and body["period_id"] == body["task_id"]
+    _status_path(cmd).write_text(json.dumps({
+        "finished": True, "done": 1, "of": 1,
+        "summary_html": r"\\srv\parity\_periods\x\period_summary.html",
+        "summary_portal_html": r"\\srv\parity\_periods\x\period_summary.portal.html",
+        "rows": [{"folder": r"\\srv\parity\Acme\1", "report": "r.html", "outcome": "match"}]}))
+    done = er.parity_period_status(body["task_id"])
+    assert "period_summary.portal.html" in done["summary_url"]
     assert "r.html" in done["rows"][0]["report_url"]
 
 
@@ -135,11 +171,30 @@ def test_a_period_preview_answers_at_once(shares):
     assert body["rows"][0]["outcome"] == "would compare" and body["preview"] is True
 
 
-def test_an_unknown_or_malformed_period_id_is_a_404(shares):
+def test_two_periods_are_compared_in_the_background(shares, popen):
     er = shares[0]
-    for pid in ("0123456789ab", "../../etc"):
+    body = er.parity_two_periods(er.ParityTwoPeriodsRequest(
+        a_start="2026-09-01", a_end="2026-09-30", b_start="2026-10-01", b_end="2026-10-31",
+        client="Acme"))
+    cmd = popen[0]
+    assert cmd[1].endswith("parity_job.py") and cmd[2] == "periods"
+    assert cmd[cmd.index("--a-from") + 1] == "2026-09-01" and cmd[cmd.index("--b-to") + 1] == "2026-10-31"
+    assert body["started"] is True
+
+
+def test_two_periods_preview_answers_at_once(shares):
+    er = shares[0]
+    preview = er.parity_two_periods(er.ParityTwoPeriodsRequest(
+        a_start="2026-09-01", a_end="2026-09-30", b_start="2026-10-01", b_end="2026-10-31",
+        preview=True))
+    assert preview["rows_a"] == [] and preview["rows_b"][0]["outcome"] == "would compare"
+
+
+def test_an_unknown_or_malformed_task_id_is_a_404(shares):
+    er = shares[0]
+    for tid in ("0123456789ab", "../../etc"):
         with pytest.raises(er.HTTPException) as caught:
-            er.parity_period_status(pid)
+            er.parity_task_status(tid)
         assert caught.value.status_code == 404
 
 
@@ -153,9 +208,21 @@ def test_a_run_with_a_manual_estimate_tells_the_runner_where_to_file_its_parity(
     er.start(req)
     job = _check_in(er)["run"]
     assert job["manual_workbook"] == str(sheet) and job["parity_root"] == str(er.PARITY_ROOT)
+    assert job["compare_with_manual"] is False
 
 
-def test_a_run_without_one_files_no_parity(api):
+def test_a_run_asked_to_compare_when_it_finishes_tells_the_runner_so(api):
+    er, root = api
+    from test_estimate_queue import _check_in, _request
+    _check_in(er)
+    req = _request(er, root)
+    req.compare_with_manual = True
+    er.start(req)
+    job = _check_in(er)["run"]
+    assert job["compare_with_manual"] is True and job["parity_root"] == str(er.PARITY_ROOT)
+
+
+def test_a_run_without_either_files_no_parity(api):
     er, root = api
     from test_estimate_queue import _check_in, _request
     _check_in(er)
@@ -180,24 +247,24 @@ def _filed(tmp_path):
             {"name": "12677.json", "path": str(run / "12677.json")}]
 
 
+class _Done:
+    def __init__(self, code, body):
+        self.returncode, self.stdout, self.stderr = code, json.dumps(body), ""
+
+
 def test_the_runner_files_the_comparison_with_the_engines_workbook(tmp_path, monkeypatch):
     runner = _runner()
     filed = _filed(tmp_path)
     manual = _touch(tmp_path / "Manual" / "12677.xls")
     calls = []
 
-    class Done:
-        returncode = 0
-        stdout = json.dumps({"folder": str(tmp_path / "parity" / "Acme" / "x")})
-        stderr = ""
-
     def fake_run(cmd, **kw):
         calls.append((cmd, kw["env"]["SDI_PARITY_ROOT"]))
-        return Done()
+        return _Done(0, {"folder": str(tmp_path / "parity" / "Acme" / "x")})
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
     log = []
-    job = {"run_id": "abc123", "drawing_number": "12677-01-GA", "manual_workbook": str(manual),
-           "parity_root": str(tmp_path / "parity")}
+    job = {"run_id": "abc123", "drawing_number": "12677-01-GA", "client": "Acme",
+           "manual_workbook": str(manual), "parity_root": str(tmp_path / "parity")}
     folder = runner.file_parity(job, filed, ROOT, Path(sys.executable), log)
     cmd, root = calls[0]
     assert folder.endswith("x") and root == str(tmp_path / "parity")
@@ -205,6 +272,23 @@ def test_the_runner_files_the_comparison_with_the_engines_workbook(tmp_path, mon
     assert cmd[cmd.index("--manual") + 1] == str(manual)
     assert cmd[cmd.index("--made-by") + 1] == "run abc123"
     assert log == [f"[parity] comparison filed to {folder}"]
+
+
+def test_compare_when_finished_finds_the_sheet_and_an_unclear_one_is_left_to_a_person(tmp_path, monkeypatch):
+    runner = _runner()
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return _Done(3, {"error": "2 sheets are equally likely", "choose": True})
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    log = []
+    job = {"run_id": "abc123", "drawing_number": "12677-01-GA", "client": "Acme",
+           "manual_workbook": "", "compare_with_manual": True,
+           "parity_root": str(tmp_path / "parity")}
+    assert runner.file_parity(job, _filed(tmp_path), ROOT, Path(sys.executable), log) == ""
+    assert "--manual" not in calls[0] and calls[0][calls[0].index("--client") + 1] == "Acme"
+    assert "not a clear choice" in log[0] and "Choose it on the parity card" in log[0]
 
 
 def test_a_comparison_that_fails_is_logged_and_the_run_carries_on(tmp_path):
@@ -218,7 +302,7 @@ def test_a_comparison_that_fails_is_logged_and_the_run_carries_on(tmp_path):
     assert log and log[0].startswith("[parity] NOT filed to the parity folder")
 
 
-def test_no_manual_estimate_or_no_parity_root_files_nothing(tmp_path, monkeypatch):
+def test_no_manual_and_no_compare_or_no_parity_root_files_nothing(tmp_path, monkeypatch):
     runner = _runner()
     monkeypatch.setattr(runner.subprocess, "run", lambda *a, **k: pytest.fail("not called"))
     log = []

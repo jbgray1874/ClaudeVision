@@ -1,67 +1,110 @@
-"""Ask by voice or by typing; hear the answer, read it, or both (D-620).
+"""Ask by voice or by typing; always see the answer, hear it too if wanted (D-620, D-622).
 
 JG, 1 Nov 2026: "can the prompting be by voice user only, or text only? both ways would be
-ideal. summary voiced or texted back or both".
+ideal. summary voiced or texted back or both". The review: type or speak; show the recognised
+words so job numbers can be corrected; always display the written answer and its source;
+Listen / Stop with optional automatic spoken replies; speak the same saved answer; reuse the
+AM CRM's speech because browser recognition alone is not consistently supported.
 
-The walkthrough page uses the browser's own speech services. These checks hold the page to the
-choices it offers; the flow itself was driven in Chromium with a stand-in microphone and speech
-engine when it was written (spoken question asked, answer read sentence by sentence with
-"£421.37" read whole, spoken-only folds the words away, text-only reads nothing).
+One script, /estimating/sdi-voice.js, does the speech for every estimating page. When it was
+written it was driven in Chromium: the browser path (words into the box, nothing asked until
+Ask; answer shown, Listen, automatic reading when ticked; "£421.37" read whole), the server
+voice path (the CRM's /speak called, the device voice used when playback fails) and the server
+recording path with Chromium's fake microphone (a 16 kHz WAV posted to the CRM's /transcribe,
+the words into the box, nothing asked).
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PAGE = (ROOT / "sdi-intelligence-backend" / "sdi-walkthrough.html").read_text(encoding="utf-8")
+BACKEND = ROOT / "sdi-intelligence-backend"
+PAGE = (BACKEND / "sdi-walkthrough.html").read_text(encoding="utf-8")
+VOICE = (BACKEND / "sdi-voice.js").read_text(encoding="utf-8")
+APP = (BACKEND / "app.py").read_text(encoding="utf-8")
+ROUTES = (BACKEND / "estimate_routes.py").read_text(encoding="utf-8")
+sys.path.insert(0, str(ROOT / "tests"))
 
+
+# ── the shared script ───────────────────────────────────────────────────────────────────
+
+def test_one_script_serves_every_estimating_page():
+    assert '@app.get("/estimating/sdi-voice.js")' in APP
+    assert 'media_type="text/javascript"' in APP
+    assert '<script src="/estimating/sdi-voice.js"></script>' in PAGE
+
+
+def test_it_reuses_the_crm_speech_and_falls_back_to_the_browser():
+    assert 'fetch("/api/voicecrm/transcribe"' in VOICE
+    assert 'fetch("/api/voicecrm/speak"' in VOICE
+    assert "window.SpeechRecognition || window.webkitSpeechRecognition" in VOICE
+    # iPhones, and browsers with no recognition, record for the service where it is set up.
+    assert 'ST.speech_stt === "ios" && (IOS || !SR)' in VOICE
+    # A server voice that cannot play falls back to the device's own.
+    assert ".catch(function () { if (playing === (btn || null)) deviceVoice(text, btn); });" in VOICE
+
+
+def test_the_recording_is_the_crm_format():
+    assert "encodeWav(chunks, ctx.sampleRate, 16000)" in VOICE
+    assert '"Content-Type": "audio/wav"' in VOICE
+
+
+def test_figures_are_read_whole():
+    assert 'replace(/([.!?])\\s+/g, "$1\\u0000")' in VOICE
+
+
+def test_speech_status_names_only_the_speech_facts(api):
+    er, _ = api
+    body = er.speech_status()
+    assert set(body) == {"speech_ready", "speech_stt", "speech_tts"}
+
+
+# ── the e-mail page ─────────────────────────────────────────────────────────────────────
 
 def test_a_question_can_be_spoken_or_typed():
     assert '<button id="micBtn" type="button" class="ghost">Speak</button>' in PAGE
-    assert '<textarea id="question"' in PAGE and '$("askBtn").onclick = () => ask("text");' in PAGE
-    assert "window.SpeechRecognition || window.webkitSpeechRecognition" in PAGE
-    assert 'rec.lang = "en-GB"' in PAGE
-    assert 'ask("voice")' in PAGE, "a spoken question is asked when the speaker stops"
+    assert '<textarea id="question"' in PAGE and '$("askBtn").onclick = ask;' in PAGE
 
 
-def test_a_browser_without_recognition_says_what_to_do_instead():
-    assert "This browser cannot take a spoken question" in PAGE
-    assert "key on the keyboard types what you say into the box; then tap Ask." in PAGE
-    assert "The microphone is blocked for this page" in PAGE
+def test_the_recognised_words_are_checked_before_anything_is_asked():
+    """A misheard job number asked about would be answered about the wrong job."""
+    listen = PAGE.split("function listen(){", 1)[1].split("\n}\n", 1)[0]
+    assert "ask(" not in listen
+    assert "Check it, especially any job number, then tap Ask." in listen
+    assert "Never submits" in VOICE
 
 
-def test_answers_come_back_as_text_spoken_or_both_and_the_choice_is_remembered():
-    for value in ("auto", "text", "voice", "both"):
-        assert f'<input type="radio" name="reply" value="{value}">' in PAGE
-    assert 'store.set("sdi.walkthrough.reply", replyMode)' in PAGE
-    assert 'return askedBy === "voice" ? "both" : "text";' in PAGE, \
-        "left on 'the way I asked', a spoken question is answered aloud and on screen"
-    # Browser storage may be refused; the page must still work.
+def test_the_written_answer_and_its_source_are_always_shown():
+    assert "Show the words" not in PAGE, "spoken-only no longer folds the answer away"
+    assert 'src.textContent = "Source: "' in PAGE
+
+
+def test_every_answer_has_listen_and_reading_aloud_is_optional_and_remembered():
+    assert 'sayBtn.textContent = "Listen"' in PAGE
+    assert '<input type="checkbox" id="autoRead">' in PAGE
+    assert 'if($("autoRead").checked) V.speak(spoken, sayBtn);' in PAGE
+    assert 'store.set("sdi.walkthrough.autoread"' in PAGE
     assert "try{ return localStorage.getItem(k); }catch(e){ return null; }" in PAGE
 
 
-def test_spoken_only_folds_the_words_away_rather_than_dropping_them():
-    assert '<summary>Show the words</summary>' in PAGE
-    assert 'if(mode === "voice" && SYNTH)' in PAGE
-
-
-def test_the_record_figures_are_read_after_the_answer_and_figures_stay_whole():
+def test_the_same_saved_answer_is_spoken():
     assert '" From the record: " + j.recorded.join(" ")' in PAGE
-    assert 'replace(/([.!?])\\s+/g, "$1\\u0000")' in PAGE, \
-        "a sentence ends at a stop followed by a space, so £421.37 is one figure"
+    assert 'const spoken = (j.answer || "")' in PAGE
 
 
-def test_every_answer_and_the_commentary_can_be_read_aloud_and_stopped():
-    assert 'sayBtn.textContent = "Read aloud"' in PAGE
-    assert 'id="sayWords"' in PAGE and "say(w.commentary, $(\"sayWords\"))" in PAGE
-    assert 'btn.textContent = "Stop"' in PAGE and "SYNTH.cancel()" in PAGE
+def test_the_commentary_can_be_heard():
+    assert 'id="sayWords"' in PAGE and 'V.speak(w.commentary, $("sayWords"))' in PAGE
 
 
 def test_the_page_says_where_spoken_questions_go():
     flat = " ".join(PAGE.split())
-    assert "Speak uses your browser's own speech service" in flat
-    assert "type the question instead for anything you would not say on a call" in flat
+    assert "Speak uses SDI's speech service where it is set up, otherwise your browser's own" in flat
+    assert "type anything you would not say on a call" in flat
 
 
 def test_the_source_line_says_how_the_question_was_asked():
-    assert '" · asked by " + (askedBy === "voice" ? "voice" : "text")' in PAGE
+    assert '" · asked by " + (by === "voice" ? "voice" : "text")' in PAGE
+
+
+from test_estimate_queue import api  # noqa: E402,F401

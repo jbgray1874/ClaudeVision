@@ -1411,8 +1411,9 @@ def file_parity(job: Dict[str, Any], filed: List[Dict[str, str]], engine_root: P
     Never fails the run: the estimate is filed whatever happens here."""
     root = str(job.get("parity_root") or "").strip()
     manual = str(job.get("manual_workbook") or "").strip()
+    find = not manual and bool(job.get("compare_with_manual"))     # D-621: by job number
     book = _engine_book(filed)
-    if not root or not manual or not book:
+    if not root or not (manual or find) or not book:
         return ""
     cli = Path(engine_root) / "src" / "parity_job.py"
     if not cli.is_file():
@@ -1420,7 +1421,9 @@ def file_parity(job: Dict[str, Any], filed: List[Dict[str, str]], engine_root: P
         return ""
     env = dict(os.environ, SDI_PARITY_ROOT=root)
     cmd = [str(engine_python) if Path(engine_python).is_file() else sys.executable, str(cli),
-           "job", str(job.get("drawing_number") or Path(book).stem), "--manual", manual,
+           "job", str(job.get("drawing_number") or Path(book).stem),
+           *(["--manual", manual] if manual else []),
+           *(["--client", str(job.get("client"))] if job.get("client") else []),
            "--ai", book, "--made-by", f"run {job.get('run_id', '')}", "--json"]
     try:
         proc = subprocess.run(cmd, cwd=str(engine_root), capture_output=True, text=True,
@@ -1435,6 +1438,10 @@ def file_parity(job: Dict[str, Any], filed: List[Dict[str, str]], engine_root: P
         body = json.loads(line) if line else {}
     except ValueError:
         body = {}
+    if proc.returncode == 3:
+        log.append(f"[parity] NOT compared: the manual estimate is not a clear choice "
+                   f"({str(body.get('error') or '')[:300]}). Choose it on the parity card.")
+        return ""
     if proc.returncode != 0 or not body.get("folder"):
         why = body.get("error") or ((proc.stderr or "").strip().splitlines() or ["no answer"])[-1]
         log.append(f"[parity] NOT filed to the parity folder: {str(why)[:300]}")
