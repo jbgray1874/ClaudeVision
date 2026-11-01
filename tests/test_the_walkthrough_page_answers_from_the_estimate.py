@@ -194,8 +194,11 @@ def test_the_email_carries_the_button(service, monkeypatch):
     er._email_finished_run(run.as_json(), run.deliverables, ["james.gray@wearesdi.com"],
                            False, True)
     url = run.as_json()["walkthrough_url"]
-    assert f'href="{url}"' in sent["html"] and "Listen to the walkthrough" in sent["html"]
-    assert sent["text"].startswith(f"Listen to the walkthrough and ask about this estimate: {url}")
+    # D-613: the ask button leads and opens the page at its question box.
+    assert f'href="{url}#ask"' in sent["html"] and f'href="{url}#listen"' in sent["html"]
+    assert sent["html"].index("Ask a question") < sent["html"].index("Listen to the walkthrough")
+    assert sent["text"].startswith(f"Ask a question about this estimate: {url}#ask\n"
+                                   f"Listen to the walkthrough: {url}#listen")
 
 
 def test_the_button_goes_inside_the_notes_own_frame():
@@ -205,7 +208,7 @@ def test_the_button_goes_inside_the_notes_own_frame():
     note = ew.email_button({"html": '<div style="x"><p>Here is the estimate</p></div>',
                             "text": "Here is the estimate"}, "http://PC:8071/estimating/walkthrough/t")
     assert note["html"].startswith('<div style="x"><p style="margin:14px 0 4px"><a href=')
-    assert note["html"].index("Listen to the walkthrough") < note["html"].index("Here is")
+    assert note["html"].index("Ask a question") < note["html"].index("Here is")
 
 
 # ── the question box ───────────────────────────────────────────────────────────────────

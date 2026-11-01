@@ -3296,6 +3296,35 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             "outstanding lines below are settled.</p>"
             if provisional else "</p>")
 
+    # THE PRICE AT EVERY QUANTITY, WHERE THE EYE LANDS (D-613). JG, 1 Nov 2026: the e-mail
+    # should carry "a detailed but readable summary of the estimate across the units priced".
+    # The quantity table sat in §1, under the panel and a paragraph of working, with material
+    # and labour columns and no order value; on a phone nobody reached it. Here it is first:
+    # the quantity, the sheet's own unit cost at it, and what the order comes to. §1 keeps the
+    # full table and its caveats.
+    _summary = [r for r in ((quantity_sweep or {}).get("rows") or [])
+                if isinstance(r, dict) and _money(r.get("unit")) is not None
+                and _money(r.get("quantity"))]
+    if len(_summary) > 1:
+        _as_run = (quantity_sweep or {}).get("baseline_quantity") or order_qty
+        add('<p style="margin:16px 0 4px"><b>Price at each quantity</b></p>')
+        add(_table(["Quantity", "Unit cost, ex VAT", "Order value, ex VAT"],
+                   [[f"{_fmt(r.get('quantity'))} off"
+                     + (" (as run)" if int(_money(r.get("quantity")) or 0) == int(_as_run)
+                        else ""),
+                     _gbp(r.get("unit")),
+                     _gbp(round(_money(r["unit"]) * _money(r["quantity"]), 2))]
+                    for r in _summary], numeric={1, 2}))
+        add('<p style="color:#5b6b7d;font-size:12px;margin:4px 0 12px">Each unit cost is '
+            "the workbook's own total at that quantity. The order value is that unit cost "
+            "times the quantity. §1 has material and labour at each quantity, and what does "
+            "not step down.</p>")
+    elif _money(totals.get("unit")) is not None and _money(order_qty):
+        add(f'<p style="margin:8px 0">Order value at {_fmt(order_qty)} off: '
+            f"<b>{_e(_gbp(round(_money(totals['unit']) * _money(order_qty), 2)))}</b>"
+            f' <span style="color:#5b6b7d;font-size:12px">the unit cost times the '
+            f"quantity, ex VAT</span></p>")
+
     # WHERE THE PANEL GOES. Built at the very end, from the same values the sections are
     # built from, and put HERE — above everything. See the block by that name below.
     _focus_at = len(h)
