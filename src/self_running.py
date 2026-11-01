@@ -300,6 +300,9 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
                 f"nobody this cycle)")
         say(f"   finished estimates are e-mailed to {', '.join(email_to)}" if email_to else
             "   no saved e-mail list: finished estimates are filed and sent to nobody")
+    if config.LIVE_ENQUIRY_EMAIL_ESTIMATOR:
+        say(f"   and to the estimator each row names, at "
+            f"{', '.join(config.LIVE_ENQUIRY_EMAIL_DOMAINS)} addresses only (D-614)")
 
     def after_each(d: ler.Decision, attempt: Dict[str, Any]) -> None:
         if attempt.get("status") == "done" and d.row.completed_column:

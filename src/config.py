@@ -5449,6 +5449,10 @@ LIVE_ENQUIRY_SHEET_NAMES = ("Live", "Sheet1")
 LIVE_ENQUIRY_COLUMNS = (
     # Before "ai_check", whose \bAI\b would otherwise take an "AI Completed" header (D-608).
     ("ai_completed", r"\bAI\s*COMPLET"),
+    # The estimator's address (D-614): before "estimator", which would otherwise take an
+    # "Estimator Email" header, and before "customer"; a bare "Email" header counts too.
+    ("estimator_email", r"\bESTIMATOR\b.*\bE-?MAIL\b|\bE-?MAIL\b.*\bESTIMATOR\b"
+                        r"|^E-?MAIL(\s+ADDRESS)?$"),
     ("customer", r"\bCUSTOMER\b"),
     ("drawing", r"\bDRAWING\b"),
     ("description", r"\bJOB\b.*\bDESC"),
@@ -5500,6 +5504,18 @@ LIVE_ENQUIRY_MAX_ATTEMPTS = int(os.getenv("SDI_LIVE_ENQUIRY_MAX_ATTEMPTS", "1"))
 # Who the portal e-mails a finished estimate to. Empty: filed, sent to nobody — every book is
 # checked before an estimator sees it.
 LIVE_ENQUIRY_EMAIL_TO = os.getenv("SDI_LIVE_ENQUIRY_EMAIL_TO", "")
+# THE ESTIMATOR NAMED ON THE ROW HEARS TOO (D-614). JG, 1 Nov 2026: the e-mail goes to the page's
+# saved list ("just me now, but I can add anyone") and "we ultimately will drive off the live
+# enquiry s/sheet in addition that has an estimator e-mail on there in one of the columns". When
+# switched on, each row's own estimator address, from an "Estimator Email" column or an address
+# written in the Estimator column, is added to that row's e-mail beside the saved list. Off until
+# JG says: SDI_LIVE_ENQUIRY_EMAIL_ESTIMATOR=1 in .env. Only addresses at these domains are used:
+# the estimate is internal costing, and a typed customer address on the sheet must not receive it.
+LIVE_ENQUIRY_EMAIL_ESTIMATOR = os.getenv(
+    "SDI_LIVE_ENQUIRY_EMAIL_ESTIMATOR", "").strip().lower() in ("1", "yes", "true", "on")
+LIVE_ENQUIRY_EMAIL_DOMAINS = tuple(
+    d.strip().lower().lstrip("@") for d in
+    os.getenv("SDI_LIVE_ENQUIRY_EMAIL_DOMAINS", "wearesdi.com").split(",") if d.strip())
 LIVE_ENQUIRY_LEDGER = os.getenv("SDI_LIVE_ENQUIRY_LEDGER",
                                 str(BASE_DIR / "output" / "live_enquiry" / "ledger.json"))
 # The design area, through the endpoint James will provide. Unset: the share is the only
