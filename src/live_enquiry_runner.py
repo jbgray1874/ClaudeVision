@@ -97,6 +97,8 @@ class EnquiryRow:
     # column at all. A sheet with it runs by its own rule; one without keeps D-420's.
     ai_completed: str = ""
     completed_column: bool = False
+    # The estimator's address, where the sheet has a column for it (D-614).
+    estimator_email: str = ""
 
 
 def _text(value: Any) -> str:
@@ -195,7 +197,8 @@ def rows_from_table(table: Sequence[Sequence[Any]]) -> List[EnquiryRow]:
             due=_as_date(cell("due")), ai_check=_text(cell("ai_check")),
             estimator=_text(cell("estimator")), account_manager=_text(cell("account_manager")),
             quantities=_text(cell("quantities")), notes=notes,
-            ai_completed=_text(cell("ai_completed")), completed_column="ai_completed" in cols))
+            ai_completed=_text(cell("ai_completed")), completed_column="ai_completed" in cols,
+            estimator_email=_text(cell("estimator_email"))))
     return out
 
 
@@ -837,6 +840,38 @@ class Portal:
         return self._call("POST", "/api/estimate/self-running/heartbeat", report)
 
 
+_ADDRESS = re.compile(r"[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def estimator_addresses(row: EnquiryRow) -> Tuple[List[str], List[str]]:
+    """(used, refused): the e-mail addresses the row names for its estimator (D-614), from the
+    Estimator Email column or written in the Estimator column. Used only at the domains in
+    LIVE_ENQUIRY_EMAIL_DOMAINS; any other is refused and said, never sent to."""
+    used: List[str] = []
+    refused: List[str] = []
+    for found in _ADDRESS.findall(f"{row.estimator_email} {row.estimator}"):
+        address = found.strip(".").lower()
+        domain = address.rsplit("@", 1)[-1]
+        target = used if domain in config.LIVE_ENQUIRY_EMAIL_DOMAINS else refused
+        if address not in target:
+            target.append(address)
+    return used, refused
+
+
+def recipients_for(d: Decision, email_to: Optional[Sequence[str]] = None) -> List[str]:
+    """Who this row's finished estimate goes to: the saved list (or LIVE_ENQUIRY_EMAIL_TO), and,
+    when LIVE_ENQUIRY_EMAIL_ESTIMATOR is on, the estimator the row names (D-614)."""
+    base = list(email_to or []) or [a.strip() for a in
+                                     re.split(r"[,;\s]+", config.LIVE_ENQUIRY_EMAIL_TO or "")
+                                     if a.strip()]
+    out: List[str] = []
+    for address in base + (estimator_addresses(d.row)[0]
+                           if config.LIVE_ENQUIRY_EMAIL_ESTIMATOR else []):
+        if address.lower() not in {a.lower() for a in out}:
+            out.append(address)
+    return out
+
+
 def request_body(d: Decision, email_to: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """What the page sends for a pack estimate. The client is the share's folder name — the
     spelling the output tree is filed under — and the drawing number is the row's. `email_to`
@@ -850,8 +885,7 @@ def request_body(d: Decision, email_to: Optional[Sequence[str]] = None) -> Dict[
         "files": [],
         "deliverables": True,
         "method": "both",
-        "email_to": (", ".join(email_to) if email_to
-                     else (config.LIVE_ENQUIRY_EMAIL_TO or None)),
+        "email_to": ", ".join(recipients_for(d, email_to)) or None,
         "email_quote": False,
     }
 
@@ -917,6 +951,18 @@ def run_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: Pa
     save_ledger(ledger_path, ledger)
     say(f"   queued {d.row.drawing} ({d.row.customer}) at {'/'.join(map(str, d.quantities))} "
         f"— run {attempt['run_id']}")
+    _to = recipients_for(d, email_to)
+    attempt["email_to"] = _to
+    say(f"   e-mailed when finished to {', '.join(_to)}" if _to else
+        "   e-mailed to nobody when finished: no saved list and no estimator address")
+    if config.LIVE_ENQUIRY_EMAIL_ESTIMATOR:
+        _used, _refused = estimator_addresses(d.row)
+        if _refused:
+            say(f"   NOT e-mailed to {', '.join(_refused)}: not an address at "
+                f"{', '.join(config.LIVE_ENQUIRY_EMAIL_DOMAINS)}. The estimate is internal.")
+        elif not _used:
+            say(f"   row {d.row.row} names no estimator e-mail address, so only the saved list "
+                f"hears about it")
     deadline = clock() + config.LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES * 60
     while True:
         sleep(poll_seconds)

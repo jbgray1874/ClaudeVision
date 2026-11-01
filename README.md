@@ -181,6 +181,7 @@ python src\main.py --pdf "<pack>.pdf" --generate-ai-spreadsheet --deliverables `
 |------|--------|
 | `SDI_APPLY_DRAWING_FACTS=1` | Apply deterministic drawing-fact overlay |
 | `SDI_LLM_FULL_EXTRACT=1` | Whole-document LLM extract (default-on when `XAI_API_KEY` present) |
+| `SDI_XAI_MODEL` / `SDI_XAI_VISION_MODEL` / `SDI_XAI_IMAGE_MODEL` | The Grok models (D-612): text, the drawing reads (the text model unless set apart) and the quote's picture. Defaults in `src/config.py`: **grok-4.7** and **grok-imagine-image-2.0**. `python src\xai_models.py` checks the account has them |
 | `SKIP_VISION_EXTRACTION=1` | Skip page-image vision pass (faster) |
 | `SCAN_DEBUG=1` | Per-part timing and source diagnostics |
 | `VISION_RENDER_DPI` | Page render DPI for vision/OCR (default **300**, was 144) |
@@ -235,6 +236,8 @@ python src\main.py --pdf "<pack>.pdf" --generate-ai-spreadsheet --deliverables `
 | `SDI_LIVE_ENQUIRY_PASSWORD` | *(Live Enquiry runner)* The workbook's password, if it carries one (needs `msoffcrypto-tool`). `.env` only |
 | `SDI_LIVE_ENQUIRY_ROOT` | *(Live Enquiry runner)* The packs: `<root>\<customer>\<drawing>` (default the UNC `...\AI Estimating\Live Enquiry`) |
 | `SDI_LIVE_ENQUIRY_EMAIL_TO` | *(Live Enquiry runner)* Who the portal e-mails each finished estimate to. **Empty** (default): filed, sent to nobody |
+| `SDI_LIVE_ENQUIRY_EMAIL_ESTIMATOR` | *(AI Estimate Self-Running)* `1` also e-mails each row's own estimator, from an Estimator Email column or an address in the Estimator column, beside the page's saved list (D-614). Default off |
+| `SDI_LIVE_ENQUIRY_EMAIL_DOMAINS` | *(AI Estimate Self-Running)* The only domains a row's estimator address may be at, comma separated (default `wearesdi.com`). Any other address on the sheet is named in the log and never sent the estimate |
 | `SDI_LIVE_ENQUIRY_POLL_MINUTES` / `SDI_LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES` / `SDI_LIVE_ENQUIRY_MAX_ATTEMPTS` | *(Live Enquiry runner)* How often `watch` reads the sheet (**15**), how long it waits on one run before it stops queueing behind it (**240**), and how many tries a failing job gets before it waits for `retry` (**1**) |
 | `SDI_LIVE_ENQUIRY_LEDGER` | *(Live Enquiry runner)* Its record of every run (default `output\live_enquiry\ledger.json`); `live_enquiry_status.csv` is written beside it on every scan |
 | `SDI_DESIGN_AREA_ENDPOINT` | *(Live Enquiry runner)* The design area's endpoint, a second source of packs. **Unset** until it is given; the share is then the only source |
