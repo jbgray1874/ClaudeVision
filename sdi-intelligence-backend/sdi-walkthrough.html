@@ -10,7 +10,13 @@
      estimate may be provisional and nothing here is a customer quotation.
      THE QUESTION BOX LEADS (D-613). JG, 1 Nov 2026: the e-mail's button "takes you to the app
      with the prompt part". On a phone the prices and the box are what fits on the first
-     screen; #ask focuses the box, #listen goes to the player. -->
+     screen; #ask focuses the box, #listen goes to the player.
+     ASK BY VOICE OR BY TYPING, HEAR THE ANSWER, READ IT, OR BOTH (D-620). JG, 1 Nov 2026: "can the
+     prompting be by voice user only, or text only? both ways would be ideal. summary voiced or
+     texted back or both". The browser's own speech services do it: recognition for the
+     question, synthesis for the answer, so nothing is installed and nothing new is sent to
+     this service. Where a browser has no recognition the Speak button says so and the
+     keyboard's own microphone key still works. -->
 <style>
   :root{
     --bg:#0d0d0f; --panel:#121214; --line:#26262b; --ink:#f0efec; --muted:#9b9ba3;
@@ -54,11 +60,20 @@
   .top{ display:flex; justify-content:space-between; align-items:baseline; gap:12px;
         flex-wrap:wrap }
   .top a{ font-size:14px }
+  .askrow{ display:flex; gap:8px; flex-wrap:wrap; align-items:center }
+  .ghost{ background:transparent; color:var(--brand); border:1px solid var(--brand) }
+  .ghost.on{ background:var(--brand); color:#111 }
+  .reply{ display:flex; gap:6px 14px; flex-wrap:wrap; align-items:center; margin-top:10px;
+          font-size:14px }
+  .reply label{ display:flex; gap:5px; align-items:center; cursor:pointer }
+  .say{ margin:6px 0 0; padding:4px 12px; font:500 13px var(--body) }
+  details.words-of{ margin-top:4px } details.words-of summary{ cursor:pointer; color:var(--muted);
+          font-size:13px }
   @media (max-width:560px){
     h1{ font-size:23px }
     main{ padding:18px 14px 48px }
     section{ padding:14px }
-    #ask button#askBtn{ width:100% }
+    #ask .askrow button{ flex:1 }
   }
 </style>
 </head>
@@ -87,8 +102,22 @@
       <button type="button" class="chip">What is still to confirm before this is quoted?</button>
       <button type="button" class="chip">Where does the labour go?</button>
     </div>
-    <textarea id="question" placeholder="Type a question, e.g. Why is 1 off dearer than 10 off?"></textarea>
-    <button id="askBtn" type="button">Ask</button>
+    <textarea id="question" placeholder="Type a question, or tap Speak and ask it, e.g. Why is 1 off dearer than 10 off?"></textarea>
+    <div class="askrow">
+      <button id="askBtn" type="button">Ask</button>
+      <button id="micBtn" type="button" class="ghost">Speak</button>
+    </div>
+    <p class="note" id="micNote" hidden></p>
+    <div class="reply" role="radiogroup" aria-label="How answers come back">
+      <span class="note">Answers come back:</span>
+      <label><input type="radio" name="reply" value="auto"> the way I asked</label>
+      <label><input type="radio" name="reply" value="text"> as text</label>
+      <label><input type="radio" name="reply" value="voice"> spoken</label>
+      <label><input type="radio" name="reply" value="both"> both</label>
+    </div>
+    <p class="note">Speak uses your browser's own speech service (in Chrome that is Google's, on an
+      iPhone Apple's), so type the question instead for anything you would not say on a call.
+      Answers are read aloud on this device.</p>
     <div class="qa" id="answers"></div>
   </section>
 
@@ -99,6 +128,7 @@
 
   <section id="wordsBox" hidden>
     <h2>Commentary</h2>
+    <button type="button" class="ghost say" id="sayWords" hidden>Read aloud</button>
     <div class="words" id="words"></div>
   </section>
 
@@ -134,7 +164,10 @@ async function load(){
       + "</td></tr>").join("");
     $("pricesBox").hidden = false;
   }
-  if(w.commentary){ $("words").textContent = w.commentary; $("wordsBox").hidden = false; }
+  if(w.commentary){
+    $("words").textContent = w.commentary; $("wordsBox").hidden = false;
+    if(SYNTH){ $("sayWords").hidden = false; $("sayWords").onclick = () => say(w.commentary, $("sayWords")); }
+  }
   if((w.files || []).length){
     $("files").innerHTML = w.files.map(n => "<li><a href='" + fileUrl(n) + "' target='_blank' rel='noopener'>"
       + esc(n) + "</a></li>").join("");
@@ -149,7 +182,101 @@ function goToHash(){
   else if(where === "listen" && !$("listen").hidden){ $("listen").scrollIntoView(); }
 }
 
-async function ask(){
+// ── voice (D-620) ───────────────────────────────────────────────────────────────────────
+const RECOG = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+const SYNTH = ("speechSynthesis" in window) ? window.speechSynthesis : null;
+const store = {
+  get(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } },
+  set(k, v){ try{ localStorage.setItem(k, v); }catch(e){} }
+};
+let replyMode = store.get("sdi.walkthrough.reply") || "auto";
+let speaking = null;                       // the button whose words are being read
+
+function replyFor(askedBy){
+  if(replyMode !== "auto") return replyMode;
+  return askedBy === "voice" ? "both" : "text";
+}
+
+function speakable(text){
+  return String(text || "").replace(/[*_#`>|]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function voice(){
+  const all = SYNTH ? SYNTH.getVoices() : [];
+  return all.find(v => /^en-GB/i.test(v.lang) && v.localService)
+      || all.find(v => /^en-GB/i.test(v.lang)) || all.find(v => /^en/i.test(v.lang)) || null;
+}
+
+function stopSpeaking(){
+  if(SYNTH) SYNTH.cancel();
+  if(speaking){ speaking.textContent = "Read aloud"; speaking.classList.remove("on"); speaking = null; }
+}
+
+// SENTENCE BY SENTENCE. One long utterance stops part-way in some browsers, so the words are
+// queued a sentence at a time; Stop clears the queue. A sentence ends at a stop FOLLOWED BY A
+// SPACE, so "£421.37" stays one figure and is read as one.
+function say(text, btn){
+  if(!SYNTH) return;
+  const again = speaking === btn;
+  stopSpeaking();
+  if(again) return;                        // the same button again means stop
+  const parts = speakable(text).replace(/([.!?])\s+/g, "$1\u0000").split("\u0000")
+    .filter(x => x.trim());
+  if(!parts.length) return;
+  const v = voice();
+  if(btn){ speaking = btn; btn.textContent = "Stop"; btn.classList.add("on"); }
+  parts.forEach((part, i) => {
+    const u = new SpeechSynthesisUtterance(part.trim());
+    if(v){ u.voice = v; u.lang = v.lang; } else { u.lang = "en-GB"; }
+    if(i === parts.length - 1) u.onend = () => { if(speaking === btn) stopSpeaking(); };
+    u.onerror = () => { if(speaking === btn) stopSpeaking(); };
+    SYNTH.speak(u);
+  });
+}
+
+let listening = null;
+function listen(){
+  const note = $("micNote");
+  if(!RECOG){
+    note.hidden = false;
+    note.textContent = "This browser cannot take a spoken question. On a phone, the microphone "
+      + "key on the keyboard types what you say into the box; then tap Ask.";
+    return;
+  }
+  if(listening){ listening.stop(); return; }
+  stopSpeaking();
+  const rec = new RECOG();
+  rec.lang = "en-GB"; rec.interimResults = true; rec.continuous = false; rec.maxAlternatives = 1;
+  let heard = "";
+  rec.onresult = e => {
+    let interim = "";
+    for(let i = e.resultIndex; i < e.results.length; i++){
+      const t = e.results[i][0].transcript;
+      if(e.results[i].isFinal) heard += t; else interim += t;
+    }
+    $("question").value = (heard + interim).trim();
+  };
+  rec.onerror = e => {
+    note.hidden = false;
+    note.textContent = (e.error === "not-allowed" || e.error === "service-not-allowed")
+      ? "The microphone is blocked for this page. Allow it in the browser's site settings, or type the question."
+      : e.error === "no-speech" ? "Nothing was heard. Tap Speak and ask again, or type."
+      : "The question was not caught (" + e.error + "). Try again, or type it.";
+  };
+  rec.onend = () => {
+    listening = null;
+    $("micBtn").textContent = "Speak"; $("micBtn").classList.remove("on");
+    if(heard.trim()){ $("question").value = heard.trim(); ask("voice"); }
+  };
+  note.hidden = true;
+  listening = rec;
+  $("micBtn").textContent = "Listening… tap to stop"; $("micBtn").classList.add("on");
+  rec.start();
+}
+
+async function ask(askedBy){
+  askedBy = askedBy === "voice" ? "voice" : "text";
+  const mode = replyFor(askedBy);
   const q = $("question").value.trim();
   if(!q) return;
   const btn = $("askBtn"); btn.disabled = true; btn.textContent = "Asking…";
@@ -164,6 +291,22 @@ async function ask(){
     a.className = "a" + (r.ok && j.status === "answered" ? "" : " note");
     a.textContent = r.ok ? (j.answer || "No answer came back.") : (j.detail || ("Failed (" + r.status + ")"));
     if(r.ok){
+      // SPOKEN, SHOWN, OR BOTH (D-620). Spoken only folds the words away rather than leaving
+      // them out: the figures are still there to check, one tap away. The record's own figures
+      // are read after the explanation, because they are the numbers that count.
+      const spoken = (j.answer || "") + ((j.recorded || []).length ? " From the record: " + j.recorded.join(" ") : "");
+      let sayBtn = null;
+      if(SYNTH){
+        sayBtn = document.createElement("button");
+        sayBtn.type = "button"; sayBtn.className = "ghost say"; sayBtn.textContent = "Read aloud";
+        sayBtn.onclick = () => say(spoken, sayBtn);
+        if(mode === "voice" || mode === "both") say(spoken, sayBtn);
+      }
+      if(mode === "voice" && SYNTH){
+        const fold = document.createElement("details"); fold.className = "words-of";
+        fold.innerHTML = "<summary>Show the words</summary>";
+        item.insertBefore(fold, a); fold.appendChild(a);
+      }
       // D-616: the record's own figures beside the explanation, what the model did not see,
       // and where the answer came from: the run, the record and who answered.
       if((j.recorded || []).length){
@@ -179,8 +322,10 @@ async function ask(){
       src.textContent = "Source: " + (j.record_name || "no record")
         + (j.run_id ? " · run " + j.run_id : "")
         + ((j.sources || []).length ? " · " + j.sources.join(", ") : "")
-        + " · answered by " + (j.model || "nobody: the record figures only");
+        + " · answered by " + (j.model || "nobody: the record figures only")
+        + " · asked by " + (askedBy === "voice" ? "voice" : "text");
       item.appendChild(src);
+      if(sayBtn) item.appendChild(sayBtn);
       $("question").value = "";
     }
   }catch(e){
@@ -188,10 +333,20 @@ async function ask(){
   }
   btn.disabled = false; btn.textContent = "Ask";
 }
-$("askBtn").onclick = ask;
+$("askBtn").onclick = () => ask("text");
+$("micBtn").onclick = listen;
 document.querySelectorAll("#chips .chip").forEach(c => c.onclick = () => {
   $("question").value = c.textContent; ask();
 });
+document.querySelectorAll('input[name="reply"]').forEach(r => {
+  r.checked = r.value === replyMode;
+  r.onchange = () => { replyMode = r.value; store.set("sdi.walkthrough.reply", replyMode); if(replyMode === "text") stopSpeaking(); };
+});
+if(!SYNTH){
+  document.querySelectorAll('input[name="reply"][value="voice"], input[name="reply"][value="both"]')
+    .forEach(r => { r.disabled = true; r.parentElement.title = "This browser cannot read aloud"; });
+}
+if(SYNTH && SYNTH.onvoiceschanged !== undefined) SYNTH.onvoiceschanged = () => {};
 window.addEventListener("hashchange", goToHash);
 $("question").addEventListener("keydown", e => {
   if(e.key === "Enter" && (e.ctrlKey || e.metaKey)) ask();

@@ -76,6 +76,7 @@ except ImportError:                    # loaded by path, without this folder on 
 config = the_service_config(config)   # this service's, even where the engine's holds the name
 import docmgr
 import estimate_email
+import estimate_history
 import estimate_walkthrough
 import quote_release
 import self_running_switch
@@ -420,6 +421,45 @@ def work_in_hand() -> List[Dict[str, Any]]:
         return [{"run_id": r.run_id, "client": r.client,
                  "drawing_number": r.drawing_number, "status": r.status}
                 for r in _RUNS.values() if r.status in ("queued", "running")]
+# ── RESTART-SAFE HISTORY (D-618) ─────────────────────────────────────────────────────────
+# Every run is written to disk at each change of state and read back when the service starts,
+# so a deployment no longer forgets queued, running and finished jobs. See estimate_history.
+_PROGRESS_SAVE_SECONDS = 10.0
+_last_progress_save: Dict[str, float] = {}
+
+
+def _keep(run: "Run") -> None:
+    """Save one run's state. A save that fails is said on the run's log, never raised."""
+    why = estimate_history.save(run)
+    if why:
+        run.line(f"(The run's history could not be saved: {why}. It is safe until the service "
+                 f"restarts.)")
+
+
+def _restore_history() -> int:
+    now = time.time()
+    try:
+        restored = estimate_history.load(Run, now=now)
+    except Exception as exc:                                        # noqa: BLE001
+        print(f"[history] runs could not be restored: {type(exc).__name__}: {exc}", flush=True)
+        return 0
+    for run in restored.values():
+        note = estimate_history.restored_note(run, now)
+        if note:
+            run.line(note)
+        if run.email_result.get("sending"):
+            run.email_result = {"sent": False, "reason": (
+                "the service restarted while this e-mail was being sent, so it is not sent "
+                "again; check the inbox before sending it by hand")}
+            run.line("E-mail: " + run.email_result["reason"] + ".")
+    _RUNS.update(restored)
+    if restored:
+        print(f"[history] restored {len(restored)} run(s) from {estimate_history.store_dir()}",
+              flush=True)
+    return len(restored)
+
+
+_restore_history()
 
 
 def _expire_dead_claims() -> None:
@@ -441,6 +481,7 @@ def _expire_dead_claims() -> None:
             r = _RUNNERS.get(run.runner)
             if r is not None and r.run_id == run.run_id:
                 r.run_id = ""
+            _keep(run)
 
 
 def _release_runs_orphaned_by_a_restart(runner_id: str, process: str) -> None:
@@ -472,6 +513,7 @@ def _release_runs_orphaned_by_a_restart(runner_id: str, process: str) -> None:
             r = _RUNNERS.get(runner_id)
             if r is not None and r.run_id == run.run_id:
                 r.run_id = ""
+            _keep(run)
 
 
 def _online_runners() -> List[Runner]:
@@ -829,6 +871,7 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         run.claimed_by_process = req.process or ""
         runner.run_id = run.run_id
         run.line(f"Claimed by runner {req.hostname or req.runner_id}")
+        _keep(run)
 
     return {"run": {
         "run_id": run.run_id, "client": run.client, "units": run.units,
@@ -858,6 +901,9 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         # the same stamp as its folder in AISheets. Empty: no second copy on this machine.
         "archive_root": str(COMPLETED_BRIEFS_ROOT) if FILE_TO_COMPLETED_BRIEFS else "",
         "archive_stamp": time.strftime("%Y-%m-%d %H-%M-%S", time.localtime(run.queued_at)),
+        # AND THE PARITY FOLDER (D-619), when a manual estimate came with the run: the runner
+        # files the comparison there too, so it is searchable beside the ones run by job number.
+        "parity_root": str(PARITY_ROOT) if run.manual_workbook else "",
     }}
 
 
@@ -1050,9 +1096,16 @@ def progress(run_id: str, req: ProgressRequest,
             run.line(text)
             _check_the_engine_was_told(run, text)
         run.lease_until = now + LEASE_SECONDS
-        r = _RUNNERS.get(req.runner_id)
-        if r is not None:
-            r.last_seen = now
+        # A RUNNER MID-JOB IS A CONNECTED RUNNER (D-618). After a restart of this service the
+        # runner is not in the registry until it next asks for work, and it does not ask while
+        # it works, so the page said "No estimating runner is connected" and refused new jobs
+        # beside a runner that was plainly busy. Its heartbeat puts it back.
+        r = _RUNNERS.setdefault(req.runner_id, Runner(runner_id=req.runner_id))
+        r.last_seen = now
+        r.run_id = run.run_id
+        if now - _last_progress_save.get(run_id, 0.0) >= _PROGRESS_SAVE_SECONDS:
+            _last_progress_save[run_id] = now
+            _keep(run)
         _cancel = run.cancel_requested
     # THE ANSWER TO A HEARTBEAT IS WHERE A CANCELLATION FITS. The runner is a separate
     # process on another machine and cannot be reached; it can only be told something the
@@ -1073,6 +1126,12 @@ def complete(run_id: str, req: CompleteRequest,
             raise HTTPException(404, "No such run.")
         if run.runner != req.runner_id:
             raise HTTPException(409, "That run is claimed by a different runner.")
+        # A FINISH ALREADY RECORDED IS NOT RECORDED TWICE (D-618). The runner reports again
+        # when an answer is lost on the way back; the second report re-made the walkthrough and
+        # sent the e-mail a second time.
+        if (req.status == "done" and run.status == "done" and run.finished_at
+                and run.deliverables):
+            return {"ok": True, "already_recorded": True}
         for text in req.lines:
             run.line(text)
             _check_the_engine_was_told(run, text)
@@ -1115,11 +1174,16 @@ def complete(run_id: str, req: CompleteRequest,
         r = _RUNNERS.get(req.runner_id)
         if r is not None:
             r.last_seen, r.run_id = now, ""
-        _send_to = list(run.email_to)
+        # AT MOST ONCE (D-618): marked as being sent, on disk, before the send starts; a run
+        # whose e-mail was already tried is never sent it again, after a restart or otherwise.
+        _send_to = [] if run.email_result else list(run.email_to)
+        if _send_to:
+            run.email_result = {"sending": True, "at": now}
         _snapshot = run.as_json()
         _quote = run.email_quote
         _provisional = run.status != "done" or _looks_provisional(run)
         _deliverables = list(run.deliverables)
+        _keep(run)
 
     # OUTSIDE THE LOCK. Talking to a mail server takes seconds and can hang; holding the
     # registry lock while it does would stall every other run, the page's polling and the
@@ -1137,6 +1201,7 @@ def complete(run_id: str, req: CompleteRequest,
                     + (f" — {', '.join(_result.get('attached') or []) or 'no attachments'}"
                        if _result.get("sent") else
                        f" — NOT SENT: {_result.get('reason')}"))
+                _keep(_live)
     return {"ok": True}
 
 
@@ -2134,6 +2199,7 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     # without them (D-607).
     with _LOCK:
         _RUNS[run.run_id] = run
+        _keep(run)
     # WHICH CONSTRUCTION THIS RUN PRICES, said where the estimator is looking (D-535): a
     # schedule on file changes what the run is, and a run that silently priced last week's
     # schedule — or silently asked the model again — is the failure this panel exists to end.
@@ -2754,6 +2820,208 @@ async def estimate_parity(
     }
 
 
+# ── Parity by job number (D-619) ─────────────────────────────────────────────
+#
+# JG, 1 Nov 2026: "a new parity option where we can compare one job - can choose / find from
+# file system or name for the tool to search by job number ... we take the most obvious s/sheet
+# candidate and we run a parity against it from our AI estimate with html outputs. the s/sheets
+# that are used are stored at K:\Estimating\Completed\AI Estimating\parity and below this for
+# every run we save down the two s/sheets compared and the parity reports that are available to
+# be searched through in the web page and app ... also, can run a search and comparison between
+# all manual and AI estimates ran across two time periods."
+#
+# The finding, filing and searching live in src/parity_job.py, run in the engine's Python like
+# the parity route above: one place for the rules, the same answer from the command line, the
+# desk page and the phone. These routes only check the key and the paths, and add links.
+# A period can take a while over the share, so it runs in the background and the page reads its
+# progress from a status file in the state folder.
+_PARITY_JOB_CLI = str(_REPO_ROOT / "src" / "parity_job.py")
+PARITY_ROOT = Path(os.getenv(
+    "SDI_PARITY_ROOT",
+    r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\parity"))
+MANUAL_ESTIMATES_ROOT = Path(os.getenv(
+    "SDI_MANUAL_ESTIMATES_ROOT",
+    r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Manual Estimates"))
+_PERIOD_ID = re.compile(r"^[a-f0-9]{12}$")
+
+
+def _parity_job(args: List[str], timeout: int = 300) -> Dict[str, Any]:
+    """Run parity_job.py with --json and return its answer. Its exit 2 is a reason a person can
+    act on (no manual estimate found, a bad date) and comes back as a 400 in its own words."""
+    if not Path(_ENGINE_PYTHON).exists():
+        raise HTTPException(
+            status_code=500,
+            detail=f"Engine python not found at {_ENGINE_PYTHON} — set SDI_ENGINE_PYTHON")
+    env = dict(os.environ)
+    env.setdefault("SDI_PARITY_ROOT", str(PARITY_ROOT))
+    env.setdefault("SDI_MANUAL_ESTIMATES_ROOT", str(MANUAL_ESTIMATES_ROOT))
+    env.setdefault("SDI_ESTIMATE_OUTPUT_ROOT", str(OUTPUT_ROOT))
+    try:
+        proc = subprocess.run([_ENGINE_PYTHON, _PARITY_JOB_CLI, *args, "--json"],
+                              capture_output=True, text=True, timeout=timeout, env=env,
+                              cwd=str(_REPO_ROOT))
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="The parity search timed out on the share")
+    line = next((ln for ln in reversed((proc.stdout or "").splitlines())
+                 if ln.strip().startswith("{")), "")
+    try:
+        body = json.loads(line) if line else {}
+    except ValueError:
+        body = {}
+    if proc.returncode == 2:
+        raise HTTPException(status_code=400, detail=str(body.get("error") or "parity refused"))
+    if proc.returncode != 0:
+        msg = (proc.stderr or proc.stdout or "parity failed").strip().splitlines()
+        raise HTTPException(status_code=500, detail=(msg[-1] if msg else "parity failed")[:400])
+    return body
+
+
+def _file_link(path: Any) -> Optional[str]:
+    return f"/api/file?path={urllib.parse.quote(str(path))}" if path else None
+
+
+def _report_links(idx: Dict[str, Any]) -> Dict[str, Any]:
+    """One filed comparison with links to its report and both sheets."""
+    folder = Path(str(idx.get("folder") or ""))
+
+    def at(name: Any) -> Optional[str]:
+        return _file_link(folder / str(name)) if name and str(folder) else None
+    return {**idx,
+            "report_url": at(idx.get("report_html")),
+            "bundle_json_url": at(idx.get("bundle_json")),
+            "bundle_csv_url": at(idx.get("bundle_csv")),
+            "manual_url": at((idx.get("manual") or {}).get("copied_as")),
+            "ai_url": at((idx.get("ai") or {}).get("copied_as"))}
+
+
+def _parity_path(path: Optional[str], label: str) -> Optional[str]:
+    if not path or not path.strip():
+        return None
+    resolved = _within_a_root(path.strip())
+    if resolved is None:
+        raise HTTPException(status_code=403,
+                            detail=f"That {label} is outside the shares this service may read.")
+    return str(resolved)
+
+
+@router.get("/parity/find")
+def parity_find(job: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """What a comparison of this job would use: every manual workbook for the job number, most
+    obvious first with why, and every AI run of it, newest first."""
+    _check_key(x_sdi_key)
+    body = _parity_job(["find", job.strip()[:80]], timeout=120)
+    for c in body.get("manual") or []:
+        c["url"] = _file_link(c.get("path"))
+    for r in body.get("ai") or []:
+        r["url"] = _file_link(r.get("workbook"))
+    return body
+
+
+class ParityJobRequest(BaseModel):
+    job: str
+    manual_path: Optional[str] = None       # chosen by hand; otherwise the most obvious one
+    ai_path: Optional[str] = None           # chosen by hand; otherwise the newest run
+    read_via_excel: bool = False
+
+
+@router.post("/parity/job")
+def parity_job_run(req: ParityJobRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Compare one job and file both sheets and the report under the parity folder."""
+    who = _check_key(x_sdi_key)
+    args = ["job", req.job.strip()[:80], "--made-by",
+            f"portal{' ' + who if who else ''}"]
+    manual = _parity_path(req.manual_path, "manual estimate")
+    ai = _parity_path(req.ai_path, "AI estimate")
+    if manual:
+        args += ["--manual", manual]
+    if ai:
+        args += ["--ai", ai]
+    if req.read_via_excel:
+        args.append("--read-via-excel")
+    return _report_links(_parity_job(args))
+
+
+@router.get("/parity/reports")
+def parity_reports(q: str = "", start: Optional[str] = None, end: Optional[str] = None,
+                   x_sdi_key: Optional[str] = Header(default=None)):
+    """Filed comparisons, newest first, by job, drawing or client and by date; and the period
+    comparisons already run."""
+    _check_key(x_sdi_key)
+    args = ["search"] + ([q.strip()[:80]] if q.strip() else [])
+    if start:
+        args += ["--from", start]
+    if end:
+        args += ["--to", end]
+    reports = [_report_links(i) for i in _parity_job(args, timeout=120).get("reports") or []]
+    periods = _parity_job(["periods"], timeout=60).get("periods") or []
+    for p in periods:
+        p["summary_url"] = _file_link(p.get("summary_html"))
+    return {"reports": reports, "periods": periods, "parity_root": str(PARITY_ROOT)}
+
+
+class ParityPeriodRequest(BaseModel):
+    start: str
+    end: str
+    preview: bool = False
+    read_via_excel: bool = False
+
+
+def _period_status_file(pid: str) -> Path:
+    return estimate_email.state_dir() / "parity_periods" / f"{pid}.json"
+
+
+@router.post("/parity/period")
+def parity_period(req: ParityPeriodRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Every AI estimate run in the period against its manual estimate. A preview answers at
+    once with what would be compared; a real run starts in the background and returns an id
+    whose progress /parity/period/{id} reports."""
+    _check_key(x_sdi_key)
+    args = ["period", "--from", req.start.strip()[:10], "--to", req.end.strip()[:10]]
+    if req.read_via_excel:
+        args.append("--read-via-excel")
+    if req.preview:
+        return _parity_job(args + ["--preview"])
+    if not Path(_ENGINE_PYTHON).exists():
+        raise HTTPException(
+            status_code=500,
+            detail=f"Engine python not found at {_ENGINE_PYTHON} — set SDI_ENGINE_PYTHON")
+    pid = uuid.uuid4().hex[:12]
+    status = _period_status_file(pid)
+    status.parent.mkdir(parents=True, exist_ok=True)
+    status.write_text(json.dumps({"done": 0, "of": None, "start": req.start, "end": req.end,
+                                  "started_at": time.time()}), encoding="utf-8")
+    env = dict(os.environ)
+    env.setdefault("SDI_PARITY_ROOT", str(PARITY_ROOT))
+    env.setdefault("SDI_MANUAL_ESTIMATES_ROOT", str(MANUAL_ESTIMATES_ROOT))
+    env.setdefault("SDI_ESTIMATE_OUTPUT_ROOT", str(OUTPUT_ROOT))
+    subprocess.Popen([_ENGINE_PYTHON, _PARITY_JOB_CLI, *args, "--json",
+                      "--status-file", str(status)],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
+                     cwd=str(_REPO_ROOT))
+    return {"started": True, "period_id": pid, "status_url": f"/api/estimate/parity/period/{pid}"}
+
+
+@router.get("/parity/period/{pid}")
+def parity_period_status(pid: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """How far a period comparison has got, each job's outcome, and its summary page when done."""
+    _check_key(x_sdi_key)
+    if not _PERIOD_ID.match(pid):
+        raise HTTPException(status_code=404, detail="No such period comparison")
+    path = _period_status_file(pid)
+    try:
+        body = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="No such period comparison")
+    except (OSError, ValueError):
+        return {"done": None, "note": "progress is being written; ask again in a moment"}
+    if body.get("summary_html"):
+        body["summary_url"] = _file_link(body["summary_html"])
+    for row in body.get("rows") or []:
+        if row.get("folder") and row.get("report"):
+            row["report_url"] = _file_link(Path(row["folder"]) / row["report"])
+    return body
+
+
 # ── Print the drawings behind an estimate ────────────────────────────────────
 #
 # An estimate is checked against the drawings, and printing them meant opening the job folder
@@ -3096,6 +3364,7 @@ def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
             # and no reference document, and its book compares what arrived with that.
             run.submitted_scope = submitted_scope(run, method, None, "none", [])
             _RUNS[run.run_id] = run
+            _keep(run)
             accepted.append(run)
             queued_at += 0.001          # keeps the queue order stable and the sort total
 
@@ -3250,6 +3519,7 @@ def batch_abandon(batch_id: str, x_sdi_key: Optional[str] = Header(default=None)
             r = _RUNNERS.get(run.runner)
             if r is not None and r.run_id == run.run_id:
                 r.run_id = ""
+            _keep(run)
             released += 1
     return {"ok": True, "released": released}
 
@@ -3292,6 +3562,7 @@ def abandon(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
         r = _RUNNERS.get(run.runner)
         if r is not None and r.run_id == run.run_id:
             r.run_id = ""
+        _keep(run)
     return {"ok": True, "was": was, "run_id": run_id}
 
 
@@ -3424,8 +3695,8 @@ def deliverable(run_id: str, name: str, x_sdi_key: Optional[str] = Header(defaul
 
 @router.get("")
 def recent(x_sdi_key: Optional[str] = Header(default=None), limit: int = 25):
-    """Every run this service has queued, newest first. In memory only — a
-    restart forgets them, and the estimates themselves are on the share."""
+    """Every run this service has queued, newest first: kept on disk since D-618, so a
+    restart no longer forgets them (estimate_history)."""
     _check_key(x_sdi_key)
     with _LOCK:
         _expire_dead_claims()

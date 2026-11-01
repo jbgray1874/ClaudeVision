@@ -1199,6 +1199,7 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
         return
 
     file_a_copy(job, filed, log)          # D-617: and in the completed AI briefs area
+    file_parity(job, filed, engine_root, engine_python, log)   # D-619: and the parity folder
     _finish(requests, base, headers, run_id, runner_id, "done", "", log, filed)
 
 
@@ -1388,6 +1389,58 @@ def file_a_copy(job: Dict[str, Any], filed: List[Dict[str, str]], log: List[str]
         log.append(f"[archive] NOT filed to the completed AI briefs area ({exc}). The estimate "
                    f"is filed in AISheets as usual.")
         return ""
+
+
+def _engine_book(filed: List[Dict[str, str]]) -> Optional[str]:
+    """The engine's workbook among the filed files: the one stamped _YYYYMMDD_HHMMSS."""
+    books = [f for f in filed if f["name"].lower().endswith(".xlsx")]
+    stamped = [f for f in books if re.search(r"_\d{8}_\d{6}\.xlsx$", f["name"], re.I)]
+    pool = stamped or books
+    return min(pool, key=lambda f: len(f["name"]))["path"] if pool else None
+
+
+def file_parity(job: Dict[str, Any], filed: List[Dict[str, str]], engine_root: Path,
+                engine_python: Path, log: List[str]) -> str:
+    """A run that came with a manual estimate also files its comparison to the parity folder
+    (D-619): both sheets, the report and the index, as a comparison by job number does, so the
+    search on the page finds it beside the rest. The folder, or "".
+
+    JG, 1 Nov 2026: "for every run we save down the two s/sheets compared and the parity reports
+    that are available to be searched through in the web page and app and also at the time of
+    run". The deliverables already hold the run's own parity section; this is the filed copy.
+    Never fails the run: the estimate is filed whatever happens here."""
+    root = str(job.get("parity_root") or "").strip()
+    manual = str(job.get("manual_workbook") or "").strip()
+    book = _engine_book(filed)
+    if not root or not manual or not book:
+        return ""
+    cli = Path(engine_root) / "src" / "parity_job.py"
+    if not cli.is_file():
+        log.append(f"[parity] NOT filed to the parity folder: {cli} is not on this runner yet.")
+        return ""
+    env = dict(os.environ, SDI_PARITY_ROOT=root)
+    cmd = [str(engine_python) if Path(engine_python).is_file() else sys.executable, str(cli),
+           "job", str(job.get("drawing_number") or Path(book).stem), "--manual", manual,
+           "--ai", book, "--made-by", f"run {job.get('run_id', '')}", "--json"]
+    try:
+        proc = subprocess.run(cmd, cwd=str(engine_root), capture_output=True, text=True,
+                              timeout=300, env=env)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log.append(f"[parity] NOT filed to the parity folder ({type(exc).__name__}). The run's "
+                   f"own deliverables are unaffected.")
+        return ""
+    line = next((ln for ln in reversed((proc.stdout or "").splitlines())
+                 if ln.strip().startswith("{")), "")
+    try:
+        body = json.loads(line) if line else {}
+    except ValueError:
+        body = {}
+    if proc.returncode != 0 or not body.get("folder"):
+        why = body.get("error") or ((proc.stderr or "").strip().splitlines() or ["no answer"])[-1]
+        log.append(f"[parity] NOT filed to the parity folder: {str(why)[:300]}")
+        return ""
+    log.append(f"[parity] comparison filed to {body['folder']}")
+    return str(body["folder"])
 
 
 def _finish(requests, base: str, headers: Dict[str, str], run_id: str, runner_id: str,
