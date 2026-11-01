@@ -14,6 +14,11 @@ say, never to work out a new price, and to point at the workbook or report for t
 THE SAME MODEL THE ENGINE ALREADY USES. Grok, through web_ai_price_lookup._call_xai_llm, the
 call the price lookups and reads already make; no new key and no new provider. The figures go
 where the drawings already go. SDI_OFFLINE stops it, as it stops every paid call.
+
+ONE SAVED RECORD, HANDED OVER WHOLE (D-615). The estimating app's "Ask about a saved estimate"
+box chooses the exact record first, from a run it holds or a job filed on the share, and hands
+that record here as `record`, with its own rule-based reading as `record_answer`. The answer is
+pinned to that record and to nothing else: no latest JSON for the job, no other run.
 """
 from __future__ import annotations
 
@@ -74,14 +79,25 @@ def facts(record: Dict[str, Any], quantity_prices: List[Dict[str, Any]]) -> Dict
             if isinstance(r, dict)],
         "labour_lines": _rows("labour_rows", "operation"),
         "material_lines": _rows("material_rows", "description"),
+        # THE CHARGED PART LIST (D-615): what the app's own lookup answers part questions from.
+        "parts": [{"part": str(l.get("part_number") or ""),
+                   "description": str(l.get("description") or ""),
+                   "per_unit": l.get("qty_per_unit"),
+                   "material": str(l.get("material_label") or ""),
+                   "charged_gbp": _money(l.get("charged_ext_gbp"))}
+                  for l in ((record.get("costed_job") or {}).get("lines") or [])[:40]
+                  if isinstance(l, dict)],
         "review_flags": flags,
         "release": (record.get("release_decision") or {}).get("status")
         if isinstance(record.get("release_decision"), dict) else None,
     }
 
 
-def prompt(question: str, known: Dict[str, Any], commentary: str) -> str:
+def prompt(question: str, known: Dict[str, Any], commentary: str,
+           record_answer: str = "") -> str:
     context = json.dumps(known, default=str)[:_MAX_CONTEXT_CHARS]
+    lookup = (f"RECORD LOOKUP (a rule-based reading of the same record, exact): "
+              f"{record_answer[:2000]}\n\n" if record_answer.strip() else "")
     return (
         "You answer an SDI estimator's question about ONE finished internal cost estimate.\n"
         "Rules: answer only from the ESTIMATE FACTS and WALKTHROUGH below. If they do not say, "
@@ -91,6 +107,7 @@ def prompt(question: str, known: Dict[str, Any], commentary: str) -> str:
         "and may be provisional; never describe it as a customer quotation.\n\n"
         f"ESTIMATE FACTS (JSON): {context}\n\n"
         f"WALKTHROUGH: {commentary[:4000]}\n\n"
+        f"{lookup}"
         f"QUESTION: {question}\n\n"
         'Reply as JSON only: {"answer": "..."}')
 
@@ -100,11 +117,13 @@ def answer(payload: Dict[str, Any], ask: Any = None) -> Dict[str, str]:
     question = str(payload.get("question") or "").strip()
     if not question:
         return {"status": "unavailable", "answer": "Type a question about the estimate first."}
-    record = _load(list(payload.get("records") or []))
+    record = (payload["record"] if isinstance(payload.get("record"), dict)
+              else _load(list(payload.get("records") or [])))
     known = facts(record, list(payload.get("quantity_prices") or []))
     if ask is None:
         from web_ai_price_lookup import _call_xai_llm as ask
-    reply = ask(prompt(question, known, str(payload.get("commentary") or "")),
+    reply = ask(prompt(question, known, str(payload.get("commentary") or ""),
+                       str(payload.get("record_answer") or "")),
                 max_completion_tokens=2500, temperature=0.0)
     text = str((reply or {}).get("answer") or "").strip() if isinstance(reply, dict) else ""
     if not text:
@@ -112,7 +131,12 @@ def answer(payload: Dict[str, Any], ask: Any = None) -> Dict[str, str]:
                 "answer": "No answer came back from the model (it may be offline, or the key "
                           "is not set on this machine). The workbook and report hold every "
                           "figure."}
-    return {"status": "answered", "answer": text}
+    try:
+        import xai_models
+        model = xai_models.text_model()
+    except Exception:                                                # noqa: BLE001
+        model = ""
+    return {"status": "answered", "answer": text, "model": model}
 
 
 def main() -> int:

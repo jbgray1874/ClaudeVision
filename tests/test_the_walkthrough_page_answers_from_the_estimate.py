@@ -265,7 +265,9 @@ def test_the_engine_answers_only_from_the_estimate(tmp_path):
                               "quantity_prices": [{"quantity": 1, "unit_gbp": 538.06},
                                                   {"quantity": 5, "unit_gbp": 401.2}]},
                              ask=fake_ask)
-    assert got == {"status": "answered", "answer": "The largest labour line is Weld (CO2) at £90."}
+    assert got["status"] == "answered"
+    assert got["answer"] == "The largest labour line is Weld (CO2) at £90."
+    assert got["model"], "D-615: the answer says which model gave it"
     p = asked["prompt"]
     assert "QUESTION: What drives labour?" in p and "Never invent or recalculate a price" in p
     assert '"unit_gbp": 401.2' in p and '"line": "Weld (CO2)"' in p and "SDI walkthrough." in p
