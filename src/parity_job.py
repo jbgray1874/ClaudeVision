@@ -1,64 +1,80 @@
 #!/usr/bin/env python3
-r"""Parity by job number: find both estimates, compare them, file the comparison (D-619).
+r"""Parity by job number: find both estimates, compare the filed copies, keep the evidence.
 
-    python src\parity_job.py find   12677-01-GA          what it would compare, and the choices
-    python src\parity_job.py job    12677-01-GA          compare and file
+    python src\parity_job.py find   12677-01-GA [--client Acme]     both sides, and whether it is clear
+    python src\parity_job.py job    12677-01-GA [--client Acme]     compare and file (only when clear)
     python src\parity_job.py job    12677-01-GA --manual "<path>" --ai "<path>"
-    python src\parity_job.py search [text] [--from YYYY-MM-DD] [--to YYYY-MM-DD]
-    python src\parity_job.py period --from 2026-10-01 --to 2026-10-31 [--preview]
-    python src\parity_job.py periods                     period comparisons already run
+    python src\parity_job.py search [text] [--from D] [--to D] [--outcome match|warning|fail|...]
+    python src\parity_job.py period --from 2026-10-01 --to 2026-10-31 [--client X] [--preview]
+    python src\parity_job.py periods --a-from D --a-to D --b-from D --b-to D [--client X] [--job N]
+    python src\parity_job.py history                                period comparisons already run
 
-JG, 1 Nov 2026: "a new parity option where we can compare one job - can choose / find from file
-system or name for the tool to search by job number. ... the manual estimates live at
-K:\Estimating\Completed\Manual Estimates\2026\$client.. we take the most obvious s/sheet
-candidate and we run a parity against it from our AI estimate with html outputs. the s/sheets
-that are used are stored at K:\Estimating\Completed\AI Estimating\parity and below this for
-every run we save down the two s/sheets compared and the parity reports that are available to
-be searched through in the web page and app ... also, can run a search and comparison between
-all manual and AI estimates ran across two time periods."
+JG, 1 Nov 2026 (D-619): compare one job by job number, "we take the most obvious s/sheet
+candidate and we run a parity against it from our AI estimate with html outputs", save both
+sheets and the reports under AI Estimating\parity, searchable, and "a search and comparison
+between all manual and AI estimates ran across two time periods".
 
-THE COMPARISON ITSELF IS parity_run.run_parity, unchanged: the engine's summary against the
-manual workbook, with its bundle, CSV and HTML report. This module finds the two sides, files
-what was compared, and keeps an index so a comparison can be found again.
+THE REVIEW, 1 Nov 2026 (D-621), and what changed because of it:
+  * MATCHING RESPECTS THE CLIENT AND THE DRAWING. A sheet is chosen for you only when the choice
+    is clear: under a client folder matching the AI run's client, naming the full drawing number
+    when one is given, in one job folder, and better than the next by issue. Otherwise every
+    candidate is returned with the reason it could not be decided, and a person chooses.
+  * THE FILED COPIES ARE WHAT IS COMPARED. Both workbooks, the run's summary and its record are
+    copied, unchanged and under their own names, into ai\ and manual\ in the comparison's folder,
+    each with its SHA-256; the comparison then reads those copies, so the report always
+    describes exactly what is kept.
+  * THE RUN'S OWN SUMMARY, NEVER ANOTHER. A workbook with no summary filed beside it is refused:
+    looking elsewhere could find a newer run's reading of the same drawing.
+  * QUANTITIES MUST MATCH. The comparator divides the engine's total by the manual sheet's
+    quantity; when the run priced a different quantity that unit cost is wrong. The run's own
+    quantity sweep is used at the manual's quantity where it priced it; otherwise the comparison
+    is marked "quantities differ" and is not counted as a match or a miss.
+  * A SINGLE COMPARISON CAN RUN IN THE BACKGROUND with a status file the service polls.
+  * TWO PERIODS: Period A against Period B, filtered by client and job. Within each period every
+    drawing is counted once (its newest run, the others collapsed and counted); pairs with no
+    manual estimate, ambiguous pairs and quantity mismatches are listed apart from the
+    comparable ones; a pair already compared with the same manual sheet is reused, not redone.
+    The date is the AI estimate's (its run folder); the manual sheet's date is its file date and
+    says so.
 
-FINDING THE MANUAL ESTIMATE. Under <Manual Estimates>\<year>\<client>\, newest year first: a job
-folder whose name starts with the job number (as "1282- MILWAUKEE RED 50cm PEG" does), or a
-workbook there whose name does. Inside, the most obvious workbook: the full drawing number in
-its name, then the highest issue ("ISS 7", "Issue 3", "Rev B" counts as later than none), then
-the newest. Copies, old and superseded versions, quotes and blank templates rank last; Excel's
-own lock files are never offered. Every candidate is returned with why it ranked where it did,
-so a person can choose another.
+THE COMPARISON ITSELF IS parity_run.run_parity (the engine's summary against the manual
+workbook, with its bundle, CSV and HTML report), unchanged. Nothing outside the parity folder is
+ever written, and the original sheets are only ever read.
 
-FINDING THE AI ESTIMATE. Under AISheets\<client>\<drawing>\<date time (N off)>\, the newest run
-of that drawing whose folder holds the engine's workbook and its summary JSON.
-
-FILED. Each comparison gets its own folder, <parity>\<client>\<job>\<date time>\, holding a copy
-of both workbooks, the AI summary, the parity bundle, CSV and HTML report, and parity_index.json:
-what was compared, from where, and the headline. Search reads those indexes. A period run files
-each job the same way and writes one summary page linking them all under <parity>\_periods\.
-Nothing outside the parity folder is ever written.
+FILED: <parity>\<client>\<drawing>\<date time>_<comparison id>\
+    ai\<the engine's workbook>  ai\<its summary .json>  ai\<its record .json>
+    manual\<the manual workbook>
+    <the parity report .html, bundle .json, .csv>
+    parity_index.json            the manifest: sources, copies, fingerprints, dates, quantities,
+                                 how the manual sheet was chosen, the headline and the outcome
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import os
 import re
 import shutil
+import statistics
 import sys
 import time
+import uuid
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
+from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 MANUAL_DEFAULT = r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Manual Estimates"
 AISHEETS_DEFAULT = r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\AISheets"
 PARITY_DEFAULT = r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\parity"
+SCHEMA = "sdi_parity_comparison.v2"
 WORKBOOK_SUFFIXES = (".xls", ".xlsx", ".xlsm")
 INDEX_NAME = "parity_index.json"
+COMPARABLE = ("match", "warning", "fail")
 _RUN_FOLDER = re.compile(r"^(\d{4}-\d{2}-\d{2}) (\d{2})-(\d{2})-(\d{2}) \((\d+) off\)$")
 _ISSUE = re.compile(r"\b(?:ISS(?:UE)?|REV(?:ISION)?|R|V)\s*\.?\s*([0-9]+|[A-Z])\b", re.I)
 _SECOND_RATE = ("copy", "old", "superseded", "draft", "quote", "backup", "bak")
@@ -69,13 +85,22 @@ class ParityJobError(ValueError):
     """Something a person can fix: no manual estimate found, no AI run, a bad date."""
 
 
+class ParityChoiceNeeded(ParityJobError):
+    """More than one manual sheet could be the one, or the likeliest does not match the client
+    or the drawing: a person chooses. Carries every candidate and the reason."""
+
+    def __init__(self, reason: str, candidates: List[Dict[str, Any]]):
+        super().__init__(reason)
+        self.candidates = candidates
+
+
 def roots() -> Dict[str, Path]:
     return {"manual": Path(os.getenv("SDI_MANUAL_ESTIMATES_ROOT", "") or MANUAL_DEFAULT),
             "aisheets": Path(os.getenv("SDI_ESTIMATE_OUTPUT_ROOT", "") or AISHEETS_DEFAULT),
             "parity": Path(os.getenv("SDI_PARITY_ROOT", "") or PARITY_DEFAULT)}
 
 
-# ── job numbers ─────────────────────────────────────────────────────────────────────────
+# ── names ───────────────────────────────────────────────────────────────────────────────
 
 def job_digits(job: str) -> str:
     """"12677-01-GA" -> "12677": the job number every folder starts with."""
@@ -98,6 +123,14 @@ def _safe(text: str) -> str:
     return re.sub(r"\s+", " ", cleaned).rstrip(". ")[:120] or "unnamed"
 
 
+def client_matches(folder: str, client: str) -> bool:
+    """The same client, with case, spaces and punctuation set aside: "ACME" is "Acme Ltd"."""
+    a, b = _bare(folder), _bare(client)
+    if not a or not b:
+        return False
+    return a == b or (min(len(a), len(b)) >= 3 and (a in b or b in a))
+
+
 # ── the manual estimate ─────────────────────────────────────────────────────────────────
 
 def _issue_rank(name: str) -> int:
@@ -108,37 +141,52 @@ def _issue_rank(name: str) -> int:
     return int(last) if last.isdigit() else ord(last) - ord("A") + 1
 
 
-def _manual_candidate(path: Path, job: str, client: str, year: str) -> Optional[Dict[str, Any]]:
+def _manual_candidate(path: Path, job: str, client_folder: str, year: str,
+                      wanted_client: str = "") -> Optional[Dict[str, Any]]:
     name = path.name
     lower = name.lower()
     if (not path.is_file() or path.suffix.lower() not in WORKBOOK_SUFFIXES
             or name.startswith("~$") or any(w in lower for w in _NEVER)):
         return None
     full = _bare(job)
-    reasons = []
     names_drawing = len(full) > len(job_digits(job)) and full in _bare(path.stem)
+    issue = _issue_rank(name)
+    second = [w for w in _SECOND_RATE if re.search(rf"\b{w}\b", lower)]
+    if wanted_client:
+        client_match = "same" if client_matches(client_folder, wanted_client) else "other"
+    else:
+        client_match = "unknown"
+    reasons = []
+    if client_match == "same":
+        reasons.append("the run's client")
+    elif client_match == "other":
+        reasons.append(f"a different client ({client_folder})")
     if names_drawing:
         reasons.append("names the drawing")
-    issue = _issue_rank(name)
     if issue:
         reasons.append(f"issue {issue}")
-    second = [w for w in _SECOND_RATE if re.search(rf"\b{w}\b", lower)]
     if second:
         reasons.append("looks like a " + "/".join(second))
     try:
         modified = path.stat().st_mtime
     except OSError:
         modified = 0.0
-    return {"path": str(path), "name": name, "client": client, "year": year,
+    return {"path": str(path), "name": name, "client": client_folder, "year": year,
             "folder": str(path.parent), "issue": issue, "modified": modified,
             "modified_text": time.strftime("%d %b %Y %H:%M", time.localtime(modified)),
-            "_rank": (0 if second else 1, 1 if names_drawing else 0, issue, modified),
+            "names_drawing": names_drawing, "second_rate": bool(second),
+            "client_match": client_match,
+            "_rank": (1 if client_match != "other" else 0, 0 if second else 1,
+                      1 if names_drawing else 0, issue, modified),
             "why": ", ".join(reasons) or "the job's workbook"}
 
 
 def find_manual(job: str, manual_root: Optional[Path] = None,
-                years: Optional[Iterable[str]] = None) -> List[Dict[str, Any]]:
-    """Every manual workbook for this job, most obvious first."""
+                years: Optional[Iterable[str]] = None,
+                client: str = "") -> List[Dict[str, Any]]:
+    """Every manual workbook for this job number, likeliest first, each saying why. Every client
+    folder is looked in, so a sheet filed under another client is shown as that, not missed;
+    whether one may be chosen without asking is decide()'s question."""
     root = Path(manual_root or roots()["manual"])
     digits = job_digits(job)
     if not root.is_dir():
@@ -158,18 +206,15 @@ def find_manual(job: str, manual_root: Optional[Path] = None,
             for entry in entries:
                 if not _starts_with_job(entry.name, digits):
                     continue
+                files = [entry]
                 if entry.is_dir():
-                    inner = []
                     try:
                         inner = list(entry.iterdir())
                     except OSError:
-                        pass
-                    for f in inner + [g for d in inner if d.is_dir() for g in d.iterdir()]:
-                        c = _manual_candidate(f, job, cdir.name, ydir.name)
-                        if c:
-                            found.append(c)
-                else:
-                    c = _manual_candidate(entry, job, cdir.name, ydir.name)
+                        inner = []
+                    files = inner + [g for d in inner if d.is_dir() for g in d.iterdir()]
+                for f in files:
+                    c = _manual_candidate(f, job, cdir.name, ydir.name, client)
                     if c:
                         found.append(c)
         if found:
@@ -178,6 +223,48 @@ def find_manual(job: str, manual_root: Optional[Path] = None,
     for c in found:
         c.pop("_rank", None)
     return found
+
+
+def decide(candidates: List[Dict[str, Any]], job: str, client: str = "") -> Dict[str, Any]:
+    """Whether the likeliest sheet may be used without asking, and why.
+
+    Clear only when: it is under a client folder matching the run's client (when the client is
+    known); it names the full drawing number (when one is given, e.g. 12677-01-GA rather than
+    12677); the sheets left are in one job folder; and it is a higher issue than the next. A
+    date alone never decides between two sheets."""
+    if not candidates:
+        return {"pick": None, "clear": False, "reason": "No manual estimate was found."}
+    pool = list(candidates)
+    if client:
+        same = [c for c in pool if c["client_match"] == "same"]
+        if not same:
+            return {"pick": pool[0], "clear": False, "reason": (
+                f"No sheet is under a client folder matching '{client}'. The likeliest is "
+                f"under '{pool[0]['client']}': choose it if it is right.")}
+        pool = same
+    digits = job_digits(job)
+    if len(_bare(job)) > len(digits):
+        named = [c for c in pool if c["names_drawing"]]
+        if not named:
+            return {"pick": pool[0], "clear": False, "reason": (
+                f"No sheet names {job}; the ones found start with {digits} only, and a job "
+                f"number can cover several drawings. Choose the right one.")}
+        pool = named
+    good = [c for c in pool if not c["second_rate"]] or pool
+    folders = sorted({c["folder"] for c in good})
+    if len(folders) > 1:
+        return {"pick": good[0], "clear": False, "reason": (
+            f"Sheets for this job are in {len(folders)} folders "
+            f"({'; '.join(Path(f).name for f in folders[:4])}). Choose the right one.")}
+    if len(good) == 1:
+        return {"pick": good[0], "clear": True, "reason": good[0]["why"]}
+    top, nxt = good[0], good[1]
+    if top["issue"] > nxt["issue"]:
+        return {"pick": top, "clear": True,
+                "reason": f"{top['why']}; the highest issue of {len(good)} sheets"}
+    return {"pick": top, "clear": False, "reason": (
+        f"{len(good)} sheets are equally likely ({', '.join(c['name'] for c in good[:4])}): "
+        f"no issue number tells them apart, and a date alone does not decide. Choose one.")}
 
 
 # ── the AI estimate ─────────────────────────────────────────────────────────────────────
@@ -197,8 +284,19 @@ def _summary_for(workbook: Path) -> Optional[Path]:
     return candidate if candidate.is_file() else None
 
 
-def find_ai(job: str, aisheets_root: Optional[Path] = None) -> List[Dict[str, Any]]:
-    """Every AI run of this job that holds a workbook and its summary, newest first."""
+def _record_for(folder: Path) -> Optional[Path]:
+    """The run's record (D-616), when its folder holds exactly one."""
+    try:
+        records = [p for p in folder.glob("*_record.json") if p.is_file()]
+    except OSError:
+        return None
+    return records[0] if len(records) == 1 else None
+
+
+def find_ai(job: str, aisheets_root: Optional[Path] = None,
+            client: str = "") -> List[Dict[str, Any]]:
+    """Every AI run of this job that holds a workbook and its summary, the exact drawing and
+    the client's own runs first, then newest first."""
     root = Path(aisheets_root or roots()["aisheets"])
     digits = job_digits(job)
     full = _bare(job)
@@ -218,36 +316,18 @@ def find_ai(job: str, aisheets_root: Optional[Path] = None) -> List[Dict[str, An
                 summary = _summary_for(book) if book else None
                 if not book or not summary:
                     continue
+                record = _record_for(rdir)
                 runs.append({"workbook": str(book), "summary": str(summary),
+                             "record": str(record) if record else "",
                              "run_folder": str(rdir), "client": cdir.name,
                              "drawing": ddir.name, "stamp": rdir.name[:19],
-                             "day": m.group(1), "units": int(m.group(5)), "exact": exact})
-    runs.sort(key=lambda r: (r["exact"], r["stamp"]), reverse=True)
+                             "day": m.group(1), "units": int(m.group(5)), "exact": exact,
+                             "client_match": bool(client) and client_matches(cdir.name, client)})
+    runs.sort(key=lambda r: (r["exact"], r["client_match"], r["stamp"]), reverse=True)
     return runs
 
 
-# ── run one, file it ────────────────────────────────────────────────────────────────────
-
-def _new_folder(base: Path, stamp: str) -> Path:
-    base.mkdir(parents=True, exist_ok=True)
-    for n in range(1, 100):
-        folder = base / (stamp if n == 1 else f"{stamp} ({n})")
-        try:
-            folder.mkdir()
-            return folder
-        except FileExistsError:
-            continue
-    raise OSError(f"no free folder under {base}")
-
-
-def _default_compare(ai: str, manual: str, out_dir: Path, read_via_excel: bool) -> Dict[str, Any]:
-    from parity_run import run_parity
-    return run_parity(ai, manual, out_dir=out_dir, read_via_excel=read_via_excel)
-
-
 def _placed_manual(path: Path, manual_root: Path) -> Dict[str, str]:
-    """A manual workbook chosen by hand: its client and year when it sits under the manual
-    estimates folder as <year>\\<client>\\..., otherwise neither."""
     try:
         parts = path.resolve().relative_to(manual_root.resolve()).parts
     except (OSError, ValueError):
@@ -257,92 +337,283 @@ def _placed_manual(path: Path, manual_root: Path) -> Dict[str, str]:
     return {"year": "", "client": ""}
 
 
-def _placed_ai(path: Path) -> Dict[str, str]:
-    """An AI workbook chosen by hand: its client, drawing and run when it sits in an AISheets
-    run folder, <client>\\<drawing>\\<date time (N off)>\\, otherwise none of them."""
+def _placed_ai(path: Path) -> Dict[str, Any]:
     run = path.parent
-    if _RUN_FOLDER.match(run.name) and run.parent.parent != run.parent:
+    m = _RUN_FOLDER.match(run.name)
+    if m and run.parent.parent != run.parent:
         return {"client": run.parent.parent.name, "drawing": run.parent.name,
-                "stamp": run.name[:19], "run_folder": str(run)}
-    return {"client": "", "drawing": "", "stamp": "", "run_folder": str(run)}
+                "stamp": run.name[:19], "run_folder": str(run), "units": int(m.group(5))}
+    return {"client": "", "drawing": "", "stamp": "", "run_folder": str(run), "units": None}
+
+
+def _ai_side(ai: str) -> Dict[str, Any]:
+    """The AI side chosen by hand: its workbook, its own summary and record. A workbook with
+    no summary beside it is refused rather than matched to a summary found elsewhere."""
+    p = Path(ai)
+    if not p.is_file():
+        raise ParityJobError(f"The AI estimate could not be found: {ai}")
+    if p.suffix.lower() == ".json":
+        summary, book = p, _engine_workbook(p.parent, p.stem)
+    else:
+        book, summary = p, _summary_for(p)
+        if summary is None:
+            raise ParityJobError(
+                f"No summary is filed beside {p.name}. The comparison reads that run's own "
+                f"summary, and one found anywhere else could be a different run of the same "
+                f"drawing. Choose the run's .json, or a run folder that holds one.")
+    record = _record_for(p.parent)
+    return {"workbook": str(book) if book else "", "summary": str(summary),
+            "record": str(record) if record else "", **_placed_ai(p)}
+
+
+# ── fingerprints, snapshots, quantities ─────────────────────────────────────────────────
+
+def fingerprint(path: Path) -> Dict[str, Any]:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    st = path.stat()
+    return {"sha256": h.hexdigest(), "bytes": st.st_size,
+            "modified": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime))}
+
+
+def _snapshot(src: str, into: Path) -> Dict[str, Any]:
+    """Copy one source, unchanged and under its own name, and fingerprint both ends. A source
+    that changed while it was being copied is refused, so a kept copy is never half of two."""
+    source = Path(src)
+    before = fingerprint(source)
+    into.mkdir(parents=True, exist_ok=True)
+    dest = into / source.name
+    shutil.copy2(source, dest)
+    after = fingerprint(dest)
+    if after["sha256"] != before["sha256"]:
+        raise ParityJobError(f"{source.name} changed while it was being copied; try again when "
+                             f"nobody is saving it.")
+    return {"source": str(source), "copied_as": f"{into.name}/{dest.name}", "path": str(dest),
+            **after}
+
+
+def _new_folder(base: Path, name: str) -> Path:
+    base.mkdir(parents=True, exist_ok=True)
+    for n in range(1, 100):
+        folder = base / (name if n == 1 else f"{name} ({n})")
+        try:
+            folder.mkdir()
+            return folder
+        except FileExistsError:
+            continue
+    raise OSError(f"no free folder under {base}")
+
+
+def _thresholds() -> tuple:
+    """The comparator's own verdict thresholds, so a quantity-corrected verdict means the same."""
+    try:
+        import config
+        t = (getattr(config, "WORKBOOK_EQUIVALENT_PRICING", {}) or {}).get(
+            "variance_thresholds_pct") or {}
+        return float(t.get("match", 3.0)), float(t.get("warning", 10.0))
+    except Exception:                                                # noqa: BLE001
+        return 3.0, 10.0
+
+
+def _verdict(pct: Optional[float]) -> str:
+    if pct is None:
+        return "review"
+    match, warn = _thresholds()
+    return "match" if pct <= match else "warning" if pct <= warn else "fail"
+
+
+def _load(path: str) -> Dict[str, Any]:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            body = json.load(fh)
+        return body if isinstance(body, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _num(v: Any) -> Optional[float]:
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def quantities(summary: Dict[str, Any], bundle: Dict[str, Any], run_units: Optional[int],
+               headline: Dict[str, Any]) -> Dict[str, Any]:
+    """The quantity each side priced, whether their unit costs can be compared, and the AI unit
+    cost at the manual's quantity when the run's quantity sweep priced it."""
+    est = summary.get("estimate_summary") if isinstance(summary.get("estimate_summary"), dict) else {}
+    ai_qty = _num(((est or {}).get("estimate_workbook_inputs") or {}).get("assumed_job_quantity"))
+    if ai_qty is None and run_units:
+        ai_qty = float(run_units)
+    manual_qty = None
+    for row in bundle.get("money_cell_comparisons") or []:
+        if str(row.get("label", "")).lower().startswith("reference order quantity"):
+            manual_qty = _num(row.get("workbook_cached_numeric"))
+            break
+    sweep = {}
+    for r in ((summary.get("quantity_sweep") or {}).get("rows") or []):
+        q, u = _num((r or {}).get("quantity")), _num((r or {}).get("unit"))
+        if q and u:
+            sweep[q] = u
+    out: Dict[str, Any] = {"ai": ai_qty, "manual": manual_qty, "comparable": True, "note": ""}
+    if ai_qty is None or manual_qty is None:
+        out["note"] = "One side's quantity could not be read; check the report before relying on the unit costs."
+        return out
+    if abs(ai_qty - manual_qty) < 1e-9:
+        return out
+    manual_unit = _num(headline.get("manual_unit_cost_gbp"))
+    if manual_qty in sweep and manual_unit:
+        ai_unit = round(sweep[manual_qty], 2)
+        pct = round(abs(manual_unit - ai_unit) / abs(ai_unit) * 100.0, 4) if ai_unit else None
+        out.update(note=(f"The AI run priced {ai_qty:g} off and the manual sheet {manual_qty:g} off; "
+                         f"compared at {manual_qty:g} off from the run's own quantity sweep."),
+                   ai_unit_at_manual_qty=ai_unit, pct_at_manual_qty=pct,
+                   status_at_manual_qty=_verdict(pct),
+                   gap_at_manual_qty=round(ai_unit - manual_unit, 2))
+        return out
+    out.update(comparable=False, note=(
+        f"Quantities differ: the AI run priced {ai_qty:g} off and the manual sheet is "
+        f"{manual_qty:g} off, which the run did not price. The unit costs are not comparable; "
+        f"re-run the estimate at {manual_qty:g} off, or compare another run."))
+    return out
+
+
+def outcome_of(index: Dict[str, Any]) -> str:
+    if index.get("error"):
+        return "not compared"
+    q = index.get("quantity") or {}
+    if q and not q.get("comparable", True):
+        return "quantities differ"
+    if q.get("status_at_manual_qty"):
+        return str(q["status_at_manual_qty"])
+    return str((index.get("headline") or {}).get("status") or "review")
+
+
+def unit_pct(index: Dict[str, Any]) -> Optional[float]:
+    q = index.get("quantity") or {}
+    if q.get("pct_at_manual_qty") is not None:
+        return _num(q["pct_at_manual_qty"])
+    return _num((index.get("headline") or {}).get("pct_variance"))
+
+
+def _money_lines(bundle: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The money rows the comparator read, cost kept apart from selling price, each with its
+    cell on the manual sheet."""
+    out = []
+    for row in bundle.get("money_cell_comparisons") or []:
+        out.append({"label": row.get("label"), "ai": _num(row.get("json_numeric")),
+                    "manual": _num(row.get("workbook_cached_numeric")),
+                    "pct": _num(row.get("pct_variance")), "status": row.get("status"),
+                    "cell": row.get("cell")})
+    return out
+
+
+# ── one comparison ──────────────────────────────────────────────────────────────────────
+
+def _default_compare(ai: str, manual: str, out_dir: Path, read_via_excel: bool) -> Dict[str, Any]:
+    from parity_run import run_parity
+    return run_parity(ai, manual, out_dir=out_dir, read_via_excel=read_via_excel)
+
+
+def _status(path: Optional[Path], body: Dict[str, Any]) -> None:
+    if not path:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(body, default=str), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass
 
 
 def run_job(job: str, manual: Optional[str] = None, ai: Optional[str] = None, *,
-            read_via_excel: bool = False, compare: Optional[Callable[..., Dict[str, Any]]] = None,
-            now: Optional[float] = None, made_by: str = "") -> Dict[str, Any]:
-    """Compare one job's AI estimate with its manual one and file the comparison."""
+            client: str = "", read_via_excel: bool = False,
+            compare: Optional[Callable[..., Dict[str, Any]]] = None,
+            now: Optional[float] = None, made_by: str = "", comparison_id: str = "",
+            say: Callable[[str], None] = lambda m: None) -> Dict[str, Any]:
+    """Compare one job's AI estimate with its manual one, from filed copies, and keep them."""
     r = roots()
-    if manual:
-        if not Path(manual).is_file():
-            raise ParityJobError(f"The manual estimate could not be found: {manual}")
-        manual_pick = {"path": manual, "why": "chosen by hand",
-                       **_placed_manual(Path(manual), r["manual"])}
-    else:
-        candidates = find_manual(job, r["manual"])
-        if not candidates:
-            raise ParityJobError(
-                f"No manual estimate was found for {job_digits(job)} under {r['manual']}: no "
-                f"job folder or workbook in any client folder starts with that number. Choose "
-                f"the workbook by hand.")
-        manual_pick = candidates[0]
+    say("Finding the AI estimate…")
     if ai:
-        if not Path(ai).is_file():
-            raise ParityJobError(f"The AI estimate could not be found: {ai}")
-        summary = _summary_for(Path(ai)) if Path(ai).suffix.lower() != ".json" else Path(ai)
-        ai_pick = {"workbook": ai, "summary": str(summary) if summary else "",
-                   **_placed_ai(Path(ai))}
+        ai_pick = _ai_side(ai)
     else:
-        runs = find_ai(job, r["aisheets"])
+        runs = find_ai(job, r["aisheets"], client=client)
         if not runs:
             raise ParityJobError(
                 f"No AI estimate was found for {job} in AISheets: no run folder holds both the "
                 f"engine's workbook and its summary. Run the estimate first, or choose it by hand.")
         ai_pick = runs[0]
-    client = ai_pick.get("client") or manual_pick.get("client") or "Unknown client"
+    client = client or ai_pick.get("client") or ""
+    say("Finding the manual estimate…")
+    if manual:
+        if not Path(manual).is_file():
+            raise ParityJobError(f"The manual estimate could not be found: {manual}")
+        manual_pick = {"path": manual, "why": "chosen by hand",
+                       **_placed_manual(Path(manual), r["manual"])}
+        how, match_reason = "chosen by hand", "chosen by hand"
+    else:
+        candidates = find_manual(job, r["manual"], client=client)
+        if not candidates:
+            raise ParityJobError(
+                f"No manual estimate was found for {job_digits(job)} under {r['manual']}: no "
+                f"job folder or workbook in any client folder starts with that number. Choose "
+                f"the workbook by hand.")
+        d = decide(candidates, job, client)
+        if not d["clear"]:
+            raise ParityChoiceNeeded(d["reason"], candidates)
+        manual_pick, how, match_reason = d["pick"], "found by job number", d["reason"]
+
+    folder_client = client or manual_pick.get("client") or "Unknown client"
     drawing = ai_pick.get("drawing") or job
+    cid = comparison_id or uuid.uuid4().hex[:8]
     stamp = time.strftime("%Y-%m-%d %H-%M-%S", time.localtime(now or time.time()))
-    folder = _new_folder(r["parity"] / _safe(client) / _safe(drawing), stamp)
+    folder = _new_folder(r["parity"] / _safe(folder_client) / _safe(drawing), f"{stamp}_{cid}")
 
-    files = []
-    for label, src in (("manual", manual_pick["path"]), ("ai", ai_pick["workbook"])):
-        dest = folder / f"{label} - {Path(src).name}"
-        shutil.copy2(src, dest)
-        files.append(dest.name)
-    summary = ai_pick.get("summary") or ""
-    if summary and Path(summary).is_file():
-        shutil.copy2(summary, folder / f"ai - {Path(summary).name}")
-        files.append(f"ai - {Path(summary).name}")
+    say("Copying both estimates into the parity folder…")
+    manual_copy = _snapshot(manual_pick["path"], folder / "manual")
+    ai_copy = _snapshot(ai_pick["summary"], folder / "ai")
+    book_copy = _snapshot(ai_pick["workbook"], folder / "ai") if ai_pick.get("workbook") else {}
+    record_copy = _snapshot(ai_pick["record"], folder / "ai") if ai_pick.get("record") else {}
 
-    # THE SUMMARY OF THIS RUN, NOT ANOTHER. Handed the workbook, parity_run looks for the
-    # summary in the engine's own JSON folder first, which holds the NEWEST run of the drawing;
-    # comparing an older run's workbook against a newer run's reading would be two estimates
-    # presented as one. So the summary filed beside the workbook goes in, when there is one.
-    ai_side = summary if summary and Path(summary).is_file() else ai_pick["workbook"]
-    # A COMPARISON THAT FAILS IS STILL FILED, with why. The two sheets are already copied, and
-    # an index that says "could not be compared: <reason>" is what lets the next person see it
-    # was tried and what stopped it, rather than finding a folder of two spreadsheets.
-    error = ""
+    say("Comparing the copies…")
+    error, result = "", {}
     try:
-        result = (compare or _default_compare)(ai_side, manual_pick["path"], folder,
+        result = (compare or _default_compare)(ai_copy["path"], manual_copy["path"], folder,
                                                read_via_excel)
     except Exception as exc:                                         # noqa: BLE001
-        result, error = {}, f"{type(exc).__name__}: {exc}"
+        error = f"{type(exc).__name__}: {exc}"
+    headline = result.get("headline") or {}
+    bundle = _load(result["bundle_json"]) if result.get("bundle_json") else {}
+    quantity = quantities(_load(ai_copy["path"]), bundle, ai_pick.get("units"), headline) \
+        if not error else {}
+
+    for c in (manual_copy, ai_copy, book_copy, record_copy):
+        c.pop("path", None)
     index = {
-        "job": job_digits(job), "drawing": drawing, "client": client, "stamp": stamp,
-        "folder": str(folder),
-        "manual": {"source": manual_pick["path"], "why": manual_pick.get("why", ""),
-                   "copied_as": files[0]},
-        "ai": {"source": ai_pick["workbook"], "run": ai_pick.get("stamp", ""),
-               "run_folder": ai_pick.get("run_folder", ""), "copied_as": files[1]},
+        "schema": SCHEMA, "comparison_id": cid, "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "job": job_digits(job), "drawing": drawing, "client": folder_client, "stamp": stamp,
+        "folder": str(folder), "made_by": made_by or "by job number",
+        "match": {"how": how, "reason": match_reason,
+                  "client_matched": bool(client) and client_matches(manual_pick.get("client", ""), client)},
+        "manual": {**manual_copy, "client_folder": manual_pick.get("client", ""),
+                   "year": manual_pick.get("year", ""),
+                   "date": manual_copy.get("modified"), "date_basis": "the sheet's file date"},
+        "ai": {**{k: v for k, v in book_copy.items()},
+               "source": ai_pick.get("workbook") or ai_pick["summary"],
+               "copied_as": book_copy.get("copied_as") or ai_copy["copied_as"],
+               "summary": ai_copy, "record": record_copy or None,
+               "run": ai_pick.get("stamp", ""), "run_folder": ai_pick.get("run_folder", ""),
+               "units": ai_pick.get("units"),
+               "date": ai_pick.get("stamp", ""), "date_basis": "the AI run folder's date and time"},
+        "quantity": quantity,
         "report_html": Path(result["bundle_html"]).name if result.get("bundle_html") else "",
         "bundle_json": Path(result["bundle_json"]).name if result.get("bundle_json") else "",
         "bundle_csv": Path(result["bundle_csv"]).name if result.get("bundle_csv") else "",
-        "headline": result.get("headline") or {},
-        "read_via_excel": bool(read_via_excel),
-        "made_by": made_by or "by job number",
-        "files": files,
-        "error": error,
+        "headline": headline, "lines": _money_lines(bundle),
+        "read_via_excel": bool(read_via_excel), "error": error,
     }
+    index["outcome"] = outcome_of(index)
     (folder / INDEX_NAME).write_text(json.dumps(index, indent=2, default=str), encoding="utf-8")
     if error:
         raise ParityJobError(f"The two estimates could not be compared ({error[:300]}). Both "
@@ -361,44 +632,60 @@ def _day(text: Optional[str]) -> Optional[date]:
         raise ParityJobError(f"'{text}' is not a date as YYYY-MM-DD.") from exc
 
 
+def _indexes(root: Path) -> List[Dict[str, Any]]:
+    out = []
+    for path in root.glob(f"*/*/*/{INDEX_NAME}"):
+        idx = _load(str(path))
+        if idx:
+            idx["folder"] = str(path.parent)
+            idx.setdefault("outcome", outcome_of(idx))
+            out.append(idx)
+    return out
+
+
 def search(text: str = "", start: Optional[str] = None, end: Optional[str] = None,
-           parity_root: Optional[Path] = None, limit: int = 200) -> List[Dict[str, Any]]:
-    """Filed comparisons, newest first, matching the text (job, drawing or client) and dates."""
+           parity_root: Optional[Path] = None, limit: int = 200,
+           outcome: str = "") -> List[Dict[str, Any]]:
+    """Filed comparisons, newest first, by job, drawing or client, date and outcome."""
     root = Path(parity_root or roots()["parity"])
     if not root.is_dir():
         return []
     lo, hi = _day(start), _day(end)
     want = _bare(text)
     out = []
-    for path in root.glob(f"*/*/*/{INDEX_NAME}"):
-        try:
-            idx = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
+    for idx in _indexes(root):
         day = _day(str(idx.get("stamp", ""))[:10]) if idx.get("stamp") else None
         if lo and (not day or day < lo) or hi and (not day or day > hi):
             continue
         if want and want not in _bare(f"{idx.get('job')} {idx.get('drawing')} {idx.get('client')}"):
             continue
-        idx["folder"] = str(path.parent)
+        if outcome and idx["outcome"] != outcome:
+            continue
         out.append(idx)
     out.sort(key=lambda i: str(i.get("stamp", "")), reverse=True)
     return out[:limit]
 
 
-# ── a period ────────────────────────────────────────────────────────────────────────────
+# ── periods ─────────────────────────────────────────────────────────────────────────────
 
-def runs_between(start: str, end: str, aisheets_root: Optional[Path] = None) -> List[Dict[str, Any]]:
-    """The newest AI run of each drawing whose run folder is dated within the period."""
+def runs_between(start: str, end: str, aisheets_root: Optional[Path] = None,
+                 client: str = "", job: str = "") -> List[Dict[str, Any]]:
+    """Each drawing estimated in the period, once: its newest run there, with how many runs it
+    had. The date is the AI run folder's."""
     root = Path(aisheets_root or roots()["aisheets"])
     lo, hi = _day(start), _day(end)
     if not lo or not hi or hi < lo:
         raise ParityJobError("A period needs a start and an end date, the end not before the start.")
     if not root.is_dir():
         raise ParityJobError(f"AISheets is not reachable: {root}")
+    digits = job_digits(job) if job else ""
     newest: Dict[str, Dict[str, Any]] = {}
     for cdir in sorted(p for p in root.iterdir() if p.is_dir()):
+        if client and not client_matches(cdir.name, client):
+            continue
         for ddir in sorted(p for p in cdir.iterdir() if p.is_dir()):
+            if digits and not _starts_with_job(ddir.name, digits):
+                continue
             for rdir in sorted(p for p in ddir.iterdir() if p.is_dir()):
                 m = _RUN_FOLDER.match(rdir.name)
                 if not m or not (lo <= _day(m.group(1)) <= hi):
@@ -407,227 +694,437 @@ def runs_between(start: str, end: str, aisheets_root: Optional[Path] = None) -> 
                 if not book or not _summary_for(book):
                     continue
                 key = f"{cdir.name}\\{ddir.name}"
-                if key not in newest or rdir.name > newest[key]["run"]:
+                seen = newest.get(key)
+                runs = (seen["runs_in_period"] if seen else 0) + 1
+                if not seen or rdir.name > seen["run"]:
                     newest[key] = {"client": cdir.name, "drawing": ddir.name, "run": rdir.name,
-                                   "workbook": str(book)}
+                                   "run_folder": str(rdir), "workbook": str(book),
+                                   "units": int(m.group(5)), "estimate_date": m.group(1)}
+                newest[key]["runs_in_period"] = runs
     return sorted(newest.values(), key=lambda r: (r["client"], r["drawing"]))
 
 
-def _write_status(paths: Iterable[Optional[Path]], body: Dict[str, Any]) -> None:
-    text = json.dumps(body, default=str)
-    for path in paths:
-        if not path:
-            continue
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(text, encoding="utf-8")
-            os.replace(tmp, path)
-        except OSError:
-            pass
+def _reusable(archive: List[Dict[str, Any]], run_folder: str, manual_sha: str) -> Optional[Dict[str, Any]]:
+    for idx in sorted(archive, key=lambda i: str(i.get("stamp", "")), reverse=True):
+        if (not idx.get("error") and (idx.get("ai") or {}).get("run_folder") == run_folder
+                and (idx.get("manual") or {}).get("sha256") == manual_sha):
+            return idx
+    return None
+
+
+def _pair(run: Dict[str, Any], r: Dict[str, Path], archive: List[Dict[str, Any]], *,
+          preview: bool, read_via_excel: bool, compare, made_by: str) -> Dict[str, Any]:
+    row = {"client": run["client"], "drawing": run["drawing"], "ai_run": run["run"],
+           "estimate_date": run["estimate_date"], "runs_in_period": run["runs_in_period"]}
+    try:
+        candidates = find_manual(run["drawing"], r["manual"], client=run["client"])
+    except ParityJobError as exc:
+        return {**row, "outcome": "no manual", "note": str(exc)}
+    if not candidates:
+        return {**row, "outcome": "no manual", "note": "no manual estimate found"}
+    d = decide(candidates, run["drawing"], run["client"])
+    if not d["clear"]:
+        return {**row, "outcome": "ambiguous", "note": d["reason"],
+                "candidates": [c["path"] for c in candidates[:6]]}
+    manual = d["pick"]["path"]
+    if preview:
+        return {**row, "outcome": "would compare", "manual": manual, "why": d["reason"]}
+    try:
+        idx = _reusable(archive, run["run_folder"], fingerprint(Path(manual))["sha256"])
+        reused = idx is not None
+        if not idx:
+            idx = run_job(run["drawing"], manual=manual, ai=run["workbook"], client=run["client"],
+                          read_via_excel=read_via_excel, compare=compare, made_by=made_by)
+            archive.append(idx)
+    except Exception as exc:                                         # noqa: BLE001
+        return {**row, "outcome": "failed", "note": f"{type(exc).__name__}: {exc}", "manual": manual}
+    h, q = idx.get("headline") or {}, idx.get("quantity") or {}
+    return {**row, "outcome": idx.get("outcome") or outcome_of(idx), "manual": manual,
+            "folder": idx["folder"], "report": idx.get("report_html", ""), "reused": reused,
+            "ai_unit": q.get("ai_unit_at_manual_qty") or h.get("ai_unit_cost_gbp"),
+            "manual_unit": h.get("manual_unit_cost_gbp"), "pct": unit_pct(idx),
+            "quantity_note": q.get("note", ""), "status": idx.get("outcome")}
+
+
+def stats(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    comparable = [x for x in rows if x["outcome"] in COMPARABLE]
+    pcts = [float(x["pct"]) for x in comparable if isinstance(x.get("pct"), (int, float))]
+    count = {k: sum(1 for x in rows if x["outcome"] == k)
+             for k in ("match", "warning", "fail", "quantities differ", "no manual", "ambiguous",
+                       "failed", "not compared", "would compare")}
+    return {"drawings": len(rows), "compared": len(comparable), **count,
+            "runs_collapsed": sum(max(0, int(x.get("runs_in_period") or 1) - 1) for x in rows),
+            "median_abs_pct": round(statistics.median(pcts), 2) if pcts else None,
+            "mean_abs_pct": round(statistics.mean(pcts), 2) if pcts else None,
+            "within_warning_pct": (round(100.0 * sum(1 for x in comparable
+                                                     if x["outcome"] in ("match", "warning"))
+                                         / len(comparable), 1) if comparable else None)}
+
+
+def _period_rows(start, end, r, archive, *, client, job, preview, read_via_excel, compare,
+                 made_by, progress) -> List[Dict[str, Any]]:
+    runs = runs_between(start, end, r["aisheets"], client=client, job=job)
+    rows = []
+    for i, run in enumerate(runs, start=1):
+        rows.append(_pair(run, r, archive, preview=preview, read_via_excel=read_via_excel,
+                          compare=compare, made_by=made_by))
+        progress(i, len(runs), rows)
+    return rows
 
 
 def run_period(start: str, end: str, *, preview: bool = False, read_via_excel: bool = False,
+               client: str = "", job: str = "",
                compare: Optional[Callable[..., Dict[str, Any]]] = None,
                say: Callable[[str], None] = print,
                status_file: Optional[Path] = None) -> Dict[str, Any]:
-    """Every AI estimate in the period against its manual estimate, each filed, one summary.
-
-    status_file: a second copy of the progress, for the service, which started this in the
-    background and does not know the folder's name until the first line is written."""
+    """Every drawing estimated in one period against its manual estimate, each filed."""
     r = roots()
-    try:
-        runs = runs_between(start, end, r["aisheets"])
-    except ParityJobError as exc:
-        _write_status([status_file], {"finished": True, "error": str(exc)})
-        raise
-    rows: List[Dict[str, Any]] = []
     folder = None
-    status_path = None
     if not preview:
         folder = _new_folder(r["parity"] / "_periods",
                              f"{start} to {end} (run {time.strftime('%Y-%m-%d %H-%M-%S')})")
-        status_path = folder / "status.json"
-    _write_status([status_path, status_file],
-                  {"done": 0, "of": len(runs), "rows": [], "folder": str(folder or ""),
-                   "start": start, "end": end, "preview": preview})
-    for i, run in enumerate(runs, start=1):
-        row = {"client": run["client"], "drawing": run["drawing"], "ai_run": run["run"]}
-        try:
-            manual = find_manual(run["drawing"], r["manual"])
-        except ParityJobError as exc:
-            manual = []
-            row["note"] = str(exc)
-        if not manual:
-            row.setdefault("note", "no manual estimate found")
-            row["outcome"] = "no manual"
-        elif preview:
-            row.update(outcome="would compare", manual=manual[0]["path"])
-        else:
-            try:
-                idx = run_job(run["drawing"], manual=manual[0]["path"], ai=run["workbook"],
-                              read_via_excel=read_via_excel, compare=compare,
-                              made_by=f"period {start} to {end}")
-                h = idx.get("headline") or {}
-                row.update(outcome="compared", manual=manual[0]["path"],
-                           folder=idx["folder"], report=idx.get("report_html", ""),
-                           ai_unit=h.get("ai_unit_cost_gbp"), manual_unit=h.get("manual_unit_cost_gbp"),
-                           pct=h.get("pct_variance"), status=h.get("status"))
-            except Exception as exc:                                 # noqa: BLE001
-                row.update(outcome="failed", note=f"{type(exc).__name__}: {exc}")
-        rows.append(row)
-        say(f"  {i}/{len(runs)}  {run['drawing']}: {row['outcome']}"
-            + (f" ({row.get('note')})" if row.get("note") else ""))
-        _write_status([status_path, status_file],
-                      {"done": i, "of": len(runs), "rows": rows, "folder": str(folder or ""),
-                       "start": start, "end": end, "preview": preview})
-    result = {"start": start, "end": end, "preview": preview, "rows": rows,
-              "compared": sum(1 for x in rows if x["outcome"] == "compared"),
-              "no_manual": sum(1 for x in rows if x["outcome"] == "no manual"),
-              "failed": sum(1 for x in rows if x["outcome"] == "failed")}
+    base = {"kind": "period", "start": start, "end": end, "client": client, "job": job,
+            "preview": preview, "folder": str(folder or "")}
+
+    def progress(i, n, rows):
+        say(f"  {i}/{n}  {rows[-1]['drawing']}: {rows[-1]['outcome']}")
+        _status(status_file, {**base, "done": i, "of": n, "rows": rows})
+        if folder:
+            _status(folder / "status.json", {**base, "done": i, "of": n, "rows": rows})
+
+    _status(status_file, {**base, "done": 0, "of": None, "rows": []})
+    archive = _indexes(r["parity"]) if r["parity"].is_dir() else []
+    rows = _period_rows(start, end, r, archive, client=client, job=job, preview=preview,
+                        read_via_excel=read_via_excel, compare=compare,
+                        made_by=f"period {start} to {end}", progress=progress)
+    result = {**base, "rows": rows, "stats": stats(rows), "date_basis": DATE_BASIS,
+              "compared": stats(rows)["compared"], "no_manual": stats(rows)["no manual"],
+              "failed": stats(rows)["failed"]}
     if folder:
-        result["folder"] = str(folder)
-        (folder / "period_summary.json").write_text(json.dumps(result, indent=2, default=str),
-                                                    encoding="utf-8")
-        (folder / "period_summary.html").write_text(period_page(result, r["parity"]),
-                                                    encoding="utf-8")
+        _write_pages(folder, "period_summary", result, period_page)
         result["summary_html"] = str(folder / "period_summary.html")
-    _write_status([status_path, status_file],
-                  {**result, "done": len(runs), "of": len(runs), "finished": True})
+        result["summary_portal_html"] = str(folder / "period_summary.portal.html")
+    _status(status_file, {**result, "done": len(rows), "of": len(rows), "finished": True})
+    if folder:
+        _status(folder / "status.json", {**result, "done": len(rows), "of": len(rows), "finished": True})
     return result
 
 
-def periods(parity_root: Optional[Path] = None, limit: int = 100) -> List[Dict[str, Any]]:
-    """Period comparisons already run, newest first: their dates, counts and summary page."""
+DATE_BASIS = ("Each AI estimate is dated by its run folder. Each manual estimate's date is its "
+              "file's modified date, labelled as such: the sheet holds no reliable estimate date.")
+
+
+def compare_periods(a: tuple, b: tuple, *, client: str = "", job: str = "",
+                    preview: bool = False, read_via_excel: bool = False,
+                    compare: Optional[Callable[..., Dict[str, Any]]] = None,
+                    say: Callable[[str], None] = print,
+                    status_file: Optional[Path] = None) -> Dict[str, Any]:
+    """Period A against Period B: the comparable pairs in each, how the variance moved, the
+    drawings estimated in both, and everything that could not be compared, listed apart."""
+    r = roots()
+    for s, e in (a, b):
+        if not _day(s) or not _day(e) or _day(e) < _day(s):
+            raise ParityJobError("Each period needs a start and an end date, the end not before the start.")
+    name = (f"A {a[0]} to {a[1]} vs B {b[0]} to {b[1]} "
+            f"(run {time.strftime('%Y-%m-%d %H-%M-%S')})")
+    folder = None if preview else _new_folder(r["parity"] / "_periods", name)
+    base = {"kind": "two periods", "a": list(a), "b": list(b), "client": client, "job": job,
+            "preview": preview, "folder": str(folder or "")}
+    archive = _indexes(r["parity"]) if r["parity"].is_dir() else []
+    sides: Dict[str, List[Dict[str, Any]]] = {}
+    for label, (s, e) in (("A", a), ("B", b)):
+        def progress(i, n, rows, label=label):
+            say(f"  {label} {i}/{n}  {rows[-1]['drawing']}: {rows[-1]['outcome']}")
+            _status(status_file, {**base, "period": label, "done": i, "of": n,
+                                  "rows_a": sides.get("A", rows if label == "A" else []),
+                                  "rows_b": rows if label == "B" else []})
+        sides[label] = _period_rows(s, e, r, archive, client=client, job=job, preview=preview,
+                                    read_via_excel=read_via_excel, compare=compare,
+                                    made_by=f"period {s} to {e}", progress=progress)
+    sa, sb = stats(sides["A"]), stats(sides["B"])
+    by_a = {x["drawing"]: x for x in sides["A"] if x["outcome"] in COMPARABLE}
+    both = []
+    for x in sides["B"]:
+        y = by_a.get(x["drawing"])
+        if y and x["outcome"] in COMPARABLE:
+            both.append({"drawing": x["drawing"], "client": x["client"],
+                         "pct_a": y.get("pct"), "pct_b": x.get("pct"),
+                         "change": (round(x["pct"] - y["pct"], 2)
+                                    if isinstance(x.get("pct"), (int, float))
+                                    and isinstance(y.get("pct"), (int, float)) else None)})
+
+    def delta(k):
+        return (round(sb[k] - sa[k], 2) if isinstance(sa.get(k), (int, float))
+                and isinstance(sb.get(k), (int, float)) else None)
+    result = {**base, "rows_a": sides["A"], "rows_b": sides["B"], "stats_a": sa, "stats_b": sb,
+              "change": {"median_abs_pct": delta("median_abs_pct"),
+                         "mean_abs_pct": delta("mean_abs_pct"),
+                         "within_warning_pct": delta("within_warning_pct")},
+              "in_both": both, "date_basis": DATE_BASIS}
+    if folder:
+        _write_pages(folder, "comparison", result, two_period_page)
+        result["summary_html"] = str(folder / "comparison.html")
+        result["summary_portal_html"] = str(folder / "comparison.portal.html")
+    _status(status_file, {**result, "finished": True})
+    if folder:
+        _status(folder / "status.json", {**result, "finished": True})
+    return result
+
+
+def history(parity_root: Optional[Path] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    """Period comparisons already run, newest first."""
     root = Path(parity_root or roots()["parity"]) / "_periods"
     if not root.is_dir():
         return []
     out = []
-    for path in root.glob("*/period_summary.json"):
-        try:
-            body = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        out.append({"start": body.get("start"), "end": body.get("end"),
-                    "folder": str(path.parent), "name": path.parent.name,
-                    "compared": body.get("compared"), "no_manual": body.get("no_manual"),
-                    "failed": body.get("failed"),
-                    "summary_html": str(path.parent / "period_summary.html")})
+    for name in ("period_summary.json", "comparison.json"):
+        for path in root.glob(f"*/{name}"):
+            body = _load(str(path))
+            if not body:
+                continue
+            stem = Path(name).stem
+            s = body.get("stats") or body.get("stats_b") or {}
+            out.append({"kind": body.get("kind") or "period", "name": path.parent.name,
+                        "folder": str(path.parent),
+                        "start": body.get("start") or (body.get("a") or [None])[0],
+                        "end": body.get("end") or (body.get("b") or [None, None])[-1],
+                        "a": body.get("a"), "b": body.get("b"),
+                        "compared": s.get("compared", body.get("compared")),
+                        "no_manual": s.get("no manual", body.get("no_manual")),
+                        "failed": s.get("failed", body.get("failed")),
+                        "summary_html": str(path.parent / f"{stem}.html"),
+                        "summary_portal_html": str(path.parent / f"{stem}.portal.html")})
     out.sort(key=lambda x: x["name"].rsplit("(run ", 1)[-1], reverse=True)
     return out[:limit]
 
+
+# ── pages ───────────────────────────────────────────────────────────────────────────────
+# WRITTEN TWICE, BECAUSE THEY ARE OPENED FROM TWO PLACES. From the share, links are relative
+# so the folder can be opened in Explorer or moved. Through the portal a page is served from
+# /api/file in a sandbox, where a relative link resolves to nothing, so the .portal copy links
+# each report through /api/file by its full path.
 
 def _gbp(v: Any) -> str:
     try:
         return f"£{float(v):,.2f}"
     except (TypeError, ValueError):
-        return "not read"
+        return ""
 
 
-def period_page(result: Dict[str, Any], parity_root: Path) -> str:
-    """One page: every job in the period, the two unit costs, the gap, and its report."""
-    def link(row: Dict[str, Any]) -> str:
-        if not row.get("folder") or not row.get("report"):
-            return ""
-        rel = os.path.relpath(Path(row["folder"]) / row["report"], Path(result["folder"]))
-        return f'<a href="{html.escape(rel.replace(os.sep, "/"))}">report</a>'
+def _pct(v: Any) -> str:
+    return f"{float(v):.1f}%" if isinstance(v, (int, float)) else ""
+
+
+def _link(row: Dict[str, Any], here: Path, portal: bool, text: str = "report") -> str:
+    if not row.get("folder") or not row.get("report"):
+        return html.escape(str(row.get("note") or ""))[:240]
+    target = Path(row["folder"]) / row["report"]
+    href = ("/api/file?path=" + quote(str(target))) if portal \
+        else os.path.relpath(target, here).replace(os.sep, "/")
+    return f'<a href="{html.escape(href)}">{text}</a>'
+
+
+_STYLE = """<style>body{font:14px/1.5 Segoe UI,Arial,sans-serif;margin:24px;color:#1a1e1c}
+table{border-collapse:collapse;margin:8px 0 18px}td,th{padding:5px 10px;border-bottom:1px solid #d5dad7;text-align:left;vertical-align:top}
+td.n{text-align:right;font-variant-numeric:tabular-nums}h1{font-size:22px}h2{font-size:17px;margin-top:22px}
+.note{color:#5b625e}</style>"""
+
+
+def _rows_table(rows: List[Dict[str, Any]], here: Path, portal: bool, outcomes: Iterable[str]) -> str:
+    keep = [x for x in rows if x["outcome"] in set(outcomes)]
+    if not keep:
+        return '<p class="note">None.</p>'
     body = "".join(
-        "<tr><td>{}</td><td>{}</td><td>{}</td><td class=n>{}</td><td class=n>{}</td>"
-        "<td class=n>{}</td><td>{}</td><td>{}</td></tr>".format(
-            html.escape(r["drawing"]), html.escape(r["client"]), html.escape(r["ai_run"]),
-            _gbp(r.get("ai_unit")) if r["outcome"] == "compared" else "",
-            _gbp(r.get("manual_unit")) if r["outcome"] == "compared" else "",
-            (f"{float(r['pct']):+.1f}%" if isinstance(r.get("pct"), (int, float)) else ""),
-            html.escape(str(r.get("status") or r["outcome"])),
-            link(r) or html.escape(r.get("note", "")))
-        for r in result["rows"])
-    return f"""<!doctype html><meta charset="utf-8"><title>Parity {html.escape(result['start'])} to {html.escape(result['end'])}</title>
-<style>body{{font:14px/1.5 Segoe UI,Arial,sans-serif;margin:24px;color:#1a1e1c}}
-table{{border-collapse:collapse}}td,th{{padding:5px 10px;border-bottom:1px solid #d5dad7;text-align:left}}
-td.n{{text-align:right;font-variant-numeric:tabular-nums}}h1{{font-size:22px}}</style>
-<h1>AI against manual estimates, {html.escape(result['start'])} to {html.escape(result['end'])}</h1>
-<p>{result['compared']} compared, {result['no_manual']} with no manual estimate found,
-{result['failed']} could not be compared. Each AI estimate is the newest run of its drawing in
-the period; each manual estimate is the most obvious workbook for its job number. Internal
-costing only.</p>
-<table><tr><th>Drawing</th><th>Client</th><th>AI run</th><th>AI unit</th><th>Manual unit</th>
-<th>Gap</th><th>Verdict</th><th>Report</th></tr>{body}</table>
-"""
+        "<tr><td>{}</td><td>{}</td><td>{}</td><td class=n>{}</td><td class=n>{}</td><td class=n>{}</td>"
+        "<td>{}</td><td>{}</td></tr>".format(
+            html.escape(x["drawing"]), html.escape(x["client"]),
+            html.escape(x["ai_run"]) + (f" ({x['runs_in_period']} runs, newest used)"
+                                        if x.get("runs_in_period", 1) > 1 else ""),
+            _gbp(x.get("ai_unit")), _gbp(x.get("manual_unit")), _pct(x.get("pct")),
+            html.escape(str(x.get("outcome"))), _link(x, here, portal)
+            + (f'<br><span class="note">{html.escape(x["quantity_note"])}</span>' if x.get("quantity_note") else ""))
+        for x in keep)
+    return ("<table><tr><th>Drawing</th><th>Client</th><th>AI run</th><th>AI unit</th>"
+            "<th>Manual unit</th><th>Variance</th><th>Outcome</th><th>Evidence</th></tr>"
+            + body + "</table>")
+
+
+def _stats_line(s: Dict[str, Any]) -> str:
+    return (f"{s['compared']} comparable ({s['match']} match, {s['warning']} warning, "
+            f"{s['fail']} fail); median variance {_pct(s['median_abs_pct']) or 'n/a'}, "
+            f"mean {_pct(s['mean_abs_pct']) or 'n/a'}, within warning "
+            f"{_pct(s['within_warning_pct']) or 'n/a'}. Apart: {s['quantities differ']} with "
+            f"quantities that differ, {s['ambiguous']} ambiguous, {s['no manual']} with no manual "
+            f"estimate, {s['failed']} that failed. {s['runs_collapsed']} repeat run(s) collapsed.")
+
+
+def period_page(result: Dict[str, Any], here: Path, portal: bool) -> str:
+    rows = result["rows"]
+    s = result["stats"]
+    return (f"<!doctype html><meta charset=utf-8><title>Parity {html.escape(result['start'])} to "
+            f"{html.escape(result['end'])}</title>{_STYLE}"
+            f"<h1>AI against manual estimates, {html.escape(result['start'])} to {html.escape(result['end'])}</h1>"
+            f"<p>{html.escape(_stats_line(s))}</p><p class=note>{html.escape(result['date_basis'])} "
+            f"Internal costing only.</p>"
+            f"<h2>Comparable</h2>{_rows_table(rows, here, portal, COMPARABLE)}"
+            f"<h2>Quantities differ</h2>{_rows_table(rows, here, portal, ['quantities differ'])}"
+            f"<h2>Ambiguous: choose the manual sheet</h2>{_rows_table(rows, here, portal, ['ambiguous'])}"
+            f"<h2>No manual estimate found</h2>{_rows_table(rows, here, portal, ['no manual'])}"
+            f"<h2>Could not be compared</h2>{_rows_table(rows, here, portal, ['failed', 'not compared'])}")
+
+
+def two_period_page(result: Dict[str, Any], here: Path, portal: bool) -> str:
+    a, b, sa, sb, ch = result["a"], result["b"], result["stats_a"], result["stats_b"], result["change"]
+    def pts(v):
+        return "" if v is None else f"{v:+.1f} pts"
+    both = "".join(f"<tr><td>{html.escape(x['drawing'])}</td><td>{html.escape(x['client'])}</td>"
+                   f"<td class=n>{_pct(x['pct_a'])}</td><td class=n>{_pct(x['pct_b'])}</td>"
+                   f"<td class=n>{pts(x['change'])}</td></tr>"
+                   for x in result["in_both"]) or '<tr><td colspan=5 class=note>None estimated in both periods.</td></tr>'
+
+    def moved(k):
+        v = ch.get(k)
+        return "n/a" if v is None else f"{v:+.1f} pts"
+    parts = [f"<!doctype html><meta charset=utf-8><title>Parity A against B</title>{_STYLE}",
+             f"<h1>Period A {html.escape(a[0])} to {html.escape(a[1])} against Period B "
+             f"{html.escape(b[0])} to {html.escape(b[1])}</h1>",
+             f"<p class=note>{html.escape(result['date_basis'])}"
+             + (f" Client: {html.escape(result['client'])}." if result.get("client") else "")
+             + (f" Job: {html.escape(result['job'])}." if result.get("job") else "")
+             + " Internal costing only.</p>",
+             "<table><tr><th></th><th>Period A</th><th>Period B</th><th>Change</th></tr>"
+             f"<tr><td>Comparable pairs</td><td class=n>{sa['compared']}</td><td class=n>{sb['compared']}</td><td></td></tr>"
+             f"<tr><td>Median variance</td><td class=n>{_pct(sa['median_abs_pct'])}</td><td class=n>{_pct(sb['median_abs_pct'])}</td><td class=n>{moved('median_abs_pct')}</td></tr>"
+             f"<tr><td>Mean variance</td><td class=n>{_pct(sa['mean_abs_pct'])}</td><td class=n>{_pct(sb['mean_abs_pct'])}</td><td class=n>{moved('mean_abs_pct')}</td></tr>"
+             f"<tr><td>Within warning</td><td class=n>{_pct(sa['within_warning_pct'])}</td><td class=n>{_pct(sb['within_warning_pct'])}</td><td class=n>{moved('within_warning_pct')}</td></tr>"
+             f"<tr><td>Quantities differ</td><td class=n>{sa['quantities differ']}</td><td class=n>{sb['quantities differ']}</td><td></td></tr>"
+             f"<tr><td>Ambiguous</td><td class=n>{sa['ambiguous']}</td><td class=n>{sb['ambiguous']}</td><td></td></tr>"
+             f"<tr><td>No manual estimate</td><td class=n>{sa['no manual']}</td><td class=n>{sb['no manual']}</td><td></td></tr>"
+             f"<tr><td>Failed</td><td class=n>{sa['failed']}</td><td class=n>{sb['failed']}</td><td></td></tr>"
+             f"<tr><td>Repeat runs collapsed</td><td class=n>{sa['runs_collapsed']}</td><td class=n>{sb['runs_collapsed']}</td><td></td></tr>"
+             "</table>",
+             "<h2>Drawings estimated in both periods</h2><table><tr><th>Drawing</th><th>Client</th>"
+             f"<th>Variance A</th><th>Variance B</th><th>Change</th></tr>{both}</table>"]
+    for label, rows in (("A", result["rows_a"]), ("B", result["rows_b"])):
+        parts.append(f"<h2>Period {label}: comparable</h2>{_rows_table(rows, here, portal, COMPARABLE)}")
+        parts.append(f"<h2>Period {label}: apart from the figures</h2>"
+                     f"{_rows_table(rows, here, portal, ['quantities differ', 'ambiguous', 'no manual', 'failed', 'not compared'])}")
+    return "".join(parts)
+
+
+def _write_pages(folder: Path, stem: str, result: Dict[str, Any], page) -> None:
+    (folder / f"{stem}.json").write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
+    (folder / f"{stem}.html").write_text(page(result, folder, False), encoding="utf-8")
+    (folder / f"{stem}.portal.html").write_text(page(result, folder, True), encoding="utf-8")
 
 
 # ── command line ────────────────────────────────────────────────────────────────────────
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Parity by job number (D-619).")
+    ap = argparse.ArgumentParser(description="Parity by job number (D-619, D-621).")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    f = sub.add_parser("find"); f.add_argument("job")
-    j = sub.add_parser("job"); j.add_argument("job")
+    f = sub.add_parser("find"); f.add_argument("job"); f.add_argument("--client", default="")
+    j = sub.add_parser("job"); j.add_argument("job"); j.add_argument("--client", default="")
     j.add_argument("--manual"); j.add_argument("--ai")
     j.add_argument("--read-via-excel", action="store_true")
-    j.add_argument("--made-by", default="", help="what asked for it, for the index")
+    j.add_argument("--made-by", default="", help="what asked for it, for the manifest")
+    j.add_argument("--id", default="", help="the comparison id, when the service chose it")
     s = sub.add_parser("search"); s.add_argument("text", nargs="?", default="")
     s.add_argument("--from", dest="start"); s.add_argument("--to", dest="end")
+    s.add_argument("--outcome", default="")
     p = sub.add_parser("period"); p.add_argument("--from", dest="start", required=True)
     p.add_argument("--to", dest="end", required=True); p.add_argument("--preview", action="store_true")
+    p.add_argument("--client", default=""); p.add_argument("--job", default="")
     p.add_argument("--read-via-excel", action="store_true")
-    p.add_argument("--status-file", help="a second copy of the progress, for the service")
     q = sub.add_parser("periods")
-    for x in (f, j, s, p, q):
+    for k in ("a-from", "a-to", "b-from", "b-to"):
+        q.add_argument(f"--{k}", required=True)
+    q.add_argument("--client", default=""); q.add_argument("--job", default="")
+    q.add_argument("--preview", action="store_true"); q.add_argument("--read-via-excel", action="store_true")
+    hst = sub.add_parser("history")
+    for x in (f, j, s, p, q, hst):
         x.add_argument("--json", action="store_true", help="one JSON line, for the service")
+        x.add_argument("--status-file", help="progress for the service, which runs this in the background")
     a = ap.parse_args(argv)
+    status = Path(a.status_file) if getattr(a, "status_file", None) else None
     try:
         import config  # noqa: F401  — loads .env, so the roots set there apply
     except Exception:                                                # noqa: BLE001
         pass
+    quiet = (lambda m: None) if a.json else print
     try:
         if a.cmd == "find":
-            out = {"job": a.job, "manual": find_manual(a.job), "ai": find_ai(a.job)}
+            ai_runs = find_ai(a.job)
+            client = a.client or (ai_runs[0]["client"] if ai_runs else "")
+            manual = find_manual(a.job, client=client)
+            d = decide(manual, a.job, client)
+            out = {"job": a.job, "client": client, "manual": manual, "ai": ai_runs,
+                   "decision": {"clear": d["clear"], "reason": d["reason"],
+                                "path": (d["pick"] or {}).get("path")}}
             if not a.json:
-                print(f"Manual estimates for {job_digits(a.job)}, most obvious first:")
-                for c in out["manual"] or []:
+                print(f"Manual estimates for {job_digits(a.job)} ({client or 'client unknown'}), likeliest first:")
+                for c in manual:
                     print(f"  {c['path']}  ({c['why']}, {c['modified_text']})")
+                print(("Clear: " if d["clear"] else "Choose by hand: ") + d["reason"])
                 print("AI estimates, newest first:")
-                for run in out["ai"] or []:
+                for run in ai_runs:
                     print(f"  {run['workbook']}")
         elif a.cmd == "job":
-            out = run_job(a.job, a.manual, a.ai, read_via_excel=a.read_via_excel,
-                          made_by=a.made_by)
+            def step(m):
+                quiet(m)
+                _status(status, {"state": "running", "step": m, "job": a.job})
+            _status(status, {"state": "running", "step": "Starting…", "job": a.job})
+            out = run_job(a.job, a.manual, a.ai, client=a.client, read_via_excel=a.read_via_excel,
+                          made_by=a.made_by, comparison_id=a.id, say=step)
+            _status(status, {"state": "done", "finished": True, "result": out})
             if not a.json:
                 h = out["headline"]
                 print(f"Filed to {out['folder']}\n  manual {out['manual']['source']}\n"
-                      f"  AI     {out['ai']['source']}\n  AI {_gbp(h.get('ai_unit_cost_gbp'))} "
-                      f"against manual {_gbp(h.get('manual_unit_cost_gbp'))}, "
-                      f"verdict {h.get('status') or 'not read'}; report {out['report_html']}")
+                      f"  AI     {out['ai']['source']}\n  outcome {out['outcome']}: AI "
+                      f"{_gbp(h.get('ai_unit_cost_gbp')) or 'not read'} against manual "
+                      f"{_gbp(h.get('manual_unit_cost_gbp')) or 'not read'}; "
+                      f"{(out.get('quantity') or {}).get('note', '')}")
         elif a.cmd == "search":
-            out = {"reports": search(a.text, a.start, a.end)}
+            out = {"reports": search(a.text, a.start, a.end, outcome=a.outcome)}
             if not a.json:
                 for i in out["reports"]:
-                    print(f"  {i['stamp']}  {i['drawing']}  {i['client']}  {i['folder']}")
-        elif a.cmd == "periods":
-            out = {"periods": periods()}
+                    print(f"  {i['stamp']}  {i['drawing']}  {i['client']}  {i['outcome']}  {i['folder']}")
+        elif a.cmd == "history":
+            out = {"periods": history()}
             if not a.json:
                 for x in out["periods"]:
-                    print(f"  {x['name']}: {x['compared']} compared  {x['summary_html']}")
+                    print(f"  {x['name']}: {x['compared']} comparable  {x['summary_html']}")
+        elif a.cmd == "periods":
+            out = compare_periods((getattr(a, "a_from"), getattr(a, "a_to")),
+                                  (getattr(a, "b_from"), getattr(a, "b_to")),
+                                  client=a.client, job=a.job, preview=a.preview,
+                                  read_via_excel=a.read_via_excel, say=quiet, status_file=status)
+            if not a.json:
+                print(f"A: {_stats_line(out['stats_a'])}\nB: {_stats_line(out['stats_b'])}"
+                      + (f"\nFiled in {out['folder']}" if out.get("folder") else "\nPreview only"))
         else:
             out = run_period(a.start, a.end, preview=a.preview, read_via_excel=a.read_via_excel,
-                             say=(lambda m: None) if a.json else print,
-                             status_file=Path(a.status_file) if a.status_file else None)
+                             client=a.client, job=a.job, say=quiet, status_file=status)
             if not a.json:
-                print(f"{out['compared']} compared, {out['no_manual']} with no manual, "
-                      f"{out['failed']} failed" + (f"; summary in {out['folder']}"
-                                                   if out.get("folder") else "; preview only"))
+                print(_stats_line(out["stats"]) + (f"\nFiled in {out['folder']}"
+                                                   if out.get("folder") else "\nPreview only"))
+    except ParityChoiceNeeded as exc:
+        body = {"error": str(exc), "choose": True, "candidates": exc.candidates}
+        _status(status, {"state": "choose", "finished": True, **body})
+        print(json.dumps(body, default=str) if a.json else str(exc), file=sys.stdout if a.json else sys.stderr)
+        return 3
     except ParityJobError as exc:
+        _status(status, {"state": "failed", "finished": True, "error": str(exc)})
         if a.json:
             print(json.dumps({"error": str(exc)}))
         else:
             print(str(exc), file=sys.stderr)
         return 2
     except Exception as exc:                                         # noqa: BLE001
-        # A period runs in the background; the page reads the status file, so it must say
-        # the run ended, and why, rather than show "running" for ever.
-        if getattr(a, "status_file", None):
-            _write_status([Path(a.status_file)],
-                          {"finished": True, "error": f"{type(exc).__name__}: {exc}"})
+        # In the background the page reads the status file, so it must say the run ended, and
+        # why, rather than show "running" for ever.
+        _status(status, {"state": "failed", "finished": True,
+                         "error": f"{type(exc).__name__}: {exc}"})
         raise
     if a.json:
         print(json.dumps(out, default=str))

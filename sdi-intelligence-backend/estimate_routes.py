@@ -241,6 +241,7 @@ class Run:
     # questions about the same files, and the runner has to be told which was asked.
     pdf_path: str = ""
     manual_workbook: str = ""               # parity partner, if one was attached to this run
+    compare_with_manual: bool = False       # D-621: find the manual sheet when it finishes
     batch_id: str = ""                      # which enquiry this drawing came in with
     # THE SECOND OPINION, KEPT BESIDE THE FIRST AND NEVER MIXED INTO IT. An LLM read of the
     # drawing arrives in seconds; the engine's estimate takes tens of minutes and runs one
@@ -606,6 +607,10 @@ class EstimateRequest(BaseModel):
     # the only way the comparison gets made at the moment somebody is actually looking at
     # the job, rather than never.
     manual_workbook: Optional[str] = None
+    # OR COMPARE WITH THE MANUAL ESTIMATE WHEN THIS FINISHES (D-621): the runner finds it by job
+    # number under Manual Estimates, and compares only when the choice is clear; otherwise the
+    # run's log says so and the parity card offers the candidates.
+    compare_with_manual: bool = False
     # THE SAME THREE WORDS THE BATCH ENDPOINT ALREADY VALIDATES. "both" and "engine" are the
     # normal run and behave identically here -- this endpoint has always produced a full
     # estimate and still does. "llm" is the new one: read the pack with the vision model
@@ -888,9 +893,11 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         # the same stamp as its folder in AISheets. Empty: no second copy on this machine.
         "archive_root": str(COMPLETED_BRIEFS_ROOT) if FILE_TO_COMPLETED_BRIEFS else "",
         "archive_stamp": time.strftime("%Y-%m-%d %H-%M-%S", time.localtime(run.queued_at)),
-        # AND THE PARITY FOLDER (D-619), when a manual estimate came with the run: the runner
-        # files the comparison there too, so it is searchable beside the ones run by job number.
-        "parity_root": str(PARITY_ROOT) if run.manual_workbook else "",
+        # AND THE PARITY FOLDER (D-619), when a manual estimate came with the run or is to be
+        # found when it finishes (D-621): the runner files the comparison there, searchable
+        # beside the ones run by job number.
+        "parity_root": str(PARITY_ROOT) if (run.manual_workbook or run.compare_with_manual) else "",
+        "compare_with_manual": bool(run.compare_with_manual),
     }}
 
 
@@ -2137,6 +2144,7 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                   units=int(req.units), quantity_breaks=list(_breaks),
                   job_folder=str(job), output_path=str(out),
                   manual_workbook=manual_wb, queued_at=queued_at,
+                  compare_with_manual=bool(req.compare_with_manual) and not manual_wb,
                   llm_only=(method == "llm"),
                   fresh_read=bool(req.fresh_read),
                   email_to=_email_to, email_quote=bool(req.email_quote),
@@ -2807,7 +2815,23 @@ async def estimate_parity(
     }
 
 
-# ── Parity by job number (D-619) ─────────────────────────────────────────────
+# ── Speech for the question boxes (D-622) ────────────────────────────────────
+# Whether the AM CRM's Azure speech is configured, so the estimating pages know whether to
+# record for the service (iPhones, browsers with no recognition) and speak in its voice. Only
+# the three speech facts: nothing else about the CRM's settings reaches these pages.
+@router.get("/speech")
+def speech_status():
+    try:
+        import voicecrm_speech
+        st = voicecrm_speech.status()
+    except Exception:                                                # noqa: BLE001
+        st = {}
+    return {"speech_ready": bool(st.get("speech_ready")),
+            "speech_stt": str(st.get("speech_stt") or "off"),
+            "speech_tts": bool(st.get("speech_tts"))}
+
+
+# ── Parity by job number (D-619, D-621) ──────────────────────────────────────
 #
 # JG, 1 Nov 2026: "a new parity option where we can compare one job - can choose / find from
 # file system or name for the tool to search by job number ... we take the most obvious s/sheet
@@ -2819,9 +2843,12 @@ async def estimate_parity(
 #
 # The finding, filing and searching live in src/parity_job.py, run in the engine's Python like
 # the parity route above: one place for the rules, the same answer from the command line, the
-# desk page and the phone. These routes only check the key and the paths, and add links.
-# A period can take a while over the share, so it runs in the background and the page reads its
-# progress from a status file in the state folder.
+# desk page and the phone. These routes check the key and the paths, run it, and add links.
+#
+# THE REVIEW (D-621): a single comparison now runs in the background too, with an id the page
+# polls, so a slow share never invites a second press; the same comparison asked for again
+# while one is running returns the first one's id. An ambiguous manual sheet comes back as a
+# choice, never a guess.
 _PARITY_JOB_CLI = str(_REPO_ROOT / "src" / "parity_job.py")
 PARITY_ROOT = Path(os.getenv(
     "SDI_PARITY_ROOT",
@@ -2829,23 +2856,34 @@ PARITY_ROOT = Path(os.getenv(
 MANUAL_ESTIMATES_ROOT = Path(os.getenv(
     "SDI_MANUAL_ESTIMATES_ROOT",
     r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Manual Estimates"))
-_PERIOD_ID = re.compile(r"^[a-f0-9]{12}$")
+_PARITY_TASK_ID = re.compile(r"^[a-f0-9]{8,12}$")
+_PARITY_RUNNING: Dict[str, str] = {}          # what was asked -> the task already doing it
+_PARITY_LOCK = threading.Lock()
 
 
-def _parity_job(args: List[str], timeout: int = 300) -> Dict[str, Any]:
-    """Run parity_job.py with --json and return its answer. Its exit 2 is a reason a person can
-    act on (no manual estimate found, a bad date) and comes back as a 400 in its own words."""
-    if not Path(_ENGINE_PYTHON).exists():
-        raise HTTPException(
-            status_code=500,
-            detail=f"Engine python not found at {_ENGINE_PYTHON} — set SDI_ENGINE_PYTHON")
+def _parity_env() -> Dict[str, str]:
     env = dict(os.environ)
     env.setdefault("SDI_PARITY_ROOT", str(PARITY_ROOT))
     env.setdefault("SDI_MANUAL_ESTIMATES_ROOT", str(MANUAL_ESTIMATES_ROOT))
     env.setdefault("SDI_ESTIMATE_OUTPUT_ROOT", str(OUTPUT_ROOT))
+    return env
+
+
+def _engine_ready() -> None:
+    if not Path(_ENGINE_PYTHON).exists():
+        raise HTTPException(
+            status_code=500,
+            detail=f"Engine python not found at {_ENGINE_PYTHON} — set SDI_ENGINE_PYTHON")
+
+
+def _parity_job(args: List[str], timeout: int = 300) -> Dict[str, Any]:
+    """Run parity_job.py with --json and return its answer. Exit 2 is a reason a person can act
+    on (no manual estimate found, a bad date), a 400 in its own words; exit 3 is a choice to
+    make, a 409 carrying the candidates."""
+    _engine_ready()
     try:
         proc = subprocess.run([_ENGINE_PYTHON, _PARITY_JOB_CLI, *args, "--json"],
-                              capture_output=True, text=True, timeout=timeout, env=env,
+                              capture_output=True, text=True, timeout=timeout, env=_parity_env(),
                               cwd=str(_REPO_ROOT))
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="The parity search timed out on the share")
@@ -2855,6 +2893,8 @@ def _parity_job(args: List[str], timeout: int = 300) -> Dict[str, Any]:
         body = json.loads(line) if line else {}
     except ValueError:
         body = {}
+    if proc.returncode == 3:
+        raise HTTPException(status_code=409, detail=body)
     if proc.returncode == 2:
         raise HTTPException(status_code=400, detail=str(body.get("error") or "parity refused"))
     if proc.returncode != 0:
@@ -2863,22 +2903,55 @@ def _parity_job(args: List[str], timeout: int = 300) -> Dict[str, Any]:
     return body
 
 
+def _parity_background(args: List[str], key: str = "") -> Dict[str, Any]:
+    """Start parity_job.py in the background with a status file; the id to poll. The same
+    request while one is still running gets the running one's id."""
+    _engine_ready()
+    with _PARITY_LOCK:
+        running = _PARITY_RUNNING.get(key) if key else None
+        if running:
+            try:
+                state = json.loads(_parity_status_file(running).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                state = {}
+            if not state.get("finished"):
+                return {"started": False, "already_running": True, "task_id": running,
+                        "status_url": f"/api/estimate/parity/task/{running}"}
+        tid = uuid.uuid4().hex[:8]
+        status = _parity_status_file(tid)
+        status.parent.mkdir(parents=True, exist_ok=True)
+        status.write_text(json.dumps({"state": "starting", "done": 0, "of": None,
+                                      "started_at": time.time()}), encoding="utf-8")
+        subprocess.Popen([_ENGINE_PYTHON, _PARITY_JOB_CLI, *args, "--json",
+                          "--status-file", str(status)],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_parity_env(),
+                         cwd=str(_REPO_ROOT))
+        if key:
+            _PARITY_RUNNING[key] = tid
+    return {"started": True, "task_id": tid, "status_url": f"/api/estimate/parity/task/{tid}"}
+
+
 def _file_link(path: Any) -> Optional[str]:
     return f"/api/file?path={urllib.parse.quote(str(path))}" if path else None
 
 
 def _report_links(idx: Dict[str, Any]) -> Dict[str, Any]:
-    """One filed comparison with links to its report and both sheets."""
+    """One filed comparison with links to its report and the filed copies of both sheets."""
     folder = Path(str(idx.get("folder") or ""))
 
     def at(name: Any) -> Optional[str]:
-        return _file_link(folder / str(name)) if name and str(folder) else None
+        return _file_link(folder.joinpath(*str(name).split("/"))) if name and str(folder) else None
     return {**idx,
             "report_url": at(idx.get("report_html")),
             "bundle_json_url": at(idx.get("bundle_json")),
             "bundle_csv_url": at(idx.get("bundle_csv")),
             "manual_url": at((idx.get("manual") or {}).get("copied_as")),
             "ai_url": at((idx.get("ai") or {}).get("copied_as"))}
+
+
+def _summary_link(body: Dict[str, Any]) -> Optional[str]:
+    """A period summary through the portal: the copy whose links go through /api/file."""
+    return _file_link(body.get("summary_portal_html") or body.get("summary_html"))
 
 
 def _parity_path(path: Optional[str], label: str) -> Optional[str]:
@@ -2891,12 +2964,20 @@ def _parity_path(path: Optional[str], label: str) -> Optional[str]:
     return str(resolved)
 
 
+def _day_arg(value: Optional[str]) -> Optional[str]:
+    v = (value or "").strip()[:10]
+    if v and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+        raise HTTPException(status_code=400, detail=f"'{v}' is not a date as YYYY-MM-DD.")
+    return v or None
+
+
 @router.get("/parity/find")
-def parity_find(job: str, x_sdi_key: Optional[str] = Header(default=None)):
-    """What a comparison of this job would use: every manual workbook for the job number, most
-    obvious first with why, and every AI run of it, newest first."""
+def parity_find(job: str, client: str = "", x_sdi_key: Optional[str] = Header(default=None)):
+    """What a comparison of this job would use: every manual workbook for the job number,
+    likeliest first with why, whether the choice is clear or must be made, and every AI run."""
     _check_key(x_sdi_key)
-    body = _parity_job(["find", job.strip()[:80]], timeout=120)
+    args = ["find", job.strip()[:80]] + (["--client", client.strip()[:80]] if client.strip() else [])
+    body = _parity_job(args, timeout=120)
     for c in body.get("manual") or []:
         c["url"] = _file_link(c.get("path"))
     for r in body.get("ai") or []:
@@ -2906,107 +2987,147 @@ def parity_find(job: str, x_sdi_key: Optional[str] = Header(default=None)):
 
 class ParityJobRequest(BaseModel):
     job: str
-    manual_path: Optional[str] = None       # chosen by hand; otherwise the most obvious one
+    client: Optional[str] = None
+    manual_path: Optional[str] = None       # chosen by hand; otherwise only a clear choice
     ai_path: Optional[str] = None           # chosen by hand; otherwise the newest run
     read_via_excel: bool = False
 
 
 @router.post("/parity/job")
 def parity_job_run(req: ParityJobRequest, x_sdi_key: Optional[str] = Header(default=None)):
-    """Compare one job and file both sheets and the report under the parity folder."""
+    """Compare one job in the background and file both sheets and the report under the parity
+    folder; poll the returned status_url."""
     who = _check_key(x_sdi_key)
-    args = ["job", req.job.strip()[:80], "--made-by",
-            f"portal{' ' + who if who else ''}"]
     manual = _parity_path(req.manual_path, "manual estimate")
     ai = _parity_path(req.ai_path, "AI estimate")
+    job = req.job.strip()[:80]
+    args = ["job", job, "--made-by", f"portal{' ' + who if who else ''}"]
+    if (req.client or "").strip():
+        args += ["--client", req.client.strip()[:80]]
     if manual:
         args += ["--manual", manual]
     if ai:
         args += ["--ai", ai]
     if req.read_via_excel:
         args.append("--read-via-excel")
-    return _report_links(_parity_job(args))
+    return _parity_background(args, key="job|" + "|".join([job.lower(), manual or "", ai or ""]))
+
+
+def _parity_status_file(tid: str) -> Path:
+    return estimate_email.state_dir() / "parity_periods" / f"{tid}.json"
+
+
+@router.get("/parity/task/{tid}")
+def parity_task_status(tid: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """How far a background comparison has got: its step or progress, then its result, the
+    choice to make, or why it failed."""
+    _check_key(x_sdi_key)
+    if not _PARITY_TASK_ID.match(tid):
+        raise HTTPException(status_code=404, detail="No such parity comparison")
+    try:
+        body = json.loads(_parity_status_file(tid).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="No such parity comparison")
+    except (OSError, ValueError):
+        return {"state": "running", "note": "progress is being written; ask again in a moment"}
+    if isinstance(body.get("result"), dict):
+        body["result"] = _report_links(body["result"])
+    if body.get("summary_html") or body.get("summary_portal_html"):
+        body["summary_url"] = _summary_link(body)
+    for key in ("rows", "rows_a", "rows_b"):
+        for row in body.get(key) or []:
+            if row.get("folder") and row.get("report"):
+                row["report_url"] = _file_link(Path(row["folder"]) / row["report"])
+    for c in body.get("candidates") or []:
+        c["url"] = _file_link(c.get("path"))
+    return body
+
+
+# The period routes of D-619 answer to their first name as well.
+@router.get("/parity/period/{tid}")
+def parity_period_status(tid: str, x_sdi_key: Optional[str] = Header(default=None)):
+    return parity_task_status(tid, x_sdi_key)
 
 
 @router.get("/parity/reports")
 def parity_reports(q: str = "", start: Optional[str] = None, end: Optional[str] = None,
-                   x_sdi_key: Optional[str] = Header(default=None)):
-    """Filed comparisons, newest first, by job, drawing or client and by date; and the period
-    comparisons already run."""
+                   outcome: str = "", x_sdi_key: Optional[str] = Header(default=None)):
+    """Filed comparisons, newest first, by job, drawing or client, date and outcome; and the
+    period comparisons already run."""
     _check_key(x_sdi_key)
     args = ["search"] + ([q.strip()[:80]] if q.strip() else [])
-    if start:
-        args += ["--from", start]
-    if end:
-        args += ["--to", end]
+    if _day_arg(start):
+        args += ["--from", _day_arg(start)]
+    if _day_arg(end):
+        args += ["--to", _day_arg(end)]
+    if outcome.strip():
+        args += ["--outcome", outcome.strip()[:30]]
     reports = [_report_links(i) for i in _parity_job(args, timeout=120).get("reports") or []]
-    periods = _parity_job(["periods"], timeout=60).get("periods") or []
+    periods = _parity_job(["history"], timeout=60).get("periods") or []
     for p in periods:
-        p["summary_url"] = _file_link(p.get("summary_html"))
+        p["summary_url"] = _summary_link(p)
     return {"reports": reports, "periods": periods, "parity_root": str(PARITY_ROOT)}
 
 
 class ParityPeriodRequest(BaseModel):
     start: str
     end: str
+    client: str = ""
+    job: str = ""
     preview: bool = False
     read_via_excel: bool = False
 
 
-def _period_status_file(pid: str) -> Path:
-    return estimate_email.state_dir() / "parity_periods" / f"{pid}.json"
+def _filters(client: str, job: str) -> List[str]:
+    out = []
+    if client.strip():
+        out += ["--client", client.strip()[:80]]
+    if job.strip():
+        out += ["--job", job.strip()[:80]]
+    return out
 
 
 @router.post("/parity/period")
 def parity_period(req: ParityPeriodRequest, x_sdi_key: Optional[str] = Header(default=None)):
-    """Every AI estimate run in the period against its manual estimate. A preview answers at
-    once with what would be compared; a real run starts in the background and returns an id
-    whose progress /parity/period/{id} reports."""
+    """Every drawing estimated within one period against its manual estimate. A preview
+    answers at once; a real run starts in the background and returns an id to poll."""
     _check_key(x_sdi_key)
-    args = ["period", "--from", req.start.strip()[:10], "--to", req.end.strip()[:10]]
+    args = ["period", "--from", _day_arg(req.start) or "", "--to", _day_arg(req.end) or ""] \
+        + _filters(req.client, req.job)
     if req.read_via_excel:
         args.append("--read-via-excel")
     if req.preview:
         return _parity_job(args + ["--preview"])
-    if not Path(_ENGINE_PYTHON).exists():
-        raise HTTPException(
-            status_code=500,
-            detail=f"Engine python not found at {_ENGINE_PYTHON} — set SDI_ENGINE_PYTHON")
-    pid = uuid.uuid4().hex[:12]
-    status = _period_status_file(pid)
-    status.parent.mkdir(parents=True, exist_ok=True)
-    status.write_text(json.dumps({"done": 0, "of": None, "start": req.start, "end": req.end,
-                                  "started_at": time.time()}), encoding="utf-8")
-    env = dict(os.environ)
-    env.setdefault("SDI_PARITY_ROOT", str(PARITY_ROOT))
-    env.setdefault("SDI_MANUAL_ESTIMATES_ROOT", str(MANUAL_ESTIMATES_ROOT))
-    env.setdefault("SDI_ESTIMATE_OUTPUT_ROOT", str(OUTPUT_ROOT))
-    subprocess.Popen([_ENGINE_PYTHON, _PARITY_JOB_CLI, *args, "--json",
-                      "--status-file", str(status)],
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
-                     cwd=str(_REPO_ROOT))
-    return {"started": True, "period_id": pid, "status_url": f"/api/estimate/parity/period/{pid}"}
+    started = _parity_background(args, key="period|" + "|".join(args))
+    started["period_id"] = started["task_id"]
+    return started
 
 
-@router.get("/parity/period/{pid}")
-def parity_period_status(pid: str, x_sdi_key: Optional[str] = Header(default=None)):
-    """How far a period comparison has got, each job's outcome, and its summary page when done."""
+class ParityTwoPeriodsRequest(BaseModel):
+    a_start: str
+    a_end: str
+    b_start: str
+    b_end: str
+    client: str = ""
+    job: str = ""
+    preview: bool = False
+    read_via_excel: bool = False
+
+
+@router.post("/parity/periods")
+def parity_two_periods(req: ParityTwoPeriodsRequest,
+                       x_sdi_key: Optional[str] = Header(default=None)):
+    """Period A against Period B (D-621): the comparable pairs in each and how the variance
+    moved, with missing partners, ambiguous matches and quantity mismatches listed apart."""
     _check_key(x_sdi_key)
-    if not _PERIOD_ID.match(pid):
-        raise HTTPException(status_code=404, detail="No such period comparison")
-    path = _period_status_file(pid)
-    try:
-        body = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="No such period comparison")
-    except (OSError, ValueError):
-        return {"done": None, "note": "progress is being written; ask again in a moment"}
-    if body.get("summary_html"):
-        body["summary_url"] = _file_link(body["summary_html"])
-    for row in body.get("rows") or []:
-        if row.get("folder") and row.get("report"):
-            row["report_url"] = _file_link(Path(row["folder"]) / row["report"])
-    return body
+    args = ["periods", "--a-from", _day_arg(req.a_start) or "", "--a-to", _day_arg(req.a_end) or "",
+            "--b-from", _day_arg(req.b_start) or "", "--b-to", _day_arg(req.b_end) or ""] \
+        + _filters(req.client, req.job)
+    if req.read_via_excel:
+        args.append("--read-via-excel")
+    if req.preview:
+        return _parity_job(args + ["--preview"], timeout=600)
+    return _parity_background(args, key="periods|" + "|".join(args))
 
 
 # ── Print the drawings behind an estimate ────────────────────────────────────

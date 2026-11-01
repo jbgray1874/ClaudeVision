@@ -590,11 +590,17 @@
           <span class="p" id="runManualName"><span class="pending">None — no parity report</span></span>
           <button id="clearRunManual" type="button" hidden>Clear</button>
         </div>
+        <label style="display:flex;gap:9px;align-items:center;margin-top:8px;cursor:pointer;text-transform:none;font-family:var(--body);letter-spacing:normal;font-size:inherit">
+          <input id="compareWhenDone" type="checkbox"> <span class="note" style="margin:0">Or
+          compare with the manual estimate <b>when this estimate finishes</b>, found by job number.
+          It compares only when the choice is clear; otherwise the log says so and the parity
+          card below offers the sheets.</span></label>
         <p class="note">Attach the manual estimate for this job and a <strong>parity report</strong>
            is produced with the estimate, comparing the two, and filed under
-           <code>AI Estimating\parity</code> with both sheets. <em>Find by job number</em> picks
-           the most obvious sheet under Manual Estimates from the drawing number above. It must
-           sit on a share the runner can read. Leave it empty and the run is unchanged.</p>
+           <code>AI Estimating\parity</code> with both sheets. <em>Find by job number</em> looks
+           under Manual Estimates for the client and drawing number above, and fills it in only
+           when the choice is clear. It must sit on a share the runner can read. Leave it empty
+           and the run is unchanged.</p>
         <p class="note" id="runManualWhy" hidden></p>
       </div>
 
@@ -1028,28 +1034,32 @@
       <ul class="out" id="parityOut"></ul>
     </section>
 
-    <!-- ══ PARITY BY JOB NUMBER (D-619) ══════════════════════════════
-         JG, 1 Nov 2026: "compare one job - can choose / find from file system or name for the
-         tool to search by job number ... we take the most obvious s/sheet candidate and we run
-         a parity against it from our AI estimate with html outputs." Both sheets and the report
-         are filed under the parity folder, one folder per comparison, and are searchable here
-         and on the phone. The finding rules live in src/parity_job.py, so the command line,
-         this page and the phone give the same answer. -->
+    <!-- ══ PARITY BY JOB NUMBER (D-619, D-621) ═══════════════════════
+         JG, 1 Nov 2026: compare one job "by job number ... we take the most obvious s/sheet
+         candidate", file both sheets and the reports under AI Estimating\parity, searchable,
+         and compare "all manual and AI estimates ran across two time periods". The review:
+         show both files and why before anything runs; ask when the match is not clear; compare
+         the filed copies; run in the background; Period A against Period B. The rules live in
+         src/parity_job.py, so the command line, this page and the phone agree. -->
     <section class="card" id="pjCard">
       <h2>Parity by job number — find, compare, file, search</h2>
-      <p class="hint">Type the job number. The manual estimate is found under
-         <code>Manual Estimates\&lt;year&gt;\&lt;client&gt;</code> (newest year first, the job
-         folder or workbook that starts with the number), and the AI estimate is the newest run
-         in AISheets. The most obvious sheet is chosen for you, with why; pick another if it is
-         wrong. Each comparison is filed under <code>AI Estimating\parity\&lt;client&gt;\&lt;drawing&gt;\&lt;date time&gt;</code>
-         with both sheets and the report.</p>
+      <p class="hint">Type the job number. The manual estimate is looked for under
+         <code>Manual Estimates\&lt;year&gt;\&lt;client&gt;</code>, held to the AI run's client
+         and the full drawing number; the AI estimate is the newest run with its own summary.
+         A sheet is ticked for you only when the choice is clear; otherwise choose one. Both
+         files and the reason are shown before anything runs. The comparison reads copies filed
+         under <code>AI Estimating\parity\&lt;client&gt;\&lt;drawing&gt;\&lt;date time&gt;_&lt;id&gt;</code>,
+         fingerprinted, so the report always describes what is kept.</p>
 
       <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
         <input id="pjJob" type="text" autocomplete="off" placeholder="Job number, e.g. 12677-01-GA"
                style="flex:1;min-width:180px">
+        <input id="pjClient" type="text" autocomplete="off" placeholder="Client (optional)"
+               style="flex:0 1 200px;min-width:140px">
         <button id="pjFind" type="button">Find both estimates</button>
       </div>
       <div id="pjFound" hidden>
+        <p class="note" id="pjDecision"></p>
         <div class="dest" style="border-left-color:var(--info)">
           <span class="k">Manual estimate</span>
           <div id="pjManualList"></div>
@@ -1062,7 +1072,8 @@
         <label style="display:flex;gap:9px;align-items:center;margin-top:10px;cursor:pointer;text-transform:none;font-family:var(--body);letter-spacing:normal;font-size:inherit">
           <input id="pjExcel" type="checkbox"> <span class="note" style="margin:0">Resolve the
           manual sheet's formulas through Excel (only if its totals come back blank).</span></label>
-        <button class="btn-run" id="pjRun" type="button" style="margin-top:10px" disabled>
+        <p class="note" id="pjChosen"></p>
+        <button class="btn-run" id="pjRun" type="button" style="margin-top:6px" disabled>
           Compare and file</button>
       </div>
       <ul class="out" id="pjOut"></ul>
@@ -1073,22 +1084,47 @@
                style="flex:1;min-width:160px">
         <label class="note" style="margin:0">From <input id="pjFrom" type="date"></label>
         <label class="note" style="margin:0">To <input id="pjTo" type="date"></label>
+        <select id="pjOutcome">
+          <option value="">Any outcome</option><option value="match">Match</option>
+          <option value="warning">Warning</option><option value="fail">Fail</option>
+          <option value="quantities differ">Quantities differ</option>
+          <option value="review">Review</option><option value="not compared">Not compared</option>
+        </select>
         <button id="pjSearch" type="button">Search</button>
       </div>
       <div id="pjResults" style="overflow-x:auto"></div>
 
-      <h3 style="margin-top:18px">Compare every AI estimate in a period</h3>
-      <p class="note">Every drawing the engine estimated between the two dates (its newest run in
-         that time) against its manual estimate. Each is filed like a single comparison, and one
-         summary page lists them all under <code>parity\_periods</code>. Preview first to see
-         what would be compared.</p>
+      <h3 style="margin-top:18px">Compare jobs within a period</h3>
+      <p class="note">Every drawing the engine estimated between the two dates, counted once
+         (its newest run there), against its manual estimate. Pairs with no manual estimate,
+         ambiguous ones and quantity mismatches are listed apart, not counted. A pair already
+         compared with the same manual sheet is reused. Preview first.</p>
       <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
         <label class="note" style="margin:0">From <input id="pjPFrom" type="date"></label>
         <label class="note" style="margin:0">To <input id="pjPTo" type="date"></label>
+        <input id="pjPClient" type="text" placeholder="Client (optional)" style="width:160px">
+        <input id="pjPJob" type="text" placeholder="Job (optional)" style="width:130px">
         <button id="pjPreview" type="button">Preview</button>
         <button id="pjPeriod" type="button">Compare the period</button>
       </div>
       <div id="pjPeriodOut" style="overflow-x:auto"></div>
+
+      <h3 style="margin-top:18px">Compare two periods</h3>
+      <p class="note">Period A against Period B: the comparable pairs in each, how the median and
+         mean variance moved, the drawings estimated in both, and everything that could not be
+         compared, listed apart. Dates are the AI estimates' run dates; a manual sheet's date is
+         its file date, and the report says so.</p>
+      <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
+        <span class="note" style="margin:0"><b>A</b></span>
+        <input id="pjAFrom" type="date" aria-label="Period A from"><input id="pjATo" type="date" aria-label="Period A to">
+        <span class="note" style="margin:0"><b>B</b></span>
+        <input id="pjBFrom" type="date" aria-label="Period B from"><input id="pjBTo" type="date" aria-label="Period B to">
+        <input id="pjTClient" type="text" placeholder="Client (optional)" style="width:160px">
+        <input id="pjTJob" type="text" placeholder="Job (optional)" style="width:130px">
+        <button id="pjTPreview" type="button">Preview</button>
+        <button id="pjTRun" type="button">Compare A with B</button>
+      </div>
+      <div id="pjTwoOut" style="overflow-x:auto"></div>
     </section>
 
     <!-- ══ ESTIMATOR OVERRIDE ═══════════════════════════════════════
@@ -3362,6 +3398,8 @@ runBtn.onclick = async () => {
     // The optional parity partner. null means no comparison was asked for and the run is
     // exactly as it was before this existed.
     manual_workbook: runManual ? runManual.path : null,
+    // D-621: or find it by job number when the run finishes, comparing only a clear choice.
+    compare_with_manual: !runManual && document.getElementById("compareWhenDone").checked,
     // Sent as typed. The service parses and validates, and refuses the run on a typo BEFORE
     // anything is staged — one place that decides what an address is, not two.
     email_to: (document.getElementById("emailTo").value || "").trim(),
@@ -4015,32 +4053,41 @@ parityRun.onclick = async () => {
 };
 
 
-/* ══ PARITY BY JOB NUMBER (D-619) ═════════════════════════════════════════════════════
-   Find both sides by job number, compare, file under the parity folder, search what is filed,
-   and compare a whole period in the background. The service runs src/parity_job.py. */
+/* ══ PARITY BY JOB NUMBER (D-619, D-621) ══════════════════════════════════════════════
+   Find both sides by job number and show why; ask when the match is not clear; compare in the
+   background; search what is filed; one period, or Period A against Period B. The service
+   runs src/parity_job.py. */
 const pjEsc = t => String(t ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
 const pjGbp = v => (typeof v === "number") ? "£" + v.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2}) : "—";
-const pjPct = v => (typeof v === "number") ? (v > 0 ? "+" : "") + v.toFixed(1) + "%" : "";
-const pjColour = st => st === "match" ? "var(--ok)" : st === "warning" ? "var(--warn)" : st ? "var(--bad)" : "var(--dim)";
-let pjManual = null, pjAi = null;
+const pjPct = v => (typeof v === "number") ? v.toFixed(1) + "%" : "";
+const pjColour = st => st === "match" ? "var(--ok)" : st === "warning" ? "var(--warn)"
+  : (st === "fail" || st === "not compared") ? "var(--bad)" : "var(--dim)";
+const pjLink = (url, text) => url ? '<a href="' + pjEsc(url) + '" target="_blank" rel="noopener">' + text + '</a>' : "";
+let pjManual = null, pjAi = null, pjClientFound = "";
 
-function pjChoices(box, items, label, pick){
+function pjChoices(box, items, name, preselect, pick){
   box.innerHTML = items.length ? "" : '<p class="note" style="color:var(--warn)">None found.</p>';
   items.forEach((it, i) => {
     const row = document.createElement("label");
     row.style.cssText = "display:flex;gap:8px;align-items:flex-start;margin-top:5px;cursor:pointer;text-transform:none;font-family:var(--body);letter-spacing:normal;font-size:inherit";
-    row.innerHTML = '<input type="radio" name="' + label + '"' + (i === 0 ? " checked" : "") + ' style="margin-top:3px">'
-      + '<span><b>' + pjEsc(it.name || it.drawing) + '</b> <span class="note" style="margin:0">'
-      + pjEsc(it.why || ((it.stamp || "") + (it.units ? " · " + it.units + " off" : ""))) + (it.modified_text ? " · " + pjEsc(it.modified_text) : "")
-      + (it.client ? " · " + pjEsc(it.client) : "") + '</span>'
-      + (it.url ? ' <a href="' + pjEsc(it.url) + '" target="_blank" rel="noopener">open</a>' : "") + '</span>';
+    row.innerHTML = '<input type="radio" name="' + name + '"' + (preselect && i === 0 ? " checked" : "") + ' style="margin-top:3px">'
+      + '<span><b>' + pjEsc(it.name) + '</b> <span class="note" style="margin:0">'
+      + pjEsc(it.why || "") + (it.modified_text ? " · " + pjEsc(it.modified_text) : "")
+      + (it.client ? " · " + pjEsc(it.client) + (it.year ? " " + pjEsc(it.year) : "") : "") + '</span> '
+      + pjLink(it.url, "open") + '</span>';
     row.querySelector("input").onchange = () => pick(it);
     box.appendChild(row);
   });
-  if(items[0]) pick(items[0]);
+  if(preselect && items[0]) pick(items[0]);
 }
 
-function pjRefresh(){ $("pjRun").disabled = !(pjManual && pjAi); }
+function pjRefresh(){
+  $("pjRun").disabled = !(pjManual && pjAi);
+  $("pjChosen").innerHTML = (pjManual && pjAi)
+    ? "Will compare <b>" + pjEsc(pjAi.name) + "</b> (" + pjEsc(pjAi.stamp || "") + ") with <b>"
+      + pjEsc(pjManual.name) + "</b>: " + pjEsc(pjManual.why || "chosen") + "."
+    : (pjManual ? "Choose the AI run." : "Choose the manual sheet.");
+}
 
 $("pjFind").onclick = async () => {
   const job = $("pjJob").value.trim();
@@ -4048,14 +4095,19 @@ $("pjFind").onclick = async () => {
   if(!job){ out.innerHTML = '<li><span style="color:var(--warn)">Type a job number first.</span></li>'; return; }
   $("pjFind").disabled = true; $("pjFind").textContent = "Looking on the share…";
   try{
-    const r = await api("/api/estimate/parity/find?job=" + encodeURIComponent(job));
+    const q = "job=" + encodeURIComponent(job) + ($("pjClient").value.trim() ? "&client=" + encodeURIComponent($("pjClient").value.trim()) : "");
+    const r = await api("/api/estimate/parity/find?" + q);
     const j = await r.json().catch(() => ({}));
     if(!r.ok){ out.innerHTML = '<li><span style="color:var(--bad)">' + detailText(j, r, "Not found") + '</span></li>'; $("pjFound").hidden = true; return; }
-    pjManual = pjAi = null;
+    pjManual = pjAi = null; pjClientFound = j.client || "";
     $("pjFound").hidden = false;
-    pjChoices($("pjManualList"), j.manual || [], "pjm", it => { pjManual = it; pjRefresh(); });
-    pjChoices($("pjAiList"), (j.ai || []).map(a => ({...a, name: a.workbook.split(/[\\/]/).pop()})), "pja",
-              it => { pjAi = it; pjRefresh(); });
+    const d = j.decision || {};
+    $("pjDecision").innerHTML = (d.clear ? '<span style="color:var(--ok)">Clear choice.</span> '
+                                         : '<span style="color:var(--warn)">Choose the manual sheet.</span> ')
+      + pjEsc(d.reason || "") + (pjClientFound ? " Client: " + pjEsc(pjClientFound) + "." : "");
+    pjChoices($("pjManualList"), j.manual || [], "pjm", !!d.clear, it => { pjManual = it; pjRefresh(); });
+    pjChoices($("pjAiList"), (j.ai || []).map(a => ({...a, name: a.workbook.split(/[\\/]/).pop(),
+      why: a.stamp + (a.units ? " · " + a.units + " off" : "")})), "pja", true, it => { pjAi = it; pjRefresh(); });
     pjRefresh();
   }catch(e){
     out.innerHTML = '<li><span style="color:var(--bad)">Could not reach the service.</span></li>';
@@ -4063,19 +4115,32 @@ $("pjFind").onclick = async () => {
 };
 $("pjJob").addEventListener("keydown", e => { if(e.key === "Enter") $("pjFind").click(); });
 $("pjPickManual").onclick = () => chooseOneFile("Select the manual estimate", [".xlsx",".xlsm",".xls"], it => {
-  const box = $("pjManualList");
-  pjChoices(box, [{path: it.path, name: it.name, why: "chosen by hand"}], "pjm", c => { pjManual = c; pjRefresh(); });
+  pjChoices($("pjManualList"), [{path: it.path, name: it.name, why: "chosen by hand"}], "pjm", true,
+            c => { pjManual = c; pjRefresh(); });
 });
 
-function pjHeadline(idx){
-  const h = idx.headline || {};
-  const links = [["Parity report", idx.report_url], ["Manual sheet (filed copy)", idx.manual_url],
-                 ["AI sheet (filed copy)", idx.ai_url], ["Bundle CSV", idx.bundle_csv_url]]
-    .filter(x => x[1]).map(x => '<a href="' + pjEsc(x[1]) + '" target="_blank" rel="noopener">' + x[0] + '</a>').join(" · ");
-  return '<li><span style="color:' + pjColour(h.status) + '">' + pjEsc((h.status || "compared").toUpperCase())
-    + '</span> — AI ' + pjGbp(h.ai_unit_cost_gbp) + ' against manual ' + pjGbp(h.manual_unit_cost_gbp)
-    + (typeof h.gap_gbp === "number" ? ' · gap ' + pjGbp(h.gap_gbp) + ' ' + pjPct(h.pct_variance) : "") + '</li>'
-    + '<li>' + links + '</li><li class="note">Filed in <code>' + pjEsc(idx.folder) + '</code></li>';
+function pjResult(idx){
+  const h = idx.headline || {}, q = idx.quantity || {};
+  const oc = idx.outcome || h.status || "compared";
+  const ai = q.ai_unit_at_manual_qty ?? h.ai_unit_cost_gbp;
+  const pct = q.pct_at_manual_qty ?? h.pct_variance;
+  const lines = (idx.lines || []).filter(x => x.label && !/^reference order quantity/i.test(x.label))
+    .map(x => '<tr><td>' + pjEsc(x.label) + '</td><td style="text-align:right">' + pjGbp(x.ai) + '</td><td style="text-align:right">'
+      + pjGbp(x.manual) + '</td><td>' + pjEsc(x.status || "") + '</td><td>' + pjEsc(x.cell || "") + '</td></tr>').join("");
+  return '<li><span style="color:' + pjColour(oc) + '">' + pjEsc(String(oc).toUpperCase()) + '</span> — AI '
+    + pjGbp(ai) + ' against manual ' + pjGbp(h.manual_unit_cost_gbp) + (pct != null ? ' · variance ' + pjPct(pct) : "") + '</li>'
+    + (q.note ? '<li class="note">' + pjEsc(q.note) + '</li>' : "")
+    + (lines ? '<li><table style="border-collapse:collapse;font-size:12.5px"><tr><th style="text-align:left">Line</th><th>AI</th><th>Manual</th><th>Status</th><th>Cell</th></tr>' + lines + '</table></li>' : "")
+    + '<li>' + [pjLink(idx.report_url, "Parity report"), pjLink(idx.manual_url, "Manual sheet (filed copy)"),
+                pjLink(idx.ai_url, "AI sheet (filed copy)"), pjLink(idx.bundle_csv_url, "Bundle CSV")].filter(Boolean).join(" · ") + '</li>'
+    + '<li class="note">Filed in <code>' + pjEsc(idx.folder) + '</code> · ' + pjEsc((idx.match || {}).how || "")
+    + (idx.comparison_id ? " · id " + pjEsc(idx.comparison_id) : "") + '</li>';
+}
+
+async function pjPoll(url, render, done){
+  const s = await api(url).then(x => x.json()).catch(() => ({}));
+  render(s);
+  if(s.finished) done && done(s); else setTimeout(() => pjPoll(url, render, done), 2500);
 }
 
 $("pjRun").onclick = async () => {
@@ -4083,18 +4148,26 @@ $("pjRun").onclick = async () => {
   $("pjRun").disabled = true; $("pjRun").textContent = "Comparing and filing…";
   try{
     const r = await api("/api/estimate/parity/job", {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({job: $("pjJob").value.trim(), manual_path: pjManual.path,
-                            ai_path: pjAi.workbook, read_via_excel: $("pjExcel").checked})});
+      body: JSON.stringify({job: $("pjJob").value.trim(), client: pjClientFound || $("pjClient").value.trim() || null,
+                            manual_path: pjManual.path, ai_path: pjAi.workbook, read_via_excel: $("pjExcel").checked})});
     const j = await r.json().catch(() => ({}));
-    out.innerHTML = r.ok ? pjHeadline(j)
-      : '<li><span style="color:var(--bad)">' + detailText(j, r, "The comparison failed") + '</span></li>';
+    if(!r.ok){ out.innerHTML = '<li><span style="color:var(--bad)">' + detailText(j, r, "The comparison could not start") + '</span></li>';
+               $("pjRun").textContent = "Compare and file"; pjRefresh(); return; }
+    if(j.already_running) out.innerHTML = '<li class="note">That comparison is already running; following it.</li>';
+    pjPoll(j.status_url, s => {
+      if(s.state === "done" && s.result) out.innerHTML = pjResult(s.result);
+      else if(s.state === "choose") out.innerHTML = '<li><span style="color:var(--warn)">' + pjEsc(s.error) + '</span></li>';
+      else if(s.state === "failed") out.innerHTML = '<li><span style="color:var(--bad)">' + pjEsc(s.error) + '</span></li>';
+      else out.innerHTML = '<li class="note">' + pjEsc(s.step || "Working…") + '</li>';
+    }, () => { $("pjRun").textContent = "Compare and file"; pjRefresh(); });
   }catch(e){
     out.innerHTML = '<li><span style="color:var(--bad)">Could not reach the service.</span></li>';
-  }finally{ $("pjRun").textContent = "Compare and file"; pjRefresh(); }
+    $("pjRun").textContent = "Compare and file"; pjRefresh();
+  }
 };
 
 function pjTable(rows, head, cells){
-  if(!rows.length) return '<p class="note">Nothing found.</p>';
+  if(!rows.length) return '<p class="note">None.</p>';
   return '<table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px"><tr>'
     + head.map(h => '<th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--line)">' + h + '</th>').join("")
     + '</tr>' + rows.map(r => '<tr>' + cells(r).map(c => '<td style="padding:4px 8px;border-bottom:1px solid var(--line)">' + c + '</td>').join("") + '</tr>').join("")
@@ -4107,72 +4180,110 @@ $("pjSearch").onclick = async () => {
   if($("pjQ").value.trim()) q.set("q", $("pjQ").value.trim());
   if($("pjFrom").value) q.set("start", $("pjFrom").value);
   if($("pjTo").value) q.set("end", $("pjTo").value);
+  if($("pjOutcome").value) q.set("outcome", $("pjOutcome").value);
   try{
     const r = await api("/api/estimate/parity/reports?" + q.toString());
     const j = await r.json().catch(() => ({}));
     if(!r.ok){ box.innerHTML = '<p style="color:var(--bad)">' + detailText(j, r, "Search failed") + '</p>'; return; }
-    box.innerHTML = pjTable(j.reports || [], ["When", "Drawing", "Client", "Verdict", "AI unit", "Manual unit", "Gap", ""], i => {
-      const h = i.headline || {};
+    box.innerHTML = pjTable(j.reports || [], ["When", "Drawing", "Client", "Outcome", "AI unit", "Manual unit", "Variance", ""], i => {
+      const h = i.headline || {}, qy = i.quantity || {};
       return [pjEsc(i.stamp), pjEsc(i.drawing), pjEsc(i.client),
-              i.error ? '<span style="color:var(--bad)">not compared</span>' : '<span style="color:' + pjColour(h.status) + '">' + pjEsc(h.status || "—") + '</span>',
-              pjGbp(h.ai_unit_cost_gbp), pjGbp(h.manual_unit_cost_gbp), pjPct(h.pct_variance),
-              i.report_url ? '<a href="' + pjEsc(i.report_url) + '" target="_blank" rel="noopener">report</a>' : pjEsc((i.error || "").slice(0, 80))];
+              '<span style="color:' + pjColour(i.outcome) + '">' + pjEsc(i.outcome || "—") + '</span>',
+              pjGbp(qy.ai_unit_at_manual_qty ?? h.ai_unit_cost_gbp), pjGbp(h.manual_unit_cost_gbp),
+              pjPct(qy.pct_at_manual_qty ?? h.pct_variance),
+              pjLink(i.report_url, "report") || pjEsc((i.error || "").slice(0, 80))];
     }) + ((j.periods || []).length ? '<p class="note" style="margin-top:10px"><b>Period comparisons</b></p>'
-      + pjTable(j.periods, ["Period", "Compared", "No manual", "Failed", ""], p => [
-          pjEsc(p.start + " to " + p.end), pjEsc(p.compared), pjEsc(p.no_manual), pjEsc(p.failed),
-          p.summary_url ? '<a href="' + pjEsc(p.summary_url) + '" target="_blank" rel="noopener">summary</a>' : ""]) : "");
+      + pjTable(j.periods, ["Kind", "Period", "Comparable", "No manual", "Failed", ""], p => [
+          pjEsc(p.kind), pjEsc(p.kind === "two periods" && p.a && p.b ? "A " + p.a.join(" to ") + " · B " + p.b.join(" to ") : p.start + " to " + p.end),
+          pjEsc(p.compared), pjEsc(p.no_manual), pjEsc(p.failed), pjLink(p.summary_url, "summary")]) : "");
   }catch(e){ box.innerHTML = '<p style="color:var(--bad)">Could not reach the service.</p>'; }
 };
 
-function pjPeriodRows(rows){
-  return pjTable(rows || [], ["Drawing", "Client", "AI run", "Outcome", "AI unit", "Manual unit", "Gap", ""], r => [
-    pjEsc(r.drawing), pjEsc(r.client), pjEsc(r.ai_run), pjEsc(r.status || r.outcome),
+function pjRows(rows){
+  return pjTable(rows || [], ["Drawing", "Client", "AI run", "Outcome", "AI unit", "Manual unit", "Variance", ""], r => [
+    pjEsc(r.drawing), pjEsc(r.client), pjEsc(r.ai_run) + (r.runs_in_period > 1 ? ' <span class="note">(' + r.runs_in_period + ' runs, newest used)</span>' : ""),
+    '<span style="color:' + pjColour(r.outcome) + '">' + pjEsc(r.outcome) + (r.reused ? " (reused)" : "") + '</span>',
     pjGbp(r.ai_unit), pjGbp(r.manual_unit), pjPct(r.pct),
-    r.report_url ? '<a href="' + pjEsc(r.report_url) + '" target="_blank" rel="noopener">report</a>' : pjEsc(r.note || r.manual || "")]);
+    pjLink(r.report_url, "report") || pjEsc(r.note || r.quantity_note || r.manual || "")]);
 }
 
-async function pjPeriod(preview){
-  const box = $("pjPeriodOut");
-  const start = $("pjPFrom").value, end = $("pjPTo").value;
-  if(!start || !end){ box.innerHTML = '<p style="color:var(--warn)">Choose both dates.</p>'; return; }
-  box.innerHTML = '<p class="note">' + (preview ? "Looking through AISheets…" : "Starting…") + '</p>';
+function pjStats(s){
+  if(!s) return "";
+  return s.compared + " comparable (" + s.match + " match, " + s.warning + " warning, " + s.fail + " fail); median variance "
+    + (s.median_abs_pct == null ? "n/a" : s.median_abs_pct + "%") + "; apart: " + s["quantities differ"] + " quantities differ, "
+    + s.ambiguous + " ambiguous, " + s["no manual"] + " no manual, " + s.failed + " failed; "
+    + s.runs_collapsed + " repeat run(s) collapsed.";
+}
+
+async function pjStart(url, body, box, render){
+  box.innerHTML = '<p class="note">' + (body.preview ? "Looking through AISheets…" : "Starting…") + '</p>';
   try{
-    const r = await api("/api/estimate/parity/period", {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({start, end, preview})});
+    const r = await api(url, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
-    if(!r.ok){ box.innerHTML = '<p style="color:var(--bad)">' + detailText(j, r, "The period could not start") + '</p>'; return; }
-    if(preview){
-      const would = (j.rows || []).filter(x => x.outcome === "would compare").length;
-      box.innerHTML = '<p class="note">' + would + ' of ' + (j.rows || []).length + ' would be compared; the rest have no manual estimate found.</p>' + pjPeriodRows(j.rows);
-      return;
-    }
-    const poll = async () => {
-      const s = await api(j.status_url).then(x => x.json()).catch(() => ({}));
+    if(!r.ok){ box.innerHTML = '<p style="color:var(--bad)">' + detailText(j, r, "It could not start") + '</p>'; return; }
+    if(body.preview){ render(j, true); return; }
+    pjPoll(j.status_url, s => {
       if(s.error){ box.innerHTML = '<p style="color:var(--bad)">' + pjEsc(s.error) + '</p>'; return; }
-      box.innerHTML = '<p class="note">' + (s.finished ? "Finished: " : "Running: ") + (s.done ?? 0) + ' of ' + (s.of ?? "?") + ' drawings'
-        + (s.summary_url ? ' · <a href="' + pjEsc(s.summary_url) + '" target="_blank" rel="noopener">summary page</a>' : "") + '</p>' + pjPeriodRows(s.rows);
-      if(!s.finished) setTimeout(poll, 3000);
-    };
-    poll();
+      render(s, false);
+    });
   }catch(e){ box.innerHTML = '<p style="color:var(--bad)">Could not reach the service.</p>'; }
+}
+
+function pjPeriod(preview){
+  const start = $("pjPFrom").value, end = $("pjPTo").value, box = $("pjPeriodOut");
+  if(!start || !end){ box.innerHTML = '<p style="color:var(--warn)">Choose both dates.</p>'; return; }
+  pjStart("/api/estimate/parity/period", {start, end, preview, client: $("pjPClient").value.trim(), job: $("pjPJob").value.trim()},
+    box, (s, isPreview) => {
+      box.innerHTML = '<p class="note">' + (isPreview ? "Preview: " : (s.finished ? "Finished: " : "Running: " + (s.done ?? 0) + " of " + (s.of ?? "?") + ". "))
+        + pjEsc(pjStats(s.stats) || "") + " " + pjLink(s.summary_url, "summary page") + '</p>' + pjRows(s.rows);
+    });
 }
 $("pjPreview").onclick = () => pjPeriod(true);
 $("pjPeriod").onclick = () => pjPeriod(false);
 
-/* AT THE TIME OF A RUN: the manual sheet found by job number for the run being set up. */
+function pjTwo(preview){
+  const v = id => $(id).value, box = $("pjTwoOut");
+  if(!v("pjAFrom") || !v("pjATo") || !v("pjBFrom") || !v("pjBTo")){ box.innerHTML = '<p style="color:var(--warn)">Choose all four dates.</p>'; return; }
+  pjStart("/api/estimate/parity/periods", {a_start: v("pjAFrom"), a_end: v("pjATo"), b_start: v("pjBFrom"), b_end: v("pjBTo"),
+    client: $("pjTClient").value.trim(), job: $("pjTJob").value.trim(), preview}, box, (s, isPreview) => {
+      if(!s.finished && !isPreview){
+        box.innerHTML = '<p class="note">Running period ' + pjEsc(s.period || "A") + ': ' + (s.done ?? 0) + ' of ' + (s.of ?? "?") + '…</p>'; return; }
+      const ch = s.change || {}, sa = s.stats_a || {}, sb = s.stats_b || {};
+      const mv = k => ch[k] == null ? "n/a" : (ch[k] > 0 ? "+" : "") + ch[k] + " pts";
+      box.innerHTML = '<p class="note">' + (isPreview ? "Preview. " : "Finished. ") + pjLink(s.summary_url, "comparison page") + '</p>'
+        + pjTable([["Comparable pairs", sa.compared, sb.compared, ""], ["Median variance", pjPct(sa.median_abs_pct), pjPct(sb.median_abs_pct), mv("median_abs_pct")],
+                   ["Mean variance", pjPct(sa.mean_abs_pct), pjPct(sb.mean_abs_pct), mv("mean_abs_pct")],
+                   ["Within warning", pjPct(sa.within_warning_pct), pjPct(sb.within_warning_pct), mv("within_warning_pct")],
+                   ["Quantities differ", sa["quantities differ"], sb["quantities differ"], ""], ["Ambiguous", sa.ambiguous, sb.ambiguous, ""],
+                   ["No manual estimate", sa["no manual"], sb["no manual"], ""], ["Repeat runs collapsed", sa.runs_collapsed, sb.runs_collapsed, ""]],
+                  ["", "Period A", "Period B", "Change"], r => r.map(x => pjEsc(x ?? "")))
+        + '<p class="note" style="margin-top:8px"><b>Estimated in both periods</b></p>'
+        + pjTable(s.in_both || [], ["Drawing", "Client", "Variance A", "Variance B", "Change"], x => [pjEsc(x.drawing), pjEsc(x.client),
+            pjPct(x.pct_a), pjPct(x.pct_b), x.change == null ? "" : pjEsc((x.change > 0 ? "+" : "") + x.change + " pts")])
+        + '<p class="note" style="margin-top:8px"><b>Period A</b></p>' + pjRows(s.rows_a)
+        + '<p class="note" style="margin-top:8px"><b>Period B</b></p>' + pjRows(s.rows_b);
+    });
+}
+$("pjTPreview").onclick = () => pjTwo(true);
+$("pjTRun").onclick = () => pjTwo(false);
+
+/* AT THE TIME OF A RUN: the manual sheet found by job number for the run being set up, filled
+   in only when the choice is clear (D-621). */
 $("findRunManual").onclick = async () => {
   const job = ($("drawing").value || "").trim();
+  const client = ($("client").value || "").trim();
   const why = $("runManualWhy"); why.hidden = false;
   if(!job){ why.textContent = "Type the drawing number above first."; return; }
   why.textContent = "Looking under Manual Estimates…";
   try{
-    const r = await api("/api/estimate/parity/find?job=" + encodeURIComponent(job));
+    const r = await api("/api/estimate/parity/find?job=" + encodeURIComponent(job) + (client ? "&client=" + encodeURIComponent(client) : ""));
     const j = await r.json().catch(() => ({}));
-    const best = (j.manual || [])[0];
-    if(!r.ok || !best){ why.textContent = r.ok ? "No manual estimate was found for that job number; choose it by hand." : detailText(j, r, "Not found"); return; }
+    const d = j.decision || {}, best = (j.manual || [])[0];
+    if(!r.ok){ why.textContent = detailText(j, r, "Not found"); return; }
+    if(!best){ why.textContent = "No manual estimate was found for that job number; choose it by hand."; return; }
+    if(!d.clear){ why.textContent = "Not filled in: " + (d.reason || "the choice is not clear") + " Use Choose manual estimate."; return; }
     runManual = {path: best.path, name: best.name}; renderRunManual();
-    why.textContent = "Found in " + best.client + " " + best.year + " (" + best.why + ")"
-      + ((j.manual || []).length > 1 ? "; " + ((j.manual.length) - 1) + " other sheet(s) there, choose by hand if this is not the one." : ".");
+    why.textContent = "Found in " + best.client + " " + best.year + ": " + d.reason + ".";
   }catch(e){ why.textContent = "Could not reach the service."; }
 };
 

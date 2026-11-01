@@ -139,31 +139,33 @@ compare: the same record, the same recorded figures. **Listen** plays the walkth
 
 ---
 
-## 7. Parity by job number (D-619, no new run)
+## 7. Parity by job number (D-619, D-621, no new run)
 
-Before this, check `.env` on the laptop: if it sets `SDI_FILE_ROOTS`, add the Manual Estimates,
-the parity folder and completed AI briefs to it, as `sdi-intelligence-backend\env\common.env`
-now does. Otherwise the report links answer "outside the allowed roots".
-
-| Test | Do | Pass |
-|---|---|---|
-| Command line | `.venv\Scripts\python.exe src\parity_job.py find 1282` | Lists the TTI 1282 workbooks, ISS 7 first, with why; and the AI runs if any |
-| Find on the desk | Parity by job number card: type a job number you have a manual estimate and an AI run for, Find both estimates | The most obvious manual sheet ticked, with why; the newest AI run ticked |
-| Compare and file | Compare and file | Verdict, AI and manual unit cost, gap; links to the report and both filed sheets. A new folder under `AI Estimating\parity\<client>\<drawing>\<date time>` holds both sheets, the report and `parity_index.json` |
-| Search | Search with the job number, then with a date range | The comparison just filed is listed with its verdict and a report link |
-| A period | Choose 1 to 31 Oct, Preview, then Compare the period | Preview lists what would be compared; the run shows progress, then a summary page under `parity\_periods` linking each report |
-| At the time of a run | On the Job panel, type the drawing number, Find by job number, then run | The run's deliverables hold the parity section, and the log ends "[parity] comparison filed to ..." |
-| Phone, Wi-Fi off (after the portal update) | Parity tab: find, compare, search | Same answers as the desk; a report opens |
-
-## 8. Ask by voice, hear the answer (D-620, no new run)
+Your `.env` already lists the Manual Estimates, parity and completed AI briefs folders in
+`SDI_FILE_ROOTS`. No estimate needs re-running: parity compares the saved results.
 
 | Test | Do | Pass |
 |---|---|---|
-| Spoken question | E-mail page or phone: tap Speak, ask prompt 1 | The question appears as typed; the answer is shown and read aloud, the record's figures whole ("four hundred and twenty-one pounds thirty-seven") |
-| Text only | Choose "as text", type a question | Shown, not read aloud |
-| Spoken only | Choose "spoken", ask anything | Read aloud; the words are folded under "Show the words" |
-| Read again | Tap Read aloud on an earlier answer, then Stop | Reads, then stops at once |
-| Commentary | E-mail page: Read aloud on the commentary | The walkthrough's words are read |
+| Command line | `.venv\Scripts\python.exe src\parity_job.py find 1282` | Lists the TTI 1282 workbooks, ISS 7 first, with why, and says "Clear" or "Choose by hand" with the reason |
+| A known pair | Parity by job number card: a job you have a manual estimate and an AI run for, Find both estimates | Both files and the reason shown before anything runs. If the match is not clear, nothing is ticked and Compare stays off until you choose |
+| Compare and file | Compare and file | Progress steps, then the outcome, both unit costs, any quantity note, the sell price line, and links to the report and both filed copies. The folder `parity\<client>\<drawing>\<date time>_<id>` holds `ai\`, `manual\`, the report and `parity_index.json` with a SHA-256 for each file |
+| A second press | Press Compare and file twice quickly | One comparison runs; the second press follows the first |
+| A different quantity | A job whose AI run was at another quantity than the manual sheet | Compared at the manual's quantity if the run priced it, or shown as "quantities differ" |
+| Search | By job number, a date range, then Outcome = Match | Filtered as asked; each row links its report |
+| Within a period | 1 to 31 Oct, Preview, then Compare the period | Each drawing once; no manual, ambiguous and quantity mismatches listed apart; the summary page opens and its report links work, from the page and from the share |
+| Two periods | A = September, B = October, Preview, then Compare A with B | Comparable pairs, median and mean variance and their change, drawings in both, and the rest listed apart; the comparison page's links work |
+| At the time of a run | Tick "compare with the manual estimate when this estimate finishes", then run | The log ends "[parity] comparison filed to ..." or says the choice was not clear |
+| Phone, Wi-Fi off (after the portal update) | Parity tab | Same answers; running a comparison only for the named estimators |
+
+## 8. Ask by voice or text (D-620, D-622, no new run)
+
+| Test | Do | Pass |
+|---|---|---|
+| Spoken question | E-mail page: tap Speak, say prompt 1 | The words appear in the box with "Check it, especially any job number, then tap Ask"; nothing is asked until you tap Ask |
+| Answer | Tap Ask | The written answer and its source always shown, with Listen |
+| Listen and Stop | Tap Listen, then Stop | Reads the answer and the record's figures, figures whole; stops at once |
+| Read automatically | Tick "Read each answer aloud as it arrives", ask again | Read aloud as well as shown |
+| iPhone | The same on an iPhone | Speak records and the service turns it into words if Azure speech is set up (`SDI_SPEECH_KEY`); otherwise the keyboard's microphone key |
 
 ---
 
