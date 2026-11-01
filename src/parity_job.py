@@ -756,8 +756,13 @@ def runs_between(start: str, end: str, aisheets_root: Optional[Path] = None,
 
 
 def _reusable(archive: List[Dict[str, Any]], run_folder: str, manual_sha: str) -> Optional[Dict[str, Any]]:
+    """An earlier comparison of the same run against the same sheet, made by the comparator in
+    use now. One filed before the line-by-line comparison (D-623) carries no `lines_from`; it
+    stays in the archive and in search, but a period compares that pair again rather than
+    linking a report that has no cost, scope or commercial lines in it."""
     for idx in sorted(archive, key=lambda i: str(i.get("stamp", "")), reverse=True):
-        if (not idx.get("error") and (idx.get("ai") or {}).get("run_folder") == run_folder
+        if (not idx.get("error") and idx.get("lines_from")
+                and (idx.get("ai") or {}).get("run_folder") == run_folder
                 and (idx.get("manual") or {}).get("sha256") == manual_sha):
             return idx
     return None

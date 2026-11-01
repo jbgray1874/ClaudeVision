@@ -215,6 +215,13 @@ def test_a_job_at_a_quantity_the_run_did_not_price_is_not_comparable(monkeypatch
     assert "re-run the estimate at 10 off" in idx["quantity"]["note"]
 
 
+def test_a_period_compares_again_a_pair_filed_before_the_line_by_line_report():
+    old = {"stamp": "2026-10-31 10-00-00", "ai": {"run_folder": "R"}, "manual": {"sha256": "S"}}
+    new = {**old, "stamp": "2026-10-30 09-00-00", "lines_from": "line by line"}
+    assert parity_job._reusable([old], "R", "S") is None
+    assert parity_job._reusable([old, new], "R", "S") is new
+
+
 def test_the_period_statistics_count_every_gap_by_its_size():
     rows = [{"outcome": "match", "pct": -2.0}, {"outcome": "warning", "pct": 6.0}]
     s = parity_job.stats(rows)
