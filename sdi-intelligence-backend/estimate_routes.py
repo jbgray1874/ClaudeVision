@@ -111,6 +111,21 @@ OUTPUT_ROOT = Path(os.getenv(
     "SDI_ESTIMATE_OUTPUT_ROOT",
     r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\AISheets"))
 
+# A SECOND COPY WHERE THE ESTIMATORS FILE THEIR WORK (D-617). JG, 1 Nov 2026: "when we save down
+# the estimates ... I now need a save down to K:\Estimating\Completed\Live Enquiries\completed AI
+# briefs\$ClientArea\ followed by the job pack number, if we do multiple runs for the same job
+# pack we create a new sub dir below this with a timestamp and some other identifier like a
+# version number so that we have a record of them all." The runner copies every finished run's
+# files to <this>\<client area>\<job pack>\<queued time> v<N> (<units> off). It is also the
+# folder the phone's question box reads filed estimates from, so every run becomes askable
+# there. UNC like OUTPUT_ROOT; the same setting the portal's approved areas read.
+# SDI_FILE_TO_COMPLETED_BRIEFS=0 switches the copy off on one machine.
+COMPLETED_BRIEFS_ROOT = Path(os.getenv(
+    "SDI_COMPLETED_AI_BRIEFS_ROOT",
+    r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Live Enquiries\completed AI briefs"))
+FILE_TO_COMPLETED_BRIEFS = os.getenv(
+    "SDI_FILE_TO_COMPLETED_BRIEFS", "1").strip().lower() not in ("0", "false", "no", "off")
+
 _MAX_LOG_LINES = 4000
 
 # How long a runner's claim on a run survives without word from it. A laptop that
@@ -839,6 +854,10 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         "fresh_read": bool(run.fresh_read),
         # WHAT WAS SUBMITTED (D-604), for the engine to compare with what it receives.
         "submitted_scope": dict(run.submitted_scope),
+        # THE SECOND COPY (D-617): where, and the run's own time, so its folder there carries
+        # the same stamp as its folder in AISheets. Empty: no second copy on this machine.
+        "archive_root": str(COMPLETED_BRIEFS_ROOT) if FILE_TO_COMPLETED_BRIEFS else "",
+        "archive_stamp": time.strftime("%Y-%m-%d %H-%M-%S", time.localtime(run.queued_at)),
     }}
 
 

@@ -31,6 +31,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 
@@ -1197,6 +1198,7 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
                   "engine did instead.", log, filed)
         return
 
+    file_a_copy(job, filed, log)          # D-617: and in the completed AI briefs area
     _finish(requests, base, headers, run_id, runner_id, "done", "", log, filed)
 
 
@@ -1299,6 +1301,93 @@ def _quantity_prices_from_deliverables(deliverables: List[Dict[str, str]]) -> Li
         if found:
             return found
     return []
+
+
+# ── A SECOND COPY WHERE THE ESTIMATORS FILE THEIR WORK (D-617) ────────────────────────────
+# JG, 1 Nov 2026: every finished run is also saved to the completed AI briefs area, under the
+# client area and the job pack number, a new sub-folder for every run "with a timestamp and some
+# other identifier like a version number so that we have a record of them all". The service
+# names the root and the run's own time in the claim; this machine, which holds the files,
+# makes the folder and copies them. A copy that fails is said in the run log and never fails
+# the estimate, which is already filed in AISheets.
+_ARCHIVE_VERSION = re.compile(r"\bv(\d+)\b", re.I)
+_ARCHIVE_UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _archive_segment(text: Any) -> str:
+    cleaned = _ARCHIVE_UNSAFE.sub("-", str(text or "")).strip()
+    return re.sub(r"\s+", " ", cleaned).rstrip(". ")[:120] or "unnamed"
+
+
+def _bare(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(text or "").lower())
+
+
+def client_area(root: Path, client: str) -> Path:
+    """The client's folder under the root: one already there whose name matches with case and
+    punctuation removed ("M & S" is "M&S"), so a client is never filed twice under two
+    spellings; otherwise a new one in the client's name."""
+    want = _bare(client)
+    if want:
+        try:
+            for entry in sorted(root.iterdir()):
+                if entry.is_dir() and _bare(entry.name) == want:
+                    return entry
+        except OSError:
+            pass
+    return root / _archive_segment(client)
+
+
+def archive_folder(base: Path, stamp: str, units: Any) -> Path:
+    """A new folder for this run under the job pack: "<stamp> v<N> (<units> off)", N one more
+    than the highest version already there. Made exclusively, so two runs can never share one
+    and an earlier run's files are never written over."""
+    base.mkdir(parents=True, exist_ok=True)
+    highest = 0
+    for entry in base.iterdir():
+        found = _ARCHIVE_VERSION.search(entry.name) if entry.is_dir() else None
+        if found:
+            highest = max(highest, int(found.group(1)))
+    try:
+        units = int(units)
+    except (TypeError, ValueError):
+        units = 1
+    for version in range(highest + 1, highest + 200):
+        folder = base / f"{_archive_segment(stamp)} v{version} ({units} off)"
+        try:
+            folder.mkdir()
+            return folder
+        except FileExistsError:
+            continue
+    raise OSError(f"no free version folder under {base}")
+
+
+def file_a_copy(job: Dict[str, Any], filed: List[Dict[str, str]], log: List[str]) -> str:
+    """Copy a finished run's files to the completed AI briefs area. The folder, or ""."""
+    root = str(job.get("archive_root") or "").strip()
+    if not root or not filed:
+        return ""
+    try:
+        base = (client_area(Path(root), str(job.get("client") or ""))
+                / _archive_segment(job.get("drawing_number")))
+        folder = archive_folder(base, str(job.get("archive_stamp")
+                                          or time.strftime("%Y-%m-%d %H-%M-%S")),
+                                job.get("units"))
+        copied, failed = 0, []
+        for item in filed:
+            try:
+                shutil.copy2(item["path"], folder / item["name"])
+                copied += 1
+            except OSError as exc:
+                failed.append(f"{item.get('name')} ({exc})")
+        log.append(f"[archive] {copied} of {len(filed)} file(s) also filed to {folder}")
+        for f in failed:
+            log.append(f"[archive] NOT copied: {f}")
+        return str(folder)
+    except OSError as exc:
+        log.append(f"[archive] NOT filed to the completed AI briefs area ({exc}). The estimate "
+                   f"is filed in AISheets as usual.")
+        return ""
 
 
 def _finish(requests, base: str, headers: Dict[str, str], run_id: str, runner_id: str,
