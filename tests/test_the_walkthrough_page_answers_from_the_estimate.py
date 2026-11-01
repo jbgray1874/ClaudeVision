@@ -276,7 +276,14 @@ def test_the_engine_answers_only_from_the_estimate(tmp_path):
 
 
 def test_no_answer_from_the_model_is_said_never_invented(tmp_path):
-    got = estimate_qa.answer({"question": "Why?", "records": []}, ask=lambda p, **k: None)
+    # D-616: no record is "record unavailable" and the model is never asked.
+    got = estimate_qa.answer({"question": "Why?", "records": []},
+                             ask=lambda p, **k: pytest.fail("asked with no evidence"))
+    assert got["status"] == "unavailable" and got["answer"].startswith("Record unavailable")
+    rec = tmp_path / "x_record.json"
+    rec.write_text(json.dumps({"final_estimate": {"totals": {"unit_gbp": 10.0}}}))
+    got = estimate_qa.answer({"question": "Why?", "records": [str(rec)]},
+                             ask=lambda p, **k: None)
     assert got["status"] == "unavailable" and "workbook and report hold every figure" in got["answer"]
     assert estimate_qa.answer({"question": ""}, ask=lambda p, **k: {"answer": "x"})["status"] == \
         "unavailable"

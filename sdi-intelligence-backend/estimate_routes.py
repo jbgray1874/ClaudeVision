@@ -2350,7 +2350,10 @@ def walkthrough_ask(token: str, req: AskRequest,
         return {"status": "unavailable",
                 "answer": "Questions are answered on the machine that runs estimates, and "
                           "this one has no engine. Open the link on the estimating laptop."}
+    # THE SHARED QUESTION SERVICE (D-616): the run's own files go, and the engine answers from
+    # the single *_record.json among them, or says "record unavailable"; the run is named back.
     payload = {"question": question, "records": estimate_walkthrough.records_json(rec),
+               "run_id": rec.get("run_id") or "",
                "commentary": estimate_walkthrough.commentary(rec),
                "quantity_prices": rec.get("quantity_prices") or [],
                "drawing_number": rec.get("drawing_number"), "client": rec.get("client")}
