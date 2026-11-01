@@ -535,8 +535,10 @@ async function ask(){
   try{
     const a = await api("/api/estimate/tools/ask",
                         {brief: relative, area: "briefs", question: question});
-    say("ask-state", "Answered from " + (a.record_name || "the filed record") + ".",
-        a.complete ? "ok" : "");
+    // D-615: grok-4.7 answers from the record chosen; the lookup answers when it cannot.
+    const by = (a.model ? "by " + a.model + " " : "");
+    say("ask-state", "Answered " + by + "from " + (a.record_name || "the filed record") + ".",
+        (a.complete || a.model) ? "ok" : "");
     const box = el("div", null, $("ask-out"),
                    "answer" + (a.complete ? "" : " partial"));
     el("p", a.answer, box);
@@ -548,7 +550,10 @@ async function ask(){
     el("p", (a.sources && a.sources.length)
         ? "From " + a.sources.join(", ") + " in " + a.record_name
         : "Nothing in the record answered this.", src, "mono");
-    if(!a.complete)
+    if(a.model)
+      el("p", "Read from this saved record only. Check a figure in the job's report "
+         + "before it goes to a customer.", src, "muted");
+    else if(!a.complete)
       el("p", "Incomplete — the record does not hold everything this question "
          + "asked for. Open the job's report before relying on it.", src, "muted");
   }catch(e){

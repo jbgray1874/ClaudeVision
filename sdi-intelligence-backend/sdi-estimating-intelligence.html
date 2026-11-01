@@ -4569,7 +4569,8 @@ $("askSubmit").onclick = async () => {
     if(!r.ok) throw new Error(detailText(j, r, "Question unavailable"));
     $("askAnswer").textContent = j.answer || "No answer is present in this run's record.";
     $("askSources").textContent = "Source: run " + j.run_id + " · " + j.record_name
-      + (j.sources && j.sources.length ? " · " + j.sources.join(" · ") : "");
+      + (j.sources && j.sources.length ? " · " + j.sources.join(" · ") : "")
+      + (j.answered_by ? " · answered by " + j.answered_by : "");   // D-615
   }catch(e){
     $("askAnswer").textContent = "Could not answer from this run: " + e.message;
   }finally{
