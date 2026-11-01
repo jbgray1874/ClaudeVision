@@ -320,6 +320,10 @@ as xAI/LLM estimates so estimators know to verify (see Pending #3 below).
   items on 1282 (junction box, mains cable, earth strap, LED link light, GU10 downlight, loom).
   Current xAI flagship is grok-4.3 (verified via web search; older slugs redirect to it, but
   grok-2 is too old even for redirect).
+- **Superseded 1 Nov 2026 by D-612.** The models are named once at the top of `src/config.py`
+  (XAI_MODEL grok-4.7, XAI_VISION_MODEL, XAI_IMAGE_MODEL grok-imagine-image-2.0); `.env` overrides
+  them with SDI_XAI_MODEL, SDI_XAI_VISION_MODEL and SDI_XAI_IMAGE_MODEL. No module names a model
+  itself. `python src\xai_models.py` lists the account's models and checks the three settings.
 
 ### estimator.py (the big one — many changes; verified present via grep at end of session)
 - **`_lookup_catalogue_tube_price`** (line ~540): matches a detected tube profile+length against

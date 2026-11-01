@@ -817,7 +817,8 @@ def reconcile_job(
     is identical to the previous inline main() (verified: standalone output unchanged).
     """
     if model is None:
-        model = os.environ.get("XAI_VISION_MODEL", "grok-4.3")
+        import xai_models                                           # noqa: WPS433
+        model = xai_models.vision_model()                           # D-612: named once
     if cache_dir is None:
         cache_dir = pathB.DEFAULT_CACHE_DIR if pathB is not None else ""
     # BOTH RESOLVED BEFORE _args IS BUILT, and that ordering is the whole of it. `refresh`
@@ -996,7 +997,8 @@ def main():
     ap.add_argument("--pdf", default=None)
     ap.add_argument("--dpi", type=int, default=300)
     ap.add_argument("--max-side", type=int, default=2000)
-    ap.add_argument("--model", default=os.environ.get("XAI_VISION_MODEL", "grok-4.3"))
+    import xai_models                                                # noqa: WPS433
+    ap.add_argument("--model", default=xai_models.vision_model())
     ap.add_argument("--cache-dir", default=pathB.DEFAULT_CACHE_DIR)
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--refresh", action="store_true")

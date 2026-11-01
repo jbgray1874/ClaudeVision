@@ -87,7 +87,7 @@ READERS: List[Dict[str, str]] = [
     {
         "key": "vision",
         "name": "Grok vision (xAI)",
-        "library": "grok-4.3, pages rendered at 300 dpi",
+        "library": "the Grok vision model, pages rendered at 300 dpi",   # named per run
         "produces": "Everything a person reads off a drawing and no parser can: which view is "
                     "which, what a leader line points at, welding and finish notes in free "
                     "text, a BOM in a layout nothing has seen before.",
@@ -124,8 +124,21 @@ READERS: List[Dict[str, str]] = [
 _BY_KEY = {r["key"]: r for r in READERS}
 
 
+def _as_run(reader: Dict[str, str]) -> Dict[str, str]:
+    """The reader as this machine runs it: the vision reader names the model it calls (D-612),
+    so a book says which Grok read its pages, not the model the catalogue was written for."""
+    entry = dict(reader)
+    if entry.get("key") == "vision":
+        try:
+            import xai_models                                        # noqa: WPS433
+            entry["library"] = f"{xai_models.vision_model()}, pages rendered at 300 dpi"
+        except Exception:                                            # noqa: BLE001
+            pass
+    return entry
+
+
 def reader_by_key(key: str) -> Dict[str, str]:
-    return dict(_BY_KEY.get(str(key), {}))
+    return _as_run(_BY_KEY.get(str(key), {}))
 
 
 def _env_on(name: str, default: str = "") -> bool:
@@ -177,7 +190,7 @@ def readers_that_ran(*, llm_only: bool, dxf_enabled: bool = True,
     out: List[Dict[str, Any]] = []
     for reader in READERS:
         ran, why_off = state[reader["key"]]
-        entry = dict(reader)
+        entry: Dict[str, Any] = _as_run(reader)
         entry["ran"] = bool(ran)
         entry["why_off"] = why_off
         out.append(entry)

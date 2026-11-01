@@ -893,7 +893,8 @@ def test_a_cached_answer_never_asks_the_model_again(tmp_path, monkeypatch):
 
     import _bom_vision_reader as pathB
     png = pathB.render_page_to_png(str(pdf), 0)
-    key = concept_scan._cache_key([png], os.environ.get("XAI_VISION_MODEL", "grok-4.3"))
+    import xai_models
+    key = concept_scan._cache_key([png], xai_models.vision_model())
     (tmp_path / "cache").mkdir()
     (tmp_path / "cache" / (key + ".json")).write_text(
         json.dumps({"raw_response": json.dumps(FIXTURE)}), encoding="utf-8")

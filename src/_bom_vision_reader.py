@@ -186,17 +186,22 @@ def call_vision_llm(png_bytes: bytes, model: str) -> str:
     b64 = base64.b64encode(png_bytes).decode("ascii")
     data_url = f"data:image/png;base64,{b64}"
 
-    resp = client.chat.completions.create(
-        model=model,
-        temperature=0,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": _VISION_PROMPT},
-                {"type": "image_url", "image_url": {"url": data_url}},
-            ],
-        }],
-    )
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            temperature=0,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": _VISION_PROMPT},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            }],
+        )
+    except Exception as exc:                                         # noqa: BLE001
+        import xai_models                                            # noqa: WPS433
+        xai_models.note_exception(exc, model)                        # said once, then raised
+        raise
     return resp.choices[0].message.content or ""
 
 
@@ -516,7 +521,8 @@ def main():
     ap.add_argument("--page", type=int, default=None, help="single page index (0-based)")
     ap.add_argument("--dpi", type=int, default=300)
     ap.add_argument("--max-side", type=int, default=2000)
-    ap.add_argument("--model", default=os.environ.get("XAI_VISION_MODEL", "grok-4.3"))
+    import xai_models                                                # noqa: WPS433
+    ap.add_argument("--model", default=xai_models.vision_model())
     ap.add_argument("--dump-image", action="store_true", help="save rendered PNGs for inspection")
     ap.add_argument("--verbose", action="store_true", help="print the raw LLM response for each page")
     ap.add_argument("--cache-dir", default=DEFAULT_CACHE_DIR, help="where to store/read cached page results")

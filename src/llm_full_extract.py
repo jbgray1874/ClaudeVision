@@ -21,7 +21,7 @@ Public API:
     extract_full_job(pdf_path, model=..., )  -> dict   (structured job; {} on failure)
 
 Standalone:
-    python llm_full_extract.py <pdf> [--model grok-4.3] [--context-only]
+    python llm_full_extract.py <pdf> [--model <grok model>] [--context-only]
 """
 from __future__ import annotations
 
@@ -38,7 +38,9 @@ try:
 except Exception:  # pragma: no cover
     pdfplumber = None
 
-DEFAULT_MODEL = os.environ.get("XAI_VISION_MODEL", "grok-4.3")
+import xai_models  # noqa: E402  — the Grok models, named once in config (D-612)
+
+DEFAULT_MODEL = xai_models.vision_model()
 SOURCE_NAME = "llm_full_extract"
 
 # THE WORDS WE ASK FOR MUST BE WORDS WE CAN COST.
@@ -574,14 +576,18 @@ def _call_llm(user_content: str, model: str,
         raise RuntimeError("XAI_API_KEY not set (C:\\ClaudeVision\\.env or $env:XAI_API_KEY).")
     from openai import OpenAI  # xAI is OpenAI-compatible
     client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_content},
-        ],
-        temperature=0,
-    )
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0,
+        )
+    except Exception as exc:                                         # noqa: BLE001
+        xai_models.note_exception(exc, model)                        # said once, then raised
+        raise
     return resp.choices[0].message.content
 
 

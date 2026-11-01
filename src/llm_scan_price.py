@@ -186,7 +186,9 @@ def scan_price(pdf_path: Any, units: int, model: Optional[str] = None,
     must not cost the other ninety-three, so every failure returns a result that SAYS what
     went wrong instead of propagating.
     """
-    model = model or os.environ.get("XAI_VISION_MODEL") or "grok-4.3"
+    if not model:
+        import xai_models                                            # noqa: WPS433
+        model = xai_models.vision_model()                            # D-612: named once
     path = Path(pdf_path)
     if not path.is_file():
         return _stamp({"found": False, "why": f"the drawing is not readable: {path}"},

@@ -1780,9 +1780,14 @@ def _call_vision_llm(png_pages: List[bytes], model: str, brief: str = "",
     import time as _time                                            # noqa: WPS433
     _t0, _failed = _time.time(), True
     try:
-        resp = client.chat.completions.create(
-            model=model, temperature=0,
-            messages=[{"role": "user", "content": content}])
+        try:
+            resp = client.chat.completions.create(
+                model=model, temperature=0,
+                messages=[{"role": "user", "content": content}])
+        except Exception as exc:                                    # noqa: BLE001
+            import xai_models                                       # noqa: WPS433
+            xai_models.note_exception(exc, model)                   # said once, then raised
+            raise
         _failed = False
     finally:
         try:                                 # a partner run's call count (D-529); else nothing
@@ -1924,7 +1929,8 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
     import _bom_vision_reader as pathB                              # noqa: WPS433
 
     if model is None:
-        model = os.environ.get("XAI_VISION_MODEL", "grok-4.3")
+        import xai_models                                           # noqa: WPS433
+        model = xai_models.vision_model()                           # D-612: named once
     brief = str(brief or "").strip()[:BRIEF_MAX_CHARS]
     pngs: List[bytes] = []
     rendered: List[Dict[str, Any]] = []
