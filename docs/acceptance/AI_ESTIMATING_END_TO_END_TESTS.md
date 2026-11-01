@@ -157,6 +157,23 @@ Your `.env` already lists the Manual Estimates, parity and completed AI briefs f
 | At the time of a run | Tick "compare with the manual estimate when this estimate finishes", then run | The log ends "[parity] comparison filed to ..." or says the choice was not clear |
 | Phone, Wi-Fi off (after the portal update) | Parity tab | Same answers; running a comparison only for the named estimators |
 
+### 7a. The line-by-line report (D-623, SCRUM-157, no new run)
+
+Three known pairs: jobs with a manual sheet and an AI run of the same drawing. Compare each by
+job number, then open "Parity report".
+
+| Test | Pass |
+|---|---|
+| How each side adds up | Both sides say whether their lines reach their own totals, with the gap if not |
+| Cost apart from sell | Material, labour, rebate and overheads, absorption and total unit cost in one table, each with its manual cell. Margin and sell price in another. No row compares a cost with a sell price |
+| Commercial lines | Every delivery, packaging and installation line on the manual sheet is listed with its AI counterpart or "not in the AI estimate", and its cell. AI-only lines say "not on the manual sheet" |
+| Scope | Parts on one side only; made on one and bought on the other; material not charged where the part is worked; quantity per unit; blank, gauge or nest behind a money difference |
+| Quantities | Same quantity: compared as they stand. Another quantity: the AI unit cost at the manual's quantity from the run's sweep, or "quantities differ" on every line |
+| Revision | Both revisions shown; "differs" when they do |
+| Drill-down | Each item under "The biggest differences" jumps to its line and cells |
+| Wording | Agrees, close or differs. Nothing calls either side wrong |
+| Money-cell report | Still linked as "Money-cell report" beside it |
+
 ## 8. Ask by voice or text (D-620, D-622, no new run)
 
 | Test | Do | Pass |

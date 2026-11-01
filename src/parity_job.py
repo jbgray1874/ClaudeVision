@@ -464,7 +464,8 @@ def quantities(summary: Dict[str, Any], bundle: Dict[str, Any], run_units: Optio
     manual_unit = _num(headline.get("manual_unit_cost_gbp"))
     if manual_qty in sweep and manual_unit:
         ai_unit = round(sweep[manual_qty], 2)
-        pct = round(abs(manual_unit - ai_unit) / abs(ai_unit) * 100.0, 4) if ai_unit else None
+        # A percentage of the manual figure, as the line-by-line comparison states every one.
+        pct = round(abs(ai_unit - manual_unit) / abs(manual_unit) * 100.0, 4)
         out.update(note=(f"The AI run priced {ai_qty:g} off and the manual sheet {manual_qty:g} off; "
                          f"compared at {manual_qty:g} off from the run's own quantity sweep."),
                    ai_unit_at_manual_qty=ai_unit, pct_at_manual_qty=pct,
@@ -505,6 +506,39 @@ def _money_lines(bundle: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "manual": _num(row.get("workbook_cached_numeric")),
                     "pct": _num(row.get("pct_variance")), "status": row.get("status"),
                     "cell": row.get("cell")})
+    return out
+
+
+def _detail_quantity(detail: Dict[str, Any], headline: Dict[str, Any]) -> Dict[str, Any]:
+    """The line-by-line comparison's quantities, in the shape the index has always carried."""
+    q = dict(detail.get("quantity") or {})
+    out: Dict[str, Any] = {"ai": q.get("ai"), "manual": q.get("manual"),
+                           "comparable": q.get("comparable", True), "note": q.get("note", ""),
+                           "compared_at": q.get("compared_at"), "manual_cell": q.get("manual_cell")}
+    if q.get("ai_unit_at_manual_qty") is not None:
+        out.update(ai_unit_at_manual_qty=q["ai_unit_at_manual_qty"],
+                   pct_at_manual_qty=headline.get("pct_variance"),
+                   status_at_manual_qty=headline.get("status"),
+                   gap_at_manual_qty=headline.get("gap_gbp"))
+    return out
+
+
+def _detail_lines(detail: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The cost build-up, the selling side and the commercial lines, each with its cell: cost
+    and sell never in one line."""
+    out = []
+    for kind in ("cost_build", "selling"):
+        for r in detail.get(kind) or []:
+            out.append({"kind": "cost" if kind == "cost_build" else "selling",
+                        "label": r.get("label"), "ai": r.get("ai"), "manual": r.get("manual"),
+                        "pct": r.get("pct"), "status": r.get("status"),
+                        "cell": r.get("manual_cell"), "fraction": bool(r.get("fraction"))})
+    for c in (detail.get("commercial") or {}).get("categories") or []:
+        out.append({"kind": "commercial", "label": c.get("label"), "ai": c.get("ai"),
+                    "manual": c.get("manual"), "pct": c.get("pct"),
+                    "status": c.get("status") if c.get("presence") == "both" else c.get("presence"),
+                    "cell": ", ".join(str(x.get("cell")) for x in (c.get("manual_lines") or [])
+                                      if x.get("cell"))})
     return out
 
 
@@ -585,8 +619,16 @@ def run_job(job: str, manual: Optional[str] = None, ai: Optional[str] = None, *,
         error = f"{type(exc).__name__}: {exc}"
     headline = result.get("headline") or {}
     bundle = _load(result["bundle_json"]) if result.get("bundle_json") else {}
-    quantity = quantities(_load(ai_copy["path"]), bundle, ai_pick.get("units"), headline) \
-        if not error else {}
+    # D-623: the line-by-line record answers quantity, lines, scope and revision when it was
+    # made and read both unit costs; the money-cell bundle answers otherwise.
+    detail = _load(result["detail_json"]) if result.get("detail_json") else {}
+    use_detail = bool(detail) and headline.get("unit_cost_source") == "line by line"
+    if error:
+        quantity = {}
+    elif use_detail:
+        quantity = _detail_quantity(detail, headline)
+    else:
+        quantity = quantities(_load(ai_copy["path"]), bundle, ai_pick.get("units"), headline)
 
     for c in (manual_copy, ai_copy, book_copy, record_copy):
         c.pop("path", None)
@@ -608,9 +650,18 @@ def run_job(job: str, manual: Optional[str] = None, ai: Optional[str] = None, *,
                "date": ai_pick.get("stamp", ""), "date_basis": "the AI run folder's date and time"},
         "quantity": quantity,
         "report_html": Path(result["bundle_html"]).name if result.get("bundle_html") else "",
+        "legacy_html": (Path(result["legacy_html"]).name if result.get("legacy_html")
+                        and result.get("legacy_html") != result.get("bundle_html") else ""),
+        "detail_json": Path(result["detail_json"]).name if result.get("detail_json") else "",
         "bundle_json": Path(result["bundle_json"]).name if result.get("bundle_json") else "",
         "bundle_csv": Path(result["bundle_csv"]).name if result.get("bundle_csv") else "",
-        "headline": headline, "lines": _money_lines(bundle),
+        "headline": headline,
+        "lines": _detail_lines(detail) if use_detail else _money_lines(bundle),
+        "lines_from": "line by line" if use_detail else "money cells",
+        "scope_counts": ((detail.get("scope") or {}).get("counts") if detail else None),
+        "revision": ({k: (detail.get("revision") or {}).get(k) for k in ("manual", "ai", "differs")}
+                     if detail else None),
+        "differences": (detail.get("differences") or [])[:10] if detail else [],
         "read_via_excel": bool(read_via_excel), "error": error,
     }
     index["outcome"] = outcome_of(index)
@@ -748,7 +799,7 @@ def _pair(run: Dict[str, Any], r: Dict[str, Path], archive: List[Dict[str, Any]]
 
 def stats(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     comparable = [x for x in rows if x["outcome"] in COMPARABLE]
-    pcts = [float(x["pct"]) for x in comparable if isinstance(x.get("pct"), (int, float))]
+    pcts = [abs(float(x["pct"])) for x in comparable if isinstance(x.get("pct"), (int, float))]
     count = {k: sum(1 for x in rows if x["outcome"] == k)
              for k in ("match", "warning", "fail", "quantities differ", "no manual", "ambiguous",
                        "failed", "not compared", "would compare")}

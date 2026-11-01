@@ -4125,7 +4125,9 @@ parityRun.onclick = async () => {
     /* HTML FIRST, BECAUSE IT IS THE ONE A PERSON READS. The JSON is the record and the CSV is
        for Excel; leading with either sends an estimator into a 2,000-line file to answer
        "why did these two differ". */
-    [{url:j.bundle_html_url, name:"Parity report (HTML — read this one)"},
+    [{url:j.bundle_html_url, name:"Parity report, line by line (HTML — read this one)"},
+     {url:j.legacy_html_url, name:"Money-cell report (HTML)"},
+     {url:j.detail_json_url, name:"Line-by-line record (JSON)"},
      {url:j.bundle_json_url, name:"Parity bundle (JSON — the full comparison)"},
      {url:j.bundle_csv_url,  name:"Parity comparison (CSV)"}]
       .filter(d => d.url).forEach(d => {
@@ -4219,8 +4221,13 @@ function pjResult(idx){
   return '<li><span style="color:' + pjColour(oc) + '">' + pjEsc(String(oc).toUpperCase()) + '</span> — AI '
     + pjGbp(ai) + ' against manual ' + pjGbp(h.manual_unit_cost_gbp) + (pct != null ? ' · variance ' + pjPct(pct) : "") + '</li>'
     + (q.note ? '<li class="note">' + pjEsc(q.note) + '</li>' : "")
+    + (idx.scope_counts ? '<li>Scope: ' + pjEsc(idx.scope_counts.manual_only ?? 0) + ' parts only on the manual · '
+      + pjEsc(idx.scope_counts.ai_only ?? 0) + ' only on the AI · ' + pjEsc(idx.scope_counts.made_bought_differs ?? 0)
+      + ' made on one, bought on the other · ' + pjEsc(idx.scope_counts.material_not_charged ?? 0) + ' with material not charged'
+      + (idx.revision && idx.revision.differs ? ' · <strong>revisions differ</strong>' : "") + '</li>' : "")
     + (lines ? '<li><table style="border-collapse:collapse;font-size:12.5px"><tr><th style="text-align:left">Line</th><th>AI</th><th>Manual</th><th>Status</th><th>Cell</th></tr>' + lines + '</table></li>' : "")
-    + '<li>' + [pjLink(idx.report_url, "Parity report"), pjLink(idx.manual_url, "Manual sheet (filed copy)"),
+    + '<li>' + [pjLink(idx.report_url, "Parity report"), pjLink(idx.legacy_report_url, "Money-cell report"),
+                pjLink(idx.manual_url, "Manual sheet (filed copy)"),
                 pjLink(idx.ai_url, "AI sheet (filed copy)"), pjLink(idx.bundle_csv_url, "Bundle CSV")].filter(Boolean).join(" · ") + '</li>'
     + '<li class="note">Filed in <code>' + pjEsc(idx.folder) + '</code> · ' + pjEsc((idx.match || {}).how || "")
     + (idx.comparison_id ? " · id " + pjEsc(idx.comparison_id) : "") + '</li>';
