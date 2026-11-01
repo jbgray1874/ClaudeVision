@@ -15,3 +15,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import config  # noqa: E402,F401  — the engine's, cached in sys.modules for the process
+
+
+# ── A PRIVATE STATE FOLDER FOR EVERY TEST (D-618) ─────────────────────────────────────────
+# The estimating service now keeps every run on disk under its state folder and reads them
+# back on import (restart-safe history). Left alone, the suite would write runs into the
+# home folder and each fresh import of the routes would restore runs from earlier tests. A
+# test that wants a particular folder still sets SDI_STATE_DIR itself.
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _private_state_folder(tmp_path_factory, monkeypatch):
+    monkeypatch.setenv("SDI_STATE_DIR", str(tmp_path_factory.mktemp("sdi-state")))

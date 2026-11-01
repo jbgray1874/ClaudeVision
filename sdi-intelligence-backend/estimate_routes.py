@@ -76,6 +76,7 @@ except ImportError:                    # loaded by path, without this folder on 
 config = the_service_config(config)   # this service's, even where the engine's holds the name
 import docmgr
 import estimate_email
+import estimate_history
 import estimate_walkthrough
 import quote_release
 import self_running_switch
@@ -407,6 +408,47 @@ _RUNNERS: Dict[str, Runner] = {}
 _LOCK = threading.Lock()
 
 
+# ── RESTART-SAFE HISTORY (D-618) ─────────────────────────────────────────────────────────
+# Every run is written to disk at each change of state and read back when the service starts,
+# so a deployment no longer forgets queued, running and finished jobs. See estimate_history.
+_PROGRESS_SAVE_SECONDS = 10.0
+_last_progress_save: Dict[str, float] = {}
+
+
+def _keep(run: "Run") -> None:
+    """Save one run's state. A save that fails is said on the run's log, never raised."""
+    why = estimate_history.save(run)
+    if why:
+        run.line(f"(The run's history could not be saved: {why}. It is safe until the service "
+                 f"restarts.)")
+
+
+def _restore_history() -> int:
+    now = time.time()
+    try:
+        restored = estimate_history.load(Run, now=now)
+    except Exception as exc:                                        # noqa: BLE001
+        print(f"[history] runs could not be restored: {type(exc).__name__}: {exc}", flush=True)
+        return 0
+    for run in restored.values():
+        note = estimate_history.restored_note(run, now)
+        if note:
+            run.line(note)
+        if run.email_result.get("sending"):
+            run.email_result = {"sent": False, "reason": (
+                "the service restarted while this e-mail was being sent, so it is not sent "
+                "again; check the inbox before sending it by hand")}
+            run.line("E-mail: " + run.email_result["reason"] + ".")
+    _RUNS.update(restored)
+    if restored:
+        print(f"[history] restored {len(restored)} run(s) from {estimate_history.store_dir()}",
+              flush=True)
+    return len(restored)
+
+
+_restore_history()
+
+
 def _expire_dead_claims() -> None:
     """A GATE NOBODY ASKS REPORTS NOTHING, so this is called on every request that
     reads or changes the queue rather than left to a timer that might not be
@@ -426,6 +468,7 @@ def _expire_dead_claims() -> None:
             r = _RUNNERS.get(run.runner)
             if r is not None and r.run_id == run.run_id:
                 r.run_id = ""
+            _keep(run)
 
 
 def _release_runs_orphaned_by_a_restart(runner_id: str, process: str) -> None:
@@ -457,6 +500,7 @@ def _release_runs_orphaned_by_a_restart(runner_id: str, process: str) -> None:
             r = _RUNNERS.get(runner_id)
             if r is not None and r.run_id == run.run_id:
                 r.run_id = ""
+            _keep(run)
 
 
 def _online_runners() -> List[Runner]:
@@ -814,6 +858,7 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         run.claimed_by_process = req.process or ""
         runner.run_id = run.run_id
         run.line(f"Claimed by runner {req.hostname or req.runner_id}")
+        _keep(run)
 
     return {"run": {
         "run_id": run.run_id, "client": run.client, "units": run.units,
@@ -1035,9 +1080,16 @@ def progress(run_id: str, req: ProgressRequest,
             run.line(text)
             _check_the_engine_was_told(run, text)
         run.lease_until = now + LEASE_SECONDS
-        r = _RUNNERS.get(req.runner_id)
-        if r is not None:
-            r.last_seen = now
+        # A RUNNER MID-JOB IS A CONNECTED RUNNER (D-618). After a restart of this service the
+        # runner is not in the registry until it next asks for work, and it does not ask while
+        # it works, so the page said "No estimating runner is connected" and refused new jobs
+        # beside a runner that was plainly busy. Its heartbeat puts it back.
+        r = _RUNNERS.setdefault(req.runner_id, Runner(runner_id=req.runner_id))
+        r.last_seen = now
+        r.run_id = run.run_id
+        if now - _last_progress_save.get(run_id, 0.0) >= _PROGRESS_SAVE_SECONDS:
+            _last_progress_save[run_id] = now
+            _keep(run)
         _cancel = run.cancel_requested
     # THE ANSWER TO A HEARTBEAT IS WHERE A CANCELLATION FITS. The runner is a separate
     # process on another machine and cannot be reached; it can only be told something the
@@ -1058,6 +1110,12 @@ def complete(run_id: str, req: CompleteRequest,
             raise HTTPException(404, "No such run.")
         if run.runner != req.runner_id:
             raise HTTPException(409, "That run is claimed by a different runner.")
+        # A FINISH ALREADY RECORDED IS NOT RECORDED TWICE (D-618). The runner reports again
+        # when an answer is lost on the way back; the second report re-made the walkthrough and
+        # sent the e-mail a second time.
+        if (req.status == "done" and run.status == "done" and run.finished_at
+                and run.deliverables):
+            return {"ok": True, "already_recorded": True}
         for text in req.lines:
             run.line(text)
             _check_the_engine_was_told(run, text)
@@ -1100,11 +1158,16 @@ def complete(run_id: str, req: CompleteRequest,
         r = _RUNNERS.get(req.runner_id)
         if r is not None:
             r.last_seen, r.run_id = now, ""
-        _send_to = list(run.email_to)
+        # AT MOST ONCE (D-618): marked as being sent, on disk, before the send starts; a run
+        # whose e-mail was already tried is never sent it again, after a restart or otherwise.
+        _send_to = [] if run.email_result else list(run.email_to)
+        if _send_to:
+            run.email_result = {"sending": True, "at": now}
         _snapshot = run.as_json()
         _quote = run.email_quote
         _provisional = run.status != "done" or _looks_provisional(run)
         _deliverables = list(run.deliverables)
+        _keep(run)
 
     # OUTSIDE THE LOCK. Talking to a mail server takes seconds and can hang; holding the
     # registry lock while it does would stall every other run, the page's polling and the
@@ -1122,6 +1185,7 @@ def complete(run_id: str, req: CompleteRequest,
                     + (f" — {', '.join(_result.get('attached') or []) or 'no attachments'}"
                        if _result.get("sent") else
                        f" — NOT SENT: {_result.get('reason')}"))
+                _keep(_live)
     return {"ok": True}
 
 
@@ -2119,6 +2183,7 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     # without them (D-607).
     with _LOCK:
         _RUNS[run.run_id] = run
+        _keep(run)
     # WHICH CONSTRUCTION THIS RUN PRICES, said where the estimator is looking (D-535): a
     # schedule on file changes what the run is, and a run that silently priced last week's
     # schedule — or silently asked the model again — is the failure this panel exists to end.
@@ -3081,6 +3146,7 @@ def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
             # and no reference document, and its book compares what arrived with that.
             run.submitted_scope = submitted_scope(run, method, None, "none", [])
             _RUNS[run.run_id] = run
+            _keep(run)
             accepted.append(run)
             queued_at += 0.001          # keeps the queue order stable and the sort total
 
@@ -3235,6 +3301,7 @@ def batch_abandon(batch_id: str, x_sdi_key: Optional[str] = Header(default=None)
             r = _RUNNERS.get(run.runner)
             if r is not None and r.run_id == run.run_id:
                 r.run_id = ""
+            _keep(run)
             released += 1
     return {"ok": True, "released": released}
 
@@ -3277,6 +3344,7 @@ def abandon(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
         r = _RUNNERS.get(run.runner)
         if r is not None and r.run_id == run.run_id:
             r.run_id = ""
+        _keep(run)
     return {"ok": True, "was": was, "run_id": run_id}
 
 
@@ -3409,8 +3477,8 @@ def deliverable(run_id: str, name: str, x_sdi_key: Optional[str] = Header(defaul
 
 @router.get("")
 def recent(x_sdi_key: Optional[str] = Header(default=None), limit: int = 25):
-    """Every run this service has queued, newest first. In memory only — a
-    restart forgets them, and the estimates themselves are on the share."""
+    """Every run this service has queued, newest first: kept on disk since D-618, so a
+    restart no longer forgets them (estimate_history)."""
     _check_key(x_sdi_key)
     with _LOCK:
         _expire_dead_claims()
