@@ -301,7 +301,14 @@ async def _public_surface_guard(request, call_next):
                     # nothing to click and nothing to read. Only somebody who
                     # is NOT signed in is sent to sign in.
                     signed_in = auth.current_user(request) if auth.ENABLED else None
-                    if path == "/estimating" and auth.ENABLED and signed_in is None:
+                    # ── A PAGE UNDER /estimating TOO (D-613) ─────────────────
+                    # The finished-estimate e-mail's button opens
+                    # /estimating/walkthrough/<token>, usually on a phone that
+                    # has never signed in here. A 403 in JSON is a dead end;
+                    # sign-in returns them to the page they asked for.
+                    if ((path == "/estimating" or path.startswith("/estimating/"))
+                            and request.method in ("GET", "HEAD")
+                            and auth.ENABLED and signed_in is None):
                         return auth.login_redirect(request)
                     if signed_in is not None:
                         return JSONResponse(status_code=403, content={"detail":
@@ -338,15 +345,27 @@ async def _public_surface_guard(request, call_next):
                 if path == "/api/estimate" or path.startswith("/api/estimate/"):
                     # Existing queue endpoints require a service key; translate the
                     # authenticated user inside the service, never in browser JS.
-                    if not config.API_KEY:
-                        return JSONResponse(status_code=503, content={"detail": "Estimator API is not configured"})
-                    request.scope["headers"] = [(k, v) for k, v in request.scope["headers"]
-                                                if k.lower() != b"x-sdi-key"] + [
-                                                    (b"x-sdi-key", config.API_KEY.encode("utf-8"))]
-                    # Request.headers was already read above; refresh the cached
-                    # view after changing the ASGI header list.
-                    from starlette.datastructures import Headers
-                    request._headers = Headers(scope=request.scope)
+                    # ── NO KEY TO TRANSLATE IS NOT A FAULT (D-613) ───────────
+                    # With SDI_API_KEY blank and no partner keys the estimating
+                    # API asks nobody for a key, so there is nothing to put in
+                    # the header: who may look and what may be done was
+                    # decided above. It answered 503 "not configured" instead,
+                    # and every panel on the phone said so. Partner keys
+                    # without a portal key DO close the API to a request with
+                    # no key, and that is still said, with the fix.
+                    if config.API_KEY:
+                        request.scope["headers"] = [(k, v) for k, v in request.scope["headers"]
+                                                    if k.lower() != b"x-sdi-key"] + [
+                                                        (b"x-sdi-key", config.API_KEY.encode("utf-8"))]
+                        # Request.headers was already read above; refresh the cached
+                        # view after changing the ASGI header list.
+                        from starlette.datastructures import Headers
+                        request._headers = Headers(scope=request.scope)
+                    elif getattr(config, "PARTNER_KEYS", None):
+                        return JSONResponse(status_code=503, content={"detail":
+                            "Estimator API is not configured: partner keys are set and "
+                            "SDI_API_KEY is not, so the estimating API refuses a request "
+                            "with no key. Set SDI_API_KEY in .env and restart the service."})
                 return await call_next(request)
             if not any(path == a or path.startswith(a + "/") or path == a for a in _PUBLIC_ALLOW):
                 # Indistinguishable from a route that does not exist — the public
