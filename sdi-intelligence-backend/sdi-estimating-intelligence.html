@@ -874,6 +874,9 @@
       <textarea id="askQuestion" rows="3" maxlength="500" placeholder="What is the total? Which parts and routes were costed? Why is release held?"></textarea>
       <button type="button" id="askSubmit">Ask about this run</button>
       <div class="answer-box" id="askAnswer" role="status">Select a run and ask about its costs, BOM, routes or release checks.</div>
+      <p class="note" id="askRecorded"></p>
+      <p class="note" id="askLookup"></p>
+      <p class="note" id="askCoverage"></p>
       <p class="note" id="askSources"></p>
     </section>
 
@@ -4560,7 +4563,7 @@ $("askSubmit").onclick = async () => {
   }
   $("askSubmit").disabled = true;
   $("askAnswer").textContent = "Checking the selected run's filed evidence…";
-  $("askSources").textContent = "";
+  ["askSources", "askRecorded", "askLookup", "askCoverage"].forEach(i => $(i).textContent = "");
   try{
     const r = await api("/api/estimate/tools/ask", {method:"POST",
       headers:{"Content-Type":"application/json"},
@@ -4568,7 +4571,13 @@ $("askSubmit").onclick = async () => {
     const j = await r.json().catch(() => ({}));
     if(!r.ok) throw new Error(detailText(j, r, "Question unavailable"));
     $("askAnswer").textContent = j.answer || "No answer is present in this run's record.";
-    $("askSources").textContent = "Source: run " + j.run_id + " · " + j.record_name
+    // D-616: beside the explanation, the record's own figures, the lookup's reading of the
+    // same record, what the model did not see, and where it all came from.
+    $("askRecorded").textContent = (j.recorded || []).length
+      ? "From the record: " + j.recorded.join(" ") : "";
+    $("askLookup").textContent = j.record_answer ? "Record lookup: " + j.record_answer : "";
+    $("askCoverage").textContent = j.coverage_note || "";
+    $("askSources").textContent = "Source: run " + (j.run_id || "filed job") + " · " + j.record_name
       + (j.sources && j.sources.length ? " · " + j.sources.join(" · ") : "")
       + (j.answered_by ? " · answered by " + j.answered_by : "");   // D-615
   }catch(e){

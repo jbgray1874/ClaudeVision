@@ -389,22 +389,30 @@ def answer_saved_record(record: dict[str, Any], question: str) -> dict[str, Any]
             "sources": [], "complete": False}
 
 
-# ── THE SAME QUESTION, ANSWERED BY THE MODEL, FROM THE SAME RECORD (D-615) ─────────────────
+# ── THE SAME QUESTION, ANSWERED BY THE MODEL, FROM THE SAME RECORD (D-615, D-616) ─────────
 # JG, 1 Nov 2026: "yes, switch it to grok-4.7". The lookup above matches words: "what did this
 # come out at" is answered, "why is labour so high at 1 off" falls through to "I cannot
 # establish that". The record chosen above, and nothing else, now goes to the engine's question
-# module (src/estimate_qa.py), which asks the configured Grok model to answer from it alone and
-# never to work out a new price. The lookup's own answer goes with it as the exact reading.
+# service (src/estimate_qa.py), the one the e-mail's walkthrough page asks too (D-616), so one
+# saved estimate answers the same through either. The lookup's own answer goes with it.
+#
+# WHAT COMES BACK, AND IS SHOWN (D-616): the model's explanation; the record's own figures,
+# read directly and never the model's (`recorded`); this lookup's answer (`record_answer`);
+# what the model did not see (`coverage_note`); the run, the record and the fields used; and
+# which model answered. Money in the model's answer that is not in the record is refused there.
 #
 # THE LOOKUP STAYS. Where the model cannot be had (no engine on this box, no key, offline, a
 # refusal, too slow) the lookup's answer is returned exactly as before and says it was the
 # lookup, so a question never goes unanswered because the model is away.
 #
-# A SLICE OF THE RECORD, NOT THE RECORD. A saved record can run to 30 MB; the question module
-# reads totals, the quantity sweep, the labour and material rows, the charged part list, the
-# review flags and the release decision, so only those travel.
+# WHAT TRAVELS (D-616). The first cut sent a slice: the first 60 lines, and release_decision,
+# which these records do not use; the release status is costed_job.release. Now the parts of
+# the record the service reads all go, every line, the release block and the open decisions,
+# and the service chooses and counts what the model sees. The drawing reads, the heaviest part
+# of a record, stay behind.
 _ASK_KEYS = ("drawing_number", "declared_product", "customer", "client",
              "requested_order_quantity", "quantity_sweep", "review_flags", "release_decision")
+_ASK_COSTED_KEYS = ("run", "lines", "release", "decisions_required")
 ASK_TIMEOUT_SECONDS = int(os.getenv("SDI_ASK_TIMEOUT_SECONDS", "75"))   # inside App Proxy's 85 s
 LOOKUP = "record lookup"
 
@@ -415,19 +423,21 @@ def record_for_the_model(record: dict[str, Any]) -> dict[str, Any]:
     out["final_estimate"] = {k: final[k] for k in ("totals", "labour_rows", "material_rows")
                              if k in final}
     costed = record.get("costed_job") if isinstance(record.get("costed_job"), dict) else {}
-    out["costed_job"] = {"lines": list(costed.get("lines") or [])[:60]}
+    out["costed_job"] = {k: costed[k] for k in _ASK_COSTED_KEYS if k in costed}
     return out
 
 
 def ask_the_model(record: dict[str, Any], question: str, record_answer: str, *,
-                  engine_python: str, qa_cli: str, run: Any = None) -> dict[str, Any] | None:
-    """{"answer", "model"} from the engine's question module, or None where it cannot be had."""
+                  engine_python: str, qa_cli: str, run: Any = None, record_name: str = "",
+                  run_id: str = "") -> dict[str, Any] | None:
+    """The question service's reply when it answered, or None where it could not."""
     import json
     import subprocess
     if not Path(engine_python).exists() or not Path(qa_cli).exists():
         return None
     payload = json.dumps({"question": question, "record": record_for_the_model(record),
-                          "record_answer": record_answer}, default=str)
+                          "record_answer": record_answer, "record_name": record_name,
+                          "run_id": run_id}, default=str)
     try:
         proc = (run or subprocess.run)([engine_python, qa_cli], input=payload,
                                        capture_output=True, text=True, encoding="utf-8",
@@ -440,21 +450,30 @@ def ask_the_model(record: dict[str, Any], question: str, record_answer: str, *,
         except ValueError:
             continue
         if isinstance(got, dict) and got.get("status") == "answered" and got.get("answer"):
-            return {"answer": str(got["answer"]), "model": str(got.get("model") or "grok")}
+            got["model"] = str(got.get("model") or "grok")
+            return got
         if isinstance(got, dict) and "status" in got:
             return None
     return None
 
 
 def answer_with_the_model(record: dict[str, Any], question: str, *, engine_python: str,
-                          qa_cli: str, run: Any = None) -> dict[str, Any]:
-    """The lookup's answer, then the model's from the same record where it can be had."""
+                          qa_cli: str, run: Any = None, record_name: str = "",
+                          run_id: str = "") -> dict[str, Any]:
+    """The lookup's answer, then the question service's from the same record where it can be
+    had, with both shown."""
     looked_up = answer_saved_record(record, question)        # refuses a bad question first
     got = ask_the_model(record, question, str(looked_up.get("answer") or ""),
-                        engine_python=engine_python, qa_cli=qa_cli, run=run)
+                        engine_python=engine_python, qa_cli=qa_cli, run=run,
+                        record_name=record_name, run_id=run_id)
     if got is None:
-        return dict(looked_up, answered_by=LOOKUP, model="")
+        return dict(looked_up, answered_by=LOOKUP, model="", recorded=[], coverage_note="",
+                    refused_figures=[], record_answer="")
+    sources = list(got.get("sources") or [])
+    sources += [s for s in looked_up.get("sources") or [] if s not in sources]
     return dict(looked_up, answer=got["answer"], answered_by=got["model"], model=got["model"],
                 record_answer=looked_up.get("answer") or "",
-                sources=["the saved record, read by " + got["model"]]
-                + list(looked_up.get("sources") or []))
+                recorded=list(got.get("recorded") or []),
+                coverage_note=str(got.get("coverage_note") or ""),
+                refused_figures=list(got.get("refused_figures") or []),
+                sources=sources)
