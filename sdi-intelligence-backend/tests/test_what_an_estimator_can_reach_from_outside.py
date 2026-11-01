@@ -286,3 +286,53 @@ class LookingAndDoingAreDifferentPermissionsTests(unittest.TestCase):
         after = self.GUARD.split("STARTS_A_RUN", 1)[1][:600]
         self.assertIn("Looking is open to anyone signed in", after)
         self.assertIn("STARTING a run", after)
+
+
+class TheEmailsQuestionScreenTests(unittest.TestCase):
+    """D-613, 1 November 2026: the finished-estimate e-mail's button opens the
+    estimate's question screen on a phone, through this address, with no VPN.
+    Three things stood between the button and the answer: a signed-out phone
+    got a 403 in JSON instead of the sign-in page, every estimating call
+    answered 503 "Estimator API is not configured" because no SDI_API_KEY was
+    set, and the question itself is a POST nobody had put on the list."""
+
+    GUARD = APP.split("async def _public_surface_guard", 1)[1].split("\n# ──", 1)[0]
+    TOKEN = "AbCdEfGhIjKlMnOpQrStUv"
+
+    def test_a_question_from_the_email_page_is_allowed(self):
+        self.assertTrue(surface.post_allowed(f"/api/estimate/walkthrough/{self.TOKEN}/ask"))
+        self.assertTrue(surface.post_allowed(f"/api/estimate/walkthrough/{self.TOKEN}/ask/"))
+
+    def test_nothing_else_under_walkthrough_is_opened_by_it(self):
+        for path in (f"/api/estimate/walkthrough/{self.TOKEN}",
+                     f"/api/estimate/walkthrough/{self.TOKEN}/file/x.xlsx",
+                     f"/api/estimate/walkthrough/{self.TOKEN}/ask/more",
+                     "/api/estimate/walkthrough/short/ask",
+                     "/api/estimate/walkthrough/../release/ask",
+                     f"/api/estimate/walkthrough/{self.TOKEN}/../../release",
+                     f"/API/ESTIMATE/WALKTHROUGH/{self.TOKEN}/ASK",
+                     f"/x/api/estimate/walkthrough/{self.TOKEN}/ask",
+                     f"/api/estimate/walkthrough/{'A' * 65}/ask"):
+            with self.subTest(path=path):
+                self.assertFalse(surface.post_allowed(path), path)
+
+    def test_the_never_list_is_still_refused(self):
+        for path in surface.NEVER_PUBLIC_POST:
+            with self.subTest(path=path):
+                self.assertFalse(surface.post_allowed(path))
+
+    def test_a_signed_out_phone_is_sent_to_sign_in_for_any_estimating_page(self):
+        self.assertIn('path.startswith("/estimating/")', self.GUARD)
+        branch = self.GUARD.split('path.startswith("/estimating/")', 1)[1][:300]
+        self.assertIn('request.method in ("GET", "HEAD")', branch)
+        self.assertIn("signed_in is None", branch)
+        self.assertIn("auth.login_redirect(request)", branch)
+
+    def test_no_key_to_translate_is_not_a_503(self):
+        estimate = self.GUARD.split('if path == "/api/estimate" or path.startswith("/api/estimate/"):', 1)[1]
+        estimate = estimate.split("return await call_next(request)", 1)[0]
+        self.assertIn("if config.API_KEY:", estimate)
+        self.assertNotIn("if not config.API_KEY:", estimate)
+        refusal = estimate.split('elif getattr(config, "PARTNER_KEYS", None):', 1)[1]
+        self.assertIn("status_code=503", refusal)
+        self.assertIn("Set SDI_API_KEY", refusal)

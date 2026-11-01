@@ -23,6 +23,7 @@ the rest of the shares stay where they are.
 """
 import ntpath
 import os
+import re
 
 # The only POSTs an estimator may make from outside: start work, and ask about
 # work already done.
@@ -31,6 +32,13 @@ PUBLIC_POST = (
     "/api/estimate/brief",            # start one from a completed brief
     "/api/estimate/tools/ask",        # questions answered from a filed record
 )
+
+# A QUESTION ABOUT ONE FINISHED ESTIMATE, FROM ITS E-MAIL (D-613). The finished-estimate
+# e-mail's button opens /estimating/walkthrough/<token>, and its box asks here. It is the same
+# kind of POST as /tools/ask: a question answered from a record already filed, never a run, a
+# release or an e-mail. The token is the service's own, the shape estimate_walkthrough issues,
+# so nothing else under /walkthrough/ is opened by this.
+WALKTHROUGH_ASK = re.compile(r"/api/estimate/walkthrough/[A-Za-z0-9_-]{16,64}/ask")
 
 # Named so a test can state what must never be on PUBLIC_POST, rather than the
 # list being checked against itself.
@@ -74,7 +82,8 @@ def approved_roots() -> tuple:
 
 def post_allowed(path: str) -> bool:
     """May this POST be made from outside the office?"""
-    return str(path or "").rstrip("/") in PUBLIC_POST
+    path = str(path or "").rstrip("/")
+    return path in PUBLIC_POST or WALKTHROUGH_ASK.fullmatch(path) is not None
 
 
 def under_the_briefs(asked: str) -> bool:
