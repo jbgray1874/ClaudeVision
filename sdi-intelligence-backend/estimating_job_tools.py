@@ -387,3 +387,74 @@ def answer_saved_record(record: dict[str, Any], question: str) -> dict[str, Any]
             "costs, BOM, routes or release checks, or open the source report. "
             "This evidence lookup does not perform a new drawing read.",
             "sources": [], "complete": False}
+
+
+# ── THE SAME QUESTION, ANSWERED BY THE MODEL, FROM THE SAME RECORD (D-615) ─────────────────
+# JG, 1 Nov 2026: "yes, switch it to grok-4.7". The lookup above matches words: "what did this
+# come out at" is answered, "why is labour so high at 1 off" falls through to "I cannot
+# establish that". The record chosen above, and nothing else, now goes to the engine's question
+# module (src/estimate_qa.py), which asks the configured Grok model to answer from it alone and
+# never to work out a new price. The lookup's own answer goes with it as the exact reading.
+#
+# THE LOOKUP STAYS. Where the model cannot be had (no engine on this box, no key, offline, a
+# refusal, too slow) the lookup's answer is returned exactly as before and says it was the
+# lookup, so a question never goes unanswered because the model is away.
+#
+# A SLICE OF THE RECORD, NOT THE RECORD. A saved record can run to 30 MB; the question module
+# reads totals, the quantity sweep, the labour and material rows, the charged part list, the
+# review flags and the release decision, so only those travel.
+_ASK_KEYS = ("drawing_number", "declared_product", "customer", "client",
+             "requested_order_quantity", "quantity_sweep", "review_flags", "release_decision")
+ASK_TIMEOUT_SECONDS = int(os.getenv("SDI_ASK_TIMEOUT_SECONDS", "75"))   # inside App Proxy's 85 s
+LOOKUP = "record lookup"
+
+
+def record_for_the_model(record: dict[str, Any]) -> dict[str, Any]:
+    out = {k: record[k] for k in _ASK_KEYS if k in record}
+    final = record.get("final_estimate") if isinstance(record.get("final_estimate"), dict) else {}
+    out["final_estimate"] = {k: final[k] for k in ("totals", "labour_rows", "material_rows")
+                             if k in final}
+    costed = record.get("costed_job") if isinstance(record.get("costed_job"), dict) else {}
+    out["costed_job"] = {"lines": list(costed.get("lines") or [])[:60]}
+    return out
+
+
+def ask_the_model(record: dict[str, Any], question: str, record_answer: str, *,
+                  engine_python: str, qa_cli: str, run: Any = None) -> dict[str, Any] | None:
+    """{"answer", "model"} from the engine's question module, or None where it cannot be had."""
+    import json
+    import subprocess
+    if not Path(engine_python).exists() or not Path(qa_cli).exists():
+        return None
+    payload = json.dumps({"question": question, "record": record_for_the_model(record),
+                          "record_answer": record_answer}, default=str)
+    try:
+        proc = (run or subprocess.run)([engine_python, qa_cli], input=payload,
+                                       capture_output=True, text=True, encoding="utf-8",
+                                       timeout=ASK_TIMEOUT_SECONDS)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    for line in reversed((getattr(proc, "stdout", "") or "").strip().splitlines()):
+        try:
+            got = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(got, dict) and got.get("status") == "answered" and got.get("answer"):
+            return {"answer": str(got["answer"]), "model": str(got.get("model") or "grok")}
+        if isinstance(got, dict) and "status" in got:
+            return None
+    return None
+
+
+def answer_with_the_model(record: dict[str, Any], question: str, *, engine_python: str,
+                          qa_cli: str, run: Any = None) -> dict[str, Any]:
+    """The lookup's answer, then the model's from the same record where it can be had."""
+    looked_up = answer_saved_record(record, question)        # refuses a bad question first
+    got = ask_the_model(record, question, str(looked_up.get("answer") or ""),
+                        engine_python=engine_python, qa_cli=qa_cli, run=run)
+    if got is None:
+        return dict(looked_up, answered_by=LOOKUP, model="")
+    return dict(looked_up, answer=got["answer"], answered_by=got["model"], model=got["model"],
+                record_answer=looked_up.get("answer") or "",
+                sources=["the saved record, read by " + got["model"]]
+                + list(looked_up.get("sources") or []))

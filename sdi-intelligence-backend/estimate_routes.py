@@ -78,6 +78,7 @@ import estimate_email
 import quote_release
 import self_running_switch
 import staging
+from estimating_job_tools import answer_with_the_model  # D-615
 from estimating_job_tools import (areas, browse_briefs, answer_saved_record,
                                    filed_record)
 
@@ -3308,7 +3309,9 @@ def ask_saved_run(req: SavedRunQuestion, x_sdi_key: Optional[str] = Header(defau
         except json.JSONDecodeError as exc:
             raise HTTPException(409, "That saved record cannot be read as JSON.") from exc
         try:
-            result = answer_saved_record(held["record"], req.question)
+            result = answer_with_the_model(held["record"], req.question,
+                                           engine_python=_ENGINE_PYTHON,
+                                           qa_cli=str(_REPO_ROOT / "src" / "estimate_qa.py"))
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         return {"run_id": "", "drawing_number": held["folder_name"],
@@ -3334,9 +3337,13 @@ def ask_saved_run(req: SavedRunQuestion, x_sdi_key: Optional[str] = Header(defau
             raise ValueError("Record is outside this run or too large.")
         with path.open("r", encoding="utf-8") as stream:
             record = json.load(stream)
-        result = answer_saved_record(record, req.question)
+        answer_saved_record(record, req.question)            # a bad question is refused here
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(409, "The saved run record cannot be safely read.") from exc
+    # D-615: the same record, answered by the model, outside the read's try so a model failure
+    # is never reported as an unreadable record.
+    result = answer_with_the_model(record, req.question, engine_python=_ENGINE_PYTHON,
+                                   qa_cli=str(_REPO_ROOT / "src" / "estimate_qa.py"))
     return {"run_id": run.run_id, "drawing_number": run.drawing_number,
             "record_name": path.name, **result}
 
