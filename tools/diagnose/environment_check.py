@@ -307,6 +307,19 @@ def probe_pricing_rungs(problems: List[str]) -> None:
         if state != "REACHED":
             problems.append(f"xAI {state} ({detail}) — the LLM market fallback is dead on this "
                             f"machine.")
+        else:
+            # THE MODELS, NOT ONLY THE KEY (D-612). A key that works with a model the account
+            # does not serve fails every call just the same.
+            try:
+                import xai_models
+                code, lines = xai_models.check(k)
+                for line in lines:
+                    print(f"   {line}" if line else "")
+                if code == 1:
+                    problems.append("A configured Grok model is not served to this account (see "
+                                    "the xAI lines above): set SDI_XAI_MODEL in .env.")
+            except Exception as exc:                             # noqa: BLE001
+                print(f"   Grok models: not checked ({type(exc).__name__}: {str(exc)[:80]})")
     k = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not k:
         print("Anthropic (LLM + web tool)   : NOT CONFIGURED — ANTHROPIC_API_KEY unset")

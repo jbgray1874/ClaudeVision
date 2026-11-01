@@ -665,19 +665,41 @@ def _load_logo_markup(customer: str) -> str:
     return ""
 
 
+_SDI_LOGO_RASTERS = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                     ".webp": "image/webp"}
+
+
 def _sdi_logo_markup() -> str:
-    """SDI's own yellow-circle logo (left header). Read from the assets folder; fall back to a
-    plain yellow circle if the file is missing so a quote still renders."""
+    """SDI's own logo (left header), read from the assets folder: SVG first, because it scales;
+    otherwise a PNG, JPG or WebP of it, embedded, the same files the portal's /api/brand/logo
+    takes (D-611). A plain yellow circle only when no logo file is there at all, so a quote
+    still renders, and the run log says which."""
     try:
-        for fn in os.listdir(ASSETS_LOGOS):
-            stem, ext = os.path.splitext(fn)
-            if _normalise_key(stem) == SDI_LOGO_KEY and ext.lower() == ".svg":
-                svg = open(os.path.join(ASSETS_LOGOS, fn), encoding="utf-8", errors="replace").read()
-                m = re.search(r"<svg\b.*?</svg>", svg, re.S | re.I)
-                inner = _size_svg(m.group(0) if m else svg, height_px=52)
-                return f'<span style="display:inline-flex;align-items:center;">{inner}</span>'
+        names = sorted(os.listdir(ASSETS_LOGOS))
     except OSError:
-        pass
+        names = []
+    ours = [fn for fn in names if _normalise_key(os.path.splitext(fn)[0]) == SDI_LOGO_KEY]
+    for fn in ours:
+        if os.path.splitext(fn)[1].lower() == ".svg":
+            try:
+                svg = open(os.path.join(ASSETS_LOGOS, fn), encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            m = re.search(r"<svg\b.*?</svg>", svg, re.S | re.I)
+            inner = _size_svg(m.group(0) if m else svg, height_px=52)
+            return f'<span style="display:inline-flex;align-items:center;">{inner}</span>'
+    for fn in ours:
+        media = _SDI_LOGO_RASTERS.get(os.path.splitext(fn)[1].lower())
+        if not media:
+            continue
+        try:
+            data = base64.b64encode(open(os.path.join(ASSETS_LOGOS, fn), "rb").read()).decode("ascii")
+        except OSError:
+            continue
+        return (f'<span style="display:inline-flex;align-items:center;"><img alt="we.are.sdi" '
+                f'style="height:52px;width:auto" src="data:{media};base64,{data}"></span>')
+    print(f"   [quote] no we.are.sdi logo file in {ASSETS_LOGOS} (wearesdi.svg or .png): the "
+          f"quote's header shows the plain yellow mark.", flush=True)
     return ('<span style="display:inline-flex;"><svg width="56" height="56" viewBox="0 0 100 100">'
             '<circle cx="50" cy="50" r="50" fill="#F5D947"/></svg></span>')
 

@@ -111,7 +111,8 @@ class WebPriceConnector:
             client = self._xai_client()
             if client is not None:
                 try:
-                    model = os.getenv("XAI_MODEL", "grok-2-latest")
+                    import xai_models                                # noqa: WPS433
+                    model = xai_models.text_model()                  # D-612: was grok-2
                     resp = client.chat.completions.create(
                         model=model,
                         messages=[
@@ -240,7 +241,8 @@ class WebPriceConnector:
         client = self._xai_client()
         if client is not None:
             try:
-                model = str(web_cfg.get("xai_model") or os.getenv("XAI_MODEL", "grok-2-latest"))
+                import xai_models                                    # noqa: WPS433
+                model = str(web_cfg.get("xai_model") or xai_models.text_model())  # D-612
                 resp = client.chat.completions.create(
                     model=model,
                     messages=[

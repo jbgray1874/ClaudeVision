@@ -79,6 +79,25 @@ HISTORY_DIR = INPUT_DIR / "history"
 
 load_dot_env()      # before any os.environ read below
 
+# ── THE GROK MODELS, NAMED ONCE (D-612) ─────────────────────────────────────────────────
+# JG, 1 Nov 2026: "we need to upgrade the model so we get the best possible llm... is it in the
+# .env file? must be in config.py?" It was in neither: grok-4.3 was written into a dozen modules
+# and two still fell back to grok-2, which xAI no longer serves. Every caller now asks
+# xai_models, which reads these. .env overrides them for one machine; nothing else names a model.
+#   SDI_XAI_MODEL         text and, unless set apart, the drawing reads (grok-4.3 = the previous)
+#   SDI_XAI_VISION_MODEL  the drawing reads only
+#   SDI_XAI_IMAGE_MODEL   the quote's artist's impression
+# A NEW MODEL IS A NEW READER. Reads and prices are stored per model, so the first run of each
+# job after a change reads its pages and asks its prices again, and its figures may move against
+# a baseline taken on the old one. `python src\xai_models.py` says whether this account has them.
+def _model_setting(*names: str) -> str:
+    return next((os.environ[n].strip() for n in names if os.environ.get(n, "").strip()), "")
+
+
+XAI_MODEL = _model_setting("SDI_XAI_MODEL", "XAI_MODEL") or "grok-4.7"
+XAI_VISION_MODEL = _model_setting("SDI_XAI_VISION_MODEL", "XAI_VISION_MODEL") or XAI_MODEL
+XAI_IMAGE_MODEL = _model_setting("SDI_XAI_IMAGE_MODEL") or "grok-imagine-image-2.0"
+
 OUTPUT_DIR = BASE_DIR / "output"
 JSON_DIR = OUTPUT_DIR / "json"
 LOG_DIR = OUTPUT_DIR / "logs"
@@ -622,12 +641,13 @@ QUOTE_RENDER = {
     "enabled": True,                  # SDI_QUOTE_RENDER_ENABLED=0 switches one machine off
     # THE DRAWING IS THE REFERENCE: the GA's first sheet goes to the image model as an image
     # EDIT, so the picture is of THIS unit. These are the edit model and its picture shape.
-    "model": "grok-imagine-image-2.0",
+    "model": XAI_IMAGE_MODEL,
     "aspect_ratio": "3:2",
     "resolution": "2k",
     "quality": "medium",
-    # When the edit endpoint refuses, the unit is drawn from its description instead.
-    "text_model": "grok-2-image",
+    # When the edit endpoint refuses, the unit is drawn from its description instead, by the
+    # same image model (D-612: this was grok-2-image, a model xAI no longer serves).
+    "text_model": XAI_IMAGE_MODEL,
     # The scene for a customer the table below does not name: their own store.
     "scene_template": "inside a {customer} store, on the shop floor",
     "default_scene": "on a bright, modern retail shop floor",
@@ -4166,7 +4186,7 @@ ORDER BY
         #   XAI_API_KEY   for Grok / xAI SDK
         #   OPENAI_API_KEY for OpenAI
         "llm_provider": "xai",  # "xai", "openai", or "none"
-        "xai_model": "grok-4.3",
+        "xai_model": XAI_MODEL,           # D-612: named once, at the top of this file
         "openai_model": "gpt-4.1-mini",
         # When enable_web_ai_fallback is True, call LLM for indicative prices if catalog URLs miss or are absent.
         "llm_market_estimate_fallback": True,

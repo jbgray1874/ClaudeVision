@@ -57,6 +57,8 @@ param(
     # legend through that one shared reader (it reads only config).
     # run_timing comes with llm_full_extract, whose read store counts each answer it gives
     # back as reused or computed on the run's timing record (D-553).
+    # xai_models comes with llm_full_extract and llm_scan_price: it names the Grok model they
+    # call, once, from config (D-612).
     #
     # The first version of this script sent all 990 tracked files, which would have put 183
     # test files, several hundred one-off src/_probe_*.py scripts, a prototype for a
@@ -86,7 +88,8 @@ param(
         "src/supplier_reference.py",
         "src/edge_banding.py",
         "src/section_profile.py",
-        "src/finish_rules.py"
+        "src/finish_rules.py",
+        "src/xai_models.py"
     ),
 
     # Everything tracked. Here for the day the server's job changes; not the default,
