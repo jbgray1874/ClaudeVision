@@ -4,10 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Estimate Walkthrough</title>
-<!-- THE WALKTHROUGH PAGE (D-610). Opened from the button in a finished estimate's e-mail:
+<!-- THE WALKTHROUGH PAGE (D-610). Opened from the buttons in a finished estimate's e-mail:
      the spoken walkthrough, its words, the price at every quantity, the run's files, and a box
      to ask questions about the estimate, answered from the estimate's own record. Internal: the
-     estimate may be provisional and nothing here is a customer quotation. -->
+     estimate may be provisional and nothing here is a customer quotation.
+     THE QUESTION BOX LEADS (D-613). JG, 1 Nov 2026: the e-mail's button "takes you to the app
+     with the prompt part". On a phone the prices and the box are what fits on the first
+     screen; #ask focuses the box, #listen goes to the player. -->
 <style>
   :root{
     --bg:#0d0d0f; --panel:#121214; --line:#26262b; --ink:#f0efec; --muted:#9b9ba3;
@@ -44,39 +47,58 @@
   .a{ margin:4px 0 0; white-space:pre-wrap }
   .err{ color:var(--bad) }
   .note{ color:var(--muted); font-size:13px }
+  .chips{ display:flex; flex-wrap:wrap; gap:8px; margin:0 0 10px }
+  .chip{ margin:0; background:transparent; color:var(--brand); border:1px solid var(--line);
+         border-radius:16px; padding:6px 12px; font:500 14px var(--body) }
+  .top{ display:flex; justify-content:space-between; align-items:baseline; gap:12px;
+        flex-wrap:wrap }
+  .top a{ font-size:14px }
+  @media (max-width:560px){
+    h1{ font-size:23px }
+    main{ padding:18px 14px 48px }
+    section{ padding:14px }
+    #ask button#askBtn{ width:100% }
+  }
 </style>
 </head>
 <body>
 <main>
-  <div class="eyebrow">SDI INTELLIGENCE</div>
+  <div class="top"><div class="eyebrow">SDI INTELLIGENCE</div>
+    <a href="/estimating">Open the estimating app</a></div>
   <h1 id="title">Estimate walkthrough</h1>
   <p class="sub" id="sub">Loading…</p>
+
+  <section id="pricesBox" hidden>
+    <h2>Price at each quantity</h2>
+    <table><thead><tr><th>Quantity</th><th class="n">Unit cost</th><th class="n">Order value</th></tr></thead>
+      <tbody id="prices"></tbody></table>
+    <p class="note">Ex VAT. The order value is the unit cost times the quantity. Internal cost
+      estimate; it may be provisional, and nothing on this page is a customer quotation.</p>
+  </section>
+
+  <section id="ask">
+    <h2>Ask about this estimate</h2>
+    <p class="note">Answered from this estimate's own figures and commentary. Where they do not
+      say, the answer says so and points to the workbook or the report.</p>
+    <div class="chips" id="chips">
+      <button type="button" class="chip">Why does the unit cost change with quantity?</button>
+      <button type="button" class="chip">What are the biggest costs?</button>
+      <button type="button" class="chip">What is still to confirm before this is quoted?</button>
+      <button type="button" class="chip">Where does the labour go?</button>
+    </div>
+    <textarea id="question" placeholder="Type a question, e.g. Why is 1 off dearer than 10 off?"></textarea>
+    <button id="askBtn" type="button">Ask</button>
+    <div class="qa" id="answers"></div>
+  </section>
 
   <section id="listen" hidden>
     <h2>Listen</h2>
     <audio id="audio" controls preload="metadata"></audio>
   </section>
 
-  <section id="pricesBox" hidden>
-    <h2>Price at each quantity</h2>
-    <table><thead><tr><th>Quantity</th><th class="n">Unit cost, ex VAT</th></tr></thead>
-      <tbody id="prices"></tbody></table>
-    <p class="note">Internal cost estimate. It may be provisional; nothing on this page is a
-      customer quotation.</p>
-  </section>
-
   <section id="wordsBox" hidden>
     <h2>Commentary</h2>
     <div class="words" id="words"></div>
-  </section>
-
-  <section>
-    <h2>Ask about this estimate</h2>
-    <p class="note">Answered from this estimate's own figures and commentary. Where they do not
-      say, the answer says so and points to the workbook or the report.</p>
-    <textarea id="question" placeholder="e.g. Why is the labour higher at 1 off than at 10 off?"></textarea>
-    <button id="ask" type="button">Ask</button>
-    <div class="qa" id="answers"></div>
   </section>
 
   <section id="filesBox" hidden>
@@ -106,7 +128,9 @@ async function load(){
     : (w.unit_cost_gbp ? [{quantity: w.units || 1, unit_gbp: w.unit_cost_gbp}] : []);
   if(prices.length){
     $("prices").innerHTML = prices.map(p => "<tr><td>" + esc(p.quantity) + " off</td><td class='n'>"
-      + gbp(p.unit_gbp) + "</td></tr>").join("");
+      + gbp(p.unit_gbp) + "</td><td class='n'>"
+      + (Number(p.quantity) > 0 ? gbp(Math.round(p.unit_gbp * p.quantity * 100) / 100) : "")
+      + "</td></tr>").join("");
     $("pricesBox").hidden = false;
   }
   if(w.commentary){ $("words").textContent = w.commentary; $("wordsBox").hidden = false; }
@@ -115,12 +139,19 @@ async function load(){
       + esc(n) + "</a></li>").join("");
     $("filesBox").hidden = false;
   }
+  goToHash();
+}
+
+function goToHash(){
+  const where = (location.hash || "").slice(1);
+  if(where === "ask"){ $("ask").scrollIntoView(); $("question").focus({preventScroll: true}); }
+  else if(where === "listen" && !$("listen").hidden){ $("listen").scrollIntoView(); }
 }
 
 async function ask(){
   const q = $("question").value.trim();
   if(!q) return;
-  const btn = $("ask"); btn.disabled = true; btn.textContent = "Asking…";
+  const btn = $("askBtn"); btn.disabled = true; btn.textContent = "Asking…";
   const item = document.createElement("div");
   item.innerHTML = "<div class='q'>" + esc(q) + "</div><p class='a note'>Working out the answer…</p>";
   $("answers").prepend(item);
@@ -137,7 +168,11 @@ async function ask(){
   }
   btn.disabled = false; btn.textContent = "Ask";
 }
-$("ask").onclick = ask;
+$("askBtn").onclick = ask;
+document.querySelectorAll("#chips .chip").forEach(c => c.onclick = () => {
+  $("question").value = c.textContent; ask();
+});
+window.addEventListener("hashchange", goToHash);
 $("question").addEventListener("keydown", e => {
   if(e.key === "Enter" && (e.ctrlKey || e.metaKey)) ask();
 });

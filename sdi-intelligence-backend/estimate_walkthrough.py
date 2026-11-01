@@ -35,12 +35,18 @@ def store_dir() -> Path:
 
 
 def portal_base() -> str:
-    """Where a reader of the e-mail reaches this service: SDI_PORTAL_URL where set, otherwise
-    this machine's name and port, which any PC on the SDI network can open. Never localhost:
-    on the reader's own PC that is their PC."""
+    """Where a reader of the e-mail reaches this service. SDI_PORTAL_URL where set; otherwise
+    the portal's public address, https:// and the first of SDI_PUBLIC_HOSTS, which a phone
+    opens through Microsoft sign-in with no VPN (D-613); otherwise this machine's name and
+    port, which only a PC on the SDI network can open. Never localhost: on the reader's own
+    PC that is their PC."""
     explicit = os.getenv("SDI_PORTAL_URL", "").strip().rstrip("/")
     if explicit:
         return explicit
+    public = [h.strip().lower() for h in os.getenv("SDI_PUBLIC_HOSTS", "").split(",")
+              if h.strip()]
+    if public:
+        return "https://" + public[0].split("/")[0]
     port = os.getenv("SDI_PORT", "").strip()
     if not port:
         try:
@@ -53,6 +59,11 @@ def portal_base() -> str:
 
 def url_for(token: str) -> str:
     return f"{portal_base()}/estimating/walkthrough/{token}"
+
+
+def ask_url(url: str) -> str:
+    """The same page, opened at its question box."""
+    return url.split("#", 1)[0] + "#ask"
 
 
 def _names(deliverables: List[Dict[str, str]]) -> List[str]:
@@ -142,17 +153,31 @@ def public_view(record: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def email_button(note: Dict[str, str], url: str) -> Dict[str, str]:
-    """The note with the walkthrough button at its top, in the HTML and the plain text."""
+    """The note with its two buttons at the top, in the HTML and the plain text: ask about
+    the estimate, which opens the page at its question box, and listen to the walkthrough.
+
+    JG, 1 Nov 2026: "when you select the button on the e-mail to prompt / question the
+    estimate, it takes you to the app with the prompt part". The link is the portal's public
+    address when there is one, so it opens on a phone, through Microsoft sign-in, with no VPN.
+    """
+    ask = ask_url(url)
+    listen = url.split("#", 1)[0] + "#listen"
+    _btn = ("display:inline-block;padding:11px 18px;border-radius:4px;text-decoration:none;"
+            "font-weight:bold;margin:0 8px 8px 0")
     button = (
-        '<p style="margin:14px 0 4px"><a href="' + url + '" style="display:inline-block;'
-        'background:#B8860B;color:#ffffff;padding:10px 18px;border-radius:4px;'
-        'text-decoration:none;font-weight:bold">&#9654; Listen to the walkthrough and ask about '
-        'this estimate</a></p><p style="margin:0 0 14px;color:#5b6b7d;font-size:12px">Opens the '
-        'SDI Intelligence portal: the spoken walkthrough, its words, the price at every '
-        'quantity and a box to ask questions about this estimate. On the SDI network.</p>')
+        '<p style="margin:14px 0 4px">'
+        '<a href="' + ask + '" style="' + _btn + 'background:#B8860B;color:#ffffff">'
+        '&#10067; Ask a question about this estimate</a>'
+        '<a href="' + listen + '" style="' + _btn + 'background:#ffffff;color:#B8860B;'
+        'border:2px solid #B8860B">&#9654; Listen to the walkthrough</a></p>'
+        '<p style="margin:0 0 14px;color:#5b6b7d;font-size:12px">Opens the SDI Intelligence '
+        'app: type a question and it is answered from this estimate\'s own figures. The price '
+        'at every quantity, the spoken walkthrough and its words are on the same page. Works '
+        'on a phone; you sign in with your SDI Microsoft account.</p>')
     html = str(note.get("html") or "")
     m = re.match(r"\s*<div[^>]*>", html)
     html = (html[:m.end()] + button + html[m.end():]) if m else button + html
-    text = (f"Listen to the walkthrough and ask about this estimate: {url}\n\n"
+    text = (f"Ask a question about this estimate: {ask}\n"
+            f"Listen to the walkthrough: {listen}\n\n"
             + str(note.get("text") or ""))
     return dict(note, html=html, text=text)
