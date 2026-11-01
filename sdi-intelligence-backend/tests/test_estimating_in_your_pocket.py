@@ -203,15 +203,20 @@ class TheRouteOffersBothAndPrefersTheFiledOneTests(unittest.TestCase):
 class NothingOnThePublicSurfaceGrewTests(unittest.TestCase):
     """The page is new. The boundary is not."""
 
-    def test_the_three_posts_are_still_the_three_posts(self):
+    def test_the_posts_are_the_named_posts(self):
+        """Three, and the two parity comparisons added on purpose (D-619)."""
         self.assertEqual(public_surface.PUBLIC_POST,
                          ("/api/estimate", "/api/estimate/brief",
-                          "/api/estimate/tools/ask"))
+                          "/api/estimate/tools/ask", "/api/estimate/parity/job",
+                          "/api/estimate/parity/period", "/api/estimate/parity/periods"))
 
     def test_the_page_calls_nothing_that_is_never_public(self):
+        # The exact path, ended by its quote or a query: /api/estimate/parity (the upload
+        # comparison, office-only) is not /api/estimate/parity/job (D-619).
+        import re
         for forbidden in public_surface.NEVER_PUBLIC_POST:
             with self.subTest(path=forbidden):
-                self.assertNotIn(forbidden, PAGE)
+                self.assertIsNone(re.search(re.escape(forbidden) + r'["?]', PAGE))
 
     def test_the_page_says_a_quotation_is_not_released_from_outside(self):
         self.assertIn("never released from outside the office", PAGE)
@@ -224,7 +229,10 @@ class NothingOnThePublicSurfaceGrewTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(
                     path in ("/api/me", "/api/estimate", "/api/estimate/brief",
-                             "/api/estimate/tools/ask", "/api/estimate/tools/briefs"),
+                             "/api/estimate/tools/ask", "/api/estimate/tools/briefs",
+                             "/api/estimate/parity/find", "/api/estimate/parity/job",
+                             "/api/estimate/parity/reports", "/api/estimate/parity/period",
+                             "/api/estimate/parity/periods"),
                     f"{path} is not one of the paths this page is meant to use")
 
 
@@ -388,7 +396,7 @@ BROWSER_GLOBALS = {
     # browser
     "fetch", "setTimeout", "clearTimeout", "setInterval", "clearInterval",
     "alert", "confirm", "document", "window", "location", "console",
-    "URLSearchParams",
+    "URLSearchParams", "SpeechSynthesisUtterance",
     # the page's own two-character helpers, declared as arrow consts
     "$", "el", "icon", "api", "say",
 }
@@ -535,7 +543,8 @@ class TheJobCardTests(unittest.TestCase):
         self.assertIn('out["summary"] = summarise_record(', browse)
         self.assertEqual(public_surface.PUBLIC_POST,
                          ("/api/estimate", "/api/estimate/brief",
-                          "/api/estimate/tools/ask"))
+                          "/api/estimate/tools/ask", "/api/estimate/parity/job",
+                          "/api/estimate/parity/period", "/api/estimate/parity/periods"))
 
     def test_a_folder_with_no_record_still_browses(self):
         """Browsing must not fail because a folder holds no estimate - the
@@ -641,3 +650,45 @@ class StartingFromAWrittenBriefTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ParityAndVoiceOnThePhoneTests(unittest.TestCase):
+    """D-619/D-621 and D-620/D-622, 1 November 2026."""
+
+    def test_there_is_a_parity_screen_on_the_bar(self):
+        self.assertIn('<button data-screen="parity" role="tab"', PAGE)
+        self.assertIn('<section class="screen" id="s-parity">', PAGE)
+        self.assertIn("grid-template-columns:repeat(5,1fr)", PAGE)
+
+    def test_it_finds_compares_searches_and_runs_one_or_two_periods(self):
+        for call in ('api("/api/estimate/parity/find?job="', 'api("/api/estimate/parity/job"',
+                     'api("/api/estimate/parity/reports?"', 'api("/api/estimate/parity/period"',
+                     'api("/api/estimate/parity/periods"'):
+            with self.subTest(call=call):
+                self.assertIn(call, PAGE)
+
+    def test_a_comparison_is_followed_in_the_background_not_waited_on(self):
+        self.assertIn("setTimeout(() => follow(url, cb), 3000)", PAGE)
+        self.assertIn('follow(t.status_url, {step:', PAGE)
+
+    def test_an_unclear_match_is_a_choice_not_a_guess(self):
+        self.assertIn('"p-m", !!d.clear && m === f.manual[0]', PAGE)
+        self.assertIn("if(go) go.disabled = !(pick.manual && pick.ai);", PAGE)
+        self.assertIn('(d.clear ? "Clear choice. " : "Choose one. ")', PAGE)
+
+    def test_voice_is_the_shared_script_and_never_asks_by_itself(self):
+        self.assertIn('<script src="/estimating/sdi-voice.js"></script>', PAGE)
+        listen = PAGE.split("function listen(){", 1)[1].split("\n}\n", 1)[0]
+        self.assertNotIn("ask(", listen)
+        self.assertIn("Check it, especially any job number, then tap Ask.", listen)
+        self.assertNotIn("data-reply", PAGE)
+
+    def test_every_answer_is_written_with_its_source_and_has_listen(self):
+        self.assertIn('el("button", "Listen", box, "ghost")', PAGE)
+        self.assertIn('id="ask-autoread"', PAGE)
+        self.assertNotIn("Show the words", PAGE)
+
+    def test_the_page_says_where_spoken_questions_go_and_who_parity_is_for(self):
+        flat = " ".join(PAGE.split())
+        self.assertIn("Speak uses SDI's speech service where it is set up", flat)
+        self.assertIn("parity is for the named estimators", flat)

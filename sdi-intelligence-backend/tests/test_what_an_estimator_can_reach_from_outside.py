@@ -272,7 +272,8 @@ class LookingAndDoingAreDifferentPermissionsTests(unittest.TestCase):
         import public_surface
         self.assertEqual(public_surface.PUBLIC_POST,
                          ("/api/estimate", "/api/estimate/brief",
-                          "/api/estimate/tools/ask"))
+                          "/api/estimate/tools/ask", "/api/estimate/parity/job",
+                          "/api/estimate/parity/period", "/api/estimate/parity/periods"))
         for never in public_surface.NEVER_PUBLIC_POST:
             with self.subTest(path=never):
                 self.assertFalse(public_surface.post_allowed(never))
@@ -336,3 +337,48 @@ class TheEmailsQuestionScreenTests(unittest.TestCase):
         refusal = estimate.split('elif getattr(config, "PARTNER_KEYS", None):', 1)[1]
         self.assertIn("status_code=503", refusal)
         self.assertIn("Set SDI_API_KEY", refusal)
+
+
+class ParityFromOutsideTests(unittest.TestCase):
+    """D-619/D-621, 1 November 2026: parity "in the web portal inside the network or on VPN,
+    and also the phone or tablet with only wifi or data". The review: do not broaden access;
+    a filed comparison holds copies of the manual costing sheets. So from outside, running a
+    comparison, reading the filed ones and opening any file in the parity folder are all held
+    to the named estimators, as starting a run is."""
+
+    GUARD = APP.split("async def _public_surface_guard", 1)[1].split("\n# ──", 1)[0]
+
+    def test_the_three_comparisons_are_named_and_the_upload_stays_inside(self):
+        import public_surface
+        self.assertEqual(public_surface.PARITY_POST,
+                         ("/api/estimate/parity/job", "/api/estimate/parity/period",
+                          "/api/estimate/parity/periods"))
+        for path in public_surface.PARITY_POST:
+            self.assertTrue(public_surface.post_allowed(path))
+        self.assertIn("/api/estimate/parity", public_surface.NEVER_PUBLIC_POST)
+        self.assertFalse(public_surface.post_allowed("/api/estimate/parity"))
+
+    def test_every_parity_route_and_file_is_named_people_only(self):
+        gate = self.GUARD.split("PARITY IS FOR THE NAMED ESTIMATORS", 1)[1][:900]
+        self.assertIn("_is_parity(path)", gate)
+        self.assertIn('_under_parity(\n                        request.query_params.get("path", ""))', gate)
+        self.assertIn("not _may_start_a_run(request)", gate)
+        self.assertIn("parity is for the named estimators", gate)
+
+    def test_the_gate_names_reads_as_well_as_runs(self):
+        import public_surface
+        for path in ("/api/estimate/parity/find", "/api/estimate/parity/reports",
+                     "/api/estimate/parity/task/ab12cd34", "/api/estimate/parity/job"):
+            self.assertTrue(public_surface.is_parity(path))
+        self.assertFalse(public_surface.is_parity("/api/estimate/parityx"))
+
+    def test_the_filed_comparisons_are_in_the_parity_folder_and_manual_estimates_are_not(self):
+        import public_surface
+        report = (public_surface.PARITY_DEFAULT
+                  + r"\Acme\12677-01-GA\2026-11-01 14-05-00_ab12cd34\12677.full_parity.html")
+        self.assertTrue(public_surface.under_parity(report))
+        self.assertTrue(public_surface.under_the_briefs(report))
+        self.assertFalse(public_surface.under_parity(public_surface.PARITY_DEFAULT + r" backup\x.html"))
+        manual = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Manual Estimates"
+                  r"\2026\Acme\12677\12677.xls")
+        self.assertFalse(public_surface.under_the_briefs(manual))

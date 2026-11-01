@@ -236,7 +236,8 @@ _RUNNER_ONLY = ("/api/estimate/runner", "/api/estimate/self-running/heartbeat")
 # they can be tested without starting the service - see that module for why
 # reads are allowed by method and writes only by name.
 from public_surface import post_allowed as _public_post_allowed, \
-    under_the_briefs as _under_the_briefs
+    under_the_briefs as _under_the_briefs, is_parity as _is_parity, \
+    under_parity as _under_parity
 
 
 # ── LOOKING AND DOING ARE DIFFERENT PERMISSIONS, AS THEY ARE IN AM CRM ──────
@@ -336,12 +337,22 @@ async def _public_surface_guard(request, call_next):
                             "detail": "Looking is open to anyone signed in; STARTING a run "
                                       "from outside the office is limited to named people. "
                                       + access.why_refused("SDI_ESTIMATOR_OIDS", asking)})
+                # PARITY IS FOR THE NAMED ESTIMATORS (D-621): running a comparison, reading
+                # the filed ones, and opening any file in the parity folder, because those
+                # hold copies of the manual costing sheets.
+                if (_is_parity(path) or (path in ("/api/files", "/api/file") and _under_parity(
+                        request.query_params.get("path", "")))) and not _may_start_a_run(request):
+                    asking = auth.current_user(request) if auth.ENABLED else None
+                    return JSONResponse(status_code=403, content={
+                        "detail": "From outside the office, parity is for the named estimators: "
+                                  "the filed comparisons hold copies of the manual costing "
+                                  "sheets. " + access.why_refused("SDI_ESTIMATOR_OIDS", asking)})
                 if path in ("/api/files", "/api/file") and not _under_the_briefs(
                         request.query_params.get("path", "")):
                     return JSONResponse(status_code=403, content={
                         "detail": "From outside the office, only the live enquiries, the "
-                                  "completed AI briefs and the filed estimates (AISheets) "
-                                  "can be opened."})
+                                  "completed AI briefs, the filed estimates (AISheets) "
+                                  "and the filed parity comparisons can be opened."})
                 if path == "/api/estimate" or path.startswith("/api/estimate/"):
                     # Existing queue endpoints require a service key; translate the
                     # authenticated user inside the service, never in browser JS.
