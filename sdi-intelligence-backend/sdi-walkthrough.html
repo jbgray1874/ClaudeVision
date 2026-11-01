@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estimate Walkthrough</title>
+<!-- THE WALKTHROUGH PAGE (D-610). Opened from the button in a finished estimate's e-mail:
+     the spoken walkthrough, its words, the price at every quantity, the run's files, and a box
+     to ask questions about the estimate, answered from the estimate's own record. Internal: the
+     estimate may be provisional and nothing here is a customer quotation. -->
+<style>
+  :root{
+    --bg:#0d0d0f; --panel:#121214; --line:#26262b; --ink:#f0efec; --muted:#9b9ba3;
+    --brand:#e8a33d; --bad:#ff6b6b; --r:10px;
+    --body:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f4f4f2; --panel:#ffffff; --line:#d9d8d3; --ink:#17171a; --muted:#5b5b63;
+           --brand:#a9701a; --bad:#c0342f; }
+  }
+  *{ box-sizing:border-box }
+  body{ margin:0; background:var(--bg); color:var(--ink); font:16px/1.55 var(--body) }
+  main{ max-width:880px; margin:0 auto; padding:28px 16px 60px }
+  .eyebrow{ color:var(--brand); letter-spacing:.18em; font-size:12px; font-weight:700 }
+  h1{ font-size:28px; margin:6px 0 4px }
+  .sub{ color:var(--muted); margin:0 0 18px }
+  section{ background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
+           padding:18px; margin:14px 0 }
+  h2{ font-size:17px; margin:0 0 10px }
+  audio{ width:100% }
+  table{ border-collapse:collapse; width:100%; max-width:420px }
+  th,td{ text-align:left; padding:6px 10px 6px 0; border-bottom:1px solid var(--line) }
+  td.n,th.n{ text-align:right; font-variant-numeric:tabular-nums }
+  .words{ white-space:pre-wrap }
+  ul.files{ margin:0; padding-left:18px }
+  a{ color:var(--brand) }
+  textarea{ width:100%; min-height:80px; background:var(--bg); color:var(--ink);
+            border:1px solid var(--line); border-radius:8px; padding:10px; font:inherit }
+  button{ margin-top:8px; background:var(--brand); color:#111; border:0; border-radius:8px;
+          padding:10px 18px; font:600 15px var(--body); cursor:pointer }
+  button:disabled{ opacity:.6; cursor:default }
+  .qa{ margin-top:14px }
+  .q{ font-weight:600; margin-top:12px }
+  .a{ margin:4px 0 0; white-space:pre-wrap }
+  .err{ color:var(--bad) }
+  .note{ color:var(--muted); font-size:13px }
+</style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">SDI INTELLIGENCE</div>
+  <h1 id="title">Estimate walkthrough</h1>
+  <p class="sub" id="sub">Loading…</p>
+
+  <section id="listen" hidden>
+    <h2>Listen</h2>
+    <audio id="audio" controls preload="metadata"></audio>
+  </section>
+
+  <section id="pricesBox" hidden>
+    <h2>Price at each quantity</h2>
+    <table><thead><tr><th>Quantity</th><th class="n">Unit cost, ex VAT</th></tr></thead>
+      <tbody id="prices"></tbody></table>
+    <p class="note">Internal cost estimate. It may be provisional; nothing on this page is a
+      customer quotation.</p>
+  </section>
+
+  <section id="wordsBox" hidden>
+    <h2>Commentary</h2>
+    <div class="words" id="words"></div>
+  </section>
+
+  <section>
+    <h2>Ask about this estimate</h2>
+    <p class="note">Answered from this estimate's own figures and commentary. Where they do not
+      say, the answer says so and points to the workbook or the report.</p>
+    <textarea id="question" placeholder="e.g. Why is the labour higher at 1 off than at 10 off?"></textarea>
+    <button id="ask" type="button">Ask</button>
+    <div class="qa" id="answers"></div>
+  </section>
+
+  <section id="filesBox" hidden>
+    <h2>Files</h2>
+    <ul class="files" id="files"></ul>
+  </section>
+</main>
+<script>
+const TOKEN = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop() || "");
+const API = "/api/estimate/walkthrough/" + encodeURIComponent(TOKEN);
+const API_KEY = "";                       // set if SDI_API_KEY is enabled, as on the estimating page
+const $ = id => document.getElementById(id);
+const api = (p, o = {}) => fetch(p, {...o, headers: {"X-SDI-Key": API_KEY, ...(o.headers || {})}});
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const gbp = v => "£" + Number(v).toLocaleString("en-GB", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const fileUrl = name => API + "/file/" + encodeURIComponent(name);
+
+async function load(){
+  let r, w;
+  try{ r = await api(API); w = await r.json(); }
+  catch(e){ $("sub").textContent = "The portal could not be reached: " + e.message; return; }
+  if(!r.ok){ $("sub").innerHTML = '<span class="err">' + esc(w.detail || ("Failed (" + r.status + ")")) + "</span>"; return; }
+  $("title").textContent = (w.drawing_number || "Estimate") + " — walkthrough";
+  $("sub").textContent = [w.client, w.units ? w.units + " off" : ""].filter(Boolean).join(" · ");
+  if(w.audio){ $("audio").src = fileUrl(w.audio); $("listen").hidden = false; }
+  const prices = (w.quantity_prices && w.quantity_prices.length) ? w.quantity_prices
+    : (w.unit_cost_gbp ? [{quantity: w.units || 1, unit_gbp: w.unit_cost_gbp}] : []);
+  if(prices.length){
+    $("prices").innerHTML = prices.map(p => "<tr><td>" + esc(p.quantity) + " off</td><td class='n'>"
+      + gbp(p.unit_gbp) + "</td></tr>").join("");
+    $("pricesBox").hidden = false;
+  }
+  if(w.commentary){ $("words").textContent = w.commentary; $("wordsBox").hidden = false; }
+  if((w.files || []).length){
+    $("files").innerHTML = w.files.map(n => "<li><a href='" + fileUrl(n) + "' target='_blank' rel='noopener'>"
+      + esc(n) + "</a></li>").join("");
+    $("filesBox").hidden = false;
+  }
+}
+
+async function ask(){
+  const q = $("question").value.trim();
+  if(!q) return;
+  const btn = $("ask"); btn.disabled = true; btn.textContent = "Asking…";
+  const item = document.createElement("div");
+  item.innerHTML = "<div class='q'>" + esc(q) + "</div><p class='a note'>Working out the answer…</p>";
+  $("answers").prepend(item);
+  try{
+    const r = await api(API + "/ask", {method: "POST", headers: {"Content-Type": "application/json"},
+                                       body: JSON.stringify({question: q})});
+    const j = await r.json();
+    const a = item.querySelector(".a");
+    a.className = "a" + (r.ok && j.status === "answered" ? "" : " note");
+    a.textContent = r.ok ? (j.answer || "No answer came back.") : (j.detail || ("Failed (" + r.status + ")"));
+    if(r.ok) $("question").value = "";
+  }catch(e){
+    item.querySelector(".a").textContent = "The portal could not be reached: " + e.message;
+  }
+  btn.disabled = false; btn.textContent = "Ask";
+}
+$("ask").onclick = ask;
+$("question").addEventListener("keydown", e => {
+  if(e.key === "Enter" && (e.ctrlKey || e.metaKey)) ask();
+});
+load();
+</script>
+</body>
+</html>

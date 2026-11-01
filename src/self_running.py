@@ -74,6 +74,8 @@ def recent_runs(ledger: Dict[str, Any], limit: int = RECENT_RUNS_SHOWN) -> List[
                         "finished_at": a.get("finished_at"),
                         "unit_gbp": a.get("engine_price_gbp"),
                         "quantities": a.get("quantities"),
+                        "quantity_prices": a.get("quantity_prices") or [],
+                        "walkthrough_url": a.get("walkthrough_url") or "",
                         "output": a.get("output_path") or "", "error": a.get("error") or ""})
     out.sort(key=lambda r: str(r.get("queued_at") or ""), reverse=True)
     return out[:limit]

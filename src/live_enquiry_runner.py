@@ -862,6 +862,9 @@ def _attempt_from(snapshot: Dict[str, Any], attempt: Dict[str, Any]) -> Dict[str
         "error": snapshot.get("error") or "",
         "output_path": snapshot.get("output_path") or attempt.get("output_path"),
         "engine_price_gbp": snapshot.get("engine_price_gbp"),
+        # THE PRICE AT EVERY QUANTITY, AND THE WALKTHROUGH PAGE (D-610), for the page's card.
+        "quantity_prices": snapshot.get("quantity_prices") or attempt.get("quantity_prices") or [],
+        "walkthrough_url": snapshot.get("walkthrough_url") or attempt.get("walkthrough_url") or "",
         "seconds": snapshot.get("seconds"),
         "deliverables": [x.get("name") for x in (snapshot.get("deliverables") or [])
                          if isinstance(x, dict)],

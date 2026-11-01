@@ -1267,6 +1267,40 @@ def _unit_cost_from_deliverables(deliverables: List[Dict[str, str]]) -> Optional
     return None
 
 
+def quantity_prices_from(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The unit cost at every quantity the run priced (D-610), from the quantity sweep the
+    engine wrote: [{"quantity": 1, "unit_gbp": 538.06}, {"quantity": 5, ...}]. Empty for a
+    run priced at one quantity, which unit_cost_from already answers."""
+    rows = ((summary or {}).get("quantity_sweep") or {}).get("rows") \
+        if isinstance(summary, dict) else None
+    out: Dict[int, float] = {}
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        try:
+            q, unit = int(r.get("quantity")), float(r.get("unit"))
+        except (TypeError, ValueError):
+            continue
+        if q >= 1 and unit > 0:
+            out[q] = round(unit, 2)
+    return [{"quantity": q, "unit_gbp": out[q]} for q in sorted(out)] if len(out) > 1 else []
+
+
+def _quantity_prices_from_deliverables(deliverables: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+    import json as _json
+    for item in deliverables or []:
+        if not str(item.get("name") or "").lower().endswith(".json"):
+            continue
+        try:
+            with open(item["path"], "r", encoding="utf-8") as fh:
+                found = quantity_prices_from(_json.load(fh))
+        except Exception:                                # noqa: BLE001
+            continue
+        if found:
+            return found
+    return []
+
+
 def _finish(requests, base: str, headers: Dict[str, str], run_id: str, runner_id: str,
             status: str, error: str, log: List[str],
             deliverables: Optional[List[Dict[str, str]]] = None) -> None:
@@ -1275,7 +1309,10 @@ def _finish(requests, base: str, headers: Dict[str, str], run_id: str, runner_id
         print(error)
     body = {"runner_id": runner_id, "status": status, "error": error,
             "lines": [], "deliverables": deliverables or [],
-            "unit_cost_gbp": _unit_cost_from_deliverables(deliverables or [])}
+            "unit_cost_gbp": _unit_cost_from_deliverables(deliverables or []),
+            # AND THE PRICE AT EVERY QUANTITY ASKED FOR (D-610), so the page shows 1, 5 and 10
+            # off, not one unit price for a run that priced three.
+            "quantity_prices": _quantity_prices_from_deliverables(deliverables or [])}
     # The whole log goes with the completion, so a run whose progress posts were
     # lost to a blip still arrives complete rather than half-reported.
     body["lines"] = log

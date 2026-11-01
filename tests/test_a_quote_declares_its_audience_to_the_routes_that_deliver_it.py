@@ -204,18 +204,23 @@ def test_every_route_that_delivers_a_file_is_covered():
     # the guide and the brand logo — and, since the app portal landed (Entra SSO, 28 Sep
     # 2026), /services.json and the /app/ page and its assets, each behind sign-in. Since
     # 29 Sep 2026, /workflow/<name>: the two Technical Design workflow maps, from a fixed list
-    # of two files, behind sign-in. None of them is a deliverable.
-    assert known_file_responses["app.py"] == 9, (
+    # of two files, behind sign-in. Since 31 Oct 2026 (D-610), /estimating/walkthrough/<token>:
+    # the walkthrough page itself, one fixed file, behind sign-in. None of them is a deliverable.
+    assert known_file_responses["app.py"] == 10, (
         f"a new file-serving route appeared in app.py ({known_file_responses['app.py']} "
         f"FileResponse calls, was 5) — does it need the release gate?")
     # estimate_routes.py: the drawings-print PDF, which is a drawing pack and not a quotation;
     # and, since 6 Oct 2026 (D-401), /{run_id}/deliverables/{name}, which serves one of a
     # run's own filed files to the site that queued it and holds an unreleased quotation
     # behind the same gate as /api/file (quote_release.may_go_to_a_customer).
-    assert known_file_responses["estimate_routes.py"] == 2, (
+    # And since 31 Oct 2026 (D-610), /walkthrough/{token}/file/{name}: one of a finished run's
+    # own files, by exact name from its walkthrough record, behind the same gate.
+    assert known_file_responses["estimate_routes.py"] == 3, (
         f"a new file-serving route appeared in estimate_routes.py — does it need the gate?")
     routes_at = routes_src.index("def deliverable(")
     assert "quote_release.may_go_to_a_customer" in routes_src[routes_at:routes_at + 2600]
+    walk_at = routes_src.index("def walkthrough_file(")
+    assert "quote_release.may_go_to_a_customer" in routes_src[walk_at:walk_at + 1200]
 
 
 def test_the_engine_side_still_agrees_with_the_document(tmp_path):
