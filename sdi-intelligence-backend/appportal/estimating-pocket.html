@@ -41,7 +41,7 @@
 
   /* Bottom bar: thumbs reach the bottom of a phone, not the top. */
   .bar{position:fixed;left:0;right:0;bottom:0;z-index:30;display:grid;
-       grid-template-columns:repeat(4,1fr);background:rgba(13,13,15,.96);
+       grid-template-columns:repeat(5,1fr);background:rgba(13,13,15,.96);
        backdrop-filter:blur(12px);border-top:1px solid var(--line);
        padding-bottom:var(--safe-b)}
   .bar button{background:none;border:0;padding:11px 4px 12px;color:var(--ink-faint);
@@ -72,7 +72,7 @@
   .chip.work{border-color:rgba(255,212,0,.5);color:var(--accent)}
 
   .row{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin:10px 0}
-  input[type=search],input[type=text],textarea,select{
+  input[type=search],input[type=text],input[type=date],textarea,select{
       width:100%;background:#101013;border:1px solid var(--line);border-radius:var(--r);
       padding:12px 13px;font-size:16px}  /* 16px: anything less and iOS zooms */
   textarea{min-height:76px;resize:vertical}
@@ -116,6 +116,8 @@
   .note{border-left:3px solid var(--warn);background:rgba(255,157,66,.06);
         border-radius:0 var(--r) var(--r) 0;padding:11px 13px;margin:12px 0;font-size:14px}
   .screen{display:none}.screen.on{display:block}
+  .half{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+  .ghost.on{border-color:var(--accent);color:var(--accent)}
 </style>
 </head>
 <body>
@@ -137,9 +139,19 @@
     <div id="ask-browser"></div>
 
     <div id="ask-box" style="display:none">
-      <textarea id="ask-q" placeholder="What did this come out at?"></textarea>
+      <textarea id="ask-q" placeholder="What did this come out at? Or tap Speak and ask it."></textarea>
       <div class="chips" id="ask-chips"></div>
-      <div class="row"><button class="go" id="ask-go" type="button">Ask</button></div>
+      <div class="half" style="margin:10px 0"><button class="go" id="ask-go" type="button">Ask</button>
+        <button class="ghost" id="ask-mic" type="button">Speak</button></div>
+      <!-- D-620, D-622: "can the prompting be by voice ... or text only? both ways would be
+           ideal. summary voiced or texted back or both". The review: the recognised words go
+           into the box to be checked; the written answer and its source always show; Listen,
+           and reading aloud optional. /estimating/sdi-voice.js, shared with every page. -->
+      <label class="tickrow"><input type="checkbox" id="ask-autoread"> Read each answer aloud as it arrives</label>
+      <p class="muted" style="margin-top:6px">A spoken question goes into the box first: check it,
+        especially a job number, then tap Ask. Speak uses SDI's speech service where it is set
+        up, otherwise your phone's own (Apple's on an iPhone, Google's on Android), so type
+        anything you would not say on a call.</p>
       <div class="state" id="ask-state" role="status" aria-live="polite">Four kinds of
         question can be answered. Tap one above, or write your own.</div>
       <div id="ask-out"></div>
@@ -236,6 +248,61 @@
       Quotations are never released from outside the office — this starts the work and
       files it; sending anything to a customer is done at a desk.</div>
   </section>
+
+  <!-- ── PARITY (D-619, D-621) ──────────────────────────────────────────── -->
+  <!-- JG, 1 Nov 2026: parity by job number, filed and searchable "in the web page and app",
+       and "a search and comparison between all manual and AI estimates ran across two time
+       periods". The review: show both files and why before anything runs, ask when the match
+       is not clear, run in the background, Period A against Period B, and hold parity to the
+       named estimators outside the office. The service does the work; this screen asks it. -->
+  <section class="screen" id="s-parity">
+    <h1>AI against manual</h1>
+    <p class="hint">Type a job number. The manual sheet is looked for under Manual Estimates,
+      held to the AI run's client and drawing; both are shown with the reason before anything
+      runs, and if the match is not clear you choose.</p>
+    <input type="search" id="p-job" placeholder="Job number, e.g. 12677-01-GA" autocomplete="off">
+    <div class="row"><button class="go" id="p-find" type="button">Find both estimates</button></div>
+    <div id="p-found"></div>
+    <div class="state" id="p-state" role="status" aria-live="polite" hidden></div>
+    <div id="p-out"></div>
+
+    <h1 style="margin-top:22px">Filed comparisons</h1>
+    <input type="search" id="p-q" placeholder="Job, drawing or client" autocomplete="off">
+    <div class="half" style="margin-top:9px">
+      <input type="date" id="p-from" aria-label="From"><input type="date" id="p-to" aria-label="To"></div>
+    <select id="p-outcome" style="margin-top:9px" aria-label="Outcome">
+      <option value="">Any outcome</option><option value="match">Match</option>
+      <option value="warning">Warning</option><option value="fail">Fail</option>
+      <option value="quantities differ">Quantities differ</option><option value="not compared">Not compared</option>
+    </select>
+    <div class="row"><button class="ghost" id="p-search" type="button" style="width:100%">Search</button></div>
+    <div id="p-list"></div>
+
+    <h1 style="margin-top:22px">Within a period</h1>
+    <p class="hint">Each drawing estimated between the dates, once, against its manual
+      estimate. The ones that cannot be compared are listed apart.</p>
+    <div class="half"><input type="date" id="p-pfrom" aria-label="Period from">
+      <input type="date" id="p-pto" aria-label="Period to"></div>
+    <input type="text" id="p-pclient" placeholder="Client (optional)" style="margin-top:9px">
+    <div class="half" style="margin-top:9px"><button class="ghost" id="p-preview" type="button">Preview</button>
+      <button class="go" id="p-period" type="button">Compare the period</button></div>
+    <div class="state" id="p-pstate" role="status" aria-live="polite" hidden></div>
+    <div id="p-pout"></div>
+
+    <h1 style="margin-top:22px">Two periods</h1>
+    <p class="hint">Period A against Period B: how the variance moved, and the drawings
+      estimated in both.</p>
+    <p class="muted">Period A</p>
+    <div class="half"><input type="date" id="p-afrom" aria-label="A from"><input type="date" id="p-ato" aria-label="A to"></div>
+    <p class="muted" style="margin-top:6px">Period B</p>
+    <div class="half"><input type="date" id="p-bfrom" aria-label="B from"><input type="date" id="p-bto" aria-label="B to"></div>
+    <input type="text" id="p-tclient" placeholder="Client (optional)" style="margin-top:9px">
+    <div class="row"><button class="go" id="p-two" type="button">Compare A with B</button></div>
+    <div class="state" id="p-tstate" role="status" aria-live="polite" hidden></div>
+    <div id="p-tout"></div>
+    <div class="note">From outside the office, parity is for the named estimators: the filed
+      comparisons hold copies of the manual costing sheets. Nothing here is sent to a customer.</div>
+  </section>
 </main>
 
 <nav class="bar" role="tablist">
@@ -247,8 +314,11 @@
     <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>Folders</button>
   <button data-screen="start" role="tab" aria-selected="false">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10 8.5l6 3.5-6 3.5z"/></svg>Start</button>
+  <button data-screen="parity" role="tab" aria-selected="false">
+    <svg viewBox="0 0 24 24"><path d="M12 4v16M5 8h14M5 8l-2 6h4zM19 8l-2 6h4z"/></svg>Parity</button>
 </nav>
 
+<script src="/estimating/sdi-voice.js"></script>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -516,7 +586,7 @@ function offerAsk(data, relative){
   for(const q of ASKABLE){
     const b = el("button", q, $("ask-chips"));
     b.type = "button";
-    b.onclick = () => { $("ask-q").value = q; ask(); };
+    b.onclick = () => { askedBy = "text"; $("ask-q").value = q; ask(); };
   }
   say("ask-state", "The figures above are straight from the filed record. Ask "
       + "for the detail behind them - a named part, a particular operation, or "
@@ -556,6 +626,9 @@ async function ask(){
         ? "From " + a.sources.join(", ") + " in " + a.record_name
           + (a.model ? " · answered by " + a.model : " · record lookup")
         : "Nothing in the record answered this.", src, "mono");
+    el("p", "Asked by " + askedBy + ".", src, "muted");
+    voiceTheAnswer(box, a);
+    askedBy = "text";
     if(a.model)
       el("p", "Read from this saved record only. Check a figure in the job's report "
          + "before it goes to a customer.", src, "muted");
@@ -566,7 +639,6 @@ async function ask(){
     say("ask-state", e.message, "err");
   }finally{ $("ask-go").disabled = false; }
 }
-$("ask-go").onclick = ask;
 
 // ── RUNNING ─────────────────────────────────────────────────────────────────
 const MONEY = n => (typeof n === "number" && isFinite(n))
@@ -734,6 +806,223 @@ async function startBrief(){
   }finally{ $("b-go").disabled = false; }
 }
 $("b-go").onclick = startBrief;
+
+// ── VOICE ON THE ASK BOX (D-620, D-622) ─────────────────────────────────────
+// /estimating/sdi-voice.js: the AM CRM's Azure speech where it is set up (iPhones record
+// for the service), the phone's own otherwise. The words go into the box; Ask sends them.
+let askedBy = "text";
+function stored(k){ try{ return window.localStorage.getItem(k); }catch(e){ return null; } }
+function store(k, v){ try{ window.localStorage.setItem(k, v); }catch(e){} }
+function voiceTheAnswer(box, a){
+  const V = window.SDIVoice;
+  if(!V || !V.canSpeak()) return;
+  const words = (a.answer || "") + ((a.recorded || []).length ? " From the record: " + a.recorded.join(" ") : "");
+  const b = el("button", "Listen", box, "ghost");
+  b.type = "button"; b.style.marginTop = "9px";
+  b.onclick = () => V.speak(words, b);
+  if($("ask-autoread").checked) V.speak(words, b);
+}
+function listen(){
+  const V = window.SDIVoice;
+  if(!V){ say("ask-state", "Voice is not available here; type the question.", "err"); return; }
+  V.listen({
+    onState: (t, kind) => say("ask-state", t, kind === "err" ? "err" : ""),
+    onInterim: t => { $("ask-q").value = t; },
+    onDone: t => { $("ask-q").value = t; askedBy = "voice";
+      say("ask-state", "Heard: “" + t + "”. Check it, especially any job number, then tap Ask."); },
+    onEnd: () => { $("ask-mic").textContent = "Speak"; $("ask-mic").classList.remove("on"); }
+  });
+  if(V.listening()){ $("ask-mic").textContent = "Listening… tap to stop"; $("ask-mic").classList.add("on"); }
+}
+$("ask-mic").onclick = listen;
+$("ask-go").onclick = () => { ask(); };
+$("ask-autoread").checked = stored("sdi.pocket.autoread") === "1";
+$("ask-autoread").onchange = () => {
+  store("sdi.pocket.autoread", $("ask-autoread").checked ? "1" : "0");
+  if(!$("ask-autoread").checked && window.SDIVoice) window.SDIVoice.stop();
+};
+if(window.SDIVoice) window.SDIVoice.status();
+
+// ── PARITY (D-619, D-621) ───────────────────────────────────────────────────
+const VERDICT = st => st === "match" ? "ok" : st === "warning" ? "work" : st ? "bad" : "";
+const PCT = v => (typeof v === "number") ? v.toFixed(1) + "%" : "";
+let pick = {manual: null, ai: null, client: ""};
+
+function link(parent, text, url){
+  if(!url) return null;
+  const a = el("a", text, parent);
+  a.href = url; a.target = "_blank"; a.rel = "noopener"; a.style.marginRight = "14px";
+  return a;
+}
+function comparisonCard(parent, idx){
+  const h = idx.headline || {}, q = idx.quantity || {};
+  const oc = idx.outcome || (idx.error ? "not compared" : h.status || "compared");
+  const c = el("div", null, parent, "card " + (VERDICT(oc) === "ok" ? "good" : oc === "not compared" ? "bad" : "work"));
+  el("h3", (idx.drawing || idx.job || "") + (idx.client ? " · " + idx.client : ""), c);
+  el("span", oc, c, "chip " + VERDICT(oc));
+  if(!idx.error){
+    el("div", "AI " + (MONEY(q.ai_unit_at_manual_qty != null ? q.ai_unit_at_manual_qty : h.ai_unit_cost_gbp) || "not read")
+       + " · manual " + (MONEY(h.manual_unit_cost_gbp) || "not read"), c, "hint");
+    const pct = q.pct_at_manual_qty != null ? q.pct_at_manual_qty : h.pct_variance;
+    if(typeof pct === "number") el("p", "Variance " + PCT(pct), c, "hint");
+    if(q.note) el("p", q.note, c, "muted");
+  } else el("p", idx.error, c, "hint");
+  if(idx.stamp) el("p", idx.stamp + (idx.comparison_id ? " · " + idx.comparison_id : ""), c, "mono");
+  const links = el("p", null, c);
+  link(links, "Report", idx.report_url);
+  link(links, "Manual sheet", idx.manual_url);
+  link(links, "AI sheet", idx.ai_url);
+}
+function pickRow(parent, item, group, checked, cb){
+  const row = el("label", null, parent, "tickrow");
+  const r = el("input", null, row); r.type = "radio"; r.name = group; r.checked = checked;
+  el("span", item.label, row);
+  r.onchange = () => cb.pick(item);
+  if(checked) cb.pick(item);
+}
+function compareButton(c, job){
+  const go = el("button", "Compare and file", c, "go");
+  go.type = "button"; go.style.marginTop = "10px";
+  go.onclick = () => runParity(job, go);
+  return go;
+}
+async function findParity(){
+  const job = $("p-job").value.trim();
+  $("p-found").replaceChildren(); $("p-out").replaceChildren();
+  $("p-state").hidden = false;
+  if(!job){ say("p-state", "Type a job number first.", "err"); return; }
+  $("p-find").disabled = true;
+  say("p-state", "Looking on the share…");
+  try{
+    const f = await api("/api/estimate/parity/find?job=" + encodeURIComponent(job));
+    const d = f.decision || {};
+    pick = {manual: null, ai: null, client: f.client || ""};
+    const c = el("div", null, $("p-found"), "card");
+    let go = null;
+    el("h3", "Manual estimate", c);
+    el("p", (d.clear ? "Clear choice. " : "Choose one. ") + (d.reason || ""), c, d.clear ? "hint" : "muted");
+    (f.manual || []).slice(0, 8).forEach(m => pickRow(c, {...m, label: m.name + " · " + (m.client || "") + " " + (m.year || "")},
+      "p-m", !!d.clear && m === f.manual[0], {pick: it => { pick.manual = it; ready(); }}));
+    if(!(f.manual || []).length) el("p", "None found under Manual Estimates.", c, "hint");
+    el("h3", "AI estimate", c).style.marginTop = "10px";
+    (f.ai || []).slice(0, 5).forEach((a, i) => pickRow(c, {...a, label: a.stamp + " · " + a.units + " off"},
+      "p-a", i === 0, {pick: it => { pick.ai = it; ready(); }}));
+    if(!(f.ai || []).length) el("p", "No AI run with its own summary.", c, "hint");
+    go = compareButton(c, job);
+    function ready(){
+      if(go) go.disabled = !(pick.manual && pick.ai);
+      say("p-state", pick.manual && pick.ai
+        ? "Will compare the run of " + pick.ai.stamp + " with " + pick.manual.name + "."
+        : "Choose the manual sheet to compare.");
+    }
+    ready();
+  }catch(e){ say("p-state", e.message, "err"); }
+  finally{ $("p-find").disabled = false; }
+}
+async function follow(url, cb){
+  let s = {};
+  try{ s = await api(url); }catch(e){ cb.done({state: "failed", error: e.message}); return; }
+  if(s.finished) cb.done(s); else { cb.step(s); setTimeout(() => follow(url, cb), 3000); }
+}
+async function runParity(job, btn){
+  btn.disabled = true;
+  say("p-state", "Starting…");
+  try{
+    const t = await api("/api/estimate/parity/job", {job: job, client: pick.client || null,
+                                                   manual_path: pick.manual.path, ai_path: pick.ai.workbook});
+    if(t.already_running) say("p-state", "That comparison is already running; following it.");
+    follow(t.status_url, {step: s => say("p-state", s.step || "Working…"), done: s => {
+      btn.disabled = false;
+      if(s.state === "done" && s.result){ say("p-state", "Filed.", "ok"); $("p-out").replaceChildren(); comparisonCard($("p-out"), s.result); }
+      else say("p-state", s.error || "It did not finish.", "err");
+    }});
+  }catch(e){ say("p-state", e.message, "err"); btn.disabled = false; }
+}
+async function searchParity(){
+  const q = new URLSearchParams();
+  if($("p-q").value.trim()) q.set("q", $("p-q").value.trim());
+  if($("p-from").value) q.set("start", $("p-from").value);
+  if($("p-to").value) q.set("end", $("p-to").value);
+  if($("p-outcome").value) q.set("outcome", $("p-outcome").value);
+  $("p-list").replaceChildren(el("p", "Searching…", null, "muted"));
+  try{
+    const r = await api("/api/estimate/parity/reports?" + q.toString());
+    $("p-list").replaceChildren();
+    const reports = (r.reports || []).slice(0, 40), periods = (r.periods || []).slice(0, 10);
+    if(!reports.length) el("p", "Nothing filed matches.", $("p-list"), "muted");
+    for(const idx of reports) comparisonCard($("p-list"), idx);
+    for(const per of periods){
+      const c = el("div", null, $("p-list"), "card");
+      el("h3", per.kind === "two periods" && per.a && per.b
+         ? "A " + per.a.join(" to ") + " · B " + per.b.join(" to ") : "Period " + per.start + " to " + per.end, c);
+      el("p", per.compared + " comparable · " + per.no_manual + " with no manual · " + per.failed + " failed", c, "hint");
+      link(el("p", null, c), "Summary page", per.summary_url);
+    }
+  }catch(e){ $("p-list").replaceChildren(el("p", e.message, null, "hint")); }
+}
+function rowCards(parent, rows){
+  for(const r of rows || []){
+    const c = el("div", null, parent, "card");
+    el("h3", r.drawing + " · " + r.client, c);
+    el("span", r.outcome, c, "chip " + VERDICT(r.outcome));
+    if(r.runs_in_period > 1) el("p", r.runs_in_period + " runs in the period; the newest used.", c, "muted");
+    if(["match","warning","fail"].includes(r.outcome))
+      el("p", "AI " + (MONEY(r.ai_unit) || "not read") + " · manual " + (MONEY(r.manual_unit) || "not read") + " · " + PCT(r.pct), c, "hint");
+    else if(r.note || r.quantity_note) el("p", r.note || r.quantity_note, c, "muted");
+    link(el("p", null, c), "Report", r.report_url);
+  }
+}
+function statsLine(s){
+  if(!s) return "";
+  return s.compared + " comparable (" + s.match + " match, " + s.warning + " warning, " + s.fail + " fail), median "
+    + (s.median_abs_pct == null ? "n/a" : s.median_abs_pct + "%") + "; apart: " + s["quantities differ"] + " quantities differ, "
+    + s.ambiguous + " ambiguous, " + s["no manual"] + " no manual.";
+}
+async function period(preview){
+  const start = $("p-pfrom").value, end = $("p-pto").value;
+  $("p-pstate").hidden = false;
+  if(!start || !end){ say("p-pstate", "Choose both dates.", "err"); return; }
+  say("p-pstate", preview ? "Looking through the estimates…" : "Starting…");
+  try{
+    const r = await api("/api/estimate/parity/period", {start: start, end: end, preview: preview,
+                                                       client: $("p-pclient").value.trim()});
+    if(preview){ say("p-pstate", "Preview: " + statsLine(r.stats)); $("p-pout").replaceChildren(); rowCards($("p-pout"), r.rows); return; }
+    follow(r.status_url, {step: s => say("p-pstate", "Running: " + (s.done || 0) + " of " + (s.of == null ? "?" : s.of) + " drawings."),
+      done: s => {
+        if(s.error){ say("p-pstate", s.error, "err"); return; }
+        say("p-pstate", "Finished: " + statsLine(s.stats), "ok");
+        $("p-pout").replaceChildren(); link($("p-pout"), "Summary page", s.summary_url); rowCards($("p-pout"), s.rows);
+      }});
+  }catch(e){ say("p-pstate", e.message, "err"); }
+}
+async function twoPeriods(){
+  const v = id => $(id).value;
+  $("p-tstate").hidden = false;
+  if(!v("p-afrom") || !v("p-ato") || !v("p-bfrom") || !v("p-bto")){ say("p-tstate", "Choose all four dates.", "err"); return; }
+  say("p-tstate", "Starting…");
+  try{
+    const r = await api("/api/estimate/parity/periods", {a_start: v("p-afrom"), a_end: v("p-ato"),
+      b_start: v("p-bfrom"), b_end: v("p-bto"), client: $("p-tclient").value.trim()});
+    follow(r.status_url, {step: s => say("p-tstate", "Running period " + (s.period || "A") + ": " + (s.done || 0) + " of " + (s.of == null ? "?" : s.of) + "."),
+      done: s => {
+        if(s.error){ say("p-tstate", s.error, "err"); return; }
+        const ch = s.change || {};
+        say("p-tstate", "Median variance " + (ch.median_abs_pct == null ? "n/a" : (ch.median_abs_pct > 0 ? "+" : "") + ch.median_abs_pct + " pts")
+            + " from A to B.", "ok");
+        const out = $("p-tout"); out.replaceChildren();
+        el("p", "A: " + statsLine(s.stats_a), out, "hint");
+        el("p", "B: " + statsLine(s.stats_b), out, "hint");
+        for(const x of s.in_both || []) el("p", x.drawing + ": " + PCT(x.pct_a) + " then " + PCT(x.pct_b), out, "muted");
+        link(el("p", null, out), "Comparison page", s.summary_url);
+      }});
+  }catch(e){ say("p-tstate", e.message, "err"); }
+}
+$("p-find").onclick = findParity;
+$("p-job").addEventListener("keydown", e => { if(e.key === "Enter") findParity(); });
+$("p-search").onclick = searchParity;
+$("p-preview").onclick = () => period(true);
+$("p-period").onclick = () => period(false);
+$("p-two").onclick = twoPeriods;
 
 whoAmI();
 {

@@ -15,11 +15,19 @@ delivery-note splitter. Allowing the prefix allows all of it. So reads are
 allowed by method and writes only where named below - and a POST added next
 month is refused until somebody puts it on this list deliberately.
 
-THE FILE BROWSER IS NOT OPENED, THREE FOLDERS ARE. /api/files and /api/file
+THE FILE BROWSER IS NOT OPENED, FOUR FOLDERS ARE. /api/files and /api/file
 read every configured share. On the public surface they are held to the live
-enquiries, the completed AI briefs and the filed estimates (approved_roots), so
-the drawings picker works on a phone, a finished estimate can be opened, and
-the rest of the shares stay where they are.
+enquiries, the completed AI briefs, the filed estimates and the filed parity
+comparisons (approved_roots), so the drawings picker works on a phone, a
+finished estimate and its comparison can be opened, and the rest of the shares
+stay where they are. The manual estimates themselves are not opened from
+outside: a comparison files its own copy of the manual sheet it used.
+
+PARITY IS FOR THE NAMED ESTIMATORS (D-621). A filed comparison holds copies of
+the manual costing sheets, so from outside the office everything under
+/api/estimate/parity, reading included, and every file in the parity folder,
+is held to SDI_ESTIMATOR_OIDS, the people who may start a run. Anyone else
+signed in sees the rest of estimating as before.
 """
 import ntpath
 import os
@@ -31,7 +39,24 @@ PUBLIC_POST = (
     "/api/estimate",                  # start a run
     "/api/estimate/brief",            # start one from a completed brief
     "/api/estimate/tools/ask",        # questions answered from a filed record
+    "/api/estimate/parity/job",       # compare one job with its manual estimate (D-619)
+    "/api/estimate/parity/period",    # compare every job estimated in a period (D-619)
+    "/api/estimate/parity/periods",   # Period A against Period B (D-621)
 )
+
+# PARITY BY JOB NUMBER (D-619). JG, 1 Nov 2026: the comparison "in the web portal inside the
+# network or on VPN, and also the phone or tablet with only wifi or data". It reads two filed
+# spreadsheets and files both, with the report, under the parity folder; it never runs an
+# estimate, releases or e-mails anything. It writes to the share, and what it files holds
+# copies of the manual costing sheets, so running one AND reading what is filed are held to
+# the named estimators (SDI_ESTIMATOR_OIDS), as starting a run is (D-621).
+# The upload route, /api/estimate/parity, stays office-only (NEVER_PUBLIC_POST).
+PARITY_POST = (
+    "/api/estimate/parity/job",
+    "/api/estimate/parity/period",
+    "/api/estimate/parity/periods",
+)
+PARITY_PREFIX = "/api/estimate/parity"
 
 # A QUESTION ABOUT ONE FINISHED ESTIMATE, FROM ITS E-MAIL (D-613). The finished-estimate
 # e-mail's button opens /estimating/walkthrough/<token>, and its box asks here. It is the same
@@ -63,6 +88,10 @@ ENQUIRY_DEFAULT = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed"
 # OUTPUT_ROOT, under the same setting.
 ESTIMATES_DEFAULT = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed"
                      r"\AI Estimating\AISheets")
+# Where every parity comparison is filed with both sheets and its report (D-619) -
+# estimate_routes' PARITY_ROOT, under the same setting.
+PARITY_DEFAULT = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed"
+                  r"\AI Estimating\parity")
 
 
 def briefs_root() -> str:
@@ -70,14 +99,36 @@ def briefs_root() -> str:
 
 
 def approved_roots() -> tuple:
-    """The three trees that may be read from outside: the drawings waiting to be
-    priced, the completed briefs, and the filed estimates (30 October 2026: "we
+    """The four trees that may be read from outside: the drawings waiting to be
+    priced, the completed briefs, the filed estimates (30 October 2026: "we
     should be able to read all the directories with the live enquiry drawing
-    packs and the estimates"). Everything else on every share stays inside the
-    office, whoever is asking."""
+    packs and the estimates"), and the filed parity comparisons (D-619: "the
+    parity reports that are available to be searched through in the web page and
+    app"). Everything else on every share stays inside the office, whoever is
+    asking."""
     return (briefs_root(),
             (os.getenv("SDI_LIVE_ENQUIRY_ROOT", "") or ENQUIRY_DEFAULT).strip(),
-            (os.getenv("SDI_ESTIMATE_OUTPUT_ROOT", "") or ESTIMATES_DEFAULT).strip())
+            (os.getenv("SDI_ESTIMATE_OUTPUT_ROOT", "") or ESTIMATES_DEFAULT).strip(),
+            parity_root())
+
+
+def parity_root() -> str:
+    return (os.getenv("SDI_PARITY_ROOT", "") or PARITY_DEFAULT).strip()
+
+
+def is_parity(path: str) -> bool:
+    """A parity route: the comparisons, their search and their progress (D-621)."""
+    path = str(path or "").rstrip("/")
+    return path == PARITY_PREFIX or path.startswith(PARITY_PREFIX + "/")
+
+
+def under_parity(asked: str) -> bool:
+    """Is this path inside the parity folder?"""
+    if not str(asked or "").strip():
+        return False
+    here = ntpath.normcase(ntpath.normpath(str(asked)))
+    there = ntpath.normcase(ntpath.normpath(parity_root()))
+    return here == there or here.startswith(there.rstrip("\\") + "\\")
 
 
 def post_allowed(path: str) -> bool:

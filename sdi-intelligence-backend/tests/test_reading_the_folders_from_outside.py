@@ -50,11 +50,15 @@ class TheBoundaryMovedByOneFolderTests(unittest.TestCase):
             with self.subTest(path=elsewhere):
                 self.assertFalse(public_surface.under_the_briefs(elsewhere))
 
-    def test_it_is_three_folders_and_no_more(self):
-        self.assertEqual(len(public_surface.approved_roots()), 3)
+    def test_it_is_four_folders_and_no_more(self):
+        """The three of 30 October and the filed parity comparisons (D-619). The manual
+        estimates themselves are not among them."""
+        self.assertEqual(len(public_surface.approved_roots()), 4)
+        self.assertFalse(any("Manual Estimates" in r for r in public_surface.approved_roots()))
 
-    def test_the_refusal_names_all_three(self):
+    def test_the_refusal_names_all_four(self):
         self.assertIn("the filed estimates (AISheets)", APP)
+        self.assertIn("the filed parity comparisons can be opened", APP)
 
 
 class EachFileSaysWhetherItOpensTests(unittest.TestCase):

@@ -344,6 +344,7 @@
   <span>Collapse</span>
 </button>
 </nav>
+<script src="/estimating/sdi-voice.js"></script>
 <script>(function(){
   var b=document.body, t=document.getElementById("sdinav-toggle"), K="sdi.nav.collapsed";
   if(!t) return;
@@ -881,13 +882,22 @@
       <button type="button" id="askCurrent">Use this page's run</button>
       <button type="button" id="askLatest">Use latest completed run</button>
       <label for="askQuestion" style="margin-top:12px">Question</label>
-      <textarea id="askQuestion" rows="3" maxlength="500" placeholder="What is the total? Which parts and routes were costed? Why is release held?"></textarea>
+      <textarea id="askQuestion" rows="3" maxlength="500" placeholder="What is the total? Which parts and routes were costed? Why is release held? Or tap Speak and ask it."></textarea>
+      <!-- D-622: ask by voice or by typing; the written answer always shows, Listen reads it. -->
       <button type="button" id="askSubmit">Ask about this run</button>
+      <button type="button" id="askMic">Speak</button>
+      <label style="display:inline-flex;gap:6px;align-items:center;margin-left:8px;text-transform:none;font-family:var(--body);letter-spacing:normal;font-size:inherit">
+        <input type="checkbox" id="askAutoRead"> <span class="note" style="margin:0">Read answers aloud as they arrive</span></label>
+      <p class="note" id="askMicNote" hidden></p>
       <div class="answer-box" id="askAnswer" role="status">Select a run and ask about its costs, BOM, routes or release checks.</div>
       <p class="note" id="askRecorded"></p>
       <p class="note" id="askLookup"></p>
       <p class="note" id="askCoverage"></p>
       <p class="note" id="askSources"></p>
+      <button type="button" id="askListen" hidden>Listen</button>
+      <p class="note">A spoken question goes into the box first: check it, especially a job number,
+        then ask. Speak uses SDI's speech service where it is set up, otherwise the browser's own,
+        so type anything you would not say on a call.</p>
     </section>
 
     <!-- ══ DRAWINGS ═════════════════════════════════════════════════ -->
@@ -4894,6 +4904,28 @@ $("askCurrent").onclick = () => {
   }
   refreshAskRuns(runId);
 };
+let askBy = "text";
+function askMicState(text, kind){
+  const n = $("askMicNote"); n.hidden = !text; n.textContent = text || "";
+  n.style.color = kind === "err" ? "var(--bad)" : "";
+}
+$("askMic").onclick = () => {
+  if(!window.SDIVoice){ askMicState("Voice is not available here; type the question.", "err"); return; }
+  SDIVoice.listen({
+    onState: askMicState,
+    onInterim: t => { $("askQuestion").value = t; },
+    onDone: t => { $("askQuestion").value = t; askBy = "voice";
+      askMicState("Heard: \u201c" + t + "\u201d. Check it, especially any job number, then ask."); $("askQuestion").focus(); },
+    onEnd: () => { $("askMic").textContent = "Speak"; }
+  });
+  if(SDIVoice.listening()) $("askMic").textContent = "Listening… tap to stop";
+};
+try{ $("askAutoRead").checked = localStorage.getItem("sdi.ask.autoread") === "1"; }catch(e){}
+$("askAutoRead").onchange = () => {
+  try{ localStorage.setItem("sdi.ask.autoread", $("askAutoRead").checked ? "1" : "0"); }catch(e){}
+  if(!$("askAutoRead").checked && window.SDIVoice) SDIVoice.stop();
+};
+if(window.SDIVoice) SDIVoice.status();
 $("askSubmit").onclick = async () => {
   const id = $("askRun").value;
   const question = $("askQuestion").value.trim();
@@ -4902,6 +4934,8 @@ $("askSubmit").onclick = async () => {
     return;
   }
   $("askSubmit").disabled = true;
+  askMicState(""); $("askListen").hidden = true;
+  if(window.SDIVoice) SDIVoice.stop();
   $("askAnswer").textContent = "Checking the selected run's filed evidence…";
   ["askSources", "askRecorded", "askLookup", "askCoverage"].forEach(i => $(i).textContent = "");
   try{
@@ -4919,11 +4953,20 @@ $("askSubmit").onclick = async () => {
     $("askCoverage").textContent = j.coverage_note || "";
     $("askSources").textContent = "Source: run " + (j.run_id || "filed job") + " · " + j.record_name
       + (j.sources && j.sources.length ? " · " + j.sources.join(" · ") : "")
-      + (j.answered_by ? " · answered by " + j.answered_by : "");   // D-615
+      + (j.answered_by ? " · answered by " + j.answered_by : "")   // D-615
+      + " · asked by " + askBy;
+    // D-622: the same saved answer and the record's own figures, heard on request.
+    const spoken = (j.answer || "") + ((j.recorded || []).length ? " From the record: " + j.recorded.join(" ") : "");
+    if(window.SDIVoice && SDIVoice.canSpeak()){
+      $("askListen").hidden = false;
+      $("askListen").onclick = () => SDIVoice.speak(spoken, $("askListen"));
+      if($("askAutoRead").checked) SDIVoice.speak(spoken, $("askListen"));
+    }
   }catch(e){
     $("askAnswer").textContent = "Could not answer from this run: " + e.message;
   }finally{
     $("askSubmit").disabled = false;
+    askBy = "text";
   }
 };
 refreshAskRuns();
