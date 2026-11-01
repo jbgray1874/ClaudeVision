@@ -3311,7 +3311,8 @@ def ask_saved_run(req: SavedRunQuestion, x_sdi_key: Optional[str] = Header(defau
         try:
             result = answer_with_the_model(held["record"], req.question,
                                            engine_python=_ENGINE_PYTHON,
-                                           qa_cli=str(_REPO_ROOT / "src" / "estimate_qa.py"))
+                                           qa_cli=str(_REPO_ROOT / "src" / "estimate_qa.py"),
+                                           record_name=held["record_name"])
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         return {"run_id": "", "drawing_number": held["folder_name"],
@@ -3343,7 +3344,8 @@ def ask_saved_run(req: SavedRunQuestion, x_sdi_key: Optional[str] = Header(defau
     # D-615: the same record, answered by the model, outside the read's try so a model failure
     # is never reported as an unreadable record.
     result = answer_with_the_model(record, req.question, engine_python=_ENGINE_PYTHON,
-                                   qa_cli=str(_REPO_ROOT / "src" / "estimate_qa.py"))
+                                   qa_cli=str(_REPO_ROOT / "src" / "estimate_qa.py"),
+                                   record_name=path.name, run_id=run.run_id)
     return {"run_id": run.run_id, "drawing_number": run.drawing_number,
             "record_name": path.name, **result}
 

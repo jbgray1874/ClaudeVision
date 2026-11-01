@@ -25,7 +25,10 @@ RECORD = {
                        "labour_rows": [{"operation": "Weld", "total_value_gbp": 90}],
                        "huge_trace": ["x" * 1000] * 50},
     "costed_job": {"lines": [{"part_number": "12678-01-003", "qty_per_unit": 2,
-                              "description": "Side panel", "charged_ext_gbp": 41.2}] * 80},
+                              "description": "Side panel", "charged_ext_gbp": 41.2}] * 80,
+                   "release": {"status": "provisional", "to_confirm": 3},
+                   "decisions_required": [{"kind": "missing_price", "part": "12678-01-077"}],
+                   "gaps": {"heavy": ["x"] * 100}},
     "drawing_reads": {"pages": ["big"] * 500},
 }
 ROUTES = (BACKEND / "estimate_routes.py").read_text(encoding="utf-8")
@@ -58,15 +61,24 @@ class TheModelAnswersTests(unittest.TestCase):
 
     def _ask(self, question, reply):
         return tools.answer_with_the_model(RECORD, question, engine_python=str(self.python),
-                                           qa_cli=str(self.cli), run=self._run(reply))
+                                           qa_cli=str(self.cli), run=self._run(reply),
+                                           record_name="12678-01-GA_record.json",
+                                           run_id="run-7")
 
     def test_the_models_answer_from_the_record_is_shown_and_named(self):
         said = self._ask("Why is labour high at 1 off?",
                          {"status": "answered", "answer": "Set-up is carried by one unit.",
-                          "model": "grok-4.7"})
+                          "model": "grok-4.7", "sources": ["final_estimate.totals"],
+                          "recorded": ["Unit cost £538.06 ex VAT at 1 off."],
+                          "coverage_note": "Answered from part of the record: 40 of 80 parts.",
+                          "refused_figures": []})
+        self.assertEqual(said["recorded"], ["Unit cost £538.06 ex VAT at 1 off."])
+        self.assertTrue(said["coverage_note"].startswith("Answered from part of the record"))
+        self.assertEqual((self.sent["payload"]["record_name"], self.sent["payload"]["run_id"]),
+                         ("12678-01-GA_record.json", "run-7"))
         self.assertEqual(said["answer"], "Set-up is carried by one unit.")
         self.assertEqual((said["answered_by"], said["model"]), ("grok-4.7", "grok-4.7"))
-        self.assertEqual(said["sources"][0], "the saved record, read by grok-4.7")
+        self.assertEqual(said["sources"], ["final_estimate.totals"])
 
     def test_the_lookup_goes_with_it_and_is_kept(self):
         said = self._ask("what did it cost", {"status": "answered", "answer": "£538.06 a unit.",
@@ -75,13 +87,18 @@ class TheModelAnswersTests(unittest.TestCase):
         self.assertIn("Calculated unit total: £538.06", said["record_answer"])
         self.assertTrue(said["complete"])
 
-    def test_only_a_slice_of_the_record_travels(self):
+    def test_what_the_service_reads_travels_whole_and_the_drawing_reads_stay(self):
+        """D-616: every line, the release block and the open decisions go; the service
+        chooses and counts what the model sees. The first cut sent 60 lines and no release."""
         self._ask("what did it cost", {"status": "answered", "answer": "x", "model": "grok-4.7"})
         sent = self.sent["payload"]["record"]
         self.assertNotIn("drawing_reads", sent)
         self.assertNotIn("huge_trace", sent["final_estimate"])
+        self.assertNotIn("gaps", sent["costed_job"])
         self.assertEqual(sent["final_estimate"]["totals"]["unit_gbp"], 538.06)
-        self.assertEqual(len(sent["costed_job"]["lines"]), 60)
+        self.assertEqual(len(sent["costed_job"]["lines"]), 80)
+        self.assertEqual(sent["costed_job"]["release"]["status"], "provisional")
+        self.assertEqual(len(sent["costed_job"]["decisions_required"]), 1)
         self.assertEqual(self.sent["kw"]["timeout"], tools.ASK_TIMEOUT_SECONDS)
         self.assertLessEqual(tools.ASK_TIMEOUT_SECONDS, 85, "inside App Proxy's default")
 
@@ -92,6 +109,7 @@ class TheModelAnswersTests(unittest.TestCase):
                 said = self._ask("what did it cost", reply)
                 self.assertTrue(said["answer"].startswith("Calculated unit total: £538.06"))
                 self.assertEqual((said["answered_by"], said["model"]), ("record lookup", ""))
+                self.assertEqual(said["record_answer"], "")
 
     def test_no_engine_on_this_box_is_the_lookup(self):
         said = tools.answer_with_the_model(RECORD, "what did it cost",
@@ -123,6 +141,22 @@ class TheRouteAndPagesTests(unittest.TestCase):
         self.assertIn('" · answered by " + j.answered_by', DESK)
         self.assertIn('"by " + a.model', POCKET)
         self.assertIn("Read from this saved record only.", POCKET)
+
+    def test_the_pages_show_the_record_figures_the_lookup_and_the_coverage_beside_it(self):
+        """D-616: the lookup was kept in the reply and shown nowhere."""
+        for page, names in ((DESK, ('"From the record: " + j.recorded.join(" ")',
+                                    '"Record lookup: " + j.record_answer',
+                                    "j.coverage_note")),
+                            (POCKET, ('"From the record: " + a.recorded.join(" ")',
+                                      '"Record lookup: " + a.record_answer',
+                                      "a.coverage_note"))):
+            for name in names:
+                with self.subTest(name=name):
+                    self.assertIn(name, page)
+
+    def test_each_question_names_its_record_and_run_to_the_service(self):
+        self.assertIn('record_name=held["record_name"]', self.ROUTE)
+        self.assertIn("record_name=path.name, run_id=run.run_id", self.ROUTE)
 
 
 if __name__ == "__main__":

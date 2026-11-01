@@ -546,6 +546,11 @@ async function ask(){
     const box = el("div", null, $("ask-out"),
                    "answer" + (a.complete ? "" : " partial"));
     el("p", a.answer, box);
+    // D-616: the record's own figures, the lookup's reading and what the model did not see,
+    // beside the explanation, never instead of it.
+    if((a.recorded || []).length) el("p", "From the record: " + a.recorded.join(" "), box);
+    if(a.record_answer) el("p", "Record lookup: " + a.record_answer, box, "muted");
+    if(a.coverage_note) el("p", a.coverage_note, box, "muted");
     const src = el("div", null, box, "src");
     // ── WHERE IT CAME FROM, ALWAYS ────────────────────────────────────────
     // An estimate quoted back to a customer has to be checkable. The record
@@ -553,6 +558,7 @@ async function ask(){
     // assertion.
     el("p", (a.sources && a.sources.length)
         ? "From " + a.sources.join(", ") + " in " + a.record_name
+          + (a.model ? " · answered by " + a.model : " · record lookup")
         : "Nothing in the record answered this.", src, "mono");
     if(a.model)
       el("p", "Read from this saved record only. Check a figure in the job's report "
