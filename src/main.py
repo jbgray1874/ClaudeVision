@@ -2403,6 +2403,21 @@ def main() -> None:
                         except Exception as _p_exc:              # noqa: BLE001
                             print(f"   [deliverables] parity report skipped ({_p_exc}) — the "
                                   f"bundle above is unaffected.", flush=True)
+
+                        # D-623 (SCRUM-157): the line-by-line comparison a person reads. Cost
+                        # apart from sell, commercial lines, scope part by part, quantities and
+                        # revisions, each difference linked to its lines and cells. Isolated.
+                        try:
+                            import parity_compare as _pcmp
+                            _d = _pcmp.compare(Path(_canon_json2), Path(_manual))
+                            _dj, _dh = _pcmp.write(
+                                _d, _out_dir, re.sub(r"[^\w\- ]", "", str(scan_label)).strip())
+                            (summary.setdefault("saved_output_paths", {}))["parity_detail"] = _dh
+                            print(f"   [deliverables] parity, line by line -> {Path(_dh).name}",
+                                  flush=True)
+                        except Exception as _d_exc:              # noqa: BLE001
+                            print(f"   [deliverables] line-by-line parity skipped ({_d_exc}) — "
+                                  f"the bundle above is unaffected.", flush=True)
                     elif not _explicit:
                         print("   [deliverables] no --parity-workbook passed — new-job report only "
                               "(no parity section). Pass --parity-workbook <path> to compare against a "

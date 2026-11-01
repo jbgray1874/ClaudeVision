@@ -150,10 +150,25 @@ def run_parity(ai: str | Path,
     out_csv = out / f"{stem}.full_parity.csv"
 
     _ensure_engine_on_path()
-    from estimate_full_parity_report import generate_and_write
 
-    bundle, written_json, written_csv = generate_and_write(
-        summary_path, manual_path, out_json, out_csv, read_via_excel=read_via_excel)
+    # TWO COMPARISONS, EACH FAILURE-ISOLATED (D-623, SCRUM-157).
+    #
+    # The money-cell bundle is the long-standing record, and the only one that can drive Excel
+    # to resolve an empty value cache. The line-by-line detail (parity_compare) is the one a
+    # person reads: cost apart from sell, the commercial lines, scope part by part, quantities
+    # and revisions, each difference linked to its lines and cells. Either may fail on a sheet
+    # the other reads, so each runs on its own; only when both fail is there nothing to file.
+    bundle: Dict[str, Any] = {}
+    written_json = written_csv = None
+    legacy_error = ""
+    try:
+        from estimate_full_parity_report import generate_and_write
+        bundle, written_json, written_csv = generate_and_write(
+            summary_path, manual_path, out_json, out_csv, read_via_excel=read_via_excel)
+    except Exception as exc:                                     # noqa: BLE001
+        legacy_error = f"{type(exc).__name__}: {exc}"
+        print(f"   [parity] the money-cell bundle could not be written ({legacy_error}); the "
+              f"line-by-line comparison carries on.", flush=True)
 
     # THE ONE OF THE THREE A PERSON CAN ACTUALLY READ.
     #
@@ -165,23 +180,79 @@ def run_parity(ai: str | Path,
     # Failure-isolated on purpose: the bundle is the record, and a template fault in the report
     # must not cost the comparison that was just computed successfully.
     written_html = None
+    if written_json:
+        try:
+            from parity_report_html import generate_report_files
+            written_html = generate_report_files(written_json, out_dir=out, job_stem=stem)
+        except Exception as exc:                                 # noqa: BLE001
+            print(f"   [parity] the HTML report could not be written ({exc}) — the bundle JSON "
+                  f"and CSV are complete and unaffected.", flush=True)
+
+    detail, detail_json, detail_html, detail_error = None, None, None, ""
     try:
-        from parity_report_html import generate_report_files
-        written_html = generate_report_files(written_json, out_dir=out, job_stem=stem)
+        import parity_compare
+        detail = parity_compare.compare(summary_path, manual_path)
+        detail_json, detail_html = parity_compare.write(detail, out, stem)
     except Exception as exc:                                     # noqa: BLE001
-        print(f"   [parity] the HTML report could not be written ({exc}) — the bundle JSON and "
-              f"CSV are complete and unaffected.", flush=True)
+        detail_error = f"{type(exc).__name__}: {exc}"
+        print(f"   [parity] the line-by-line comparison could not be written ({detail_error}).",
+              flush=True)
+
+    if not written_json and not detail_json:
+        raise RuntimeError(f"Neither comparison could be made. Money cells: {legacy_error}. "
+                           f"Line by line: {detail_error}.")
 
     return {
         "ai_summary": str(summary_path),
         "manual_workbook": str(manual_path),
-        "bundle_json": str(written_json),
-        "bundle_csv": str(written_csv),
-        "bundle_html": written_html,
+        "bundle_json": str(written_json) if written_json else None,
+        "bundle_csv": str(written_csv) if written_csv else None,
+        # The page a person opens: the line-by-line report, or the money-cell page without it.
+        "bundle_html": detail_html or written_html,
+        "legacy_html": written_html,
+        "detail_json": detail_json,
+        "detail_html": detail_html,
+        "detail_headline": (detail or {}).get("headline"),
+        "errors": {"money_cells": legacy_error, "line_by_line": detail_error},
         "job_stem": stem,
         "read_via_excel": bool(read_via_excel),
-        "headline": _headline(bundle),
+        "headline": _merged_headline(_headline(bundle), detail),
     }
+
+
+def _merged_headline(legacy: Dict[str, Any], detail: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The one-line answer, from the line-by-line comparison when it read both unit costs.
+
+    The detail reads the same price chain at the same quantity, and when the quantities differ it
+    takes the AI figure from the run's own sweep or says the two are not comparable, which the
+    money-cell rollup never did. Where the detail could not read both figures (an empty value
+    cache that only Excel can fill), the money-cell answer stands. The percentage stays unsigned,
+    as every caller has always read it; the signed figure travels beside it.
+    """
+    h = dict(legacy)
+    d = (detail or {}).get("headline") or {}
+    if d.get("ai_unit_cost_gbp") is None or d.get("manual_unit_cost_gbp") is None:
+        h["unit_cost_source"] = "money cells"
+        return h
+    pct = d.get("pct")
+    h.update({
+        "ai_unit_cost_gbp": d["ai_unit_cost_gbp"],
+        "manual_unit_cost_gbp": d["manual_unit_cost_gbp"],
+        "gap_gbp": d.get("gap_gbp"),
+        "pct_variance": abs(pct) if isinstance(pct, (int, float)) else None,
+        "pct_signed": pct,
+        "status": d.get("status"),
+        "workbook_cell": next((r.get("manual_cell") for r in detail.get("cost_build") or []
+                               if r.get("key") == "unit"), legacy.get("workbook_cell")),
+        "compared_at_qty": d.get("compared_at_qty"),
+        "comparable": d.get("comparable", True),
+        "ai_sell_gbp": d.get("ai_sell_gbp"),
+        "manual_sell_gbp": d.get("manual_sell_gbp"),
+        "scope_counts": d.get("scope_counts"),
+        "revision_differs": d.get("revision_differs"),
+        "unit_cost_source": "line by line",
+    })
+    return h
 
 
 def _headline(bundle: Dict[str, Any]) -> Dict[str, Any]:
@@ -302,6 +373,8 @@ def main() -> None:
               f"{h['labour_route_issues']} issues")
         print(f"  Bundle JSON:     {res['bundle_json']}")
         print(f"  Bundle CSV:      {res['bundle_csv']}")
+        if res.get("detail_html"):
+            print(f"  Line by line:    {res['detail_html']}")
 
 
 if __name__ == "__main__":
