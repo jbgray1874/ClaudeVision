@@ -148,6 +148,10 @@ _CONTENT_TYPES = {
     ".csv": ("text", "csv"),
     ".json": ("application", "json"),
     ".pdf": ("application", "pdf"),
+    # The spoken walkthrough and its words (D-609). Sent as audio, a phone's mail app offers
+    # to play it; sent as a generic file, some only offer to save it.
+    ".wav": ("audio", "wav"),
+    ".txt": ("text", "plain"),
 }
 
 

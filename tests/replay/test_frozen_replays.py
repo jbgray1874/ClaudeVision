@@ -55,10 +55,12 @@ def _frozen_summary(job: Path) -> dict:
     if not frozen.is_file():
         message = (
             f"{job.name}: accepted facts exist but NO frozen summary.json — this pack is "
-            f"NOT protected. On the box:\n"
-            f"    copy output\\json\\{job.name}.json  tests\\replay\\{job.name}\\summary.json\n"
-            f"from the run the estimator signed off, write "
-            f"tests/replay/{job.name}/provenance.json, and commit both.")
+            f"NOT protected. On the box, from an archived copy of the run the estimator "
+            f"signed off:\n"
+            f"    python tools\\freeze_replay_fixture.py {job.name} --find\n"
+            f"then freeze it with --source and the accepted run, person, date and figures. "
+            f"The record and its provenance are job data: they stay on this machine and are "
+            f"never committed (SCRUM-134).")
         if ALLOW_MISSING:
             pytest.skip(message + "\n(skipped: SDI_REPLAY_ALLOW_MISSING is set)")
         pytest.fail(message)

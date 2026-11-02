@@ -142,8 +142,15 @@ corpus/
 cache/
 .sdi-commit
 
-# Frozen-replay harness: accepted facts and frozen summaries are versioned evidence
+# Frozen-replay harness: the structure an estimator accepted (accepted_facts.json, bom_tree.json,
+# the template) is versioned evidence.
 !tests/replay/**/*.json
+# The frozen record itself is job data: prices, customer and parts. It is kept on the laptop and
+# never committed (SCRUM-134, SCRUM-137), and nor are the provenance holding the accepted prices
+# or the fingerprint taken from the record. These come after the un-ignore so they win.
+tests/replay/*/summary.json
+tests/replay/*/provenance.json
+tests/replay/*/fingerprint.json
 
 # ── SDI Intelligence app portal ──
 !sdi-intelligence-backend/services.json
