@@ -13195,11 +13195,26 @@ def _made_part_material_allowance(pe: Dict[str, Any]) -> Optional[float]:
     me = pe.get("material_estimate") if isinstance(pe.get("material_estimate"), dict) else {}
     material = str(pe.get("normalized_material") or me.get("material") or "").strip()
     gauge = _safe_float(me.get("thickness_mm") or pe.get("normalized_thickness_mm"))
+    # THE BOARD SDI ACTUALLY BUYS (SCRUM-179/100). The 19:30 12678 run charged the spine
+    # and top £12.48 each from answers describing raw 18 mm MDF "excluding finishing",
+    # while the promotion note beside them said the laminating is IN the sheet price —
+    # because this question asked for the raw core. A promoted board's allowance asks
+    # for the pre-faced board, and the compatibility gate below then refuses a raw core
+    # answered against it, instead of charging the contradiction with a warning.
+    _faced = str(me.get("costing_material_family") or pe.get("_faced_board_family")
+                 or "").upper().replace(" ", "")
+    _lam_note = str(pe.get("construction_note_laminate") or "")
+    if _faced in ("MFMDF", "MFC"):
+        material = _faced
     what = str(pe.get("description") or pe.get("part_number") or "").strip()
     if not what:
         return None
     stock = " ".join(x for x in (material.replace("_", " ").lower(),
                                  f"{gauge:g} mm" if gauge else "") if x) or "sheet"
+    if _faced in ("MFMDF", "MFC"):
+        stock = f"pre-faced (melamine/laminate-faced) {stock} board"
+    elif "LAMINAT" in _lam_note.upper():
+        stock = f"{stock}, laminated ({_lam_note[:40].strip()})"
     question = (f"{stock} stock — the RAW MATERIAL ONLY for one '{what}'. SDI makes this part "
                 f"and charges its own cutting, forming, joining and finishing separately, so "
                 f"price the stock it is cut from and nothing else; its size is not known, so "

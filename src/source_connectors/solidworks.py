@@ -1761,10 +1761,11 @@ def mint_model_children(parts: List[Dict[str, Any]], job: NativeJob) -> List[str
         return minted
     by_code = {_clean_pn(str(p.get("part_number") or "")).upper(): p
                for p in parts if isinstance(p, dict) and p.get("part_number")}
-    # Every edge to a record-less child, with the parent's own per-unit count, so the
-    # minted line carries the per-unit total the tree implies (06M: 1 x 101SA's 6 plus
-    # 1 x 102SA's 2 = 8) and the working is printed beside it.
-    edges: Dict[str, List[Tuple[str, float, float]]] = {}
+    # Every edge to a record-less child, PER PARENT, with the edge figures kept as a SET:
+    # the analyser lists an edge once per instance, configuration and reporting SLDASM,
+    # so the list records what was SEEN, never a count (_per_parent_count's own lesson,
+    # 11650-06). The parent's per-unit count rides along for the division below.
+    edges: Dict[str, Dict[str, Tuple[List[float], float]]] = {}
     for parent, kids in (getattr(job, "hierarchy", None) or {}).items():
         pk = _clean_pn(str(parent)).upper()
         parent_rec = by_code.get(pk)
@@ -1782,8 +1783,19 @@ def mint_model_children(parts: List[Dict[str, Any]], job: NativeJob) -> List[str
                 e_qty = max(1.0, float(q or 1))
             except (TypeError, ValueError):
                 e_qty = 1.0
-            edges.setdefault(ck, []).append((_clean_pn(str(parent)), e_qty, p_qty))
-    for ck, owns in edges.items():
+            _slot = edges.setdefault(ck, {}).setdefault(_clean_pn(str(parent)),
+                                                        ([], p_qty))
+            _slot[0].append(e_qty)
+    # The child's own full-depth product total, where the flattened BOM states one — the
+    # reliable count the division rule needs.
+    _bom_totals: Dict[str, float] = {}
+    for _row in getattr(job, "bom", None) or []:
+        _bk = _clean_pn(str(getattr(_row, "part_number", "") or "")).upper()
+        _bq = float(getattr(_row, "quantity", 0) or 0)
+        if _bk and _bq > 0:
+            _bom_totals[_bk] = _bom_totals.get(_bk, 0.0) + _bq
+    for ck, owned_by in edges.items():
+        owns = [(pn, qtys, pq) for pn, (qtys, pq) in sorted(owned_by.items())]
         nat = (getattr(job, "part_signals", {}) or {}).get(ck)
         if nat is None:
             continue
@@ -1809,16 +1821,45 @@ def mint_model_children(parts: List[Dict[str, Any]], job: NativeJob) -> List[str
                 basis = "a plate-shaped solid's extents"
         if not (L and W and thk):
             continue
-        # THE ROW'S OWN QUANTITY, NEVER THE TREE'S PRODUCT. The BOMs sheet states the
-        # rule this first violated: a record's quantity is per parent, and the
-        # multiplication belongs to the route. The first mint wrote the per-unit total
-        # here, the compiler multiplied by the parent again, and 05M's "6 per 101SA x6"
-        # went onto 12678's sheet as a row of 216. The record now carries the largest
-        # per-parent count the model states; the per-unit product lives in the flag's
-        # trail, computed once, by the route, like every other part.
-        qty = max(1, int(round(max(e for _, e, _ in owns))))
-        per_unit = int(round(sum(e * p for _, e, p in owns))) or 1
-        trail = " + ".join(f"{e:g} per {pn} x{p:g}" for pn, e, p in owns)
+        # THE ROW'S OWN QUANTITY, ON _per_parent_count's OWN BASIS. Two lessons, both
+        # paid for on real sheets: the first mint wrote the per-unit total and the
+        # compiler multiplied by the parent again (05M on 12678's sheet as a row of
+        # 216); and the edge figures are a record of what was SEEN, once per instance
+        # and configuration, never a count (11650-06's extender, 3 summed to 6). So:
+        # PER PARENT = THE CHILD'S PRODUCT TOTAL ÷ THE PARENT'S, where both exist and
+        # divide whole — 6 ribs in the product over 6 bracket assemblies is ONE per
+        # bracket. With no usable totals, the DEDUPLICATED edge figure stands where the
+        # model states exactly one; and where nothing divides (a shared child whose
+        # total cannot be attributed), ONE per parent is carried with the conflict said
+        # out loud, for the BOM-ranked edges and the quantity check to decide — never a
+        # figure invented to make the arithmetic tidy.
+        _parents = sorted({pn for pn, _, _ in owns})
+        _total_ck = _bom_totals.get(ck.upper())
+        qty = 1
+        qty_basis = ""
+        if _total_ck and len(_parents) == 1:
+            _p_total = owns[0][2]
+            if _p_total > 0 and abs(_total_ck / _p_total
+                                    - round(_total_ck / _p_total)) < 1e-9:
+                qty = max(1, int(round(_total_ck / _p_total)))
+                qty_basis = (f"the model counts {_total_ck:g} in the whole product and "
+                             f"{_p_total:g} of {_parents[0]}, so one takes {qty}")
+        if not qty_basis:
+            _distinct = sorted({e for _, qtys, _ in owns for e in qtys})
+            if len(_parents) == 1 and len(_distinct) == 1 and not _total_ck:
+                qty = max(1, int(round(_distinct[0])))
+                qty_basis = (f"the model's tree states {qty} per {_parents[0]} "
+                             f"(deduplicated edge, no product total to divide)")
+            else:
+                qty = 1
+                qty_basis = (f"no per-parent count divides (product total "
+                             f"{_total_ck:g} across {', '.join(_parents)}" if _total_ck
+                             else f"the edges state {_distinct} across "
+                                  f"{', '.join(_parents)}")
+                qty_basis += (" — 1 per parent is carried; the BOM edges and the "
+                              "quantity check decide")
+        per_unit = int(round(sum(qty * p for _, _, p in owns))) or 1
+        trail = " + ".join(f"{qty:g} per {pn} x{p:g}" for pn, _, p in owns)
         mat = _norm_sw_material(getattr(nat, "material", "") or "")
         rec: Dict[str, Any] = {
             "part_number": ck,
@@ -1836,11 +1877,11 @@ def mint_model_children(parts: List[Dict[str, Any]], job: NativeJob) -> List[str
             "review_flags": [
                 f"part minted from the SolidWorks model ({basis}): the product tree "
                 f"holds it under {', '.join(sorted({pn for pn, _, _ in owns}))} and the "
-                f"pack has no sheet for it — the model's tree implies x{per_unit} a "
-                f"unit ({trail}); the row carries its own per-parent count and the "
-                f"route multiplies, once; its material is priced from the modelled "
-                f"blank so the unit is not silently short; confirm the count and the "
-                f"part against the drawing office"],
+                f"pack has no sheet for it — quantity basis: {qty_basis}; the tree "
+                f"implies x{per_unit} a unit ({trail}); the row carries its own "
+                f"per-parent count and the route multiplies, once; its material is "
+                f"priced from the modelled blank so the unit is not silently short; "
+                f"confirm the count and the part against the drawing office"],
         }
         if nat.has_flat():
             rec["native_flat_pattern"] = True
