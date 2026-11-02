@@ -288,6 +288,11 @@ report names its cell on the manual sheet; for each check, look up at least one 
 A period compares the newest AI run of each drawing in the dates against its manual sheet.
 Period A against Period B shows whether the AI estimates are moving closer to the manual ones.
 
+The time frame is any two moments (D-625): a month, a week, one day (From and To the same
+date), or hours within a day using the optional time boxes beside the dates, so two runs of
+the same drawing made the same day can be compared morning against afternoon. A bare date
+means the whole day; an end given to the minute includes that minute.
+
 #### One period
 
 1. Card **Parity by job number**, section **Compare jobs within a period**: From 1 Oct 2026, To
@@ -306,6 +311,8 @@ Period A against Period B shows whether the AI estimates are moving closer to th
 7. Press **Compare the period** again with the same dates. Pass: the rows say "(reused)" and it
    finishes quickly. A pair compared before 2 Nov is compared again, never reused.
 8. Narrow it: Client = M&S, then Job = 12677. Pass: only those rows.
+9. Hours within a day: a drawing that ran twice on one day, From and To the same date, times
+   either side of midday. Pass: each window lists only the run inside it.
 
 #### Two periods, A against B
 
@@ -328,6 +335,7 @@ Period A against Period B shows whether the AI estimates are moving closer to th
 
 ```
 .venv\Scripts\python.exe src\parity_job.py period --from 2026-10-01 --to 2026-10-31 --preview
+.venv\Scripts\python.exe src\parity_job.py period --from "2026-10-31 09:00" --to "2026-10-31 12:00" --preview
 .venv\Scripts\python.exe src\parity_job.py search 12677
 ```
 

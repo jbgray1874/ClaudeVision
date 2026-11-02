@@ -1152,10 +1152,13 @@
       <p class="note">Every drawing the engine estimated between the two dates, counted once
          (its newest run there), against its manual estimate. Pairs with no manual estimate,
          ambiguous ones and quantity mismatches are listed apart, not counted. A pair already
-         compared with the same manual sheet is reused. Preview first.</p>
+         compared with the same manual sheet is reused. Preview first. The period can be any
+         two dates, one day included; the times are optional and narrow it within a day, so
+         two runs of the same drawing on the same day can be compared morning against
+         afternoon.</p>
       <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
-        <label class="note" style="margin:0">From <input id="pjPFrom" type="date"></label>
-        <label class="note" style="margin:0">To <input id="pjPTo" type="date"></label>
+        <label class="note" style="margin:0">From <input id="pjPFrom" type="date"><input id="pjPFromT" type="time" aria-label="From time, optional"></label>
+        <label class="note" style="margin:0">To <input id="pjPTo" type="date"><input id="pjPToT" type="time" aria-label="To time, optional"></label>
         <input id="pjPClient" type="text" placeholder="Client (optional)" style="width:160px">
         <input id="pjPJob" type="text" placeholder="Job (optional)" style="width:130px">
         <button id="pjPreview" type="button">Preview</button>
@@ -1170,9 +1173,9 @@
          its file date, and the report says so.</p>
       <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
         <span class="note" style="margin:0"><b>A</b></span>
-        <input id="pjAFrom" type="date" aria-label="Period A from"><input id="pjATo" type="date" aria-label="Period A to">
+        <input id="pjAFrom" type="date" aria-label="Period A from"><input id="pjAFromT" type="time" aria-label="Period A from time, optional"><input id="pjATo" type="date" aria-label="Period A to"><input id="pjAToT" type="time" aria-label="Period A to time, optional">
         <span class="note" style="margin:0"><b>B</b></span>
-        <input id="pjBFrom" type="date" aria-label="Period B from"><input id="pjBTo" type="date" aria-label="Period B to">
+        <input id="pjBFrom" type="date" aria-label="Period B from"><input id="pjBFromT" type="time" aria-label="Period B from time, optional"><input id="pjBTo" type="date" aria-label="Period B to"><input id="pjBToT" type="time" aria-label="Period B to time, optional">
         <input id="pjTClient" type="text" placeholder="Client (optional)" style="width:160px">
         <input id="pjTJob" type="text" placeholder="Job (optional)" style="width:130px">
         <button id="pjTPreview" type="button">Preview</button>
@@ -4325,8 +4328,15 @@ async function pjStart(url, body, box, render){
   }catch(e){ box.innerHTML = '<p style="color:var(--bad)">Could not reach the service.</p>'; }
 }
 
+/* A boundary: the date, with its optional time appended (D-625). A bare date is the whole
+   day, so one day is a period on its own; a time narrows it within the day. */
+function pjWhen(dateId, timeId){
+  const d = $(dateId).value;
+  return d ? (($(timeId).value) ? d + " " + $(timeId).value : d) : "";
+}
+
 function pjPeriod(preview){
-  const start = $("pjPFrom").value, end = $("pjPTo").value, box = $("pjPeriodOut");
+  const start = pjWhen("pjPFrom", "pjPFromT"), end = pjWhen("pjPTo", "pjPToT"), box = $("pjPeriodOut");
   if(!start || !end){ box.innerHTML = '<p style="color:var(--warn)">Choose both dates.</p>'; return; }
   pjStart("/api/estimate/parity/period", {start, end, preview, client: $("pjPClient").value.trim(), job: $("pjPJob").value.trim()},
     box, (s, isPreview) => {
@@ -4340,7 +4350,8 @@ $("pjPeriod").onclick = () => pjPeriod(false);
 function pjTwo(preview){
   const v = id => $(id).value, box = $("pjTwoOut");
   if(!v("pjAFrom") || !v("pjATo") || !v("pjBFrom") || !v("pjBTo")){ box.innerHTML = '<p style="color:var(--warn)">Choose all four dates.</p>'; return; }
-  pjStart("/api/estimate/parity/periods", {a_start: v("pjAFrom"), a_end: v("pjATo"), b_start: v("pjBFrom"), b_end: v("pjBTo"),
+  pjStart("/api/estimate/parity/periods", {a_start: pjWhen("pjAFrom", "pjAFromT"), a_end: pjWhen("pjATo", "pjAToT"),
+    b_start: pjWhen("pjBFrom", "pjBFromT"), b_end: pjWhen("pjBTo", "pjBToT"),
     client: $("pjTClient").value.trim(), job: $("pjTJob").value.trim(), preview}, box, (s, isPreview) => {
       if(!s.finished && !isPreview){
         box.innerHTML = '<p class="note">Running period ' + pjEsc(s.period || "A") + ': ' + (s.done ?? 0) + ' of ' + (s.of ?? "?") + '…</p>'; return; }

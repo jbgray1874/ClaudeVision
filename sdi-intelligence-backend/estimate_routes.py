@@ -2989,9 +2989,13 @@ def _parity_path(path: Optional[str], label: str) -> Optional[str]:
 
 
 def _day_arg(value: Optional[str]) -> Optional[str]:
-    v = (value or "").strip()[:10]
-    if v and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
-        raise HTTPException(status_code=400, detail=f"'{v}' is not a date as YYYY-MM-DD.")
+    """A date, or a date with a time (D-625): a period can be a day, or hours within one, so
+    two runs of the same drawing on the same day can be compared against each other's era."""
+    v = (value or "").strip()[:19]
+    if v and not re.fullmatch(r"\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?", v):
+        raise HTTPException(status_code=400,
+                            detail=f"'{v}' is not a date as YYYY-MM-DD, or a date and time as "
+                                   f"YYYY-MM-DD HH:MM.")
     return v or None
 
 
