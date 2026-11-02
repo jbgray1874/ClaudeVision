@@ -270,6 +270,16 @@
     <div class="state" id="p-state" role="status" aria-live="polite" hidden></div>
     <div id="p-out"></div>
 
+    <div id="p-ask" hidden style="margin-top:18px">
+      <h1>Ask about this comparison</h1>
+      <p class="hint" id="pa-which"></p>
+      <textarea id="pa-q" placeholder="e.g. Which three differences account for most of the gap? Or tap Speak."></textarea>
+      <div class="half" style="margin:10px 0"><button class="go" id="pa-go" type="button">Ask</button>
+        <button class="ghost" id="pa-mic" type="button">Speak</button></div>
+      <div class="state" id="pa-state" role="status" aria-live="polite" hidden></div>
+      <div id="pa-out"></div>
+    </div>
+
     <h1 style="margin-top:22px">Filed comparisons</h1>
     <input type="search" id="p-q" placeholder="Job, drawing or client" autocomplete="off">
     <div class="half" style="margin-top:9px">
@@ -919,9 +929,69 @@ function comparisonCard(parent, idx){
   if(idx.stamp) el("p", idx.stamp + (idx.comparison_id ? " · " + idx.comparison_id : ""), c, "mono");
   const links = el("p", null, c);
   link(links, "Report", idx.report_url);
+  link(links, "Listen", idx.listen_url);
   link(links, "Manual sheet", idx.manual_url);
   link(links, "AI sheet", idx.ai_url);
+  if(!idx.listen_url && idx.walkthrough_note)
+    el("p", "Spoken comparison: " + idx.walkthrough_note, c, "muted");
+  // ASK ABOUT THIS COMPARISON (D-628): the same question interface as a live run, pinned to
+  // this filed comparison. It explains the saved results and changes neither estimate.
+  if(idx.folder){
+    const ab = el("button", "Ask about this comparison", c, "ghost");
+    ab.type = "button"; ab.style.marginTop = "8px";
+    ab.onclick = () => paOpen(idx.folder,
+      (idx.drawing || idx.job || "") + (idx.comparison_id ? " · " + idx.comparison_id : ""));
+  }
 }
+// ── ASK ABOUT THIS COMPARISON (D-628) ───────────────────────────────────────
+// Type or Speak, review the words, Ask; the written answer always, the comparison's own
+// recorded figures beneath it, Listen or automatic read-aloud as on the ask screen. It
+// explains the saved results only: no run, no change to either estimate, no quotation.
+let paFolder = null;
+function paOpen(folder, label){
+  paFolder = folder;
+  $("p-ask").hidden = false;
+  $("pa-which").textContent = "Answered from the filed comparison " + label + " only. It "
+    + "explains the saved results; it changes neither estimate and authorises nothing.";
+  $("p-ask").scrollIntoView();
+}
+function paListen(){
+  const V = window.SDIVoice;
+  if(!V){ say("pa-state", "Voice is not available here; type the question.", "err"); return; }
+  V.listen({
+    onState: (t, kind) => say("pa-state", t, kind === "err" ? "err" : ""),
+    onInterim: t => { $("pa-q").value = t; },
+    onDone: t => { $("pa-q").value = t;
+      say("pa-state", "Heard: “" + t + "”. Check it, then tap Ask."); },
+    onEnd: () => { $("pa-mic").textContent = "Speak"; $("pa-mic").classList.remove("on"); }
+  });
+  if(V.listening()){ $("pa-mic").textContent = "Listening… tap to stop"; $("pa-mic").classList.add("on"); }
+}
+$("pa-mic").onclick = paListen;
+async function paAsk(){
+  const q = $("pa-q").value.trim();
+  if(!q || !paFolder) return;
+  $("pa-go").disabled = true;
+  $("pa-state").hidden = false;
+  say("pa-state", "Asking…");
+  try{
+    const a = await api("/api/estimate/parity/ask", {folder: paFolder, question: q});
+    say("pa-state", "", "");
+    $("pa-state").hidden = true;
+    const box = $("pa-out");
+    box.replaceChildren();
+    el("p", a.answer || "Nothing came back.", box);
+    if((a.recorded || []).length)
+      el("p", "From the comparison: " + a.recorded.join(" "), box, "mono");
+    el("p", "From " + ((a.sources || []).join(", ") || "the filed comparison")
+       + (a.model ? " · answered by " + a.model : " · record lookup"), box, "muted");
+    voiceTheAnswer(box, a);
+  }catch(e){
+    say("pa-state", e.message, "err");
+  }finally{ $("pa-go").disabled = false; }
+}
+$("pa-go").onclick = paAsk;
+
 function pickRow(parent, item, group, checked, cb){
   const row = el("label", null, parent, "tickrow");
   const r = el("input", null, row); r.type = "radio"; r.name = group; r.checked = checked;

@@ -42,6 +42,7 @@ PUBLIC_POST = (
     "/api/estimate/parity/job",       # compare one job with its manual estimate (D-619)
     "/api/estimate/parity/period",    # compare every job estimated in a period (D-619)
     "/api/estimate/parity/periods",   # Period A against Period B (D-621)
+    "/api/estimate/parity/ask",       # a question about one filed comparison (D-628)
 )
 
 # PARITY BY JOB NUMBER (D-619). JG, 1 Nov 2026: the comparison "in the web portal inside the
@@ -55,6 +56,7 @@ PARITY_POST = (
     "/api/estimate/parity/job",
     "/api/estimate/parity/period",
     "/api/estimate/parity/periods",
+    "/api/estimate/parity/ask",
 )
 PARITY_PREFIX = "/api/estimate/parity"
 
