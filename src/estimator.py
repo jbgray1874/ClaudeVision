@@ -13699,6 +13699,15 @@ def stamp_members_coated_area(parts: Any, summary: Any = None) -> int:
             if not _sec_m2 and (not _L or not _W):
                 continue
             _per = max(1.0, (_safe_float(_m.get("quantity")) or 1.0) / _asm_qty)
+            # A SHARED MEMBER'S PER-PARENT MAP NAMES ITS COUNT IN THIS ASSEMBLY (SCRUM-105):
+            # 12678-01-06M is two ribs in each bracket of both designs, and its one
+            # quantity divided by either assembly's count says neither.
+            _mbp = _m.get("quantity_by_parent")
+            if isinstance(_mbp, dict):
+                for _bk, _bv in _mbp.items():
+                    if str(_bk or "").strip().upper() == _apn and (_safe_float(_bv) or 0) > 0:
+                        _per = float(_safe_float(_bv))
+                        break
             _m_area = (_sec_m2 * _per if _sec_m2
                        else (_L / 1000.0) * (_W / 1000.0) * _faces * _per)
             _area += _m_area
