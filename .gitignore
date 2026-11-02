@@ -168,3 +168,14 @@ sdi-intelligence-backend/*.db-shm
 
 # Voice CRM app journal (runtime data, created where the portal runs)
 sdi-intelligence-backend/voicecrm_journal.db*
+
+# ── Laptop working folders that must never reach GitHub (D-631) ──
+# `git status` on the laptop shows these untracked: customer quotation workbooks sent to
+# buyers, migration runs of works orders, e-mails and review packs. Untracked is one
+# careless `git add -A` from published; ignored is not. The one committed template
+# (sagex3/Sage X3 Essentials Import Templates.zip) stays tracked: an ignore never evicts
+# a file already in the index.
+assets/
+emails/
+review/
+sagex3/
