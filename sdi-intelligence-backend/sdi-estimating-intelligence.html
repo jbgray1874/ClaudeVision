@@ -4040,6 +4040,7 @@ parityRun.onclick = async () => {
        for Excel; leading with either sends an estimator into a 2,000-line file to answer
        "why did these two differ". */
     [{url:j.bundle_html_url, name:"Parity report, line by line (HTML — read this one)"},
+     {url:j.walkthrough_url, name:"Listen to the comparison (WAV)"},
      {url:j.legacy_html_url, name:"Money-cell report (HTML)"},
      {url:j.detail_json_url, name:"Line-by-line record (JSON)"},
      {url:j.bundle_json_url, name:"Parity bundle (JSON — the full comparison)"},
@@ -4140,7 +4141,8 @@ function pjResult(idx){
       + ' made on one, bought on the other · ' + pjEsc(idx.scope_counts.material_not_charged ?? 0) + ' with material not charged'
       + (idx.revision && idx.revision.differs ? ' · <strong>revisions differ</strong>' : "") + '</li>' : "")
     + (lines ? '<li><table style="border-collapse:collapse;font-size:12.5px"><tr><th style="text-align:left">Line</th><th>AI</th><th>Manual</th><th>Status</th><th>Cell</th></tr>' + lines + '</table></li>' : "")
-    + '<li>' + [pjLink(idx.report_url, "Parity report"), pjLink(idx.legacy_report_url, "Money-cell report"),
+    + '<li>' + [pjLink(idx.report_url, "Parity report"), pjLink(idx.listen_url, "Listen to the comparison"),
+                pjLink(idx.legacy_report_url, "Money-cell report"),
                 pjLink(idx.manual_url, "Manual sheet (filed copy)"),
                 pjLink(idx.ai_url, "AI sheet (filed copy)"), pjLink(idx.bundle_csv_url, "Bundle CSV")].filter(Boolean).join(" · ") + '</li>'
     + '<li class="note">Filed in <code>' + pjEsc(idx.folder) + '</code> · ' + pjEsc((idx.match || {}).how || "")

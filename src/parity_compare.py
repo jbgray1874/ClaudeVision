@@ -803,6 +803,115 @@ close within {detail['thresholds_pct']['warning']:g}%.</p>
 </main></html>"""
 
 
+# ── the comparison, spoken (D-627) ──────────────────────────────────────────────────────
+# JG, 2 Nov 2026: "Does the parity run also create a .wav file with an explanation. this
+# would be superb." The words are written here from the detail's own figures, the same way
+# the estimate's walkthrough is written from the covering note's; walkthrough_audio turns
+# them into sound. Spoken rules as D-609: money as words, no symbols, brackets or markup,
+# and differences described, never judged.
+
+def _gbp_words(value: Any) -> str:
+    """"421 pounds and 37 pence" — the estimate walkthrough's own voice where it imports."""
+    try:
+        from estimate_explained import say_gbp
+        return say_gbp(value)
+    except Exception:                                                # noqa: BLE001
+        v = _f(value)
+        if v is None:
+            return "an amount not yet known"
+        pounds, pence = divmod(int(round(abs(v) * 100)), 100)
+        words = f"{pounds:,} pound{'' if pounds == 1 else 's'}"
+        if pence:
+            words += f" and {pence} pence"
+        return ("minus " if v < 0 else "") + words
+
+
+def _head_word(side: Dict[str, Any], key: str) -> str:
+    v = ((side.get("head") or {}).get(key) or {}).get("value")
+    return str(v).strip() if v not in (None, "") else ""
+
+
+def spoken(detail: Dict[str, Any]) -> str:
+    """A short spoken account of one comparison: the verdict, the quantities, the cost gap,
+    the selling side, the scope, the biggest differences and any health warnings. A minute
+    or so; the report holds every line."""
+    h, q = detail["headline"], detail["quantity"]
+    sc, rv = detail["scope"]["counts"], detail["revision"]
+    drawing = _head_word(detail["manual"], "drawing") or _head_word(detail["ai"], "drawing")
+    out: List[str] = [f"SDI Intelligence parity walkthrough for {drawing}." if drawing
+                      else "SDI Intelligence parity walkthrough."]
+    out.append("The AI estimate is compared with the manual estimate, line by line. The manual "
+               "estimate is the comparison, not automatically the right answer.")
+    mq, aq = _f(q.get("manual")), _f(q.get("ai"))
+    if q.get("comparable", True) and mq is not None and aq is not None and abs(mq - aq) < 1e-9:
+        out.append(f"Both are costed at {mq:g} off.")
+    elif q.get("ai_unit_at_manual_qty") is not None:
+        out.append(f"The AI run priced {aq:g} off and the manual sheet {mq:g} off. The unit "
+                   f"cost is compared at {mq:g} off, from the run's own quantity sweep.")
+    elif not q.get("comparable", True):
+        out.append(f"Take care. The AI run priced {aq:g} off and the manual sheet {mq:g} off, "
+                   f"which the run did not price, so the unit costs are not like for like.")
+    ai_u, man_u, gap = h.get("ai_unit_cost_gbp"), h.get("manual_unit_cost_gbp"), h.get("gap_gbp")
+    if ai_u is not None and man_u is not None:
+        out.append(f"The AI unit cost is {_gbp_words(ai_u)}. The manual unit cost is "
+                   f"{_gbp_words(man_u)}.")
+        if gap:
+            pct = h.get("pct")
+            out.append(f"The AI figure is {_gbp_words(abs(gap))} "
+                       f"{'higher' if gap > 0 else 'lower'}"
+                       + (f", {abs(pct):g} percent of the manual figure" if isinstance(
+                           pct, (int, float)) else "") + ".")
+        word = {"match": "On the unit cost, the two agree.",
+                "warning": "On the unit cost, the two are close.",
+                "fail": "On the unit cost, the two differ."}.get(str(h.get("status")))
+        if word:
+            out.append(word)
+    else:
+        out.append("One side's unit cost could not be read; the report says which.")
+    if h.get("ai_sell_gbp") is not None and h.get("manual_sell_gbp") is not None:
+        out.append(f"The selling side is kept apart from cost. The AI sell price is "
+                   f"{_gbp_words(h['ai_sell_gbp'])}, against {_gbp_words(h['manual_sell_gbp'])} "
+                   f"on the manual sheet.")
+        margin = next((r for r in detail["selling"] if r["key"] == "margin"), {})
+        if margin.get("note") and "estimator" in str(margin["note"]):
+            out.append("The engine leaves the margin for the estimator to set.")
+    out.append(f"Scope. {sc['in_both']} part{'' if sc['in_both'] == 1 else 's'} on both "
+               f"estimates, {sc['manual_only']} only on the manual, {sc['ai_only']} only on "
+               f"the AI.")
+    if sc.get("made_bought_differs"):
+        out.append(f"{sc['made_bought_differs']} made on one side and bought on the other.")
+    if sc.get("material_not_charged"):
+        out.append(f"{sc['material_not_charged']} with material not charged where the part "
+                   f"is worked.")
+    firsts = [d for d in detail.get("differences") or [] if d.get("what")][:3]
+    if firsts:
+        out.append("The biggest differences.")
+        for i, d in enumerate(firsts, start=1):
+            piece = f"{i}. {d['what']}"
+            why = str(d.get("detail") or "").strip()
+            delta = _f(d.get("delta_gbp"))
+            if why:
+                piece += f": {why}"
+            elif delta:
+                piece += (f": {_gbp_words(abs(delta))} "
+                          f"{'higher' if delta > 0 else 'lower'} on the AI estimate")
+            out.append(piece + ".")
+    if rv.get("differs"):
+        out.append(f"Take care. The revisions differ: the manual sheet is at "
+                   f"{rv.get('manual')} and the AI estimate at {rv.get('ai')}. Check the "
+                   f"drawing each estimate was made from.")
+    rec = h.get("reconciles") or {}
+    for side_name, balances in (("manual", rec.get("manual")), ("AI", rec.get("ai"))):
+        if balances is False:
+            out.append(f"Take care. The {side_name} side's lines do not reach its own "
+                       f"totals, so its figures are suspect.")
+    out.append("The full report lists every line with its cell on the sheet.")
+    text = " ".join(out)
+    # The spoken rules: nothing a voice reads badly. Money is already words.
+    return re.sub(r"\s+", " ", text.replace("£", " pounds ").replace("%", " percent ")
+                  .replace("&", " and ").replace("(", ", ").replace(")", "")).strip()
+
+
 def write(detail: Dict[str, Any], out_dir: str | Path, stem: str) -> Tuple[str, str]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)

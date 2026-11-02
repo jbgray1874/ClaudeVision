@@ -2820,6 +2820,8 @@ async def estimate_parity(
         "bundle_html_url": url(bundle_html),
         "legacy_html_url": url(legacy_html) if legacy_html and legacy_html != bundle_html else None,
         "detail_json_url": url(detail_json),
+        # The spoken comparison (D-627), where the engine's machine has a voice.
+        "walkthrough_url": url(result.get("walkthrough_wav")),
         "headline": result.get("headline") or {},
     }
 
@@ -2952,6 +2954,8 @@ def _report_links(idx: Dict[str, Any]) -> Dict[str, Any]:
         return _file_link(folder.joinpath(*str(name).split("/"))) if name and str(folder) else None
     return {**idx,
             "report_url": at(idx.get("report_html")),
+            "listen_url": at(idx.get("walkthrough_wav")),
+            "spoken_words_url": at(idx.get("walkthrough_txt")),
             "legacy_report_url": at(idx.get("legacy_html")),
             "detail_json_url": at(idx.get("detail_json")),
             "bundle_json_url": at(idx.get("bundle_json")),

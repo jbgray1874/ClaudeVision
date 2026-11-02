@@ -198,6 +198,29 @@ def run_parity(ai: str | Path,
         print(f"   [parity] the line-by-line comparison could not be written ({detail_error}).",
               flush=True)
 
+    # THE COMPARISON, SPOKEN (D-627). JG: "Does the parity run also create a .wav file with
+    # an explanation. this would be superb." The words come from the detail's own figures and
+    # the voice is the same Windows one the estimate walkthrough uses; a machine with no
+    # voice writes the words and keeps the comparison. Failure-isolated like everything here.
+    walkthrough_wav = walkthrough_txt = None
+    walkthrough_note = ""
+    if detail is not None and detail_html:
+        try:
+            import parity_compare
+            from walkthrough_audio import paths_for, write_walkthrough
+            # Named here, not via the report: paths_for treats a dotted stem's last piece as
+            # an extension, and "12677.parity" would come out as "12677.txt".
+            base = out / (str(stem).replace(".", "_") + "_parity.tmp")
+            ok, walkthrough_note = write_walkthrough(parity_compare.spoken(detail), base)
+            txt, wav = paths_for(base)
+            walkthrough_txt = str(txt) if txt.is_file() else None
+            walkthrough_wav = str(wav) if ok else None
+            print(f"   [parity] spoken comparison: {walkthrough_note}", flush=True)
+        except Exception as exc:                                 # noqa: BLE001
+            walkthrough_note = f"not spoken ({type(exc).__name__}: {exc})"
+            print(f"   [parity] {walkthrough_note} — the comparison itself is unaffected.",
+                  flush=True)
+
     if not written_json and not detail_json:
         raise RuntimeError(f"Neither comparison could be made. Money cells: {legacy_error}. "
                            f"Line by line: {detail_error}.")
@@ -213,6 +236,9 @@ def run_parity(ai: str | Path,
         "detail_json": detail_json,
         "detail_html": detail_html,
         "detail_headline": (detail or {}).get("headline"),
+        "walkthrough_wav": walkthrough_wav,
+        "walkthrough_txt": walkthrough_txt,
+        "walkthrough_note": walkthrough_note,
         "errors": {"money_cells": legacy_error, "line_by_line": detail_error},
         "job_stem": stem,
         "read_via_excel": bool(read_via_excel),
