@@ -208,7 +208,8 @@ class NothingOnThePublicSurfaceGrewTests(unittest.TestCase):
         self.assertEqual(public_surface.PUBLIC_POST,
                          ("/api/estimate", "/api/estimate/brief",
                           "/api/estimate/tools/ask", "/api/estimate/parity/job",
-                          "/api/estimate/parity/period", "/api/estimate/parity/periods"))
+                          "/api/estimate/parity/period", "/api/estimate/parity/periods",
+                          "/api/estimate/parity/ask"))
 
     def test_the_page_calls_nothing_that_is_never_public(self):
         # The exact path, ended by its quote or a query: /api/estimate/parity (the upload
@@ -232,7 +233,7 @@ class NothingOnThePublicSurfaceGrewTests(unittest.TestCase):
                              "/api/estimate/tools/ask", "/api/estimate/tools/briefs",
                              "/api/estimate/parity/find", "/api/estimate/parity/job",
                              "/api/estimate/parity/reports", "/api/estimate/parity/period",
-                             "/api/estimate/parity/periods"),
+                             "/api/estimate/parity/periods", "/api/estimate/parity/ask"),
                     f"{path} is not one of the paths this page is meant to use")
 
 
@@ -544,7 +545,8 @@ class TheJobCardTests(unittest.TestCase):
         self.assertEqual(public_surface.PUBLIC_POST,
                          ("/api/estimate", "/api/estimate/brief",
                           "/api/estimate/tools/ask", "/api/estimate/parity/job",
-                          "/api/estimate/parity/period", "/api/estimate/parity/periods"))
+                          "/api/estimate/parity/period", "/api/estimate/parity/periods",
+                          "/api/estimate/parity/ask"))
 
     def test_a_folder_with_no_record_still_browses(self):
         """Browsing must not fail because a folder holds no estimate - the

@@ -273,7 +273,8 @@ class LookingAndDoingAreDifferentPermissionsTests(unittest.TestCase):
         self.assertEqual(public_surface.PUBLIC_POST,
                          ("/api/estimate", "/api/estimate/brief",
                           "/api/estimate/tools/ask", "/api/estimate/parity/job",
-                          "/api/estimate/parity/period", "/api/estimate/parity/periods"))
+                          "/api/estimate/parity/period", "/api/estimate/parity/periods",
+                          "/api/estimate/parity/ask"))
         for never in public_surface.NEVER_PUBLIC_POST:
             with self.subTest(path=never):
                 self.assertFalse(public_surface.post_allowed(never))
@@ -352,7 +353,7 @@ class ParityFromOutsideTests(unittest.TestCase):
         import public_surface
         self.assertEqual(public_surface.PARITY_POST,
                          ("/api/estimate/parity/job", "/api/estimate/parity/period",
-                          "/api/estimate/parity/periods"))
+                          "/api/estimate/parity/periods", "/api/estimate/parity/ask"))
         for path in public_surface.PARITY_POST:
             self.assertTrue(public_surface.post_allowed(path))
         self.assertIn("/api/estimate/parity", public_surface.NEVER_PUBLIC_POST)
