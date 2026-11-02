@@ -413,6 +413,76 @@ def test_a_period_backwards_is_refused(shares):
         parity_job.runs_between("2026-10-31", "2026-10-01")
 
 
+# ── the time frame is any two moments (D-625) ───────────────────────────────────────────
+
+def test_one_day_is_a_period_on_its_own(shares, compare):
+    manual, aisheets, _ = shares
+    _touch(manual / "2026" / "Acme" / "12677" / "12677-01-GA ISS 1.xls")
+    _ai_run(aisheets, "Acme", "12677-01-GA", "2026-10-31 09-15-00")
+    _ai_run(aisheets, "Acme", "12677-01-GA", "2026-10-31 14-30-00")
+    out = parity_job.run_period("2026-10-31", "2026-10-31", preview=True, compare=compare,
+                                say=lambda m: None)
+    row = out["rows"][0]
+    assert row["runs_in_period"] == 2 and "14-30-00" in row["ai_run"]
+
+
+def test_a_time_narrows_the_period_within_a_day(shares, compare):
+    """Two runs of the same drawing on the same day: 09:00 to 12:00 sees only the morning one,
+    and an afternoon window only the afternoon one, so same-day runs can be compared apart."""
+    manual, aisheets, _ = shares
+    _touch(manual / "2026" / "Acme" / "12677" / "12677-01-GA ISS 1.xls")
+    _ai_run(aisheets, "Acme", "12677-01-GA", "2026-10-31 09-15-00")
+    _ai_run(aisheets, "Acme", "12677-01-GA", "2026-10-31 14-30-00")
+    morning = parity_job.run_period("2026-10-31 09:00", "2026-10-31 12:00", preview=True,
+                                    compare=compare, say=lambda m: None)
+    assert [r["ai_run"] for r in morning["rows"]] == ["2026-10-31 09-15-00 (1 off)"]
+    assert morning["rows"][0]["runs_in_period"] == 1
+    afternoon = parity_job.run_period("2026-10-31 12:00", "2026-10-31 23:59", preview=True,
+                                      compare=compare, say=lambda m: None)
+    assert [r["ai_run"] for r in afternoon["rows"]] == ["2026-10-31 14-30-00 (1 off)"]
+
+
+def test_an_end_given_to_the_minute_includes_that_whole_minute(shares, compare):
+    manual, aisheets, _ = shares
+    _touch(manual / "2026" / "Acme" / "12677" / "12677-01-GA ISS 1.xls")
+    _ai_run(aisheets, "Acme", "12677-01-GA", "2026-10-31 12-00-30")
+    out = parity_job.run_period("2026-10-31 09:00", "2026-10-31 12:00", preview=True,
+                                compare=compare, say=lambda m: None)
+    assert len(out["rows"]) == 1
+
+
+def test_a_timed_period_files_to_a_folder_windows_accepts(shares, compare):
+    """A boundary with a time carries ':', which Windows refuses in a folder name."""
+    manual, aisheets, _ = shares
+    _touch(manual / "2026" / "Acme" / "12677" / "12677-01-GA ISS 1.xls")
+    _ai_run(aisheets, "Acme", "12677-01-GA", "2026-10-31 09-15-00")
+    out = parity_job.run_period("2026-10-31 09:00", "2026-10-31 12:00", compare=compare,
+                                say=lambda m: None)
+    folder = Path(out["folder"])
+    assert folder.is_dir() and ":" not in folder.name
+    assert (folder / "period_summary.html").is_file()
+
+
+def test_a_backwards_or_nonsense_time_is_refused(shares):
+    with pytest.raises(parity_job.ParityJobError, match="end not before the start"):
+        parity_job.runs_between("2026-10-31 14:00", "2026-10-31 09:00")
+    with pytest.raises(parity_job.ParityJobError, match="not a time of day"):
+        parity_job.runs_between("2026-10-31 25:00", "2026-10-31")
+
+
+def test_search_narrows_by_time_as_well_as_date(shares, compare):
+    manual, aisheets, _ = shares
+    _touch(manual / "2026" / "Acme" / "12677" / "12677-01-GA ISS 1.xls")
+    _ai_run(aisheets, "Acme", "12677-01-GA", "2026-10-31 09-00-00")
+    early = time.mktime((2026, 10, 31, 9, 15, 0, 0, 0, -1))
+    late = time.mktime((2026, 10, 31, 14, 30, 0, 0, 0, -1))
+    parity_job.run_job("12677-01-GA", compare=compare, now=early)
+    parity_job.run_job("12677-01-GA", compare=compare, now=late)
+    found = parity_job.search("12677", start="2026-10-31 12:00", end="2026-10-31")
+    assert [x["stamp"] for x in found] == ["2026-10-31 14-30-00"]
+    assert len(parity_job.search("12677", start="2026-10-31", end="2026-10-31")) == 2
+
+
 def test_one_job_failing_does_not_stop_the_period(shares):
     manual, aisheets, _ = shares
     _touch(manual / "2026" / "Acme" / "12677" / "12677-01-GA ISS 1.xls")

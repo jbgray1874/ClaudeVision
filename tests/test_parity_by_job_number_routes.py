@@ -171,6 +171,22 @@ def test_a_period_preview_answers_at_once(shares):
     assert body["rows"][0]["outcome"] == "would compare" and body["preview"] is True
 
 
+def test_a_period_takes_a_time_of_day_and_still_refuses_nonsense(shares):
+    """D-625: the time frame can be hours within one day. The run in `shares` is at 11:00, so
+    a morning window holds it and an afternoon window does not."""
+    er = shares[0]
+    morning = er.parity_period(er.ParityPeriodRequest(
+        start="2026-10-31 09:00", end="2026-10-31 12:00", preview=True))
+    assert morning["rows"][0]["outcome"] == "would compare"
+    afternoon = er.parity_period(er.ParityPeriodRequest(
+        start="2026-10-31 12:00", end="2026-10-31 23:59", preview=True))
+    assert afternoon["rows"] == []
+    with pytest.raises(er.HTTPException) as e:
+        er.parity_period(er.ParityPeriodRequest(start="2026-10-31 nineish", end="2026-10-31",
+                                                preview=True))
+    assert e.value.status_code == 400 and "date and time" in str(e.value.detail)
+
+
 def test_two_periods_are_compared_in_the_background(shares, popen):
     er = shares[0]
     body = er.parity_two_periods(er.ParityTwoPeriodsRequest(

@@ -683,6 +683,45 @@ def _day(text: Optional[str]) -> Optional[date]:
         raise ParityJobError(f"'{text}' is not a date as YYYY-MM-DD.") from exc
 
 
+# A date, optionally with a time: 2026-10-31, 2026-10-31 09:30, 2026-10-31T09:30:15. The time's
+# separators may be ':' or '-', because that is how the run folders themselves spell it.
+_WHEN = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:[ T](\d{1,2})[:\-](\d{2})(?:[:\-](\d{2}))?)?$")
+
+
+def _moment(text: Optional[str], *, late: bool = False) -> Optional[datetime]:
+    """The boundary a person typed, as an exact moment (D-625).
+
+    A bare date has always meant the whole day, and keeps meaning it: its first second, or
+    with `late` its last, so one day is a valid period on its own. A time narrows it — two
+    runs of the same drawing on the same day can be compared morning against afternoon — and
+    an end given to the minute includes that whole minute."""
+    if not text or not str(text).strip():
+        return None
+    m = _WHEN.match(str(text).strip())
+    if not m:
+        raise ParityJobError(f"'{text}' is not a date as YYYY-MM-DD, or a date and time as "
+                             f"YYYY-MM-DD HH:MM.")
+    day = datetime.strptime(m.group(1), "%Y-%m-%d")
+    if m.group(2) is None:
+        return day.replace(hour=23, minute=59, second=59) if late else day
+    hour, minute = int(m.group(2)), int(m.group(3))
+    second = int(m.group(4)) if m.group(4) is not None else (59 if late else 0)
+    if hour > 23 or minute > 59 or second > 59:
+        raise ParityJobError(f"'{text}' is not a time of day.")
+    return day.replace(hour=hour, minute=minute, second=second)
+
+
+def _stamp_dt(stamp: str) -> Optional[datetime]:
+    """A run folder's or comparison's stamp, '2026-10-31 14-30-00', as a datetime."""
+    try:
+        return datetime.strptime(str(stamp or "")[:19], "%Y-%m-%d %H-%M-%S")
+    except ValueError:
+        try:
+            return datetime.strptime(str(stamp or "")[:10], "%Y-%m-%d")
+        except ValueError:
+            return None
+
+
 def _indexes(root: Path) -> List[Dict[str, Any]]:
     out = []
     for path in root.glob(f"*/*/*/{INDEX_NAME}"):
@@ -701,12 +740,12 @@ def search(text: str = "", start: Optional[str] = None, end: Optional[str] = Non
     root = Path(parity_root or roots()["parity"])
     if not root.is_dir():
         return []
-    lo, hi = _day(start), _day(end)
+    lo, hi = _moment(start), _moment(end, late=True)
     want = _bare(text)
     out = []
     for idx in _indexes(root):
-        day = _day(str(idx.get("stamp", ""))[:10]) if idx.get("stamp") else None
-        if lo and (not day or day < lo) or hi and (not day or day > hi):
+        when = _stamp_dt(str(idx.get("stamp", ""))) if idx.get("stamp") else None
+        if lo and (not when or when < lo) or hi and (not when or when > hi):
             continue
         if want and want not in _bare(f"{idx.get('job')} {idx.get('drawing')} {idx.get('client')}"):
             continue
@@ -724,9 +763,10 @@ def runs_between(start: str, end: str, aisheets_root: Optional[Path] = None,
     """Each drawing estimated in the period, once: its newest run there, with how many runs it
     had. The date is the AI run folder's."""
     root = Path(aisheets_root or roots()["aisheets"])
-    lo, hi = _day(start), _day(end)
+    lo, hi = _moment(start), _moment(end, late=True)
     if not lo or not hi or hi < lo:
-        raise ParityJobError("A period needs a start and an end date, the end not before the start.")
+        raise ParityJobError("A period needs a start and an end, as dates or dates with times, "
+                             "the end not before the start. One day, or part of one, is fine.")
     if not root.is_dir():
         raise ParityJobError(f"AISheets is not reachable: {root}")
     digits = job_digits(job) if job else ""
@@ -739,7 +779,10 @@ def runs_between(start: str, end: str, aisheets_root: Optional[Path] = None,
                 continue
             for rdir in sorted(p for p in ddir.iterdir() if p.is_dir()):
                 m = _RUN_FOLDER.match(rdir.name)
-                if not m or not (lo <= _day(m.group(1)) <= hi):
+                if not m:
+                    continue
+                ran = _stamp_dt(rdir.name)
+                if not ran or not (lo <= ran <= hi):
                     continue
                 book = _engine_workbook(rdir, ddir.name)
                 if not book or not _summary_for(book):
@@ -835,10 +878,13 @@ def run_period(start: str, end: str, *, preview: bool = False, read_via_excel: b
                status_file: Optional[Path] = None) -> Dict[str, Any]:
     """Every drawing estimated in one period against its manual estimate, each filed."""
     r = roots()
+    if not _moment(start) or not _moment(end, late=True):
+        raise ParityJobError("A period needs a start and an end, as dates or dates with times.")
     folder = None
     if not preview:
+        # _safe, because a boundary with a time carries ':' and Windows refuses it in a name.
         folder = _new_folder(r["parity"] / "_periods",
-                             f"{start} to {end} (run {time.strftime('%Y-%m-%d %H-%M-%S')})")
+                             _safe(f"{start} to {end} (run {time.strftime('%Y-%m-%d %H-%M-%S')})"))
     base = {"kind": "period", "start": start, "end": end, "client": client, "job": job,
             "preview": preview, "folder": str(folder or "")}
 
@@ -879,10 +925,11 @@ def compare_periods(a: tuple, b: tuple, *, client: str = "", job: str = "",
     drawings estimated in both, and everything that could not be compared, listed apart."""
     r = roots()
     for s, e in (a, b):
-        if not _day(s) or not _day(e) or _day(e) < _day(s):
-            raise ParityJobError("Each period needs a start and an end date, the end not before the start.")
-    name = (f"A {a[0]} to {a[1]} vs B {b[0]} to {b[1]} "
-            f"(run {time.strftime('%Y-%m-%d %H-%M-%S')})")
+        if not _moment(s) or not _moment(e, late=True) or _moment(e, late=True) < _moment(s):
+            raise ParityJobError("Each period needs a start and an end, as dates or dates with "
+                                 "times, the end not before the start.")
+    name = _safe(f"A {a[0]} to {a[1]} vs B {b[0]} to {b[1]} "
+                 f"(run {time.strftime('%Y-%m-%d %H-%M-%S')})")
     folder = None if preview else _new_folder(r["parity"] / "_periods", name)
     base = {"kind": "two periods", "a": list(a), "b": list(b), "client": client, "job": job,
             "preview": preview, "folder": str(folder or "")}
@@ -1088,7 +1135,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     s = sub.add_parser("search"); s.add_argument("text", nargs="?", default="")
     s.add_argument("--from", dest="start"); s.add_argument("--to", dest="end")
     s.add_argument("--outcome", default="")
-    p = sub.add_parser("period"); p.add_argument("--from", dest="start", required=True)
+    p = sub.add_parser("period", help="one period: dates, or dates with times (D-625), "
+                                      "e.g. --from \"2026-10-31 09:00\" --to \"2026-10-31 12:00\"")
+    p.add_argument("--from", dest="start", required=True)
     p.add_argument("--to", dest="end", required=True); p.add_argument("--preview", action="store_true")
     p.add_argument("--client", default=""); p.add_argument("--job", default="")
     p.add_argument("--read-via-excel", action="store_true")
