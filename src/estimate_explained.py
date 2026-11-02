@@ -3616,6 +3616,13 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             + ". Weight uses each recorded stock basis: section kg/m × cut length for sections, "
               "or blank area × gauge × density for sheet, times how many are "
               "made. It decides the next line.</p>")
+        # THE PACK'S OWN FIGURE, WHERE IT TOOK CHARGE (SCRUM-178). Without this sentence a
+        # reader sees 33.07 kg above and 1.84 kg of counted parts and has to guess which
+        # one the courier was asked about.
+        if _basis.get("weight_basis"):
+            _wb = str(_basis.get("weight_basis"))
+            add(f"<p><b>The weight the lookups were asked.</b> "
+                f"{_wb[0].upper() + _wb[1:]}.</p>")
         # WHAT WAS LEFT OUT, BY NAME. A unit weight that comes up short against the title
         # block is a part that was not weighed, and a tally of "2 parts had no blank" cannot
         # tell anybody which. Named, it is one line for design to answer.

@@ -1735,6 +1735,126 @@ def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
     return stamped
 
 
+def mint_model_children(parts: List[Dict[str, Any]], job: NativeJob) -> List[str]:
+    """Mint a priced record for a model-only child the product reaches (SCRUM-155).
+
+    12678-01-GA: 04M, 05M and 06M hang off the two bracket assemblies in the model tree,
+    carry the welding, dressing and powder charged on their parents — and have no record,
+    so no material line anywhere holds the bracket steel. reached_bom_item_unaccounted
+    fired, the unit cost was short exactly that money, and the only remedy on the sheet
+    was a question. The hierarchy pass above wires the EDGES; nothing minted the leaves.
+
+    DELIBERATELY NARROW, the same shape as the D-512 board gauge:
+      - only a child an EXISTING parent record claims, so the tree is this job's;
+      - only when its own model file read cleanly (part_signals) with sheet geometry the
+        costing can price: a flat pattern, or a plate-shaped solid whose smallest extent
+        is a plausible gauge at most a quarter of the next dimension — a bolt, a tube
+        and a block all fail that test and stay out;
+      - never a part SDI's own conventions call bought in, and never a code that already
+        has a record;
+      - stamped minted_from_model with its question, so the sheet says where the line
+        came from and an estimator confirms it against the drawing office.
+    A child whose file failed, or whose shape this cannot read, stays unminted and keeps
+    the missing-price question — short in the open, never guessed."""
+    minted: List[str] = []
+    if not parts or not getattr(job, "part_signals", None):
+        return minted
+    by_code = {_clean_pn(str(p.get("part_number") or "")).upper(): p
+               for p in parts if isinstance(p, dict) and p.get("part_number")}
+    # Every edge to a record-less child, with the parent's own per-unit count, so the
+    # minted line carries the per-unit total the tree implies (06M: 1 x 101SA's 6 plus
+    # 1 x 102SA's 2 = 8) and the working is printed beside it.
+    edges: Dict[str, List[Tuple[str, float, float]]] = {}
+    for parent, kids in (getattr(job, "hierarchy", None) or {}).items():
+        pk = _clean_pn(str(parent)).upper()
+        parent_rec = by_code.get(pk)
+        if parent_rec is None:
+            continue
+        try:
+            p_qty = max(1.0, float(parent_rec.get("quantity") or 1))
+        except (TypeError, ValueError):
+            p_qty = 1.0
+        for child, q in kids or ():
+            ck = _clean_pn(str(child))
+            if not ck or ck.upper() in by_code or ck.upper() == pk:
+                continue
+            try:
+                e_qty = max(1.0, float(q or 1))
+            except (TypeError, ValueError):
+                e_qty = 1.0
+            edges.setdefault(ck, []).append((_clean_pn(str(parent)), e_qty, p_qty))
+    for ck, owns in edges.items():
+        nat = (getattr(job, "part_signals", {}) or {}).get(ck)
+        if nat is None:
+            continue
+        try:
+            from bought_in_policy import is_bought_in as _bi
+            if getattr(nat, "likely_bought_in", False) or _bi(
+                    {"part_number": ck, "description": getattr(nat, "description", "") or ""}):
+                continue
+        except Exception:                                            # noqa: BLE001
+            pass
+        L = W = thk = None
+        basis = ""
+        if nat.has_flat():
+            L, W = _num(nat.flat_length_mm), _num(nat.flat_width_mm)
+            thk = _num(nat.thickness_mm)
+            basis = "its flat pattern"
+        if not (L and W):
+            _dims = sorted(v for v in (_num(x) for x in (nat.bbox_mm or [])) if v)
+            if (len(_dims) == 3 and 0.3 <= _dims[0] <= 60.0
+                    and _dims[0] * 4 <= _dims[1]
+                    and _plausible_mm(_dims[1]) and _plausible_mm(_dims[2])):
+                L, W, thk = _dims[2], _dims[1], (thk or _dims[0])
+                basis = "a plate-shaped solid's extents"
+        if not (L and W and thk):
+            continue
+        qty = int(round(sum(e * p for _, e, p in owns))) or 1
+        trail = " + ".join(f"{e:g} per {pn} x{p:g}" for pn, e, p in owns)
+        mat = _norm_sw_material(getattr(nat, "material", "") or "")
+        rec: Dict[str, Any] = {
+            "part_number": ck,
+            "description": (getattr(nat, "description", "") or
+                            "from the SolidWorks model's own tree"),
+            "quantity": qty,
+            "normalized_material": mat or None,
+            "normalized_thickness_mm": float(thk),
+            "blank_length_mm": float(L), "blank_width_mm": float(W),
+            "normalized_geometry": {"blank_length_mm": float(L),
+                                    "blank_width_mm": float(W)},
+            "geometry_source": "solidworks_native",
+            "minted_from_model": True,
+            "owning_assembly": owns[0][0],
+            "review_flags": [
+                f"part minted from the SolidWorks model ({basis}): the product tree "
+                f"holds it under {', '.join(sorted({pn for pn, _, _ in owns}))} and the "
+                f"pack has no sheet for it — x{qty} a unit ({trail}); its material is "
+                f"priced from the modelled blank so the unit is not silently short; "
+                f"confirm against the drawing office"],
+        }
+        if nat.has_flat():
+            rec["native_flat_pattern"] = True
+        try:
+            from source_precedence import raise_manufacturing_question as _ask_m
+            _ask_m(rec,
+                   f"{ck} is priced from its model alone",
+                   f"minted from the SolidWorks tree ({trail}): blank {float(L):g} x "
+                   f"{float(W):g} x {float(thk):g} mm"
+                   + (f", {mat}" if mat else "") + " — no drawing sheet of its own",
+                   "confirm the part, its size and its material against the drawing "
+                   "office, or rule it out of scope",
+                   "solidworks.minted_from_model")
+        except Exception:                                            # noqa: BLE001
+            pass
+        parts.append(rec)
+        by_code[ck.upper()] = rec
+        minted.append(ck)
+    if minted:
+        print(f"   [hierarchy] {len(minted)} model-only part(s) minted and priced from "
+              f"their own files: {', '.join(sorted(minted))}", flush=True)
+    return minted
+
+
 def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                                  drawn_counts: Optional[Dict[str, int]] = None,
                                  population: Optional[List[Dict[str, Any]]] = None
@@ -2524,6 +2644,37 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                     except Exception:                                # noqa: BLE001
                         pass
                     out["thickness"] += 1
+                # AND THE TWO LARGER EXTENTS ARE ITS BLANK (SCRUM-180). The same shelf
+                # that had no gauge had no blank, so geometry_inference's category
+                # default sized it: 12678-01-GA's shelves were nested, priced and
+                # weighed as the "tier" default 350 x 250 while the model that measures
+                # them at 520 x 370 sat in the pack. The verified plate shape above is
+                # what justifies it — the board's envelope IS the rectangle it is cut
+                # from — and the figures enter at the same provisional rank as the
+                # gauge, under the same question; a measured flat, a DXF or a stated
+                # size still displaces them. A box-shaped board (the plinth) fails the
+                # plate test and is deliberately left to its own construction question.
+                if (_board_mat and _leaf and len(_dims) == 3
+                        and 3.0 <= _dims[0] <= 60.0 and _dims[0] * 4 <= _dims[1]
+                        and not _dxf_backed(part) and not nat.has_flat()
+                        and not (_num(part.get("blank_length_mm"))
+                                 and _num(part.get("blank_width_mm")))):
+                    _bl, _bw = float(_dims[2]), float(_dims[1])
+                    if _plausible_mm(_bl) and _plausible_mm(_bw):
+                        _wb2 = _apply_field(part, "blank_length_mm", _bl,
+                                            "model_extents_board_gauge")
+                        _wb2 = _apply_field(part, "blank_width_mm", _bw,
+                                            "model_extents_board_gauge") or _wb2
+                        if _wb2:
+                            _ngb = part.get("normalized_geometry")
+                            _ngb = dict(_ngb) if isinstance(_ngb, dict) else {}
+                            _ngb["blank_length_mm"], _ngb["blank_width_mm"] = _bl, _bw
+                            part["normalized_geometry"] = _ngb
+                            flags.append(
+                                f"blank {_bl:g} x {_bw:g}mm from the model's extents for "
+                                f"the board — provisional with its gauge; a measured flat "
+                                f"or a stated size displaces it")
+                            out["flat"] += 1
 
         # ── SURFACE TREATMENT ────────────────────────────────────────────────────
         # The cut list publishes the finish the designer specified. This is the datum the

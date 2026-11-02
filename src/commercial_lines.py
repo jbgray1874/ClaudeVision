@@ -176,12 +176,30 @@ def product_envelope(summary: Any, parts: Any = None) -> Optional[Dict[str, Any]
     return None
 
 
+def product_stated_weight(summary: Any) -> Optional[Dict[str, Any]]:
+    """The unit weight the pack itself states, {kg, where}, or None (SCRUM-178).
+
+    The GA's title block is the one place the whole product's weight is written down, and
+    until now nothing on the shipping side read it: 12678-01-GA states 33.07 kg, two parts
+    of thirteen could be weighed for 1.84 kg, and the courier was asked for a 2 kg parcel.
+    Read next to product_envelope, passed the same way, used only as a floor."""
+    try:
+        from size_reading import stated_product_weight_kg
+        return stated_product_weight_kg(summary)
+    except Exception:                                                # noqa: BLE001
+        return None
+
+
 def describe_order(parts: List[Dict[str, Any]], order_qty: Any,
-                   envelope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                   envelope: Optional[Dict[str, Any]] = None,
+                   stated_weight: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The shipment, in the terms a haulier or a packer would ask for.
 
     `envelope` is the assembled product's overall size (product_envelope), where the run
     established one: with it, the product ships assembled by the packing policy (D-551).
+    `stated_weight` is the unit weight the pack itself states (product_stated_weight):
+    where parts went unweighed and the stated figure is heavier than the measured sum,
+    the stated figure is the shipment's weight (SCRUM-178).
 
     Built from what the engine already measured, not from anything new: every part's blank,
     its gauge, its material's density, and how many of the assembly are being made. A part
@@ -345,10 +363,31 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any,
             "per_assembly": per, "kg_each": round(_line_kg, 3),
             "kg_in_order": round(_line_kg * per * qty, 3),
         })
+    # THE PACK'S OWN WEIGHT BEATS A PARTIAL SUM (SCRUM-178). On 12678-01-GA two parts of
+    # thirteen could be weighed — 1.84 kg — while the GA's title block states 33.07 kg, and
+    # the courier was asked to price a 2 kg parcel for a 33 kg podium. A measured total
+    # that is missing named parts is a lower bound, not the unit's weight: where the pack
+    # states a heavier figure and parts went unweighed, the stated figure is the shipment's
+    # weight, and both figures are kept so the covering note can show the gap. A stated
+    # weight never lightens a fully measured order, and a fully weighed order keeps its
+    # measured sum whatever the pack says — the gap then belongs to the weigh, not here.
+    measured_kg = weight_kg
+    _sw = stated_weight if isinstance(stated_weight, dict) else {}
+    _sw_kg = _num(_sw.get("kg"))
+    _stated_in_charge = bool(_sw_kg and skipped and _sw_kg > measured_kg)
+    if _stated_in_charge:
+        weight_kg = float(_sw_kg)
     out = {
         "schema": SCHEMA, "order_quantity": qty,
         "unit_weight_kg": round(weight_kg, 2) if weight_kg else None,
         "order_weight_kg": round(weight_kg * qty, 2) if weight_kg else None,
+        "stated_unit_weight_kg": round(float(_sw_kg), 2) if _stated_in_charge else None,
+        "measured_unit_weight_kg": round(measured_kg, 2) if _stated_in_charge else None,
+        "weight_basis": (
+            f"the pack states {float(_sw_kg):g} kg a unit "
+            f"({_sw.get('where') or 'its own sheet'}); the measured blanks give "
+            f"{round(measured_kg, 2):g} kg with {skipped} part(s) unweighed, so the stated "
+            f"weight drives packaging and delivery") if _stated_in_charge else None,
         "largest_part_mm": [longest, widest] if longest and widest else None,
         "parts_measured": counted, "parts_without_a_blank": skipped,
         # Counted separately from an ordinary miss: a part left out because its recorded
@@ -381,7 +420,9 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any,
         # THE SAME PARTS THE WEIGHT WAS BUILT FROM. Handing this the unfiltered list left the
         # carton and pallet count resting on the assembly envelope the weight had just been
         # cleared of — half a fix, and the half nobody reads.
-        out["shipment"] = palletising.plan_shipment(shippable, order_qty)
+        out["shipment"] = palletising.plan_shipment(
+            shippable, order_qty,
+            unit_weight_floor_kg=float(_sw_kg) if _stated_in_charge else None)
         out["shippable_parts"] = shippable          # for a re-plan at each break (D-449)
     except Exception:                                                # noqa: BLE001
         out["shipment"] = None
@@ -956,7 +997,9 @@ def _box_cartons_from_shipment(order: Dict[str, Any], qty: int, box_costing: Any
         if nq is None and ship_parts:
             try:
                 import palletising
-                nq = _num((palletising.plan_shipment(ship_parts, q) or {})
+                nq = _num((palletising.plan_shipment(
+                    ship_parts, q,
+                    unit_weight_floor_kg=_num(order.get("stated_unit_weight_kg"))) or {})
                           .get("carton_count"))
             except Exception:                                        # noqa: BLE001
                 nq = None
@@ -1098,7 +1141,10 @@ def _sdi_live_rate(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]
                         if unit == "kg":
                             return weight_each * q if weight_each else None
                         plan = (order.get("shipment") if q == qty else
-                                (_pal.plan_shipment(shippable, q) if shippable else None)) or {}
+                                (_pal.plan_shipment(
+                                    shippable, q,
+                                    unit_weight_floor_kg=_num(order.get("stated_unit_weight_kg")))
+                                 if shippable else None)) or {}
                         n = _num(plan.get("pallet_count" if unit == "pallet" else "carton_count"))
                         return float(n) if n else None
 
@@ -1335,7 +1381,9 @@ def _counted_shipment_price(code: str, order: Dict[str, Any]) -> Optional[Dict[s
         else:
             try:
                 import palletising
-                p = palletising.plan_shipment(order.get("shippable_parts") or [], q) or {}
+                p = palletising.plan_shipment(
+                    order.get("shippable_parts") or [], q,
+                    unit_weight_floor_kg=_num(order.get("stated_unit_weight_kg"))) or {}
             except Exception:                                        # noqa: BLE001
                 return None
         n = _num(p.get("pallet_count" if unit == "pallet" else "carton_count"))
@@ -1641,12 +1689,15 @@ def shipment_shape(order: Dict[str, Any]) -> str:
 
 
 def packaging_line(parts: List[Dict[str, Any]], order_qty: Any, customer: Any = None,
-                   envelope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    order = describe_order(parts, order_qty, envelope=envelope)
+                   envelope: Optional[Dict[str, Any]] = None,
+                   stated_weight: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    order = describe_order(parts, order_qty, envelope=envelope, stated_weight=stated_weight)
     order["customer"] = str(customer or "").strip()
     size = order.get("largest_part_mm")
     where = (f"largest panel {size[0]:.0f} x {size[1]:.0f}mm, " if size else "")
-    weight = (f"about {order['order_weight_kg']:.0f} kg total, "
+    weight = (f"about {order['order_weight_kg']:.0f} kg total"
+              + (" (the pack's stated weight)" if order.get("stated_unit_weight_kg") else "")
+              + ", "
               if order.get("order_weight_kg") else "")
     count = _count_phrase(order)
     count = (f"{count}, " if count else "")
@@ -1661,11 +1712,13 @@ def packaging_line(parts: List[Dict[str, Any]], order_qty: Any, customer: Any = 
 
 
 def delivery_line(parts: List[Dict[str, Any]], order_qty: Any, customer: Any = None,
-                  envelope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    order = describe_order(parts, order_qty, envelope=envelope)
+                  envelope: Optional[Dict[str, Any]] = None,
+                  stated_weight: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    order = describe_order(parts, order_qty, envelope=envelope, stated_weight=stated_weight)
     order["customer"] = str(customer or "").strip()
-    weight = (f"about {order['order_weight_kg']:.0f} kg" if order.get("order_weight_kg")
-              else "a part pallet")
+    weight = ((f"about {order['order_weight_kg']:.0f} kg"
+               + (" (the pack's stated weight)" if order.get("stated_unit_weight_kg") else ""))
+              if order.get("order_weight_kg") else "a part pallet")
     ship = order.get("shipment") or {}
     pallets = ship.get("pallet_count")
     on = (f" on {pallets} pallet(s)" if pallets else "")

@@ -133,6 +133,41 @@ def stated_mass_yardstick_kg(summary: Any) -> Optional[float]:
     return best
 
 
+def stated_product_weight_kg(summary: Any) -> Optional[Dict[str, Any]]:
+    """The unit weight the pack itself states, {"kg", "where"}, or None (SCRUM-178).
+
+    The heaviest WEIGHT figure on any sheet once the qualified ones are dropped — the
+    assembled product's, usually, which is the figure packaging and delivery should be
+    asked for when the blanks could not all be weighed. A weight the sheet qualifies as
+    something else's (MAX, LOADING, CAPACITY, GROSS, SHIPPING, a bag's, the goods') is a
+    rating or a consignment total, not the unit on the bench, and the same vocabulary the
+    title-block reader uses drops it here (extractor_patterns.strip_weights_not_the_parts),
+    so "MAX LOADING: 50KG" never becomes the product and "WEIGHT: 33.07kg" on the next
+    line still does."""
+    try:
+        from extractor_patterns import strip_weights_not_the_parts as _strip
+    except Exception:                                                # noqa: BLE001
+        def _strip(t: str) -> str:
+            return t
+    best: Optional[float] = None
+    where = ""
+    for pg in ((summary or {}).get("pages") or []) if isinstance(summary, dict) else []:
+        if not isinstance(pg, dict):
+            continue
+        text = _strip(" ".join(str(pg.get(k) or "")
+                               for k in ("pypdf_text", "pdfplumber_text", "normalized_text")))
+        for m in _WEIGHT.finditer(text):
+            v = _num(m.group(1))
+            if v is None:
+                continue
+            kg = v / 1000.0 if m.group(2).upper() == "G" else v
+            if best is None or kg > best:
+                best = kg
+                n = pg.get("job_page_number") or pg.get("page_number")
+                where = f"page {n}" if n else "its own sheet"
+    return {"kg": best, "where": where} if best else None
+
+
 def job_yardstick_mm(summary: Any, parts: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     """{mm, basis, kg, kg_basis} — the stated envelope first, else the largest measured
     member; the heaviest stated weight. None where the job states and measures nothing."""
