@@ -655,6 +655,12 @@ def run_job(job: str, manual: Optional[str] = None, ai: Optional[str] = None, *,
         "detail_json": Path(result["detail_json"]).name if result.get("detail_json") else "",
         "bundle_json": Path(result["bundle_json"]).name if result.get("bundle_json") else "",
         "bundle_csv": Path(result["bundle_csv"]).name if result.get("bundle_csv") else "",
+        # The spoken comparison (D-627): the .wav where the machine has a voice, its words
+        # always, both filed with the report.
+        "walkthrough_wav": Path(result["walkthrough_wav"]).name if result.get("walkthrough_wav") else "",
+        "walkthrough_txt": Path(result["walkthrough_txt"]).name if result.get("walkthrough_txt") else "",
+        # An audio failure never costs the comparison; it is said here, explicitly, instead.
+        "walkthrough_note": str(result.get("walkthrough_note") or ""),
         "headline": headline,
         "lines": _detail_lines(detail) if use_detail else _money_lines(bundle),
         "lines_from": "line by line" if use_detail else "money cells",

@@ -107,6 +107,45 @@ def test_the_last_cycles_tally_survives_a_short_beat(switch_mod):
     assert w["phase"] == "idle"
 
 
+# ── the card's run window (D-626) ────────────────────────────────────────────────────
+#
+# JG, 2 Nov 2026: the price of each quantity ran (D-610's quantity_prices, carried through
+# here untouched), "only show the number ran for the past week and a max of 100, or we'll
+# run out of space".
+
+def _ledger_of(attempts):
+    return {"jobs": {str(i): {"customer": "TTI", "drawing": f"J{i}", "attempts": [a]}
+                     for i, a in enumerate(attempts)}}
+
+
+def test_the_card_lists_the_past_week_only_and_at_most_100():
+    from datetime import datetime
+    now = datetime(2026, 11, 2, 12, 0, 0)
+    attempts = [{"status": "done", "queued_at": "2026-11-01T10:00:00",
+                 "finished_at": "2026-11-01T10:40:00",
+                 "quantity_prices": [{"quantity": 1, "unit_gbp": 421.37},
+                                     {"quantity": 10, "unit_gbp": 300.0}]},
+                {"status": "done", "queued_at": "2026-10-25T10:00:00",
+                 "finished_at": "2026-10-25T10:40:00"},          # 8 days old — off the card
+                {"status": "error", "queued_at": "2026-10-20T10:00:00",
+                 "finished_at": "2026-10-20T10:10:00"}]
+    rows = sr.recent_runs(_ledger_of(attempts), now=now)
+    assert [r["drawing"] for r in rows] == ["J0"]
+    assert rows[0]["quantity_prices"][1] == {"quantity": 10, "unit_gbp": 300.0}
+    many = [{"status": "done", "queued_at": f"2026-11-01T10:00:{s % 60:02d}",
+             "finished_at": "2026-11-01T11:00:00"} for s in range(130)]
+    assert len(sr.recent_runs(_ledger_of(many), now=now)) == 100
+
+
+def test_a_run_still_going_stays_on_the_card_whatever_its_age():
+    from datetime import datetime
+    rows = sr.recent_runs(_ledger_of([
+        {"status": "running", "queued_at": "2026-10-01T10:00:00"},
+        {"status": "queued", "queued_at": "2026-09-01T10:00:00"}]),
+        now=datetime(2026, 11, 2, 12, 0, 0))
+    assert {r["status"] for r in rows} == {"running", "queued"}
+
+
 # ── the watcher obeys the switch ─────────────────────────────────────────────────────
 
 class _Unreachable:

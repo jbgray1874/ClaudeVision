@@ -309,3 +309,57 @@ def test_the_live_enquiry_setting_wins_over_the_saved_list(tmp_path, monkeypatch
     portal = _Portal(["someone@else.com"])
     _cycle(tmp_path, monkeypatch, portal, email_env="estimating@wearesdi.com")
     assert portal.bodies[0]["email_to"] == "estimating@wearesdi.com"
+
+
+# ── a natural voice, opt-in (D-630) ───────────────────────────────────────────────────
+# JG, 2 Nov 2026: "can we do a birmingham accent ? also make it less robotic." No catalogue
+# carries a Brummie voice; SDI_WALKTHROUGH_VOICE=azure makes it natural, through the CRM's
+# own Azure Speech resource, in the same voice the pages' Listen buttons use. The words
+# leave the building only when that is switched on; the default stays the machine's own.
+
+def _azure_env(monkeypatch):
+    monkeypatch.setenv("SDI_WALKTHROUGH_VOICE", "azure")
+    monkeypatch.setenv("SDI_SPEECH_KEY", "k")
+    monkeypatch.setenv("SDI_SPEECH_REGION", "uksouth")
+    monkeypatch.delenv("SDI_SPEECH_VOICE", raising=False)
+
+
+def test_the_azure_voice_speaks_when_switched_on(tmp_path, monkeypatch):
+    _azure_env(monkeypatch)
+    xlsx = tmp_path / "12678.xlsx"
+    sent = {}
+
+    def post(ssml):
+        sent["ssml"] = ssml
+        return b"RIFF" + b"0" * 2000
+    ok, said = wa.write_walkthrough("The estimate costs money.", xlsx, post=post,
+                                    windows=False)
+    assert ok is True and "the Azure voice en-GB-SoniaNeural" in said
+    assert (tmp_path / "12678_walkthrough.wav").read_bytes().startswith(b"RIFF")
+    assert "en-GB-SoniaNeural" in sent["ssml"] and "The estimate costs money." in sent["ssml"]
+
+
+def test_azure_failing_falls_back_and_is_said_not_hidden(tmp_path, monkeypatch):
+    _azure_env(monkeypatch)
+    xlsx = tmp_path / "12678.xlsx"
+
+    def broken(ssml):
+        raise OSError("no route to Azure")
+    ok, said = wa.write_walkthrough("Words.", xlsx, post=broken, windows=False)
+    assert ok is False
+    assert "Azure could not speak it (OSError)" in said
+    assert "no Windows speech synthesiser" in said
+    assert (tmp_path / "12678_walkthrough.txt").is_file()
+
+
+def test_without_the_switch_nothing_goes_to_azure(tmp_path, monkeypatch):
+    monkeypatch.delenv("SDI_WALKTHROUGH_VOICE", raising=False)
+    monkeypatch.setenv("SDI_SPEECH_KEY", "k")
+    monkeypatch.setenv("SDI_SPEECH_REGION", "uksouth")
+    called = []
+
+    def post(ssml):
+        called.append(ssml)
+        return b"RIFF" + b"0" * 2000
+    ok, said = wa.write_walkthrough("Words.", tmp_path / "x.xlsx", post=post, windows=False)
+    assert called == [] and ok is False and "no Windows speech synthesiser" in said

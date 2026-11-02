@@ -140,7 +140,31 @@ def records_json(record: Dict[str, Any]) -> List[str]:
 
 
 def public_view(record: Dict[str, Any]) -> Dict[str, Any]:
-    """What the page shows: never a path, only names it can ask for."""
+    """What the page shows: never a path, only names it can ask for.
+
+    THE QUOTE IS NOT OFFERED WHILE IT IS HELD (D-629). The file route has always refused an
+    unreleased customer quotation; listing it as a link anyway handed the reader a button
+    that answers with a refusal in JSON. A file the service will not serve is named under
+    `held`, with the reason, and the page shows it as words rather than a link."""
+    files: List[str] = []
+    held: List[Dict[str, str]] = []
+    for d in record.get("deliverables") or []:
+        name, path = str(d.get("name") or ""), str(d.get("path") or "")
+        if not name:
+            continue
+        try:
+            import estimate_email
+            import quote_release
+            held_back = (path and estimate_email.is_customer_quote(path)
+                         and not quote_release.may_go_to_a_customer(path))
+        except Exception:                                            # noqa: BLE001
+            held_back = False
+        if held_back:
+            held.append({"name": name, "why": "the customer quotation, held until an "
+                                              "estimator completes the commercial inputs "
+                                              "and authorises release"})
+        else:
+            files.append(name)
     return {
         "client": record.get("client"), "drawing_number": record.get("drawing_number"),
         "units": record.get("units"), "unit_cost_gbp": record.get("unit_cost_gbp"),
@@ -148,7 +172,7 @@ def public_view(record: Dict[str, Any]) -> Dict[str, Any]:
         "created": record.get("created"),
         "audio": _first(record, "_walkthrough.wav"),
         "commentary": commentary(record),
-        "files": [d["name"] for d in record.get("deliverables") or []],
+        "files": files, "held": held,
     }
 
 

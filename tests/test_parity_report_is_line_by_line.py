@@ -142,6 +142,109 @@ def test_unit_costs_the_line_by_line_reading_cannot_see_fall_back_to_the_money_c
     assert h["ai_unit_cost_gbp"] == 500.0 and h["manual_unit_cost_gbp"] == 400.0
 
 
+def test_the_comparison_is_spoken_in_plain_words(tmp_path):
+    """D-627: the spoken account reads from the detail's own figures, money as words, no
+    symbols, differences described rather than judged."""
+    import parity_compare as pcmp
+    d = pcmp.compare(ai_summary(tmp_path / "a.json", qty=50, sweep={10: 150.0, 50: 90.0}),
+                     manual_workbook(tmp_path / "m.xlsx", qty=10))
+    words = pcmp.spoken(d)
+    assert "pounds" in words and "£" not in words and "%" not in words
+    assert "not automatically the right answer" in words
+    assert "compared at 10 off, from the run's own quantity sweep" in words
+    assert "only on the AI" in words
+    assert "made on one side and bought on the other" in words
+    assert "material not charged where the part is worked" in words
+    assert "The revisions differ" in words
+    assert "The biggest differences." in words
+    assert "wrong" not in words and "correct" not in words
+    # The reviewer's spec, 2 Nov: which estimates, the reasons, and the limits.
+    assert "for Acme" in words                                     # the client
+    assert "revision" in words                                     # both revisions said
+    assert "Labour is" in words                                    # material/labour reasons
+    assert "Delivery and carriage is" in words                     # commercial categories
+    assert "Installation and site work is on the manual sheet only." in words
+
+
+def test_every_spoken_amount_is_a_figure_the_saved_comparison_holds(tmp_path):
+    """The reviewer's acceptance 3: the audio can never disagree with the report, because
+    every amount it says is read back and matched against the detail record's own numbers."""
+    import parity_compare as pcmp
+    d = pcmp.compare(ai_summary(tmp_path / "a.json", qty=50, sweep={10: 150.0, 50: 90.0}),
+                     manual_workbook(tmp_path / "m.xlsx", qty=10))
+    words = pcmp.spoken(d)
+    held = set()
+
+    def collect(obj):
+        if isinstance(obj, bool):
+            return
+        if isinstance(obj, (int, float)):
+            held.add(round(abs(float(obj)), 2))
+        elif isinstance(obj, dict):
+            for v in obj.values():
+                collect(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                collect(v)
+    collect(d)
+    import re as _re
+    said = [(int(p.replace(",", "")) + (int(pence) if pence else 0) / 100.0)
+            for p, pence in _re.findall(r"([\d,]+) pounds?(?: and (\d+) pence)?", words)]
+    assert said, "the walkthrough says money"
+    for amount in said:
+        assert round(amount, 2) in held, f"{amount} is not in the saved comparison"
+
+
+def test_each_comparison_keeps_its_own_audio(monkeypatch, shares):
+    """The reviewer's acceptance 5: a second comparison files its own words in its own
+    folder; the first's are untouched."""
+    _legacy(monkeypatch)
+    _filed_run(shares)
+    _sheet(shares)
+    first = parity_job.run_job("12677-01-GA", comparison_id="aaaa0001")
+    words1 = (Path(first["folder"]) / first["walkthrough_txt"]).read_text("utf-8")
+    second = parity_job.run_job("12677-01-GA", comparison_id="bbbb0002")
+    assert Path(second["folder"]) != Path(first["folder"])
+    assert (Path(second["folder"]) / second["walkthrough_txt"]).is_file()
+    assert (Path(first["folder"]) / first["walkthrough_txt"]).read_text("utf-8") == words1
+    assert first["walkthrough_note"] and "no sound" in first["walkthrough_note"]
+
+
+def test_a_dotted_stem_never_loses_its_walkthrough_name(monkeypatch, pair):
+    """Regression (reviewer, 2 Nov): paths_for treats a dotted stem's tail as an extension,
+    and the first cut filed the words as a bare '12677.txt'."""
+    _legacy(monkeypatch)
+    ai, manual, out = pair
+    res = parity_run.run_parity(ai, manual, out_dir=out)
+    names = {p.name for p in Path(out).iterdir()}
+    assert "12677.txt" not in names
+    assert Path(res["walkthrough_txt"]).name == "12677_parity_walkthrough.txt"
+
+
+def test_the_parity_run_writes_the_spoken_words_beside_the_report(monkeypatch, pair, capsys):
+    """On a box with no Windows voice the words are still written and the run says why
+    there is no sound; the .wav arrives on the laptop."""
+    _legacy(monkeypatch)
+    ai, manual, out = pair
+    res = parity_run.run_parity(ai, manual, out_dir=out)
+    assert res["walkthrough_txt"] and Path(res["walkthrough_txt"]).is_file()
+    assert Path(res["walkthrough_txt"]).name.endswith("_parity_walkthrough.txt")
+    text = Path(res["walkthrough_txt"]).read_text("utf-8")
+    assert "parity walkthrough" in text and "pounds" in text
+    assert res["walkthrough_wav"] is None and "no sound" in res["walkthrough_note"]
+    assert "spoken comparison" in capsys.readouterr().out
+
+
+def test_a_job_comparison_files_the_spoken_words_with_the_report(monkeypatch, shares):
+    _legacy(monkeypatch)
+    _filed_run(shares)
+    _sheet(shares)
+    idx = parity_job.run_job("12677-01-GA")
+    assert idx["walkthrough_txt"].endswith("_parity_walkthrough.txt")
+    assert (Path(idx["folder"]) / idx["walkthrough_txt"]).is_file()
+    assert idx["walkthrough_wav"] == ""          # this box has no Windows voice
+
+
 def test_the_command_line_names_the_line_by_line_report(monkeypatch, pair, capsys):
     _legacy(monkeypatch)
     ai, manual, out = pair

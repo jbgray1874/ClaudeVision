@@ -355,8 +355,175 @@ def _model_name() -> str:
         return ""
 
 
+# ── a saved COMPARISON, asked about (D-628) ─────────────────────────────────────────────
+# JG, 2 Nov 2026: "Ask about this comparison should sit beside the parity report and its
+# spoken explanation. Reuse the existing text/voice question interface." The answer uses that
+# exact saved comparison (the parity detail record, SCRUM-157), names parts, cells and
+# figures as it holds them, and must distinguish a confirmed difference from an unresolved
+# assumption. It never assumes the manual estimate is right, never invents a price, and
+# changes nothing: the comparison was made before the question and stays as filed.
+
+def _comparison_of(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str]:
+    if isinstance(payload.get("comparison"), dict):
+        doc, name, why = payload["comparison"], str(payload.get("comparison_name")
+                                                    or "the saved comparison"), ""
+    elif payload.get("comparison_path"):
+        path = Path(str(payload["comparison_path"]))
+        doc, why = _read(path)
+        name = path.name
+    else:
+        return {}, "", "no saved comparison was named"
+    if doc and not str(doc.get("schema", "")).startswith("sdi_parity_detail"):
+        return {}, name, f"{name} is not a saved line-by-line comparison"
+    return doc, name, why
+
+
+def _all_money(obj: Any, out: Set[float]) -> None:
+    """Every number the comparison holds, as money the model may quote. Recursive, because
+    the honest set is 'anything the record itself says', nothing more."""
+    if isinstance(obj, bool):
+        return
+    if isinstance(obj, (int, float)):
+        m = _money(abs(obj))
+        if m is not None:
+            out.add(m)
+        return
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _all_money(v, out)
+    elif isinstance(obj, list):
+        for v in obj:
+            _all_money(v, out)
+
+
+def _comparison_known(detail: Dict[str, Any], question: str) -> Dict[str, Any]:
+    """What goes to the model: the whole decision surface of the comparison, with the scope
+    trimmed to the flagged parts plus any part the question names."""
+    parts = (detail.get("scope") or {}).get("parts") or []
+    kept = [p for p in parts if p.get("flagged")][:40]
+    for p in parts:
+        if p not in kept and _named(question, p.get("code"), p.get("description")):
+            kept.append(p)
+    return {
+        "headline": detail.get("headline"), "quantity": detail.get("quantity"),
+        "revision": detail.get("revision"), "thresholds_pct": detail.get("thresholds_pct"),
+        "cost_build": detail.get("cost_build"), "selling": detail.get("selling"),
+        "commercial": detail.get("commercial"), "labour": detail.get("labour"),
+        "scope_counts": (detail.get("scope") or {}).get("counts"),
+        "scope_parts": kept, "differences": detail.get("differences"),
+        "manual": {"head": (detail.get("manual") or {}).get("head"),
+                   "reconciles": (detail.get("manual") or {}).get("reconcile"),
+                   "problems": (detail.get("manual") or {}).get("problems")},
+        "ai": {"head": (detail.get("ai") or {}).get("head"),
+               "reconciles": (detail.get("ai") or {}).get("reconcile"),
+               "problems": (detail.get("ai") or {}).get("problems")},
+    }
+
+
+def comparison_recorded(detail: Dict[str, Any]) -> List[str]:
+    """The comparison's own figures, written before any model speaks."""
+    h = detail.get("headline") or {}
+    q = detail.get("quantity") or {}
+    out = []
+    if h.get("ai_unit_cost_gbp") is not None and h.get("manual_unit_cost_gbp") is not None:
+        out.append(f"Unit cost: AI {_gbp(h['ai_unit_cost_gbp'])} against manual "
+                   f"{_gbp(h['manual_unit_cost_gbp'])}, gap {_gbp(h.get('gap_gbp'))}"
+                   + (f" ({h['pct']:+.1f}% of the manual figure)"
+                      if isinstance(h.get("pct"), (int, float)) else "")
+                   + (f", compared at {q.get('compared_at'):g} off"
+                      if isinstance(q.get("compared_at"), (int, float)) else "") + ".")
+    if not q.get("comparable", True):
+        out.append("Quantities differ and the run did not price the manual's, so the unit "
+                   "costs are not like for like.")
+    if h.get("ai_sell_gbp") is not None or h.get("manual_sell_gbp") is not None:
+        out.append(f"Sell price, kept apart from cost: AI {_gbp(h.get('ai_sell_gbp'))} "
+                   f"against manual {_gbp(h.get('manual_sell_gbp'))}.")
+    sc = h.get("scope_counts") or {}
+    if sc:
+        out.append(f"Scope: {sc.get('manual_only', 0)} part(s) only on the manual, "
+                   f"{sc.get('ai_only', 0)} only on the AI, "
+                   f"{sc.get('made_bought_differs', 0)} made/bought differ, "
+                   f"{sc.get('material_not_charged', 0)} material not charged.")
+    for d in (detail.get("differences") or [])[:3]:
+        if d.get("what"):
+            out.append(f"Difference: {d['what']}"
+                       + (f" ({_gbp(d['delta_gbp'])})" if d.get("delta_gbp") is not None else "")
+                       + (f" — {d['detail']}" if d.get("detail") else "") + ".")
+    if (detail.get("revision") or {}).get("differs"):
+        rv = detail["revision"]
+        out.append(f"Revisions differ: manual {rv.get('manual')}, AI {rv.get('ai')}.")
+    return out
+
+
+def comparison_prompt(question: str, known: Dict[str, Any], commentary: str) -> str:
+    context = json.dumps(known, default=str)[:_MAX_CONTEXT_CHARS]
+    return (
+        "You explain ONE saved comparison between an AI cost estimate and a manual cost "
+        "estimate for an SDI estimator.\n"
+        "Rules: answer only from the COMPARISON RECORD below. Name the parts, workbook cells "
+        "and figures exactly as the record holds them, money to the penny, and only figures "
+        "that appear below. Distinguish a CONFIRMED difference (both sides read, cells named) "
+        "from an UNRESOLVED one (a figure not read, quantities not comparable, a part on one "
+        "side only, an input assumed). NEVER treat the manual estimate as automatically "
+        "correct: it is the comparison, not the answer; where the two differ, say what each "
+        "side holds and what to check, never which is right. Never invent or recalculate a "
+        "price. Nothing here is a customer quotation and your answer authorises nothing. "
+        "Keep it short: a few sentences, plain English, no markdown.\n\n"
+        f"COMPARISON RECORD (JSON): {context}\n\n"
+        f"SPOKEN SUMMARY OF THE SAME RECORD: {commentary[:4000]}\n\n"
+        f"QUESTION: {question}\n\n"
+        'Reply as JSON only: {"answer": "..."}')
+
+
+def answer_comparison(payload: Dict[str, Any], ask: Any = None) -> Dict[str, Any]:
+    """One reply for one question about one saved comparison. Same response shape as a run's
+    answer, so every page renders it the same way."""
+    question = str(payload.get("question") or "").strip()[:1000]
+    base: Dict[str, Any] = {"comparison_id": str(payload.get("comparison_id") or ""),
+                            "record_name": "", "recorded": [], "sources": [],
+                            "coverage": {}, "coverage_note": "", "model": "",
+                            "refused_figures": []}
+    if not question:
+        return dict(base, status="unavailable",
+                    answer="Type a question about the comparison first.")
+    detail, name, why = _comparison_of(payload)
+    base["record_name"] = name
+    if not detail:
+        return dict(base, status="unavailable", answer=f"Comparison unavailable: {why}.")
+    base["recorded"] = comparison_recorded(detail)
+    base["sources"] = [s for s in ([name] + list(payload.get("sources") or [])) if s]
+    commentary = str(payload.get("commentary") or "")
+    if ask is None:
+        from web_ai_price_lookup import _call_xai_llm as ask
+    reply = ask(comparison_prompt(question, _comparison_known(detail, question), commentary),
+                max_completion_tokens=2500, temperature=0.0)
+    text = str((reply or {}).get("answer") or "").strip() if isinstance(reply, dict) else ""
+    if not text:
+        return dict(base, status="unavailable",
+                    answer="No answer came back from the model (it may be offline, or the "
+                           "key is not set on this machine). The recorded figures above are "
+                           "the comparison's own; the report holds every line.")
+    allowed: Set[float] = set()
+    _all_money(detail, allowed)
+    for m in _MONEY_IN_TEXT.findall(commentary or ""):
+        v = _money(m.replace(",", ""))
+        if v is not None:
+            allowed.add(v)
+    refused = refused_figures(text, allowed)
+    model = _model_name()
+    if refused:
+        return dict(base, status="answered", model=model, refused_figures=refused,
+                    answer=(f"The model's explanation quoted {', '.join(refused)}, which "
+                            f"{'is' if len(refused) == 1 else 'are'} not in this comparison, "
+                            f"so it is not shown. The recorded figures above are the "
+                            f"comparison's own. Ask again more narrowly."))
+    return dict(base, status="answered", answer=text, model=model)
+
+
 def answer(payload: Dict[str, Any], ask: Any = None) -> Dict[str, Any]:
     """One reply for one question about one saved record. `ask` is for the tests."""
+    if payload.get("comparison") or payload.get("comparison_path"):
+        return answer_comparison(payload, ask)
     question = str(payload.get("question") or "").strip()[:1000]
     base: Dict[str, Any] = {"run_id": str(payload.get("run_id") or ""),
                             "record_name": str(payload.get("record_name") or ""),

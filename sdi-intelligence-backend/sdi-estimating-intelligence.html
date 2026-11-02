@@ -1131,6 +1131,19 @@
           Compare and file</button>
       </div>
       <ul class="out" id="pjOut"></ul>
+      <!-- ASK ABOUT THIS COMPARISON (D-628). The shared question service, pinned to one FILED
+           comparison: it explains the saved results, changes neither estimate, invents no
+           price and authorises nothing. -->
+      <div id="pjAsk" hidden style="margin-top:12px">
+        <span class="k">Ask about this comparison</span>
+        <p class="note" id="pjAskWhich" style="margin:4px 0 6px"></p>
+        <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
+          <input id="pjAskQ" type="text" autocomplete="off" style="flex:1;min-width:260px"
+                 placeholder="e.g. Which three differences account for most of the gap?">
+          <button id="pjAskGo" type="button">Ask</button>
+        </div>
+        <ul class="out" id="pjAskOut"></ul>
+      </div>
 
       <h3 style="margin-top:18px">Search filed comparisons</h3>
       <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
@@ -4129,6 +4142,7 @@ parityRun.onclick = async () => {
        for Excel; leading with either sends an estimator into a 2,000-line file to answer
        "why did these two differ". */
     [{url:j.bundle_html_url, name:"Parity report, line by line (HTML — read this one)"},
+     {url:j.walkthrough_url, name:"Listen to the comparison (WAV)"},
      {url:j.legacy_html_url, name:"Money-cell report (HTML)"},
      {url:j.detail_json_url, name:"Line-by-line record (JSON)"},
      {url:j.bundle_json_url, name:"Parity bundle (JSON — the full comparison)"},
@@ -4224,12 +4238,15 @@ function pjResult(idx){
   return '<li><span style="color:' + pjColour(oc) + '">' + pjEsc(String(oc).toUpperCase()) + '</span> — AI '
     + pjGbp(ai) + ' against manual ' + pjGbp(h.manual_unit_cost_gbp) + (pct != null ? ' · variance ' + pjPct(pct) : "") + '</li>'
     + (q.note ? '<li class="note">' + pjEsc(q.note) + '</li>' : "")
+    + (!idx.walkthrough_wav && idx.walkthrough_note ? '<li class="note">Spoken comparison: '
+       + pjEsc(idx.walkthrough_note) + '</li>' : "")
     + (idx.scope_counts ? '<li>Scope: ' + pjEsc(idx.scope_counts.manual_only ?? 0) + ' parts only on the manual · '
       + pjEsc(idx.scope_counts.ai_only ?? 0) + ' only on the AI · ' + pjEsc(idx.scope_counts.made_bought_differs ?? 0)
       + ' made on one, bought on the other · ' + pjEsc(idx.scope_counts.material_not_charged ?? 0) + ' with material not charged'
       + (idx.revision && idx.revision.differs ? ' · <strong>revisions differ</strong>' : "") + '</li>' : "")
     + (lines ? '<li><table style="border-collapse:collapse;font-size:12.5px"><tr><th style="text-align:left">Line</th><th>AI</th><th>Manual</th><th>Status</th><th>Cell</th></tr>' + lines + '</table></li>' : "")
-    + '<li>' + [pjLink(idx.report_url, "Parity report"), pjLink(idx.legacy_report_url, "Money-cell report"),
+    + '<li>' + [pjLink(idx.report_url, "Parity report"), pjLink(idx.listen_url, "Listen to the comparison"),
+                pjLink(idx.legacy_report_url, "Money-cell report"),
                 pjLink(idx.manual_url, "Manual sheet (filed copy)"),
                 pjLink(idx.ai_url, "AI sheet (filed copy)"), pjLink(idx.bundle_csv_url, "Bundle CSV")].filter(Boolean).join(" · ") + '</li>'
     + '<li class="note">Filed in <code>' + pjEsc(idx.folder) + '</code> · ' + pjEsc((idx.match || {}).how || "")
@@ -4254,7 +4271,11 @@ $("pjRun").onclick = async () => {
                $("pjRun").textContent = "Compare and file"; pjRefresh(); return; }
     if(j.already_running) out.innerHTML = '<li class="note">That comparison is already running; following it.</li>';
     pjPoll(j.status_url, s => {
-      if(s.state === "done" && s.result) out.innerHTML = pjResult(s.result);
+      if(s.state === "done" && s.result){
+        out.innerHTML = pjResult(s.result);
+        if(s.result.folder) pjAskHere(s.result.folder,
+          (s.result.drawing || "") + (s.result.comparison_id ? " · id " + s.result.comparison_id : ""));
+      }
       else if(s.state === "choose") out.innerHTML = '<li><span style="color:var(--warn)">' + pjEsc(s.error) + '</span></li>';
       else if(s.state === "failed") out.innerHTML = '<li><span style="color:var(--bad)">' + pjEsc(s.error) + '</span></li>';
       else out.innerHTML = '<li class="note">' + pjEsc(s.step || "Working…") + '</li>';
@@ -4264,6 +4285,41 @@ $("pjRun").onclick = async () => {
     $("pjRun").textContent = "Compare and file"; pjRefresh();
   }
 };
+
+/* ASK ABOUT THIS COMPARISON (D-628): type or speak elsewhere, here type; review; Ask; the
+   written answer always, with the comparison's own recorded figures above it. */
+let pjAskFolder = null;
+function pjAskHere(folder, label){
+  pjAskFolder = folder;
+  $("pjAsk").hidden = false;
+  $("pjAskWhich").textContent = "Answered from the filed comparison " + label + " only: the "
+    + "line-by-line record and its spoken summary. It explains the saved results; it changes "
+    + "neither estimate and authorises nothing.";
+}
+$("pjAskGo").onclick = async () => {
+  const q = $("pjAskQ").value.trim(), box = $("pjAskOut");
+  if(!q || !pjAskFolder) return;
+  $("pjAskGo").disabled = true; box.innerHTML = '<li class="note">Asking…</li>';
+  try{
+    const r = await api("/api/estimate/parity/ask", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({folder: pjAskFolder, question: q})});
+    const a = await r.json().catch(() => ({}));
+    if(!r.ok){ box.innerHTML = '<li><span style="color:var(--bad)">' + pjEsc(detailText(a, r, "It could not answer")) + '</span></li>'; return; }
+    box.innerHTML = '<li>' + pjEsc(a.answer || "Nothing came back.") + '</li>'
+      + ((a.recorded || []).length ? '<li class="note" style="white-space:pre-wrap">From the comparison:\n'
+          + pjEsc(a.recorded.join("\n")) + '</li>' : "")
+      + '<li class="note">From ' + pjEsc((a.sources || []).join(", ") || "the filed comparison")
+      + (a.model ? ' · answered by ' + pjEsc(a.model) : ' · record lookup') + '</li>';
+  }catch(e){
+    box.innerHTML = '<li><span style="color:var(--bad)">Could not reach the service.</span></li>';
+  }finally{ $("pjAskGo").disabled = false; }
+};
+$("pjAskQ").addEventListener("keydown", e => { if(e.key === "Enter") $("pjAskGo").click(); });
+$("pjResults").addEventListener("click", e => {
+  const b = e.target.closest ? e.target.closest(".pjAskBtn") : null;
+  if(b){ pjAskHere(b.dataset.folder, b.dataset.label); $("pjAsk").scrollIntoView(); }
+});
 
 function pjTable(rows, head, cells){
   if(!rows.length) return '<p class="note">None.</p>';
@@ -4290,7 +4346,9 @@ $("pjSearch").onclick = async () => {
               '<span style="color:' + pjColour(i.outcome) + '">' + pjEsc(i.outcome || "—") + '</span>',
               pjGbp(qy.ai_unit_at_manual_qty ?? h.ai_unit_cost_gbp), pjGbp(h.manual_unit_cost_gbp),
               pjPct(qy.pct_at_manual_qty ?? h.pct_variance),
-              pjLink(i.report_url, "report") || pjEsc((i.error || "").slice(0, 80))];
+              (pjLink(i.report_url, "report") || pjEsc((i.error || "").slice(0, 80)))
+              + (i.folder ? ' <button type="button" class="pjAskBtn" data-folder="' + pjEsc(i.folder)
+                 + '" data-label="' + pjEsc(i.drawing || "") + '">ask</button>' : "")];
     }) + ((j.periods || []).length ? '<p class="note" style="margin-top:10px"><b>Period comparisons</b></p>'
       + pjTable(j.periods, ["Kind", "Period", "Comparable", "No manual", "Failed", ""], p => [
           pjEsc(p.kind), pjEsc(p.kind === "two periods" && p.a && p.b ? "A " + p.a.join(" to ") + " · B " + p.b.join(" to ") : p.start + " to " + p.end),
