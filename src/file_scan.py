@@ -4418,6 +4418,14 @@ def _finalize_scan_summary(
             except Exception as _mint_exc:                           # noqa: BLE001
                 print(f"   [hierarchy] model-only children not minted "
                       f"({type(_mint_exc).__name__}: {_mint_exc})", flush=True)
+            # A HOLLOW BOARD BOX IS COSTED AS ITS PANELS (SCRUM-180): 12678's plinth.
+            try:
+                from source_connectors.solidworks import mint_hollow_board_panels
+                mint_hollow_board_panels(summary["manufacturing_writeup"]["parts"],
+                                         _sw_job_late)
+            except Exception as _hb_exc:                             # noqa: BLE001
+                print(f"   [hierarchy] hollow board panels not minted "
+                      f"({type(_hb_exc).__name__}: {_hb_exc})", flush=True)
             _sw_meta = getattr(_sw_job_late, "meta", {}) or {}
             _edges = sum(len(v) for v in (getattr(_sw_job_late, "hierarchy", {}) or {}).values())
             _asms = len(getattr(_sw_job_late, "assembly_pns", []) or [])

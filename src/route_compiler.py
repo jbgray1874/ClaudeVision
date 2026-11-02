@@ -3111,6 +3111,39 @@ def build_part_graph(
         _own_src = str(source_of(record, "quantity") or "")
         if _own_src:
             qty_own_source[child_id] = _own_src
+        # ── A PER-PARENT COUNT MAP NAMES THIS PARENT'S OWN FIGURE (SCRUM-105) ─────────
+        #
+        # 12678-01-06M: two ribs in each of two bracket designs. A shared child's single
+        # `quantity` cannot stand for every parent, so the multi-parent branch below kept
+        # the BOM edge of 1 under each — and the sheet charged 8 of a part the model
+        # counts 16 of, with the two-roads check reduced to a note. A reader that
+        # genuinely counts PER PARENT (the SolidWorks connector's arbitrated split) now
+        # writes the map `quantity_by_parent`, and this walk reads the figure for the
+        # parent it is standing on — BEFORE the agreement shortcut, because a split
+        # record's own scalar can equal the edge while this parent's figure does not.
+        # Rank still decides: a map from a reader the edge outranks changes nothing.
+        _split = record.get("quantity_by_parent")
+        if isinstance(_split, Mapping) and _split:
+            _split_src = str(record.get("quantity_by_parent_source") or "")
+            if rank(_split_src) > _edge_substitution_rank:
+                _want = clean_part_number(str(parent_id))
+                for _k, _v in _split.items():
+                    if clean_part_number(str(_k)) != _want:
+                        continue
+                    _pp_q = number(_v, None)
+                    if _pp_q and _pp_q > 0:
+                        qty_own[child_id] = _pp_q
+                        qty_own_source[child_id] = _split_src
+                        if abs(_pp_q - edge_qty) > 1e-9:
+                            qty_notes.setdefault(child_id, (
+                                f"one {parent_id} takes {_pp_q:g} of this part, counted "
+                                f"per parent by {_display_source(_split_src)}; the BOM "
+                                f"edge said {edge_qty:g} and does not outrank that count"))
+                            print(f"   [graph] {child_id} qty-per-{parent_id} {_pp_q:g} "
+                                  f"from {_display_source(_split_src)}'s per-parent map "
+                                  f"KEPT (BOM edge said {edge_qty:g})", flush=True)
+                        return _pp_q
+                    break
         if _own is None or abs(_own - edge_qty) < 1e-9:
             return edge_qty
         _label = _display_source(_own_src) if _own_src else "an unnamed reader"

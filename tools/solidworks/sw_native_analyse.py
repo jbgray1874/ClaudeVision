@@ -80,7 +80,7 @@ SW_TYPELIB_MAJOR = 34
 # so a CODE improvement reaches an OLD job automatically — the models never changed, but what we
 # read out of them did, and a freshness check that only looks at file dates would reuse a stale
 # extract for ever. Kept in step with source_connectors.solidworks._MIN_EXTRACT_SCHEMA_VERSION.
-EXTRACT_SCHEMA_VERSION = 3
+EXTRACT_SCHEMA_VERSION = 4   # v4: body volume + surface area (density-free; SCRUM-180)
 
 # Opt-in (--flatten): flatten formed parts in memory to MEASURE the developed blank when
 # the cut-list property route yields nothing usable. Off by default because it rebuilds
@@ -222,6 +222,11 @@ class RouteSignals:
     material_source: str = ""
     thickness_mm: Optional[float] = None
     mass_kg: Optional[float] = None
+    # The body's own volume and surface area (SCRUM-180). Density-free, so they survive the
+    # MDF parts whose mass never populates: a box-shaped board whose volume fills a fraction
+    # of its envelope is a HOLLOW construction, and volume over half the surface is its gauge.
+    volume_mm3: Optional[float] = None
+    surface_area_mm2: Optional[float] = None
     bbox_mm: Optional[Tuple[float, float, float]] = None
     ops_hint: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
@@ -839,6 +844,35 @@ def get_mass_kg(doc) -> Optional[float]:
     return None
 
 
+def get_volume_and_area_mm(doc) -> Tuple[Optional[float], Optional[float]]:
+    """(volume mm3, surface area mm2) of the part's bodies, or (None, None).
+
+    The same mass-property call get_mass_kg makes, read for the two figures that do not
+    depend on a density: SI document units return m3 and m2. A board whose material has no
+    density in the library gives no mass, but its geometry is still there to measure."""
+    ext = _wrap(_get0(doc, "Extension"), "IModelDocExtension")
+    for _mk in ("CreateMassProperty2", "CreateMassProperty"):
+        try:
+            mp = _wrap(getattr(ext, _mk)(), "IMassProperty")
+            vol = float(_get0(mp, "Volume") or 0.0)
+            area = float(_get0(mp, "SurfaceArea") or 0.0)
+            if vol > 0 and area > 0:
+                return round(vol * 1e9, 1), round(area * 1e6, 1)
+        except Exception:
+            continue
+    for _src, _name in ((ext, "GetMassProperties2"), (ext, "GetMassProperties"),
+                        (doc, "GetMassProperties2"), (doc, "GetMassProperties")):
+        try:
+            res = getattr(_src, _name)(0) if _name.endswith("2") else getattr(_src, _name)()
+            if isinstance(res, (list, tuple)) and len(res) >= 5:
+                vol, area = float(res[3] or 0.0), float(res[4] or 0.0)
+                if vol > 0 and area > 0:
+                    return round(vol * 1e9, 1), round(area * 1e6, 1)
+        except Exception:
+            continue
+    return None, None
+
+
 def _call_or_prop(obj, name):
     """Return obj.name whether it is a method (call it) or a property (value). Unlike
     _get0 this RAISES on error so callers can record why a call failed."""
@@ -1218,6 +1252,10 @@ def sheet_metal_signals(doc, allow_flatten: Optional[bool] = None) -> RouteSigna
             pass
     sig.bbox_mm = get_bbox_mm(doc, SW_PART)
     sig.mass_kg = get_mass_kg(doc)
+    try:
+        sig.volume_mm3, sig.surface_area_mm2 = get_volume_and_area_mm(doc)
+    except Exception:
+        sig.volume_mm3 = sig.surface_area_mm2 = None
 
     # ── Flat pattern + thickness from the cut list ────────────────────────────────
     # Cut-list thickness is the sheet-metal parameter itself, so it beats a custom
@@ -2108,7 +2146,8 @@ def main():
                     print(f"  material={rs.get('material')!r} sheet_metal={rs.get('is_sheet_metal')} "
                           f"bends={rs.get('bend_count')} holes={rs.get('hole_count_est')} "
                           f"flat={rs.get('flat_pattern_present')} weldment={rs.get('has_weldment')} "
-                          f"mass_kg={rs.get('mass_kg')} bbox={rs.get('bbox_mm')}")
+                          f"mass_kg={rs.get('mass_kg')} bbox={rs.get('bbox_mm')} "
+                          f"volume_mm3={rs.get('volume_mm3')} area_mm2={rs.get('surface_area_mm2')}")
                     # The costing-critical line: flat blank + gauge. Printed separately so a
                     # missing value is obvious at a glance rather than buried in the JSON.
                     print(f"  FLAT: {rs.get('flat_length_mm')} x {rs.get('flat_width_mm')} mm"
