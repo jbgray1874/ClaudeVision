@@ -94,6 +94,13 @@ def test_the_board_row_never_wears_the_refused_gauge():
     seg = seg[:seg.index("def ", 10)]
     assert "thickness_rejected_mm" in seg
     assert "gauge unset" in seg
+    # AND THE HOLD COVERS EVERY SOURCE OF A SHEET PRICE (second 12678 review): the
+    # 19:09 run still charged £6.50 a sheet on a gauge-less shelf, because a stored
+    # sheet price from the costing walked past the first guard. With the gauge unset,
+    # no price enters the cell, wherever the figure came from.
+    assert "if _gauge_held and _sheet_price:" in seg
+    assert "WITHHELD — the gauge is unset" in seg
+    assert "_sheet_price = None" in seg
     # And the estimate record carries the refusal out of costing for it to read.
     esrc = open(os.path.join(os.path.dirname(__file__), "..", "src", "estimator.py"),
                 encoding="utf-8").read()

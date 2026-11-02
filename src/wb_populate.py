@@ -6933,7 +6933,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # gauge, the Ga cell stays empty and the £/kg gap-filler below gets nothing, so
         # the row shows an honest 0 beside its question instead of pricing the refusal.
         _rej_t = _safe(pe.get("thickness_rejected_mm"))
-        if _rej_t and not _safe(pe.get("normalized_thickness_mm")):
+        _gauge_held = bool(_rej_t and not _safe(pe.get("normalized_thickness_mm")))
+        if _gauge_held:
             thick = None
             _flag(f"other-sheet {pe.get('part_number')} gauge unset — {float(_rej_t):g} mm "
                   f"was refused below the board floor; no gauge and no sheet price until "
@@ -6999,6 +7000,24 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # verified per-part allowance travels with its own nest-of-one, and a figure the
         # two readings of which disagree is left OFF the sheet, with the conflict and
         # the question on the row, until a person says what the price bought.
+        # AND THE GAUGE HOLD COVERS EVERY SOURCE OF A SHEET PRICE (SCRUM-180, second
+        # 12678 review). The first guard emptied the gauge cell and starved the £/kg
+        # gap-filler — and the 19:09 run still charged £6.50 a sheet on a gauge-less
+        # shelf, because a stored sheet price from the costing walked straight past it.
+        # With the gauge unset the board is not identified, so NO price can claim to
+        # buy it, wherever the figure came from: the cell stays empty and the row sits
+        # unpriced beside its own gauge question.
+        if _gauge_held and _sheet_price:
+            _flag(f"other-sheet {pe.get('part_number')} sheet price "
+                  f"£{float(_sheet_price):.2f} WITHHELD — the gauge is unset "
+                  f"({float(_rej_t):g} mm refused), so the board is not identified and "
+                  f"no price can claim to buy it; unpriced until the gauge is confirmed "
+                  f"(SCRUM-180).", flags)
+            pe.setdefault("review_flags", []).append(
+                f"{pe.get('part_number')}: sheet price £{float(_sheet_price):.2f} "
+                f"withheld — the gauge is unset, so the board it would buy is not "
+                f"identified; confirm the gauge and the row prices")
+            _sheet_price = None
         _cpp_chk = _safe(me.get("cost_per_part_gbp") or me.get("unit_material_cost_gbp"))
         _pps_chk = _safe(se.get("parts_per_sheet") or me.get("parts_per_sheet"))
         if _buying_unit_conflict(_sheet_price, _cpp_chk, _pps_chk):

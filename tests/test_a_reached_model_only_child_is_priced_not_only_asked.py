@@ -81,16 +81,21 @@ def _minted(job=None):
     return {p["part_number"]: p for p in parts}
 
 
-def test_the_bracket_steel_is_minted_with_the_trees_own_arithmetic():
+def test_the_bracket_steel_is_minted_with_the_rows_own_count():
+    """THE ROW'S OWN QUANTITY, NEVER THE TREE'S PRODUCT. The first mint wrote the
+    per-unit total and the route multiplied by the parent again — 12678's 19:09 run
+    costed 05M at 216 off a '6 per 101SA x6' trail. The record carries the per-parent
+    count; the flag states the per-unit product the tree implies."""
     got = _minted()
     m6 = got["12678-01-06M"]
     assert m6["minted_from_model"] is True
-    assert m6["quantity"] == 8                      # 1 x 101SA's 6 + 1 x 102SA's 2
+    assert m6["quantity"] == 1                      # 1 per parent — the route multiplies
     assert (m6["blank_length_mm"], m6["blank_width_mm"]) == (120.0, 60.0)
     assert m6["normalized_thickness_mm"] == 2.0
     assert m6["native_flat_pattern"] is True
     assert "STEEL" in str(m6["normalized_material"]).upper()
-    assert any("x8 a unit" in f for f in m6["review_flags"])
+    assert any("implies x8 a unit" in f for f in m6["review_flags"])
+    assert any("the route multiplies, once" in f for f in m6["review_flags"])
     assert any("priced from its model alone" in str(q.get("issue"))
                for q in m6["manufacturing_questions"])
 
@@ -98,10 +103,35 @@ def test_the_bracket_steel_is_minted_with_the_trees_own_arithmetic():
 def test_a_plate_modelled_as_an_extrude_is_minted_from_its_extents():
     got = _minted()
     m4 = got["12678-01-04M"]
-    assert m4["quantity"] == 2
+    assert m4["quantity"] == 1                      # 1 per 102SA; the route makes it 2
     assert (m4["blank_length_mm"], m4["blank_width_mm"]) == (90.0, 32.0)
     assert m4["normalized_thickness_mm"] == 2.5
     assert any("plate-shaped solid" in f for f in m4["review_flags"])
+
+
+def test_a_multi_count_edge_keeps_the_per_parent_count_on_the_row():
+    """Six ribs per bracket assembly: the record says 6, the flag says the tree implies
+    36 a unit across the six assemblies, and nothing multiplies twice."""
+    from source_connectors.solidworks import (apply_native_hierarchy_to_parts,
+                                              mint_model_children,
+                                              normalize_native_extract)
+    job = normalize_native_extract([
+        {"title": "12678-01-101SA", "doctype": 2,
+         "assembly_part_number": "12678-01-101SA",
+         "assembly_edges": [
+             {"parent": "12678-01-101SA", "child": "12678-01-05M", "qty": 6}]},
+        {"title": "12678-01-05M", "doctype": 1, "route_signals": {
+            "material": "Mild Steel", "is_sheet_metal": True, "bend_count": 0,
+            "thickness_mm": 2.0, "flat_length_mm": 300.0, "flat_width_mm": 114.6,
+            "bbox_mm": [300.0, 114.6, 2.0]}},
+    ])
+    parts = [{"part_number": "12678-01-101SA", "description": "BRACKET ASSY",
+              "quantity": 6, "is_sub_assembly": True}]
+    apply_native_hierarchy_to_parts(parts, job)
+    mint_model_children(parts, job)
+    m5 = {p["part_number"]: p for p in parts}["12678-01-05M"]
+    assert m5["quantity"] == 6
+    assert any("implies x36 a unit" in f for f in m5["review_flags"])
 
 
 def test_a_failed_file_keeps_its_missing_price_question():
@@ -126,6 +156,36 @@ def test_a_child_with_a_record_is_not_minted_twice():
     assert [p["part_number"] for p in parts].count("12678-01-06M") == 1
     assert not [p for p in parts if p.get("minted_from_model")
                 and p["part_number"] == "12678-01-06M"]
+
+
+def test_the_charged_quantity_chain_multiplies_once():
+    """THE WHOLE CHAIN, as the second review demanded: the minted record's own count,
+    through the assembly multiplication, to the canonical quantity the sheet charges.
+    Six ribs per bracket on six brackets is 36 — the 19:09 run charged 216, because the
+    record carried 36 and the route multiplied by the parent again."""
+    import route_compiler as rc
+    job = normalize_native_extract([
+        {"title": "12678-01-101SA", "doctype": 2,
+         "assembly_part_number": "12678-01-101SA",
+         "assembly_edges": [
+             {"parent": "12678-01-101SA", "child": "12678-01-05M", "qty": 6}]},
+        {"title": "12678-01-05M", "doctype": 1, "route_signals": {
+            "material": "Mild Steel", "is_sheet_metal": True, "bend_count": 0,
+            "thickness_mm": 2.0, "flat_length_mm": 300.0, "flat_width_mm": 114.6,
+            "bbox_mm": [300.0, 114.6, 2.0]}},
+    ])
+    parts = [{"part_number": "12678-01-GA", "description": "PODIUM", "quantity": 1,
+              "is_assembly_parent": True, "assembly_children": ["12678-01-101SA"]},
+             {"part_number": "12678-01-101SA", "description": "BRACKET ASSY",
+              "quantity": 6, "is_sub_assembly": True}]
+    apply_native_hierarchy_to_parts(parts, job)
+    mint_model_children(parts, job)
+    m5 = {p["part_number"]: p for p in parts}["12678-01-05M"]
+    assert m5["quantity"] == 6
+    graph = rc.build_part_graph(parts)
+    node = next(n for n in graph["nodes"] if n.part_number == "12678-01-05M")
+    assert node.qty_per_unit == 36, (node.qty_per_unit, node.qty_trail)
+    assert any("= 36" in t for t in node.qty_trail), node.qty_trail
 
 
 def test_the_scan_wires_the_mint_after_the_hierarchy():
