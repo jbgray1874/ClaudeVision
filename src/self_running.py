@@ -56,7 +56,11 @@ import config  # noqa: E402
 import live_enquiry_runner as ler  # noqa: E402
 
 IDLE_BEAT_SECONDS = 60          # how often an idle watcher asks the portal whether it is on
-RECENT_RUNS_SHOWN = 10
+# THE WINDOW THE CARD SHOWS (D-626). JG, 2 Nov 2026: the price of each quantity ran, "only
+# show the number ran for the past week and a max of 100, or we'll run out of space". The
+# prices per quantity are D-610's and travel on each attempt; this is the window.
+RECENT_RUNS_SHOWN = 100
+RECENT_RUNS_DAYS = 7
 
 
 # ── WHAT THE PAGE IS TOLD ────────────────────────────────────────────────────────────
@@ -64,11 +68,24 @@ def counts(decisions: Sequence[ler.Decision]) -> Dict[str, int]:
     return dict(Counter(d.status for d in decisions))
 
 
-def recent_runs(ledger: Dict[str, Any], limit: int = RECENT_RUNS_SHOWN) -> List[Dict[str, Any]]:
-    """The newest attempts in the ledger, newest first, as the page lists them."""
+def recent_runs(ledger: Dict[str, Any], limit: int = RECENT_RUNS_SHOWN,
+                days: int = RECENT_RUNS_DAYS,
+                now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    """The attempts of the past week, newest first, at most `limit`, as the page lists them.
+
+    An attempt still running is kept whatever its age, so a long job never vanishes from the
+    card mid-run; a finished one older than the window drops off."""
+    edge = (now or datetime.now()) - timedelta(days=days)
     out = []
     for job in (ledger.get("jobs") or {}).values():
         for a in job.get("attempts") or []:
+            when = str(a.get("finished_at") or a.get("queued_at") or "")
+            if a.get("status") not in ("queued", "running"):
+                try:
+                    if datetime.fromisoformat(when[:19]) < edge:
+                        continue
+                except ValueError:
+                    pass                                 # an unreadable date is kept, not hidden
             out.append({"customer": job.get("customer"), "drawing": job.get("drawing"),
                         "status": a.get("status"), "queued_at": a.get("queued_at"),
                         "finished_at": a.get("finished_at"),
