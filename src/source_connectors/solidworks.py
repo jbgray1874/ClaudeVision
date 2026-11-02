@@ -210,6 +210,10 @@ class NativePart:
     flat_pattern: bool = False
     has_weldment: bool = False
     bbox_mm: Optional[List[float]] = None
+    # The body's volume and surface area (extract schema v4, SCRUM-180): density-free
+    # measures a board whose mass never populates still has. None on older extracts.
+    volume_mm3: Optional[float] = None
+    surface_area_mm2: Optional[float] = None
     doctype: int = SW_PART
     # ── measured cut-list geometry (the estimating prize a PDF cannot supply) ──
     flat_length_mm: Optional[float] = None
@@ -517,6 +521,8 @@ def normalize_native_extract(records: List[Dict[str, Any]],
             flat_pattern=bool(rs.get("flat_pattern_present")),
             has_weldment=bool(rs.get("has_weldment")),
             bbox_mm=rs.get("bbox_mm"),
+            volume_mm3=_num(rs.get("volume_mm3")),
+            surface_area_mm2=_num(rs.get("surface_area_mm2")),
             doctype=int(r.get("doctype") or SW_PART),
             flat_length_mm=_num(rs.get("flat_length_mm")),
             flat_width_mm=_num(rs.get("flat_width_mm")),
@@ -925,7 +931,7 @@ def native_files_state(folder: str | Path) -> Dict[str, Any]:
 # estimate needs. An extract stamped below this is regenerated even when the models have not
 # changed — so an analyser CODE fix reaches an OLD job (2019 models, last year's extract)
 # automatically, instead of being frozen out by a freshness check that only compares file dates.
-_MIN_EXTRACT_SCHEMA_VERSION = 3
+_MIN_EXTRACT_SCHEMA_VERSION = 4
 
 
 def _extract_schema_version(extract_path: Path) -> int:
@@ -1733,6 +1739,198 @@ def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
             f"{'is' if len(added) == 1 else 'are'} held by {target.get('part_number')}")
         stamped.append({"part_number": target.get("part_number"), "children": added})
     return stamped
+
+
+def hollow_board_takeoff(bbox_mm: Any, volume_mm3: Any, surface_area_mm2: Any
+                         ) -> Optional[Dict[str, Any]]:
+    """The panel take-off of a HOLLOW board construction modelled as one body, or None.
+
+    12678-01-01J BASE: the drawing's Section B-B shows a mitred plinth box — a top and four
+    walls, open beneath, with internal rails — while the model is one part 552 x 125 x 370.
+    The plate test (D-512) rightly refuses that box as a board, so nothing gauged it, nothing
+    sized it, and the line went out unpriced. The model still knows what it is made of:
+
+      FILL   volume / envelope. A solid block fills it; a board box fills a small fraction.
+             Only a fill under one half is read as a hollow construction.
+      GAUGE  a constant-thickness board body has volume V = A t and surface S = 2A + P t
+             (both faces, plus the edges of perimeter P). Started from 2V/S and corrected
+             for the edges of the panels it implies, it converges on the board's thickness.
+      PANELS the envelope's faces — top, the two long walls, the two short walls, then the
+             second large face — taken in that order while the measured board area (V / t)
+             accounts for them; area left over is internal rails of the box's own height.
+
+    Every figure is DERIVED from the model's own geometry, never a category default, and the
+    caller enters it provisionally with a question: the drawing's construction still decides.
+    """
+    try:
+        dims = sorted(float(x) for x in (bbox_mm or []) if x)
+        V = float(volume_mm3 or 0.0)
+        S = float(surface_area_mm2 or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if len(dims) != 3 or V <= 0 or S <= 0 or dims[0] <= 0:
+        return None
+    H, W, L = dims
+    fill = V / (H * W * L)
+    if fill >= 0.5:
+        return None
+    faces = [("top", L, W), ("long wall", L, H), ("long wall", L, H),
+             ("short wall", W, H), ("short wall", W, H), ("second face", L, W)]
+    t = 2.0 * V / S
+    pieces: List[Tuple[str, float, float]] = []
+    for _ in range(12):
+        A = V / t
+        pieces, acc = [], 0.0
+        for name, a, b in faces:
+            if acc + a * b <= A * 1.02:
+                pieces.append((name, a, b))
+                acc += a * b
+            else:
+                break
+        rest = A - acc
+        if rest > 0.02 * A:
+            run = rest / H
+            n = max(1, int(-(-run // L)))
+            pieces += [("internal rail", run / n, H)] * n
+        P = sum(2.0 * (a + b) for _, a, b in pieces)
+        denom = S - P * t
+        if denom <= 0:
+            return None
+        t_new = 2.0 * V / denom
+        if abs(t_new - t) < 0.01:
+            t = t_new
+            break
+        t = t_new
+    if not (3.0 <= t <= min(60.0, H / 2.0)) or len(pieces) < 4:
+        return None
+    gauge = round(t * 2.0) / 2.0
+    grouped: Dict[Tuple[str, float, float], int] = {}
+    for name, a, b in pieces:
+        k = (name, round(a, 1), round(b, 1))
+        grouped[k] = grouped.get(k, 0) + 1
+    return {
+        "envelope_mm": [L, W, H], "fill": round(fill, 3),
+        "volume_mm3": V, "surface_area_mm2": S,
+        "gauge_mm": gauge, "gauge_measured_mm": round(t, 2),
+        "board_area_m2": round(V / t / 1e6, 4),
+        "panels": [{"name": n, "length_mm": a, "width_mm": b, "count": c}
+                   for (n, a, b), c in grouped.items()],
+    }
+
+
+def mint_hollow_board_panels(parts: List[Dict[str, Any]], job: "NativeJob") -> List[str]:
+    """A hollow board construction is costed as the panels it is made of (SCRUM-180).
+
+    A board LEAF whose model fails the plate test (its thinnest extent is no gauge) but
+    whose volume fills under half its envelope is a box made of boards — 12678-01-01J's
+    plinth. hollow_board_takeoff reads its gauge and panels from the model's volume and
+    surface area; each panel becomes a made record (<code>-P<n>) at that gauge, a child of
+    the part, which then stands as their assembly: its material is carried by its panels,
+    its own route (machining, edging, fitting) stays on it. Everything enters provisionally
+    with one question — the drawing's construction decides. Never a part with a measured
+    flat or a DXF, never a bought-in, never a part already split. Returns the parts split."""
+    split: List[str] = []
+    signals = getattr(job, "part_signals", None) or {}
+    if not parts or not signals:
+        return split
+    try:
+        from costed_facts import is_other_sheet_material as _board
+    except Exception:                                                # noqa: BLE001
+        return split
+    by_key = {_pn_key(k): v for k, v in signals.items()}
+    held = {_pn_key(p.get("part_number")) for p in parts if isinstance(p, dict)}
+    for part in list(parts):
+        if not isinstance(part, dict) or part.get("hollow_board_takeoff"):
+            continue
+        pn = str(part.get("part_number") or "").strip()
+        nat = by_key.get(_pn_key(pn))
+        if nat is None or nat.has_flat() or _dxf_backed(part):
+            continue
+        if (part.get("is_assembly_parent") or part.get("is_sub_assembly")
+                or part.get("assembly_children") or part.get("is_bought_in")
+                or getattr(nat, "likely_bought_in", False)):
+            continue
+        mat = (part.get("normalized_material")
+               or _norm_sw_material(getattr(nat, "material", "") or ""))
+        if not (mat and _board(str(mat))):
+            continue
+        tk = hollow_board_takeoff(nat.bbox_mm, getattr(nat, "volume_mm3", None),
+                                  getattr(nat, "surface_area_mm2", None))
+        if not tk:
+            continue
+        g = float(tk["gauge_mm"])
+        L, W, H = tk["envelope_mm"]
+        why = (f"HOLLOW BOARD CONSTRUCTION FROM THE MODEL: {pn}'s solid measures "
+               f"{L:g} x {W:g} x {H:g} mm but fills {tk['fill']:.0%} of that envelope, so "
+               f"it is a box made of boards, not a block. Its volume "
+               f"({tk['volume_mm3'] / 1e6:.2f} litres) and surface "
+               f"({tk['surface_area_mm2'] / 1e6:.3f} m2) give a {g:g} mm board "
+               f"(measured {tk['gauge_measured_mm']:g}), {tk['board_area_m2']:.3f} m2 of it, "
+               f"costed as the panels below — provisional, from the model alone; the "
+               f"drawing's construction decides")
+        children: List[str] = []
+        for i, pnl in enumerate(tk["panels"], 1):
+            code = f"{pn}-P{i}"
+            if _pn_key(code) in held:
+                continue
+            a, b = float(pnl["length_mm"]), float(pnl["width_mm"])
+            rec: Dict[str, Any] = {
+                "part_number": code,
+                "description": f"{part.get('description') or pn} — {pnl['name']} "
+                               f"{a:g} x {b:g} x {g:g} mm (from the model's take-off)",
+                "quantity": int(pnl["count"]),
+                "normalized_material": mat,
+                "materials": list(part.get("materials") or [mat]),
+                "blank_length_mm": a, "blank_width_mm": b,
+                "normalized_geometry": {"blank_length_mm": a, "blank_width_mm": b},
+                "geometry_source": "solidworks_native",
+                "owning_assembly": pn, "bom_parent": pn,
+                "hollow_board_panel_of": pn,
+                "is_bought_in": False,
+                "page_roles": list(part.get("page_roles") or []),
+                "pages": list(part.get("pages") or []),
+                "review_flags": [f"panel of {pn}: {why}"],
+            }
+            for _k in ("surface_finishes", "construction_note_laminate"):
+                if part.get(_k):
+                    rec[_k] = part.get(_k)
+            _apply_field(rec, "normalized_thickness_mm", g, "model_extents_board_gauge")
+            # THE CUT TRAVELS WITH THE PANEL. Once the part stands for its panels the
+            # route rules its own routing not applicable (an assembly is not routed), so
+            # a panel carrying no cut would let the cutting labour vanish. A board panel
+            # is cut on the router — the board convention the parent's own line used.
+            try:
+                from estimator import record_operation as _rec_op
+                _rec_op(rec, "cnc_routing", "hollow_board_takeoff", inferred=True)
+            except Exception:                                        # noqa: BLE001
+                rec.setdefault("inferred_operations", []).append("cnc_routing")
+            parts.append(rec)
+            held.add(_pn_key(code))
+            children.append(code)
+        if not children:
+            continue
+        # precedence: direct-write ok — a structural stamp (the part now stands for its
+        # panels), not an arbitrated datum; the material it no longer carries is theirs.
+        part["is_assembly_parent"] = True
+        part["assembly_children"] = list(part.get("assembly_children") or []) + children
+        part["hollow_board_takeoff"] = dict(tk)
+        part.setdefault("review_flags", []).append(why)
+        try:
+            from source_precedence import raise_manufacturing_question as _ask_h
+            _ask_h(part,
+                   f"{pn} is costed as a {g:g} mm board box from its model",
+                   why + ": " + "; ".join(
+                       f"{p['count']} x {p['name']} {p['length_mm']:g} x {p['width_mm']:g}"
+                       for p in tk["panels"]),
+                   "confirm the construction, the board gauge and the panels against the "
+                   "drawing's section; correct any panel and the price follows",
+                   "solidworks.hollow_board_takeoff")
+        except Exception:                                            # noqa: BLE001
+            pass
+        split.append(pn)
+        print(f"   [hierarchy] {pn}: hollow board construction — {len(children)} panel "
+              f"line(s) at {g:g} mm from the model's volume and surface", flush=True)
+    return split
 
 
 def _shared_child_split(total: Optional[float],
