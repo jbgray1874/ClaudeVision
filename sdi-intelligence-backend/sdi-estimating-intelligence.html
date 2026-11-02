@@ -951,6 +951,29 @@
       </div>
       <div class="files" id="exOut" style="margin-top:10px"></div>
     </section>
+
+    <!-- ══ PACK EXTRACT (D-640) ══════════════════════════════════════
+         ONE READER ON THE PACK, ORGANISED. JG, 2 Nov 2026: a SolidWorks drawing-pack extract
+         and an xAI extract, each a button, on the drawings chosen with "Add drawing files…" or
+         "Add job folder…" above. The files are staged exactly as an estimate stages them and
+         queued for the runner, which runs that one reader and files its output: nothing is
+         priced and no workbook template is used. -->
+    <section class="card" id="packExtractCard">
+      <h2>Pack extract — one reader, no estimate</h2>
+      <p class="sub" style="margin:0 0 12px">Reads the drawings in the <b>Drawings</b> list above
+        (the same files "Add drawing files…" and "Add job folder…" choose) with <b>one reader</b>
+        and files what it found, organised, under the client and drawing number. <b>Prices
+        nothing.</b></p>
+      <div class="exgrid">
+        <button class="btn-run" id="pxSw"
+                title="The SolidWorks analyser on the pack's models: every part's material, gauge, flat blank, bends, cut length, mass and envelope; the assembly tree with per-parent counts; the product BOM; the drawings' BOM tables; and what could not be read. Workbook and JSON.">
+          SolidWorks pack extract</button>
+        <button class="btn-run" id="pxXai"
+                title="The whole-document xAI read on the pack's PDFs, exactly as returned (JSON), and laid out as tables (workbook).">
+          xAI extract</button>
+      </div>
+      <div class="files" id="pxOut" style="margin-top:10px"></div>
+    </section>
   </div>
 
   <!-- ══ RUN ════════════════════════════════════════════════════════ -->
@@ -3288,6 +3311,84 @@ async function findSavedRuns(){
   }
   refresh();
 }
+/* ── PACK EXTRACT (D-640): one reader on the chosen drawings, queued for the runner ── */
+async function runPackExtract(kind, label){
+  const out = document.getElementById("pxOut");
+  const dn = safe(drawing.value), cl = safe(client.value);
+  line("");
+  line("── " + label + " ──");
+  if(!dn || !cl){
+    line("Type the client and the drawing number first: they name the folder it is filed in.");
+    if(out) out.textContent = label + ": client and drawing number needed";
+    return;
+  }
+  const folder = drawings.find(d => d.is_dir);
+  const files = drawings.filter(d => !d.is_dir).map(d => d.path);
+  if(!folder && !files.length){
+    line("Add the drawings first: Add drawing files… or Add job folder….");
+    if(out) out.textContent = label + ": add the drawings first";
+    return;
+  }
+  if(out) out.textContent = label + ": queueing…";
+  let j, r;
+  try{
+    r = await api("/api/estimate/pack-extract", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({kind: kind, client: cl, drawing_number: dn,
+                           job_folder: folder ? folder.path : "", files: files})});
+    j = await r.json().catch(() => ({}));
+  }catch(err){
+    line(label.toUpperCase() + " FAILED — " + (err && err.message ? err.message : String(err)));
+    if(out) out.textContent = label + " failed";
+    return;
+  }
+  if(!r.ok){
+    const why = j.detail || j.error || ("HTTP " + r.status);
+    line(label.toUpperCase() + " REFUSED — " + why);
+    if(out) out.textContent = label + " refused: " + why;
+    return;
+  }
+  line("Queued: " + label + " → " + (j.output_path || ""));
+  let seen = 0;
+  const tick = async () => {
+    let s, rr;
+    try{
+      rr = await api("/api/estimate/" + encodeURIComponent(j.run_id));
+      s = await rr.json();
+    }catch(e){ setTimeout(tick, 4000); return; }      /* a dropped poll is not a failed run */
+    if(rr.status === 404){
+      line("The service no longer holds this extract; look in " + (j.output_path || "its folder") + ".");
+      return;
+    }
+    (s.log || []).slice(seen).forEach(line); seen = (s.log || []).length;
+    if(s.status === "queued" || s.status === "running"){
+      if(out) out.textContent = label + ": " + (s.status === "running"
+        ? "reading on " + (s.runner || "the runner") + "…" : "queued…");
+      setTimeout(tick, 4000); return;
+    }
+    if(!out) return;
+    out.innerHTML = "";
+    if(s.status === "done"){
+      (s.deliverables || []).forEach(d => {
+        const a = document.createElement("a");
+        a.href = "/api/file?path=" + encodeURIComponent(d.path);
+        a.textContent = d.name; a.target = "_blank"; a.rel = "noopener";
+        a.style.marginRight = "12px";
+        out.appendChild(a);
+      });
+      if(!(s.deliverables || []).length) out.textContent = label + ": nothing was written — see the log";
+    }else{
+      out.textContent = label + " failed: " + (s.error || "see the log");
+      if(s.error) line(s.error);
+    }
+  };
+  tick();
+}
+[["pxSw","sw","SolidWorks pack extract"], ["pxXai","xai","xAI extract"]].forEach(([id, kind, label]) => {
+  const b = document.getElementById(id);
+  if(b) b.addEventListener("click", () => runPackExtract(kind, label));
+});
+
 const exFindBtn = document.getElementById("exFind");
 if(exFindBtn) exFindBtn.addEventListener("click", findSavedRuns);
 const exRunPick = document.getElementById("exRun");
