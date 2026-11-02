@@ -289,12 +289,17 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
         return report("running", f"{current.get('drawing')} ({current.get('customer')})",
                       counts=tally, current=dict(current), recent=recent_runs(ledger))
 
+    switched_off: List[bool] = []
+
     def before_each(d: ler.Decision) -> bool:
         current.clear()
         current.update(customer=d.row.customer, drawing=d.row.drawing,
                        quantities=list(d.quantities), since=ler._now())
         current_key["key"] = ler.job_key(d.row)
-        return switch.beat(_running())
+        on = switch.beat(_running())
+        if not on:
+            switched_off.append(True)
+        return on
 
     # A JOB IS MINUTES TO HOURS, AND THE PAGE MUST STILL SEE THE WATCHER. The runner waits on
     # each job by sleeping between status calls; here each sleep is followed by a beat, so the
@@ -326,10 +331,42 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
             write_back(Path(s["workbook"]), d.row, attempt, say=say)
             ler.save_ledger(s["ledger"], ledger)
 
-    out["ran"] = ler.run_ready(decisions, portal, ledger, s["ledger"], say=say,
-                               before_each=before_each, after_each=after_each,
-                               email_to=email_to,
-                               **(wait if wait is not None else {"sleep": sleep_and_beat}))
+    # ONE JOB AT A TIME, AND THE SHEET IS READ AGAIN AFTER EACH (D-639). The cycle used to
+    # read the sheet once and run only the rows ready at that moment, so a row made ready
+    # while a job ran (a new line on the sheet, a pack dropped into its folder) waited for
+    # the whole cycle to end and then LIVE_ENQUIRY_POLL_MINUTES more. Now each finished job
+    # is followed by a fresh read of the sheet and the folders, and whatever is ready then
+    # is next. A row is tried at most once a cycle, so a failure cannot loop; a switch
+    # turned off, a portal that stops answering, or a job still running at its time limit
+    # ends the cycle exactly as before.
+    _wait = wait if wait is not None else {"sleep": sleep_and_beat}
+    tried: set = set()
+    ran: List[Dict[str, Any]] = []
+    while True:
+        ready = [d for d in decisions
+                 if d.status == "ready" and ler.job_key(d.row) not in tried]
+        if not ready:
+            break
+        nxt = ready[0]
+        tried.add(ler.job_key(nxt.row))
+        batch = ler.run_ready([nxt], portal, ledger, s["ledger"], say=say,
+                              before_each=before_each, after_each=after_each,
+                              email_to=email_to, **_wait)
+        ran += batch
+        if batch and batch[-1].get("status") not in {"done", "error"}:
+            break                                    # still running at its time limit
+        if switched_off:
+            break                                    # switched off before it was queued
+        if not batch and not any(d.status == "ready" and ler.job_key(d.row) not in tried
+                                 for d in decisions):
+            break
+        try:
+            sources = ler._sources(s["root"])
+            decisions = ler.plan(ler.read_sheet(s["workbook"]), sources, ledger)
+        except Exception as exc:                                      # noqa: BLE001
+            say(f"   (the sheet could not be read again after {nxt.row.drawing}: "
+                f"{type(exc).__name__}: {exc}; carrying on with the last read)")
+    out["ran"] = ran
     after = ler.plan(ler.read_sheet(s["workbook"]), sources, ledger)
     ler.write_status(after, s["ledger"])
     out["counts"] = counts(after)
