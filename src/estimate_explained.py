@@ -3623,6 +3623,11 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             _wb = str(_basis.get("weight_basis"))
             add(f"<p><b>The weight the lookups were asked.</b> "
                 f"{_wb[0].upper() + _wb[1:]}.</p>")
+        # A STATED WEIGHT THAT COULD NOT BE OWNED stays an open question, in print.
+        if _basis.get("stated_weight_unverified"):
+            _wu = str(_basis.get("stated_weight_unverified"))
+            add(f"<p><b>A stated weight was not used.</b> "
+                f"{_wu[0].upper() + _wu[1:]}.</p>")
         # WHAT WAS LEFT OUT, BY NAME. A unit weight that comes up short against the title
         # block is a part that was not weighed, and a tally of "2 parts had no blank" cannot
         # tell anybody which. Named, it is one line for design to answer.

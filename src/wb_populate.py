@@ -1984,6 +1984,21 @@ def costed_geometry_value(pe: Dict[str, Any], *names: str) -> Any:
 # one file and not board in another.
 
 
+def _buying_unit_conflict(sheet_price: Any, cpp: Any, pps: Any) -> bool:
+    """A claimed stock-sheet price the row's own nest disproves (SCRUM-182).
+
+    True when dividing the claimed sheet price by the nest returns less than a third of
+    the engine's own per-part money: a figure that cheap per sheet is a piece wearing
+    the sheet column. A SUSPICION DETECTOR, never proof of either basis — the caller
+    leaves the row unpriced with the conflict named, and never invents a synthetic
+    sheet rate to make the two numbers agree."""
+    try:
+        sp, c, n = float(sheet_price), float(cpp), float(pps)
+    except (TypeError, ValueError):
+        return False
+    return bool(sp > 0 and c > 0 and n > 1 and sp / n < c / 3.0)
+
+
 def _board_sheet_price_from_kg_rate(material, thickness_mm, sheet_l_mm, sheet_w_mm):
     """A board's cost per SHEET from its £/kg rate x sheet volume x density.
 
@@ -6975,6 +6990,32 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                       f"{str(pe.get('normalized_material') or '').upper()} £/kg rate x sheet volume "
                       f"x density (£{_sheet_price:.2f}/sheet) — an SDI material rate, not a supplier "
                       f"quote; confirm the board grade.", flags)
+        # THE CHARGED CELL IS CROSS-CHECKED, AND A CONFLICT PRICES NOTHING (SCRUM-182).
+        # The template's own formula divides this cell by the row's nest, so a stored
+        # "sheet price" must hand back the engine's per-part money. 12678-01-GA wrote a
+        # per-piece £7.50 here and the nest divided it into £0.31 shelves. The detector
+        # below is a SUSPICION, never proof of either basis — so nothing is rebuilt and
+        # no synthetic sheet rate is invented: a verified sheet price nests as before, a
+        # verified per-part allowance travels with its own nest-of-one, and a figure the
+        # two readings of which disagree is left OFF the sheet, with the conflict and
+        # the question on the row, until a person says what the price bought.
+        _cpp_chk = _safe(me.get("cost_per_part_gbp") or me.get("unit_material_cost_gbp"))
+        _pps_chk = _safe(se.get("parts_per_sheet") or me.get("parts_per_sheet"))
+        if _buying_unit_conflict(_sheet_price, _cpp_chk, _pps_chk):
+            _flag(f"Other-sheet {pe.get('part_number')} CONFLICTING BUYING BASES: "
+                  f"£{float(_sheet_price):.2f} claims to be the stock sheet, but divided "
+                  f"by the nest of {float(_pps_chk):g} it returns "
+                  f"£{float(_sheet_price) / float(_pps_chk):.2f} against the engine's "
+                  f"£{float(_cpp_chk):.2f} a part. Neither basis is verified, so no sheet "
+                  f"price is written and the row is unpriced until a person says what the "
+                  f"price buys (SCRUM-182).", flags)
+            pe.setdefault("review_flags", []).append(
+                f"{pe.get('part_number')}: CONFLICTING BUYING BASES — a claimed sheet "
+                f"price of £{float(_sheet_price):.2f} against the engine's "
+                f"£{float(_cpp_chk):.2f} a part under a nest of {float(_pps_chk):g}; the "
+                f"row is left unpriced — confirm whether the figure bought a stock sheet "
+                f"or a cut piece")
+            _sheet_price = None
         if _sheet_price:
             ws.cell(row=row, column=o["col_cost_per_sheet"], value=_sheet_price)
         else:

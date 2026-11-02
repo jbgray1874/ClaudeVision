@@ -374,7 +374,12 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any,
     measured_kg = weight_kg
     _sw = stated_weight if isinstance(stated_weight, dict) else {}
     _sw_kg = _num(_sw.get("kg"))
-    _stated_in_charge = bool(_sw_kg and skipped and _sw_kg > measured_kg)
+    # AND ONLY A WEIGHT THAT BELONGS TO THE PRODUCT DRIVES (second 12678 review): a
+    # figure read off a sheet that could not be matched to the declared product is an
+    # unverified observation. It never takes charge on the strength of a warning
+    # string; it is recorded as an open question and the measured figure stands.
+    _sw_ok = _sw.get("verified", True) is not False
+    _stated_in_charge = bool(_sw_kg and skipped and _sw_kg > measured_kg and _sw_ok)
     if _stated_in_charge:
         weight_kg = float(_sw_kg)
     out = {
@@ -388,6 +393,12 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any,
             f"({_sw.get('where') or 'its own sheet'}); the measured blanks give "
             f"{round(measured_kg, 2):g} kg with {skipped} part(s) unweighed, so the stated "
             f"weight drives packaging and delivery") if _stated_in_charge else None,
+        "stated_weight_unverified": (
+            f"a stated weight of {float(_sw_kg):g} kg was found "
+            f"({_sw.get('where') or 'a sheet of the pack'}) but could not be matched to "
+            f"the declared product, so it does NOT drive the shipment; the measured "
+            f"figure stands and the weight stays an open question"
+            ) if (_sw_kg and not _sw_ok) else None,
         "largest_part_mm": [longest, widest] if longest and widest else None,
         "parts_measured": counted, "parts_without_a_blank": skipped,
         # Counted separately from an ordinary miss: a part left out because its recorded
