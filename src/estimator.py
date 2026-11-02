@@ -14014,9 +14014,18 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                     _env = _cl.product_envelope(summary, parts)
                 except Exception:                                    # noqa: BLE001
                     _env = None
-                _cline = (_cl.packaging_line(parts, _oq, customer=_cust, envelope=_env)
+                # THE PACK'S STATED WEIGHT RIDES WITH THE ENVELOPE (SCRUM-178), so a
+                # partially weighed order is not asked for as a 2 kg parcel when the GA
+                # states 33.07 kg.
+                try:
+                    _swt = _cl.product_stated_weight(summary)
+                except Exception:                                    # noqa: BLE001
+                    _swt = None
+                _cline = (_cl.packaging_line(parts, _oq, customer=_cust, envelope=_env,
+                                             stated_weight=_swt)
                           if _code == "PACKAGING"
-                          else _cl.delivery_line(parts, _oq, customer=_cust, envelope=_env))
+                          else _cl.delivery_line(parts, _oq, customer=_cust, envelope=_env,
+                                                 stated_weight=_swt))
             except Exception as _cl_exc:                    # noqa: BLE001
                 # THE ONE PATH WITH NO VOICE. A crash here used to land as a bare £0
                 # wearing the ordinary estimator-to-price text — indistinguishable from a

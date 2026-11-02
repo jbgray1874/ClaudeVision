@@ -235,7 +235,8 @@ def test_the_businesss_rates_price_the_counted_shipment_at_every_break(monkeypat
     import palletising
     plans = {1: {"pallet_count": 1, "carton_count": 1}, 5: {"pallet_count": 2, "carton_count": 5},
              50: {"pallet_count": 13, "carton_count": 50}}
-    monkeypatch.setattr(palletising, "plan_shipment", lambda parts, q: plans.get(int(q), {"pallet_count": 1}))
+    monkeypatch.setattr(palletising, "plan_shipment",
+                        lambda parts, q, **kw: plans.get(int(q), {"pallet_count": 1}))
     cl._LIVE_RATE_CACHE.clear(); cl._LIVE_RATE_STATUS.clear()
     order = {"customer": "M&S", "order_quantity": 5, "order_weight_kg": 220.0,
              "shipment": plans[5], "shippable_parts": [{"part_number": "P"}], "quantity_breaks": [1, 5, 50]}
