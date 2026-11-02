@@ -21,6 +21,13 @@ venv/
 .envbackup
 !config/*.example.env
 
+# ── SDI Same Day (Muhammad's brief_lite) - NEVER in this repository ──────
+# This repository is PUBLIC. A copy of Same Day sits in C:\ClaudeVision on the
+# laptop (31 Oct 2026), and its databases hold client chats, client profiles
+# and SDI's past work. One `git add -A` would have published them.
+/SameDayIntelligence/
+/SDI_Automation/
+
 # ── Output data (VERY IMPORTANT) ─────────────────────────────────────────
 output/
 *.json
