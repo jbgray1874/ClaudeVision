@@ -9,8 +9,8 @@ The chain under test, from the sheet to the answer:
 5. **Questions** are answered by grok-4.7 from that run's saved record: in the app, on the phone,
    and from the e-mail's page (D-616).
 
-Build under test: main-2026 at or after the commit named in the session, with the portal
-cherry-pick for D-616 (24eb4ff6). Tests 1 to 3 need no new estimate.
+Build under test: the commit the session last named, merged on the laptop ("fixes in"), with
+`check-services.ps1` showing both ports on it. Tests 1 to 3, 7 and 8 need no new estimate.
 
 ---
 
@@ -19,6 +19,7 @@ cherry-pick for D-616 (24eb4ff6). Tests 1 to 3 need no new estimate.
 | Check | How | Pass |
 |---|---|---|
 | Services and runner on HEAD | `.\tools\start\check-services.ps1 -Ports 8071,8072` | Both "matches HEAD" |
+| The page is the new one | Open `http://localhost:8072/estimating` and press Ctrl+F5 | The page reloads; an old copy in the browser cache would hide new cards and links |
 | Grok models | `python src\xai_models.py` | OK three times |
 | Your address is saved | Estimating page, "Email the finished estimate to" | Your address, then "Save as the default list" |
 | The workbook is closed | AI-Live-Enquiry.xlsx not open in Excel | No `~$AI-Live-Enquiry.xlsx` beside it |
@@ -148,7 +149,7 @@ Your `.env` already lists the Manual Estimates, parity and completed AI briefs f
 |---|---|---|
 | Command line | `.venv\Scripts\python.exe src\parity_job.py find 1282` | Lists the TTI 1282 workbooks, ISS 7 first, with why, and says "Clear" or "Choose by hand" with the reason |
 | A known pair | Parity by job number card: a job you have a manual estimate and an AI run for, Find both estimates | Both files and the reason shown before anything runs. If the match is not clear, nothing is ticked and Compare stays off until you choose |
-| Compare and file | Compare and file | Progress steps, then the outcome, both unit costs, any quantity note, the sell price line, and links to the report and both filed copies. The folder `parity\<client>\<drawing>\<date time>_<id>` holds `ai\`, `manual\`, the report and `parity_index.json` with a SHA-256 for each file |
+| Compare and file | Compare and file | Progress steps, then the outcome, both unit costs, any quantity note, a Scope line with part counts, the cost and selling lines, and links to the Parity report, the Money-cell report and both filed copies. The folder `parity\<client>\<drawing>\<date time>_<id>` holds `ai\`, `manual\`, both reports (`.parity.html` and `.full_parity.html`), the `.parity_detail.json` record and `parity_index.json` with a SHA-256 for each file |
 | A second press | Press Compare and file twice quickly | One comparison runs; the second press follows the first |
 | A different quantity | A job whose AI run was at another quantity than the manual sheet | Compared at the manual's quantity if the run priced it, or shown as "quantities differ" |
 | Search | By job number, a date range, then Outcome = Match | Filtered as asked; each row links its report |
@@ -157,22 +158,79 @@ Your `.env` already lists the Manual Estimates, parity and completed AI briefs f
 | At the time of a run | Tick "compare with the manual estimate when this estimate finishes", then run | The log ends "[parity] comparison filed to ..." or says the choice was not clear |
 | Phone, Wi-Fi off (after the portal update) | Parity tab | Same answers; running a comparison only for the named estimators |
 
-### 7a. The line-by-line report (D-623, SCRUM-157, no new run)
+### 7a. The line-by-line report (D-623, SCRUM-157, no new run, about 45 minutes)
 
-Three known pairs: jobs with a manual sheet and an AI run of the same drawing. Compare each by
-job number, then open "Parity report".
+This is SCRUM-157's acceptance. On three known pairs:
+- every manual delivery, packaging and installation line is listed with its AI counterpart or
+  "not in the AI estimate", with its cell;
+- cost is never compared with sell;
+- a run at another quantity is compared at the manual's quantity or marked not comparable;
+- scope is listed part by part, with made/bought (SCRUM-156) and missing material (SCRUM-155)
+  visible.
 
-| Test | Pass |
-|---|---|
-| How each side adds up | Both sides say whether their lines reach their own totals, with the gap if not |
-| Cost apart from sell | Material, labour, rebate and overheads, absorption and total unit cost in one table, each with its manual cell. Margin and sell price in another. No row compares a cost with a sell price |
-| Commercial lines | Every delivery, packaging and installation line on the manual sheet is listed with its AI counterpart or "not in the AI estimate", and its cell. AI-only lines say "not on the manual sheet" |
-| Scope | Parts on one side only; made on one and bought on the other; material not charged where the part is worked; quantity per unit; blank, gauge or nest behind a money difference |
-| Quantities | Same quantity: compared as they stand. Another quantity: the AI unit cost at the manual's quantity from the run's sweep, or "quantities differ" on every line |
-| Revision | Both revisions shown; "differs" when they do |
-| Drill-down | Each item under "The biggest differences" jumps to its line and cells |
-| Wording | Agrees, close or differs. Nothing calls either side wrong |
-| Money-cell report | Still linked as "Money-cell report" beside it |
+#### Step 1. Choose three pairs (5 minutes, nothing is filed)
+
+1. Estimating page on 8072, Ctrl+F5.
+2. Card **Parity by job number**, section **Compare jobs within a period**: From 1 Oct 2026,
+   To 31 Oct 2026, Client and Job blank. Press **Preview**.
+3. Rows whose Outcome is **would compare** have a clear manual sheet; the last column names it.
+   Choose three:
+   - one where the AI run and the manual sheet are at the same quantity;
+   - one where they differ, if the list has one: the AI run column shows "(N off)";
+   - 12677-01-GA if it is listed, because it carries SCRUM-155 and SCRUM-156.
+4. If fewer than three say would compare, widen the dates, or find a job by hand:
+   `.venv\Scripts\python.exe src\parity_job.py find <job number>`.
+
+Write the three drawing numbers down.
+
+#### Step 2. Compare each pair (2 minutes each)
+
+1. Top of the card: type the drawing number, and the client if you know it. Press
+   **Find both estimates**.
+2. Check the manual sheet and the AI run are the right ones. If nothing is ticked the match was
+   not clear: tick the right sheet, or use **Choose another from share…**.
+3. Press **Compare and file** and wait for the outcome line.
+4. Under the outcome there is now a **Scope:** line with part counts, and the links
+   **Parity report**, **Money-cell report**, **Manual sheet (filed copy)**, **AI sheet (filed copy)**.
+
+Pass: the Scope line is there. If it is missing, the line-by-line report could not be made for
+that pair: send that comparison's `parity_index.json` and move to the next pair.
+
+#### Step 3. Read the report against the sheet (10 minutes each)
+
+Open **Parity report**. Open **Manual sheet (filed copy)** in Excel beside it. Each line on the
+report names its cell on the manual sheet; for each check, look up at least one cell.
+
+| # | Where on the report | How to check it | Pass |
+|---|---|---|---|
+| 1 | **How each side adds up** | Read both lines | Both say "adds up". If one says "does not add up", write down the gap: that side's lines are suspect |
+| 2 | **Cost build-up** | Look up the manual cells for Total material cost and Total unit cost | Each manual figure equals its cell. Rows: total material, total labour, rebate and overhead absorption, customer rebate, overhead absorption divisor, total unit cost. **No sell price in this table** |
+| 3 | **Selling price** | Look up the margin and sell price cells | Only margin and sell price. An AI margin of 0 with "the engine leaves margin for the estimator to set" is expected |
+| 4 | **Delivery, packaging and installation** | In Excel, Ctrl+F on the manual sheet for: deliver, carriage, transport, pack, pallet, crate, install, site | **Every** line you find is on the report, with its cell, and either an AI line beside it or "not in the AI estimate". A manual commercial line missing from the report is a fail |
+| 5 | **Scope, part by part** | Choose two flagged parts. Find each part code on the manual sheet and in the AI sheet | Each flag is true: "only on the manual estimate", "only on the AI estimate", "bought on the manual, made on the AI" or the reverse, "material not charged on the … estimate", "quantity per unit X against Y", blank, gauge or nest. Parts that agree are folded under "The parts that agree" |
+| 6 | Scope on 12677-01-GA, if tested | The frame and the made/bought part | SCRUM-155 shows as "material not charged"; SCRUM-156 as made on one side, bought on the other |
+| 7 | The cards at the top, **Quantity and revision** | The manual's Quantity cell, and the AI run folder's "(N off)" | Same quantity: no quantity note. Different, and the run priced the manual's quantity: "compared at N off from the run's own quantity sweep", and the unit cost and sell price cards say "at N off". Different, not priced: "Quantities differ … re-run the estimate at N off", and every cost line says quantities differ |
+| 8 | Same card | The manual's Rev cell, or ISS in its file name | Both revisions shown; "differs" when they differ; a note when one side's revision is not recorded |
+| 9 | **The biggest differences** | Click three of them | Each jumps to its row, and that row shows its cell |
+| 10 | Anywhere | Read it | Only "agrees", "close" or "differs". Nothing says either side is wrong or correct |
+| 11 | **Money-cell report** link on the card | Open it | The old report still opens |
+
+#### Step 4. Once each, on any one pair
+
+| Test | Do | Pass |
+|---|---|---|
+| Two spreadsheets | Card **Parity report — for a job already estimated**: the same pair's AI workbook and manual sheet, then run | The first link is "Parity report, line by line", then "Money-cell report" |
+| A period | **Compare the period**, 1 to 31 Oct | Each row's "report" link opens the line-by-line report |
+| At the time of a run | Only if a run is happening anyway, with a manual workbook attached | The run log has "[deliverables] parity, line by line -> …" and that page is in the run's folder |
+| Phone, Wi-Fi off | Parity tab, search a drawing just compared, open its report | The line-by-line report opens. Named estimators only |
+
+#### What to send back for 7a
+
+- The three drawing numbers and each outcome.
+- Every check that failed: the drawing, the check number, the report section and the cell.
+- Above all, any manual delivery, packaging or installation line the report missed.
+- For a pair that looks wrong, its `parity_index.json` and `.parity_detail.json`, from
+  `parity\<client>\<drawing>\<date time>_<id>\`.
 
 ## 8. Ask by voice or text (D-620, D-622, no new run)
 
@@ -209,3 +267,6 @@ Ask the same saved estimate through the desk, the phone and the e-mail page.
 - Any answer that shows "record lookup", "Record unavailable", or a figure you cannot find in
   the workbook.
 - The self-running log lines for the test 4 run.
+- Parity (test 7): any row of the table that did not pass, with the drawing number.
+- The line-by-line report (test 7a): the list under "What to send back for 7a".
+- Voice (test 8): which phone and browser, and any job number the box heard wrongly.
