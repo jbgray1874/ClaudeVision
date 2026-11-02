@@ -838,10 +838,18 @@ def spoken(detail: Dict[str, Any]) -> str:
     h, q = detail["headline"], detail["quantity"]
     sc, rv = detail["scope"]["counts"], detail["revision"]
     drawing = _head_word(detail["manual"], "drawing") or _head_word(detail["ai"], "drawing")
-    out: List[str] = [f"SDI Intelligence parity walkthrough for {drawing}." if drawing
-                      else "SDI Intelligence parity walkthrough."]
+    customer = _head_word(detail["manual"], "customer") or _head_word(detail["ai"], "customer")
+    out: List[str] = [(f"SDI Intelligence parity walkthrough for {drawing}" if drawing
+                       else "SDI Intelligence parity walkthrough")
+                      + (f", for {customer}." if customer else ".")]
     out.append("The AI estimate is compared with the manual estimate, line by line. The manual "
                "estimate is the comparison, not automatically the right answer.")
+    man_rev, ai_rev = rv.get("manual"), rv.get("ai")
+    if man_rev and ai_rev and not rv.get("differs"):
+        out.append(f"Both are at revision {man_rev}.")
+    elif man_rev or ai_rev:
+        out.append(f"The manual sheet is at revision {man_rev or 'not recorded'} and the AI "
+                   f"estimate at revision {ai_rev or 'not recorded'}.")
     mq, aq = _f(q.get("manual")), _f(q.get("ai"))
     if q.get("comparable", True) and mq is not None and aq is not None and abs(mq - aq) < 1e-9:
         out.append(f"Both are costed at {mq:g} off.")
@@ -868,6 +876,24 @@ def spoken(detail: Dict[str, Any]) -> str:
             out.append(word)
     else:
         out.append("One side's unit cost could not be read; the report says which.")
+    # THE MAIN REASONS, from the comparison's own rows: material and labour from the cost
+    # build-up, then each commercial category that moves money or sits on one side only.
+    for key, said in (("material", "Material"), ("labour", "Labour")):
+        row = next((r for r in detail["cost_build"] if r["key"] == key), {})
+        d = _f(row.get("delta"))
+        if d and abs(d) >= 0.5:
+            out.append(f"{said} is {_gbp_words(abs(d))} "
+                       f"{'higher' if d > 0 else 'lower'} on the AI estimate.")
+    for c in (detail.get("commercial") or {}).get("categories") or []:
+        if c.get("presence") == "both":
+            d = _f(c.get("delta"))
+            if d and abs(d) >= 0.5:
+                out.append(f"{c['label']} is {_gbp_words(abs(d))} "
+                           f"{'higher' if d > 0 else 'lower'} on the AI estimate.")
+        elif c.get("presence") == "manual only":
+            out.append(f"{c['label']} is on the manual sheet only.")
+        elif c.get("presence") == "AI only":
+            out.append(f"{c['label']} is on the AI estimate only.")
     if h.get("ai_sell_gbp") is not None and h.get("manual_sell_gbp") is not None:
         out.append(f"The selling side is kept apart from cost. The AI sell price is "
                    f"{_gbp_words(h['ai_sell_gbp'])}, against {_gbp_words(h['manual_sell_gbp'])} "
@@ -905,6 +931,11 @@ def spoken(detail: Dict[str, Any]) -> str:
         if balances is False:
             out.append(f"Take care. The {side_name} side's lines do not reach its own "
                        f"totals, so its figures are suspect.")
+    unread = sum(1 for r in detail["cost_build"] + detail["selling"]
+                 if r.get("status") == "not read")
+    if unread:
+        out.append(f"Take care. {unread} of the compared figures could not be read; the "
+                   f"report names {'it' if unread == 1 else 'each one'}.")
     out.append("The full report lists every line with its cell on the sheet.")
     text = " ".join(out)
     # The spoken rules: nothing a voice reads badly. Money is already words.

@@ -2946,6 +2946,70 @@ def _file_link(path: Any) -> Optional[str]:
     return f"/api/file?path={urllib.parse.quote(str(path))}" if path else None
 
 
+class ParityAskRequest(BaseModel):
+    folder: str
+    question: str = ""
+
+
+@router.post("/parity/ask")
+def parity_ask(req: ParityAskRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """A question about one FILED comparison (D-628), answered by the shared question service
+    from that exact saved record: the line-by-line detail, with the spoken summary as its
+    commentary. It reads the filed copies and changes nothing; from outside the office the
+    parity prefix already holds this to the named estimators."""
+    _check_key(x_sdi_key)
+    question = str(req.question or "").strip()[:1000]
+    if not question:
+        raise HTTPException(400, "Type a question about the comparison first.")
+    folder = Path(str(req.folder or "").strip())
+    try:
+        inside = folder.resolve()
+        root = PARITY_ROOT.resolve()
+        ok = inside == root or root in inside.parents
+    except OSError:
+        ok = False
+    if not ok:
+        raise HTTPException(400, "That folder is not a filed comparison under the parity area.")
+    if not (folder / "parity_index.json").is_file():
+        raise HTTPException(404, "No filed comparison was found in that folder.")
+    detail = sorted(folder.glob("*.parity_detail.json"))
+    if not detail:
+        raise HTTPException(409, "This comparison predates the line-by-line report. Press "
+                                 "Compare and file again — the filed copies are reused and "
+                                 "it takes seconds — then ask.")
+    if not Path(_ENGINE_PYTHON).exists():
+        return {"status": "unavailable",
+                "answer": "Questions are answered on the machine that runs estimates, and "
+                          "this one has no engine."}
+    commentary = ""
+    spoken = sorted(folder.glob("*_parity_walkthrough.txt"))
+    if spoken:
+        try:
+            commentary = spoken[0].read_text(encoding="utf-8")[:4000]
+        except OSError:
+            commentary = ""
+    payload = {"question": question, "comparison_path": str(detail[0]),
+               "comparison_id": folder.name,
+               "sources": [p.name for p in detail] + [p.name for p in spoken],
+               "commentary": commentary}
+    try:
+        proc = subprocess.run([_ENGINE_PYTHON, _QA_CLI], input=json.dumps(payload),
+                              capture_output=True, text=True, encoding="utf-8", timeout=150)
+    except subprocess.TimeoutExpired:
+        return {"status": "unavailable", "answer": "The answer took too long. Ask again, or "
+                                                   "more narrowly."}
+    for line in reversed((proc.stdout or "").strip().splitlines()):
+        try:
+            got = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(got, dict) and "answer" in got:
+            return got
+    return {"status": "unavailable",
+            "answer": "No answer came back: " + ((proc.stderr or "").strip()[-300:]
+                                                 or "the engine said nothing")}
+
+
 def _report_links(idx: Dict[str, Any]) -> Dict[str, Any]:
     """One filed comparison with links to its report and the filed copies of both sheets."""
     folder = Path(str(idx.get("folder") or ""))

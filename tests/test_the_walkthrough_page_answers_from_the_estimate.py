@@ -168,6 +168,15 @@ def test_the_page_serves_only_the_runs_own_files_and_holds_the_quote(service):
     with pytest.raises(er.HTTPException) as held:
         er.walkthrough_file(token, "12678-01-GA_quote.html")
     assert held.value.status_code == 403
+    # ── AND IT IS NEVER OFFERED AS A LINK (D-629) ────────────────────────────
+    # The page used to list the held quotation like any file; tapping it answered with the
+    # refusal above, in JSON, which reads as a broken button. Held files are named apart,
+    # with the reason, and the page writes them as words.
+    view = er.walkthrough_view(token)
+    assert "12678-01-GA_quote.html" not in view["files"]
+    assert any(h["name"] == "12678-01-GA_quote.html" and "held" in h["why"]
+               for h in view["held"])
+    assert "w.held" in PAGE and "held until released" in PAGE
 
 
 def test_an_unknown_or_malformed_token_is_not_found(service):

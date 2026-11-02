@@ -659,6 +659,8 @@ def run_job(job: str, manual: Optional[str] = None, ai: Optional[str] = None, *,
         # always, both filed with the report.
         "walkthrough_wav": Path(result["walkthrough_wav"]).name if result.get("walkthrough_wav") else "",
         "walkthrough_txt": Path(result["walkthrough_txt"]).name if result.get("walkthrough_txt") else "",
+        # An audio failure never costs the comparison; it is said here, explicitly, instead.
+        "walkthrough_note": str(result.get("walkthrough_note") or ""),
         "headline": headline,
         "lines": _detail_lines(detail) if use_detail else _money_lines(bundle),
         "lines_from": "line by line" if use_detail else "money cells",

@@ -206,6 +206,43 @@ def test_two_periods_preview_answers_at_once(shares):
     assert preview["rows_a"] == [] and preview["rows_b"][0]["outcome"] == "would compare"
 
 
+def test_ask_about_a_filed_comparison_reads_that_folder_only(shares, monkeypatch):
+    """D-629: the question route answers from the filed comparison's own detail record, with
+    its spoken words as commentary, and refuses anything outside the parity area."""
+    er, _, _, parity = shares
+    folder = parity / "Acme" / "12677-01-GA" / "2026-11-02 12-00-00_abcd1234"
+    folder.mkdir(parents=True)
+    (folder / "parity_index.json").write_text("{}", encoding="utf-8")
+    (folder / "12677.parity_detail.json").write_text(
+        json.dumps({"schema": "sdi_parity_detail.v1"}), encoding="utf-8")
+    (folder / "12677_parity_walkthrough.txt").write_text("the words", encoding="utf-8")
+    sent = {}
+
+    class Done:
+        stdout = json.dumps({"status": "answered", "answer": "ok", "recorded": []})
+        stderr = ""
+
+    def fake_run(cmd, **kw):
+        sent["payload"] = json.loads(kw.get("input") or "{}")
+        return Done()
+    monkeypatch.setattr(er.subprocess, "run", fake_run)
+    out = er.parity_ask(er.ParityAskRequest(folder=str(folder), question="why the gap?"))
+    assert out["answer"] == "ok"
+    assert sent["payload"]["comparison_path"].endswith("12677.parity_detail.json")
+    assert sent["payload"]["commentary"] == "the words"
+    with pytest.raises(er.HTTPException) as outside:
+        er.parity_ask(er.ParityAskRequest(folder=str(parity.parent / "elsewhere"),
+                                          question="why"))
+    assert outside.value.status_code == 400
+    old = parity / "Acme" / "12677-01-GA" / "2026-10-01 09-00-00_cafe0001"
+    old.mkdir(parents=True)
+    (old / "parity_index.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(er.HTTPException) as predates:
+        er.parity_ask(er.ParityAskRequest(folder=str(old), question="why"))
+    assert predates.value.status_code == 409
+    assert "Compare and file again" in str(predates.value.detail)
+
+
 def test_an_unknown_or_malformed_task_id_is_a_404(shares):
     er = shares[0]
     for tid in ("0123456789ab", "../../etc"):

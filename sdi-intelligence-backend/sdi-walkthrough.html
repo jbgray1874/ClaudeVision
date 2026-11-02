@@ -163,9 +163,13 @@ async function load(){
     if(V) V.status().then(() => { if(V.canSpeak()){ $("sayWords").hidden = false;
       $("sayWords").onclick = () => V.speak(w.commentary, $("sayWords")); } });
   }
-  if((w.files || []).length){
+  /* A file the service will not serve is words, not a link (D-629): the held customer
+     quotation used to render as a button that answered with a refusal. */
+  const heldFiles = (w.held || []).map(h => "<li><span style='opacity:.7'>" + esc(h.name)
+    + " — " + esc(h.why || "held until released") + "</span></li>").join("");
+  if((w.files || []).length || heldFiles){
     $("files").innerHTML = w.files.map(n => "<li><a href='" + fileUrl(n) + "' target='_blank' rel='noopener'>"
-      + esc(n) + "</a></li>").join("");
+      + esc(n) + "</a></li>").join("") + heldFiles;
     $("filesBox").hidden = false;
   }
   goToHash();
