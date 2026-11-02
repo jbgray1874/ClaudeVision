@@ -134,6 +134,18 @@ def test_a_file_too_large_to_attach_is_named_too(tmp_path, monkeypatch):
 
 # ── when it sends, and when it does not ──────────────────────────────────────
 
+def test_the_walkthrough_is_attached_as_audio_so_a_phone_offers_to_play_it(tmp_path):
+    wav = tmp_path / "12677_walkthrough.wav"
+    wav.write_bytes(b"RIFF0000WAVEfmt ")
+    words = tmp_path / "12677_walkthrough.txt"
+    words.write_text("The unit cost is four hundred pounds.", encoding="utf-8")
+    files, skipped = estimate_email.readable_attachments([str(wav), str(words)])
+    assert not skipped
+    kinds = {f["name"]: (f["maintype"], f["subtype"]) for f in files}
+    assert kinds["12677_walkthrough.wav"] == ("audio", "wav")
+    assert kinds["12677_walkthrough.txt"] == ("text", "plain")
+
+
 def test_an_empty_box_sends_to_nobody():
     """So an engine test does not land in an estimator's inbox at two in the morning."""
     out = estimate_email.send([], "subject", "<p>x</p>", "x", [])

@@ -3,14 +3,45 @@
 The chain under test, from the sheet to the answer:
 
 1. **AI Estimate Self-Running** reads the AI-Live-Enquiry sheet and runs each ready row.
-2. The **runner** estimates it and files the books to AISheets **and** to completed AI briefs (D-617).
+2. The **runner** estimates it, speaks the walkthrough to a `.wav` (D-609), and files the books
+   to AISheets **and** to completed AI briefs (D-617).
 3. AICompleted is set to **YES** on the sheet.
 4. The **e-mail** goes to the saved list: price at each quantity, files, two buttons (D-609, D-613).
 5. **Questions** are answered by grok-4.7 from that run's saved record: in the app, on the phone,
    and from the e-mail's page (D-616).
 
 Build under test: the commit the session last named, merged on the laptop ("fixes in"), with
-`check-services.ps1` showing both ports on it. Tests 1 to 3, 7 and 8 need no new estimate.
+`check-services.ps1` showing both ports on it. Tests 1 to 3, 7, 8 and 10 need no new estimate.
+
+---
+
+## Released, and where each is tested
+
+| # | Released | What it does | Changes | Jira | Test |
+|---|---|---|---|---|---|
+| 1 | Self-running from the AI-Live-Enquiry sheet | Runs each ready row; writes YES back | D-608, D-608a, D-608b | | 4, 6 |
+| 2 | Filing to completed AI briefs | Every run also filed there, numbered v1, v2 | D-617, D-617a | | 1, 4 |
+| 3 | Restart-safe run history | Runs survive a service restart; one e-mail per run | D-618 | SCRUM-159 | 9 |
+| 4 | Spoken walkthrough, the `.wav` | Each estimate writes a spoken summary and saves it as a `.wav` beside the workbook | D-609, D-624 | | 5b |
+| 5 | The e-mail | Price at each quantity, two buttons, the files and the `.wav` attached | D-609, D-613, D-614 | | 5a |
+| 6 | Walkthrough page | From the e-mail: plays the `.wav`, shows its words, prices, files, a question box | D-610, D-613 | | 5c |
+| 7 | Question window, the chat | Answered by grok-4.7 from one saved record, the record's own figures first | D-612, D-615, D-616 | SCRUM-141 | 2, 3, prompts |
+| 8 | Ask by voice | Speak or type; the answer always shown, read aloud on request | D-620, D-622 | SCRUM-141 | 8 |
+| 9 | Parity per job | Find by job number, compare the filed copies, the line-by-line report | D-619, D-621, D-623 | SCRUM-158, SCRUM-157 | 7, 7a |
+| 10 | Parity per time frame | One period, or Period A against Period B | D-619, D-621, D-623a | SCRUM-158 | 7b |
+| 11 | Engine accuracy baselines | The tools are released; the baselines are not frozen yet | | SCRUM-133 to SCRUM-136 | 10 |
+
+### The order to test in
+
+1. **Section 0**, 2 minutes.
+2. **Tests 1, 2 and 3**: no new run.
+3. **Test 4**: one self-running run of 12677-01-GA. While it runs, do **test 9** steps 1 to 3.
+4. **Test 5**: the e-mail from that run, its `.wav` and the walkthrough page.
+5. **Test 9** step 4: restart again after it finished.
+6. **Test 8**: voice.
+7. **Tests 7, 7a and 7b**: parity per job and per time frame.
+8. **Test 10**: engine accuracy baselines.
+9. **Test 6**: the edge cases.
 
 ---
 
@@ -112,18 +143,46 @@ made/bought), so its fresh book is worth reading anyway.
 
 ---
 
-## 5. The e-mail
+## 5. The e-mail, the spoken walkthrough and the walkthrough page (after test 4)
 
-| Check | Pass |
-|---|---|
-| Subject | Drawing, state, unit cost at the run quantity |
-| Top of the note | **Price at each quantity**: 1, 5 and 10 off, unit cost and order value |
-| Buttons | **Ask a question about this estimate**, **Listen to the walkthrough** |
-| Attachments | Workbook, report, explanation, walkthrough `.wav`; the customer quote held while provisional |
+Open the test 4 workbook from `AISheets\M&S\12677-01-GA\<date time> (1 off)\` beside you: every
+figure below is checked against it.
 
-On the phone, Wi-Fi and VPN off: tap **Ask a question**. Pass: Microsoft sign-in, then the
-estimate's page at its question box, prices at the top. Ask the same prompts as in test 3 and
-compare: the same record, the same recorded figures. **Listen** plays the walkthrough.
+### 5a. The e-mail
+
+| Check | How | Pass |
+|---|---|---|
+| One e-mail | Your inbox, and anyone else on the saved list | Exactly one per run. A second one after a restart fails test 9 |
+| Subject | Read it | Drawing, state, unit cost at the run quantity |
+| Prices | The **Price at each quantity** table at the top | 1, 5 and 10 off, each unit cost equal to the workbook's at that quantity, order value = unit cost × quantity |
+| What needs your eye | Under the prices | The same items the report lists for review |
+| Buttons | Look | **Ask a question about this estimate** and **Listen to the walkthrough** |
+| Attachments | Look | Workbook, report, explanation and `<workbook name>_walkthrough.wav`. The customer quote is held while the estimate is provisional |
+| A file too large | Only if the note says so | A file over 8 MB, or one past 20 MB in total, is not attached; the note names it and where it is. A walkthrough over about 4 minutes passes 8 MB |
+
+### 5b. The spoken walkthrough, the `.wav`
+
+| Check | How | Pass |
+|---|---|---|
+| Made | The run's console, or the run log | A line `[walkthrough] <name>_walkthrough.wav (N MB) and <name>_walkthrough.txt` |
+| Filed | `AISheets\...\<date time> (1 off)\` and `completed AI briefs\...\v2 (1 off)\` | Both `_walkthrough.wav` and `_walkthrough.txt` beside the workbook |
+| Plays on the desk | Double-click the attachment in Outlook | Plays in a British voice |
+| Plays on the phone | Tap the attachment in the phone's mail app | Offers to play it, and plays |
+| Says what the words say | Listen with `_walkthrough.txt` open | The same words, in the same order |
+| Content | Listen to the end | Unit cost; material and labour; the largest material blocks and labour lines; the other quantities; what is still to confirm; the top three items needing an eye; whether the estimate is provisional |
+| Figures | Each figure you hear against the workbook | Every figure matches. A total still pending is said as pending, never as a figure |
+| Clean speech | Listen | Money said as words. No symbols, brackets, section marks or markup read out |
+| No voice on the machine | Only if the log says `no sound` or `the voice could not be made` | The `.txt` is written and the estimate still finishes. Send the log line |
+
+### 5c. The walkthrough page, from the e-mail
+
+| Check | How | Pass |
+|---|---|---|
+| Listen, on the desk | Click **Listen to the walkthrough** | Sign in if asked, then the estimate's page plays the walkthrough and shows its words |
+| Page content | Read it | The prices at every quantity at the top, the run's own files to open, and the question box |
+| Ask, on the desk | Click **Ask a question about this estimate**, then ask prompts 1, 2 and 9 | The page opens at its question box. The answers carry **From the record** and **Source**, answered by grok-4.7 |
+| Phone, Wi-Fi and VPN off | Tap **Ask a question**, then prompts 1 to 10 | Microsoft sign-in, then the same page. The same record and the same recorded figures as tests 2 and 3. **Listen** plays the walkthrough |
+| Files | Open the workbook from the page | Opens the run's own file. The customer quote stays held while provisional |
 
 ---
 
@@ -224,7 +283,55 @@ report names its cell on the manual sheet; for each check, look up at least one 
 | At the time of a run | Only if a run is happening anyway, with a manual workbook attached | The run log has "[deliverables] parity, line by line -> …" and that page is in the run's folder |
 | Phone, Wi-Fi off | Parity tab, search a drawing just compared, open its report | The line-by-line report opens. Named estimators only |
 
-#### What to send back for 7a
+### 7b. Parity across a time frame (D-619, D-621, D-623a, no new run, about 30 minutes)
+
+A period compares the newest AI run of each drawing in the dates against its manual sheet.
+Period A against Period B shows whether the AI estimates are moving closer to the manual ones.
+
+#### One period
+
+1. Card **Parity by job number**, section **Compare jobs within a period**: From 1 Oct 2026, To
+   31 Oct 2026. Leave Client and Job blank. Press **Preview**.
+   Pass: a table of drawings with nothing filed. Each drawing appears once; where it ran more
+   than once the AI run column says "(N runs, newest used)". The outcome is one of:
+   would compare, with the manual sheet named; no manual; or ambiguous, with the reason.
+2. Press **Compare the period**. Pass: "Running: n of N" counts up, then "Finished".
+3. Read the line above the table. Pass: comparable pairs split into match, warning and fail; a
+   median variance; and apart from them the quantities differ, ambiguous, no manual and failed
+   counts, and the repeat runs collapsed.
+4. Open three rows' **report** links. Pass: each opens the line-by-line report from 7a.
+5. Open **summary page**. Pass: the same table on its own page; every report link works.
+6. On the share, open `parity\_periods\2026-10-01 to 2026-10-31 (run <date time>)\period_summary.html`
+   directly. Pass: its report links open too.
+7. Press **Compare the period** again with the same dates. Pass: the rows say "(reused)" and it
+   finishes quickly. A pair compared before 2 Nov is compared again, never reused.
+8. Narrow it: Client = M&S, then Job = 12677. Pass: only those rows.
+
+#### Two periods, A against B
+
+1. Section **Compare two periods**: A from 1 Sep to 30 Sep 2026, B from 1 Oct to 31 Oct 2026.
+   Press **Preview**, then **Compare A with B**.
+2. Pass: for each period the comparable pairs, match, warning and fail, the median and mean
+   variance and the share within 10%; the change from A to B in points; each drawing in both
+   periods with its variance in A, in B and the change; and the rest listed apart. A lower
+   median in B means the AI estimates moved closer to the manual ones.
+3. Open the comparison page, also on the share under `parity\_periods\A ... vs B ...`. Pass:
+   each period's report links work.
+
+#### Search what was filed
+
+1. Section **Search**: type 12677, then search. Pass: every comparison filed for it, newest
+   first, each with its report link.
+2. Set a date range, then **Outcome = Match**. Pass: only matching comparisons in those dates.
+
+#### The command line, the same answers
+
+```
+.venv\Scripts\python.exe src\parity_job.py period --from 2026-10-01 --to 2026-10-31 --preview
+.venv\Scripts\python.exe src\parity_job.py search 12677
+```
+
+#### What to send back for 7a and 7b
 
 - The three drawing numbers and each outcome.
 - Every check that failed: the drawing, the check number, the report section and the cell.
@@ -241,6 +348,122 @@ report names its cell on the manual sheet; for each check, look up at least one 
 | Listen and Stop | Tap Listen, then Stop | Reads the answer and the record's figures, figures whole; stops at once |
 | Read automatically | Tick "Read each answer aloud as it arrives", ask again | Read aloud as well as shown |
 | iPhone | The same on an iPhone | Speak records and the service turns it into words if Azure speech is set up (`SDI_SPEECH_KEY`); otherwise the keyboard's microphone key |
+
+---
+
+## 9. Restart safety (D-618, SCRUM-159, during test 4)
+
+Runs are kept on disk in `C:\ProgramData\SDI Intelligence\runs\`, one file per run, and put back
+when the service starts.
+
+| Step | Do | Pass |
+|---|---|---|
+| 1 | While test 4's run shows **Running** on the card, restart both services with the two `restart-service.ps1` lines from the sync list | Both come back on HEAD |
+| 2 | Ctrl+F5 on the estimating page | The run is still there, still running, its console continuing |
+| 3 | Wait for it to finish | It finishes, files to AISheets and completed AI briefs, and sets YES on the sheet |
+| 4 | After it finished, restart both services again | The run stays in the history as finished. The desk's **Ask about a saved estimate** list still shows it and the earlier runs. **No second e-mail** |
+| 5 | Look in `C:\ProgramData\SDI Intelligence\runs\` | One `.json` per run, the newest for test 4's run |
+
+A run caught mid-send by a restart is never sent again; its card says so and asks you to check
+the inbox. That is a pass, not a fault.
+
+---
+
+## 10. Engine accuracy baselines (SCRUM-133 to SCRUM-136, no new run, about 1 hour)
+
+Two questions, kept apart:
+
+- **Accuracy.** Does the engine still produce what an estimator accepted? The frozen baselines,
+  the scorecard and the saved-run proofs answer it here; parity per time frame (7b) answers it
+  against the manual estimates.
+- **Speed.** Where the minutes go. `output\timing_history.csv` answers it, never mixed with
+  accuracy.
+
+### 10.1 What exists today
+
+| Tool | What it proves | State today |
+|---|---|---|
+| Replay harness, `tests\replay` | Re-runs the costing, the workbook line list and the routes on a frozen accepted record, and checks the accepted structure: parts, quantities, operations, material charged | Two packs with accepted structure, 7332-01 and 10975-02. Neither has its frozen record yet |
+| Planted breaks, `tests\test_the_replay_gate_is_a_gate.py` | Each replay check catches a missing part, a wrong quantity, a swapped material and a duplicate operation, on synthetic records | Runs in every suite |
+| Scorecard, `tests\scorecard\12349-02.scorecard` | A few proven facts about one pack that must never move, checked against its finished workbook | One scorecard |
+| `tools\replay_saved_job.py` | A saved run driven through the current code, from costing to the report, in minutes | Any saved run |
+| `tools\prove_saved_acceptance.py` | A saved run's ledger re-audited against its calculated workbook. Read-only | Any saved run with its workbook |
+| `tools\read_ledger_audit.py` | Every item the drawing read found is charged or accounted for in the workbook | Any saved run with an LLM read |
+| `tools\three_numbers.py` | Three signals: ownership, labour nothing on the drawing supports, material contradictions | Any saved run |
+| Parity, test 7b | Variance against the manual estimates over a period, and its change from A to B | Live |
+| `output\timing_history.csv` | Minutes per phase, per run | Every run |
+
+### 10.2 The laptop's replay run (5 minutes)
+
+On the laptop a missing frozen record must fail, so the opt-out must not be set:
+
+```
+Remove-Item Env:SDI_REPLAY_ALLOW_MISSING -ErrorAction SilentlyContinue
+.venv\Scripts\python.exe -m pytest tests\replay -q -rs
+```
+
+Pass today: each pack without its record **fails**, naming the pack and saying it is "NOT
+protected". After 10.3, each frozen pack passes all three tiers: the record and its
+deliverables; the workbook canonicalisation; routing and material costing.
+
+### 10.3 Freeze the baselines, in SCRUM-134's order
+
+Order: **9439-07-04** and **9287-10-GA** first, then **0320730**, **401918** and **0351292**,
+then the two existing packs, **7332-01** and **10975-02**.
+
+For each job:
+
+1. **Find its saved records.**
+   `.venv\Scripts\python.exe tools\freeze_replay_fixture.py 9439-07-04 --find`
+   Pass: each saved record listed with the date it says it ran.
+2. **Choose the run the estimator accepted**, and copy that record to `output\archive\` first.
+   `output\json\` is overwritten by the job's next run.
+3. **Write the accepted structure with the estimator**: `tests\replay\9439-07-04\accepted_facts.json`.
+   Parts, quantities, operations required and ruled out, material that must be charged. No
+   money. The format is in `tests\replay\README.md`. The freeze refuses to run without it.
+4. **Freeze it.** The tool's own example, for 7332-01:
+   ```
+   .venv\Scripts\python.exe tools\freeze_replay_fixture.py 7332-01 --source output\archive\7332-01_accepted.json --accepted-run "the 14:17 pack, 7 Sep" --accepted-by "J Gray" --accepted-on 2026-09-07 --unit 80.09 --material 40.89 --labour 33.59 --quantity 6
+   ```
+   For each job, use its own archived record, accepted run, date and figures from the accepted
+   workbook. Pass: the record's own run date matches `--accepted-on`. If it does not, the
+   tool stops and writes nothing: that record is a different run.
+5. **Keep it private.** The freeze writes `summary.json`, `provenance.json` and
+   `fingerprint.json` into the pack. All three are ignored by git and stay on the laptop. Only
+   `accepted_facts.json` is committed. Check with `git status`: none of the three is listed.
+6. **Run 10.2 again.** Pass: that pack now passes.
+
+### 10.4 After every engine change, before a long run (10 minutes)
+
+Use test 4's saved run, `output\json\12677.json`, and its workbook.
+
+| Check | Command | Pass |
+|---|---|---|
+| Replay through the new code | `.venv\Scripts\python.exe tools\replay_saved_job.py output\json\12677.json` | Costs, workbook lines, commercial lines and the report built; nothing new flagged |
+| Saved-run proof | `.venv\Scripts\python.exe tools\prove_saved_acceptance.py output\json\12677.json` followed by the workbook's full path | Exit 0. Exit 2 means acceptance is not demonstrated; send the output |
+| Read against workbook | `.venv\Scripts\python.exe tools\read_ledger_audit.py --record output\json\12677.json --xlsx` followed by the workbook's full path | Every read item charged or accounted for |
+| Three signals | `.venv\Scripts\python.exe tools\three_numbers.py 12677` | The same or better than the last run of 12677 |
+| Scorecard | `.venv\Scripts\python.exe tools\scorecard.py tests\scorecard\12349-02.scorecard` followed by the newest 12349-02 workbook's full path | Exit 0: every pinned fact holds |
+| Replay gate | 10.2 | Every frozen pack passes |
+
+### 10.5 Accuracy over time, against the manual estimates
+
+Once a month, run 7b with A as last month and B as this month. Record in the programme
+dashboard: comparable pairs, median variance, share within 10%, and the change from A to B.
+Pass: the median falls or holds. A rise names the drawings that moved most in "in both".
+
+### 10.6 Speed, kept apart
+
+Open `output\timing_history.csv` in Excel: one row per phase per run, with the build. Filter to
+12677. Pass: test 4's run is there, its slowest phases named. Compare the same job's minutes
+across builds; never read speed from the accuracy checks or accuracy from the timing.
+
+### What to send back for 10
+
+- The 10.2 output, before and after freezing.
+- Which jobs were frozen, and any freeze that stopped on a date mismatch.
+- The 10.4 results for test 4's run.
+- The 7b medians for September and October.
 
 ---
 
@@ -268,5 +491,10 @@ Ask the same saved estimate through the desk, the phone and the e-mail page.
   the workbook.
 - The self-running log lines for the test 4 run.
 - Parity (test 7): any row of the table that did not pass, with the drawing number.
-- The line-by-line report (test 7a): the list under "What to send back for 7a".
+- The line-by-line report and time frames (tests 7a and 7b): the list under "What to send back
+  for 7a and 7b".
 - Voice (test 8): which phone and browser, and any job number the box heard wrongly.
+- The `.wav` (test 5b): any figure it says that is not in the workbook, and whether the phone
+  played the attachment.
+- Restart safety (test 9): any second e-mail, or a run missing after a restart.
+- Engine accuracy baselines (test 10): the list under "What to send back for 10".

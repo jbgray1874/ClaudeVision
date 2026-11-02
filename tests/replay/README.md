@@ -52,10 +52,14 @@ reconciliation.
 
 ## Freezing a job
 
-    copy output\json\10975-02.json  tests\replay\10975-02\summary.json
+    python tools\freeze_replay_fixture.py 10975-02 --find
 
-then commit. Keep the accepted-facts file under estimator review: a change to it is a
-POLICY change, not a test fix.
+then freeze the accepted run with `--source` and its run, person, date and figures (the tool's
+own help has a complete example). It writes `summary.json`, `provenance.json` and
+`fingerprint.json` into the pack. **They stay on the laptop and are never committed**: they are
+job data (SCRUM-134, SCRUM-137), and `.gitignore` ignores all three (D-624). Only
+`accepted_facts.json` is committed. Keep it under estimator review: a change to it is a POLICY
+change, not a test fix.
 
 ## accepted_facts.json format
 

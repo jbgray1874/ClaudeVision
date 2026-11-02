@@ -56,6 +56,24 @@ def test_the_gitignore_exception_has_not_returned():
     assert "corpus/" in rules, "the corpus directory is not excluded"
 
 
+def test_a_frozen_replay_record_stays_on_the_laptop():
+    """A frozen record is a whole job: prices, customer, parts. SCRUM-134 keeps it private and
+    commits only the accepted structure. The harness un-ignores every JSON under tests/replay
+    so the structure travels; the record, its provenance (the accepted prices) and its
+    fingerprint must be ignored after that, or the next `git add` publishes a job."""
+    private = ("summary.json", "provenance.json", "fingerprint.json")
+    tracked = [f for f in _tracked() if f.startswith("tests/replay/")
+               and f.rsplit("/", 1)[-1] in private]
+    assert not tracked, f"a frozen job record is tracked: {tracked}"
+    for name in private:
+        out = subprocess.run(["git", "check-ignore", "-q", f"tests/replay/9439-07-04/{name}"],
+                             cwd=ROOT, capture_output=True, text=True)
+        assert out.returncode == 0, f"tests/replay/<job>/{name} would be committed"
+    out = subprocess.run(["git", "check-ignore", "-q", "tests/replay/9439-07-04/accepted_facts.json"],
+                         cwd=ROOT, capture_output=True, text=True)
+    assert out.returncode == 1, "the accepted structure must still be versioned"
+
+
 def test_no_spreadsheet_of_client_pricing_is_tracked():
     """The same question asked of the other shape this data arrives in."""
     bad = [f for f in _tracked()
