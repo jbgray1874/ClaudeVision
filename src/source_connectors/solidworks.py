@@ -1809,7 +1809,15 @@ def mint_model_children(parts: List[Dict[str, Any]], job: NativeJob) -> List[str
                 basis = "a plate-shaped solid's extents"
         if not (L and W and thk):
             continue
-        qty = int(round(sum(e * p for _, e, p in owns))) or 1
+        # THE ROW'S OWN QUANTITY, NEVER THE TREE'S PRODUCT. The BOMs sheet states the
+        # rule this first violated: a record's quantity is per parent, and the
+        # multiplication belongs to the route. The first mint wrote the per-unit total
+        # here, the compiler multiplied by the parent again, and 05M's "6 per 101SA x6"
+        # went onto 12678's sheet as a row of 216. The record now carries the largest
+        # per-parent count the model states; the per-unit product lives in the flag's
+        # trail, computed once, by the route, like every other part.
+        qty = max(1, int(round(max(e for _, e, _ in owns))))
+        per_unit = int(round(sum(e * p for _, e, p in owns))) or 1
         trail = " + ".join(f"{e:g} per {pn} x{p:g}" for pn, e, p in owns)
         mat = _norm_sw_material(getattr(nat, "material", "") or "")
         rec: Dict[str, Any] = {
@@ -1828,9 +1836,11 @@ def mint_model_children(parts: List[Dict[str, Any]], job: NativeJob) -> List[str
             "review_flags": [
                 f"part minted from the SolidWorks model ({basis}): the product tree "
                 f"holds it under {', '.join(sorted({pn for pn, _, _ in owns}))} and the "
-                f"pack has no sheet for it — x{qty} a unit ({trail}); its material is "
-                f"priced from the modelled blank so the unit is not silently short; "
-                f"confirm against the drawing office"],
+                f"pack has no sheet for it — the model's tree implies x{per_unit} a "
+                f"unit ({trail}); the row carries its own per-parent count and the "
+                f"route multiplies, once; its material is priced from the modelled "
+                f"blank so the unit is not silently short; confirm the count and the "
+                f"part against the drawing office"],
         }
         if nat.has_flat():
             rec["native_flat_pattern"] = True
