@@ -9,8 +9,8 @@ an assumption now. Each product without one gets the best value Access has, in t
   3. for a made product (FGML / PHANT): its BOM material cost - the sum of each component's
      cost x link quantity / base quantity, using costs 1 to 3, worked out recursively
                                                                               - "BOM material roll-up"
-Anything still without a value is listed on the Check tab for SDI to supply - never a made-up
-figure. Costs are per unit, the same scale as the existing YITC (checked: median ratio 1.0
+Anything still without a value is loaded at 0 - Access holds no cost for it - and listed on the
+Check tab for SDI to supply (2 Nov: never left out, never a made-up figure). Costs are per unit, the same scale as the existing YITC (checked: median ratio 1.0
 against lot cost on 2,528 products).
 
 Writes one complete file, YITC_product_costs_MAPPED.xlsx: Access's own standard costs and the
@@ -150,7 +150,11 @@ def main():
             why = ("HOLDS STOCK at zero cost in Access - needs a cost before the stock load" if c in stocked_zero else
                    f"last purchase price is in {b[2]} ({b[0]}) - no exchange rate in the data" if b else
                    "no standard cost, stock, purchase or costed BOM in Access")
-            check.append([c, desc[c], cat[c], why])
+            # loaded at zero, not left out: a product without a cost line stops its stock and
+            # orders in X3, and Access really does hold no cost for it (James, 2 Nov)
+            check.append([c, desc[c], cat[c], why + " - loaded at 0"])
+            new.append(["I", "S01A", c, 1, 1, 20260101, 20260101, 20261231, 3, 0, 100, 0,
+                         "no cost in Access - loaded at 0, SDI to supply"])
             continue
         v = round(v, 5) if v >= 0.0001 else 0.0001
         new.append(["I", "S01A", c, 1, 1, 20260101, 20260101, 20261231, 3, v, 100, v, source[c]])
@@ -179,7 +183,7 @@ def main():
     for r in allrows:
         src.append([r[2], desc[r[2]], cat[r[2]], float(r[9]), r[12]])
     ck = wb.create_sheet("Check")
-    ck.append(["Product", "Description", "Category", "Why there is no cost"])
+    ck.append(["Product", "Description", "Category", "Why the cost is 0"])
     for r in check:
         ck.append(r)
     hb = wb.create_sheet("Held back")
@@ -195,14 +199,15 @@ def main():
         s_.auto_filter.ref = s_.dimensions
     n = wb.create_sheet("Notes", 0)
     for line in [["YITC - product standard costs, clean run"], [],
-                 ["Rows", f"{len(allrows)}: one cost for every product that has any cost in Access - a complete file, "
+                 ["Rows", f"{len(allrows)}: one cost for every product in the product file - a complete file, "
                           "not a top-up. Load it as the cost file"],
                  ["Where costs come from", ", ".join(f"{k} {v}" for k, v in counts.most_common())],
                  ["Order of sources", "1 Access standard cost; 2 the average cost of the product's stock lots; 3 the "
                                       "last purchase price (EUR / USD at Access's own ledger rate); 4 for made "
                                       "products, the BOM material roll-up of their components"],
-                 ["Check tab", f"{len(check)} products with no cost anywhere in Access - SDI to supply. "
-                               f"{sum(1 for r in check if r[3].startswith('HOLDS'))} of them hold stock at zero cost"],
+                 ["Check tab", f"{len(check)} products with no cost anywhere in Access are loaded at 0, not left out "
+                               f"(2 Nov) - SDI to supply a cost. {sum(1 for r in check if r[3].startswith('HOLDS'))} of "
+                               "them hold stock at zero cost in Access"],
                  ["Held back", f"{len(held)} second costs for codes that were on two products - one cost per product"],
                  ["Layout", "Cost type 1, the whole cost as Material Cost, per unit - as Ethan's notes ask"]]:
         n.append(line)
@@ -218,7 +223,12 @@ def main():
     got = [list(r) for r in load_workbook(path, read_only=True)["YITC"].iter_rows(min_row=3, values_only=True)
            if r[0] is not None]
     assert [g_[:12] for g_ in got] == [typed(r) for r in allrows], "read-back mismatch"
-    print(len(allrows), "costs", dict(counts), "|", len(check), "on Check |", len(held), "held back")
+    assert {r[2] for r in allrows} >= set(cat), "a product in the product file has no cost line"
+    sys.path.insert(0, f"{__import__('os').path.dirname(__file__)}/../rebuild")
+    from common import write_load
+    txt, n_, _ = write_load(path, "YITC", 3)
+    assert n_ == len(allrows)
+    print(len(allrows), "costs", dict(counts), "|", len(check), "on Check, loaded at 0 |", len(held), "held back |", txt)
     return allrows, check
 
 

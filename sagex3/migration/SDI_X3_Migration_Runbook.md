@@ -35,7 +35,8 @@ an old file. Read section 1 before every run.
 5. **Never load a customer file with CUS101-style codes.** `YA004BPC_load4_customers-V9`
    went back to the old numbering. The codes in X3 are like TES101 and HAF500.
 6. **Load from the mapped spreadsheets.** Each has a "Data with Headings" tab. The X3 file is
-   the data rows only, semicolon separated, in the DOS code page (cp850), CRLF line ends.
+   the data rows only, semicolon separated, in the DOS code page (cp850), CRLF line ends. Every
+   run writes it beside the spreadsheet (rule 1c).
 7. **Hold back rather than drop.** Anything that would reject goes on a "Held back" tab with
    its reason, so nothing disappears silently.
 8. **Check before handing over:** every code resolves (section 9), field counts match the
@@ -68,6 +69,32 @@ what happens to each:
 | 13 | **Bank details for BACS suppliers only** | 44 suppliers on transfer terms | Keep: Ethan's template note |
 | 14 | **Accounts left out:** intercompany, ledger accounts, employee expenses | 6 customers, 78 suppliers | Finance to decide. Until then they're listed, not silently dropped |
 | 15 | **Dormant accounts:** no trade for 2 years and nothing open | not migrated | To confirm with SDI |
+| 16 | **Products with no cost** left out of YITC (on Check instead) | 937 products had no cost line, 73 of them stocked | **Switched off, 2 Nov.** Loaded at 0, listed on Check for SDI to supply a cost. YITC now has a line for all 16,499 products |
+| 17 | **vw_ITM drops products marked do-not-use or archived** in STK_STOCK (discovery, 31 Oct) | live ones never reached the product file | **Switched off** in `rebuild/`: they come through the master grid; live ones go in and are on Check |
+| 18 | **vw_BOMP drops a hard-coded list of 51 components** and lines with no quantity | BOM lines missing, components never pulled into the product file | **Switched off** for products (`rebuild/` reads ASC_BOM_TBL). The 51 to review in the BOM part |
+| 19 | **Description 1 is only the code** (STKNAME on sub-assemblies / parts: "10074-02-SA01") | 1,753 loaded products show the code, not a name | **Fixed in `rebuild/`, 2 Nov:** takes description 3, then PMA_DESC (the part master's own description, which vw_ITM never read), then description 2. 1,653 fixed from data held; the other 100 from PMA_DESC on the next extract |
+
+### 1b. Complete files only, never a top-up (James, 30 Oct)
+
+**Every file is the whole file, rebuilt from scratch from one extract.** No top-up, add-on or
+"new rows only" files. When something was missed, the fix is a new complete file with it in.
+That way the file always matches Access as a whole, and the change report (`rebuild/changes.py`)
+shows exactly what moved since the last load. The new-accounts-only files of 27 Oct and the cost
+top-up of 30 Oct were withdrawn under this rule.
+
+### 1c. Every run produces both the spreadsheets and the X3 load files (James, 31 Oct)
+
+Each mapped spreadsheet comes with its `;` load file, built from the saved spreadsheet so the
+two can't disagree (`rebuild/common.py`, `write_load`). The format is the one James loads (V1.3
+"cleansed" files):
+- data rows only, no headings;
+- one field for every template column;
+- `;` between fields, no quotes;
+- CRLF after every line;
+- DOS code page 850.
+
+The writer stops if a value holds a `;` or a line break. Tested 2 Nov: the ZSDIITM and YITC files
+match the loaded V1.3 files byte for byte on every unchanged row.
 
 
 

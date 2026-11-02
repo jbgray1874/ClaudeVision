@@ -4,13 +4,15 @@
 --   ITEM    every product in migration.vw_ITM with its grade from vw_DQ_ITM - nothing filtered here
 --   MASTER  codes Access holds in the part master or stock master that vw_ITM does not
 --   USE     per Access code: stock on hand, open sales / purchase / works orders, last sale,
---           last purchase, last works order, do-not-use flag, Access material cost, lot cost,
---           last purchase price
---   BOM     every parent - component pair in vw_BOMP
+--           last purchase, last works order, do-not-use and archive flags, Access costs (with
+--           their per-quantity), last purchase price
+--   BOM     every parent - component line in ASC_BOM_TBL
 --   RATE    Access's own exchange rate per currency, from the purchase ledger
 --
 -- Which products go into Sage is decided in products.py, on the runbook's rules (1a), and
 -- every product left out is listed there with its reason. Nothing is dropped in this query.
+-- vw_ITM itself drops products marked do-not-use or archived in STK_STOCK (discovery, 31 Oct),
+-- so those come through the MASTER grid instead.
 --
 -- Codes are the raw Access codes, trimmed: the code rule is applied once, in common.py.
 -- Each table is read once, grouped into a small temporary table, then joined; there is no
@@ -57,6 +59,13 @@ IF OBJECT_ID('tempdb..#pma') IS NOT NULL DROP TABLE #pma;
 SELECT CAST(LTRIM(RTRIM(PMA_PART_ONLY)) AS nvarchar(60)) COLLATE DATABASE_DEFAULT AS code,
        MAX(CAST(PMA_DO_NOT_USE AS int))                   AS do_not_use,
        MAX(CAST(ISNULL(PMA_COST_MAT, 0) AS decimal(18, 5))) AS cost_mat,
+       MAX(ISNULL(PMA_COST_MAT_PER, 0))                   AS cost_mat_per,
+       MAX(CAST(ISNULL(PMA_COST, 0) AS decimal(18, 5)))   AS cost,
+       MAX(ISNULL(PMA_COST_PER, 0))                       AS cost_per,
+       MAX(CAST(ISNULL(PMA_WORKS_COST, 0) AS decimal(18, 5))) AS works_cost,
+       MAX(CAST(ISNULL(PMA_WEIGHT, 0) AS decimal(18, 5))) AS weight,
+       MAX(CAST(LTRIM(RTRIM(ISNULL(PMA_WEIGHT_UOM, ''))) AS nvarchar(10))) AS weight_uom,
+       MAX(CAST(LTRIM(RTRIM(ISNULL(PMA_DESC, ''))) AS nvarchar(60)))   AS pma_desc,
        MAX(CAST(LTRIM(RTRIM(ISNULL(PMA_DESC_1, ''))) AS nvarchar(60))) AS desc1,
        MAX(CAST(LTRIM(RTRIM(ISNULL(PMA_DESC_3, ''))) AS nvarchar(60))) AS desc3,
        MAX(CAST(LTRIM(RTRIM(ISNULL(PMA_UOM, ''))) AS nvarchar(10)))    AS uom
@@ -70,7 +79,8 @@ IF OBJECT_ID('tempdb..#stk') IS NOT NULL DROP TABLE #stk;
 SELECT CAST(LTRIM(RTRIM(STKCODE)) AS nvarchar(60)) COLLATE DATABASE_DEFAULT AS code,
        MAX(CAST(LTRIM(RTRIM(ISNULL(STKNAME, ''))) AS nvarchar(60))) AS name,
        MAX(ISNULL(CAST(STK_DO_NOT_USE AS nvarchar(5)), ''))  AS do_not_use,
-       MAX(ISNULL(CAST(STK_ARCHIVE AS nvarchar(5)), ''))     AS archive
+       MAX(ISNULL(CAST(STK_ARCHIVE AS nvarchar(5)), ''))     AS archive,
+       MAX(CAST(ISNULL(STK_BASEPRICE, 0) AS decimal(18, 5)))  AS base_price
 INTO   #stk
 FROM   dbo.STK_STOCK
 WHERE  LTRIM(RTRIM(ISNULL(STKCODE, ''))) <> ''
@@ -167,7 +177,10 @@ SELECT 'MASTER' AS grid, a.code,
        REPLACE(REPLACE(REPLACE(ISNULL(p.desc1, ''), CHAR(9), ' '), CHAR(10), ' '), CHAR(13), ' ') AS part_desc1,
        REPLACE(REPLACE(REPLACE(ISNULL(p.desc3, ''), CHAR(9), ' '), CHAR(10), ' '), CHAR(13), ' ') AS part_desc3,
        ISNULL(p.uom, '') AS uom,
-       ISNULL(d.DQ_STATUS, '(not graded)') AS DQ_STATUS
+       ISNULL(d.DQ_STATUS, '(not graded)') AS DQ_STATUS,
+       ISNULL(p.weight, 0) AS weight,
+       ISNULL(p.weight_uom, '') AS weight_uom,
+       ISNULL(s.base_price, 0) AS base_price
 FROM   #all a
 LEFT JOIN #pma p ON p.code = a.code
 LEFT JOIN #stk s ON s.code = a.code
@@ -191,7 +204,14 @@ SELECT 'USE' AS grid, a.code,
        ISNULL(p.cost_mat, 0)                              AS access_material_cost,
        ISNULL(pr.price, 0)                                AS last_purchase_price,
        ISNULL(pr.currency, '')                            AS last_purchase_currency,
-       ISNULL(CONVERT(char(8), pr.order_date, 112), '')   AS last_priced_purchase
+       ISNULL(CONVERT(char(8), pr.order_date, 112), '')   AS last_priced_purchase,
+       ISNULL(p.cost_mat_per, 0)                          AS access_material_cost_per,
+       ISNULL(p.cost, 0)                                  AS access_cost,
+       ISNULL(p.cost_per, 0)                              AS access_cost_per,
+       ISNULL(p.works_cost, 0)                            AS access_works_cost,
+       -- the part master's own description, which vw_ITM never read: the text for products
+       -- whose STKNAME is only the code (sub-assemblies, 2 Nov)
+       REPLACE(REPLACE(REPLACE(ISNULL(p.pma_desc, ''), CHAR(9), ' '), CHAR(10), ' '), CHAR(13), ' ') AS part_description
 FROM   #all a
 LEFT JOIN #lot l    ON l.code = a.code
 LEFT JOIN #so so    ON so.code = a.code
@@ -202,12 +222,18 @@ LEFT JOIN #stk s    ON s.code = a.code
 LEFT JOIN #price pr ON pr.code = a.code
 ORDER BY a.code;
 
--- ===== BOM: every parent - component pair ==============================================
-SELECT DISTINCT 'BOM' AS grid,
-       CAST(LTRIM(RTRIM(ITMREF)) AS nvarchar(60))    AS parent,
-       CAST(LTRIM(RTRIM(CPNITMREF)) AS nvarchar(60)) AS component
-FROM   migration.vw_BOMP
-WHERE  LTRIM(RTRIM(ISNULL(ITMREF, ''))) <> '' AND LTRIM(RTRIM(ISNULL(CPNITMREF, ''))) <> '';
+-- ===== BOM: every parent - component line in Access ===================================
+-- Straight from ASC_BOM_TBL, not vw_BOMP: vw_BOMP drops a hard-coded list of 51 components
+-- and every line with no quantity (discovery, 31 Oct). The builder decides which lines count.
+SELECT 'BOM' AS grid,
+       CAST(LTRIM(RTRIM(BOM_PARENT_PART_ONLY)) AS nvarchar(60)) AS parent,
+       CAST(LTRIM(RTRIM(BOM_OWNED_PART_ONLY)) AS nvarchar(60))  AS component,
+       CAST(ISNULL(BOM_QTY_USED, 0) AS decimal(18, 6))          AS qty_used,
+       ISNULL(CONVERT(char(8), BOM_EFFECT_ON_DATE, 112), '')    AS effective_from,
+       ISNULL(CONVERT(char(8), BOM_EFFECT_OFF_DATE, 112), '')   AS effective_to
+FROM   dbo.ASC_BOM_TBL
+WHERE  LTRIM(RTRIM(ISNULL(BOM_PARENT_PART_ONLY, ''))) <> ''
+  AND  LTRIM(RTRIM(ISNULL(BOM_OWNED_PART_ONLY, ''))) <> '';
 
 -- ===== RATE: Access's own rate per currency (GBP / currency on open purchase ledger items)
 SELECT 'RATE' AS grid,

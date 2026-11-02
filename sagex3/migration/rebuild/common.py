@@ -90,18 +90,19 @@ def product_codes(raw_codes):
 
 # ---- Ethan's character rule (runbook 5) ------------------------------------------------
 def x3_text(v):
-    """Letters, numbers, spaces, - _ . only. & -> AND, / -> -, accents dropped, the lost
+    """Letters, numbers, spaces, - _ . only. & -> AND, / -> -, a comma -> space, accents dropped, the lost
     apostrophe in '£s' removed, £ -> GBP, the rest removed. Not for emails, phones, websites."""
     v = v or ""
     for a, b in (("Ø", "DIA "), ("ø", "dia "), ("°", " deg"), ("½", "1/2"), ("¼", "1/4"),
-                 ("–", "-"), ("—", "-"), ("’", "'")):
+                 ("–", "-"), ("—", "-"), ("’", "'"), ("™", ""), ("®", ""), ("©", "")):
         v = v.replace(a, b)
     v = re.sub("(?<=[A-Za-z])£(?=s\\b)", "", v)
     v = re.sub("£s\\b", " GBP", v).replace("£", " GBP ")
     v = v.replace(" ? ", " - ")
     v = unicodedata.normalize("NFKD", v)
     v = "".join(ch for ch in v if not unicodedata.combining(ch))
-    v = v.replace("&", " AND ").replace("/", "-")
+    # a comma becomes a space, as the loaded files have it ("Hafele,M10" -> "Hafele M10")
+    v = v.replace("&", " AND ").replace("/", "-").replace(",", " ")
     return " ".join(re.sub(r"[^A-Za-z0-9._\- ]", "", v).split())
 
 
@@ -145,3 +146,44 @@ def notes(wb, lines, index=None):
         for c in row:
             c.alignment = Alignment(wrap_text=True, vertical="top")
     return ws
+
+
+# ---- the X3 load file: the spreadsheet's data tab as the ;-separated text X3 imports -------
+def load_value(v):
+    """A cell as the load file holds it: numbers in plain form (13.773, 0.0062, 1), never 1e-05."""
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return str(int(v))
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        return str(int(v)) if v.is_integer() else f"{v:.10f}".rstrip("0").rstrip(".")
+    return str(v)
+
+
+def write_load(xlsx, sheet, first_row, txt=None):
+    """Write the data tab of a built spreadsheet as the X3 load file, in the format of the files
+    James loads (V1.3 'cleansed', 31 Oct): data rows only, no headings; one field for every template
+    column; ; between fields, no quotes; CRLF after every line; DOS code page 850.
+    Built from the saved workbook, so the spreadsheet and the load file always agree. Stops on a ;
+    or a line break inside a value, which would shift every field after it."""
+    from openpyxl import load_workbook
+    ws = load_workbook(xlsx, read_only=True)[sheet]
+    head = list(ws.iter_rows(min_row=1, max_row=first_row - 1, values_only=True))
+    width = max(i + 1 for r in head for i, v in enumerate(r) if v not in (None, ""))
+    lines, bad, lost = [], [], 0
+    for n, r in enumerate(ws.iter_rows(min_row=first_row, values_only=True), first_row):
+        r = list(r[:width]) + [None] * (width - len(r))
+        if all(v in (None, "") for v in r):
+            continue
+        vals = [load_value(v) for v in r]
+        bad += [(n, i + 1, v) for i, v in enumerate(vals) if ";" in v or "\r" in v or "\n" in v]
+        lost += sum(1 for v in vals for ch in v if ch.encode(ENC, errors="replace") == b"?" and ch != "?")
+        lines.append(";".join(vals))
+    if bad:
+        raise SystemExit(f"{xlsx}: a ; or line break inside a value (row, column, value): {bad[:10]}")
+    txt = Path(txt) if txt else Path(xlsx).with_suffix(".txt")
+    with open(txt, "w", newline="", encoding=ENC, errors="replace") as f:
+        f.write("".join(line + "\r\n" for line in lines))
+    return txt, len(lines), lost

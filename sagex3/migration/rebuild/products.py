@@ -11,8 +11,8 @@ Every other product Access holds is on the "Not migrated" tab with what it was l
 Nothing is left out without a line saying why.
 
 The rest is the runbook's, one copy each in common.py: the product code rule (4.1), Ethan's
-character rule (5), a blank first description filled from description 3, then 2, then the code
-(6.1), units EA as SDI decided (template guide).
+character rule (5), a description 1 that is blank or only the code filled from description 3,
+then the part master description (PMA_DESC), then description 2 (6.1), units EA as SDI decided (template guide).
 
 Category: vw_ITM's, except PHANT, which is set by the usage test (runbook 13, item 9) unless
 --phant access is given:
@@ -25,7 +25,8 @@ parent only FGML, component only RAWML, neither FGSL.
 
 Usage:
     python products.py <run folder> [--today 20261231] [--phant usage|access] [--recent-years 2]
-Reads <run folder>/extract/extract_products.txt, writes <run folder>/out/ZSDIITM_products_MAPPED.xlsx.
+Reads <run folder>/extract/extract_products.txt. Writes <run folder>/out/ZSDIITM_products_MAPPED.xlsx
+and, from it, the load file ZSDIITM_products_MAPPED.txt (; separated, as X3 imports it).
 """
 import argparse
 import datetime as dt
@@ -35,7 +36,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from common import add_sheet, clip, ensure_dir, notes, product_codes, read_grids, x3_text
+from common import add_sheet, clip, ensure_dir, notes, product_codes, read_grids, write_load, x3_text
 
 HERE = Path(__file__).resolve().parent
 TEMPLATE = HERE / "templates" / "ZSDIITM.xlsx"
@@ -65,6 +66,14 @@ def as_cell(v, numeric):
     return v if v != "" else None
 
 
+def code_only(d, x):
+    """A description that is blank or only the product code, perhaps with a prefix: one word
+    holding the code ("10074-02-SA01", "TPS02-9758-00-GA", "003.17.021")."""
+    d = (d or "").strip()
+    a, b = re.sub(r"[^A-Z0-9]", "", d.upper()), re.sub(r"[^A-Z0-9]", "", x.upper())
+    return not a or (" " not in d and (b in a or a in b))
+
+
 def load(extract):
     grids, plain = read_grids(extract)
     for need in ("ITEM", "MASTER", "USE", "BOM"):
@@ -75,9 +84,11 @@ def load(extract):
     for r in grids["ITEM"]:
         r = [val(x) for x in r] + [""] * 14
         item[r[0]].append(r[:14])
-    master = {val(r[0]): [val(x) for x in r] + [""] * 8 for r in grids["MASTER"]}
-    use = {val(r[0]): [val(x) for x in r] + [""] * 16 for r in grids["USE"]}
-    bom = {(val(r[0]), val(r[1])) for r in grids["BOM"]}
+    master = {val(r[0]): ([val(x) for x in r] + [""] * 11)[:11] for r in grids["MASTER"]}
+    use = {val(r[0]): ([val(x) for x in r] + [""] * 21)[:21] for r in grids["USE"]}
+    # a BOM line counts when it has a quantity - the rule vw_BOMP applies, without its
+    # hard-coded list of 51 components left out (discovery, 31 Oct)
+    bom = {(val(r[0]), val(r[1])) for r in grids["BOM"] if len(r) < 3 or num(r[2]) > 0}
     rate = {val(r[0]): (num(r[2]), num(r[3]), num(r[4]), val(r[1])) for r in grids.get("RATE", [])}
     return item, master, use, bom, rate
 
@@ -164,7 +175,7 @@ def build(run_dir, today=None, phant="usage", recent_years=2):
             # busier one, then the first (runbook 4.1, the 33 shared codes)
             def rank(cr):
                 c, r = cr
-                u = use.get(c, [""] * 16)
+                u = use.get(c, [""] * 21)
                 return (-(r[1] in MAKE and x in comps), -num(u[2]), -(num(u[3]) + num(u[4]) + num(u[5])), c)
             cands.sort(key=rank)
             c, r = cands[0]
@@ -177,16 +188,26 @@ def build(run_dir, today=None, phant="usage", recent_years=2):
                              f"Access code {c2} becomes {x}, the same code as {c} - X3 keeps one product per code"])
         else:
             c = raws[x][0]
+            # vw_ITM's own mapping, for a product it leaves out: STKNAME, PMA_DESC_1, PMA_DESC_3
             m = master[c]
             cat = bom_category(x)
-            d1, d2, d3 = clip(x3_text(m[3] or m[4]), 30), "", clip(x3_text(m[5]), 30)
-            units = ["EA", "EA", "1", "EA", "1", "KG", "0", "0"]
+            d1, d2, d3 = (clip(x3_text(v), 30) for v in (m[3], m[4], m[5]))
+            units = ["EA", "EA", "1", "EA", "1", m[9] or "KG", m[8] or "0", m[10] or "0"]
             for c2 in raws[x][1:]:
                 held.append(["", x, c2, "", f"Access code {c2} becomes {x}, the same code as {c} - X3 keeps one product per code"])
-        if not d1:
-            d1 = d3 or d2 or x[:30]
-        if re.sub(r"[^A-Z0-9]", "", d1.upper()) == re.sub(r"[^A-Z0-9]", "", x) and d3 and d3 != d1:
-            codes_only.append([x, d1, d3])
+        # Description 1 that is only the code (STKNAME on sub-assemblies and parts: "10074-02-SA01",
+        # "TPS02-9758-00-GA") takes the first real text Access has: description 3 (PMA_DESC_3), the
+        # part master's own description (PMA_DESC, which vw_ITM never read), then description 2
+        if code_only(d1, x):
+            pma_desc = clip(x3_text(use.get(c, [""] * 21)[20]), 30)
+            found = next(((v, f) for v, f in ((d3, "description 3 (PMA_DESC_3)"), (pma_desc, "part master description (PMA_DESC)"),
+                                              (d2, "description 2 (PMA_DESC_1)")) if not code_only(v, x)), None)
+            if found:
+                codes_only.append([x, d1, found[0], found[1]])
+                d1 = found[0]
+            else:
+                d1 = d1 or d3 or d2 or x[:30]
+                codes_only.append([x, d1, "", "no description anywhere in Access - SDI to supply"])
         rows[x] = [cat, x, d1, d2, d3] + units
 
     # ---- PHANT: the usage test --------------------------------------------------------------
@@ -224,9 +245,12 @@ def build(run_dir, today=None, phant="usage", recent_years=2):
         if a["grade"] not in LOADED:
             check.append([x, r[2], r[0], a["grade"], "; ".join(why[x]),
                           f"graded {a['grade']} by vw_DQ_ITM but live - goes in (rule 1a); the grade ignores stock and purchases"])
-        if a["part_dnu"] or a["stock_dnu"] not in ("", "0", "N", "False"):
+        flags = [f for f, on in (("do-not-use", a["part_dnu"] or a["stock_dnu"] not in ("", "0")),
+                                 ("archived", a["archive"] not in ("", "0"))) if on]
+        if flags:
             check.append([x, r[2], r[0], a["grade"], "; ".join(why[x]),
-                          "marked do-not-use in Access" + (" but holds stock or is on an open order" if busy else "")])
+                          f"marked {' and '.join(flags)} in Access" + (" but holds stock or is on an open order" if busy else "")
+                          + " - vw_ITM left it out; it goes in on rule 1a"])
         if len(x) > MAX_CODE:
             check.append([x, r[2], r[0], a["grade"], "; ".join(why[x]), f"code longer than {MAX_CODE} characters"])
     for p in phant_rows:
@@ -238,7 +262,7 @@ def build(run_dir, today=None, phant="usage", recent_years=2):
     for x in sorted(set(act) - set(rows)):
         a = act[x]
         c = raws[x][0]
-        d = item[c][0][2] if item.get(c) else (master.get(c, [""] * 8)[3] or master.get(c, [""] * 8)[5])
+        d = item[c][0][2] if item.get(c) else (master.get(c, [""] * 11)[3] or master.get(c, [""] * 11)[5])
         not_migrated.append([x, ", ".join(raws[x]), clip(x3_text(d), 30), a["grade"], a["last_sale"] or "never",
                              a["last_purchase"] or "never", a["last_made"] or "never",
                              "no stock, no open order, nothing sold, bought or made since " + recent
@@ -269,7 +293,8 @@ def build(run_dir, today=None, phant="usage", recent_years=2):
                                  "Open SO lines", "Open works orders", "Stock value GBP", "Last purchase"],
               phant_rows, [20, 32, 7, 10, 10, 9, 40, 9, 8, 8, 12, 10])
     add_sheet(wb, "Held back", ["Category", "Product", "Access code", "Description", "Why"], held, [9, 20, 20, 32, 90])
-    add_sheet(wb, "Description is the code", ["Product", "Description 1", "Description 3"], codes_only, [20, 32, 32])
+    add_sheet(wb, "Descriptions filled", ["Product", "Description 1 in Access", "Description 1 now", "Taken from"],
+              codes_only, [20, 32, 32, 60])
     add_sheet(wb, "Not migrated", ["Product", "Access code(s)", "Description", "Grade", "Last sale", "Last purchase",
                                    "Last works order", "Why not"], not_migrated, [20, 20, 32, 12, 10, 10, 10, 90])
 
@@ -295,9 +320,11 @@ def build(run_dir, today=None, phant="usage", recent_years=2):
                   + ", ".join(f"{k} {v:,}" for k, v in sorted(groups.items()))
                   + ". A and B become FGML; C (bought in) is on Check; D stays PHANT"],
         ["Codes", "Upper case, letters, numbers and hyphens only - the same codes in every other file"],
-        ["Descriptions", "Ethan's character rule, within 30 characters. A blank first description takes description 3, "
-                         f"then 2, then the code. {len(codes_only):,} products have the code as description 1 and the "
-                         "text in description 3 - listed, not changed"],
+        ["Descriptions", "Ethan's character rule, within 30 characters. Where description 1 is blank or only the code "
+                         f"(sub-assemblies and parts), it takes description 3, then the part master description, then "
+                         f"description 2: {sum(1 for r in codes_only if r[2]):,} filled, "
+                         f"{sum(1 for r in codes_only if not r[2]):,} with no text anywhere in Access - the "
+                         "'Descriptions filled' tab lists each"],
         ["Units", "EA, conversion 1, as the template's guide records SDI's decision"],
         ["Held back", f"{len(held):,} Access products whose code becomes the same X3 code as another - X3 keeps one"],
         ["Not migrated", f"{len(not_migrated):,} Access products that are not live - each with its last activity"],
@@ -314,7 +341,10 @@ def build(run_dir, today=None, phant="usage", recent_years=2):
             gv = g[i] if i < len(g) else None
             assert (num(v) == float(gv or 0)) if i in NUMERIC else ((gv or "") == v), (r, g)
 
-    summary = dict(products=len(data), categories=dict(cats), held=len(held), check=len(check),
+    txt, n, lost = write_load(out, "Data with Headings", 4)
+    assert n == len(data), (n, len(data))
+    summary = dict(load_file=f"{txt.name} ({n:,} lines" + (f", {lost} characters not in cp850)" if lost else ")"),
+                   products=len(data), categories=dict(cats), held=len(held), check=len(check),
                    not_migrated=len(not_migrated), phant=dict(groups), rates=rate, shared=len(shared))
     return out, summary, rows
 
