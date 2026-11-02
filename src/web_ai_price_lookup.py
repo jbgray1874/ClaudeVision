@@ -946,6 +946,37 @@ def market_sheet_rate_indication(material: Any, thickness_mm: Any,
     if per_sheet <= 0:
         return None
     area_m2 = (sheet_l * sheet_w) / 1_000_000.0
+    # THE BUYING UNIT TRAVELS WITH THE FIGURE (SCRUM-182). 12678-01-GA: an answer of
+    # £7.50 about a blank-sized piece was stamped gbp_per_sheet here, the workbook wrote
+    # it into the Cost per sheet column, and the template divided a per-PIECE price by
+    # 24 parts a sheet — six laminated shelves for £1.95. The same discipline
+    # cut_piece_pricing.unit_of_sale applies to length-bought stock applies to sheet
+    # goods: the answer's own unit and its own words say what was priced, and a figure
+    # that is not a sheet never becomes one. A per-m2 answer is converted, because the
+    # sheet it is for is stated; a per-kg or per-metre answer, or one whose words name a
+    # piece, a blank or a cut-to-size panel, is refused, and the line goes out unpriced
+    # and asked rather than divided by the nest.
+    _unit = " ".join(str(result.get("unit") or "").upper().replace("_", " ").split())
+    _said = " ".join(" ".join(str(result.get(k) or "") for k in
+                              ("item_priced", "price_basis")).upper().split())
+    _piece_words = ("PER PIECE", "PER PART", "PER BLANK", "PER PANEL", "PER ITEM",
+                    "CUT TO SIZE", "CUT PIECE", "CUT-TO-SIZE", "OFFCUT", "ONE PIECE",
+                    "A PIECE", "EACH PIECE", "SINGLE PIECE")
+    _not_a_sheet = ""
+    if _unit in ("PER KG", "KG", "PER KILO", "PER KILOGRAM"):
+        _not_a_sheet = f"the answer's own unit is '{_unit}'"
+    elif _unit in ("PER METRE", "PER M", "M", "MTR", "LM", "PER LINEAR METRE"):
+        _not_a_sheet = f"the answer's own unit is '{_unit}'"
+    elif any(w in _said for w in _piece_words) or ("BLANK" in _said
+                                                   and "SHEET" not in _said):
+        _not_a_sheet = f"the answer's own words price a piece ('{_said[:70]}')"
+    if _not_a_sheet:
+        print(f"   [sheet-rate] {name} {thickness:g}mm: £{per_sheet:,.2f} REFUSED as a "
+              f"sheet price — {_not_a_sheet}; a per-piece figure must never be divided "
+              f"by the nest (SCRUM-182)", flush=True)
+        return None
+    if _unit in ("PER M2", "M2", "SQM", "PER SQM", "PER SQ M", "PER SQUARE METRE") and area_m2:
+        per_sheet = per_sheet * area_m2      # the answer priced the square metre, as asked-for sheet
     return {
         "gbp_per_sheet": round(per_sheet, 2),
         "gbp_per_m2": round(per_sheet / area_m2, 2) if area_m2 else None,
@@ -953,6 +984,8 @@ def market_sheet_rate_indication(material: Any, thickness_mm: Any,
         "thickness_mm": thickness,
         "confidence": result.get("confidence"),
         "source": result.get("source_type") or "web_ai_fallback",
+        "unit_said": _unit or "each",
+        "item_priced": str(result.get("item_priced") or ""),
     }
 
 

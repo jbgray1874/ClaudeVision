@@ -4932,6 +4932,26 @@ def _researched_board_rate_m2(material: Optional[str], thickness: Optional[float
         # for every part cut from it — the slowest possible way to learn the same thing.
         _RESEARCHED_BOARD_RATE_CACHE[_rate_key] = None
         return None
+    # THE ANSWER MUST DESCRIBE THE BOARD IT WAS ASKED FOR (SCRUM-100), in three states:
+    # a positive contradiction (another family, a raw core for a faced board, another
+    # gauge) is refused and cached as a miss, so the line is unpriced and asked; an
+    # answer that verifies nothing is charged with COMPATIBILITY UNVERIFIED said on the
+    # part and on the rate — missing wording never becomes a presumed match.
+    _rate_said = str((_out or {}).get("item_priced") or "")
+    _rate_state, _rate_why = _material_answer_state(material, thickness, _rate_said)
+    if _rate_state == "incompatible":
+        print(f"   [board-rate] {material} {thickness or '?'}mm: researched rate REFUSED — "
+              f"{_rate_why} ('{_rate_said[:60]}'), not the asked board (SCRUM-100)",
+              flush=True)
+        _RESEARCHED_BOARD_RATE_CACHE[_rate_key] = None
+        return None
+    _out["compatibility"] = _rate_state
+    if _rate_state == "unverified":
+        part.setdefault("review_flags", []).append(
+            f"{str(material).replace('_', ' ')} researched rate charged with "
+            f"COMPATIBILITY UNVERIFIED — {_rate_why}"
+            + (f" ('{_rate_said[:40]}')" if _rate_said else "")
+            + "; confirm the item priced matches the specified board")
     _RESEARCHED_BOARD_RATE_CACHE[_rate_key] = _out
     return _out
 
@@ -13074,6 +13094,81 @@ def apply_consumable_allowances(part_estimates: List[Dict[str, Any]],
     return n
 
 
+# THE ANSWER MUST DESCRIBE THE MATERIAL IT WAS ASKED FOR (SCRUM-100, 12678-01-GA). The
+# spine's researched allowance came back describing softwood PAR stock and the top's an
+# 18 mm birch plywood sheet, against questions asking for MDF — and both figures were
+# charged. The labels on the line said MDF throughout; the ITEM PRICED did not. Family
+# words only, deliberately coarse: an answer that names no family is accepted (most say
+# "sheet" or repeat the question), and a species inside the asked family is the family.
+_ANSWER_FAMILY_WORDS = {
+    "MDF": ("MDF",),
+    # The faced families are detected by their OWN words only — a bare "MDF" in an
+    # answer must not read as the faced board, or the raw-core rule below cannot see
+    # the 11908 transaction backwards (a core priced where the laminate is the money).
+    "MFMDF": ("MFMDF", "MELAMINE FACED"),
+    "MFC": ("MFC", "MELAMINE FACED"),
+    "PLYWOOD": ("PLYWOOD", "PLY"),
+    "CHIPBOARD": ("CHIPBOARD", "PARTICLE BOARD", "OSB"),
+    "TIMBER": ("TIMBER", "PINE", "SOFTWOOD", "HARDWOOD", "OAK", "BEECH", "BIRCH",
+               "SPRUCE", "PAR ", "WHITEWOOD", "REDWOOD", "CLS"),
+    "ACRYLIC": ("ACRYLIC", "PERSPEX", "PMMA"),
+}
+
+
+def _answer_families(text: str) -> set:
+    t = " " + " ".join(str(text or "").upper().replace("_", " ").split()) + " "
+    return {f for f, words in _ANSWER_FAMILY_WORDS.items() if any(w in t for w in words)}
+
+
+def _material_answer_clash(asked: Any, item_priced: Any) -> str:
+    """What a researched answer priced INSTEAD of the asked material, or "" when no
+    positive contradiction exists. "" is NOT a verified match — _material_answer_state
+    separates compatible from unverified; a refusal needs a contradiction, never a
+    blank."""
+    if not str(asked or "").strip() or not str(item_priced or "").strip():
+        return ""
+    asked_fams = _answer_families(str(asked))
+    said_fams = _answer_families(str(item_priced))
+    if not asked_fams or not said_fams or (asked_fams & said_fams):
+        return ""
+    return " / ".join(sorted(said_fams))
+
+
+def _material_answer_state(asked: Any, gauge_mm: Any, item_priced: Any) -> Tuple[str, str]:
+    """("compatible" | "incompatible" | "unverified", why) — what a researched answer's
+    own words say about the material it priced, against what was asked (SCRUM-100).
+
+    THE SECOND 12678 REVIEW'S RULE: missing wording must not become a presumed match.
+    Compatible needs the answer to NAME the asked family (and no contradicting gauge);
+    incompatible needs a positive contradiction — another family, a raw core against a
+    faced board, or a gauge the answer prices that is not the one asked; everything
+    else is UNVERIFIED, charged only with that said beside it."""
+    said = " " + " ".join(str(item_priced or "").upper().replace("_", " ").split()) + " "
+    if not said.strip():
+        return "unverified", "the answer does not say what it priced"
+    clash = _material_answer_clash(asked, item_priced)
+    if clash:
+        return "incompatible", f"the answer priced {clash}"
+    asked_fams = _answer_families(str(asked or ""))
+    said_fams = _answer_families(said)
+    # A RAW CORE IS NOT THE FACED BOARD: asked MFMDF/MFC and answered a bare core with
+    # no facing word is the 11908 transaction backwards — the laminate is the money.
+    if ({"MFMDF", "MFC"} & asked_fams) and said_fams \
+            and not ({"MFMDF", "MFC"} & said_fams) \
+            and not any(w in said for w in ("MELAMINE", "LAMINAT", "FACED", "PRE LAM")):
+        return "incompatible", "the answer prices the raw core, not the faced board"
+    g = _safe_float(gauge_mm)
+    if g:
+        _named_g = [float(m.group(1)) for m in
+                    re.finditer(r"(\d+(?:\.\d+)?)\s*MM\b", said)]
+        if _named_g and all(abs(v - g) > 0.6 for v in _named_g):
+            return "incompatible", (f"the answer prices {_named_g[0]:g} mm against the "
+                                    f"asked {g:g} mm")
+    if asked_fams and (asked_fams & said_fams):
+        return "compatible", ""
+    return "unverified", "the answer does not name the material it priced"
+
+
 def _is_made_line(pe: Dict[str, Any]) -> bool:
     """Does this costed line carry a route SDI works itself, on a part the make/buy authority
     does not rule bought? Read from the line's own fields and its route_context (D-485)."""
@@ -13131,6 +13226,43 @@ def _made_part_material_allowance(pe: Dict[str, Any]) -> Optional[float]:
             f"({(_ind or {}).get('missing') or 'no answer'}). It is never priced as a finished "
             f"item; give its blank length × width × gauge and it costs as a nested part")
         return None
+    # THE ANSWER MUST DESCRIBE THE MATERIAL IT WAS ASKED FOR (SCRUM-100). 12678's spine
+    # allowance described softwood PAR, the top's 18 mm birch plywood, both against MDF
+    # questions, and both were charged with MDF written beside them. Three states, per
+    # the second review: a positive contradiction is refused and the line stays an
+    # honest gap; an answer that VERIFIES nothing is charged only with that said beside
+    # it — missing wording never becomes a presumed match; only a named match is one.
+    _said_item = str((_ind or {}).get("item_priced") or "")
+    _clash = _material_answer_clash(material, _said_item)
+    _state, _state_why = _material_answer_state(material, gauge, _said_item)
+    if _state == "incompatible":
+        _bad = f"describes {_clash}" if _clash else _state_why
+        pe.setdefault("review_flags", []).append(
+            f"{pe.get('part_number') or what}: NOT PRICED — the researched allowance "
+            f"{_bad} ('{_said_item[:60]}') against a question asking for "
+            f"{material.replace('_', ' ') or 'the specified material'}"
+            f"{f' at {gauge:g} mm' if gauge else ''}; a figure for a different material "
+            f"is never charged as this one's")
+        try:
+            source_precedence.raise_manufacturing_question(
+                pe,
+                f"Material allowance for {pe.get('part_number') or what}: the research "
+                f"answered about {_clash or _state_why}, not "
+                f"{material.replace('_', ' ')}",
+                f"no allowance is charged; the answer priced '{_said_item[:60]}'",
+                "price the specified material, or confirm the substitution deliberately",
+                "estimator.material_answer_clash")
+        except Exception:                                            # noqa: BLE001
+            pass
+        return None
+    if _state == "unverified":
+        pe.setdefault("review_flags", []).append(
+            f"{pe.get('part_number') or what}: material allowance charged with "
+            f"COMPATIBILITY UNVERIFIED — {_state_why}"
+            + (f" ('{_said_item[:40]}')" if _said_item else "")
+            + f"; confirm the item priced matches "
+            + (material.replace('_', ' ') or "the specified material")
+            + (f" at {gauge:g} mm" if gauge else ""))
     pe["_last_resort_result"] = {"selected": {
         "source": ((_ind.get("evidence") or {}).get("source")), "price": price,
         "review_required": True, "review_reason": _ind.get("status"),
