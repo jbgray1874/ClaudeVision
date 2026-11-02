@@ -284,9 +284,13 @@
 
     <h1 style="margin-top:22px">Within a period</h1>
     <p class="hint">Each drawing estimated between the dates, once, against its manual
-      estimate. The ones that cannot be compared are listed apart.</p>
+      estimate. The ones that cannot be compared are listed apart. The period can be any
+      two dates, one day included; a time beside a date narrows it within the day, so two
+      runs made the same day can be compared morning against afternoon (D-625).</p>
     <div class="half"><input type="date" id="p-pfrom" aria-label="Period from">
-      <input type="date" id="p-pto" aria-label="Period to"></div>
+      <input type="time" id="p-pfromt" aria-label="Period from time, optional"></div>
+    <div class="half" style="margin-top:9px"><input type="date" id="p-pto" aria-label="Period to">
+      <input type="time" id="p-ptot" aria-label="Period to time, optional"></div>
     <input type="text" id="p-pclient" placeholder="Client (optional)" style="margin-top:9px">
     <div class="half" style="margin-top:9px"><button class="ghost" id="p-preview" type="button">Preview</button>
       <button class="go" id="p-period" type="button">Compare the period</button></div>
@@ -297,9 +301,11 @@
     <p class="hint">Period A against Period B: how the variance moved, and the drawings
       estimated in both.</p>
     <p class="muted">Period A</p>
-    <div class="half"><input type="date" id="p-afrom" aria-label="A from"><input type="date" id="p-ato" aria-label="A to"></div>
+    <div class="half"><input type="date" id="p-afrom" aria-label="A from"><input type="time" id="p-afromt" aria-label="A from time, optional"></div>
+    <div class="half" style="margin-top:9px"><input type="date" id="p-ato" aria-label="A to"><input type="time" id="p-atot" aria-label="A to time, optional"></div>
     <p class="muted" style="margin-top:6px">Period B</p>
-    <div class="half"><input type="date" id="p-bfrom" aria-label="B from"><input type="date" id="p-bto" aria-label="B to"></div>
+    <div class="half"><input type="date" id="p-bfrom" aria-label="B from"><input type="time" id="p-bfromt" aria-label="B from time, optional"></div>
+    <div class="half" style="margin-top:9px"><input type="date" id="p-bto" aria-label="B to"><input type="time" id="p-btot" aria-label="B to time, optional"></div>
     <input type="text" id="p-tclient" placeholder="Client (optional)" style="margin-top:9px">
     <div class="row"><button class="go" id="p-two" type="button">Compare A with B</button></div>
     <div class="state" id="p-tstate" role="status" aria-live="polite" hidden></div>
@@ -1021,8 +1027,16 @@ function statsLine(s){
     + (s.median_abs_pct == null ? "n/a" : s.median_abs_pct + "%") + "; apart: " + s["quantities differ"] + " quantities differ, "
     + s.ambiguous + " ambiguous, " + s["no manual"] + " no manual.";
 }
+// A boundary: the date, with its optional time appended (D-625). A bare date is the whole
+// day, so one day is a period on its own; a time narrows it within the day.
+function when(dateId, timeId){
+  const d = $(dateId).value;
+  if(!d) return "";
+  const t = $(timeId).value;
+  return t ? d + " " + t : d;
+}
 async function period(preview){
-  const start = $("p-pfrom").value, end = $("p-pto").value;
+  const start = when("p-pfrom", "p-pfromt"), end = when("p-pto", "p-ptot");
   $("p-pstate").hidden = false;
   if(!start || !end){ say("p-pstate", "Choose both dates.", "err"); return; }
   say("p-pstate", preview ? "Looking through the estimates…" : "Starting…");
@@ -1044,8 +1058,8 @@ async function twoPeriods(){
   if(!v("p-afrom") || !v("p-ato") || !v("p-bfrom") || !v("p-bto")){ say("p-tstate", "Choose all four dates.", "err"); return; }
   say("p-tstate", "Starting…");
   try{
-    const r = await api("/api/estimate/parity/periods", {a_start: v("p-afrom"), a_end: v("p-ato"),
-      b_start: v("p-bfrom"), b_end: v("p-bto"), client: $("p-tclient").value.trim()});
+    const r = await api("/api/estimate/parity/periods", {a_start: when("p-afrom", "p-afromt"), a_end: when("p-ato", "p-atot"),
+      b_start: when("p-bfrom", "p-bfromt"), b_end: when("p-bto", "p-btot"), client: $("p-tclient").value.trim()});
     follow(r.status_url, {step: s => say("p-tstate", "Running period " + (s.period || "A") + ": " + (s.done || 0) + " of " + (s.of == null ? "?" : s.of) + "."),
       done: s => {
         if(s.error){ say("p-tstate", s.error, "err"); return; }
