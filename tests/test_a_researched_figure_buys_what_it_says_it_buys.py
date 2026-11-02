@@ -101,6 +101,33 @@ def test_an_allowance_answered_about_another_material_is_refused(monkeypatch):
                for q in pe["manufacturing_questions"])
 
 
+def test_a_promoted_boards_allowance_asks_for_the_faced_board(monkeypatch):
+    """THE 19:30 MASQUERADE: the promotion said 'the laminating is IN the sheet price'
+    while the allowance asked for, received and charged raw MDF. The question now names
+    the pre-faced board, and a raw-core answer against it is refused, not charged."""
+    asked = {}
+
+    def _capture(brief, **kw):
+        asked["description"] = str(brief.get("description") or "")
+        return {"price_gbp": 12.48, "status": "provisional",
+                "item_priced": "raw 18mm MDF sheet, excluding finishing"}
+    monkeypatch.setattr(indicative_price, "resolve_indicative", _capture)
+    pe = dict(_spine(), material_estimate={"costing_material_family": "MFMDF"})
+    assert estimator._made_part_material_allowance(pe) is None
+    assert "pre-faced" in asked["description"].lower()
+    assert "mfmdf" in asked["description"].lower()
+    assert any("raw core" in f for f in pe["review_flags"])
+
+
+def test_a_faced_board_answer_prices_the_promoted_board(monkeypatch):
+    monkeypatch.setattr(indicative_price, "resolve_indicative",
+                        lambda *a, **kw: {"price_gbp": 48.0, "status": "provisional",
+                                          "item_priced": "melamine faced MDF board, 18mm",
+                                          "evidence": {"source": "x"}})
+    pe = dict(_spine(), material_estimate={"costing_material_family": "MFMDF"})
+    assert estimator._made_part_material_allowance(pe) == 48.0
+
+
 def test_an_allowance_for_the_asked_material_is_charged(monkeypatch):
     monkeypatch.setattr(indicative_price, "resolve_indicative",
                         lambda *a, **kw: {"price_gbp": 20.0, "status": "provisional",
