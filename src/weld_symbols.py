@@ -734,6 +734,72 @@ def note_weld_process(part: Dict[str, Any], sheet_text: Any) -> str:
     return str(read["process"])
 
 
+def pack_weld_process(pages: Any) -> Optional[Dict[str, Any]]:
+    """The pack-level default weld process statement, or None (SCRUM-181).
+
+    "WELD SPECIFICATION: ALL WELDS TO BE TIG UNLESS STATED" in the border notes is one
+    statement for the whole pack. Only a DEFAULT statement counts here — a process named
+    on one joint belongs to that sheet's own reader, not to the pack."""
+    try:
+        from extractor_patterns import weld_process_stated
+    except Exception:                                                # noqa: BLE001
+        return None
+    for pg in pages or ():
+        if not isinstance(pg, dict):
+            continue
+        text = " ".join(str(pg.get(k) or "") for k in
+                        ("pypdf_text", "pdfplumber_text", "normalized_text"))
+        read = weld_process_stated(text)
+        if read and read.get("default"):
+            return read
+    return None
+
+
+# An arc-weld operation the pack default describes. Spot welding is resistance work: a
+# TIG default says nothing about it.
+_PACK_DEFAULT_OPS = {"welding", "weld", "mig_welding", "tig_welding"}
+
+
+def apply_pack_weld_default(parts: Any, pages: Any) -> List[str]:
+    """Stamp the pack's default weld process on every part that carries an arc-weld
+    operation and no process of its own; the part numbers touched (SCRUM-181).
+
+    PROCESS, NEVER EXISTENCE. The specification legend still puts no weld on any part
+    (strip_specification_legend, and the tests that pin it): 12678-01-GA's bracket welds
+    stay inferred and stay asked. What the legend does answer, for a weld already
+    charged by other evidence or by inference, is which process — so the sheet row says
+    TIG is charged at the card's one arc-weld row, the TIG rate gap is asked once
+    (weld_rate_gap_question), and the inferred-weld question can quote the note instead
+    of claiming none exists. A part whose own sheet stated a process keeps its own:
+    "UNLESS STATED" is the specification's word, not ours."""
+    read = pack_weld_process(pages)
+    if not read:
+        return []
+    row = _arc_weld_row_title()
+    touched: List[str] = []
+    for part in parts or ():
+        if not isinstance(part, dict) or part.get("weld_process_stated"):
+            continue
+        ops = {str(o).strip().lower() for o in
+               ((part.get("operations") or []) + (part.get("textual_operations") or [])
+                + (part.get("inferred_operations") or []))}
+        if not (ops & _PACK_DEFAULT_OPS):
+            continue
+        part["weld_process_stated"] = {"process": read["process"], "word": read["word"],
+                                       "default": True, "charged_on": row,
+                                       "source": "pack_specification"}
+        _flag = (f"WELD PROCESS {read['process']} per the pack's weld specification, its "
+                 f"default for every weld not stated otherwise; the rate card's one "
+                 f"arc-weld row is {row}, where it is charged — confirm the rate suits "
+                 f"{read['process']}")
+        flags = part.setdefault("review_flags", [])
+        if isinstance(flags, list) and _flag not in flags:
+            flags.append(_flag)
+        weld_rate_gap_question(part)
+        touched.append(str(part.get("part_number") or ""))
+    return touched
+
+
 # The processes the card's one arc-weld row is a rate for. Any other stated process is charged
 # there only as a placeholder, and that is a rate gap, not a rate.
 _ARC_ROW_PROCESSES = ("CO2", "MIG")

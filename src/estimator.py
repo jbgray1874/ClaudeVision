@@ -4290,13 +4290,22 @@ def _safe_thickness_and_stage(part: Dict[str, Any]) -> Tuple[Optional[float], st
             if _tv and 0.3 <= _tv <= _max_t_for_part and _ok(_tv):
                 return _tv, "dxf_filename"
 
-    # Already-normalised thickness — skip tolerance-table noise when DXF exists
-    raw = part.get("normalized_thickness_mm")
+    # Already-normalised thickness — skip tolerance-table noise when DXF exists.
+    # A REFUSED FIGURE IS RE-JUDGED, NEVER RESURRECTED SILENTLY (SCRUM-180). _unset below
+    # moves a refused reading to thickness_rejected_mm, and the floor depends on the
+    # material, which can resolve between calls (TIMBER's 6 mm floor against board's
+    # 3 mm) — so the moved figure is offered back to whatever floor stands now. Accepted,
+    # it returns home and the refusal record goes; refused, it stays where no reader
+    # prices, nests or weighs it.
+    raw = part.get("normalized_thickness_mm") or part.get("thickness_rejected_mm")
     if raw:
         v = _safe_float(raw)
         _max_t = _max_t_for_part
         if v and 0.4 <= v <= _max_t and not (1900 <= v <= 2100) and _ok(v):
             if round(v, 1) not in _TOLERANCE_TABLE_SEQUENCE or not _dfn:
+                if not part.get("normalized_thickness_mm"):
+                    part["normalized_thickness_mm"] = v   # precedence: direct-write ok — restores the value the resolver already arbitrated; the refusal only parked it
+                    part.pop("thickness_rejected_mm", None)
                 return v, "normalized"
 
     # thicknesses_mm list with tolerance-table stripping
@@ -4306,11 +4315,23 @@ def _safe_thickness_and_stage(part: Dict[str, Any]) -> Tuple[Optional[float], st
     candidates = [v for v in candidates
                   if v and 0.3 <= v <= _max_t and not (1900 <= v <= 2100)]
 
+    def _quiet_raw() -> None:
+        # AN UNSET GAUGE FEEDS NOTHING DOWNSTREAM (SCRUM-180). The refused figure used to
+        # stay on normalized_thickness_mm, where the workbook's board row, the £/kg sheet
+        # price and the shipping weigh all read it back: 12678-01-GA nested, priced and
+        # weighed four boards at the 2.5 mm the question beside them had just refused. It
+        # moves to thickness_rejected_mm, which only the re-judgement above reads.
+        _raw_v = _safe_float(part.get("normalized_thickness_mm"))
+        if _raw_v:
+            part["thickness_rejected_mm"] = _raw_v
+            part["normalized_thickness_mm"] = None   # precedence: direct-write ok — a withdrawal, not an arbitration: the refused value is parked, and a stronger source still lands through the resolver
+
     def _unset(why: str) -> Tuple[Optional[float], str]:
         _flag = f"{why}. Thickness left unset — confirm the board gauge"
         _fl = part.setdefault("review_flags", [])
         if isinstance(_fl, list) and _flag not in _fl:
             _fl.append(_flag)
+        _quiet_raw()
         return None, ""
 
     if not candidates:
@@ -4338,6 +4359,7 @@ def _safe_thickness_and_stage(part: Dict[str, Any]) -> Tuple[Optional[float], st
             part.setdefault("review_flags", []).append(
                 "no board thickness on the drawing - the only values found were the "
                 "tolerance table. Thickness left unset; confirm the board gauge")
+            _quiet_raw()
             return None, ""
     if not candidates:
         return None, ""
@@ -4961,6 +4983,15 @@ def _faced_board_promotion(part: Dict[str, Any], material: Optional[str]):
         evidence.append(f"the cut file's own name ({part.get('dxf_source_file')})")
     if "LAMINAT" in str(part.get("description") or "").upper():
         evidence.append("the part's description")
+    # THE PACK'S GENERAL CONSTRUCTION NOTE (SCRUM-179). 12678-01-GA states "GENERAL
+    # CONSTRUCTION MDF - LAMINATED CLEAF TARANTA FD10" once, on the GA, for the whole
+    # product — and no per-part field ever carried it, so four laminated boards priced as
+    # raw MDF with the laminate nowhere on the sheet. construction_note stamps the note's
+    # own words on the made boards; citing the sentence keeps the evidence honest.
+    _note_lam = str(part.get("construction_note_laminate") or "")
+    if "LAMINAT" in _note_lam.upper():
+        evidence.append(f"the pack's general construction note "
+                        f"('{_note_lam[:48].strip()}')")
     if not evidence:
         return None, ""
     return family, " and ".join(evidence[:2])
@@ -6385,6 +6416,23 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             f"{material} + LAMINATED is bought pre-faced as {_faced_family} — evidence: "
             f"{_faced_why}. The laminating on the route is IN the sheet price, not a "
             f"shop operation.")
+    elif part.get("construction_note_laminate"):
+        # A LAMINATE THE PROMOTION CANNOT PLACE IS A QUESTION, NEVER RAW-BOARD MONEY IN
+        # SILENCE (SCRUM-179): the pack's construction note states the facing, no faced
+        # family prices this core, and pricing the raw board without saying so is how
+        # 12678-01-GA went out with the Cleaf nowhere on the sheet.
+        try:
+            source_precedence.raise_manufacturing_question(
+                part,
+                f"Laminate on {part.get('part_number')}: the pack's construction note "
+                f"states '{str(part.get('construction_note_laminate'))[:60]}' and no "
+                f"faced-board family prices this core",
+                "the material is costed as the raw board; the laminate is not in the price",
+                "price the laminated board (or the laminate as its own line), or record "
+                "why the raw board is right",
+                "construction_note.unpriced_laminate")
+        except Exception:                                            # noqa: BLE001
+            pass
     _cost_family = _faced_family or material
     _live_sheet_rate = _resolve_board_sheet_rate_gbp_per_m2(_cost_family, thickness, part)
     if ((_mat_acr in config.PLASTIC_SHEET_PRICED_MATERIALS or _llm_rate_m2 or _live_sheet_rate)
@@ -11441,7 +11489,13 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # level so xlsx_output Sheet Steel / Other Sheet Material sections can
         # find them (they read pe.get("normalized_material") directly).
         "normalized_material": part.get("normalized_material") or material.get("material"),
-        "normalized_thickness_mm": _t_kept or material.get("thickness_mm"),
+        # A GAUGE THE COSTING REFUSED DOES NOT SNEAK BACK THROUGH THE MATERIAL RESULT
+        # (SCRUM-180): with the thickness left unset and a refusal recorded, the estimate
+        # carries no gauge, and the refusal rides along so the sheet writer and the checks
+        # can see WHY the cell is empty instead of refilling it from a stale copy.
+        "normalized_thickness_mm": _t_kept or (
+            None if part.get("thickness_rejected_mm") else material.get("thickness_mm")),
+        "thickness_rejected_mm": (None if _t_kept else part.get("thickness_rejected_mm")),
         # WHERE THOSE TWO NUMBERS CAME FROM TRAVELS WITH THEM.
         #
         # THE THIRD AND FOURTH TIME A FACT STOPPED AT THIS BOUNDARY. geometry_rollup and

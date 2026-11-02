@@ -3561,6 +3561,20 @@ def costed_job(source: Any) -> Dict[str, Any]:
                   and _tgt.upper() in {str(pn).upper() for pn in (r.get("part_numbers") or [])}]
         _w_gbp = round(sum(_num(r.get("total_value_gbp")) for r in _wrows), 2)
         _why = str(_d.get("reason") or "").strip()
+        # THE PACK'S WELD SPECIFICATION NAMES THE PROCESS, NOT THE JOINT (SCRUM-181).
+        # 12678-01-GA's question said "quotes no weld note from the drawing" under a GA
+        # whose border prints "ALL WELDS TO BE TIG UNLESS STATED". The legend still
+        # proves no weld EXISTS — that rule stands — but for a weld already charged it
+        # is the pack's one statement of process, so the question quotes it and asks
+        # about the joint, instead of claiming no note exists.
+        _wps = _wrec.get("weld_process_stated") if isinstance(
+            _wrec.get("weld_process_stated"), Mapping) else {}
+        _spec_said = ""
+        if str(_wps.get("source") or "") == "pack_specification":
+            _spec_said = (f" for this joint — though the pack's weld specification "
+                          f"states {str(_wps.get('process') or '').upper() or 'a process'}"
+                          f" as the default for every weld, which names the process, "
+                          f"not the joint —")
         decisions.append({
             "part": _tgt, "kind": "manufacturing_decision",
             # Charged as welded AND dressed: both operations are this row's question.
@@ -3570,7 +3584,8 @@ def costed_job(source: Any) -> Dict[str, Any]:
             "assumption": (f"charged as welded and dressed"
                            f"{f' (£{_w_gbp:,.2f} a unit)' if _w_gbp else ''}"
                            f"{f' — {_why}' if _why else ''}; the inference quotes no weld "
-                           f"note from the drawing, and {_drawn}"),
+                           f"note{_spec_said}"
+                           f"{'' if _spec_said else ' from the drawing,'} and {_drawn}"),
             "action": ("confirm it is welded; if it is assembled mechanically (studs, "
                        "nutserts, screws), replace the Weld and Dress rows with the "
                        "mechanical joining labour, rather than only removing them"),

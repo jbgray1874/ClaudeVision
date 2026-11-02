@@ -6911,6 +6911,18 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         length = _safe(_bd["length_mm"])
         width  = _safe(_bd["width_mm"])
         thick  = _safe(pe.get("normalized_thickness_mm") or me.get("thickness_mm"))
+        # A GAUGE THE COSTING REFUSED NEVER REACHES THE SHEET (SCRUM-180). 12678-01-GA's
+        # boards nested at Ga 2.5 beside the question that had refused 2.5 below the board
+        # floor: the estimate's own gauge was unset, and this cell refilled itself from a
+        # stale copy on the material result. With a refusal recorded and no resolved
+        # gauge, the Ga cell stays empty and the £/kg gap-filler below gets nothing, so
+        # the row shows an honest 0 beside its question instead of pricing the refusal.
+        _rej_t = _safe(pe.get("thickness_rejected_mm"))
+        if _rej_t and not _safe(pe.get("normalized_thickness_mm")):
+            thick = None
+            _flag(f"other-sheet {pe.get('part_number')} gauge unset — {float(_rej_t):g} mm "
+                  f"was refused below the board floor; no gauge and no sheet price until "
+                  f"the gauge is confirmed.", flags)
         ws.cell(row=row, column=o["col_desc"],   value=f"{pe.get('part_number','')}  {pe.get('description','')}")
         ws.cell(row=row, column=o["col_qty"],    value=int(_safe(pe.get("quantity"), 1)))
         ws.cell(row=row, column=o["col_length"], value=length)
@@ -8629,7 +8641,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # the quantity the spec will be priced over, by length, like the tape. One ask for
     # the job, with the measurement in it, instead of a silently absent line.
     try:
-        _lam_parts = [p for p in (bom_parts or [])
+        # BOTH LISTS, the same mistake the joinery rates fixed before this (see
+        # _faced_board_job): a laminated PANEL with a blank sits in board_parts, so an
+        # ask scoped to bom_parts never fired on the very parts that get banded
+        # (SCRUM-179 — 12678-01-GA's EDGE row at zero on a laminated podium).
+        _lam_parts = [p for p in (list(bom_parts or []) + list(board_parts or []))
                       if isinstance(p, dict)
                       and (p.get("_laminate_in_board")
                            or (p.get("material_estimate") or {}).get(

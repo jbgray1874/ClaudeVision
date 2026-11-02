@@ -2745,6 +2745,42 @@ def pre_costing_passes(summary: Dict[str, Any]) -> None:
         print(f"   [section-coverage] not prepared ({type(_sc_exc).__name__}: {_sc_exc})",
               flush=True)
 
+    # THE PACK'S GENERAL CONSTRUCTION NOTE (SCRUM-179), before anything is priced: the
+    # GA's one statement of the whole product's build-up refines a bare family word and
+    # carries the laminate to the boards, so 12678-01-GA's "MDF - LAMINATED CLEAF
+    # TARANTA FD10" is costed as pre-faced board rather than read as WOOD and priced as
+    # raw sheet. After the own-sheet material pass above, so a part's own statement has
+    # already landed and the note only fills what the pack left generic.
+    try:
+        import construction_note as _cnote
+        _note = _cnote.read(summary)
+        if _note:
+            _touched = _cnote.apply(_note, summary["manufacturing_writeup"]["parts"])
+            if _touched:
+                print(f"   [construction] '{_note['text']}' ({_note['where']}) -> "
+                      f"{len(_touched)} board part(s): {', '.join(_touched[:6])}",
+                      flush=True)
+    except Exception as _cn_exc:                                     # noqa: BLE001
+        print(f"   [construction] note not applied ({type(_cn_exc).__name__}: {_cn_exc})",
+              flush=True)
+
+    # THE PACK'S WELD SPECIFICATION NAMES THE PROCESS OF EVERY CHARGED WELD (SCRUM-181):
+    # process only, never existence — the specification legend still puts no weld on any
+    # part. A part already carrying an arc-weld operation and no process of its own takes
+    # the pack default, so the sheet row says which process the rate must suit and the
+    # TIG rate gap is asked instead of the question claiming no weld note exists.
+    try:
+        from weld_symbols import apply_pack_weld_default as _wpack
+        _wtouched = _wpack(summary["manufacturing_writeup"]["parts"],
+                           summary.get("pages") or [])
+        if _wtouched:
+            print(f"   [weld process] the pack's specification names the process on "
+                  f"{len(_wtouched)} welded part(s): {', '.join(_wtouched[:6])}",
+                  flush=True)
+    except Exception as _wp_exc:                                     # noqa: BLE001
+        print(f"   [weld process] pack default not applied "
+              f"({type(_wp_exc).__name__}: {_wp_exc})", flush=True)
+
 
 def _finalize_scan_summary(
     summary: Dict[str, Any],
@@ -4373,6 +4409,15 @@ def _finalize_scan_summary(
             for _h in _hier:
                 print(f"   [hierarchy] {_h['part_number']} holds "
                       f"{', '.join(_h['children'])} (from the SolidWorks model)", flush=True)
+            # A REACHED CHILD WITH A READABLE MODEL IS PRICED, NOT ONLY ASKED (SCRUM-155):
+            # the bracket steel 12678-01-GA charged welding on and no material for.
+            try:
+                from source_connectors.solidworks import mint_model_children
+                mint_model_children(summary["manufacturing_writeup"]["parts"],
+                                    _sw_job_late)
+            except Exception as _mint_exc:                           # noqa: BLE001
+                print(f"   [hierarchy] model-only children not minted "
+                      f"({type(_mint_exc).__name__}: {_mint_exc})", flush=True)
             _sw_meta = getattr(_sw_job_late, "meta", {}) or {}
             _edges = sum(len(v) for v in (getattr(_sw_job_late, "hierarchy", {}) or {}).values())
             _asms = len(getattr(_sw_job_late, "assembly_pns", []) or [])
