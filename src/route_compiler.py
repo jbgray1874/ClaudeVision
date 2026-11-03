@@ -435,8 +435,14 @@ def at_least_once_per_instance(stated: Any, target_id: Any, quantities: Mapping[
     answered per frame — and the compiler took that as the event's count, so the weld was
     charged once beside a dressing charged twice. A stated count below the target's canonical
     multiplicity is raised to it; a count at or above it stands (the model may already have
-    counted every instance). Returns (count, raised)."""
-    if str(scope or "") != "assembly" or stated is None:
+    counted every instance). Returns (count, raised).
+
+    A PART'S OWN OPERATION IS ONCE PER INSTANCE OF THE PART TOO (D-655). 12684-02-M01, the arm
+    bracket inside each of 33 hook assemblies: Grok stated folding at 1 ("Printed qty of M01 is
+    1 on the hook assembly BOM ... that multiplier is not applied here"), its laser and deburr
+    were charged at 33, and the Fold row bent one bracket. The same floor applies at part
+    scope: the tree's multiplied count is the least number of times a part is made."""
+    if str(scope or "") not in ("assembly", "part") or stated is None:
         return stated, False
     try:
         _stated = float(stated)

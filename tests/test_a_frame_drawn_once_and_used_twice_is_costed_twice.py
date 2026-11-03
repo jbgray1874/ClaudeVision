@@ -130,7 +130,10 @@ def test_the_floor_is_the_targets_multiplicity_and_a_stated_count_above_it_stand
     assert rc.at_least_once_per_instance(1, "401918-01-401", q, "assembly") == (2.0, True)
     assert rc.at_least_once_per_instance(3, "401918-01-401", q, "assembly") == (3, False)
     assert rc.at_least_once_per_instance(1, "401918-01-GA", q, "assembly") == (1, False)
-    assert rc.at_least_once_per_instance(1, "401918-01-401", q, "part") == (1, False)
+    # D-655: a part's own operation is floored the same way (12684-02-M01, folded once for
+    # 33 brackets). Unscoped stays as stated.
+    assert rc.at_least_once_per_instance(1, "401918-01-401", q, "part") == (2.0, True)
+    assert rc.at_least_once_per_instance(1, "401918-01-401", q, None) == (1, False)
     assert rc.at_least_once_per_instance(None, "401918-01-401", q, "assembly") == (None, False)
 
 
@@ -179,3 +182,46 @@ def test_a_model_that_already_counted_both_frames_is_not_doubled():
     out = rc.compile_job_route(parts, job, known_assemblies=["401918-01-GA", "401918-01-401"])
     welds = _weld(out)
     assert welds and all(float(d["qty_per_unit"]) == 2.0 for d in welds), welds
+
+
+# ── D-655: a part's own operation happens at least once per instance of the part ──────────
+
+def _hooks(fold_qty=1):
+    parts = [
+        {"part_number": "H-GA", "description": "HOOK UNIT", "is_assembly_parent": True,
+         "assembly_children": ["H-101SA"], "quantity": 1},
+        {"part_number": "H-101SA", "description": "HOOK ASSEMBLY", "is_assembly_parent": True,
+         "is_sub_assembly": True, "assembly_children": ["H-M01"], "quantity": 33},
+        {"part_number": "H-M01", "description": "ARM BRACKET", "normalized_material": "MILD STEEL",
+         "normalized_thickness_mm": 2.0, "quantity": 1,
+         "textual_operations": ["folding"], "operation_scope": {"folding": "part"},
+         "operation_qty_per_unit": {"folding": fold_qty},
+         "operation_sources": {"folding": "llm_full_extract"}},
+    ]
+    job = {"assemblies": [
+        {"part_number": "H-GA", "children": [{"part_number": "H-101SA", "qty": 33}]},
+        {"part_number": "H-101SA", "children": [{"part_number": "H-M01", "qty": 1}]}],
+        "routes": [{"operation": "folding", "part_numbers": ["H-M01"], "scope": "part",
+                    "qty_per_unit": fold_qty, "sequence": 30}]}
+    return parts, job
+
+
+def _folds(out):
+    return [d for d in out["decisions"] if d["operation"] == "folding"
+            and d["status"] == "required" and d["target_id"] == "H-M01"]
+
+
+def test_a_bracket_inside_33_hooks_is_folded_33_times():
+    """12684-02-M01: Grok stated folding at 1 per hook and the Fold row bent one bracket,
+    while the same bracket's laser and deburr were charged at 33."""
+    parts, job = _hooks(fold_qty=1)
+    out = rc.compile_job_route(parts, job, known_assemblies=["H-GA", "H-101SA"])
+    folds = _folds(out)
+    assert folds and all(float(d["qty_per_unit"]) == 33.0 for d in folds), folds
+
+
+def test_a_part_count_already_at_the_trees_figure_stands():
+    parts, job = _hooks(fold_qty=33)
+    out = rc.compile_job_route(parts, job, known_assemblies=["H-GA", "H-101SA"])
+    folds = _folds(out)
+    assert folds and all(float(d["qty_per_unit"]) == 33.0 for d in folds), folds
