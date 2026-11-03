@@ -815,6 +815,23 @@ def main() -> int:
 _SERVICE_COMMIT: Dict[str, str] = {}
 
 
+# THE JOB TYPES THIS RUNNER EXECUTES BESIDES A FULL ESTIMATE (D-640), told to the service on
+# every claim. "sw_extract": the SolidWorks analyser on the pack, organised; "xai_extract": the
+# whole-document xAI read on the pack's PDFs, exactly as returned and laid out as tables.
+RUNNER_CAPABILITIES = ("sw_extract", "xai_extract")
+PACK_EXTRACT_KIND = {"sw_extract": "sw", "xai_extract": "xai"}
+
+
+def pack_extract_command(engine_root: Path, engine_python: Path, job: Dict[str, Any]
+                         ) -> List[str]:
+    """The one command a pack-extract job runs: src/pack_extract.py, never main.py."""
+    kind = PACK_EXTRACT_KIND[str(job.get("job_type"))]
+    paths = [str(job["pdf_path"])] if job.get("pdf_path") else [str(job["job_folder"])]
+    return [str(engine_python), "-u", str(engine_root / "src" / "pack_extract.py"), kind,
+            *paths, "--out", str(job["output_path"]),
+            "--name", str(job.get("drawing_number") or Path(paths[0]).name)]
+
+
 def _ask_for_work(requests, server: str, headers: Dict[str, str], runner_id: str,
                   process: str, build: str,
                   complained: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -826,7 +843,11 @@ def _ask_for_work(requests, server: str, headers: Dict[str, str], runner_id: str
     try:
         r = requests.post(f"{base}/runner/claim", json={
             "runner_id": runner_id, "hostname": platform.node(),
-            "process": process, "build": build},
+            "process": process, "build": build,
+            # WHAT THIS RUNNER CAN DO BESIDES AN ESTIMATE (D-640). The service hands a
+            # pack-extract job only to a runner that says it can run one: an older runner
+            # would build a full main.py estimate for it.
+            "capabilities": list(RUNNER_CAPABILITIES)},
             headers=headers, timeout=20)
     except Exception as exc:                       # noqa: BLE001 — keep polling
         # SAY IT ONCE. A runner that cannot reach the server prints a line a
@@ -1107,8 +1128,13 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
     #
     # None of the reading, pricing or arbitration was wasted effort in principle -- but the one
     # fact that decided the outcome was knowable before any of it started.
+    # A PACK EXTRACT IS NOT AN ESTIMATE (D-640): no template, no workbook check, nothing
+    # filed to the briefs or parity areas. One command, and exactly the files it names; the
+    # launch, the lease, the console and Stop are the estimate's own.
+    extract_job = str(job.get("job_type") or "") in PACK_EXTRACT_KIND
+
     tpl = workbook_template()
-    if not Path(tpl).is_file():
+    if not extract_job and not Path(tpl).is_file():
         _finish(requests, base, headers, run_id, runner_id, "error",
                 f"The estimate workbook template is not readable from this runner: {tpl} — "
                 f"so no workbook could be built and the run would produce a summary and no "
@@ -1126,6 +1152,8 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
                          llm_only=bool(job.get("llm_only")),
                          fresh_read=bool(job.get("fresh_read")),
                          product=str(job.get("drawing_number") or ""))
+    if extract_job:
+        cmd = pack_extract_command(engine_root, engine_python, job)
     say("$ " + " ".join(f'"{c}"' if " " in c else c for c in cmd))
     flush(force=True)
 
@@ -1170,6 +1198,16 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
         _finish(requests, base, headers, run_id, runner_id, "error",
                 f"Stopped — {stop_asked}. The engine was ended and nothing was filed; anything "
                 f"it wrote stays in the engine's own output folder on this machine.", log)
+        return
+
+    if extract_job:
+        filed = pack_extract_outputs(log)
+        if code != 0 or not filed:
+            _finish(requests, base, headers, run_id, runner_id, "error",
+                    f"The pack extract exited with code {code} and wrote "
+                    f"{len(filed)} file(s) — the log above says why.", log, filed)
+            return
+        _finish(requests, base, headers, run_id, runner_id, "done", "", log, filed)
         return
 
     if code != 0:
@@ -1448,6 +1486,19 @@ def file_parity(job: Dict[str, Any], filed: List[Dict[str, str]], engine_root: P
         return ""
     log.append(f"[parity] comparison filed to {body['folder']}")
     return str(body["folder"])
+
+
+def pack_extract_outputs(log: List[str]) -> List[Dict[str, str]]:
+    """The files a pack extract wrote, from its own PACK_EXTRACT_OUTPUTS line; only those
+    that exist. pack_extract.py writes straight into the run's output folder."""
+    for text in reversed(log):
+        if text.startswith("PACK_EXTRACT_OUTPUTS="):
+            try:
+                paths = [str(x) for x in json.loads(text.split("=", 1)[1])]
+            except ValueError:
+                return []
+            return [{"name": Path(w).name, "path": w} for w in paths if Path(w).is_file()]
+    return []
 
 
 def _finish(requests, base: str, headers: Dict[str, str], run_id: str, runner_id: str,

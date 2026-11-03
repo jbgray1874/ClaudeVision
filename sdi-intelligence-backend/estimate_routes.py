@@ -321,6 +321,10 @@ class Run:
     # of 31 Oct went out as Samsung / TG_Standalone with no brief and no reference, and
     # nothing between the page and the book could say what had been meant.
     submitted_scope: Dict[str, Any] = field(default_factory=dict)
+    # WHAT KIND OF JOB (D-640). "" is an estimate. "sw_extract" / "xai_extract" read the pack
+    # with ONE reader and file that reader's organised output; no workbook is built. Handed
+    # only to a runner that says on its claim it can run one (RUNNER_CAPABILITIES there).
+    job_type: str = ""
     log: List[str] = field(default_factory=list)
     deliverables: List[Dict[str, str]] = field(default_factory=list)
 
@@ -348,6 +352,7 @@ class Run:
             "email_to": list(self.email_to), "email_result": dict(self.email_result),
             "requested_by": self.requested_by,
             "submitted_scope": dict(self.submitted_scope),
+            "job_type": self.job_type,
             "queued_at": self.queued_at, "started_at": self.started_at,
             "finished_at": self.finished_at,
             "seconds": round((self.finished_at or time.time()) - ref, 1),
@@ -375,6 +380,8 @@ class Runner:
     # one on 8071 and a hand-started one on 8072); while it costs a job for one, the others
     # hear from it through /runner/heartbeat and say so, instead of "No runner connected".
     busy_elsewhere: bool = False
+    # WHAT IT CAN RUN BESIDES AN ESTIMATE (D-640), as it said on its last claim.
+    capabilities: List[str] = field(default_factory=list)
 
     @property
     def online(self) -> bool:
@@ -733,6 +740,9 @@ class ClaimRequest(BaseModel):
     # know rather than inventing a confident answer about a machine it cannot see.
     process: str = ""
     build: str = ""
+    # THE JOB TYPES IT CAN RUN BESIDES AN ESTIMATE (D-640); empty for a runner that predates
+    # them, which is then never handed one.
+    capabilities: List[str] = []
 
 
 class ProgressRequest(BaseModel):
@@ -857,15 +867,24 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
             runner.processes[req.process] = now
         if req.build:
             runner.build = req.build
+        runner.capabilities = list(req.capabilities or [])
         runner.busy_elsewhere = False
 
         if _busy_runner() is not None:
             return {"run": None, "reason": "another run is in progress"}
 
+        _can = set(req.capabilities or [])
         queued = sorted((r for r in _RUNS.values()
-                         if r.status == "queued" and r.wants_engine),
+                         if r.status == "queued" and r.wants_engine
+                         and (not r.job_type or r.job_type in _can)),
                         key=lambda r: r.queued_at)
         if not queued:
+            _waiting = [r for r in _RUNS.values() if r.status == "queued" and r.job_type
+                        and r.job_type not in _can]
+            if _waiting:
+                return {"run": None, "reason": (
+                    f"{len(_waiting)} pack extract(s) queued need a runner restarted on the "
+                    f"current build (this runner does not run {_waiting[0].job_type})")}
             return {"run": None, "reason": "nothing queued"}
 
         run = queued[0]
@@ -900,6 +919,7 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         "quantity_breaks": [int(q) for q in (run.quantity_breaks or [])],
         "llm_only": bool(run.llm_only),
         "fresh_read": bool(run.fresh_read),
+        "job_type": run.job_type,
         # WHAT WAS SUBMITTED (D-604), for the engine to compare with what it receives.
         "submitted_scope": dict(run.submitted_scope),
         # THE SECOND COPY (D-617): where, and the run's own time, so its folder there carries
@@ -4037,6 +4057,105 @@ def ask_saved_run(req: SavedRunQuestion, x_sdi_key: Optional[str] = Header(defau
 # WHAT IT WILL NOT DO is read drawings. If the job has never been run there is nothing to
 # extract, and this says so and names the button that produces it, rather than silently
 # returning empty sheets that read as "this pack contains nothing".
+
+# ── PACK EXTRACT (D-640): ONE READER ON A PACK, ORGANISED; NO ESTIMATE ──────────────────
+#
+# JG, 2 Nov 2026: a SolidWorks drawing-pack extract and an xAI extract, each its own button,
+# on files chosen exactly as "Add drawing files…" chooses them. The drawings are staged as an
+# estimate's are (same checks, same folder), queued as a runner job of their own type, and the
+# runner runs src/pack_extract.py instead of main.py: the SolidWorks analyser needs the seat on
+# the runner's machine, and the xAI read needs the engine's key. The organised workbook and
+# the JSON come back as the run's deliverables.
+_PACK_EXTRACT_JOB = {"sw": "sw_extract", "xai": "xai_extract"}
+_PACK_EXTRACT_LABEL = {"sw": "SolidWorks pack extract", "xai": "xAI extract"}
+
+
+class PackExtractRequest(BaseModel):
+    kind: str                                   # "sw" | "xai"
+    client: str
+    drawing_number: str
+    job_folder: str = ""
+    files: List[str] = []
+
+
+@router.post("/pack-extract")
+def start_pack_extract(req: PackExtractRequest,
+                       x_sdi_key: Optional[str] = Header(default=None)):
+    _caller = _check_key(x_sdi_key)
+    kind = str(req.kind or "").strip().lower()
+    if kind not in _PACK_EXTRACT_JOB:
+        raise HTTPException(400, f"Unknown extract {req.kind!r}: use 'sw' or 'xai'.")
+    job_type, label = _PACK_EXTRACT_JOB[kind], _PACK_EXTRACT_LABEL[kind]
+    client = safe_segment(req.client)
+    drawing = safe_segment(req.drawing_number)
+    if not client or not drawing:
+        raise HTTPException(400, "A client and a drawing number are both required — they "
+                                 "name the folder the extract is filed in.")
+    _sources: List[str] = []
+    if req.job_folder and str(req.job_folder).strip():
+        _sources.append(str(req.job_folder).strip())
+    _sources += [str(f).strip() for f in (req.files or []) if str(f).strip()]
+    if not _sources:
+        raise HTTPException(400, "Add a job folder, or the drawings to read.")
+    for _src in _sources:
+        if _within_a_root(_src) is None:
+            raise HTTPException(
+                403, f"That drawing is outside the shares this service may read: {_src}")
+    if kind == "sw" and not any(Path(x).suffix.lower() in (".sldprt", ".sldasm", ".slddrw")
+                                for x in _sources if Path(x).suffix):
+        if not req.job_folder:
+            raise HTTPException(400, "The SolidWorks extract reads models: add the pack's "
+                                     ".SLDPRT / .SLDASM / .SLDDRW files, or its folder.")
+    if kind == "xai" and not req.job_folder and not any(
+            Path(x).suffix.lower() == ".pdf" for x in _sources):
+        raise HTTPException(400, "The xAI extract reads PDF drawings: add the pack's PDFs, "
+                                 "or its folder.")
+    with _LOCK:
+        _expire_dead_claims()
+        dup = _active_run_for(client, drawing)
+        able = [r for r in _online_runners() if job_type in (r.capabilities or [])]
+        online = _online_runners()
+    if dup is not None:
+        raise HTTPException(
+            409, f"{drawing} for {client} is already {dup.status}. Staging again now would "
+                 f"replace the drawings that run is reading. Wait for it to finish, or "
+                 f"release it: POST /api/estimate/{dup.run_id}/abandon")
+    if not online:
+        raise HTTPException(503, "No estimating runner is connected. Start the runner on the "
+                                 "machine with SOLIDWORKS, then try again.")
+    if not able:
+        raise HTTPException(503, f"The connected runner cannot run a {label} yet: restart it "
+                                 f"on the current build (.\\tools\\start\\restart-runner.ps1).")
+    try:
+        staged = staging.stage(_sources, client=client, drawing=drawing)
+    except staging.StagingInUse as exc:
+        raise HTTPException(409, str(exc))
+    except staging.StagingError as exc:
+        raise HTTPException(400, str(exc))
+    except OSError as exc:
+        raise HTTPException(
+            502, f"The drawings could not be staged to {staging.staging_root()} "
+                 f"({type(exc).__name__}: {exc}). Check the share is reachable and writable.")
+    job = _within_a_root(staged["folder"])
+    if job is None:
+        raise HTTPException(
+            403, f"The staging folder {staged['folder']} is outside the shares this service "
+                 f"may read. Add SDI_STAGING_ROOT to SDI_FILE_ROOTS.")
+    queued_at = time.time()
+    out = OUTPUT_ROOT / client / drawing / (
+        time.strftime("%Y-%m-%d %H-%M-%S", time.localtime(queued_at)) + f" ({label})")
+    run = Run(run_id=uuid.uuid4().hex[:12], client=client, drawing_number=drawing, units=1,
+              job_folder=str(job), output_path=str(out), queued_at=queued_at,
+              requested_by=_caller, job_type=job_type)
+    run.line(f"{label.upper()} — {drawing} · {client}. One reader, no estimate: nothing is "
+             f"priced and no workbook template is used.")
+    run.line(f"Staged    {staged['copied_count']} file(s) into {job}")
+    with _LOCK:
+        _RUNS[run.run_id] = run
+        _keep(run)
+    return {"run_id": run.run_id, "output_path": str(out), "job_type": job_type,
+            "label": label}
+
 
 class ExtractRequest(BaseModel):
     """`kind` is which of the three buttons was pressed. `run_folder`, or `run_id` for a run

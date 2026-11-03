@@ -363,3 +363,36 @@ def test_the_routes_switch_it_and_hear_the_watcher(client):
     off = client.post("/api/estimate/self-running/stop", json={}).json()
     assert off["enabled"] is False
     assert client.post("/api/estimate/self-running/heartbeat", json={}).json()["enabled"] is False
+
+
+def test_a_row_made_ready_during_a_job_runs_in_the_same_cycle(share, monkeypatch):
+    """D-639: the sheet is read again after each finished job. A row added while the first
+    job ran is next, not left for the next cycle 15 minutes after this one ends."""
+    reads = {"n": 0}
+
+    def _read(path, sheet=""):
+        reads["n"] += 1
+        rows = [_row(6, "0360001")]
+        if reads["n"] > 1:                      # the line was added while 0360001 ran
+            (share["root"] / "M&S" / "0360002").mkdir(parents=True, exist_ok=True)
+            (share["root"] / "M&S" / "0360002" / "0360002-GA.pdf").write_bytes(b"%PDF-1.4")
+            rows.append(_row(7, "0360002"))
+        return rows
+    monkeypatch.setattr(ler, "read_sheet", _read)
+    portal = FakePortal()
+    out = sr.cycle(_settings(share), portal, FakeSwitch([]), say=lambda s: None,
+                   wait={"poll_seconds": 0, "sleep": lambda s: None})
+    assert portal.started == ["0360001", "0360002"]
+    assert out["counts"].get("done") == 2
+
+
+def test_a_failed_row_is_tried_once_a_cycle_not_looped(share, monkeypatch):
+    monkeypatch.setattr(ler, "read_sheet", lambda path, sheet="": [_row(6, "0360001")])
+
+    class _Failing(FakePortal):
+        def status(self, run_id):
+            return {"status": "error", "error": "boom"}
+    portal = _Failing()
+    sr.cycle(_settings(share), portal, FakeSwitch([]), say=lambda s: None,
+             wait={"poll_seconds": 0, "sleep": lambda s: None})
+    assert portal.started == ["0360001"]
