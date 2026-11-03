@@ -4756,16 +4756,28 @@ function selfStatusLine(v){
     + (w.connected ? "The watcher is connected and waiting for the switch."
                    : "No watcher is connected.");
 }
+/* A STOP THIS PAGE SENT, REMEMBERED (D-643). The service abandons the run the moment Stop is
+   confirmed, but the card is drawn from the office watcher's last report, which still said
+   "running" until its next beat — and the 20-second refresh overwrote the "Stop requested"
+   line, so a stop that had worked read as one that did nothing (12754-01-GA, 3 Nov 2026). */
+const selfStopped = {};
 function renderSelf(v){
   const w = v.watcher || {};
   selfRunBtn.hidden = !!v.enabled;
   selfStopBtn.hidden = !v.enabled;
   const job = (w.phase === "running" && w.connected) ? (w.current || {}) : {};
+  const stoppedAt = job.run_id ? selfStopped[job.run_id] : "";
   selfJobBtn.hidden = !job.run_id;
   selfJobBtn.dataset.runId = job.run_id || "";
-  selfJobBtn.textContent = job.run_id ? "Stop this job — " + (job.drawing || job.run_id)
-                                      : "Stop this job";
-  $("selfStatus").textContent = selfStatusLine(v);
+  selfJobBtn.disabled = !!stoppedAt;
+  selfJobBtn.textContent = !job.run_id ? "Stop this job"
+    : stoppedAt ? "Stopping — " + (job.drawing || job.run_id) + " (stop sent " + stoppedAt + ")"
+    : "Stop this job — " + (job.drawing || job.run_id);
+  $("selfStatus").textContent = selfStatusLine(v) + (stoppedAt
+    ? " STOP SENT at " + stoppedAt + ": the service has abandoned the run and the runner "
+      + "ends the engine within about a minute; this card says \"running\" until the office "
+      + "watcher next reports."
+    : "");
   const c = w.counts || {};
   const parts = SELF_LABELS.filter(([k]) => c[k]).map(([k, l]) => c[k] + " " + l);
   let html = parts.length
@@ -4856,9 +4868,14 @@ selfJobBtn.onclick = async () => {
   try{
     const r = await api("/api/estimate/" + encodeURIComponent(id) + "/abandon", {method:"POST"});
     const j = await r.json().catch(() => ({}));
-    $("selfStatus").textContent = r.ok
-      ? "Stop requested. The runner ends the engine on its next heartbeat."
-      : "Could not stop it: " + detailText(j, r, "refused");
+    /* 409 here means the service already holds it as stopped or finished: the stop has
+       landed, whatever the watcher's last report still says. */
+    if(r.ok || r.status === 409){
+      selfStopped[id] = new Date().toLocaleTimeString("en-GB");
+      refreshSelf();
+      return;
+    }
+    $("selfStatus").textContent = "Could not stop it: " + detailText(j, r, "refused");
   }catch(e){
     $("selfStatus").textContent = "Could not stop it — " + e.message;
   }

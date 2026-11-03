@@ -396,3 +396,15 @@ def test_a_failed_row_is_tried_once_a_cycle_not_looped(share, monkeypatch):
     sr.cycle(_settings(share), portal, FakeSwitch([]), say=lambda s: None,
              wait={"poll_seconds": 0, "sleep": lambda s: None})
     assert portal.started == ["0360001"]
+
+
+def test_a_stop_sent_from_the_card_stays_said_until_the_watcher_reports():
+    """D-643: the 20-second refresh overwrote "Stop requested", and the card drew "running"
+    from the watcher's last report, so a stop that had landed read as one that did nothing.
+    The page remembers the run it stopped, says so on every refresh, and treats a 409 (the
+    service already holds it stopped) as landed."""
+    page = PAGE.read_text(encoding="utf-8")
+    assert "const selfStopped = {};" in page
+    assert "STOP SENT at" in page
+    assert "if(r.ok || r.status === 409){" in page
+    assert "selfJobBtn.disabled = !!stoppedAt;" in page
