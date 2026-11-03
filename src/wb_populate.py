@@ -1746,24 +1746,54 @@ def _largest_fabricated_part_area(parts):
     return best_area, best_pn
 
 
-def band_area_for_row(row_part_numbers, all_parts, job_area, job_pn):
-    """(area_m2, part_number, where from) a department row is size-banded on (D-658).
+def band_area_for_row(row_part_numbers, all_parts, children_by_pn=None):
+    """(area_m2, part_number, where from) a department row is size-banded on (D-658, D-659).
 
     EACH ROW ON ITS OWN PARTS (JG, 3 Nov 2026). The band was the JOB's largest part for every
     row, so correcting 12684-02-M04 to its drawn 504 x 313 moved the 33 hooks' P.Coat row from
-    638/hr to 319/hr: a hook took the baseplate's band. A row takes the largest fabricated part
-    it carries; only a row whose parts carry no area of their own takes the job's largest."""
-    wanted = {str(x).upper() for x in (row_part_numbers or [])}
+    638/hr to 319/hr: a hook took the baseplate's band. A row is banded on the largest
+    fabricated part it carries, or that sits inside an assembly it carries (the final pack row
+    packs the frame, and the baseplate is in that box). A part from another branch of the tree
+    never sets it. Where nothing in the row's own subtree has a measured area the answer is
+    (0.0, None, why): the row gets the department's un-banded allowance, said and asked, never
+    another part's size."""
+    wanted = {str(x).strip().upper() for x in (row_part_numbers or []) if str(x).strip()}
+    seen = set(wanted)
+    stack = list(wanted)
+    kids = children_by_pn or {}
+    while stack:
+        for child in kids.get(stack.pop(), ()) or ():
+            c = str(child).strip().upper()
+            if c and c not in seen:
+                seen.add(c)
+                stack.append(c)
     own = [p for p in (all_parts or []) if isinstance(p, dict)
-           and str(p.get("part_number") or "").upper() in wanted]
-    _row_area = 0.0
-    _row_area_pn = None
-    if own:
-        _row_area, _row_area_pn = _largest_fabricated_part_area(own)
-    if _row_area > 0:
-        return _row_area, _row_area_pn, "this row's own parts"
-    return (job_area, job_pn,
-            "the job's largest part (this row's parts carry no area of their own)")
+           and str(p.get("part_number") or "").strip().upper() in seen]
+    area, pn = _largest_fabricated_part_area(own) if own else (0.0, None)
+    if area > 0:
+        where = ("this row's own parts" if str(pn or "").strip().upper() in wanted
+                 else "a part inside an assembly this row carries")
+        return area, pn, where
+    return 0.0, None, ("no part on this row, or inside an assembly it carries, has a measured "
+                       "area")
+
+
+def canonical_children_by_pn(summary) -> Dict[str, List[str]]:
+    """Each canonical node's children, keyed by part number (upper case) (D-659)."""
+    out: Dict[str, List[str]] = {}
+    try:
+        payload = canonical_route_payload(summary) or {}
+    except Exception:                                                # noqa: BLE001
+        payload = {}
+    for node in (payload.get("nodes") or []):
+        if not isinstance(node, dict):
+            continue
+        pn = str(node.get("part_number") or "").strip().upper()
+        kids = [str(e.get("part_number") or "").strip().upper()
+                for e in (node.get("children") or []) if isinstance(e, dict)]
+        if pn and kids:
+            out[pn] = [k for k in kids if k]
+    return out
 
 
 def _is_powder_consumable(part) -> bool:
@@ -6121,6 +6151,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # part it came from so the flag can name it. Only a part we make votes, through a stock
     # form we recognise; see _largest_fabricated_part_area for why "" and bought-in do not.
     _max_part_area_m2, _max_part_area_pn = _largest_fabricated_part_area(_all_pes_pw)
+    # The tree each department row's band is read through (D-659): a row's own parts and the
+    # parts inside the assemblies it carries, never another branch's.
+    _band_children = canonical_children_by_pn(summary)
     _powder_basis = ("MINIMUM PER PIECE" if _powder_by_floor_kg >= _powder_by_area_kg
                      else "COATED AREA")
     _wire_powder_kg = _powder_kg_total          # the BOM branch below reads this name
@@ -8308,7 +8341,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
 
         # ── SIZE-BANDED DEFAULT, keyed on the job's largest part AREA ────────────────
         # For Assemble/pack and P.Coat one number cannot be right - a small part is packed
-        # and coated far faster than a big one. Pick the band from _max_part_area_m2, which
+        # and coated far faster than a big one. Pick the band from the row's own parts (D-659), which
         # is known here (unlike unit cost, a workbook formula). Fold/Laser are not in the
         # band table (derived); Robomac/Weld are not (not size-driven) - all fall through.
         _bands = _THROUGHPUT_SIZE_BANDS.get(wb_op or "")
@@ -8318,7 +8351,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # took the baseplate's band. A row is banded on the largest fabricated part it carries;
         # only a row whose parts carry no area of their own (an assembly row) takes the job's.
         _band_area, _band_pn, _band_from = band_area_for_row(
-            g.get("parts") or [], _all_pes_pw, _max_part_area_m2, _max_part_area_pn)
+            g.get("parts") or [], _all_pes_pw, _band_children)
         if _bands and _band_area > 0:
             _e1, _e2, _e3 = _THROUGHPUT_AREA_EDGES
             _a = _band_area
@@ -8336,9 +8369,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 default_tp = _banded
                 _rate_basis = "size_banded"
         elif _bands and _band_area <= 0:
-            _flag(f"throughput for '{wb_op}': wanted to size-band it but no fabricated part "
-                  f"area was computed - using the un-banded default {default_tp}/hr. Not "
-                  f"guessing a band.", flags)
+            # A ROW-SPECIFIC ALLOWANCE, SAID AND ASKED (D-659): never another part's band.
+            g["band_set_by"] = {"part": None, "band": None, "from": _band_from,
+                                "allowance": f"un-banded department figure {default_tp}/hr"}
+            _flag(f"throughput for '{wb_op}' on the row for "
+                  f"{', '.join(str(x) for x in (g.get('parts') or [])[:4]) or '?'}: "
+                  f"{_band_from}, so it is not size-banded - the un-banded department figure "
+                  f"{default_tp}/hr stands as an ALLOWANCE for this row. Not another part's "
+                  f"band. Confirm this row's throughput.", flags)
             # A historical median applied WITHOUT the band it was measured in. Weaker than
             # a banded rate and stronger than a constant nobody measured — a distinction
             # the sheet made in a console line and nowhere an estimator reads.

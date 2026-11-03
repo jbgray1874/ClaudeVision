@@ -147,10 +147,10 @@ def test_the_labour_block_actually_calls_the_helper_at_the_band_site():
         "the helper's return is not bound to the names the band pick reads")
     # D-658: each row is banded on its OWN largest fabricated part; the job's largest is the
     # fallback for a row whose parts carry no area. Both answers must reach the band pick.
-    assert "_row_area, _row_area_pn = _largest_fabricated_part_area(own)" in body, (
+    assert "area, pn = _largest_fabricated_part_area(own) if own else (0.0, None)" in body, (
         "the row's own parts are not sized for the band")
-    assert "band_area_for_row(g.get('parts') or [], _all_pes_pw, _max_part_area_m2, " \
-           "_max_part_area_pn)" in body, "the band site does not ask for the row's own area"
+    assert "band_area_for_row(g.get('parts') or [], _all_pes_pw, _band_children)" in body, (
+        "the band site does not ask for the row's own area")
     assert "_THROUGHPUT_SIZE_BANDS.get(wb_op" in body and "_band_area > 0" in body, (
         "the band pick no longer reads the chosen area -- the helper's answer is unused")
 
@@ -169,7 +169,7 @@ def test_the_shelf_lands_in_band_c_and_only_pack_moves():
     assert pcoat["B"] == pcoat["C"] == pcoat["D"], "P.Coat is flat across bands; it never moved"
 
 
-# ── D-658: each row on its own parts ─────────────────────────────────────────────────────
+# ── D-658 / D-659: each row on its own parts ────────────────────────────────────────────
 
 def _sheet_part(pn, length, width):
     return {"part_number": pn, "material_estimate": {"stock_form": "sheet",
@@ -177,29 +177,66 @@ def _sheet_part(pn, length, width):
                                                      "blank_width_mm": width}}
 
 
-def test_the_hooks_row_is_banded_on_the_hook_not_the_baseplate():
-    """12684-02, 3 Nov 2026: correcting M04 to 504 x 313 moved the hooks' P.Coat row from 638/hr
-    to 319/hr. A row is banded on its own parts (JG: each row on its own parts)."""
-    from wb_populate import band_area_for_row
-    parts = [_sheet_part("12684-02-M01", 39.7, 30.0), _sheet_part("12684-02-M04", 504.0, 313.0)]
-    job_area, job_pn = 0.504 * 0.313, "12684-02-M04"
-    area, pn, why = band_area_for_row(["12684-02-M01", "12684-02-M02"], parts, job_area, job_pn)
-    assert pn == "12684-02-M01" and abs(area - 0.0397 * 0.030) < 1e-6
-    assert why == "this row's own parts"
-    e1, _e2, _e3 = config.THROUGHPUT_AREA_EDGES
-    assert area < e1 <= job_area, "the hook falls in band A; the baseplate does not"
+# 12684-02 as the canonical tree holds it: GA -> 101SA (M01, M02) and 102SA (M04, 103SA).
+TREE = {"12684-02-GA": ["12684-02-101SA", "12684-02-102SA", "BI-UPC"],
+        "12684-02-101SA": ["12684-02-M01", "12684-02-M02"],
+        "12684-02-102SA": ["12684-02-M04", "12684-02-103SA"],
+        "12684-02-103SA": ["12684-02-M06", "12684-02-M07"]}
+HOOK_ROW = ["12684-02-101SA", "12684-02-M01", "12684-02-M02"]
 
 
-def test_the_frame_row_carrying_the_baseplate_keeps_its_band():
+def _band(area):
+    e1, e2, e3 = config.THROUGHPUT_AREA_EDGES
+    return "A" if area < e1 else "B" if area < e2 else "C" if area < e3 else "D"
+
+
+def _pack(baseplate_mm):
+    return [_sheet_part("12684-02-M01", 39.7, 30.0),
+            _sheet_part("12684-02-M04", *baseplate_mm)]
+
+
+def test_correcting_the_baseplate_does_not_move_the_hook_rows_band():
+    """THE DEFECT, BOTH WAYS. 12684-02, 3 Nov 2026: M04 was corrected from a borrowed 39.7 x 30
+    to its drawn 504 x 313, and the hooks' P.Coat row moved from 638/hr to 319/hr because the
+    band was the JOB's largest part. Under that old rule the hook row's band follows the
+    baseplate; under the row rule it does not move."""
+    from wb_populate import _largest_fabricated_part_area, band_area_for_row
+    before, after = _pack((39.7, 30.0)), _pack((504.0, 313.0))
+    old_before = _band(_largest_fabricated_part_area(before)[0])
+    old_after = _band(_largest_fabricated_part_area(after)[0])
+    assert old_before != old_after, "the old job-wide rule moved the hook row with the baseplate"
+    new_before = band_area_for_row(HOOK_ROW, before, TREE)
+    new_after = band_area_for_row(HOOK_ROW, after, TREE)
+    assert new_before == new_after, "the hook row's band must not follow the baseplate"
+    assert new_after[1] == "12684-02-M01" and _band(new_after[0]) == "A"
+
+
+def test_the_frame_row_does_follow_its_own_baseplate():
     from wb_populate import band_area_for_row
-    parts = [_sheet_part("12684-02-M01", 39.7, 30.0), _sheet_part("12684-02-M04", 504.0, 313.0)]
-    area, pn, _ = band_area_for_row(["12684-02-M04", "12684-02-103SA"], parts, 0.1578,
-                                    "12684-02-M04")
+    area, pn, why = band_area_for_row(["12684-02-102SA"], _pack((504.0, 313.0)), TREE)
     assert pn == "12684-02-M04" and abs(area - 0.504 * 0.313) < 1e-6
+    assert why == "a part inside an assembly this row carries"
 
 
-def test_a_row_whose_parts_carry_no_area_takes_the_jobs_largest():
+def test_the_final_pack_row_is_banded_on_what_is_inside_the_box():
+    from wb_populate import band_area_for_row
+    area, pn, _ = band_area_for_row(["12684-02-GA"], _pack((504.0, 313.0)), TREE)
+    assert pn == "12684-02-M04", "the frame, and so the baseplate, is in the box"
+
+
+def test_a_row_with_no_measured_area_gets_no_other_parts_band():
+    """No fallback to the job's largest part (D-659): an unrelated part never sets a row's band."""
     from wb_populate import band_area_for_row
     parts = [_sheet_part("12684-02-M04", 504.0, 313.0)]
-    area, pn, why = band_area_for_row(["12684-02-GA"], parts, 0.1578, "12684-02-M04")
-    assert (area, pn) == (0.1578, "12684-02-M04") and "job's largest part" in why
+    area, pn, why = band_area_for_row(HOOK_ROW, parts, TREE)
+    assert (area, pn) == (0.0, None)
+    assert "has a measured area" in why
+
+
+def test_the_band_site_reads_the_row_through_its_own_tree_and_says_an_allowance():
+    src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
+    site = src[src.index("# ── SIZE-BANDED DEFAULT"):src.index("# ── P.COAT BY HANGING GEOMETRY")]
+    assert "band_area_for_row(\n            g.get(\"parts\") or [], _all_pes_pw, _band_children)" in site
+    assert "_max_part_area_m2" not in site.split("band_area_for_row(")[1].split(")")[0], (
+        "the job's largest part is passed to the row's band again")
+    assert "ALLOWANCE for this row" in site and "Confirm this row's throughput" in site
