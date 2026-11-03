@@ -3906,6 +3906,13 @@ def _finalize_scan_summary(
         # denied a borrowed blank is indistinguishable from one the rule never considered —
         # and it is the borrow being denied that stops a ball bearing arriving with the
         # cross member's flat pattern, a laser op and 269 seconds against it.
+        _nob = _inf.get("refused_no_blank") or []
+        if _nob:
+            print(f"   [inference] {len(_nob)} part(s) NOT lent another part's blank — a "
+                  f"section is cut to length and an assembly is sized through its members "
+                  f"(D-661): " + ", ".join(str(r.get("part") or r.get("description") or "an "
+                                                   "unnamed row") for r in _nob[:8])
+                  + (f" (+{len(_nob) - 8} more)" if len(_nob) > 8 else ""), flush=True)
         _ref = _inf.get("refused_bought_in") or []
         if _ref:
             # NAME THE ONES SOMEBODY IS LOOKING FOR. The first version printed the first six
@@ -4653,6 +4660,13 @@ def _finalize_scan_summary(
         if _n_dg:
             print(f"   [detail-geometry] {_n_dg} part(s) sized from their own detail sheet "
                   f"(pdf_overall_dims rank — a measured blank still wins)", flush=True)
+        # A SECTION IS CUT TO LENGTH, AND ITS OWN SHEET PRINTS THE LENGTH (D-661): read here,
+        # checked against the weight that sheet states, for a section no reader gave one.
+        from detail_page_geometry import apply_section_lengths_from_own_sheets
+        _sec_len = apply_section_lengths_from_own_sheets(_parts_dg, summary)
+        if _sec_len:
+            print(f"   [detail-geometry] {', '.join(_sec_len)}: section length read off "
+                  f"their own sheet, checked against its stated weight", flush=True)
         # THE OTHER HAND TAKES ITS BASE'S PROVISIONAL BLANK (D-508), now that the base has one,
         # and THEN every part read off a drawing is held against the assembly it sits in.
         from detail_page_geometry import (check_parts_against_their_assembly,

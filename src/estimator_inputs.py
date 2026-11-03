@@ -267,6 +267,12 @@ def canonical_pricing_status(part: Mapping[str, Any], price: Any) -> str:
     # them a second time, in every unit. Their £0 in the unit column is the rule (D-476).
     if _charged_once_on_the_order(part):
         return NOT_APPLICABLE
+    # A LINE DECLARED NOT REQUIRED IS AN ANSWER, NOT A RATE TO ENTER (D-661). 12684-02-GA's
+    # 18:11 sheet wrote "Delivery — NOT REQUIRED for this order (declared on the Run:" and then,
+    # on the same cell, "MATERIAL UNPRICED: enter a unit rate", and listed it first among the
+    # inputs: unpriced_reason_for_row below excused the declaration and this did not.
+    if part.get("_commercial_excluded"):
+        return NOT_APPLICABLE
     numeric = _num(price)
     return PRICED if numeric is not None and numeric > 0 else UNPRICED
 
