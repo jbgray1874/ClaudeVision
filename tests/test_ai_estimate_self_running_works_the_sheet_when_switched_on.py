@@ -450,3 +450,17 @@ def test_a_service_that_cannot_be_reached_is_left_out_and_none_is_off():
     sw.beat({})
     assert len(said) == 1, "an unreachable service is said once, not every beat"
     assert sr.Switch([_SwitchPortal("c", down=True)], say=lambda s: None).beat({}) is False
+
+
+def test_reinstalling_the_watcher_restarts_it_with_its_new_settings():
+    """D-648: re-running install-self-running-task.ps1 with SDI-App01 added changed the task
+    and left the old watcher running (MultipleInstances IgnoreNew), still reporting to the
+    laptop only. The install now stops the running watcher before registering, clears a lock
+    whose process is gone, and prints what the new watcher reports to."""
+    ps = (ROOT / "tools" / "start" / "install-self-running-task.ps1").read_text(encoding="utf-8")
+    stop = ps.index("Stop-ScheduledTask -TaskName $TaskName")
+    assert stop < ps.index("Register-ScheduledTask -TaskName $TaskName")
+    assert '$_.CommandLine -like "*self_running.py*"' in ps
+    assert '"live_enquiry.lock"' in ps and "Get-Process -Id ([int]$holder)" in ps
+    assert "reporting to|did not answer" in ps
+    assert all(ord(c) < 128 for c in ps)

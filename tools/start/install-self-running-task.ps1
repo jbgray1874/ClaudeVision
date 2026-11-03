@@ -96,6 +96,36 @@ if ($old) {
     Write-Host "Removed '$OldTask': self-running replaces it (one sheet, one lock). A job it had queued carries on in the portal." -ForegroundColor Yellow
 }
 
+# A WATCHER ALREADY RUNNING KEEPS ITS OLD SETTINGS (D-648). Registering with -Force changes
+# the task's definition, not the process it started; and with MultipleInstances IgnoreNew the
+# Start below does nothing while that process lives. On 3 Nov 2026 the watcher went on
+# reporting to the laptop's services only, after this was re-run with SDI-App01 added, and the
+# phone said "no self-running watcher is connected". So the running watcher is stopped first,
+# and the lock it can no longer release is cleared if its process is gone.
+$current = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($current) { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }
+$watchers = @(Get-CimInstance Win32_Process -Filter "Name like 'python%'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -like "*self_running.py*" })
+foreach ($w in $watchers) { Stop-Process -Id $w.ProcessId -Force -ErrorAction SilentlyContinue }
+if ($watchers.Count) {
+    Write-Host "  stopped the running watcher (pid $(($watchers | ForEach-Object { $_.ProcessId }) -join ', ')) so the new settings take effect" -ForegroundColor Yellow
+    Start-Sleep -Seconds 2
+}
+$ledger = Join-Path $Root "output\live_enquiry\ledger.json"
+if (Test-Path $envFile) {
+    $ledgerEnv = Select-String -Path $envFile -Pattern '^\s*SDI_LIVE_ENQUIRY_LEDGER\s*=\s*(.+?)\s*$' |
+        Select-Object -First 1
+    if ($ledgerEnv) { $ledger = $ledgerEnv.Matches[0].Groups[1].Value.Trim('"') }
+}
+$lock = Join-Path (Split-Path -Parent $ledger) "live_enquiry.lock"
+if (Test-Path $lock) {
+    $holder = ((Get-Content -LiteralPath $lock -ErrorAction SilentlyContinue) -split "\s+")[0]
+    if (-not ($holder -as [int]) -or -not (Get-Process -Id ([int]$holder) -ErrorAction SilentlyContinue)) {
+        Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue
+        Write-Host "  cleared the lock left by a watcher that is no longer running" -ForegroundColor Yellow
+    }
+}
+
 $action = New-ScheduledTaskAction -Execute $python `
     -Argument "`"$script`" --server `"$Server`" --log `"$log`"" -WorkingDirectory $Root
 
@@ -134,7 +164,13 @@ Write-Host "  status   $(Join-Path $Root 'output\live_enquiry\live_enquiry_statu
 Write-Host "  starts   at logon for $env:USERNAME; restarts if it exits; checked every 5 minutes"
 
 Start-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 3
+Start-Sleep -Seconds 12
 Write-Host ""
 Write-Host "  task state: $((Get-ScheduledTask -TaskName $TaskName).State)" -ForegroundColor Green
+# WHAT THE NEW WATCHER SAYS (D-648): the services it reports to, and any it cannot reach.
+if (Test-Path $log) {
+    Get-Content -LiteralPath $log -Tail 40 |
+        Where-Object { $_ -match "reporting to|did not answer|holds .*lock|Another Live Enquiry" } |
+        Select-Object -Last 4 | ForEach-Object { Write-Host "  $_" -ForegroundColor Cyan }
+}
 Write-Host "  watch it:   Get-Content '$log' -Wait -Tail 30"
