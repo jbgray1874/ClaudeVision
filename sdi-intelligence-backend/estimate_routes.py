@@ -3823,21 +3823,9 @@ def email_run(run_id: str, req: SendRequest,
             400, f"These are not files this run produced: {', '.join(_foreign)}")
 
     if chosen:
-        # ── AN EXPLICIT CHOICE IS A DECISION. IT IS NOT A PERMISSION. ───────────────
-        #
-        # This read "An explicit choice is a decision, quote included" and sent the list
-        # untouched, so a tick-box on the page put an unreleased quotation in front of a
-        # customer past the only gate there was. The gate it went past is a keyword scan of
-        # the run's console that returns True unconditionally, so nothing has leaked — but
-        # the moment that became honest there would have been no check left at all.
-        #
-        # What a person may choose is WHICH of this run's files to send. Whether the
-        # quotation may go to a customer is not theirs to tick: it needs the commercial
-        # inputs completed and a named estimator's authorisation, and those are recorded on
-        # the estimate, not in a request. The file says which it is and this asks it.
-        paths = [f for f in chosen if quote_release.may_go_to_a_customer(f)]
-        held = [{"path": f, "why": quote_release.why_held(f)}
-                for f in chosen if f not in paths]
+        # THE ESTIMATOR'S CHOICE IS SENT AS CHOSEN, QUOTE INCLUDED (D-646). JG, 3 Nov 2026:
+        # "estimating still control this process".
+        paths, held = list(chosen), []
     else:
         paths, held = estimate_email.choose_attachments(
             _deliverables, provisional=_provisional, include_quote=False)

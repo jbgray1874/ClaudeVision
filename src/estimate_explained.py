@@ -3252,8 +3252,8 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     # was missing was the line that makes it a note rather than an artefact.
     add(f"<p>Here is the estimate for <b>{_e(job)}</b>"
         f"{' (' + _e(client) + ')' if client else ''}, costed at {order_qty} off. "
-        f"The figures come from the workbook's own calculated cells — please read the "
-        f"outstanding items below before anything goes to the customer.</p>")
+        f"The figures come from the workbook's own calculated cells, and the quote is "
+        f"attached.</p>")
     add(f"<p><b>{_e(job)}</b>{' &middot; ' + _e(client) if client else ''} &middot; "
         f"{order_qty} of &middot; {_e(_state.strip().rstrip('.') or 'FOR REVIEW')}</p>")
     # ── THE HEADLINE TOTAL, AND THE CELL IT CAME FROM ───────────────────────────
@@ -4182,11 +4182,9 @@ def spoken_walkthrough(*, job: str, client: str, order_qty: Any, total: Dict[str
         order = ("First", "Second", "Third")
         out.append("What needs your eye. " + " ".join(
             f"{order[i]}: {s}." for i, s in enumerate(lines)))
-    if provisional:
-        out.append("This estimate is provisional. No customer quote goes with it until those "
-                   "are settled.")
-    out.append("The workbook, the report and the explanation are attached. Please check the "
-               "outstanding items before anything goes to the customer.")
+    # NO DISCLAIMERS (D-646). JG, 3 Nov 2026: the quote is generated and attached every time,
+    # "without any disclaimers"; estimating controls what goes to a customer.
+    out.append("The workbook, the report, the explanation and the quote are attached.")
     return " ".join(out)
 
 

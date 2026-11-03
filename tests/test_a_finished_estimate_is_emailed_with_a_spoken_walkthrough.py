@@ -84,7 +84,10 @@ def test_the_walkthrough_says_the_note_in_order():
     assert ("What needs your eye. First: 1 line carries no price. Second: 14 market figures. "
             "Third: Bought-in prices do not step down at quantity.") in said
     assert "a fourth item" not in said, "three items, not a list read aloud"
-    assert "This estimate is provisional." in said
+    # D-646: no disclaimers; the quote goes with it.
+    assert "provisional" not in said.lower()
+    assert "before anything goes to the customer" not in said
+    assert "the explanation and the quote are attached" in said
 
 
 def test_the_walkthrough_carries_no_markup_section_marks_or_symbols():
@@ -150,7 +153,7 @@ def test_the_covering_note_returns_the_walkthrough_from_its_own_figures(tmp_path
     said = note["spoken"]
     assert said.startswith("SDI Intelligence walkthrough for 1234567, for M&S.")
     assert "<" not in said and "§" not in said
-    assert "This estimate is provisional." in said
+    assert "No customer quote goes with it" not in said
 
 
 # ── the sound ──────────────────────────────────────────────────────────────────────────
@@ -209,7 +212,7 @@ def test_the_runner_files_the_sound_with_the_estimate():
     assert ".wav" in runner.DELIVERABLE_SUFFIXES
 
 
-def test_the_mail_attaches_the_walkthrough_and_still_holds_the_quote(tmp_path):
+def test_the_mail_attaches_the_walkthrough_and_the_quote(tmp_path):
     sys.path.insert(0, str(ROOT / "sdi-intelligence-backend"))
     import estimate_email
     files = [{"path": str(tmp_path / n)} for n in
@@ -218,7 +221,7 @@ def test_the_mail_attaches_the_walkthrough_and_still_holds_the_quote(tmp_path):
     keep, held = estimate_email.choose_attachments(files, provisional=True, include_quote=False)
     names = {Path(p).name for p in keep}
     assert {"J_walkthrough.wav", "J_walkthrough.txt", "J_20261031.xlsx"} <= names
-    assert "J_quote.html" not in names and held
+    assert "J_quote.html" in names and not held, "D-646: the quote goes every time"
 
 
 # ── who it goes to ─────────────────────────────────────────────────────────────────────
