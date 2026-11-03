@@ -102,6 +102,17 @@ class ItLooksForWhatWillBreakTests(unittest.TestCase):
     def test_it_says_which_account_will_read_the_shares(self):
         self.assertIn('GetValue("ObjectName")', SCRIPT)
 
+    def test_nothing_already_on_the_server_is_taken_over(self):
+        """3 November: "a new application ... with its own existence ...
+        not to over ride anything in there already". Its folder, its ports
+        and its two service names are each checked as free - and a list that
+        could not be read is never reported as free."""
+        for name in ('"SDISameDay", "SDICraft"', "is not on the server yet",
+                     "already answering on port", "already exists on the server"):
+            self.assertIn(name, SCRIPT)
+        names = SCRIPT.split("-- NEW NAMES ONLY", 1)[1].split("-- 5.", 1)[0]
+        self.assertLess(names.index("if (-not $hive)"), names.index("the name is free"))
+
     def test_the_lesson_from_kayleigh_is_on_the_list(self):
         self.assertIn("AADSTS50105", SCRIPT)
         self.assertIn("Assignment", SCRIPT)

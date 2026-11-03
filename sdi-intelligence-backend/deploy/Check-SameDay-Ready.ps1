@@ -300,6 +300,7 @@ if (-not (Test-Path -LiteralPath $remoteC)) {
     # Which account SDI Intelligence runs as: Same Day would run the same way,
     # and that account - not a person - is who the shares have to let read.
     $account = ""
+    $hive = $null
     try {
         $hive = [Microsoft.Win32.RegistryKey]::OpenRemoteBaseKey("LocalMachine", $Server)
         $svc = $hive.OpenSubKey("SYSTEM\CurrentControlSet\Services\SDIIntelligence")
@@ -322,6 +323,23 @@ if (-not (Test-Path -LiteralPath $remoteC)) {
     foreach ($port in @(5020, 5030)) {
         if (PortOpen $Server $port) { Flag "Something on $Server is already answering on port $port" }
         else { Yes "Port $port is free on $Server" }
+    }
+
+    # -- NEW NAMES ONLY ---------------------------------------------------------
+    # "a new application called sameday ... with its own existence ... it's not
+    # to over ride anything in there already" - 3 November. Its folder and
+    # ports are checked above; these are the two Windows services it would add.
+    # Said only when the server's service list could actually be read: "free"
+    # must never be the answer to "could not look".
+    foreach ($name in @("SDISameDay", "SDICraft")) {
+        if (-not $hive) {
+            Warn "Could not read the server's services, so $name is not checked"
+            continue
+        }
+        $taken = $null
+        try { $taken = $hive.OpenSubKey("SYSTEM\CurrentControlSet\Services\$name") } catch { }
+        if ($taken) { Flag "A Windows service called $name already exists on the server" }
+        else { Yes "No service called $name yet - the name is free" }
     }
 }
 
