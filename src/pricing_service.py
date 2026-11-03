@@ -379,6 +379,18 @@ def choose_udef_description_row(desc: Any, rows: List[Any]):
     return survivors[0][1], ""
 
 
+_ASSEMBLY_SHORT_FORM = re.compile(r"\b(?:SUB[- ]?)?(?:ASM|ASSY)\b")
+
+
+def _claimed_as_bought(part: Dict[str, Any]) -> bool:
+    """Do the bought-in rules claim this line (bought_in_policy)? False when they cannot say."""
+    try:
+        from bought_in_policy import is_bought_in
+        return bool(is_bought_in(part))
+    except Exception:                                                # noqa: BLE001
+        return False
+
+
 def is_something_you_can_buy(part: Dict[str, Any], skip_rollup_parents: bool = True,
                               structure_decides: bool = True) -> bool:
     """May a market price be asked for this line at all? False for anything we make or build.
@@ -453,6 +465,12 @@ def is_something_you_can_buy(part: Dict[str, Any], skip_rollup_parents: bool = T
             or str(part.get("cost_method") or "").lower().startswith("weldment_parent")
             or ((_pn.endswith("-GA") or "-GA-" in _pn) and not _bought_line)
             or any(t in _desc for t in ("WELDMENT", "ASSEMBLY", "SUB ASSEMBLY", "SUB-ASSEMBLY"))
+            # THE SHORT FORMS SAY THE SAME (D-663). 12754-01-GA's "PODIUM 1 ASM", "DRILL PODIUM
+            # 2 ASM" and "PODIUM 3 ASM" — SDI's own drawings, no members listed in the pack —
+            # were priced by the market as finished podiums, £175, £220 and £220, about 90% of
+            # the job's material. ASM and ASSY are read as the word they abbreviate, except on
+            # a line the bought-in rules claim (a purchased "HINGE ASSY" is still bought).
+            or (_ASSEMBLY_SHORT_FORM.search(_desc) and not _claimed_as_bought(part))
         )
         if _is_parent:
             return False
