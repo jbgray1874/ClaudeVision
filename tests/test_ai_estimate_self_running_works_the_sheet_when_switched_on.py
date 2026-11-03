@@ -369,6 +369,84 @@ def test_the_routes_switch_it_and_hear_the_watcher(client):
     assert client.post("/api/estimate/self-running/heartbeat", json={}).json()["enabled"] is False
 
 
+class _HomeAnswer:
+    def __init__(self, body):
+        self.body = body
+
+    def read(self):
+        import json as _json
+        return _json.dumps(self.body).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _home(monkeypatch, answer=None, down=False):
+    import urllib.error
+    import urllib.request
+    calls = []
+
+    def urlopen(req, timeout=None):
+        calls.append(req)
+        if down:
+            raise urllib.error.URLError("timed out")
+        return _HomeAnswer(answer or {"enabled": True, "watcher": {"connected": True}})
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    monkeypatch.setenv("SDI_SELF_RUNNING_HOME", "http://10.0.0.5:8071/")
+    return calls
+
+
+def test_with_a_home_every_self_running_request_is_answered_by_that_one_switch(client,
+                                                                             monkeypatch):
+    """D-651: the phone (SDI-App01) and the laptop's page each showed their own switch. A
+    service told SDI_SELF_RUNNING_HOME keeps none: reads, presses and the watcher's beats all
+    go to the home, so both screens show the same switch."""
+    calls = _home(monkeypatch, {"enabled": True, "switched_by": "the phone",
+                                "watcher": {"connected": True}})
+    seen = client.get("/api/estimate/self-running").json()
+    assert seen["enabled"] is True and seen["switched_by"] == "the phone"
+    assert seen["home"] == "http://10.0.0.5:8071"
+    client.post("/api/estimate/self-running/start", json={"by": "JG"})
+    client.post("/api/estimate/self-running/stop", json={})
+    client.post("/api/estimate/self-running/heartbeat", json={"phase": "idle"})
+    sent = [(r.get_method(), r.full_url) for r in calls]
+    assert sent == [("GET", "http://10.0.0.5:8071/api/estimate/self-running"),
+                    ("POST", "http://10.0.0.5:8071/api/estimate/self-running/start"),
+                    ("POST", "http://10.0.0.5:8071/api/estimate/self-running/stop"),
+                    ("POST", "http://10.0.0.5:8071/api/estimate/self-running/heartbeat")]
+    assert all(r.get_header("X-sdi-self-running-forwarded") == "1" for r in calls)
+    import json as _json
+    assert _json.loads(calls[1].data)["by"] == "JG"
+    assert _json.loads(calls[3].data) == {"phase": "idle"}
+    monkeypatch.delenv("SDI_SELF_RUNNING_HOME")
+    assert client.get("/api/estimate/self-running").json()["enabled"] is False, \
+        "nothing was switched on this service: it keeps no switch of its own"
+
+
+def test_a_request_already_passed_on_is_served_where_it_lands(client, monkeypatch):
+    """So SDI_SELF_RUNNING_HOME set by mistake on SDI-App01 itself cannot loop."""
+    calls = _home(monkeypatch)
+    on = client.post("/api/estimate/self-running/start", json={},
+                     headers={"X-SDI-Self-Running-Forwarded": "1"}).json()
+    assert on["enabled"] is True and "home" not in on
+    assert calls == []
+
+
+def test_a_home_that_cannot_be_reached_is_said_never_answered_from_a_copy(client, monkeypatch):
+    """A local answer would be a second switch, which is what this removes."""
+    _home(monkeypatch, down=True)
+    r = client.post("/api/estimate/self-running/start", json={})
+    assert r.status_code == 503
+    detail = r.json()["detail"]
+    assert "http://10.0.0.5:8071" in detail and "cannot reach it" in detail
+    assert client.get("/api/estimate/self-running").status_code == 503
+    monkeypatch.delenv("SDI_SELF_RUNNING_HOME")
+    assert client.get("/api/estimate/self-running").json()["enabled"] is False
+
+
 def test_a_row_made_ready_during_a_job_runs_in_the_same_cycle(share, monkeypatch):
     """D-639: the sheet is read again after each finished job. A row added while the first
     job ran is next, not left for the next cycle 15 minutes after this one ends."""
