@@ -145,8 +145,14 @@ def test_the_labour_block_actually_calls_the_helper_at_the_band_site():
     body = ast.unparse(tree)
     assert "_max_part_area_m2, _max_part_area_pn = _largest_fabricated_part_area(" in body, (
         "the helper's return is not bound to the names the band pick reads")
-    assert "_THROUGHPUT_SIZE_BANDS.get(wb_op" in body and "_max_part_area_m2 > 0" in body, (
-        "the band pick no longer reads _max_part_area_m2 -- the helper's answer is unused")
+    # D-658: each row is banded on its OWN largest fabricated part; the job's largest is the
+    # fallback for a row whose parts carry no area. Both answers must reach the band pick.
+    assert "_row_area, _row_area_pn = _largest_fabricated_part_area(own)" in body, (
+        "the row's own parts are not sized for the band")
+    assert "band_area_for_row(g.get('parts') or [], _all_pes_pw, _max_part_area_m2, " \
+           "_max_part_area_pn)" in body, "the band site does not ask for the row's own area"
+    assert "_THROUGHPUT_SIZE_BANDS.get(wb_op" in body and "_band_area > 0" in body, (
+        "the band pick no longer reads the chosen area -- the helper's answer is unused")
 
 
 def test_the_shelf_lands_in_band_c_and_only_pack_moves():
@@ -161,3 +167,39 @@ def test_the_shelf_lands_in_band_c_and_only_pack_moves():
     pcoat = config.THROUGHPUT_SIZE_BANDS["P.Coat"]
     assert pack["B"] != pack["C"], "if pack B and C were equal the bug would have hidden here too"
     assert pcoat["B"] == pcoat["C"] == pcoat["D"], "P.Coat is flat across bands; it never moved"
+
+
+# ── D-658: each row on its own parts ─────────────────────────────────────────────────────
+
+def _sheet_part(pn, length, width):
+    return {"part_number": pn, "material_estimate": {"stock_form": "sheet",
+                                                     "blank_length_mm": length,
+                                                     "blank_width_mm": width}}
+
+
+def test_the_hooks_row_is_banded_on_the_hook_not_the_baseplate():
+    """12684-02, 3 Nov 2026: correcting M04 to 504 x 313 moved the hooks' P.Coat row from 638/hr
+    to 319/hr. A row is banded on its own parts (JG: each row on its own parts)."""
+    from wb_populate import band_area_for_row
+    parts = [_sheet_part("12684-02-M01", 39.7, 30.0), _sheet_part("12684-02-M04", 504.0, 313.0)]
+    job_area, job_pn = 0.504 * 0.313, "12684-02-M04"
+    area, pn, why = band_area_for_row(["12684-02-M01", "12684-02-M02"], parts, job_area, job_pn)
+    assert pn == "12684-02-M01" and abs(area - 0.0397 * 0.030) < 1e-6
+    assert why == "this row's own parts"
+    e1, _e2, _e3 = config.THROUGHPUT_AREA_EDGES
+    assert area < e1 <= job_area, "the hook falls in band A; the baseplate does not"
+
+
+def test_the_frame_row_carrying_the_baseplate_keeps_its_band():
+    from wb_populate import band_area_for_row
+    parts = [_sheet_part("12684-02-M01", 39.7, 30.0), _sheet_part("12684-02-M04", 504.0, 313.0)]
+    area, pn, _ = band_area_for_row(["12684-02-M04", "12684-02-103SA"], parts, 0.1578,
+                                    "12684-02-M04")
+    assert pn == "12684-02-M04" and abs(area - 0.504 * 0.313) < 1e-6
+
+
+def test_a_row_whose_parts_carry_no_area_takes_the_jobs_largest():
+    from wb_populate import band_area_for_row
+    parts = [_sheet_part("12684-02-M04", 504.0, 313.0)]
+    area, pn, why = band_area_for_row(["12684-02-GA"], parts, 0.1578, "12684-02-M04")
+    assert (area, pn) == (0.1578, "12684-02-M04") and "job's largest part" in why

@@ -1746,6 +1746,26 @@ def _largest_fabricated_part_area(parts):
     return best_area, best_pn
 
 
+def band_area_for_row(row_part_numbers, all_parts, job_area, job_pn):
+    """(area_m2, part_number, where from) a department row is size-banded on (D-658).
+
+    EACH ROW ON ITS OWN PARTS (JG, 3 Nov 2026). The band was the JOB's largest part for every
+    row, so correcting 12684-02-M04 to its drawn 504 x 313 moved the 33 hooks' P.Coat row from
+    638/hr to 319/hr: a hook took the baseplate's band. A row takes the largest fabricated part
+    it carries; only a row whose parts carry no area of their own takes the job's largest."""
+    wanted = {str(x).upper() for x in (row_part_numbers or [])}
+    own = [p for p in (all_parts or []) if isinstance(p, dict)
+           and str(p.get("part_number") or "").upper() in wanted]
+    _row_area = 0.0
+    _row_area_pn = None
+    if own:
+        _row_area, _row_area_pn = _largest_fabricated_part_area(own)
+    if _row_area > 0:
+        return _row_area, _row_area_pn, "this row's own parts"
+    return (job_area, job_pn,
+            "the job's largest part (this row's parts carry no area of their own)")
+
+
 def _is_powder_consumable(part) -> bool:
     """A BOM line that IS the powder itself (the coating consumable), by name or description.
 
@@ -8292,21 +8312,30 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # is known here (unlike unit cost, a workbook formula). Fold/Laser are not in the
         # band table (derived); Robomac/Weld are not (not size-driven) - all fall through.
         _bands = _THROUGHPUT_SIZE_BANDS.get(wb_op or "")
-        if _bands and _max_part_area_m2 > 0:
+        # EACH ROW ON ITS OWN PARTS (D-658, JG 3 Nov 2026). The band was keyed on the JOB's
+        # largest part and applied to every row of the department, so correcting 12684-02-M04
+        # to its drawn 504 x 313 moved the 33 hooks' P.Coat row from 638/hr to 319/hr: a hook
+        # took the baseplate's band. A row is banded on the largest fabricated part it carries;
+        # only a row whose parts carry no area of their own (an assembly row) takes the job's.
+        _band_area, _band_pn, _band_from = band_area_for_row(
+            g.get("parts") or [], _all_pes_pw, _max_part_area_m2, _max_part_area_pn)
+        if _bands and _band_area > 0:
             _e1, _e2, _e3 = _THROUGHPUT_AREA_EDGES
-            _a = _max_part_area_m2
+            _a = _band_area
             _band = "A" if _a < _e1 else "B" if _a < _e2 else "C" if _a < _e3 else "D"
             _banded = _bands.get(_band)
             if _banded:
-                _flag(f"throughput for '{wb_op}' size-banded on part area: largest part "
-                      f"{_max_part_area_pn or '?'} {_max_part_area_m2:.4f} m2 -> band {_band} "
+                g["band_set_by"] = {"part": _band_pn, "area_m2": round(_band_area, 4),
+                                    "band": _band, "from": _band_from}
+                _flag(f"throughput for '{wb_op}' size-banded on part area, from {_band_from}: "
+                      f"largest part {_band_pn or '?'} {_band_area:.4f} m2 -> band {_band} "
                       f"-> {_banded}/hr "
                       f"(was default {default_tp}/hr). MEASURED from your own history by product "
                       f"size - a small part runs faster than a big one, and one median cannot "
                       f"say that. Retune in config.THROUGHPUT_SIZE_BANDS.", flags)
                 default_tp = _banded
                 _rate_basis = "size_banded"
-        elif _bands and _max_part_area_m2 <= 0:
+        elif _bands and _band_area <= 0:
             _flag(f"throughput for '{wb_op}': wanted to size-band it but no fabricated part "
                   f"area was computed - using the un-banded default {default_tp}/hr. Not "
                   f"guessing a band.", flags)
