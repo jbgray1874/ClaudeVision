@@ -2436,11 +2436,16 @@ def walkthrough_file(token: str, name: str, x_sdi_key: Optional[str] = Header(de
     if path is None:
         raise HTTPException(404, f"{name!r} is not one of this estimate's files, or it has "
                                  f"been moved.")
-    if quote_release.looks_like_a_quote(path) and not quote_release.may_go_to_a_customer(path):
-        raise HTTPException(403, "That is the customer quotation and it has not been released: "
-                                 + (quote_release.why_held(path) or "an estimator releases it "
-                                    "on the estimating page."))
     media, _ = mimetypes.guess_type(path.name)
+    # THE PORTAL CLIENT ESTIMATE, EVERY TIME (D-645). A quotation not yet released for a
+    # customer is served to read, as /api/file serves it: in the browser, sandboxed, marked as
+    # the portal working copy, never as a download to forward. Released ones are files.
+    if quote_release.looks_like_a_quote(path) and not quote_release.may_go_to_a_customer(path):
+        return FileResponse(str(path), media_type=media or "application/octet-stream",
+                            filename=path.name, content_disposition_type="inline",
+                            headers={"X-SDI-Quote-Release": "portal",
+                                     "Content-Security-Policy":
+                                         "sandbox allow-downloads allow-popups"})
     return FileResponse(str(path), media_type=media or "application/octet-stream",
                         filename=path.name)
 
@@ -3831,21 +3836,9 @@ def email_run(run_id: str, req: SendRequest,
             400, f"These are not files this run produced: {', '.join(_foreign)}")
 
     if chosen:
-        # ── AN EXPLICIT CHOICE IS A DECISION. IT IS NOT A PERMISSION. ───────────────
-        #
-        # This read "An explicit choice is a decision, quote included" and sent the list
-        # untouched, so a tick-box on the page put an unreleased quotation in front of a
-        # customer past the only gate there was. The gate it went past is a keyword scan of
-        # the run's console that returns True unconditionally, so nothing has leaked — but
-        # the moment that became honest there would have been no check left at all.
-        #
-        # What a person may choose is WHICH of this run's files to send. Whether the
-        # quotation may go to a customer is not theirs to tick: it needs the commercial
-        # inputs completed and a named estimator's authorisation, and those are recorded on
-        # the estimate, not in a request. The file says which it is and this asks it.
-        paths = [f for f in chosen if quote_release.may_go_to_a_customer(f)]
-        held = [{"path": f, "why": quote_release.why_held(f)}
-                for f in chosen if f not in paths]
+        # THE ESTIMATOR'S CHOICE IS SENT AS CHOSEN, QUOTE INCLUDED (D-646). JG, 3 Nov 2026:
+        # "estimating still control this process".
+        paths, held = list(chosen), []
     else:
         paths, held = estimate_email.choose_attachments(
             _deliverables, provisional=_provisional, include_quote=False)

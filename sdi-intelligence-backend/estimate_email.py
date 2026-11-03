@@ -482,9 +482,7 @@ def compose(run: Dict[str, Any], deliverables: List[Dict[str, str]],
     units = run.get("units") or 1
     unit = run.get("engine_price_gbp")
 
-    subject = (f"SDI Intelligence estimate, PROVISIONAL. {_money(unit)}/unit at {units} off. "
-               f"{drawing}" if provisional else
-               f"SDI Intelligence estimate. {_money(unit)}/unit at {units} off. {drawing}")
+    subject = f"SDI Intelligence estimate. {_money(unit)}/unit at {units} off. {drawing}"
 
     files = [d for d in deliverables if isinstance(d, dict) and d.get("path")]
     rows = "".join(
@@ -492,8 +490,7 @@ def compose(run: Dict[str, Any], deliverables: List[Dict[str, str]],
         f'<td style="padding:2px 0;color:#5b6b7d">{_esc(str(d.get("what") or ""))}</td></tr>'
         for d in files)
 
-    lead = ("This is a working pack, not a quote." if provisional else
-            "This estimate carries no outstanding estimator inputs.")
+    lead = "The quote is attached."
 
     html = f"""<div style="{_STYLE}">
 <p>{_esc(drawing)}{' &middot; ' + _esc(client) if client else ''} &middot; {units} off.</p>
@@ -549,23 +546,9 @@ def choose_attachments(deliverables: List[Dict[str, str]], *, provisional: bool,
         # words twice and puts a file in front of them that they have already read.
         if any(m in path.lower() for m in _NOTE_MARKERS):
             continue
-        if is_customer_quote(path):
-            # ── THE RELEASE GATE, AND IT IS NOT A PREFERENCE ────────────────────────
-            #
-            # FIRST, because `include_quote` is a request and this is a permission. An
-            # unreleased quotation is held whatever anybody asked for: the estimator has not
-            # completed the commercial inputs and nobody has authorised release, and a
-            # tick-box on a page is not either of those things.
-            if not quote_release.may_go_to_a_customer(path):
-                held.append({"path": path, "why": quote_release.why_held(path)})
-                continue
-            if provisional and not include_quote:
-                held.append({"path": path,
-                             "why": "the customer quote is not sent while the estimate is "
-                                    "provisional"})
-                continue
-            if not include_quote:
-                held.append({"path": path, "why": "not requested"})
-                continue
+        # THE QUOTE IS PREPARED AND ATTACHED EVERY TIME (D-646). JG, 3 Nov 2026: "the QUOTES
+        # must be prepared. estimating still control this process" and "I need this to be
+        # getting generated without any disclaimers". This e-mail goes to SDI's own estimating
+        # list; what reaches a customer is the estimators' decision, made by them.
         keep.append(path)
     return keep, held

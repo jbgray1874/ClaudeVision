@@ -105,21 +105,42 @@ def report(phase: str, message: str = "", **extra: Any) -> Dict[str, Any]:
 
 class Switch:
     """The portal's answer, asked on every beat. Unreachable is OFF: a watcher that cannot
-    hear the portal queues nothing."""
+    hear the portal queues nothing.
 
-    def __init__(self, portal: ler.Portal, say: Callable[[str], None] = print):
-        self.portal, self.say = portal, say
+    EVERY SERVICE ON THE LIST, NOT ONE (D-644). The laptop serves 8072 and 8071, and the
+    phone reaches one the watcher was not reporting to: the switch was pressed on a service
+    that never heard from the watcher, and said "not connected". Each service keeps its own
+    switch, so the beat goes to all of them (each then shows the watcher and its job), and
+    the switch pressed MOST RECENTLY on any of them is obeyed — Off pressed anywhere still
+    stops it. A service that cannot be reached is left out; none reachable is off."""
+
+    def __init__(self, portal: Any, say: Callable[[str], None] = print):
+        self.portals = list(portal) if isinstance(portal, (list, tuple)) else [portal]
+        self.portal = self.portals[0]
+        self.say = say
         self.last: Dict[str, Any] = {}
+        self._quiet: set = set()
 
     def beat(self, rep: Dict[str, Any]) -> bool:
-        try:
-            self.last = self.portal.self_running(rep) or {}
-        except ler.PortalError as exc:
-            self.say(f"   (the portal did not answer the self-running beat: {exc.message}; "
-                     f"treated as switched off)")
+        answers: List[Dict[str, Any]] = []
+        for i, portal in enumerate(self.portals):
+            try:
+                answers.append(portal.self_running(rep) or {})
+                self._quiet.discard(i)
+            except ler.PortalError as exc:
+                if i not in self._quiet:                  # said once, not every beat
+                    self._quiet.add(i)
+                    self.say(f"   (the portal at {getattr(portal, 'server', '') or i} did not "
+                             f"answer the self-running beat: {exc.message}; left out)")
+        if not answers:
             self.last = {}
             return False
-        return bool(self.last.get("enabled"))
+        newest = max(answers, key=lambda a: float(a.get("toggled_epoch") or 0.0))
+        on = bool(newest.get("enabled"))
+        self.last = {**newest, "enabled": on,
+                     "run_now": on and any(a.get("run_now") and a.get("enabled")
+                                           for a in answers)}
+        return on
 
 
 # ── COLLECTING A PACK THAT IS NOT ON THE SHARE YET ───────────────────────────────────
@@ -397,7 +418,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     s = _settings(args)
     if not s["workbook"]:
         raise SystemExit("Set SDI_LIVE_ENQUIRY_WORKBOOK (in .env) to the Live Enquiry workbook.")
-    portal = ler.Portal(args.server, args.api_key)
+    # A LIST, LIKE THE RUNNER'S (D-644): jobs go to the first service, the beat to all.
+    servers = [x.strip().rstrip("/") for x in str(args.server or "").split(",") if x.strip()]
+    portals = [ler.Portal(x, args.api_key) for x in servers] or [ler.Portal(args.server,
+                                                                            args.api_key)]
+    portal = portals[0]
 
     if args.dry_run:
         class _Silent(Switch):
@@ -410,8 +435,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         raise SystemExit(f"Another Live Enquiry runner holds {ler._lock_path(s['ledger'])}. "
                          f"Stop it first (the SDI Live Enquiry Runner task); two would queue "
                          f"every job twice.")
-    switch = Switch(portal)
-    print(f"[{ler._now()}] AI Estimate Self-Running watcher, portal {args.server}", flush=True)
+    switch = Switch(portals)
+    print(f"[{ler._now()}] AI Estimate Self-Running watcher, reporting to "
+          f"{', '.join(servers) or args.server}; jobs queued on {servers[0] if servers else args.server}",
+          flush=True)
     try:
         next_cycle = 0.0
         while True:

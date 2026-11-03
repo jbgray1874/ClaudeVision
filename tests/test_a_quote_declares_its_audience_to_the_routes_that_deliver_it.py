@@ -133,15 +133,15 @@ def test_the_name_decides_what_to_inspect_and_never_what_to_send(tmp_path):
 
 # ── the routes ──────────────────────────────────────────────────────────────────────
 
-def test_the_attachment_chooser_holds_an_unreleased_quote_even_when_asked(tmp_path):
-    """`include_quote` is a REQUEST. Release is a PERMISSION. The gate goes first."""
+def test_the_attachment_chooser_attaches_the_portal_quote(tmp_path):
+    """D-646. JG, 3 Nov 2026: the quote is prepared and attached every time, "without any
+    disclaimers"; the estimating e-mail goes to SDI's own list and estimating decides what
+    goes to a customer."""
     import estimate_email
-    held_path = _write({}, tmp_path, name="401912-02_quote_PORTAL.html")
+    path = _write({}, tmp_path, name="401912-02_quote_PORTAL.html")
     keep, held = estimate_email.choose_attachments(
-        [{"path": held_path}], provisional=False, include_quote=True)
-    assert keep == []
-    assert held and held[0]["path"] == held_path
-
+        [{"path": path}], provisional=False, include_quote=False)
+    assert keep == [path] and held == []
 
 def test_the_attachment_chooser_sends_a_released_quote_when_asked(tmp_path):
     """The control — a gate that refuses everything is not a gate."""
@@ -152,22 +152,12 @@ def test_the_attachment_chooser_sends_a_released_quote_when_asked(tmp_path):
     assert keep == [ok_path], held
 
 
-def test_the_send_route_filters_an_explicit_file_list():
-    """THE HOLE THIS AUDIT WAS FOR.
-
-    It read "An explicit choice is a decision, quote included" and sent the list untouched.
-    Checked on the route's source because the send itself needs SMTP, a live run and a
-    recipient — but on the one line that decides, and the behaviour underneath it is proved
-    by the two tests above, which run.
-    """
+def test_the_send_route_sends_an_explicit_choice_as_chosen():
+    """D-646: an estimator's chosen files go as chosen, the quote included."""
     src = (ROOT / "sdi-intelligence-backend" / "estimate_routes.py").read_text(
         encoding="utf-8")
     at = src.index("    if chosen:")
-    window = src[at:at + 1400]
-    assert "quote_release.may_go_to_a_customer" in window, (
-        "an explicit file list still bypasses the release gate")
-    assert "paths, held = chosen, []" not in window
-
+    assert "paths, held = list(chosen), []" in src[at:at + 600]
 
 def test_the_file_route_will_not_hand_an_unreleased_quote_over_as_a_download():
     """`GET /api/file` takes a path and returns a file, so a quotation is just another path.
@@ -216,8 +206,11 @@ def test_every_route_that_delivers_a_file_is_covered():
     # run's own filed files to the site that queued it and holds an unreleased quotation
     # behind the same gate as /api/file (quote_release.may_go_to_a_customer).
     # And since 31 Oct 2026 (D-610), /walkthrough/{token}/file/{name}: one of a finished run's
-    # own files, by exact name from its walkthrough record, behind the same gate.
-    assert known_file_responses["estimate_routes.py"] == 3, (
+    # own files, by exact name from its walkthrough record, behind the same gate. Since
+    # 3 Nov 2026 (D-645) that route has two returns: a quotation the gate says is NOT
+    # released is served inline, sandboxed and marked X-SDI-Quote-Release: portal — the
+    # portal working copy to read, as /api/file serves it — never as a download.
+    assert known_file_responses["estimate_routes.py"] == 4, (
         f"a new file-serving route appeared in estimate_routes.py — does it need the gate?")
     routes_at = routes_src.index("def deliverable(")
     assert "quote_release.may_go_to_a_customer" in routes_src[routes_at:routes_at + 2600]

@@ -102,6 +102,10 @@ def switch(on: bool, by: str = "") -> Dict[str, Any]:
         state = _load()
         state["enabled"] = bool(on)
         state["switched_by"] = by or state.get("switched_by") or ""
+        # WHEN IT WAS LAST PRESSED, AS A NUMBER (D-644). A watcher that serves more than one
+        # service (the laptop's 8072 and the 8071 the phone reaches) obeys the switch pressed
+        # most recently on any of them, so Off pressed anywhere still stops it.
+        state["toggled_epoch"] = time.time()
         if on:
             state["switched_on_at"] = _now_iso()
             state["run_now"] = True
@@ -132,4 +136,5 @@ def heartbeat(report: Dict[str, Any], now: Optional[float] = None) -> Dict[str, 
         state["run_now"] = False
         _save(state)
         enabled = bool(state.get("enabled"))
-    return {"enabled": enabled, "run_now": run_now}
+    return {"enabled": enabled, "run_now": run_now,
+            "toggled_epoch": float(state.get("toggled_epoch") or 0.0)}
