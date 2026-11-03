@@ -346,6 +346,9 @@ def test_a_mapped_drive_is_written_through_its_share(monkeypatch):
     assert hr_rollcall._server_path(r"K:\IT\HRSystemsOutput\Roll calls") == \
         r"\\sdi-dc01\shareddata$\Shared\IT\HRSystemsOutput\Roll calls"
     assert hr_rollcall._server_path(r"\\server\share\x") == r"\\server\share\x"
+    # And shown the way people know it, however .env spells the folder.
+    monkeypatch.setattr(cfg, "HR_ROLLCALL_DIR", r"\\SDI-DC01\shareddata$\Shared\IT\HRSystemsOutput\Roll calls")
+    assert hr_rollcall.folder() == r"K:\IT\HRSystemsOutput\Roll calls"
 
 
 def test_the_data_check_reports_without_changing_anything(app, monkeypatch):
