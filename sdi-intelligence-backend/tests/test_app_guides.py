@@ -120,3 +120,27 @@ def test_the_am_crm_guide_does_not_promise_what_the_app_refuses():
     assert "is_formula" in source
     assert "owner column" in guide
     assert "_is_owner_field" in source or "OWNER_FIELD" in source
+
+
+def test_sameday_has_its_square_its_guide_and_a_way_back():
+    """3 November 2026: "add the SameDay tile to the app portal, along with the
+    other apps. anyone can use". Its own app on its own port; the square opens
+    it, and the guide opens it too and returns to the portal."""
+    (svc,) = [s for s in _services() if s["id"] == "sameday"]
+    assert svc["surface"] == "app" and svc["app_category"] == "Apps"
+    assert svc["app_url"] == "http://10.0.0.5:5020/"
+    assert svc["guide_url"] == "guide-sameday.html"
+    guide = (APP_DIR / svc["guide_url"]).read_text(encoding="utf-8")
+    assert 'href="http://10.0.0.5:5020/"' in guide
+    assert 'href="./"' in guide                                       # back to all apps
+
+
+def test_sameday_says_what_the_office_address_cannot_do_yet():
+    """Plain http: the browser will not give it the microphone. Said on the
+    square and in the guide, so nobody presses Talk live and decides it is broken."""
+    (svc,) = [s for s in _services() if s["id"] == "sameday"]
+    assert "microphone" in svc["requires"] and "VPN" in svc["requires"]
+    guide = (APP_DIR / "guide-sameday.html").read_text(encoding="utf-8")
+    assert "Type for now." in guide
+    assert "team access code" in guide
+
