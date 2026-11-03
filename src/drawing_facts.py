@@ -86,10 +86,12 @@ def _num(s: Optional[str]) -> Optional[float]:
         return None
 
 
-def _title_block_part(page, text: str) -> Optional[str]:
+def _title_block_part(page, text: str, box_only: bool = False) -> Optional[str]:
     """The DWG NO this sheet details = the drawing-number ref in the title block (bottom-right).
     Prefer a ref physically inside the bottom-right title-block region; fall back to the last
-    ref in the page text (title block is drawn last / lowest)."""
+    ref in the page text (title block is drawn last / lowest). With box_only, the box alone
+    answers: the fallback can name a child code from a parts list, which no caller asking
+    "is this the part's own sheet" may take as a yes."""
     try:
         W, H = page.width, page.height
         words = page.extract_words()
@@ -101,6 +103,8 @@ def _title_block_part(page, text: str) -> Optional[str]:
             return m[-1]
     except Exception:
         pass
+    if box_only:
+        return None
     refs = _RE_DWGNO.findall(text or "")
     return refs[-1] if refs else None
 

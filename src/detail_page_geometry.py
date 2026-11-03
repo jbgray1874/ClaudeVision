@@ -954,9 +954,46 @@ def own_sheets(part: Mapping[str, Any], summary: Mapping[str, Any]) -> List[Mapp
         dns = [_squash(d) for d in (tb.get("drawing_numbers") or [])] if isinstance(tb, Mapping) else []
         dns += [_squash(page.get(k)) for k in ("drawing_number", "page_drawing_number")
                 if page.get(k)]
-        if pn in dns:
+        # THE NUMBER IN THE SHEET'S OWN DRAWING-NUMBER BOX (D-662). 12684-02-GA's 18:53 run kept
+        # "12684 - TABLETOP" as the drawing number of pages 8 and 9, the project line above the
+        # box, so the outer frame and the cross bar had no own sheet and no length was read off
+        # them. Where the kept reading does not name the part, the box itself is asked, through
+        # the reader that rolls each part's own facts up (drawing_facts, D-657): the box only,
+        # never a code found elsewhere on the page.
+        if pn in dns or _squash(_sheet_number_in_its_box(page)) == pn:
             out.append(page)
     return out
+
+
+_BOX_NUMBERS: Dict[Tuple[str, float, int], Optional[str]] = {}
+
+
+def _sheet_number_in_its_box(page: Mapping[str, Any]) -> Optional[str]:
+    """The drawing number printed in this sheet's title-block box, or None (no PDF at hand, or
+    no number in the box). Read once per file version and page."""
+    import os
+    path = str(page.get("source_pdf_path") or "")
+    local = _local_page_number(page)
+    if not path or not local:
+        return None
+    try:
+        key = (path, os.path.getmtime(path), int(local))
+    except OSError:
+        return None
+    if key in _BOX_NUMBERS:
+        return _BOX_NUMBERS[key]
+    found: Optional[str] = None
+    try:
+        import pdfplumber
+        from drawing_facts import _title_block_part
+        with pdfplumber.open(path) as pdf:
+            if 0 < local <= len(pdf.pages):
+                pg = pdf.pages[local - 1]
+                found = _title_block_part(pg, "", box_only=True)
+    except Exception:                                                # noqa: BLE001
+        found = None
+    _BOX_NUMBERS[key] = found
+    return found
 
 
 # ── A SECTION'S LENGTH FROM ITS OWN SHEET (D-661) ──────────────────────────────────────
