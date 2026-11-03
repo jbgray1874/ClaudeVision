@@ -6335,6 +6335,64 @@ def compile_job_route(
                             f"until then."),
             })
 
+    # (c) A MEMBER THAT DEFERS ITS FINISH TO A COATED ASSEMBLY IS COATED THERE, ONCE (D-654).
+    # 12684-02-GA, 3 Nov 2026: three P.Coat rows, GBP 358.93 at 1 off. The frame 102SA is a
+    # weldment, so its coat stands as a booth stage; its baseplate, outer frame and framework
+    # all print SEE ASSEMBLY DRAWING and were coated again on a row of their own, inside the
+    # frame that was already being coated. The hook assembly's coat lists its bracket among the
+    # parts it covers, and the bracket was coated a second time beside it. "See assembly" means
+    # the member takes the assembly's coat: where its nearest coated ancestor keeps its own
+    # coat (after the dedup above has stood down any assembly its members fully carry), the
+    # member's separate coat is the same work counted twice and is ruled out with the reason.
+    # A member whose own sheet states its own finish keeps its coat; a RAW member never had one.
+    _pw_kept = {}
+    for _eid, _ecs in claims_by_event.items():
+        _kd = arbitrate_event(_eid, _ecs)
+        if (_kd.operation == "powder_coating" and _kd.status == REQUIRED
+                and kinds.get(_kd.target_id) == "assembly"):
+            _pw_kept[_kd.target_id] = _kd
+    _pw_once: Dict[str, str] = {}
+    for _eid, _ecs in list(claims_by_event.items()):
+        _md = arbitrate_event(_eid, _ecs)
+        if not (_md.operation == "powder_coating" and _md.status == REQUIRED):
+            continue
+        _mpn = str(_md.target_id or "")
+        _mft = _leaf_finish_text(_mpn)
+        if not any(h in _mft for h in _PW_POINTER_HINTS) or re.search(r"\bRAW\b", _mft):
+            continue
+        _ups = sorted(((dist, a) for a, dist in
+                       _ancestor_distances(_mpn, graph["parents"]).items()
+                       if a != _mpn and a in _pw_kept), key=lambda x: (x[0], x[1]))
+        if not _ups:
+            continue
+        _owner = _ups[0][1]
+        _od = _pw_kept[_owner]
+        _welded = _pw_assembly_stage(_owner, str(_od.scope or ""))
+        _names_it = _mpn in (_od.participants or [])
+        add_claim(_eid, make_claim(
+            "powder_coating", NOT_APPLICABLE, "bom_tree",
+            subject_id=_mpn, target_id=_mpn, scope=_md.scope,
+            participants=list(_md.participants or []),
+            sequence=_md.sequence, confidence=1.0,
+            evidence=_mft[:160],
+            reason=(f"coated once, as part of {_owner}: this part's own sheet defers its "
+                    f"finish to the assembly, and {_owner} keeps its own coat "
+                    + ("as a welded stage the whole weldment goes through" if _welded
+                       else "naming this part among the parts it covers" if _names_it
+                       else "as the nearest assembly above it that is coated")
+                    + ". A second coat here would put the same metal through the booth "
+                      "twice; if it really is coated before assembly as well as after, "
+                      "put this row back."),
+            route_id=_md.route_id or "",
+        ))
+        _pw_once[_mpn] = _owner
+    if _pw_once:
+        for _iss in list(issues):
+            if (isinstance(_iss, dict) and _iss.get("code") == "powder_scope_mixed_members"
+                    and _iss.get("coated_members")
+                    and all(m in _pw_once for m in _iss["coated_members"])):
+                issues.remove(_iss)
+
     # Hierarchy is a source claim too. It records why leaf work is inapplicable to a parent
     # instead of deleting evidence from whichever record happens to be in hand.
     for event_id, event_claims in list(claims_by_event.items()):
