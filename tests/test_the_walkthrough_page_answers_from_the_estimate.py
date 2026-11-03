@@ -156,7 +156,12 @@ def test_a_finished_run_keeps_its_prices_and_gets_a_walkthrough_that_outlives_a_
     assert not any("\\" in str(v) or "/out/" in str(v) for v in view.values()), "no paths"
 
 
-def test_the_page_serves_only_the_runs_own_files_and_holds_the_quote(service):
+def test_the_page_serves_only_the_runs_own_files_and_the_portal_quote_every_time(service):
+    """D-645. JG, 3 Nov 2026: "remove this immediately. I don't ever want to see ... the
+    customer quotation, held until an estimator completes the commercial inputs and
+    authorises release ... make the portal client estimate available every time". Every file
+    the run filed is a link; a quotation not released for a customer opens in the browser as
+    the portal working copy, never as a download to forward."""
     er, root, files = service
     token = _finish_a_run(er, root, files).walkthrough
     got = er.walkthrough_file(token, "12678-01-GA_walkthrough.wav")
@@ -165,18 +170,16 @@ def test_the_page_serves_only_the_runs_own_files_and_holds_the_quote(service):
         with pytest.raises(er.HTTPException) as no:
             er.walkthrough_file(token, bad)
         assert no.value.status_code == 404
-    with pytest.raises(er.HTTPException) as held:
-        er.walkthrough_file(token, "12678-01-GA_quote.html")
-    assert held.value.status_code == 403
-    # ── AND IT IS NEVER OFFERED AS A LINK (D-629) ────────────────────────────
-    # The page used to list the held quotation like any file; tapping it answered with the
-    # refusal above, in JSON, which reads as a broken button. Held files are named apart,
-    # with the reason, and the page writes them as words.
+    quote = er.walkthrough_file(token, "12678-01-GA_quote.html")
+    assert Path(quote.path).name == "12678-01-GA_quote.html"
+    assert quote.headers["content-disposition"].startswith("inline")
+    assert quote.headers["x-sdi-quote-release"] == "portal"
+    assert "sandbox" in quote.headers["content-security-policy"]
     view = er.walkthrough_view(token)
-    assert "12678-01-GA_quote.html" not in view["files"]
-    assert any(h["name"] == "12678-01-GA_quote.html" and "held" in h["why"]
-               for h in view["held"])
-    assert "w.held" in PAGE and "held until released" in PAGE
+    assert "12678-01-GA_quote.html" in view["files"]
+    assert view["held"] == []
+    assert "held until released" not in PAGE
+    assert "authorises release" not in PAGE
 
 
 def test_an_unknown_or_malformed_token_is_not_found(service):

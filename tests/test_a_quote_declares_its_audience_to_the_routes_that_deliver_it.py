@@ -216,8 +216,11 @@ def test_every_route_that_delivers_a_file_is_covered():
     # run's own filed files to the site that queued it and holds an unreleased quotation
     # behind the same gate as /api/file (quote_release.may_go_to_a_customer).
     # And since 31 Oct 2026 (D-610), /walkthrough/{token}/file/{name}: one of a finished run's
-    # own files, by exact name from its walkthrough record, behind the same gate.
-    assert known_file_responses["estimate_routes.py"] == 3, (
+    # own files, by exact name from its walkthrough record, behind the same gate. Since
+    # 3 Nov 2026 (D-645) that route has two returns: a quotation the gate says is NOT
+    # released is served inline, sandboxed and marked X-SDI-Quote-Release: portal — the
+    # portal working copy to read, as /api/file serves it — never as a download.
+    assert known_file_responses["estimate_routes.py"] == 4, (
         f"a new file-serving route appeared in estimate_routes.py — does it need the gate?")
     routes_at = routes_src.index("def deliverable(")
     assert "quote_release.may_go_to_a_customer" in routes_src[routes_at:routes_at + 2600]

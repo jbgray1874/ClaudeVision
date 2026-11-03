@@ -163,13 +163,11 @@ async function load(){
     if(V) V.status().then(() => { if(V.canSpeak()){ $("sayWords").hidden = false;
       $("sayWords").onclick = () => V.speak(w.commentary, $("sayWords")); } });
   }
-  /* A file the service will not serve is words, not a link (D-629): the held customer
-     quotation used to render as a button that answered with a refusal. */
-  const heldFiles = (w.held || []).map(h => "<li><span style='opacity:.7'>" + esc(h.name)
-    + " — " + esc(h.why || "held until released") + "</span></li>").join("");
-  if((w.files || []).length || heldFiles){
+  /* EVERY FILE IS A LINK (D-645). JG, 3 Nov 2026: the portal client estimate is available
+     every time; a quotation not yet released for a customer opens as the portal working copy. */
+  if((w.files || []).length){
     $("files").innerHTML = w.files.map(n => "<li><a href='" + fileUrl(n) + "' target='_blank' rel='noopener'>"
-      + esc(n) + "</a></li>").join("") + heldFiles;
+      + esc(n) + "</a></li>").join("");
     $("filesBox").hidden = false;
   }
   goToHash();
