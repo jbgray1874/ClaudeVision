@@ -97,7 +97,11 @@ class ItLooksForWhatWillBreakTests(unittest.TestCase):
 
     def test_the_port_is_left_closed_because_the_connector_is_on_the_server(self):
         self.assertIn("PORT 5020 NEEDS NO OPENING", SCRIPT)
-        self.assertIn("LITE_TRUST_FROM=127.0.0.1", SCRIPT)
+        # As SDI Intelligence's App Proxy app does (http://10.0.0.5:8071/),
+        # SameDay's points at the server's address, and the connector - on the
+        # same server - arrives from it.
+        self.assertIn("http://10.0.0.5:5020/", SCRIPT)
+        self.assertIn("LITE_TRUST_FROM=10.0.0.5", SCRIPT)
 
     def test_it_says_which_account_will_read_the_shares(self):
         self.assertIn('GetValue("ObjectName")', SCRIPT)

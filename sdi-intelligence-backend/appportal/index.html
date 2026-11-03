@@ -275,7 +275,8 @@ function renderDetail(s){
   if(s.next)     h+='<div class="note"><h4>Next</h4><div>'+s.next+'</div></div>';
   if(s.app_url)  h+='<a class="btn" href="'+esc(s.app_url)+'">Open '+esc(s.name.split(' · ')[0])+' →</a>';
   if(s.guide_url) h+='<a class="btn" href="'+esc(s.guide_url)+'">User guide</a>';
-  if(s.link)     h+='<a class="btn" href="'+esc(s.link)+'" target="_blank" rel="noopener">'+esc(s.linkLabel||'Open ↗')+'</a>';
+  // An app in BOTH portals carries `link` for the intranet; here app_url already opens it.
+  if(s.link && s.link!==s.app_url) h+='<a class="btn" href="'+esc(s.link)+'" target="_blank" rel="noopener">'+esc(s.linkLabel||'Open ↗')+'</a>';
   $('detail').innerHTML=h;
 }
 

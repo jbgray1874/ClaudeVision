@@ -1017,7 +1017,7 @@
       "cls": "c-prog",
       "category": "Apps",
       "app_category": "Apps",
-      "surface": "app",
+      "surface": "both",
       "app_url": "http://10.0.0.5:5020/",
       "guide_url": "guide-sameday.html",
       "desc": "Talk or type a client brief. SameDay asks what is missing, draws the concept, takes changes as new options, then makes the client pack (render, GA and client sheet) and the SDI brief PDF.",
@@ -1036,6 +1036,10 @@
         {
           "title": "Cost",
           "body": "It uses SDI's OpenAI and Anthropic accounts, with a daily spend cap; when a day's cap is reached it stops until midnight. The &#9632; Stop button in a chat stops any new picture being drawn."
+        },
+        {
+          "title": "User guide",
+          "body": "<a href=\"/app/guide-sameday.html\" target=\"_blank\" rel=\"noopener\">The SameDay user guide</a> — Muhammad Yazir's: how a call goes, the questions it asks, and what to do if it does not hear you."
         }
       ],
       "next": "A secure address through App Proxy and Microsoft sign-in, which brings the microphone and phones outside the office; and reading past work on W: from the server.",
@@ -1044,7 +1048,9 @@
         "OpenAI",
         "Anthropic Claude",
         "SQLite"
-      ]
+      ],
+      "link": "http://10.0.0.5:5020/",
+      "linkLabel": "Open SDI SameDay Intelligence ↗"
     },
     {
       "id": "remote-control",
