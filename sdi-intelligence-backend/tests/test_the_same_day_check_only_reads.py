@@ -58,6 +58,21 @@ class ItNeverPrintsAKeyTests(unittest.TestCase):
         self.assertIn("(not read)", server)
         self.assertNotIn("Get-Content", server)
 
+    def test_the_keys_file_is_judged_by_its_permissions_never_opened(self):
+        """2 November: the keys now travel in the K: folder. Who can read
+        them is the question, and it is answered from the file's permissions,
+        so the check never reads a key to answer it."""
+        keys = SCRIPT.split('Head "2.', 1)[1].split('Head "3.', 1)[0]
+        self.assertIn("Get-Acl -LiteralPath $keysFile", keys)
+        for opener in ("Get-Content", "ReadAllText", "Select-String -LiteralPath $keysFile"):
+            self.assertNotIn(opener, keys)
+        # The key-shape scan looks everywhere EXCEPT the keys file.
+        self.assertIn('$_.Name -notlike ".env*"', keys.split("$keyShape =", 1)[1])
+
+    def test_a_key_anywhere_else_still_stops_the_install(self):
+        keys = SCRIPT.split('Head "2.', 1)[1].split('Head "3.', 1)[0]
+        self.assertIn('Block "Key-shaped text in', keys)
+
     def test_it_looks_for_all_three_providers_key_shapes(self):
         for shape in ("sk-ant-", "sk-proj-", "xai-"):
             self.assertIn(shape, SCRIPT)
@@ -79,6 +94,24 @@ class ItLooksForWhatWillBreakTests(unittest.TestCase):
     def test_the_server_checks_the_guide_depends_on(self):
         for check in ("Python311", "Tools\\nssm.exe", "5020, 5030", "FreeSpace"):
             self.assertIn(check, SCRIPT)
+
+    def test_the_port_is_left_closed_because_the_connector_is_on_the_server(self):
+        self.assertIn("PORT 5020 NEEDS NO OPENING", SCRIPT)
+        self.assertIn("LITE_TRUST_FROM=127.0.0.1", SCRIPT)
+
+    def test_it_says_which_account_will_read_the_shares(self):
+        self.assertIn('GetValue("ObjectName")', SCRIPT)
+
+    def test_nothing_already_on_the_server_is_taken_over(self):
+        """3 November: "a new application ... with its own existence ...
+        not to over ride anything in there already". Its folder, its ports
+        and its two service names are each checked as free - and a list that
+        could not be read is never reported as free."""
+        for name in ('"SDISameDay", "SDICraft"', "is not on the server yet",
+                     "already answering on port", "already exists on the server"):
+            self.assertIn(name, SCRIPT)
+        names = SCRIPT.split("-- NEW NAMES ONLY", 1)[1].split("-- 5.", 1)[0]
+        self.assertLess(names.index("if (-not $hive)"), names.index("the name is free"))
 
     def test_the_lesson_from_kayleigh_is_on_the_list(self):
         self.assertIn("AADSTS50105", SCRIPT)

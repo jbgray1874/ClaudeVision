@@ -113,7 +113,8 @@ if ($drive -and $drive.DisplayRoot) {
     Say "${letter}: on this laptop is $($drive.DisplayRoot) - the server will need that"
     Say "share by its UNC name, because a service has no ${letter}: drive."
 }
-foreach ($doc in @("README.md", "requirements_full.txt", ".env.example")) {
+foreach ($doc in @("README.md", "ARCHITECTURE.md", "DEPLOY_GUIDE.html", "USER_GUIDE.html",
+                  "requirements_full.txt")) {
     if (Test-Path -LiteralPath (Join-Path $Source $doc)) { Yes "$doc is there" }
     else { Flag "$doc is not in $Source" }
 }
@@ -139,25 +140,51 @@ $total = (Get-ChildItem -LiteralPath $auto -Recurse -File -Force -ErrorAction Si
           Where-Object { $_.FullName -notmatch '\\\.venv' } | Measure-Object -Property Length -Sum).Sum
 Say ("{0,-34} {1,8:N1} GB" -f "SDI_Automation in all (no venv)", ($total / 1GB))
 
-# -- 2. No keys on K: ---------------------------------------------------------
-Head "2. Are any keys on K:? (file and line only - never the key)"
+# -- 2. The keys --------------------------------------------------------------
+# The guide of 2 November reverses the one of 26 October: SDI's OpenAI and
+# Anthropic keys now travel IN the K: folder, as SDI_Automation\.env, and are
+# copied to the server with the code. A file of keys on a share is readable by
+# everyone the share lets read it, so this says who that is. It never opens
+# the file: the readers come from its permissions, not its contents.
+Head "2. The keys (file and line only - never the key)"
 $files = @(CodeFiles $Source)
 Say "$($files.Count) code and settings file(s) looked at."
-$envFiles = @($files | Where-Object { $_.Name -like ".env*" -and $_.Name -ne ".env.example" })
-foreach ($f in $envFiles) {
-    Block "A settings file with keys may be on K: $($f.FullName)"
+$keysFile = Join-Path $auto ".env"
+if (Test-Path -LiteralPath $keysFile) {
+    Flag "The keys file is on K:, as the 2 November guide says: $keysFile"
+    $readers = @()
+    try {
+        $readers = @((Get-Acl -LiteralPath $keysFile).Access |
+                     Where-Object { $_.AccessControlType -eq "Allow" -and
+                                    "$($_.FileSystemRights)" -match "Read|Modify|FullControl" } |
+                     ForEach-Object { "$($_.IdentityReference)" } | Sort-Object -Unique)
+    } catch { }
+    if ($readers.Count) {
+        Say "Everyone who can read it, and so use SDI's AI accounts:"
+        foreach ($who in $readers) {
+            $wide = $who -match "Everyone|Authenticated Users|Domain Users|\\Users$"
+            Say ("  " + $who + $(if ($wide) { "   <- the whole company, or near it" })) $(if ($wide) { "Red" } else { "Gray" })
+        }
+    } else {
+        Warn "Could not read its permissions from here."
+    }
+    Say "Once it is on the server, it does not need to stay on K:."
+} else {
+    Flag "No SDI_Automation\.env on K: - the 2 November guide says the keys come with the folder"
 }
-# OpenAI, Anthropic and xAI key shapes.
+# Key-shaped text anywhere ELSE - in the code, a note, a batch file - is a key
+# nobody meant to share, and stops the install. OpenAI, Anthropic, xAI.
 $keyShape = 'sk-ant-[A-Za-z0-9_\-]{20,}|sk-proj-[A-Za-z0-9_\-]{20,}|sk-[A-Za-z0-9]{32,}|xai-[A-Za-z0-9]{20,}'
-$keyHits = @($files | Select-String -Pattern $keyShape -CaseSensitive -ErrorAction SilentlyContinue)
+$keyHits = @($files | Where-Object { $_.Name -notlike ".env*" } |
+             Select-String -Pattern $keyShape -CaseSensitive -ErrorAction SilentlyContinue)
 foreach ($hit in $keyHits) {
     Block "Key-shaped text in $($hit.Path), line $($hit.LineNumber)"
 }
-if (-not $envFiles.Count -and -not $keyHits.Count) {
-    Yes "No .env and nothing key-shaped on K: - the keys are where the guide says"
+if (-not $keyHits.Count) {
+    Yes "Nothing key-shaped in the code or any other file - only in the keys file"
 } else {
-    Say "Keys on a share are readable by everyone who can read the share. Move" Red
-    Say "them off K:, and ask Muhammad whether they need replacing." Red
+    Say "A key in the code is copied wherever the code goes. Take it out, and ask" Red
+    Say "Muhammad whether it needs replacing." Red
 }
 
 # -- 3. What a Windows service cannot see ---------------------------------------
@@ -182,6 +209,9 @@ if (-not $driveHits.Count) {
     Say ""
     Say "Each needs the share's UNC name (\\server\share\...) or a setting that" White
     Say "can be given one. That is Muhammad's change, made once, in the code." White
+    Say "Since 2 November the past-job lookup itself 'finds it on W:', so with" White
+    Say "W: unmapped it is not a side feature that goes quiet - it is the one" White
+    Say "that answers 'Do you mean 12148?'." White
 }
 $atTarget = @($files | Select-String -Pattern $Target -SimpleMatch -ErrorAction SilentlyContinue)
 if ($atTarget.Count) {
@@ -267,6 +297,23 @@ if (-not (Test-Path -LiteralPath $remoteC)) {
         Flag "No Python 3.11 found on the server. Install 3.11.9 (64-bit), for all users."
     }
 
+    # Which account SDI Intelligence runs as: Same Day would run the same way,
+    # and that account - not a person - is who the shares have to let read.
+    $account = ""
+    $hive = $null
+    try {
+        $hive = [Microsoft.Win32.RegistryKey]::OpenRemoteBaseKey("LocalMachine", $Server)
+        $svc = $hive.OpenSubKey("SYSTEM\CurrentControlSet\Services\SDIIntelligence")
+        if ($svc) { $account = [string]$svc.GetValue("ObjectName") }
+    } catch { }
+    if ($account -eq "LocalSystem") {
+        Say "SDI Intelligence runs as LocalSystem. On the network that is the server's"
+        Say "own computer account, so W: and K: must let THE SERVER read them, by"
+        Say "their \\server\share names - no person's drive mappings come with it."
+    } elseif ($account) {
+        Say "SDI Intelligence runs as $account - Same Day would read the shares as that."
+    }
+
     if (Test-Path -LiteralPath (Join-Path $remoteC "Tools\nssm.exe")) {
         Yes "NSSM is there (C:\Tools\nssm.exe) - Same Day can run as a service like SDI Intelligence"
     } else {
@@ -276,6 +323,23 @@ if (-not (Test-Path -LiteralPath $remoteC)) {
     foreach ($port in @(5020, 5030)) {
         if (PortOpen $Server $port) { Flag "Something on $Server is already answering on port $port" }
         else { Yes "Port $port is free on $Server" }
+    }
+
+    # -- NEW NAMES ONLY ---------------------------------------------------------
+    # "a new application called sameday ... with its own existence ... it's not
+    # to over ride anything in there already" - 3 November. Its folder and
+    # ports are checked above; these are the two Windows services it would add.
+    # Said only when the server's service list could actually be read: "free"
+    # must never be the answer to "could not look".
+    foreach ($name in @("SDISameDay", "SDICraft")) {
+        if (-not $hive) {
+            Warn "Could not read the server's services, so $name is not checked"
+            continue
+        }
+        $taken = $null
+        try { $taken = $hive.OpenSubKey("SYSTEM\CurrentControlSet\Services\$name") } catch { }
+        if ($taken) { Flag "A Windows service called $name already exists on the server" }
+        else { Yes "No service called $name yet - the name is free" }
     }
 }
 
@@ -290,11 +354,16 @@ Say "   Intelligence: missing that is what stopped Kayleigh (AADSTS50105)."
 Say "   Once it exists, send Claude its Application ID, and the Entra audit"
 Say "   (Check-Entra-Access.ps1) will check this door too."
 Say ""
-Say "B. THE KEYS - Muhammad gives them to you directly. They go into" Yellow
-Say "   $Target\.env on the server, typed there. Not on K:, not in chat."
+Say "B. THE KEYS - they come with the folder (2 November guide) and are copied" Yellow
+Say "   to $Target\.env on the server. Never into chat. Section 2 above says who"
+Say "   else can read them while they are on K:."
 Say ""
-Say "C. WHO CAN REACH PORT 5020 - only the App Proxy connector needs to." Yellow
-Say "   Open to the whole office network, the team code is the only lock on it."
+Say "C. WHO CAN REACH PORT 5020 - it depends which way it is published." Yellow
+Say "   Internal first (3 November - no Entra work yet): open 5020 to the office"
+Say "   network only. The team code is then the lock, as on the laptop today."
+Say "   Through App Proxy later: PORT 5020 NEEDS NO OPENING. The connector runs"
+Say "   ON this server (APP_PROXY_GOLIVE.md 3.1), so it reaches Same Day locally:"
+Say "   internal URL http://localhost:5020/ and LITE_TRUST_FROM=127.0.0.1."
 Say ""
 Say "D. OUTBOUND - the server must reach api.openai.com and api.anthropic.com," Yellow
 Say "   and office browsers must reach api.openai.com for the live voice."
