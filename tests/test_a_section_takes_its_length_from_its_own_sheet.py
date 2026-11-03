@@ -221,3 +221,56 @@ def test_a_length_no_weight_checks_is_priced_indicative(pack):
     dpg.apply_section_lengths_from_own_sheets([short], pack)
     me = E.estimate_material(short)
     assert me["stock_estimate"]["section_length_indicative"] is True
+
+
+# ── D-662: the sheet is the part's own when its drawing-number box says so ──────────────
+#
+# 12684-02-GA, 3 Nov 2026 18:53. The run kept "12684 - TABLETOP", the project line printed
+# above the box, as the drawing number of the frame's and the bar's sheets. own_sheets found
+# no sheet for either, so no length was read; the frame went to a market guess and the bars to
+# £0. The number in the sheet's own drawing-number box decides when the kept reading names
+# nobody — the box only, never a code found elsewhere on the page.
+
+@pytest.fixture()
+def misread_pack(tmp_path):
+    path = tmp_path / "misread.pdf"
+    doc = fitz.open()
+    sheets = [("99999-01-M06", [("1500", 577, 30), ("500", 274, 210)]),
+              ("99999-01-M07", [("484.6", 447, 360), ("10", 300, 420),
+                                ("99999-01-M06", 300, 500)])]
+    for number, lines in sheets:
+        page = doc.new_page(width=1190.55, height=841.89)
+        for text, x, y in lines:
+            page.insert_text((x, y), text, fontsize=9)
+        page.insert_text((620, 760), "99999 - PROJECT NAME", fontsize=9)
+        page.insert_text((1000, 800), number, fontsize=9)
+    doc.save(str(path))
+    doc.close()
+    weights = [["0.58kg"], ["0.37kg"]]
+    return {"pages": [{"page_number": i, "source_pdf_path": str(path),
+                       "page_analysis": {"title_block": {"drawing_numbers": ["99999 - PROJECT"],
+                                                         "weights": weights[i - 1]}}}
+                      for i in (1, 2)]}
+
+
+def _own(pn, page):
+    return {"part_number": pn, "pages": [page]}
+
+
+def test_a_misread_title_block_still_finds_the_parts_own_sheet_by_its_box(misread_pack):
+    assert [p["page_number"] for p in dpg.own_sheets(_own("99999-01-M06", 1), misread_pack)] == [1]
+    assert [p["page_number"] for p in dpg.own_sheets(_own("99999-01-M07", 2), misread_pack)] == [2]
+
+
+def test_a_code_elsewhere_on_the_page_does_not_make_it_that_parts_sheet(misread_pack):
+    """Page 2 prints 99999-01-M06 in its drawing area; its box says M07. It is not M06's."""
+    assert dpg.own_sheets(_own("99999-01-M06", 2), misread_pack) == []
+
+
+def test_and_the_tube_and_bar_take_their_lengths_through_it(misread_pack):
+    tube = _tube(part_number="99999-01-M06", pages=[1])
+    bar = _bar(part_number="99999-01-M07", pages=[2])
+    assert dpg.apply_section_lengths_from_own_sheets([tube, bar], misread_pack) == [
+        "99999-01-M06", "99999-01-M07"]
+    assert tube["_section_length_from_own_sheet"]["length_mm"] == 1500.0
+    assert bar["_section_length_from_own_sheet"]["length_mm"] == 484.6

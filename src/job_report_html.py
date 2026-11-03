@@ -2942,10 +2942,18 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
         # So the engine seeds the classification with None for the figure, and the costed
         # record overwrites it below with the sheet's own charge where there is one.
         _me = _pe.get("material_estimate") or {}
+        # A MADE PART'S LABOUR IS NOT ITS MATERIAL EITHER (D-662). 12684-02-M07, eleven cross
+        # bars with no material price, was listed as "costed elsewhere ... on a sheet-steel
+        # row" at 18:53 because its saw, weld and dressing made the total non-zero; it sat on
+        # no material block at all. The total counts only for what is left after labour.
         try:
-            _v = float(_me.get("extended_material_cost_gbp") or 0) or float(
-                _pe.get("extended_total_cost_gbp") or 0)
+            _lab_m = float(((_pe.get("labour_estimate") or {}).get(
+                "extended_labour_cost_gbp")) or 0)
+            _v = float(_me.get("extended_material_cost_gbp") or 0) or max(
+                0.0, float(_pe.get("extended_total_cost_gbp") or 0) - _lab_m)
         except (TypeError, ValueError):
+            _v = 0.0
+        if _v <= 0.005:
             _v = 0.0
         if _v:
             _costed_elsewhere[_pn] = None
