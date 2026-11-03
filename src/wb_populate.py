@@ -1778,6 +1778,32 @@ def band_area_for_row(row_part_numbers, all_parts, children_by_pn=None):
                        "area")
 
 
+def unmeasured_row_parts(row_part_numbers, all_parts) -> List[str]:
+    """The fabricated parts named on a row that carry no measured area (D-660). A band set by
+    the measured ones is then set by PART of what the row coats or packs: 12684-02's hook row
+    is banded on the bracket while the arm's own drawing is unresolved, so its 638/hr is
+    provisional and is said to be. A bought-in line is not counted; it sets no band anyway."""
+    try:
+        import bought_in_policy as _bip
+    except Exception:                                    # noqa: BLE001
+        _bip = None
+    wanted = {str(x).strip().upper() for x in (row_part_numbers or []) if str(x).strip()}
+    out: List[str] = []
+    for p in (all_parts or []):
+        if not isinstance(p, dict):
+            continue
+        pn = str(p.get("part_number") or "").strip()
+        if pn.upper() not in wanted:
+            continue
+        if _bip is not None and _bip.is_bought_in(p):
+            continue
+        if p.get("is_assembly_parent") or p.get("is_sub_assembly"):
+            continue
+        if _largest_fabricated_part_area([p])[0] <= 0:
+            out.append(pn)
+    return sorted(set(out))
+
+
 def canonical_children_by_pn(summary) -> Dict[str, List[str]]:
     """Each canonical node's children, keyed by part number (upper case) (D-659)."""
     out: Dict[str, List[str]] = {}
@@ -8358,14 +8384,21 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             _band = "A" if _a < _e1 else "B" if _a < _e2 else "C" if _a < _e3 else "D"
             _banded = _bands.get(_band)
             if _banded:
+                _unmeasured = unmeasured_row_parts(g.get("parts") or [], _all_pes_pw)
                 g["band_set_by"] = {"part": _band_pn, "area_m2": round(_band_area, 4),
-                                    "band": _band, "from": _band_from}
+                                    "band": _band, "from": _band_from,
+                                    "provisional": bool(_unmeasured),
+                                    "unmeasured_parts": _unmeasured}
                 _flag(f"throughput for '{wb_op}' size-banded on part area, from {_band_from}: "
                       f"largest part {_band_pn or '?'} {_band_area:.4f} m2 -> band {_band} "
                       f"-> {_banded}/hr "
-                      f"(was default {default_tp}/hr). MEASURED from your own history by product "
-                      f"size - a small part runs faster than a big one, and one median cannot "
-                      f"say that. Retune in config.THROUGHPUT_SIZE_BANDS.", flags)
+                      + (f"PROVISIONAL: {', '.join(_unmeasured)} on this row carr"
+                         f"{'ies' if len(_unmeasured) == 1 else 'y'} no measured area, so the "
+                         f"band may be set by part of what is coated or packed; confirm the "
+                         f"row's throughput. " if _unmeasured else "")
+                      + f"(was default {default_tp}/hr). MEASURED from your own history by "
+                        f"product size - a small part runs faster than a big one, and one median "
+                        f"cannot say that. Retune in config.THROUGHPUT_SIZE_BANDS.", flags)
                 default_tp = _banded
                 _rate_basis = "size_banded"
         elif _bands and _band_area <= 0:

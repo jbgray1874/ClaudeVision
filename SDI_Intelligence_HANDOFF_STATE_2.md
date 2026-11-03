@@ -67,14 +67,25 @@ after checking the laptop already holds the portal commit it was built on, so no
     git merge-base --is-ancestor <portal base> HEAD; if ($?) { git merge --no-edit FETCH_HEAD } else { "STOP: send  git log --oneline -5 FETCH_HEAD" }
     git merge-base --is-ancestor <portal commit> HEAD; if ($?) { "fixes in" } else { "NOT in" }
 
-Then publish and restart:
+Then publish and restart, as ONE statement (3 Nov 2026 review: a printed "STOP" does not stop
+the next pasted line; PowerShell runs each line of a paste on its own. A block in braces is read
+whole before any of it runs, so a failed check really does stop the push and the restarts):
 
-    git push origin HEAD
-    git fetch origin main-2026
-    git merge-base --is-ancestor FETCH_HEAD HEAD; if ($?) { git push origin HEAD:main-2026 } else { "STOP: send  git log --oneline HEAD..FETCH_HEAD" }
-    .\tools\start\restart-service.ps1
-    .\tools\start\restart-runner.ps1
-    .\tools\start\check-services.ps1
+    git merge-base --is-ancestor <commit> HEAD
+    if (-not $?) { "NOT in: stop here and send the output above" } else {
+      git push origin HEAD
+      git fetch origin main-2026
+      git merge-base --is-ancestor FETCH_HEAD HEAD
+      if (-not $?) { "STOP: send  git log --oneline HEAD..FETCH_HEAD" } else {
+        git push origin HEAD:main-2026
+        .\tools\start\restart-service.ps1
+        .\tools\start\restart-runner.ps1
+        .\tools\start\check-services.ps1
+      }
+    }
+
+Do not start a job unless check-services.ps1 shows EVERY service that answers on HEAD
+(8071 included).
 
 The first block merges `jbgray1874`'s `main-2026` straight into the portal branch, with the commit
 the session named as the proof. `git push origin HEAD` publishes the portal branch to

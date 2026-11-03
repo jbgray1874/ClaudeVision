@@ -240,3 +240,17 @@ def test_the_band_site_reads_the_row_through_its_own_tree_and_says_an_allowance(
     assert "_max_part_area_m2" not in site.split("band_area_for_row(")[1].split(")")[0], (
         "the job's largest part is passed to the row's band again")
     assert "ALLOWANCE for this row" in site and "Confirm this row's throughput" in site
+
+
+def test_a_band_set_while_part_of_the_row_is_unmeasured_is_called_provisional():
+    """D-660: the hook row is banded on the bracket while the arm's drawing is unresolved, so the
+    rate is provisional and the row says which part carries no area."""
+    from wb_populate import unmeasured_row_parts
+    parts = [_sheet_part("12684-02-M01", 39.7, 30.0),
+             {"part_number": "12684-02-M02", "material_estimate": {"stock_form": "sheet"}},
+             {"part_number": "12684-02-101SA", "is_sub_assembly": True}]
+    assert unmeasured_row_parts(HOOK_ROW, parts) == ["12684-02-M02"]
+    assert unmeasured_row_parts(["12684-02-M01"], parts) == []
+    src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
+    site = src[src.index("# ── SIZE-BANDED DEFAULT"):src.index("# ── P.COAT BY HANGING GEOMETRY")]
+    assert '"provisional": bool(_unmeasured)' in site and "PROVISIONAL:" in site
