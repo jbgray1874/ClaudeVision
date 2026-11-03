@@ -1438,18 +1438,72 @@ class SelfRunningSwitch(BaseModel):
     by: str = ""
 
 
+# ONE SWITCH, KEPT IN ONE PLACE (D-651). The phone reaches SDI-App01 and the laptop's page
+# reaches the laptop, and each service kept its own switch, so the two screens could say
+# different things (3 Nov 2026: "The states of the web portal and the phone need to be in
+# sync"). A service told SDI_SELF_RUNNING_HOME (the laptop's .env: http://10.0.0.5:8071)
+# keeps no switch of its own: every self-running read, press and watcher beat is passed to
+# that service and its answer returned, so every screen shows the same switch by
+# construction. Unreachable is said plainly, never answered from a local copy, because a
+# local copy is a second switch. A request already passed on is served where it lands, so
+# a mistaken setting on SDI-App01 itself cannot loop.
+_SR_FORWARDED = "X-SDI-Self-Running-Forwarded"
+
+
+def _self_running_home(request: Request) -> str:
+    if request.headers.get(_SR_FORWARDED):
+        return ""
+    return os.getenv("SDI_SELF_RUNNING_HOME", "").strip().rstrip("/")
+
+
+def _self_running_at_home(home: str, method: str, tail: str = "",
+                          body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    import urllib.error
+    import urllib.request
+    data = json.dumps(body or {}).encode("utf-8") if method == "POST" else None
+    req = urllib.request.Request(
+        f"{home}/api/estimate/self-running{tail}", data=data, method=method,
+        headers={"Content-Type": "application/json", "X-SDI-Key": config.API_KEY or "",
+                 _SR_FORWARDED: "1"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            out = json.loads(resp.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            said = json.loads(exc.read().decode("utf-8") or "{}").get("detail") or ""
+        except Exception:                                             # noqa: BLE001
+            said = ""
+        raise HTTPException(502, f"The self-running switch is kept on {home}, which refused "
+                                 f"this ({exc.code}{': ' + str(said) if said else ''}).")
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        reason = getattr(exc, "reason", exc)
+        raise HTTPException(503, f"The self-running switch is kept on {home} (SDI-App01), and "
+                                 f"this machine cannot reach it ({reason}). Connect to the "
+                                 f"office network or the VPN and try again.")
+    if isinstance(out, dict):
+        out["home"] = home
+    return out
+
+
 @router.get("/self-running")
-def self_running_view(x_sdi_key: Optional[str] = Header(default=None)):
+def self_running_view(request: Request, x_sdi_key: Optional[str] = Header(default=None)):
     """The switch and the watcher as last heard from — what the page shows."""
     _check_key(x_sdi_key)
+    home = _self_running_home(request)
+    if home:
+        return _self_running_at_home(home, "GET")
     return self_running_switch.view()
 
 
 @router.post("/self-running/start")
-def self_running_start(req: SelfRunningSwitch, x_sdi_key: Optional[str] = Header(default=None)):
+def self_running_start(req: SelfRunningSwitch, request: Request,
+                       x_sdi_key: Optional[str] = Header(default=None)):
     """Switch self-running on, and ask the watcher to read the sheet at once. Switching on
     with no watcher connected is allowed — it starts as soon as one reports — and says so."""
     who = _check_key(x_sdi_key)
+    home = _self_running_home(request)
+    if home:
+        return _self_running_at_home(home, "POST", "/start", {"by": req.by or who})
     out = self_running_switch.switch(True, by=req.by or who)
     if not out["watcher"].get("connected"):
         out["note"] = ("Switched on, but no self-running watcher is connected: nothing will run "
@@ -1459,18 +1513,25 @@ def self_running_start(req: SelfRunningSwitch, x_sdi_key: Optional[str] = Header
 
 
 @router.post("/self-running/stop")
-def self_running_stop(req: SelfRunningSwitch, x_sdi_key: Optional[str] = Header(default=None)):
+def self_running_stop(req: SelfRunningSwitch, request: Request,
+                      x_sdi_key: Optional[str] = Header(default=None)):
     """Switch self-running off. The job in progress finishes on the portal; nothing more is
     queued."""
     who = _check_key(x_sdi_key)
+    home = _self_running_home(request)
+    if home:
+        return _self_running_at_home(home, "POST", "/stop", {"by": req.by or who})
     return self_running_switch.switch(False, by=req.by or who)
 
 
 @router.post("/self-running/heartbeat")
-def self_running_heartbeat(report: Dict[str, Any],
+def self_running_heartbeat(report: Dict[str, Any], request: Request,
                            x_sdi_key: Optional[str] = Header(default=None)):
     """The watcher's beat. Answers {enabled, run_now}; keeps what it reported."""
     _check_key(x_sdi_key)
+    home = _self_running_home(request)
+    if home:
+        return _self_running_at_home(home, "POST", "/heartbeat", report or {})
     return self_running_switch.heartbeat(report or {})
 
 
