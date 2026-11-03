@@ -210,6 +210,16 @@ def overlay_drawing_facts(job: Dict[str, Any], facts: Dict[str, Any]) -> Dict[st
                     f"{k}: LLM='{lv}' vs deterministic='{dv}' — used deterministic (printed)")
             p[k] = dv
             p.setdefault("_deterministic", []).append(k)
+        # THE PART'S OWN SHEET SAYS "SEE ASSEMBLY" (D-657): its finish is its assembly's. A
+        # finish the extract gave it of its own gives way to the printed pointer, and says so.
+        if d.get("finish_pointer"):
+            lv = p.get("finish")
+            if lv not in _EMPTY and "SEE " not in str(lv).upper():
+                p.setdefault("_merge_flags", []).append(
+                    f"finish: LLM='{lv}' vs its own sheet's FINISH: SEE ASSEMBLY DRAWING — "
+                    f"used the printed pointer")
+            p["finish"] = "SEE ASSEMBLY DRAWING"
+            p.setdefault("_deterministic", []).append("finish")
     # Spec: COMBINE the weld line (each source has half), fill the rest from the deterministic block.
     sb = facts.get("spec_block") or {}
     spec = job.setdefault("spec", {})
@@ -351,6 +361,15 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
         # neither the material nor the finish from the general note.
         _general_applies = _general_note_applies(part, jp, pn, assembly_pns)
         mat = jp.get("material")
+        # THE PART'S OWN WORDS FOR ITS STOCK ARE KEPT (D-657). A material read off the part's own
+        # title block ("1/2\" SQUARE STEEL TUBE", "10mm SQUARE STEEL BAR") was folded to a
+        # material code below and its words dropped, so nothing downstream could see that the
+        # part is a tube or a bar, and it was nested as sheet. Kept as the material its own sheet
+        # states, where nothing already holds that.
+        if (mat and "material" in (jp.get("_deterministic") or [])
+                and not str(part.get("material_stated") or "").strip()):
+            part["material_stated"] = str(mat).strip()
+            part.setdefault("material_stated_source", "own_sheet_title_block")
         if not mat and _job_material and _general_applies:
             mat = _job_material
             if not str(part.get("normalized_material") or "").strip():
