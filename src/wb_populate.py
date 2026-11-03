@@ -5482,6 +5482,25 @@ _STATED_SHOP_TIME_MARKERS = (
 )
 
 
+# THE TWO CLAIMS THAT ARE ALLOWANCES, NOT MEASUREMENTS (D-667). The bench-fitting rule falls
+# back to a house allowance per part fitted outside the joinery pilot's scope, and the unit
+# fitting is a per-piece handling allowance. Both are honest stand-ins where nothing measured
+# the work; neither is evidence about this job that a department's measured rate for the same
+# department, inside that rate's own scope, should give way to.
+_ALLOWANCE_TIME_MARKERS = frozenset({"bench_work_applied", "unit_fitting_applied"})
+
+
+def allowance_only_claim(group: Any, stated_time_by_pn: Dict[str, str],
+                         measured_claim_pns: Any) -> bool:
+    """Does this row's stated time come ONLY from allowance claims (D-667)? True when at least
+    one member carries a stated claim and none of them carries a measured one (a department's
+    stated time, a weld or pack model, a count taken off the part's own record)."""
+    claimed = [str(p).strip().upper() for p in ((group or {}).get("parts") or [])
+               if str(p).strip().upper() in (stated_time_by_pn or {})]
+    strong = {str(p).strip().upper() for p in (measured_claim_pns or ())}
+    return bool(claimed) and not any(p in strong for p in claimed)
+
+
 def _claim_covers(stated_ops: Any, operation: Any) -> bool:
     """Does this claim vouch for THIS operation — under either of the shop's names for it?"""
     _op = str(operation or "").strip().lower()
@@ -7426,6 +7445,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     _stated_time_by_pn: Dict[str, str] = {}
     _stated_hours_by_pn: Dict[str, Dict[str, float]] = {}
     _stated_ops_by_pn: Dict[str, set] = {}
+    _measured_claim_pns: set = set()        # D-667: claims that are not allowances
     _stamped_records = list(bom_parts or [])
     for _srcname in ("parts",):
         _stamped_records += [r for r in (summary.get(_srcname) or []) if isinstance(r, dict)]
@@ -7448,6 +7468,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             if _sp.get(_marker):
                 _stated_time_by_pn.setdefault(_spn, _why)
                 _stated_ops_by_pn.setdefault(_spn, set()).update(_ops)
+                if _marker not in _ALLOWANCE_TIME_MARKERS:
+                    _measured_claim_pns.add(_spn)
                 # AND THE HOURS THEMSELVES, not only the fact that some exist.
                 #
                 # Five separate branches in the emit loop below can each discard a computed
@@ -7489,6 +7511,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             for _cop, _cwhy in _cot.items():
                 _stated_time_by_pn.setdefault(_spn, str(_cwhy))
                 _stated_ops_by_pn.setdefault(_spn, set()).add(str(_cop).strip().lower())
+                _measured_claim_pns.add(_spn)
         _le = _sp.get("labour_estimate")
         if isinstance(_le, dict):
             _rh = _le.get("run_hours_per_unit")
@@ -8391,6 +8414,26 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         #
         # Everything else is untouched: a group with no stated time walks the chain exactly
         # as before, and the medians keep doing the job they are good at.
+        # A DEPARTMENT'S MEASURED RATE, IN ITS OWN SCOPE, OUTRANKS AN ALLOWANCE (D-667).
+        # 12203-66-GA, 3 Nov 2026 19:48 and 20:10: a faced-board tray. Bench Work Joinery was
+        # stated at 6 minutes (the house allowance, 2 min x 3 parts, because the tray's own
+        # record read plain MDF) and Packing Joinery at the per-piece handling allowance, and
+        # both took this branch ahead of the joinery shop's measured 2/hr and 20/hr for faced
+        # board. A measured time still wins here; an allowance gives way to the measurement.
+        _measured_tp = (_THROUGHPUT_DEFAULTS.get(wb_op or "")
+                        if wb_op in _STATED_THROUGHPUT_ROWS else None)
+        if _measured_tp and allowance_only_claim(g, _stated_time_by_pn, _measured_claim_pns):
+            ws.cell(row=row, column=lb["col_throughput"], value=float(_measured_tp))
+            g["rate_basis"] = "department_stated_rate"
+            g["workbook_row"] = row
+            _flag(f"throughput for '{wb_op}' is {float(_measured_tp):g}/hr — the joinery "
+                  f"department's measured rate for faced board, which outranks the "
+                  f"{_stated_shop_time_source(g, _stated_time_by_pn)} on "
+                  f"{', '.join(str(p) for p in (g.get('parts') or []))}: an allowance is a "
+                  f"stand-in where nothing measured the work, and here something did (D-667).",
+                  flags)
+            row += 1
+            continue
         _stated_hours, _stated_members = stated_row_hours(
             g, _stated_time_by_pn, _stated_hours_by_pn, _stated_ops_by_pn)
         _stated_from = ", ".join(_stated_members)
