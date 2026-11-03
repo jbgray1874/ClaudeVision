@@ -228,6 +228,27 @@ def test_rerun_lets_a_failed_job_go_again(root, tmp_path):
     assert L.plan(rows, L._sources(root), ledger)[0].status == "ready"
 
 
+
+def test_rerun_runs_a_job_baselined_as_estimated_by_hand(root, tmp_path):
+    """D-642: a baselined job read "done" before Re-Run was looked at, so typing Re-Run on
+    its row did nothing. Now Re-Run runs it once; the cell left at Re-Run does not run it
+    again, and a baselined row NOT marked Re-Run stays done."""
+    _pack(root, "M&S", "12678-01-GA")
+    plain = _rows(_line("M&S", "12678-01-GA", done=""))
+    rerun = _rows(_line("M&S", "12678-01-GA", done="Re-Run"))
+    for mark in ("fingerprint", "*"):
+        ledger = L.load_ledger(tmp_path / f"ledger_{mark == '*'}.json")
+        L.baseline(plain, L._sources(root), ledger,
+                   only=(["12678-01-GA"] if mark == "*" else ()))
+        if mark == "*":
+            ledger["jobs"][L.job_key(plain[0])]["baseline"] = "*"
+        assert L.plan(plain, L._sources(root), ledger)[0].status == "done"
+        d = L.plan(rerun, L._sources(root), ledger)[0]
+        assert d.status == "ready" and "Re-Run asked for" in d.reason, (mark, d.reason)
+        assert len(_run([d], ledger, tmp_path)) == 1
+        assert L.plan(rerun, L._sources(root), ledger)[0].status == "done", \
+            "the cell still says Re-Run, and that Re-Run has been answered"
+
 # ── the drawings: the customer's folder, then a folder carrying the number ────────────
 
 def test_a_folder_carrying_the_drawing_number_inside_its_name_is_the_pack(root):

@@ -673,12 +673,18 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
     located = locate(row, sources)
     job = ledger["jobs"].get(key) or {}
     attempts = job.get("attempts") or []
-    if not attempts and job.get("baseline") == "*":
+    # RE-RUN BEATS A BASELINE (D-642). A job marked as estimated by hand before the runner
+    # existed read "done" before Re-Run was ever looked at, so typing Re-Run on its row did
+    # nothing. A person asking for it on the sheet is the stronger instruction; it runs once
+    # per marking, as Re-Run does everywhere else.
+    _rerun_baseline = rerun and not job.get("rerun_taken")
+    if not attempts and job.get("baseline") == "*" and not _rerun_baseline:
         return Decision(row, "done", f"run by hand before the runner (baselined "
                                      f"{job.get('baselined_at')})", located=located)
     if located.status != "found":
         return Decision(row, located.status, located.reason, located=located)
-    if not attempts and job.get("baseline") == fingerprint(located.files):
+    if (not attempts and job.get("baseline") == fingerprint(located.files)
+            and not _rerun_baseline):
         return Decision(row, "done", f"run by hand before the runner (baselined "
                                      f"{job.get('baselined_at')})", located=located)
     qty, qsource = quantities_for(row, located, ledger.get("quantities", {}))
@@ -697,7 +703,8 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
     rerun_due = rerun and not job.get("rerun_taken")
     if not last:
         if job.get("baseline"):
-            d.reason = "the pack has changed since it was baselined"
+            d.reason = ("Re-Run asked for on the sheet (it was baselined as estimated by hand)"
+                        if rerun_due else "the pack has changed since it was baselined")
         return d
     same = last.get("fingerprint") == fp and list(last.get("quantities") or []) == qty
     if last.get("status") in {"queued", "running"}:
