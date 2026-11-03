@@ -109,6 +109,15 @@ def _is_section_stock(part: Mapping[str, Any]) -> bool:
         return True
     if isinstance(part.get("section_stock"), Mapping) and part["section_stock"]:
         return True
+    # THE PART'S OWN PRINTED MATERIAL WORDS NAME ITS STOCK (D-653): '1/2" SQUARE STEEL TUBE'
+    # and '10mm SQUARE STEEL BAR' are one size and a shape, which the a x b x t reader below
+    # does not read. Asked of the material fields alone, never of a page.
+    try:
+        from section_profile import stock_in_own_material_words
+        if stock_in_own_material_words(part):
+            return True
+    except Exception:                                                # noqa: BLE001
+        pass
     words = " ".join(str(part.get(k) or "") for k in
                      ("description", "material", "normalized_material", "dimension",
                       "stock_size", "size", "bom_dimension", "profile",

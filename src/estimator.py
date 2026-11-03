@@ -2799,18 +2799,171 @@ def _is_section_or_wire_candidate(part: Dict[str, Any], material: Optional[str])
         return False
     if part.get("section_stock"):
         return True
+    # THE PART'S OWN PRINTED MATERIAL WORDS REACH THIS DECISION (D-653). 12684-02-M06 is
+    # "OUTER FRAME" in MILD_STEEL, and its own title block says '1/2" SQUARE STEEL TUBE'; that
+    # cell was on the record (material_text_as_printed / material_stated) and this gate read
+    # only the description and the normalised code, so the frame went to the Sheet Steel block.
+    # A cell naming one size and a shape ('10mm SQUARE STEEL BAR', which no keyword names) is
+    # read by section_profile, the same reader detail_page_geometry asks.
+    if _own_material_section(part) is not None or part.get("_round_stock_read"):
+        return True
     tokens = [str(t).upper() for t in policy.get("section_keywords", [])]
     blob = " ".join(
         [
             str(part.get("description") or ""),
             str(part.get("normalized_material") or ""),
             str(material or ""),
+            str(part.get("material_text_as_printed") or ""),
+            str(part.get("material_stated") or ""),
         ]
     ).upper()
     hits = [token for token in tokens if token in blob]
     if hits and _formed_sheet_shape(part, hits):
         return False
     return bool(hits)
+
+
+def _own_material_section(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The section the part's own printed material words name (section_profile, D-653), or
+    None — and None for a part with a measured flat, which is sheet whatever its cell says."""
+    if not isinstance(part, dict):
+        return None
+    if _dxf_geometry_trusted(part, part.get("normalized_geometry") or {}):
+        return None
+    try:
+        from section_profile import stock_in_own_material_words
+        return stock_in_own_material_words(part)
+    except Exception:                                                # noqa: BLE001
+        return None
+
+
+def _weight_band() -> Tuple[float, float]:
+    """The band a size read off a part's own sheet is judged by against its stated weight —
+    the provisional blank's (config.PROVISIONAL_BLANK_FROM_SHEET, D-505/D-652), one band for
+    every reader that asks "does the part's own weight confirm this size"."""
+    cfg = getattr(config, "PROVISIONAL_BLANK_FROM_SHEET", {}) or {}
+    return (float(cfg.get("min_blank_to_part_weight_ratio") or 0.9),
+            float(cfg.get("weight_question_above_ratio") or 1.6))
+
+
+def _stock_weight_check(part: Dict[str, Any], kg_per_m: float,
+                        length_mm: float) -> Optional[Dict[str, Any]]:
+    """A length of stock weighed against the weight the part states (D-653), or None where it
+    states none: {mass_kg, stated_kg, whose, ratio, agrees, band}."""
+    stated, whose = _stated_weight_reference(part)
+    if not (stated and kg_per_m and length_mm):
+        return None
+    mass = float(kg_per_m) * float(length_mm) / 1000.0
+    lo, hi = _weight_band()
+    ratio = mass / float(stated)
+    return {"mass_kg": round(mass, 4), "stated_kg": float(stated), "whose": whose,
+            "ratio": round(ratio, 2), "agrees": lo <= ratio <= hi, "band": [lo, hi]}
+
+
+def _wall_the_weight_implies(a: float, b: float, profile_form: str, stated_kg: float,
+                             length_mm: float, density: float) -> Optional[float]:
+    """The wall at which a hollow a x b section of this length weighs the stated weight, or
+    None. Said beside a working wall so an estimator sees what the sheet's own weight points at;
+    never costed."""
+    try:
+        area = float(stated_kg) / (float(length_mm) / 1000.0) / float(density) * 1e6   # mm2
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    if area <= 0:
+        return None
+    if str(profile_form or "").upper() == "CHS":
+        disc = a * a - 4.0 * area / _PI
+        t = (a - disc ** 0.5) / 2.0 if disc >= 0 else None
+    else:
+        disc = (a + b) ** 2 - 4.0 * area
+        t = ((a + b) - disc ** 0.5) / 4.0 if disc >= 0 else None
+    return round(t, 2) if t and 0 < 2 * t < min(a, b) else None
+
+
+def _bar_metres_per_tonne(diameter_mm: float) -> Optional[float]:
+    """Metres of solid round bar in a tonne: the workbook's gauge table where it holds this
+    gauge (within 0.25 mm), else the solid round section, which matches that table."""
+    table = getattr(config, "WIRE_GAUGE_TABLE", {}) or {}
+    if table:
+        closest = min(table.keys(), key=lambda g: abs(float(g) - diameter_mm))
+        if abs(float(closest) - diameter_mm) <= 0.25:
+            return float(table[closest])
+    kg_per_m = _PI * (diameter_mm / 2000.0) ** 2 * 7850.0
+    return (1000.0 / kg_per_m) if kg_per_m > 0 else None
+
+
+def _round_stock_from_own_evidence(part: Dict[str, Any],
+                                   material: Any) -> Optional[Dict[str, Any]]:
+    """Round bar the part's OWN evidence names, with its length (D-653), or None.
+
+    Two warrants, both read off the part's own record:
+      material_words      its printed material cell names a round bar or rod with its diameter
+                          ('5mm DIA ROD', 'Ø8 BRIGHT BAR');
+      weight_confirmed    its sheet prints ONE diameter and no stock word at all, states no
+                          gauge, has no measured flat, and its stated weight is what a solid
+                          round of that diameter and its own length weighs. 12684-02-M02, the
+                          hook ARM: Ø5, 153.1 long, 0.02 kg, and nothing printed says ROD.
+                          The diameter is the one the drawing-read record holds as a Ø callout
+                          (hole_sizes_mm); without the weight it is a hole, and is left one.
+
+    The length is the cell's own, else the one the section readers take off the part's own
+    sheet. Never over a reader that already decided: a bar schedule, a wire length, a
+    section, or a wire form some other reader set."""
+    if not isinstance(part, dict):
+        return None
+    mine = bool(part.get("_round_stock_read"))
+    if part.get("_bar_recognised") or part.get("bar_schedule") \
+            or _safe_float(part.get("wire_length_mm")):
+        return None
+    _forms = {str((part.get("manufacturing_interpretation") or {}).get("stock_form") or ""),
+              str(part.get("stock_form") or "")}
+    if not mine and ({f.lower() for f in _forms} & {"wire", "tube"} or part.get("section_stock")):
+        return None
+    if _dxf_geometry_trusted(part, part.get("normalized_geometry") or {}):
+        return None
+    if not any(w in str(material or "").upper() for w in _METAL_WORDS):
+        return None
+    own = _own_material_section(part)
+    length_from = ""
+    if own is not None:
+        if not (own.get("solid") and str(own.get("profile_form")) == "ROUND"):
+            return None
+        dia, warrant = float(own["a"]), "material_words"
+        length = _safe_float(own.get("length_mm"))
+        if length:
+            length_from = "its printed material words"
+    else:
+        dias = sorted({v for v in (_safe_float(h) for h in (part.get("hole_sizes_mm") or [])
+                                   if not isinstance(h, (dict, list)))
+                       if v and 1.0 <= v <= 25.0})
+        if len(dias) != 1:
+            return None
+        dia, warrant = dias[0], "weight_confirmed"
+        gauge = _safe_float(part.get("normalized_thickness_mm")) or _safe_thickness_mm(part)
+        if gauge and abs(gauge - dia) > 1e-6:
+            return None                 # a gauge of its own says sheet
+        if part.get("hanging_hole_detected") or part.get("slot_detected"):
+            return None
+        length = None
+    if not length:
+        ng = part.get("normalized_geometry") or {}
+        for value, said in ((part.get("length_mm"), "its stated length"),
+                            (ng.get("developed_length_mm"), "its developed length"),
+                            (part.get("overall_length_mm"), "the overall length its own sheet prints"),
+                            (part.get("blank_length_mm"), "the length its own sheet gives")):
+            if _safe_float(value):
+                length, length_from = float(_safe_float(value)), said
+                break
+    if not length or not (10.0 * dia <= length <= 6000.0):
+        return None
+    density = _density_for_material(material) or 7850.0
+    kg_per_m = _PI / 4.0 * dia * dia * density / 1e6
+    check = _stock_weight_check(part, kg_per_m, length)
+    if warrant == "weight_confirmed" and not (check and check["agrees"]):
+        return None
+    return {"diameter_mm": dia, "length_mm": length, "length_from": length_from,
+            "warrant": warrant, "kg_per_m": kg_per_m, "weight_check": check,
+            "source_text": (own or {}).get("source_text")}
 
 
 def _formed_sheet_shape(part: Dict[str, Any], hits: Optional[List[str]] = None) -> Optional[str]:
@@ -6243,8 +6396,14 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     quantity = _safe_int(part.get("quantity")) or 1
     dims = infer_primary_dimensions(part)
     blank_length, blank_width = estimate_blank_size(dims)
-    blank_length, blank_width = _blank_that_could_have_been_cut(
-        part, blank_length, blank_width)
+    # A LENGTH OF STOCK HAS NO BLANK TO JUDGE (D-584, D-653). Stock the part's own evidence
+    # names — its printed material words, or a diameter its own weight confirms — is read
+    # before the blank gate, which refuses a 153.1 x 5 "blank" as no sheet part and clears the
+    # overall length the sheet printed with it: the one figure the bar is cut to.
+    _round = _round_stock_from_own_evidence(part, material)
+    if _round is None and _own_material_section(part) is None:
+        blank_length, blank_width = _blank_that_could_have_been_cut(
+            part, blank_length, blank_width)
     blank_length, blank_width = _blank_turned_to_fit(part, material, blank_length, blank_width)
 
     # FIX 2 (general): a weldment/assembly PARENT part is a roll-up of child parts that
@@ -6748,6 +6907,98 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     external_price = _resolve_material_price(material, thickness, quantity, part=part)
     external_result = external_price.get("result", {})
 
+    # ── ROUND BAR THE PART'S OWN EVIDENCE NAMES (D-653) ──────────────────────────────────
+    # 12684-02-M02, the hook ARM, 33 off: Ø5, 153.1 long, 0.02 kg on its own sheet, and no ROD
+    # or BAR printed. It reached the Sheet Steel block as a blank with no gauge, "DIMS
+    # REQUIRED", material GBP 0. A round bar is priced as the existing bar path prices one — the
+    # workbook's Wire Cost Per Tonne over the gauge's metres per tonne, by its length — and goes
+    # to the sheet's Wire block, which recalculates it from the same gauge and length. The line
+    # says which evidence made it round and where the length came from. (_round is read above,
+    # before the blank gate.)
+    if _round:
+        _rd, _rl = float(_round["diameter_mm"]), float(_round["length_mm"])
+        _wb_r = getattr(config, "WORKBOOK_INPUT_DEFAULTS", {}) or {}
+        _rate_t = float(_wb_r.get("wire_cost_per_tonne_gbp") or 1600.0)
+        _mpt = _bar_metres_per_tonne(_rd)
+        _scrap = float(getattr(config, "SCRAP_PERCENTAGE", 0.04))
+        _ppm = _rate_t / _mpt if _mpt else None
+        _unit = (_ppm / 1000.0) * _rl * (1.0 + _scrap) if _ppm else None
+        _chk = _round.get("weight_check")
+        _pn_r = part.get("part_number") or "this part"
+        _weighed = (f" It weighs {_chk['mass_kg']:.3f} kg against {_chk['whose']} "
+                    f"{_chk['stated_kg']:g} kg ({_chk['ratio']:.2f}x, "
+                    f"{'within' if _chk['agrees'] else 'OUTSIDE'} the "
+                    f"{_chk['band'][0]:g}-{_chk['band'][1]:g}x band)." if _chk else
+                    " No weight is stated to check the length against.")
+        if _round["warrant"] == "weight_confirmed":
+            _said = (f"{_pn_r}: round bar Ø{_rd:g} x {_rl:g} mm — its own sheet prints one "
+                     f"diameter (Ø{_rd:g}) and no stock word, states no gauge and has no "
+                     f"measured flat, and its stated weight is a solid Ø{_rd:g} round "
+                     f"{_rl:g} mm long ({_round['length_from']}).{_weighed} Priced as bar, "
+                     f"not sheet; nothing printed says ROD or BAR, so confirm the stock")
+            source_precedence.raise_manufacturing_question(
+                part, f"Is {_pn_r} Ø{_rd:g} round bar?",
+                (f"its Ø{_rd:g} callout and its stated "
+                 f"{_chk['stated_kg']:g} kg are a solid Ø{_rd:g} x {_rl:g} mm round; no ROD or "
+                 f"BAR is printed, and no gauge"),
+                "confirm the stock and its length, or give the sheet gauge if it is cut from sheet",
+                "estimator.estimate_material")
+        else:
+            _said = (f"{_pn_r}: round bar Ø{_rd:g} x {_rl:g} mm read from its own printed "
+                     f"material '{_round.get('source_text')}', the length from "
+                     f"{_round['length_from']}.{_weighed} Priced as bar, not sheet")
+        _said += (f" — the workbook's Wire Cost Per Tonne £{_rate_t:.0f}/t over "
+                  f"{(_mpt or 0):,.0f} m/t, {_scrap * 100:g}% scrap; the sheet's Wire row "
+                  f"recalculates it from the same gauge and length")
+        if _said not in (part.get("review_flags") or []):
+            part.setdefault("review_flags", []).append(_said)
+        # THE SHARED SIGNALS, as document_builder sets them for a bar: the route compiler's
+        # stock-form gate and the workbook's blocks read these. A diameter is never a gauge.
+        part["_round_stock_read"] = {"warrant": _round["warrant"], "diameter_mm": _rd,
+                                     "length_mm": _rl}
+        part["stock_form"] = "wire"
+        _mi_r = part.setdefault("manufacturing_interpretation", {})
+        if isinstance(_mi_r, dict):
+            _mi_r["stock_form"] = "wire"
+            _mi_r.setdefault("wire_gauge_mm", _rd)
+        if not _safe_float(part.get("wire_gauge_mm")):
+            part["wire_gauge_mm"] = _rd
+        if _safe_float(part.get("normalized_thickness_mm")) == _rd:
+            part["normalized_thickness_mm"] = None   # precedence: direct-write ok — clears a diameter misread as a gauge — removal, not evidence
+        part["_section_priced_length_mm"] = _rl
+        return {
+            "material": material,
+            "thickness_mm": None,                  # a DIAMETER is not a thickness
+            "blank_length_mm": _rl,
+            "blank_width_mm": None,
+            "blank_area_m2": None,
+            "unit_material_mass_kg": (round(_rl / 1000.0 / _mpt * 1000.0, 5) if _mpt else None),
+            "unit_material_cost_gbp": round(_unit, 4) if _unit is not None else None,
+            "cost_per_part_gbp": round(_unit, 4) if _unit is not None else None,
+            "extended_material_cost_gbp": (round(_unit * quantity, 2)
+                                           if _unit is not None else None),
+            "stock_estimate": {
+                "wire_length_mm": _rl, "wire_gauge_mm": _rd,
+                "metres_per_tonne": round(_mpt, 1) if _mpt else None,
+                "price_per_metre_gbp": round(_ppm, 6) if _ppm else None,
+                "round_stock_warrant": _round["warrant"],
+                "length_from": _round["length_from"],
+                "stated_weight_check": _chk,
+            },
+            "cost_method": "workbook_bar_formula",
+            "stock_form": "wire",
+            "wire_gauge_mm": _rd,
+            "wire_length_mm": _rl,
+            "requires_flat_blank": False,
+            "estimator_input_required": bool(_round["warrant"] == "weight_confirmed"
+                                             or not (_chk and _chk["agrees"])),
+            "part_confidence_overall": _part_confidence_overall(part),
+            "part_geometry_reliability": _part_geometry_reliability(part),
+            "price_source": _build_price_source_metadata(
+                external_result, fallback_source="config_wire_cost_per_tonne",
+                applied=True, applied_basis="bar_diameter_x_own_length_tonne_rate"),
+        }
+
     # ── ROUND BAR / STUD path (added 2026-07-13) ─────────────────────────────
     # Fires ONLY when document_builder recognised a bar schedule on the part's own page:
     #       ITEM  QTY  DESCRIPTION  LENGTH
@@ -6940,6 +7191,37 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         wall_t_mm = _safe_float(_ss.get("t"))
         if not (side_a_mm and side_b_mm and wall_t_mm):
             side_a_mm, side_b_mm, wall_t_mm = _parse_section_profile(str(part.get("description") or ""))
+        # THE PART'S OWN PRINTED MATERIAL WORDS SIZE IT (D-653). '1/2" SQUARE STEEL TUBE' is a
+        # 12.7 x 12.7 SHS; '10mm SQUARE STEEL BAR' a solid 10 x 10. Written onto the part as its
+        # section stock, so the route compiler, the workbook and every later reader see the
+        # section the money was costed on. A hollow section whose words state no wall is costed
+        # at the working figure config.CONCEPT_SECTION_DEFAULT_WALL_MM, and the line says so.
+        _own_sec: Dict[str, Any] = {}
+        if not (side_a_mm and side_b_mm and wall_t_mm):
+            _own_sec = dict(_own_material_section(part) or {})
+            if _own_sec and _own_sec.get("profile_form") == "ROUND" and _own_sec.get("solid"):
+                _own_sec = {}           # a round bar is the bar path's, above
+        elif str(_ss.get("source") or "") == "material_as_printed":
+            _own_sec = dict(_ss)        # costed again: the same reading, said the same way
+            if _ss.get("wall_source"):  # a wall a reader or a person has since given
+                _own_sec["wall_assumed"] = False
+        if _own_sec and not _safe_float(_own_sec.get("t")):
+            _walls = getattr(config, "CONCEPT_SECTION_DEFAULT_WALL_MM", {}) or {}
+            _own_sec["t"] = _safe_float(_walls.get(_own_sec.get("form"))) or 1.5
+            _own_sec["wall_assumed"] = True
+        _oa, _ob, _ot = (_safe_float(_own_sec.get(k)) for k in ("a", "b", "t"))
+        if _own_sec and _oa and _ob and _ot and (
+                _own_sec.get("solid") or 2 * _ot < min(_oa, _ob)):
+            _own_sec["source"] = "material_as_printed"
+            _ss = dict(part.get("section_stock") or {})
+            for _k, _v in _own_sec.items():
+                if _ss.get(_k) in (None, "", 0):
+                    _ss[_k] = _v
+            _ss.update({k: _own_sec[k] for k in ("a", "b", "t", "profile_form", "form")})
+            part["section_stock"] = _ss
+            side_a_mm, side_b_mm, wall_t_mm = _oa, _ob, _ot
+        else:
+            _own_sec = {}
         length_mm = _infer_section_length_mm(part)
         # THE LENGTH IS THE MONEY, SO THE LINE SAYS WHERE THE LENGTH CAME FROM. Section stock
         # is priced per metre. When the length is a reading (7332-01-002: 1,397 mm, transcribed
@@ -6991,6 +7273,79 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                                if not isinstance(x, (dict, list))) if v and v > 0]
             if len(_cl) > 1:
                 _len_stamp["cut_lengths_mm"] = sorted(_cl)
+
+        # WHAT THE PART'S OWN WORDS SAID, WHAT WAS ASSUMED, AND WHAT ITS WEIGHT SAYS (D-653).
+        # The line names the cell it was read from, any inch figure read in millimetres, a
+        # working wall as a working figure, and the stated weight as a check: 12684-02-M07's
+        # 10 x 10 x 484.6 bar weighs 0.38 kg against its stated 0.37; M06's 12.7 SHS at the
+        # working wall weighs about 0.79 kg over 1.5 m against its stated 0.58, which points at
+        # a wall nearer 1 mm — said beside the price, never substituted for it.
+        _own_stamp: Dict[str, Any] = {}
+        if _own_sec and side_a_mm and side_b_mm and wall_t_mm and length_mm:
+            from section_profile import (section_kg_per_m as _own_kgm,
+                                         section_description as _own_desc,
+                                         inch_sizes_to_mm as _own_inch)
+            _own_dens = (_density_for_material(material)
+                         or MATERIAL_DENSITY_KG_PER_M3.get("MILD STEEL") or 7850.0)
+            _own_kg_m = _own_kgm(side_a_mm, side_b_mm, wall_t_mm,
+                                 str(_ss.get("profile_form") or ""), _own_dens) or 0.0
+            _own_chk = _stock_weight_check(part, _own_kg_m, length_mm)
+            _own_text = str(_own_sec.get("source_text") or "")
+            _own_words = _own_desc(_ss) or f"{side_a_mm:g} x {side_b_mm:g} section"
+            _own_pn = part.get("part_number") or "this part"
+            _own_mm = _own_inch(_own_text)
+            _implied = (_wall_the_weight_implies(side_a_mm, side_b_mm,
+                                                 str(_ss.get("profile_form") or ""),
+                                                 _own_chk["stated_kg"], length_mm, _own_dens)
+                        if _own_sec.get("wall_assumed") and _own_chk else None)
+            _said = (f"{_own_pn}: costed as {_own_words}, read from its own printed material "
+                     f"'{_own_text}'"
+                     + (f" (read in millimetres as '{_own_mm}')" if _own_mm != _own_text else ""))
+            if _own_sec.get("solid"):
+                _said += " — solid, weighed as its whole section"
+            elif _own_sec.get("wall_assumed"):
+                _said += (f" — the wall {wall_t_mm:g} mm is a WORKING FIGURE (config "
+                          f"CONCEPT_SECTION_DEFAULT_WALL_MM): "
+                          + (f"its words state the wall as '{_own_sec['wall_stated_as']}', "
+                             f"which is not read here"
+                             if _own_sec.get("wall_stated_as") else
+                             "its printed material states none"))
+            if _own_chk:
+                _said += (f". It weighs {_own_chk['mass_kg']:.2f} kg over {length_mm:g} mm "
+                          f"against {_own_chk['whose']} {_own_chk['stated_kg']:g} kg "
+                          f"({_own_chk['ratio']:.2f}x, "
+                          f"{'within' if _own_chk['agrees'] else 'OUTSIDE'} the "
+                          f"{_own_chk['band'][0]:g}-{_own_chk['band'][1]:g}x band)"
+                          + (f"; that weight points to a wall of about {_implied:g} mm"
+                             if _implied else ""))
+            else:
+                _said += ". No weight is stated to check it against"
+            if _said not in (part.get("review_flags") or []):
+                part.setdefault("review_flags", []).append(_said)
+            if _own_sec.get("wall_assumed"):
+                source_precedence.raise_manufacturing_question(
+                    part, f"What wall is {_own_pn}'s {_own_words}?",
+                    (f"{wall_t_mm:g} mm, a working figure — its printed material "
+                     f"'{_own_text}' states no wall it reads"
+                     + (f"; its stated {_own_chk['stated_kg']:g} kg points to about "
+                        f"{_implied:g} mm" if _implied else "")),
+                    "state the wall; the section's weight and price follow it",
+                    "estimator.estimate_material")
+            elif _own_chk and not _own_chk["agrees"]:
+                source_precedence.raise_manufacturing_question(
+                    part, f"Is {_own_pn} {_own_words}, {length_mm:g} mm long?",
+                    (f"read from its printed material '{_own_text}'; it weighs "
+                     f"{_own_chk['mass_kg']:.2f} kg against {_own_chk['whose']} "
+                     f"{_own_chk['stated_kg']:g} kg"),
+                    "confirm the section and its cut length",
+                    "estimator.estimate_material")
+            _own_stamp = {"section_read_from": "material_as_printed",
+                          "section_words_as_printed": _own_text,
+                          "section_wall_assumed": bool(_own_sec.get("wall_assumed")),
+                          "stated_weight_check": _own_chk}
+            # The cut the process pass charges is this length (D-586): a section costed by its
+            # length is sawn to it, whether or not a blank was ever recorded.
+            part["_section_priced_length_mm"] = length_mm
 
         # A hollow rolled section is METAL by definition — it cannot be timber/MDF/wood. On these
         # drawings the deterministic reader sometimes tags a tube 'TIMBER' off a nearby spec note,
@@ -7110,7 +7465,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                         "catalogue_part_code": _cat.get("part_code"),
                         "catalogue_description": _cat.get("description"),
                         "catalogue_length_mm": _cat.get("catalogue_length_mm"),
-                    } | _len_stamp,
+                    } | _len_stamp | _own_stamp,
                     "stock_form": "tube",
                     "supplier": _cat.get("supplier"),
                     "requires_flat_blank": False,
@@ -7193,7 +7548,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                                                "supplier", "uom", "catalogue_length_mm",
                                                "rate_gbp_per_m")}
                             for x in _stock["rows"]],
-                    } | _len_stamp,
+                    } | _len_stamp | _own_stamp,
                     "stock_form": "tube",
                     "supplier": ", ".join(_stock.get("suppliers") or []) or None,
                     "requires_flat_blank": False,
@@ -7291,7 +7646,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 "rate_gbp_per_kg": price_per_kg,
                 # THE SECTION IN PURCHASING WORDS (D-594): the line a buyer reads says what to buy.
                 "section_description": _section_words(_ss),
-                "stock_estimate": {"section_length_mm": round(length_mm, 2), "kg_per_m": round(kg_per_m, 4)} | _len_stamp,
+                "stock_estimate": {"section_length_mm": round(length_mm, 2), "kg_per_m": round(kg_per_m, 4)} | _len_stamp | _own_stamp,
                 # This branch has a full a×b×t hollow-section profile + a real cut length, so it IS a
                 # tube — declare it as one (like the catalogue branch above) so the workbook routes it
                 # to the tube/BOM block and prices it by length, NOT into the Sheet Steel block as a
@@ -8500,9 +8855,20 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         # shop cuts; the only no-charge case is the evidenced one — a catalogue piece bought
         # at its own length (catalogue_section_price).
         _cut_here = str(part.get("_material_cost_method") or "") != "catalogue_section_price"
-        if not _cl_pieces and _cut_here:
+        # A CUT THE PART'S OWN ROUTE ALREADY NAMES IS NOT CUT AGAIN (D-653). 12684-02-M06's
+        # read names the tube cut (TUBE); the allowance below would have put a Saw row beside
+        # its Tube row — one length cut twice, the defect the laser rule in the route compiler
+        # exists to stop. The named cut is the cut; the allowance stands where nothing names one.
+        _tube_cut_named = any(
+            str(o).strip().lower() in ("tube_cut", "tube_cutting", "tube_laser")
+            for lst in (ops, part.get("inferred_operations"), part.get("textual_operations"))
+            if isinstance(lst, list) for o in lst)
+        if not _cl_pieces and _cut_here and not _tube_cut_named:
+            # The length the material was costed on is the cut, where no blank was recorded
+            # (D-653): a section read from its own material words has no blank of its own.
             _len_cut = _safe_float((part.get("section_stock") or {}).get("length_mm")) \
-                or _safe_float(part.get("blank_length_mm"))
+                or _safe_float(part.get("blank_length_mm")) \
+                or _safe_float(part.get("_section_priced_length_mm"))
             if _len_cut and _len_cut > 0:
                 _cl_pieces = [_len_cut]
         if _cl_pieces:
@@ -8541,6 +8907,8 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                      + (f"Sawn to size ({len(_cl_pieces)} piece(s)). "
                         if _cl_pieces else
                         ("Bought cut to its own length, so no saw charged. " if not _cut_here
+                         else "Cut to length on the tube cut its own route names, so no saw "
+                              "is added. " if _tube_cut_named
                          else "No cut length on the record, so no saw could be charged — "
                               "state the cut length and the cut prices itself. "))
                      + "SDI bends the tube, so the bend op is retained; the bend COUNT may "

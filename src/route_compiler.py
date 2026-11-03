@@ -5161,6 +5161,58 @@ def _record_stock_form(record: Any) -> str:
     ).strip().lower()
 
 
+# The operations that cut a length of stock to size (D-653): a part one of these is required on
+# is already cut, and a sheet-profiling decision beside it is the same cut again.
+_CUT_TO_LENGTH_OPERATIONS = frozenset({"saw", "tube_cut", "tube_cutting"})
+
+
+def _has_a_measured_flat(record: Any) -> bool:
+    """A flat a DXF or the model measured: a profiled plate, which is lasered whatever its
+    material cell calls it (D-653)."""
+    if not isinstance(record, Mapping):
+        return False
+    source = str(record.get("geometry_source") or "").lower()
+    return bool(record.get("dxf_augmented") or record.get("flat_pattern_detected")
+                or record.get("native_flat_pattern") or record.get("dxf_measured_outline")
+                or "dxf" in source or source == "solidworks_flat_pattern")
+
+
+def _cut_from_stock_evidence(record: Any) -> str:
+    """The stock a part record's OWN evidence says it is cut from — tube, bar or rod — in the
+    words a decision's reason can carry, or "" where it says nothing (D-653).
+
+    Read, in turn: the stock form the costing or a reader stamped, a bar its own sheet's
+    schedule named, a section on the record, the read's material family, and the part's own
+    printed material words (section_profile, the reader the estimator and the blank readers
+    ask)."""
+    if not isinstance(record, Mapping):
+        return ""
+    _mi = record.get("manufacturing_interpretation")
+    for form in (_record_stock_form(record),
+                 str((_mi or {}).get("stock_form") or "").strip().lower()
+                 if isinstance(_mi, Mapping) else ""):
+        if form == "tube":
+            return "tube or section stock (its stock form)"
+        if form in ("wire", "bar"):
+            return "round bar (its stock form)"
+    if record.get("_bar_recognised") or record.get("bar_schedule"):
+        return "round bar (its own sheet's bar schedule)"
+    if isinstance(record.get("section_stock"), Mapping) and record.get("section_stock"):
+        return "the section on its record"
+    family = str(record.get("material_family") or "").strip().lower()
+    if family in ("tube", "wire"):
+        return f"{family} stock (the read's material family)"
+    try:
+        from section_profile import stock_in_own_material_words, section_description
+        own = stock_in_own_material_words(record)
+    except Exception:                                                # noqa: BLE001
+        own = None
+    if own:
+        words = section_description(own) or str(own.get("form") or "section").replace("_", " ")
+        return f"{words}, as its own printed material says ('{own.get('source_text')}')"
+    return ""
+
+
 def weldment_finish_for_gate(record: Mapping[str, Any], target_id: str,
                              graph: Mapping[str, Any]) -> str:
     """The finish to test a part against in the powder/plate gate — a weldment parent inherits
@@ -6486,6 +6538,22 @@ def compile_job_route(
     # Tube stock is cut by the tube process. A page-level Laser word on a CHS/RHS record is
     # not a second profile-cutting event. Keep the positive claim in the audit trail and let
     # the deterministic stock-form claim rule it not applicable.
+    #
+    # A PART ITS OWN ROUTE ALREADY CUTS TO LENGTH IS NOT CUT AGAIN ON THE SHEET LASER (D-653).
+    # 12684-02-M06, 1/2" square tube, carried a tube_cut and a laser_cutting; the laser was
+    # remapped to the Tube department for a tube, so the book held two identical Tube rows.
+    # 12684-02-M07, 10 mm square bar, carried a Saw row and a Laser (Metal) row. Neither
+    # record had a profile the test below reads, nor TUBE in its name. Where the part is cut
+    # from tube, bar or rod stock on the evidence of its own record (its stock form, the
+    # read's family, its section, or its own printed material words) and a saw or tube cut is
+    # required on it, the sheet-laser decision is the same cut a second time.
+    # A cut some reading has already ruled out does not count as the cut.
+    _cut_to_length: Set[str] = {
+        _c.target_id for _cl in claims_by_event.values()
+        if _cl and clean_operation(_cl[0].operation) in _CUT_TO_LENGTH_OPERATIONS
+        and not any(_x.status in NEGATIVE_STATUSES for _x in _cl)
+        for _c in _cl
+        if _c.status == REQUIRED and str(_c.scope or "part") == "part"}
     for event_id, event_claims in list(claims_by_event.items()):
         template = event_claims[0]
         raw_part = raw.get(template.target_id) or {}
@@ -6508,11 +6576,21 @@ def compile_job_route(
         if not is_tube and profile in {"FLAT", "ROUND", "ANGLE", "CHANNEL", "OVAL"} \
                 and not _flat:
             is_tube = True
+        _cut_from = ""
+        if (not is_tube and template.scope == "part"
+                and template.operation in TUBE_INAPPLICABLE_OPERATIONS
+                and template.target_id in _cut_to_length):
+            _merged = graph["records"].get(template.target_id) or {}
+            if not (_has_a_measured_flat(raw_part) or _has_a_measured_flat(_merged)):
+                _cut_from = (_cut_from_stock_evidence(raw_part)
+                             or _cut_from_stock_evidence(_merged))
+                is_tube = bool(_cut_from)
         if (
             is_tube
             and template.scope == "part"
             and template.operation in TUBE_INAPPLICABLE_OPERATIONS
         ):
+            _form_words = str(section.get("form") or "").replace("_", " ").strip()
             add_claim(event_id, make_claim(
                 template.operation, NOT_APPLICABLE, "drawing_deterministic",
                 subject_id=template.target_id,
@@ -6520,10 +6598,14 @@ def compile_job_route(
                 scope="part",
                 participants=[template.target_id],
                 sequence=template.sequence,
-                reason=("section stock is cut by the tube process, not sheet profiling"
+                reason=(f"cut to length from {_cut_from}, and its route already cuts it "
+                        f"there — a sheet {template.operation.replace('_', ' ')} decision would "
+                        f"cut the same length a second time" if _cut_from else
+                        "section stock is cut by the tube process, not sheet profiling"
                         if profile in {"CHS", "RHS", "SHS", "TUBE", ""} else
-                        f"{'an' if profile[:1] in 'AEIOU' else 'a'} {profile.lower()} section is cut from a stock length, not "
-                        f"profiled from sheet"),
+                        f"{'an' if (_form_words or profile)[:1].upper() in 'AEIOU' else 'a'} "
+                        f"{_form_words or profile.lower() + ' section'} is cut from a stock "
+                        f"length, not profiled from sheet"),
                 route_id=template.route_id,
             ))
 

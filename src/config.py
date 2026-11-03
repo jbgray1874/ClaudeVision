@@ -2541,7 +2541,9 @@ CONCEPT_STOCK_FORM_WORDS = (
     ("angle", ("ANGLE IRON", "ANGLE")),
     ("channel", ("CHANNEL",)),
     # Sheets print these run together ("50MM FLATBAR 10MM THICK", "19MM ROUNDTUBE").
-    ("flat_bar", ("FLAT BAR", "FLATBAR")),
+    # A SQUARE BAR IS SOLID (D-653): weighed as a flat bar whose two sides are equal, never as
+    # a plate of its side's thickness. 12684-02's cross bars are "10mm SQUARE STEEL BAR".
+    ("flat_bar", ("FLAT BAR", "FLATBAR", "SQUARE BAR", "SQUAREBAR", "SQ BAR")),
     ("round_bar", ("ROUND BAR", "ROUNDBAR", "ROD")),
     ("tube", ("ROUND TUBE", "ROUNDTUBE", "CHS", "TUBE", "PIPE")),
     ("wire", ("WIRE",)),
