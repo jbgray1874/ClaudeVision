@@ -237,7 +237,7 @@ _RUNNER_ONLY = ("/api/estimate/runner", "/api/estimate/self-running/heartbeat")
 # reads are allowed by method and writes only by name.
 from public_surface import post_allowed as _public_post_allowed, \
     under_the_briefs as _under_the_briefs, is_parity as _is_parity, \
-    under_parity as _under_parity
+    under_parity as _under_parity, SELF_RUNNING_POST as _SELF_RUNNING_POST
 
 
 # ── LOOKING AND DOING ARE DIFFERENT PERMISSIONS, AS THEY ARE IN AM CRM ──────
@@ -323,8 +323,8 @@ async def _public_surface_guard(request, call_next):
                     if not _public_post_allowed(path):
                         return JSONResponse(status_code=403, content={
                             "detail": "That action is only available on the office network. "
-                                      "Releasing, emailing and the self-running switch are not "
-                                      "remote controls."})
+                                      "Releasing and emailing quotations are not remote "
+                                      "controls."})
                     # Of the three POSTs that ARE allowed out here, two queue
                     # work on a machine in the office and cost money. Asking a
                     # question of a filed record does not, so it is not held to
@@ -336,6 +336,15 @@ async def _public_surface_guard(request, call_next):
                         return JSONResponse(status_code=403, content={
                             "detail": "Looking is open to anyone signed in; STARTING a run "
                                       "from outside the office is limited to named people. "
+                                      + access.why_refused("SDI_ESTIMATOR_OIDS", asking)})
+                    # THE SELF-RUNNING SWITCH (D-641) queues estimates when it is switched
+                    # on, so it is held to the same named people as starting a run.
+                    if path.rstrip("/") in _SELF_RUNNING_POST and not _may_start_a_run(request):
+                        asking = auth.current_user(request) if auth.ENABLED else None
+                        return JSONResponse(status_code=403, content={
+                            "detail": "The self-running switch from outside the office is "
+                                      "limited to the named estimators, because switching it "
+                                      "on queues estimates. "
                                       + access.why_refused("SDI_ESTIMATOR_OIDS", asking)})
                 # PARITY IS FOR THE NAMED ESTIMATORS (D-621): running a comparison, reading
                 # the filed ones, and opening any file in the parity folder, because those

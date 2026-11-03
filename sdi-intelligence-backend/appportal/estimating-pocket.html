@@ -170,6 +170,20 @@
       <span class="muted" id="today-when"></span></div>
     <div class="state" id="today-state" role="status" aria-live="polite">Loading…</div>
     <div id="today-out"></div>
+
+    <!-- AI ESTIMATE SELF-RUNNING, FROM THE PHONE (D-641). JG, 3 Nov 2026: "needs to run from
+         the phone". The same switch as the full screen: on, the watcher in the office reads
+         the Live Enquiry sheet at once and runs every unworked job in turn; off, the job in
+         progress finishes and nothing more is queued. From outside the office it is for the
+         named estimators, as starting a run is. -->
+    <h1 style="margin-top:22px">AI Estimate Self-Running</h1>
+    <div class="state" id="self-state" role="status" aria-live="polite">Checking…</div>
+    <div class="half" style="margin:10px 0">
+      <button class="go" id="self-on" type="button">Switch on</button>
+      <button class="ghost" id="self-off" type="button">Switch off</button>
+    </div>
+    <p class="hint">Switching off lets the job in progress finish; nothing already run is
+      removed.</p>
   </section>
 
   <!-- ── FOLDERS ─────────────────────────────────────────────────────────── -->
@@ -404,7 +418,7 @@ function show(name){
     b.setAttribute("aria-selected", String(b.dataset.screen === name));
   for(const s of document.querySelectorAll(".screen"))
     s.classList.toggle("on", s.id === "s-" + name);
-  if(name === "today") loadToday();
+  if(name === "today"){ loadToday(); loadSelfRunning(); }
   if(name === "start" && !startLoaded){ startLoaded = true; browse("start", ""); }
   if(name === "ask" && !askLoaded){ askLoaded = true; browse("ask", ""); }
   if(name === "files" && !filesLoaded){ filesLoaded = true; browse("files", ""); }
@@ -688,7 +702,43 @@ async function loadToday(){
     say("today-state", e.message, "err");
   }finally{ $("today-refresh").disabled = false; }
 }
-$("today-refresh").onclick = loadToday;
+$("today-refresh").onclick = () => { loadToday(); loadSelfRunning(); };
+
+// ── AI ESTIMATE SELF-RUNNING (D-641) ─────────────────────────────────────────
+function selfRunningText(v){
+  const w = (v && v.watcher) || {};
+  if(!v) return "Unknown.";
+  const sw = v.enabled ? "ON" : "OFF";
+  if(!w.connected) return "Switched " + sw + " — but the watcher in the office is not "
+    + "connected, so nothing will run until it is.";
+  const cur = w.current && w.current.drawing
+    ? " Running " + w.current.drawing + (w.current.customer ? " (" + w.current.customer + ")" : "") + "."
+    : "";
+  const msg = w.message ? " " + w.message + "." : "";
+  return "Switched " + sw + (v.switched_by ? " by " + v.switched_by : "") + "." + cur
+    + (cur ? "" : msg);
+}
+async function loadSelfRunning(){
+  try{
+    const v = await api("/api/estimate/self-running");
+    say("self-state", selfRunningText(v), v && v.enabled ? "ok" : "");
+    $("self-on").disabled = !!(v && v.enabled);
+    $("self-off").disabled = !(v && v.enabled);
+  }catch(e){ say("self-state", e.message, "err"); }
+}
+async function switchSelfRunning(on){
+  $("self-on").disabled = $("self-off").disabled = true;
+  say("self-state", on ? "Switching on…" : "Switching off…");
+  try{
+    const v = await api("/api/estimate/self-running/" + (on ? "start" : "stop"),
+                        {by: (me && (me.email || me.name)) || "the phone"});
+    say("self-state", selfRunningText(v), v && v.enabled ? "ok" : "");
+    $("self-on").disabled = !!(v && v.enabled);
+    $("self-off").disabled = !(v && v.enabled);
+  }catch(e){ say("self-state", e.message, "err"); loadSelfRunning(); }
+}
+$("self-on").onclick = () => switchSelfRunning(true);
+$("self-off").onclick = () => switchSelfRunning(false);
 
 function runCard(r){
   const done = r.status === "done", bad = r.status === "error";
