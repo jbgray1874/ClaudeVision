@@ -435,8 +435,14 @@ def at_least_once_per_instance(stated: Any, target_id: Any, quantities: Mapping[
     answered per frame — and the compiler took that as the event's count, so the weld was
     charged once beside a dressing charged twice. A stated count below the target's canonical
     multiplicity is raised to it; a count at or above it stands (the model may already have
-    counted every instance). Returns (count, raised)."""
-    if str(scope or "") != "assembly" or stated is None:
+    counted every instance). Returns (count, raised).
+
+    A PART'S OWN OPERATION IS ONCE PER INSTANCE OF THE PART TOO (D-655). 12684-02-M01, the arm
+    bracket inside each of 33 hook assemblies: Grok stated folding at 1 ("Printed qty of M01 is
+    1 on the hook assembly BOM ... that multiplier is not applied here"), its laser and deburr
+    were charged at 33, and the Fold row bent one bracket. The same floor applies at part
+    scope: the tree's multiplied count is the least number of times a part is made."""
+    if str(scope or "") not in ("assembly", "part") or stated is None:
         return stated, False
     try:
         _stated = float(stated)
@@ -5155,6 +5161,58 @@ def _record_stock_form(record: Any) -> str:
     ).strip().lower()
 
 
+# The operations that cut a length of stock to size (D-653): a part one of these is required on
+# is already cut, and a sheet-profiling decision beside it is the same cut again.
+_CUT_TO_LENGTH_OPERATIONS = frozenset({"saw", "tube_cut", "tube_cutting"})
+
+
+def _has_a_measured_flat(record: Any) -> bool:
+    """A flat a DXF or the model measured: a profiled plate, which is lasered whatever its
+    material cell calls it (D-653)."""
+    if not isinstance(record, Mapping):
+        return False
+    source = str(record.get("geometry_source") or "").lower()
+    return bool(record.get("dxf_augmented") or record.get("flat_pattern_detected")
+                or record.get("native_flat_pattern") or record.get("dxf_measured_outline")
+                or "dxf" in source or source == "solidworks_flat_pattern")
+
+
+def _cut_from_stock_evidence(record: Any) -> str:
+    """The stock a part record's OWN evidence says it is cut from — tube, bar or rod — in the
+    words a decision's reason can carry, or "" where it says nothing (D-653).
+
+    Read, in turn: the stock form the costing or a reader stamped, a bar its own sheet's
+    schedule named, a section on the record, the read's material family, and the part's own
+    printed material words (section_profile, the reader the estimator and the blank readers
+    ask)."""
+    if not isinstance(record, Mapping):
+        return ""
+    _mi = record.get("manufacturing_interpretation")
+    for form in (_record_stock_form(record),
+                 str((_mi or {}).get("stock_form") or "").strip().lower()
+                 if isinstance(_mi, Mapping) else ""):
+        if form == "tube":
+            return "tube or section stock (its stock form)"
+        if form in ("wire", "bar"):
+            return "round bar (its stock form)"
+    if record.get("_bar_recognised") or record.get("bar_schedule"):
+        return "round bar (its own sheet's bar schedule)"
+    if isinstance(record.get("section_stock"), Mapping) and record.get("section_stock"):
+        return "the section on its record"
+    family = str(record.get("material_family") or "").strip().lower()
+    if family in ("tube", "wire"):
+        return f"{family} stock (the read's material family)"
+    try:
+        from section_profile import stock_in_own_material_words, section_description
+        own = stock_in_own_material_words(record)
+    except Exception:                                                # noqa: BLE001
+        own = None
+    if own:
+        words = section_description(own) or str(own.get("form") or "section").replace("_", " ")
+        return f"{words}, as its own printed material says ('{own.get('source_text')}')"
+    return ""
+
+
 def weldment_finish_for_gate(record: Mapping[str, Any], target_id: str,
                              graph: Mapping[str, Any]) -> str:
     """The finish to test a part against in the powder/plate gate — a weldment parent inherits
@@ -6335,6 +6393,64 @@ def compile_job_route(
                             f"until then."),
             })
 
+    # (c) A MEMBER THAT DEFERS ITS FINISH TO A COATED ASSEMBLY IS COATED THERE, ONCE (D-654).
+    # 12684-02-GA, 3 Nov 2026: three P.Coat rows, GBP 358.93 at 1 off. The frame 102SA is a
+    # weldment, so its coat stands as a booth stage; its baseplate, outer frame and framework
+    # all print SEE ASSEMBLY DRAWING and were coated again on a row of their own, inside the
+    # frame that was already being coated. The hook assembly's coat lists its bracket among the
+    # parts it covers, and the bracket was coated a second time beside it. "See assembly" means
+    # the member takes the assembly's coat: where its nearest coated ancestor keeps its own
+    # coat (after the dedup above has stood down any assembly its members fully carry), the
+    # member's separate coat is the same work counted twice and is ruled out with the reason.
+    # A member whose own sheet states its own finish keeps its coat; a RAW member never had one.
+    _pw_kept = {}
+    for _eid, _ecs in claims_by_event.items():
+        _kd = arbitrate_event(_eid, _ecs)
+        if (_kd.operation == "powder_coating" and _kd.status == REQUIRED
+                and kinds.get(_kd.target_id) == "assembly"):
+            _pw_kept[_kd.target_id] = _kd
+    _pw_once: Dict[str, str] = {}
+    for _eid, _ecs in list(claims_by_event.items()):
+        _md = arbitrate_event(_eid, _ecs)
+        if not (_md.operation == "powder_coating" and _md.status == REQUIRED):
+            continue
+        _mpn = str(_md.target_id or "")
+        _mft = _leaf_finish_text(_mpn)
+        if not any(h in _mft for h in _PW_POINTER_HINTS) or re.search(r"\bRAW\b", _mft):
+            continue
+        _ups = sorted(((dist, a) for a, dist in
+                       _ancestor_distances(_mpn, graph["parents"]).items()
+                       if a != _mpn and a in _pw_kept), key=lambda x: (x[0], x[1]))
+        if not _ups:
+            continue
+        _owner = _ups[0][1]
+        _od = _pw_kept[_owner]
+        _welded = _pw_assembly_stage(_owner, str(_od.scope or ""))
+        _names_it = _mpn in (_od.participants or [])
+        add_claim(_eid, make_claim(
+            "powder_coating", NOT_APPLICABLE, "bom_tree",
+            subject_id=_mpn, target_id=_mpn, scope=_md.scope,
+            participants=list(_md.participants or []),
+            sequence=_md.sequence, confidence=1.0,
+            evidence=_mft[:160],
+            reason=(f"coated once, as part of {_owner}: this part's own sheet defers its "
+                    f"finish to the assembly, and {_owner} keeps its own coat "
+                    + ("as a welded stage the whole weldment goes through" if _welded
+                       else "naming this part among the parts it covers" if _names_it
+                       else "as the nearest assembly above it that is coated")
+                    + ". A second coat here would put the same metal through the booth "
+                      "twice; if it really is coated before assembly as well as after, "
+                      "put this row back."),
+            route_id=_md.route_id or "",
+        ))
+        _pw_once[_mpn] = _owner
+    if _pw_once:
+        for _iss in list(issues):
+            if (isinstance(_iss, dict) and _iss.get("code") == "powder_scope_mixed_members"
+                    and _iss.get("coated_members")
+                    and all(m in _pw_once for m in _iss["coated_members"])):
+                issues.remove(_iss)
+
     # Hierarchy is a source claim too. It records why leaf work is inapplicable to a parent
     # instead of deleting evidence from whichever record happens to be in hand.
     for event_id, event_claims in list(claims_by_event.items()):
@@ -6422,6 +6538,22 @@ def compile_job_route(
     # Tube stock is cut by the tube process. A page-level Laser word on a CHS/RHS record is
     # not a second profile-cutting event. Keep the positive claim in the audit trail and let
     # the deterministic stock-form claim rule it not applicable.
+    #
+    # A PART ITS OWN ROUTE ALREADY CUTS TO LENGTH IS NOT CUT AGAIN ON THE SHEET LASER (D-653).
+    # 12684-02-M06, 1/2" square tube, carried a tube_cut and a laser_cutting; the laser was
+    # remapped to the Tube department for a tube, so the book held two identical Tube rows.
+    # 12684-02-M07, 10 mm square bar, carried a Saw row and a Laser (Metal) row. Neither
+    # record had a profile the test below reads, nor TUBE in its name. Where the part is cut
+    # from tube, bar or rod stock on the evidence of its own record (its stock form, the
+    # read's family, its section, or its own printed material words) and a saw or tube cut is
+    # required on it, the sheet-laser decision is the same cut a second time.
+    # A cut some reading has already ruled out does not count as the cut.
+    _cut_to_length: Set[str] = {
+        _c.target_id for _cl in claims_by_event.values()
+        if _cl and clean_operation(_cl[0].operation) in _CUT_TO_LENGTH_OPERATIONS
+        and not any(_x.status in NEGATIVE_STATUSES for _x in _cl)
+        for _c in _cl
+        if _c.status == REQUIRED and str(_c.scope or "part") == "part"}
     for event_id, event_claims in list(claims_by_event.items()):
         template = event_claims[0]
         raw_part = raw.get(template.target_id) or {}
@@ -6444,11 +6576,21 @@ def compile_job_route(
         if not is_tube and profile in {"FLAT", "ROUND", "ANGLE", "CHANNEL", "OVAL"} \
                 and not _flat:
             is_tube = True
+        _cut_from = ""
+        if (not is_tube and template.scope == "part"
+                and template.operation in TUBE_INAPPLICABLE_OPERATIONS
+                and template.target_id in _cut_to_length):
+            _merged = graph["records"].get(template.target_id) or {}
+            if not (_has_a_measured_flat(raw_part) or _has_a_measured_flat(_merged)):
+                _cut_from = (_cut_from_stock_evidence(raw_part)
+                             or _cut_from_stock_evidence(_merged))
+                is_tube = bool(_cut_from)
         if (
             is_tube
             and template.scope == "part"
             and template.operation in TUBE_INAPPLICABLE_OPERATIONS
         ):
+            _form_words = str(section.get("form") or "").replace("_", " ").strip()
             add_claim(event_id, make_claim(
                 template.operation, NOT_APPLICABLE, "drawing_deterministic",
                 subject_id=template.target_id,
@@ -6456,10 +6598,14 @@ def compile_job_route(
                 scope="part",
                 participants=[template.target_id],
                 sequence=template.sequence,
-                reason=("section stock is cut by the tube process, not sheet profiling"
+                reason=(f"cut to length from {_cut_from}, and its route already cuts it "
+                        f"there — a sheet {template.operation.replace('_', ' ')} decision would "
+                        f"cut the same length a second time" if _cut_from else
+                        "section stock is cut by the tube process, not sheet profiling"
                         if profile in {"CHS", "RHS", "SHS", "TUBE", ""} else
-                        f"{'an' if profile[:1] in 'AEIOU' else 'a'} {profile.lower()} section is cut from a stock length, not "
-                        f"profiled from sheet"),
+                        f"{'an' if (_form_words or profile)[:1].upper() in 'AEIOU' else 'a'} "
+                        f"{_form_words or profile.lower() + ' section'} is cut from a stock "
+                        f"length, not profiled from sheet"),
                 route_id=template.route_id,
             ))
 
@@ -6723,6 +6869,9 @@ def compile_job_route(
     _withhold_coats_with_nothing_to_coat(decisions, graph, issues)
     # A bond, a coat or a routing is charged at one level of the tree (D-446).
     _withhold_duplicate_level_ops(decisions, graph, issues)
+    # One pass through the booth per coated object (D-656); spot welds by the symbols (D-656).
+    _one_coat_event_per_target(decisions, issues)
+    _spot_welds_by_their_symbols(decisions, graph, issues)
     # NOT GATED, BECAUSE IT MOVES NO MONEY. The family gate above changes what a job charges and
     # so enters only where its evidence is; this one only ever adds a question to the record, and
     # a job that is double-charging a joint deserves the question whichever lane it came down.
@@ -7470,6 +7619,79 @@ def _withhold_duplicate_level_ops(decisions: Sequence[Any], graph: Mapping[str, 
             issues.append({"code": "operation_charged_at_one_level", "operation": _op,
                            "part": _tid, "kept_on": kept})
     return withheld
+
+
+def _one_coat_event_per_target(decisions: Sequence[Any],
+                               issues: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """A coated object goes through the booth once per instance (D-656).
+
+    12684-02-101SA, the hook assembly, 3 Nov 2026: two readers each raised a powder event on
+    it, one per route, both at 33, and the sheet's P.Coat row added them to 66 pieces. JG: the
+    hooks are 33 pieces. Two required coats of the same kind on the same target are one booth
+    pass: the higher count stands (never the sum), the participants they name are joined, and
+    the other is ruled out with the reason. A second coat stated as a count on ONE decision
+    (two coats, a primer) is untouched."""
+    groups: Dict[Tuple[str, str], List[Any]] = {}
+    for d in decisions:
+        op = str(d.operation or "").lower()
+        if d.status == REQUIRED and op in _GATED_COAT_OPS and d.target_id:
+            groups.setdefault((str(d.target_id), op), []).append(d)
+    merged: List[str] = []
+    for (tid, op), ds in groups.items():
+        if len(ds) < 2:
+            continue
+        ds = sorted(ds, key=lambda x: (-(number(x.qty_per_unit, 0.0) or 0.0),
+                                       str(x.decision_id)))
+        keep = ds[0]
+        keep.participants = sorted({p for x in ds for p in (x.participants or [])})
+        for other in ds[1:]:
+            other.status = NOT_APPLICABLE
+            other.reason = ((f"{other.reason}; " if other.reason else "")
+                            + f"the same {op.replace('_', ' ')} of {tid} as {keep.decision_id} — "
+                              f"one pass through the booth per {tid}, counted once at "
+                              f"{number(keep.qty_per_unit, 1.0):g}, not added to it")
+            other.field_provenance["status"] = "one_coat_event_per_target"
+        merged.append(tid)
+        if issues is not None:
+            issues.append({"code": "one_coat_event_per_target", "operation": op, "part": tid,
+                           "kept": keep.decision_id,
+                           "ruled_out": [x.decision_id for x in ds[1:]]})
+    return merged
+
+
+def _spot_welds_by_their_symbols(decisions: Sequence[Any], graph: Mapping[str, Any],
+                                 issues: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """A spot weld is charged per weld its own sheet's symbols show (D-656).
+
+    12684-02-GA's sheet carries 33 ISO spot-weld symbols, one per hook, and weld_symbols.py
+    recorded spot_weld_count 33 — but the Spotweld row took the part's own count, 1. JG: the
+    Spotweld rate is welds per hour. So a required spot weld on a part whose symbols were
+    counted is charged at that count for each instance of the part, where that is more."""
+    quantities = graph.get("quantities") or {}
+    counted: List[str] = []
+    for d in decisions:
+        if d.status != REQUIRED or str(d.operation or "").lower() != "spot_welding":
+            continue
+        rec = _graph_record(graph, str(d.target_id or ""))
+        n = number(rec.get("spot_weld_count"), None) if rec else None
+        if not n or n <= 0:
+            continue
+        per_instance = number(quantities.get(d.target_id), 1.0) or 1.0
+        welds = float(n) * float(per_instance)
+        if welds <= (number(d.qty_per_unit, 0.0) or 0.0):
+            continue
+        was = d.qty_per_unit
+        d.qty_per_unit = welds
+        d.field_provenance["qty_per_unit"] = "spot_weld_symbols"
+        d.reason = ((f"{d.reason}; " if d.reason else "")
+                    + f"{n:g} spot weld(s) on its own sheet, each callout one weld, x "
+                      f"{per_instance:g} per unit = {welds:g} welds a unit (the Spotweld rate "
+                      f"is welds per hour); was {was if was is not None else 'unset'}")
+        counted.append(str(d.target_id))
+        if issues is not None:
+            issues.append({"code": "spot_welds_by_their_symbols", "part": d.target_id,
+                           "welds_per_unit": welds})
+    return counted
 
 
 def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]],

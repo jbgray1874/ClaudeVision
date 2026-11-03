@@ -18,7 +18,8 @@ import re
 from typing import Any, Dict, Mapping, Optional
 
 __all__ = ["detect_section_stock", "section_kg_per_m", "section_outer_perimeter_mm",
-           "section_form", "is_flat_sided_oval", "section_description"]
+           "section_form", "is_flat_sided_oval", "section_description", "inch_sizes_to_mm",
+           "stock_in_material_words", "stock_in_own_material_words"]
 
 # The hollow-section keywords PATH 1 needs. Config (SECTION_HOLLOW_KEYWORDS) since this list
 # also decides which parts-list rows are a frame's cut list; this is the default.
@@ -223,6 +224,251 @@ def detect_section_stock(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+# ── THE PART'S OWN PRINTED MATERIAL WORDS NAME ITS STOCK (D-653) ─────────────────────────────
+#
+# 12684-02-GA, 3 Nov 2026 (SCRUM-100/107/155). The OUTER FRAME's title block states its material
+# as '1/2" SQUARE STEEL TUBE' and the CROSS BAR's as '10mm SQUARE STEEL BAR'. Neither is an
+# a x b x t callout, so detect_section_stock read nothing, and both went through the Sheet Steel
+# block as flat blanks: the frame uncosted for want of a gauge, the bars as 10 mm plate strips.
+#
+# A material cell names ONE stock: a shape word, a stock noun and its size, an inch mark meaning
+# inches. It is read here from the cell alone, never from a page, where a single size beside
+# the word BAR is as likely to be another part's. A cell that names no shape, two sizes, or a
+# stock this reader does not know (flat bar, angle, wire, mesh) reads nothing.
+_INCH_MARK = r"(?:\"|”|″|''|\bINCH(?:ES)?\b|\bIN\b)"
+_INCH_FRACTION_RE = re.compile(
+    r"(?<![\d./])(?:(\d{1,2})\s*[-\s]\s*)?(\d+)\s*/\s*(\d+)\s*" + _INCH_MARK, re.IGNORECASE)
+_INCH_DECIMAL_RE = re.compile(r"(?<![\d./])(\d+(?:\.\d+)?)\s*" + _INCH_MARK, re.IGNORECASE)
+MM_PER_INCH = 25.4
+
+# The words a cell uses for each shape and each kind of stock. SQ and RD are the drawing
+# office's abbreviations; a PIPE is round; BOX, SHS and RHS carry their own shape.
+_SQUARE_WORDS = frozenset({"SQUARE", "SQ", "SQR", "SHS", "BOX"})
+_ROUND_WORDS = frozenset({"ROUND", "RND", "RD", "CHS", "PIPE"})
+_RECT_WORDS = frozenset({"RECTANGULAR", "RECT", "RHS"})
+_HOLLOW_NOUNS = frozenset({"TUBE", "TUBES", "TUBING", "TUBULAR", "PIPE", "SHS", "RHS", "CHS"})
+_HOLLOW_PHRASES = ("BOX SECTION", "HOLLOW SECTION")
+_SOLID_NOUNS = frozenset({"BAR", "BARS", "ROD", "RODS"})
+# Stock this reader does not answer for: another reader owns it, or it is not one size.
+_OTHER_STOCK_WORDS = frozenset({"FLAT", "FLATBAR", "ANGLE", "CHANNEL", "WIRE", "MESH", "SHEET",
+                                "PLATE", "HEX", "HEXAGON", "HALF", "TEE", "BEAM", "STRIP",
+                                "OVAL", "FSO"})
+_DIA_RE = re.compile(r"(?:[Ø⌀]|\bDIA(?:METER)?\b\.?)\s*(\d+(?:\.\d+)?)\s*(?:MM\b)?"
+                     r"|(\d+(?:\.\d+)?)\s*(?:MM\b)?\s*(?:[Ø⌀]|\bDIA(?:METER)?\b\.?)")
+_WALL_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:MM\b)?\s*(?:WALL|W/T|WT|THK|THICK(?:NESS)?)\b"
+                      r"|\b(?:WALL|W/T|WT)\b\s*(?:THK|THICKNESS)?\s*(\d+(?:\.\d+)?)")
+# A wall stated as a gauge ("16G", "18 SWG") is a statement this reader does not convert.
+_GAUGE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:SWG|GA|GAUGE|G)\b")
+# A grade or a designation is not a size: S275JR, CR4, DX51D, T6, 304L STAINLESS, GRADE 2.
+_GRADE_RE = re.compile(
+    r"\b(?!(?:SHS|RHS|CHS|SQ|SQR|RD|RND|DIA|MM|X)\d)[A-Z]{1,3}\d{1,4}[A-Z]{0,3}\b"
+    r"|\b\d{3,4}L?\b(?=\s*(?:-\s*T\d|STAINLESS|S/?S\b|ALUMIN|GRADE))|\bGRADE\s*\d+[A-Z]*")
+_PAIR_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:MM)?\s*[X×*]\s*(\d+(?:\.\d+)?)\s*(?:MM\b)?")
+_SINGLE_RE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)(?![\d.])")
+# A cut length the cell itself states ("484.6 LONG", "LENGTH 1500").
+_LENGTH_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:MM\b)?\s*(?:LONG|LG|LGTH|LENGTH)\b"
+                        r"|\b(?:LENGTH|LGTH|LG)\b\s*[:=]?\s*(\d+(?:\.\d+)?)")
+
+
+def inch_sizes_to_mm(text: Any) -> str:
+    """The text with every size written in inches rewritten in millimetres: 1/2" reads 12.7MM,
+    1 1/2" reads 38.1MM, 0.75 IN reads 19.05MM. A fraction with no inch mark is left as it is
+    written: 3/16 is 4.76 mm as inches and 0.19 mm as millimetres, and that is not guessed."""
+    def _frac(m: "re.Match") -> str:
+        whole = float(m.group(1)) if m.group(1) else 0.0
+        num, den = float(m.group(2)), float(m.group(3))
+        if den <= 0:
+            return m.group(0)
+        return f"{round((whole + num / den) * MM_PER_INCH, 2):g}MM"
+
+    def _dec(m: "re.Match") -> str:
+        return f"{round(float(m.group(1)) * MM_PER_INCH, 2):g}MM"
+
+    out = _INCH_FRACTION_RE.sub(_frac, str(text or ""))
+    return _INCH_DECIMAL_RE.sub(_dec, out)
+
+
+def _blank(text: str, rx: "re.Pattern", found: Optional[list] = None) -> str:
+    """The text with every match of rx blanked to spaces, each match's first figure kept."""
+    def _sub(m: "re.Match") -> str:
+        if found is not None:
+            figure = next((g for g in m.groups() if g), None)
+            if figure is not None:
+                found.append(float(figure))
+        return " " * (m.end() - m.start())
+    return rx.sub(_sub, text)
+
+
+def stock_in_material_words(text: Any) -> Optional[Dict[str, Any]]:
+    """The stock one printed material cell names, or None (D-653).
+
+    Returns a section stock in the shape detect_section_stock returns ({a, b, t, profile_form,
+    length_mm, ...}) with detection_path "material_words", plus:
+      form         box_section / tube (round) / square_bar / round_bar — concept_scan's names
+      solid        True for a bar or rod: t is then its whole section (a square bar is weighed
+                   as a FLAT a x b, a round bar as ROUND), and it has no wall to assume
+      wall_stated  False where a hollow section's words state no wall: t is then None, and the
+                   caller says which working figure it costs on
+      wall_stated_as  the words where a wall is stated in a form not read here ("16G")
+
+    '1/2" SQUARE STEEL TUBE'  -> SHS 12.7 x 12.7, wall not stated
+    '10mm SQUARE STEEL BAR'   -> square bar 10 x 10, solid
+    '5mm DIA ROD'             -> round bar 5, solid
+    '25 x 25 x 1.5 SHS'       -> the a x b x t reader's own answer"""
+    raw = str(text or "").strip()
+    if not raw or not re.search(r"\d", raw):
+        return None
+    up = _prose_free(inch_sizes_to_mm(raw).upper())
+    words = set(re.findall(r"[A-Z]+", up))
+    squashed = " ".join(re.findall(r"[A-Z]+", up))
+    # A WHOLE PROFILE IS THE ONE READER'S (D-383): "1/2" x 1/2" x 1.5 SHS" once in millimetres,
+    # with the unit taken off each side so it reads as the cutting-list form does.
+    whole = detect_section_stock(re.sub(r"(\d)\s*MM\s*(?=[X×])", r"\1 ", up))
+    if whole and whole.get("detection_path") == "canonical_profile":
+        form = "oval_tube" if str(whole.get("profile_form")) == "OVAL" else "box_section"
+        return dict(whole, form=form, solid=False, wall_stated=True,
+                    detection_path="material_words", source_text=raw)
+    if words & _OTHER_STOCK_WORDS:
+        return None
+    hollow = bool(words & _HOLLOW_NOUNS) or any(p in squashed for p in _HOLLOW_PHRASES)
+    solid = bool(words & _SOLID_NOUNS)
+    if hollow == solid:
+        return None
+    dias: list = []
+    walls: list = []
+    gauges: list = []
+    lengths: list = []
+    up = _blank(up, _LENGTH_RE, lengths)
+    up = _blank(up, _DIA_RE, dias)
+    up = _blank(up, _WALL_RE, walls)
+    _gauge_text = [m.group(0).strip() for m in _GAUGE_RE.finditer(up)]
+    up = _blank(up, _GAUGE_RE, gauges)
+    up = _blank(up, _GRADE_RE)
+    pairs = [(float(m.group(1)), float(m.group(2))) for m in _PAIR_RE.finditer(up)]
+    up = _blank(up, _PAIR_RE)
+    singles = [float(m.group(1)) for m in _SINGLE_RE.finditer(up)]
+    dias, walls, lengths = sorted(set(dias)), sorted(set(walls)), sorted(set(lengths))
+    if len(lengths) > 1:
+        return None
+    length = lengths[0] if lengths else None
+    square = bool(words & _SQUARE_WORDS)
+    rect = bool(words & _RECT_WORDS)
+    round_ = bool(words & _ROUND_WORDS) or bool(dias)
+    if (square or rect) and round_:
+        return None
+    if len(dias) > 1 or len(walls) > 1 or len(pairs) > 1:
+        return None
+    noun = next((w for w in sorted(words & (_HOLLOW_NOUNS | _SOLID_NOUNS))), "")
+    if hollow:
+        if pairs and not dias and not singles:
+            a, b = sorted(pairs[0], reverse=True)
+            if round_ or (square and abs(a - b) > 1e-6):
+                return None
+            profile, form = ("SHS" if abs(a - b) < 1e-6 else "RHS"), "box_section"
+        elif dias and not pairs and not singles:
+            a = b = dias[0]
+            if square or rect:
+                return None
+            profile, form = "CHS", "tube"
+        elif len(singles) == 1 and not pairs and not dias:
+            a = b = singles[0]
+            if square:
+                profile, form = "SHS", "box_section"
+            elif round_:
+                profile, form = "CHS", "tube"
+            else:
+                return None       # "25MM TUBE" names no shape: round and square differ by 27%
+        else:
+            return None
+        if not (0 < b <= 300):
+            return None
+        wall = walls[0] if walls else None
+        if wall is not None and not (0 < wall and 2 * wall < min(a, b)):
+            return None
+        out: Dict[str, Any] = {"a": b if profile == "CHS" else min(a, b),
+                               "b": a if profile == "CHS" else max(a, b),
+                               "t": wall, "length_mm": length, "profile_form": profile,
+                               "form": form, "solid": False, "wall_stated": wall is not None,
+                               "keyword": noun, "detection_path": "material_words",
+                               "source_text": raw}
+        if profile == "CHS":
+            out["outside_diameter_mm"] = a
+        if wall is None and _gauge_text:
+            out["wall_stated_as"] = _gauge_text[0]
+        return out
+    # A bar or a rod is solid: a wall or a gauge on it contradicts the cell.
+    if walls or gauges:
+        return None
+    if pairs and not dias and not singles:
+        a, b = pairs[0]
+        if not (square and abs(a - b) < 1e-6):
+            return None           # an a x b bar is a flat bar, which is not this reader's
+        size, round_bar = a, False
+    elif dias and not pairs and not singles:
+        if square:
+            return None
+        size, round_bar = dias[0], True
+    elif len(singles) == 1 and not pairs and not dias:
+        size = singles[0]
+        if square:
+            round_bar = False
+        elif round_ or words & {"ROD", "RODS"}:
+            round_bar = True      # a rod is round
+        else:
+            return None           # "10MM BAR" names no shape
+    else:
+        return None
+    if not (0 < size <= 150):
+        return None
+    if round_bar:
+        return {"a": size, "b": size, "t": size, "length_mm": length, "profile_form": "ROUND",
+                "form": "round_bar", "solid": True, "wall_stated": True,
+                "outside_diameter_mm": size, "keyword": noun,
+                "detection_path": "material_words", "source_text": raw}
+    return {"a": size, "b": size, "t": size, "length_mm": length, "profile_form": "FLAT",
+            "form": "square_bar", "solid": True, "wall_stated": True, "keyword": noun,
+            "detection_path": "material_words", "source_text": raw}
+
+
+# The fields that hold a part's OWN printed material words, as the readers left them:
+# document_builder's printed cell, and the title block's unresolved callout
+# (owned_specification.retain_own_material).
+_OWN_MATERIAL_FIELDS = ("material_text_as_printed", "material_stated")
+
+
+def stock_in_own_material_words(part: Any) -> Optional[Dict[str, Any]]:
+    """The stock a part record's own printed material words name, or None (D-653).
+
+    Asks stock_in_material_words of each of the part's own material fields. The parts-list
+    candidates are read only where every printed cell says the same thing: cells that differ
+    are a disagreement document_builder has already refused to settle. Two readings naming
+    different stock decide nothing."""
+    if not isinstance(part, Mapping):
+        return None
+    texts = [part.get(k) for k in _OWN_MATERIAL_FIELDS]
+    cands = part.get("material_text_as_printed_candidates")
+    if isinstance(cands, (list, tuple)):
+        _said = {" ".join(str(c or "").upper().split()) for c in cands if str(c or "").strip()}
+        if len(_said) == 1:
+            texts.extend(cands)
+    readings = []
+    for text in texts:
+        if not str(text or "").strip():
+            continue
+        try:
+            got = stock_in_material_words(text)
+        except Exception:                                            # noqa: BLE001
+            got = None
+        if got:
+            readings.append(got)
+    if not readings:
+        return None
+    if len({(r.get("profile_form"), r.get("a"), r.get("b"), r.get("t"))
+            for r in readings}) > 1:
+        return None
+    return dict(readings[0])
+
+
 # THE SHAPE A FLAT-SIDED OVAL IS (D-594). Stored as profile_form OVAL with oval_shape
 # "flat_sided" — every reader that asks "is it an oval" still hears yes — and weighed and
 # coated as what it is: a stadium, two flats joined by two half-rounds. "FSO" below is the
@@ -269,6 +515,12 @@ def section_description(stock: Any) -> str:
         return f"{major:g} x {t:g} round tube (CHS)"
     if form in ("SHS", "RHS"):
         return f"{dims} {form}"
+    # A SOLID SECTION IS NAMED AS ONE (D-653): a 10 x 10 FLAT is square bar, not a 10 mm plate.
+    if form == "FLAT":
+        return (f"{major:g} x {minor:g} square bar" if abs(major - minor) < 1e-6
+                else f"{major:g} x {minor:g} flat bar")
+    if form == "ROUND":
+        return f"Ø{major:g} round bar"
     return ""
 
 

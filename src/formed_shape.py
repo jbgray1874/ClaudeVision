@@ -45,7 +45,10 @@ def formed_sheet_shape(part: Mapping[str, Any], hits: Optional[List[str]] = None
         return None
     if part.get("section_stock"):
         return None
-    mat_text = " ".join([str(part.get("material") or "")]
+    # The part's own printed material words count as its material (D-653).
+    mat_text = " ".join([str(part.get("material") or ""),
+                         str(part.get("material_text_as_printed") or ""),
+                         str(part.get("material_stated") or "")]
                         + [str(m) for m in (part.get("materials") or [])]).upper()
     section_words = [str(t).upper() for t in
                      (getattr(config, "SECTION_STOCK_POLICY", {}) or {}).get("section_keywords", [])]

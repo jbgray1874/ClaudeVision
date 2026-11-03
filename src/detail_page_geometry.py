@@ -109,6 +109,15 @@ def _is_section_stock(part: Mapping[str, Any]) -> bool:
         return True
     if isinstance(part.get("section_stock"), Mapping) and part["section_stock"]:
         return True
+    # THE PART'S OWN PRINTED MATERIAL WORDS NAME ITS STOCK (D-653): '1/2" SQUARE STEEL TUBE'
+    # and '10mm SQUARE STEEL BAR' are one size and a shape, which the a x b x t reader below
+    # does not read. Asked of the material fields alone, never of a page.
+    try:
+        from section_profile import stock_in_own_material_words
+        if stock_in_own_material_words(part):
+            return True
+    except Exception:                                                # noqa: BLE001
+        pass
     words = " ".join(str(part.get(k) or "") for k in
                      ("description", "material", "normalized_material", "dimension",
                       "stock_size", "size", "bom_dimension", "profile",
@@ -1660,6 +1669,39 @@ def mint_missing_hand_records(parts: Any, bom_rows: Any) -> List[str]:
 ASSEMBLY_ALLOWANCE_SOURCE = "assembly_envelope_allowance"
 
 
+def _read_agrees_with_own_weight(part: Mapping[str, Any], big: float, small: float,
+                                 cfg: Mapping[str, Any]) -> str:
+    """The working, if this read size at the part's own gauge weighs what its own sheet states;
+    otherwise "" (D-652).
+
+    The same band the provisional blank is judged by: no lighter than the finished part, and
+    no more than weight_question_above_ratio heavier. A provisional blank already judged on
+    this very size says so itself; otherwise it is worked here, so a size read by another
+    path is held to the same evidence."""
+    prov = part.get("_blank_provisional") if isinstance(part.get("_blank_provisional"),
+                                                         Mapping) else {}
+    if prov.get("weight_agrees") and _num(prov.get("length")) and _num(prov.get("width")):
+        pb, ps = (max(_num(prov["length"]), _num(prov["width"])),
+                  min(_num(prov["length"]), _num(prov["width"])))
+        if abs(pb - big) <= 0.5 and abs(ps - small) <= 0.5:
+            return "judged when the blank was read off its sheet"
+    weight = _stated_weight_kg(part)
+    t = _num(part.get("normalized_thickness_mm") or part.get("thickness_mm"))
+    mat = str(part.get("normalized_material") or "").upper()
+    dens = next((float(d) for k, d in (cfg.get("density_kg_m3") or {}).items() if k in mat),
+                None)
+    if not (weight and t and dens):
+        return ""
+    implied_m2 = weight / (t / 1000.0 * dens)
+    ratio = (big * small / 1e6) / implied_m2 if implied_m2 else 0.0
+    lo = float(cfg.get("min_blank_to_part_weight_ratio") or 0.9)
+    hi = float(cfg.get("weight_question_above_ratio") or 1.6)
+    if lo <= ratio <= hi:
+        return (f"{big:g} x {small:g} x {t:g} mm weighs {ratio:.2f}x the stated "
+                f"{weight:g} kg")
+    return ""
+
+
 def check_parts_against_their_assembly(parts: Any, summary: Mapping[str, Any]) -> List[str]:
     """A PART READ LARGER THAN THE ASSEMBLY IT SITS IN IS ASKED, AND COSTED ON THAT ASSEMBLY
     (D-508).
@@ -1717,6 +1759,27 @@ def check_parts_against_their_assembly(parts: Any, summary: Mapping[str, Any]) -
         cap_w = float(env["width"]) + folds * allowance
         big, small = max(pl, pw), min(pl, pw)
         if big <= cap_l * (1 + tol) and small <= cap_w * (1 + tol):
+            continue
+        # A SIZE ITS OWN WEIGHT CONFIRMS IS THE PART'S SIZE (D-652, SCRUM-180). 12684-02-M04
+        # BASEPLATE was read 504 x 313 off its own sheet, at 3 mm the stated 3.68 kg to within
+        # 1%, and was then costed on 39.7 x 30 because its frame 12684-02-102SA carried that
+        # outline: the arm bracket's size, not the frame's. Two figures disagree, and the one
+        # the part's own printed weight agrees with is not the one to overrule. The read
+        # stands; the parent's outline is the figure in doubt, and is said to be.
+        agrees = _read_agrees_with_own_weight(part, big, small, cfg)
+        if agrees:
+            part["_blank_kept_over_assembly"] = {
+                "read_mm": [round(big, 1), round(small, 1)], "read_source": src or "unrecorded",
+                "assembly": parent_pn, "assembly_outline_mm": [env["length"], env["width"]],
+                "weight": agrees}
+            doubt = (f"OUTLINE IN DOUBT — {parent_pn}'s outline, {float(env['length']):g} x "
+                     f"{float(env['width']):g} mm, is smaller than its member {pn}, read "
+                     f"{big:g} x {small:g} mm off that part's own sheet, which its own stated "
+                     f"weight confirms ({agrees}). The member's size stands; this outline is "
+                     f"not used as a size check on it.")
+            parent.setdefault("review_flags", [])
+            if doubt not in parent["review_flags"]:
+                parent["review_flags"].append(doubt)
             continue
         new_l, new_w = min(big, cap_l), min(small, cap_w)
         part["_blank_capped_to_assembly"] = {
