@@ -6872,6 +6872,8 @@ def compile_job_route(
     # One pass through the booth per coated object (D-656); spot welds by the symbols (D-656).
     _one_coat_event_per_target(decisions, issues)
     _spot_welds_by_their_symbols(decisions, graph, issues)
+    # A bought-in item is fitted by the assembly it goes into, once (D-661).
+    _bought_in_fitted_by_its_assembly(decisions, graph, issues)
     # NOT GATED, BECAUSE IT MOVES NO MONEY. The family gate above changes what a job charges and
     # so enters only where its evidence is; this one only ever adds a question to the record, and
     # a job that is double-charging a joint deserves the question whichever lane it came down.
@@ -7692,6 +7694,72 @@ def _spot_welds_by_their_symbols(decisions: Sequence[Any], graph: Mapping[str, A
             issues.append({"code": "spot_welds_by_their_symbols", "part": d.target_id,
                            "welds_per_unit": welds})
     return counted
+
+
+_FITTING_OPS = ("assembly",)
+
+
+def _bought_in_fitted_by_its_assembly(decisions: Sequence[Any], graph: Mapping[str, Any],
+                                      issues: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """A bought-in item is fitted by the assembly it goes into, once (D-661).
+
+    12684-02-GA, every run on 3 Nov 2026: the four stick-on bumpers FIXING1270 were on the GA's
+    Assemble/pack row ("covers ... FIXING1270") and on an Assemble/pack row of their own, 4 off
+    with a 15 minute set-up, GBP 9.11 at 1 off at 18:11. A purchased item has no members to put
+    together; its fitting is work on the assembly that holds it. So a bought-in item's own
+    fitting, where nothing stronger than the engine's inference raised it, stands down when an
+    assembly above it charges assembly. One its sheet or the BOM states is left as it is."""
+    try:
+        from source_precedence import rank as _rank
+    except Exception:                                                # pragma: no cover
+        return []
+    kinds = {getattr(n, "part_number", ""): getattr(n, "kind", "")
+             for n in (graph.get("nodes") or [])}
+    parents: Dict[str, List[str]] = {}
+    for _p, _kids in (graph.get("children") or {}).items():
+        for _k in (_kids or {}):
+            parents.setdefault(str(_k), []).append(str(_p))
+
+    def _ancestors(_pn: str) -> List[str]:
+        out: List[str] = []
+        todo = list(parents.get(_pn) or [])
+        while todo and len(out) < 32:
+            _a = todo.pop(0)
+            if _a not in out:
+                out.append(_a)
+                todo.extend(parents.get(_a) or [])
+        return out
+
+    inferred = _rank("inference") or 0
+    fitting = {}
+    for d in decisions:
+        op = str(d.operation or "").lower()
+        if d.status == REQUIRED and op in _FITTING_OPS and d.target_id:
+            fitting.setdefault((str(d.target_id), op), []).append(d)
+    stood_down: List[str] = []
+    for (tid, op), ds in fitting.items():
+        if kinds.get(tid) != "bought_in":
+            continue
+        owner = next((a for a in _ancestors(tid)
+                      if any(x.status == REQUIRED for x in fitting.get((a, op), []))), None)
+        if owner is None:
+            continue
+        for d in ds:
+            if (_rank(str(d.source or "")) or 0) > inferred:
+                continue
+            d.status = NOT_APPLICABLE
+            d.reason = ((f"{d.reason}; " if d.reason else "")
+                        + f"{tid} is bought in and fitted as part of {owner}'s "
+                          f"{op.replace('_', ' ')}, which already charges it; a purchased item "
+                          f"has nothing of its own to assemble — put this row back only if it "
+                          f"is a separate stage")
+            d.field_provenance["status"] = "bought_in_fitted_by_its_assembly"
+            stood_down.append(tid)
+            if issues is not None:
+                issues.append({"code": "bought_in_fitted_by_its_assembly", "part": tid,
+                               "operation": op, "fitted_by": owner,
+                               "ruled_out": d.decision_id})
+    return stood_down
 
 
 def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]],

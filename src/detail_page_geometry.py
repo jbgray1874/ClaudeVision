@@ -220,6 +220,8 @@ _NUMBER_WORD = re.compile(r"\d{2,4}(?:[.,]\d+)?")
 # against the weight the same sheet states.
 _SMALL_DECIMAL = re.compile(r"\d[.,]\d+")
 _SMALL_DECIMAL_MIN_MM = 3.0
+# "0116", "005": a zero then more digits before any decimal point. "0.5" is not caught.
+_LEADING_ZERO = re.compile(r"0\d+(?:[.,]\d+)?")
 
 
 def _local_page_number(page: Mapping[str, Any]) -> Optional[int]:
@@ -321,8 +323,15 @@ def read_sheet_figures(page: Mapping[str, Any]) -> Dict[str, Any]:
             # 400 x 50. A printed dimension is a figure first — "1192 TUBE LENGTH", "1154
             # INT", "258 259 259" — so figures are taken from the front of a line up to its
             # first word, and a line that opens with a word, a bullet or a symbol gives none.
+            # A FIGURE WITH A LEADING ZERO IS NOT A DIMENSION (D-661). The consultant's phone
+            # number, "0116 274 7040", sits outside the title-block zone on every 12684-02
+            # sheet and gave 116 and 274 to each: on the hook bracket's sheet that is a 274 mm
+            # "length" for a 39.7 mm part. A drawing prints 116, never 0116; a line that opens
+            # with one is a number of another kind and gives no figures at all.
             for token in text.split():
                 _tok = token.strip()
+                if _LEADING_ZERO.fullmatch(_tok):
+                    break
                 _small = bool(_SMALL_DECIMAL.fullmatch(_tok))
                 if not (_NUMBER_WORD.fullmatch(_tok) or _small):
                     break
@@ -948,6 +957,167 @@ def own_sheets(part: Mapping[str, Any], summary: Mapping[str, Any]) -> List[Mapp
         if pn in dns:
             out.append(page)
     return out
+
+
+# ── A SECTION'S LENGTH FROM ITS OWN SHEET (D-661) ──────────────────────────────────────
+#
+# 12684-02-GA, 3 Nov 2026 18:11. Once the tube and the bar were recognised as section stock
+# (D-653, D-657) they were no longer sized as sheet: right, because a section is cut to length,
+# not from a blank. But the sheet-blank reader had been the only thing reading their sheets'
+# figures, so the section path found no length at all, priced nothing, and the parts fell
+# through to the Sheet Steel block on the hook bracket's 39.7 x 30 flat, lent by
+# geometry_inference. Their own sheets print the length: 1500 beside UNDEVELOPED TUBE on the
+# outer frame's, 484.6 on the cross bar's, each beside a stated weight.
+#
+# THE RULE. A part its own evidence names as section stock, with no length any reader gave,
+# takes the LARGEST figure printed on its OWN sheet (bound to it and titled with its number)
+# as a provisional cut length. The weight that sheet states CHECKS it, in the band the
+# provisional blank uses: outside the band the figure is refused and the length is asked; no
+# weight leaves it INDICATIVE.
+SECTION_LENGTH_FROM_OWN_SHEET = "own_sheet_largest_figure"
+
+
+def _has_a_section_length(part: Mapping[str, Any]) -> bool:
+    """A length some reader already gave this section: the rungs the estimator reads before
+    the largest-dimension fallback (estimator._infer_section_length_mm)."""
+    ss = part.get("section_stock") if isinstance(part.get("section_stock"), Mapping) else {}
+    if _num(ss.get("length_mm")) or any(_num(x) for x in (ss.get("cut_lengths_mm") or [])
+                                         if not isinstance(x, (dict, list))):
+        return True
+    ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"),
+                                                        Mapping) else {}
+    return bool(_num(part.get("length_mm")) or _num(ng.get("developed_length_mm"))
+                or _num(part.get("overall_length_mm")))
+
+
+def _section_stock_of(part: Mapping[str, Any]) -> Dict[str, Any]:
+    """The section this part is: the stock already on the record, else the one its own printed
+    material words name (section_profile, D-653). Empty when neither sizes it."""
+    ss = part.get("section_stock") if isinstance(part.get("section_stock"), Mapping) else {}
+    if _num(ss.get("a")) and _num(ss.get("b")):
+        return dict(ss)
+    try:
+        from section_profile import stock_in_own_material_words
+        return dict(stock_in_own_material_words(part) or {})
+    except Exception:                                                # noqa: BLE001
+        return {}
+
+
+def section_length_from_own_sheets(part: Mapping[str, Any],
+                                   sheets: Sequence[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+    """{length_mm, pages, agrees, mass_kg, weight_kg, weight_whose, ratio, wall_mm,
+    wall_assumed, section} for a section part, or None when its sheets print no figure longer
+    than the section itself. `agrees` is True / False / None (no stated weight)."""
+    stock = _section_stock_of(part)
+    a, b = _num(stock.get("a")), _num(stock.get("b"))
+    if not (a and b) or not sheets:
+        return None
+    figures = []
+    for sheet in sheets:
+        figures.extend(v for v, _a in read_sheet_figures(sheet)["figures"])
+    longer = [v for v in figures if v > max(a, b)]
+    if not longer:
+        return None
+    length = max(longer)
+    form = str(stock.get("profile_form") or "")
+    t, wall_assumed = _num(stock.get("t")), False
+    if not t and not stock.get("solid"):
+        try:
+            import config
+            walls = getattr(config, "CONCEPT_SECTION_DEFAULT_WALL_MM", {}) or {}
+            t = _num(walls.get(stock.get("form"))) or 1.5
+        except Exception:                                            # noqa: BLE001
+            t = 1.5
+        wall_assumed = True
+    cfg = _cfg()
+    mat = str(part.get("normalized_material") or "").upper()
+    dens = next((float(d) for k, d in (cfg.get("density_kg_m3") or {}).items() if k in mat),
+                7850.0)
+    kg_m = None
+    try:
+        from section_profile import section_kg_per_m
+        kg_m = section_kg_per_m(a, b, t or a, form, dens)
+    except Exception:                                                # noqa: BLE001
+        kg_m = None
+    on_sheet = _weight_on_sheets(sheets)
+    weight = on_sheet or _stated_weight_kg(part)
+    whose = "its own sheet's" if on_sheet else ("the record's stated" if weight else "")
+    mass = (kg_m * length / 1000.0) if kg_m else None
+    ratio = (mass / weight) if (mass and weight) else None
+    lo = float(cfg.get("min_blank_to_part_weight_ratio") or 0.9)
+    hi = float(cfg.get("weight_question_above_ratio") or 1.6)
+    words = str(stock.get("source_text") or "").strip()
+    if not words:
+        try:
+            from section_profile import section_description
+            words = section_description(stock)
+        except Exception:                                            # noqa: BLE001
+            words = ""
+    return {"length_mm": round(length, 1),
+            "pages": [s.get("page_number") for s in sheets],
+            "agrees": (lo <= ratio <= hi) if ratio is not None else None,
+            "mass_kg": round(mass, 3) if mass else None,
+            "weight_kg": weight, "weight_whose": whose,
+            "ratio": round(ratio, 2) if ratio is not None else None, "band": [lo, hi],
+            "wall_mm": t, "wall_assumed": wall_assumed,
+            "section": words or f"{a:g} x {b:g} section",
+            "source": SECTION_LENGTH_FROM_OWN_SHEET}
+
+
+def apply_section_lengths_from_own_sheets(parts: Any, summary: Mapping[str, Any]) -> List[str]:
+    """Give each section part with no length the one its own sheet prints (D-661). Returns the
+    part numbers that gained one; a refused figure is said on the part and asked."""
+    if not isinstance(parts, Sequence) or not isinstance(summary, Mapping):
+        return []
+    done: List[str] = []
+    for part in parts:
+        if not isinstance(part, dict) or not _is_section_stock(part) or not _made_here(part):
+            continue
+        if part.get("_section_length_from_own_sheet") or _has_a_section_length(part):
+            continue
+        sheets = own_sheets(part, summary)
+        if not sheets:
+            continue
+        got = section_length_from_own_sheets(part, sheets)
+        if not got:
+            continue
+        pn = str(part.get("part_number") or "this part")
+        pages = ", ".join(str(p) for p in got["pages"])
+        wall = (f" at the working wall of {got['wall_mm']:g} mm"
+                if got["wall_assumed"] else "")
+        if got["agrees"] is False:
+            why = (f"{pn}: the largest figure on its own sheet (page {pages}), "
+                   f"{got['length_mm']:g} mm, is NOT taken as its length: as {got['section']}"
+                   f"{wall} that weighs {got['mass_kg']:.2f} kg against {got['weight_whose']} "
+                   f"{got['weight_kg']:g} kg ({got['ratio']:.2f}x, outside the "
+                   f"{got['band'][0]:g}-{got['band'][1]:g}x band). Give the cut length.")
+            part["_section_length_refused"] = why
+            if why not in (part.get("review_flags") or []):
+                part.setdefault("review_flags", []).append(why)
+            try:
+                from source_precedence import raise_manufacturing_question as _ask
+                _ask(part, f"What is the cut length of {pn}?", why,
+                     "state the cut length; the section's weight and price follow it",
+                     "detail_page_geometry.apply_section_lengths_from_own_sheets")
+            except Exception:                                        # noqa: BLE001
+                pass
+            continue
+        part["_section_length_from_own_sheet"] = got
+        said = (f"{pn}: section length {got['length_mm']:g} mm read off its own sheet (page "
+                f"{pages}), the largest figure printed there and not captioned as a cut "
+                f"length; ")
+        if got["agrees"]:
+            said += (f"as {got['section']}{wall} it weighs {got['mass_kg']:.2f} kg against "
+                     f"{got['weight_whose']} {got['weight_kg']:g} kg ({got['ratio']:.2f}x, "
+                     f"within the {got['band'][0]:g}-{got['band'][1]:g}x band). Confirm the "
+                     f"cut length.")
+        else:
+            said += ("no weight is stated to check it against, so it is INDICATIVE. Confirm "
+                     "the cut length.")
+        if said not in (part.get("review_flags") or []):
+            part.setdefault("review_flags", []).append(said)
+        done.append(pn)
+    return done
 
 
 def _sum_page_geometry(sheets: Sequence[Mapping[str, Any]]) -> Dict[str, float]:

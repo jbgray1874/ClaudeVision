@@ -2717,6 +2717,7 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
 # The rung of the length search that is a fallback, not a reading. Named once so the
 # estimator, the invariant and the pre-flight all test for the same string.
 SECTION_LENGTH_FALLBACK = "max_dimension_fallback"
+SECTION_LENGTH_OWN_SHEET = "own_sheet_figure"
 
 
 def _infer_section_length_mm(part: Dict[str, Any]) -> Optional[float]:
@@ -2780,6 +2781,14 @@ def _infer_section_length_mm(part: Dict[str, Any]) -> Optional[float]:
             part.get("overall_length_mm_source") or part.get("geometry_source")
             or "overall_length")
         return overall
+    # THE LENGTH ITS OWN SHEET PRINTS (D-661): the largest figure on the part's own sheet,
+    # checked against the weight that sheet states (detail_page_geometry). A reading of its
+    # own page, so it comes before the largest dimension found anywhere on the record.
+    _own_len = part.get("_section_length_from_own_sheet")
+    if isinstance(_own_len, dict) and (_safe_float(_own_len.get("length_mm")) or 0) > 0:
+        part["_section_length_source"] = SECTION_LENGTH_OWN_SHEET
+        part["_section_length_reader"] = str(_own_len.get("source") or "own_sheet")
+        return float(_own_len["length_mm"])
     dims = [_safe_float(v) for v in part.get("all_dimensions_mm", [])]
     dims = [v for v in dims if v is not None and v > 0]
     if dims:
@@ -7259,6 +7268,11 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         # INDICATIVE by the cut-list reader (bom_pipeline, D-383); the flag says why.
         if length_mm and _len_src == "section_stock" \
                 and (part.get("section_stock") or {}).get("length_indicative"):
+            _len_indicative = True
+        # A length off its own sheet that no stated weight confirmed is INDICATIVE (D-661);
+        # the sentence saying where it came from is already on the part.
+        if length_mm and _len_src == SECTION_LENGTH_OWN_SHEET \
+                and not (part.get("_section_length_from_own_sheet") or {}).get("agrees"):
             _len_indicative = True
         _len_stamp = {"section_length_source": _len_src or "none",
                       "section_length_reader": _len_reader or "none",
