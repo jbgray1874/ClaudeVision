@@ -235,8 +235,13 @@ def saved(rid):
 # with the roll call, so the screen can say if the folder could not be reached.
 
 def folder() -> str:
-    """The folder as people know it (K:\\...)."""
-    return cfg.HR_ROLLCALL_DIR or os.path.join(cfg.HR_OUTPUT_DIR, "Roll calls")
+    """The folder as people know it (K:\\...), however .env spells it."""
+    import config
+    p = (cfg.HR_ROLLCALL_DIR or os.path.join(cfg.HR_OUTPUT_DIR, "Roll calls")).strip()
+    for letter, unc in (getattr(config, "DRIVE_MAP", {}) or {}).items():
+        if p.lower() == unc.lower() or p.lower().startswith(unc.lower() + "\\"):
+            return f"{letter}:" + (p[len(unc):] or "\\")
+    return p
 
 
 def _server_path(path: str) -> str:
