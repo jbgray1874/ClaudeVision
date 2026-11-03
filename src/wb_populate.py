@@ -8427,8 +8427,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             g["rate_basis"] = "department_stated_rate"
             g["workbook_row"] = row
             _flag(f"throughput for '{wb_op}' is {float(_measured_tp):g}/hr — the joinery "
-                  f"department's measured rate for faced board, which outranks the "
-                  f"{_stated_shop_time_source(g, _stated_time_by_pn)} on "
+                  f"department's measured rate for faced board, which outranks the house "
+                  f"allowance the costing stated for this row on "
                   f"{', '.join(str(p) for p in (g.get('parts') or []))}: an allowance is a "
                   f"stand-in where nothing measured the work, and here something did (D-667).",
                   flags)
