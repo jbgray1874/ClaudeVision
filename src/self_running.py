@@ -127,16 +127,17 @@ class Switch:
         self._quiet: set = set()
 
     def beat(self, rep: Dict[str, Any]) -> bool:
-        answers: List[Dict[str, Any]] = []
+        heard: List[Any] = []
         for i, portal in enumerate(self.portals):
             try:
-                answers.append(portal.self_running(rep) or {})
+                heard.append((portal, portal.self_running(rep) or {}))
                 self._quiet.discard(i)
             except ler.PortalError as exc:
                 if i not in self._quiet:                  # said once, not every beat
                     self._quiet.add(i)
                     self.say(f"   (the portal at {getattr(portal, 'server', '') or i} did not "
                              f"answer the self-running beat: {exc.message}; left out)")
+        answers = [a for _, a in heard]
         if not answers:
             self.last = {}
             return False
@@ -145,7 +146,26 @@ class Switch:
         self.last = {**newest, "enabled": on,
                      "run_now": on and any(a.get("run_now") and a.get("enabled")
                                            for a in answers)}
+        self._pass_on(rep, heard, newest)
         return on
+
+    def _pass_on(self, rep: Dict[str, Any], heard: List[Any], newest: Dict[str, Any]) -> None:
+        """ONE SWITCH ON EVERY SCREEN (D-650). A service whose own press is older than the one
+        obeyed is told it at once, and takes it, so its page stops saying "Switched off" while
+        the watcher runs jobs on an On pressed elsewhere. Only a service that answers with a
+        toggled_epoch can take it; an older one is left as it is, and not asked every beat."""
+        epoch = float(newest.get("toggled_epoch") or 0.0)
+        if epoch <= 0:
+            return
+        obeyed = {k: newest.get(k) for k in ("enabled", "toggled_epoch", "switched_by",
+                                              "switched_on_at", "switched_off_at")}
+        for portal, answer in heard:
+            if "toggled_epoch" not in answer or float(answer.get("toggled_epoch") or 0.0) >= epoch:
+                continue
+            try:
+                portal.self_running({**rep, "obeyed": obeyed})
+            except ler.PortalError:
+                pass                                      # told again on the next beat
 
 
 # ── COLLECTING A PACK THAT IS NOT ON THE SHARE YET ───────────────────────────────────

@@ -494,6 +494,82 @@ def test_a_service_that_cannot_be_reached_is_left_out_and_none_is_off():
     assert sr.Switch([_SwitchPortal("c", down=True)], say=lambda s: None).beat({}) is False
 
 
+def test_a_service_takes_a_newer_press_the_watcher_passes_on(switch_mod):
+    """D-650: each screen showed its own switch. The laptop page read "Switched off" while
+    the watcher ran jobs on an On pressed later on the phone. A press passed on by the
+    watcher is taken when it is newer, without asking for another immediate read."""
+    switch_mod.switch(False)
+    mine = switch_mod.heartbeat({"phase": "idle"})["toggled_epoch"]
+    later = {"enabled": True, "toggled_epoch": mine + 60, "switched_by": "the phone",
+             "switched_on_at": "2026-11-03T15:00:00+00:00"}
+    hb = switch_mod.heartbeat({"phase": "running", "obeyed": later})
+    assert hb["enabled"] is True and hb["run_now"] is False
+    assert hb["toggled_epoch"] == mine + 60
+    v = switch_mod.view()
+    assert v["enabled"] is True and v["switched_by"] == "the phone"
+    assert v["switched_on_at"] == "2026-11-03T15:00:00+00:00"
+    assert "obeyed" not in v["watcher"], "the relay is not part of what the watcher said"
+
+
+def test_an_older_press_passed_on_changes_nothing(switch_mod):
+    switch_mod.switch(True)
+    mine = switch_mod.heartbeat({"phase": "idle"})["toggled_epoch"]
+    hb = switch_mod.heartbeat({"phase": "idle",
+                               "obeyed": {"enabled": False, "toggled_epoch": mine - 60}})
+    assert hb["enabled"] is True and hb["toggled_epoch"] == mine
+
+
+def test_a_press_here_is_newer_than_one_taken_from_a_machine_whose_clock_is_ahead(switch_mod):
+    """Off pressed on the laptop must not read as older than an On taken from SDI-App01 a
+    few seconds fast, or the watcher would obey the On and pass it straight back."""
+    import time as _t
+    ahead = _t.time() + 300
+    switch_mod.heartbeat({"obeyed": {"enabled": True, "toggled_epoch": ahead}})
+    switch_mod.switch(False)
+    hb = switch_mod.heartbeat({"phase": "idle"})
+    assert hb["enabled"] is False and hb["toggled_epoch"] > ahead
+
+
+def test_the_watcher_passes_the_press_in_force_to_a_service_that_is_behind():
+    laptop = _SwitchPortal("http://localhost:8072", {"enabled": False, "toggled_epoch": 100.0})
+    phone = _SwitchPortal("http://10.0.0.5:8071",
+                          {"enabled": True, "toggled_epoch": 200.0, "switched_by": "the phone"})
+    sw = sr.Switch([laptop, phone], say=lambda s: None)
+    assert sw.beat({"phase": "idle"}) is True
+    told = [r for r in laptop.reports if "obeyed" in r]
+    assert len(told) == 1 and told[0]["obeyed"]["enabled"] is True
+    assert told[0]["obeyed"]["toggled_epoch"] == 200.0
+    assert told[0]["obeyed"]["switched_by"] == "the phone"
+    assert not [r for r in phone.reports if "obeyed" in r], "the service it came from is not told"
+
+
+def test_an_older_service_without_a_press_time_is_not_asked_every_beat():
+    old = _SwitchPortal("old", {"enabled": False})
+    new = _SwitchPortal("new", {"enabled": True, "toggled_epoch": 50.0})
+    sw = sr.Switch([old, new], say=lambda s: None)
+    sw.beat({})
+    sw.beat({})
+    assert len(old.reports) == 2 and not [r for r in old.reports if "obeyed" in r]
+
+
+def test_every_screen_shows_the_switch_in_force_after_one_beat(switch_mod):
+    """End to end on the service's own code: the laptop switched off, the phone's On later."""
+    import time as _t
+    switch_mod.switch(False)
+
+    class _Laptop:
+        server = "http://localhost:8072"
+
+        def self_running(self, rep):
+            return switch_mod.heartbeat(rep)
+    phone = _SwitchPortal("http://10.0.0.5:8071",
+                          {"enabled": True, "toggled_epoch": _t.time() + 1,
+                           "switched_by": "the phone"})
+    assert sr.Switch([_Laptop(), phone], say=lambda s: None).beat({"phase": "idle"}) is True
+    v = switch_mod.view()
+    assert v["enabled"] is True and v["switched_by"] == "the phone"
+
+
 def test_reinstalling_the_watcher_restarts_it_with_its_new_settings():
     """D-648: re-running install-self-running-task.ps1 with SDI-App01 added changed the task
     and left the old watcher running (MultipleInstances IgnoreNew), still reporting to the
