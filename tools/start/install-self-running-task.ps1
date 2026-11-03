@@ -30,7 +30,10 @@
 [CmdletBinding()]
 param(
     [string] $Root = "",
-    [string] $Server   = $(if ($env:SDI_SERVER) { $env:SDI_SERVER } else { "http://localhost:8072" }),
+    # BOTH SERVICES ON THIS MACHINE, LIKE THE RUNNER (D-644): the watcher reports to every
+    # one on the list, so the switch works from whichever the page or the phone reached.
+    # Add another (e.g. SDI-APP01's 8071) with -Server "http://localhost:8072,http://...".
+    [string] $Server   = $(if ($env:SDI_SERVER) { $env:SDI_SERVER } else { "http://localhost:8072,http://localhost:8071" }),
     [string] $TaskName = "SDI AI Estimate Self-Running",
     [string] $OldTask  = "SDI Live Enquiry Runner",
     [switch] $Remove

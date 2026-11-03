@@ -75,14 +75,17 @@ def switch_mod(tmp_path, monkeypatch):
 def test_off_until_someone_presses_it(switch_mod):
     v = switch_mod.view()
     assert v["enabled"] is False and v["watcher"]["connected"] is False
-    assert switch_mod.heartbeat({"phase": "idle"}) == {"enabled": False, "run_now": False}
+    _hb = switch_mod.heartbeat({"phase": "idle"})
+    assert (_hb["enabled"], _hb["run_now"], _hb["toggled_epoch"]) == (False, False, 0.0)
 
 
 def test_a_press_is_on_and_asks_for_one_immediate_read(switch_mod):
     v = switch_mod.switch(True, by="James Gray")
     assert v["enabled"] and v["run_now_pending"] and v["switched_by"] == "James Gray"
-    assert switch_mod.heartbeat({"phase": "idle"}) == {"enabled": True, "run_now": True}
-    assert switch_mod.heartbeat({"phase": "idle"}) == {"enabled": True, "run_now": False}
+    _hb = switch_mod.heartbeat({"phase": "idle"})
+    assert _hb["enabled"] is True and _hb["run_now"] is True and _hb["toggled_epoch"] > 0
+    _again = switch_mod.heartbeat({"phase": "idle"})
+    assert (_again["enabled"], _again["run_now"]) == (True, False), "one press, one read"
 
 
 def test_stop_is_off(switch_mod):
@@ -357,7 +360,8 @@ def test_the_routes_switch_it_and_hear_the_watcher(client):
     assert on["enabled"] is True and "no self-running watcher is connected" in on["note"]
     beat = client.post("/api/estimate/self-running/heartbeat",
                        json={"phase": "running", "current": {"drawing": "0351292"}}).json()
-    assert beat == {"enabled": True, "run_now": True}
+    assert beat["enabled"] is True and beat["run_now"] is True
+    assert beat["toggled_epoch"] > 0, "the beat says when the switch was last pressed (D-644)"
     seen = client.get("/api/estimate/self-running").json()
     assert seen["watcher"]["connected"] and seen["watcher"]["current"]["drawing"] == "0351292"
     off = client.post("/api/estimate/self-running/stop", json={}).json()
@@ -408,3 +412,41 @@ def test_a_stop_sent_from_the_card_stays_said_until_the_watcher_reports():
     assert "STOP SENT at" in page
     assert "if(r.ok || r.status === 409){" in page
     assert "selfJobBtn.disabled = !!stoppedAt;" in page
+
+
+
+class _SwitchPortal:
+    def __init__(self, server, answer=None, down=False):
+        self.server, self.answer, self.down, self.reports = server, answer or {}, down, []
+
+    def self_running(self, rep):
+        if self.down:
+            raise ler.PortalError(0, "no answer")
+        self.reports.append(rep)
+        return dict(self.answer)
+
+
+def test_the_watcher_reports_to_every_service_and_obeys_the_latest_press():
+    """D-644: the phone's switch was on a service the watcher never reported to, and said
+    "not connected". The beat now goes to every service on the list; the switch pressed most
+    recently on any of them is obeyed, so Off pressed anywhere still stops it."""
+    laptop = _SwitchPortal("http://localhost:8072", {"enabled": False, "toggled_epoch": 100.0})
+    phone = _SwitchPortal("http://localhost:8071",
+                          {"enabled": True, "run_now": True, "toggled_epoch": 200.0})
+    sw = sr.Switch([laptop, phone], say=lambda s: None)
+    assert sw.beat({"phase": "idle"}) is True and sw.last["run_now"] is True
+    assert laptop.reports and phone.reports, "both services hear the watcher"
+    laptop.answer = {"enabled": False, "toggled_epoch": 300.0}       # Off pressed later
+    assert sw.beat({"phase": "idle"}) is False
+    assert sw.last["run_now"] is False
+
+
+def test_a_service_that_cannot_be_reached_is_left_out_and_none_is_off():
+    said = []
+    up = _SwitchPortal("a", {"enabled": True, "toggled_epoch": 5.0})
+    down = _SwitchPortal("b", down=True)
+    sw = sr.Switch([down, up], say=said.append)
+    assert sw.beat({}) is True
+    sw.beat({})
+    assert len(said) == 1, "an unreachable service is said once, not every beat"
+    assert sr.Switch([_SwitchPortal("c", down=True)], say=lambda s: None).beat({}) is False
