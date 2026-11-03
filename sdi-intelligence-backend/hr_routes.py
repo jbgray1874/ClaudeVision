@@ -329,6 +329,11 @@ def _inventry_on_site():
             for r in people if api.is_on_site(r)], None
 
 
+# The list as the phones last saw it. A tick keeps it with the roll call, so
+# whoever was on the list and never ticked is recorded as absent.
+_roll_seen = {"people": []}
+
+
 def _rollcall_payload() -> dict:
     import hr_rollcall
     on_site, inventry_problem = _inventry_on_site()
@@ -337,12 +342,14 @@ def _rollcall_payload() -> dict:
     except (OSError, ValueError):
         snap = None
     people, forgotten = hr_rollcall.build(on_site, snap)
+    _roll_seen["people"] = [dict(p) for p in people]
     st = hr_rollcall.state()
     for p in people:
         p["ticked"] = st["ticks"].get(p["key"])
     return {"time": _now_iso(), "people": people, "count": len(people),
             "accounted": sum(1 for p in people if p["ticked"]),
             "started": st.get("started"), "started_by": st.get("started_by"),
+            "run": hr_rollcall.run_id(st.get("started")),
             "inventry_problem": inventry_problem,
             "brighthr_checked": ((snap or {}).get("summary") or {}).get("timestamp"),
             "forgotten_left_out": forgotten}
@@ -365,7 +372,8 @@ def app_rollcall_tick(request: Request, payload: dict = Body(...)):
     key = str(payload.get("key") or "").strip()
     if not key:
         raise HTTPException(status_code=400, detail="Which person? No key was sent.")
-    st = hr_rollcall.tick(key, bool(payload.get("ticked")), user.get("name") or user.get("email", ""))
+    st = hr_rollcall.tick(key, bool(payload.get("ticked")), user.get("name") or user.get("email", ""),
+                          people=_roll_seen["people"])
     return {"key": key, "ticked": st["ticks"].get(key)}
 
 
@@ -377,6 +385,32 @@ def app_rollcall_new(request: Request):
     hr_rollcall.start_new(user.get("name") or user.get("email", ""))
     hr_blip._log(f"APP roll call started by {user.get('email') or user.get('name')}")
     return _rollcall_payload()
+
+
+@router.get("/app/rollcall/runs")
+def app_rollcall_runs(request: Request):
+    """Every roll call kept, newest first: when, who started it, how many
+    present (ticked) and absent (not ticked), and where its spreadsheet is."""
+    _app_user(request)
+    import hr_rollcall
+    return {"runs": hr_rollcall.runs(), "folder": hr_rollcall.folder(),
+            "live": hr_rollcall.run_id(hr_rollcall.state().get("started"))}
+
+
+@router.get("/app/rollcall/runs/{run_id}")
+def app_rollcall_run(request: Request, run_id: str):
+    """One kept roll call: who was present, who ticked them and when, and who
+    was absent."""
+    _app_user(request)
+    import hr_rollcall
+    found = hr_rollcall.saved(run_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="That roll call is not in the list.")
+    if found["spreadsheet_problem"] or not found["spreadsheet"]:
+        # Opening it tries the folder again: closing the spreadsheet in Excel,
+        # or a share coming back, needs no tick to put it right.
+        hr_rollcall._schedule_export(found["id"])
+    return found
 
 
 @router.get("/app/history")

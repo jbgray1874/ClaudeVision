@@ -274,7 +274,9 @@ class LookingAndDoingAreDifferentPermissionsTests(unittest.TestCase):
                          ("/api/estimate", "/api/estimate/brief",
                           "/api/estimate/tools/ask", "/api/estimate/parity/job",
                           "/api/estimate/parity/period", "/api/estimate/parity/periods",
-                          "/api/estimate/parity/ask"))
+                          "/api/estimate/parity/ask",
+                          "/api/estimate/self-running/start",
+                          "/api/estimate/self-running/stop"))
         for never in public_surface.NEVER_PUBLIC_POST:
             with self.subTest(path=never):
                 self.assertFalse(public_surface.post_allowed(never))
@@ -383,3 +385,37 @@ class ParityFromOutsideTests(unittest.TestCase):
         manual = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Manual Estimates"
                   r"\2026\Acme\12677\12677.xls")
         self.assertFalse(public_surface.under_the_briefs(manual))
+
+
+class TheSelfRunningSwitchFromThePhoneTests(unittest.TestCase):
+    """D-641, 3 November 2026. JG: "open the self-running controls from outside... needs to
+    run from the phone". The switch was on NEVER_PUBLIC_POST, so a phone got "That action is
+    only available on the office network". Switching it on queues estimates, so it is opened
+    to the people who may start a run and nobody else; the watcher's heartbeat and stopping a
+    single running job stay inside the office."""
+
+    GUARD = APP.split("async def _public_surface_guard", 1)[1].split("\n# ──", 1)[0]
+
+    def test_the_switch_may_be_pressed_from_outside(self):
+        for path in ("/api/estimate/self-running/start", "/api/estimate/self-running/stop",
+                     "/api/estimate/self-running/start/"):
+            with self.subTest(path=path):
+                self.assertTrue(surface.post_allowed(path))
+
+    def test_it_is_held_to_the_named_estimators(self):
+        self.assertEqual(surface.SELF_RUNNING_POST,
+                         ("/api/estimate/self-running/start",
+                          "/api/estimate/self-running/stop"))
+        at = self.GUARD.index("in _SELF_RUNNING_POST and not _may_start_a_run(request)")
+        self.assertLess(self.GUARD.index("_public_post_allowed(path)"), at)
+        self.assertIn("limited to the named estimators", self.GUARD[at:at + 600])
+
+    def test_the_watchers_beat_and_stopping_a_job_stay_inside(self):
+        self.assertIn("/api/estimate/self-running/heartbeat", surface.NEVER_PUBLIC_POST)
+        self.assertFalse(surface.post_allowed("/api/estimate/self-running/heartbeat"))
+        self.assertFalse(surface.post_allowed("/api/estimate/12345abcdef0/abandon"))
+        self.assertIn('"/api/estimate/self-running/heartbeat"', APP.split("_RUNNER_ONLY = (", 1)[1][:200])
+
+    def test_the_refusal_no_longer_names_the_switch(self):
+        refusal = self.GUARD.split("only available on the office network", 1)[1][:200]
+        self.assertNotIn("self-running", refusal)

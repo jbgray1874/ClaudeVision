@@ -23,6 +23,13 @@ finished estimate and its comparison can be opened, and the rest of the shares
 stay where they are. The manual estimates themselves are not opened from
 outside: a comparison files its own copy of the manual sheet it used.
 
+THE SELF-RUNNING SWITCH IS FOR THE NAMED ESTIMATORS (D-641). JG, 3 Nov 2026: "open the
+self-running controls from outside... needs to run from the phone". Switching it on starts
+the watcher working through the Live Enquiry sheet, which queues estimates, so it is held to
+the people who may start a run (SDI_ESTIMATOR_OIDS), exactly as starting one is. Switching it
+off lets the job in progress finish and queues nothing more. The watcher's own heartbeat
+stays office-only, and stopping one running job (/{run}/abandon) is not on this list.
+
 PARITY IS FOR THE NAMED ESTIMATORS (D-621). A filed comparison holds copies of
 the manual costing sheets, so from outside the office everything under
 /api/estimate/parity, reading included, and every file in the parity folder,
@@ -43,6 +50,15 @@ PUBLIC_POST = (
     "/api/estimate/parity/period",    # compare every job estimated in a period (D-619)
     "/api/estimate/parity/periods",   # Period A against Period B (D-621)
     "/api/estimate/parity/ask",       # a question about one filed comparison (D-628)
+    "/api/estimate/self-running/start",   # the self-running switch, on (D-641)
+    "/api/estimate/self-running/stop",    # and off (D-641)
+)
+
+# THE SELF-RUNNING SWITCH (D-641): allowed from outside, and held to the named estimators in
+# app.py's guard because switching it on queues estimates.
+SELF_RUNNING_POST = (
+    "/api/estimate/self-running/start",
+    "/api/estimate/self-running/stop",
 )
 
 # PARITY BY JOB NUMBER (D-619). JG, 1 Nov 2026: the comparison "in the web portal inside the
@@ -73,8 +89,7 @@ NEVER_PUBLIC_POST = (
     "/api/estimate/release",
     "/api/estimate/release/withdraw",
     "/api/estimate/recipients",
-    "/api/estimate/self-running/start",
-    "/api/estimate/self-running/stop",
+    "/api/estimate/self-running/heartbeat",
     "/api/estimate/logistics/split-scans",
     "/api/estimate/override",
     "/api/estimate/parity",

@@ -75,6 +75,12 @@ HR_MAX_DROP_PCT = float(_opt("HR_MAX_DROP_PCT", "30"))  # flag if active drops >
 
 HR_OUTPUT_DIR = _opt("HR_OUTPUT_DIR", r"K:\IT\HRSystemsOutput")
 
+# Every fire roll call is kept: the app's own copy under HR_SNAPSHOT_DIR, and
+# one spreadsheet per roll call here for HR's records. Written as people know
+# the folder (K:\...); the server opens it through SDI_DRIVE_MAP, because a
+# service has no mapped drives. Default: HR_OUTPUT_DIR\Roll calls.
+HR_ROLLCALL_DIR = _opt("HR_ROLLCALL_DIR")
+
 # ── InVentry Partner API (the supported integration route) ───────────────
 # Confirmed against InVentry's Partner API documentation AND their Postman
 # collection (received 16 and 25 Sep 2026). The collection is authoritative -

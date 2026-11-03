@@ -86,6 +86,17 @@
   details.grp>ul{padding:0 12px 6px}
   ul.roll li.grpli{display:block;padding:0;border:0}
   .grpbar{display:flex;gap:10px;align-items:center;margin:4px 0 8px}
+  .rollgrid{display:grid;gap:0 14px;align-items:start}
+  @media (min-width:780px){.rollgrid{grid-template-columns:minmax(0,1fr) 250px}}
+  ul.runs{list-style:none;margin-top:8px}
+  button.run{display:block;width:100%;text-align:left;background:var(--surface-2);color:var(--ink);
+       border:1px solid var(--line-soft);border-radius:var(--r);padding:9px 10px;margin:0 0 6px;
+       font-family:var(--body);font-size:14px;font-weight:600;cursor:pointer}
+  button.run.on{border-color:var(--accent)}
+  button.run .rt{display:flex;gap:8px;align-items:center;margin-bottom:2px}
+  button.run small{display:block;font-family:var(--mono);font-size:11px;font-weight:400;color:var(--ink-faint)}
+  button.run small.w{color:var(--warn)}
+  .path{font-family:var(--mono);font-size:11.5px;color:var(--ink-dim)}
   .hist li{list-style:none;padding:9px 0;border-bottom:1px solid var(--line-soft);font-size:14px}
   .hist li small{display:block;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
   table.t{width:100%;border-collapse:collapse;font-size:13.5px}
@@ -142,7 +153,9 @@
     </div>
 
     <div class="view" id="v-roll">
-      <div class="panel">
+     <div class="rollgrid">
+      <div>
+      <div class="panel" id="rolllive">
         <h4>Fire roll call <span class="chip c-off" id="rollcount"></span></h4>
         <div class="btns"><button class="btn ghost" id="rollload">Refresh</button>
           <button class="btn ghost" id="rollnew">Start a new roll call</button>
@@ -154,6 +167,15 @@
         <div class="err" id="rollerr"></div>
         <ul class="roll" id="roll" style="margin-top:8px"></ul>
       </div>
+      <div class="panel" id="rollsaved" style="display:none"></div>
+      </div>
+      <aside class="panel">
+        <h4>Saved roll calls</h4>
+        <p class="muted">Each roll call is saved as people are ticked: <b>present</b> is ticked, <b>absent</b>
+        is everyone else on the list. A spreadsheet of each is in <span class="path" id="runfolder"></span>.</p>
+        <ul class="runs" id="runs"></ul>
+      </aside>
+     </div>
     </div>
 
     <div class="view" id="v-issues">
@@ -248,7 +270,7 @@ const OPEN=new Set();                // groups someone opened, kept across the 5
 const NO_MANAGER='No manager listed';
 function setGroup(on){ GROUP=on; try{ localStorage.setItem('hrGroupByManager',on?'1':'0'); }catch(e){}
   document.querySelectorAll('[data-group]').forEach(b=>b.textContent=GROUP?'Show as one list':'Group by manager');
-  renderLatest(); renderRoll(); }
+  renderLatest(); renderRoll(); renderSaved(); }
 document.addEventListener('click',e=>{ if(e.target.closest('[data-group]')) setGroup(!GROUP); });
 document.addEventListener('toggle',e=>{ const d=e.target;
   if(d.matches && d.matches('details.grp')) d.open?OPEN.add(d.dataset.gid):OPEN.delete(d.dataset.gid); },true);
@@ -362,6 +384,7 @@ function renderRoll(){
     notes.push('BrightHR checked '+when(ROLL.brighthr_checked)+(h>0.5?': press Check who\'s clocked in for an up-to-date list.':'.')); }
   else notes.push('No BrightHR check yet: press Check who\'s clocked in.');
   if(ROLL.forgotten_left_out) notes.push(ROLL.forgotten_left_out+' forgotten clock-outs are left out.');
+  if(ROLL.run) notes.push('Saved as you tick: see Saved roll calls.');
   if(Object.keys(PENDING).length) notes.push(Object.keys(PENDING).length+' tick(s) not saved yet; they will be sent when the signal allows.');
   $('rollmeta').textContent=notes.join(' ');
   const rows=ROLL.people.filter(p=>!(hide&&isTicked(p)));
@@ -393,22 +416,71 @@ async function sendPending(){
 }
 async function loadRoll(){
   clearTimeout(rollTimer); $('rollerr').textContent='';
-  try{ await sendPending(); ROLL=await call('/rollcall'); renderRoll(); }
+  try{ await sendPending(); ROLL=await call('/rollcall'); renderRoll();
+       if(Date.now()-runsAt>15000 || (RUNS && RUNS.live!==ROLL.run)) loadRuns(); else renderRuns(); }
   catch(e){ if(!quiet(e)) $('rollerr').textContent=msg(e)+(Object.keys(PENDING).length?' Your ticks are kept on this phone and will be sent.':''); }
   // While the roll call is open, keep every marshal's phone in step.
   if($('v-roll').classList.contains('on')) rollTimer=setTimeout(loadRoll,5000);
 }
 $('roll').addEventListener('change',e=>{
   const cb=e.target.closest('input[data-k]'); if(!cb) return;
-  PENDING[cb.dataset.k]=cb.checked; renderRoll(); sendPending().then(loadRoll);
+  PENDING[cb.dataset.k]=cb.checked; renderRoll(); sendPending().then(()=>{ runsAt=0; loadRoll(); });
 });
 $('rollhide').addEventListener('change',renderRoll);
 $('rollload').addEventListener('click',loadRoll);
 $('rollnew').addEventListener('click',async()=>{
-  if(!confirm('Start a new roll call?\n\nThis clears every tick, on every phone.')) return;
-  try{ for(const k in PENDING) delete PENDING[k]; ROLL=await call('/rollcall/new','POST'); renderRoll(); }
+  if(!confirm('Start a new roll call?\n\nThis clears every tick, on every phone. The last roll call stays in Saved roll calls.')) return;
+  try{ for(const k in PENDING) delete PENDING[k]; ROLL=await call('/rollcall/new','POST'); showLive(); renderRoll(); loadRuns(); }
   catch(e){ if(!quiet(e)) $('rollerr').textContent=msg(e); }
 });
+
+/* ── saved roll calls: each kept from its first tick, present ticked, absent not ── */
+let RUNS=null, runsAt=0, VIEWING=null, SAVED=null;
+async function loadRuns(){
+  try{ RUNS=await call('/rollcall/runs'); runsAt=Date.now(); renderRuns(); }
+  catch(e){ if(!quiet(e)) $('runs').innerHTML='<li class="err">'+esc(msg(e))+'</li>'; }
+}
+function renderRuns(){
+  if(!RUNS) return;
+  $('runfolder').textContent=RUNS.folder||'';
+  $('runs').innerHTML=(RUNS.runs||[]).map(r=>{ const live=r.id===RUNS.live;
+    return '<li><button type="button" class="run'+((VIEWING?VIEWING===r.id:live)?' on':'')+'" data-run="'+esc(r.id)+'">'
+      +'<span class="rt">'+esc(when(r.started))+(live?'<span class="chip c-warn">live</span>':'')+'</span>'
+      +'<small>'+r.present_count+' present · '+r.absent_count+' absent</small>'
+      +(r.started_by?'<small>started by '+esc(r.started_by)+'</small>':'')
+      +(r.spreadsheet_problem?'<small class="w">spreadsheet not saved</small>':'')+'</button></li>'; }).join('')
+    || '<li class="muted">None yet. A roll call is saved from its first tick.</li>';
+}
+function showLive(){ VIEWING=null; SAVED=null; $('rollsaved').style.display='none'; $('rolllive').style.display=''; renderRuns(); }
+function renderSaved(){
+  const r=SAVED; if(!r) return;
+  const item=p=>'<li>'+esc(p.name)+'<small>'+esc([p.manager, p.ticked_by?'ticked by '+p.ticked_by+' at '+when(p.ticked_at):'',
+      whereFrom(p)].filter(Boolean).join(' · '))+'</small></li>';
+  const list=(title,ps,cls)=>'<div class="panel '+cls+'"><h4>'+title+' ('+ps.length+')</h4>'
+    +(!ps.length?'<p class="muted">Nobody.</p>'
+      :GROUP?groups('saved-'+title, ps, item, x=>x.length+(x.length===1?' person':' people'), 'names')
+      :'<ul class="names">'+ps.map(item).join('')+'</ul>')+'</div>';
+  $('rollsaved').innerHTML='<h4>Roll call, '+esc(when(r.started))+' <span class="chip '+(r.absent_count?'c-warn':'c-ok')+'">'
+      +r.present_count+' present · '+r.absent_count+' absent</span></h4>'
+    +'<p class="muted">Started'+(r.started_by?' by '+esc(r.started_by):'')+' · last tick '+esc(when(r.updated))+'.</p>'
+    +(r.spreadsheet_problem?'<p class="err">'+esc(r.spreadsheet_problem)+'</p>'
+      :r.spreadsheet?'<p class="muted" style="margin-top:6px">Spreadsheet: <span class="path">'+esc(r.spreadsheet)+'</span></p>'
+      :'<p class="muted" style="margin-top:6px">The spreadsheet is being saved.</p>')
+    +'<div class="btns" style="margin-top:12px"><button class="btn ghost" type="button" id="rollback">← Back to the live roll call</button>'
+    +groupButton()+'</div>'+list('Absent', r.absent||[], 'warn')+list('Present', r.present||[], 'ok');
+}
+$('runs').addEventListener('click',async e=>{
+  const b=e.target.closest('[data-run]'); if(!b) return;
+  if(RUNS && b.dataset.run===RUNS.live){ showLive(); return; }
+  VIEWING=b.dataset.run; renderRuns();
+  $('rolllive').style.display='none'; $('rollsaved').style.display='';
+  $('rollsaved').innerHTML='<p class="muted">Opening…</p>';
+  $('rollsaved').scrollIntoView({block:'start', behavior:'smooth'});     // on a phone the list is below
+  try{ const r=await call('/rollcall/runs/'+encodeURIComponent(VIEWING)); if(r.id===VIEWING){ SAVED=r; renderSaved(); } }
+  catch(e){ if(!quiet(e)) $('rollsaved').innerHTML='<p class="err">'+esc(msg(e))+'</p>'
+    +'<div class="btns" style="margin-top:12px"><button class="btn ghost" type="button" id="rollback">← Back to the live roll call</button></div>'; }
+});
+document.addEventListener('click',e=>{ if(e.target.closest('#rollback')) showLive(); });
 
 /* ── data issues ── */
 function table(title, cls, head, rows, explain){

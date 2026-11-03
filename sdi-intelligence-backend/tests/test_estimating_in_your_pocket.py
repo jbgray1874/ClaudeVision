@@ -204,12 +204,15 @@ class NothingOnThePublicSurfaceGrewTests(unittest.TestCase):
     """The page is new. The boundary is not."""
 
     def test_the_posts_are_the_named_posts(self):
-        """Three, and the two parity comparisons added on purpose (D-619)."""
+        """Three, the parity comparisons added on purpose (D-619), and the self-running
+        switch, opened to the named estimators on purpose (D-641)."""
         self.assertEqual(public_surface.PUBLIC_POST,
                          ("/api/estimate", "/api/estimate/brief",
                           "/api/estimate/tools/ask", "/api/estimate/parity/job",
                           "/api/estimate/parity/period", "/api/estimate/parity/periods",
-                          "/api/estimate/parity/ask"))
+                          "/api/estimate/parity/ask",
+                          "/api/estimate/self-running/start",
+                          "/api/estimate/self-running/stop"))
 
     def test_the_page_calls_nothing_that_is_never_public(self):
         # The exact path, ended by its quote or a query: /api/estimate/parity (the upload
@@ -233,7 +236,9 @@ class NothingOnThePublicSurfaceGrewTests(unittest.TestCase):
                              "/api/estimate/tools/ask", "/api/estimate/tools/briefs",
                              "/api/estimate/parity/find", "/api/estimate/parity/job",
                              "/api/estimate/parity/reports", "/api/estimate/parity/period",
-                             "/api/estimate/parity/periods", "/api/estimate/parity/ask"),
+                             "/api/estimate/parity/periods", "/api/estimate/parity/ask",
+                             # D-641: the switch's status, and its start/stop by name
+                             "/api/estimate/self-running", "/api/estimate/self-running/"),
                     f"{path} is not one of the paths this page is meant to use")
 
 
@@ -542,7 +547,10 @@ class TheJobCardTests(unittest.TestCase):
         source = (BACKEND / "estimating_job_tools.py").read_text(encoding="utf-8")
         browse = source.split("def browse_briefs(", 1)[1].split("\ndef ", 1)[0]
         self.assertIn('out["summary"] = summarise_record(', browse)
-        self.assertEqual(public_surface.PUBLIC_POST,
+        # The self-running switch was added to the surface on purpose later (D-641); the card
+        # added nothing.
+        self.assertEqual(tuple(p for p in public_surface.PUBLIC_POST
+                               if p not in public_surface.SELF_RUNNING_POST),
                          ("/api/estimate", "/api/estimate/brief",
                           "/api/estimate/tools/ask", "/api/estimate/parity/job",
                           "/api/estimate/parity/period", "/api/estimate/parity/periods",
@@ -694,3 +702,18 @@ class ParityAndVoiceOnThePhoneTests(unittest.TestCase):
         flat = " ".join(PAGE.split())
         self.assertIn("Speak uses SDI's speech service where it is set up", flat)
         self.assertIn("parity is for the named estimators", flat)
+
+
+
+class TheSelfRunningSwitchIsOnThePhoneTests(unittest.TestCase):
+    """D-641: the switch on the phone's What's running screen, the same endpoints as the full
+    screen, said by whoever pressed it."""
+
+    def test_the_card_switches_it_on_and_off(self):
+        page = (Path(__file__).resolve().parent.parent / "appportal"
+                / "estimating-pocket.html").read_text(encoding="utf-8")
+        self.assertIn('id="self-on"', page)
+        self.assertIn('id="self-off"', page)
+        self.assertIn('"/api/estimate/self-running"', page)
+        self.assertIn('"/api/estimate/self-running/" + (on ? "start" : "stop")', page)
+        self.assertIn('if(name === "today"){ loadToday(); loadSelfRunning(); }', page)
