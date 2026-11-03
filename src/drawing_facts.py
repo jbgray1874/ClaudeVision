@@ -54,7 +54,12 @@ _RE_WEIGHT = re.compile(r"WEIGHT[:\s]*([\d,]+(?:\.\d+)?)\s*g\b", re.I)
 # sheets pooled under a key that is no part, and a hand's sheet folded into its base. Every
 # "own sheet" rule (FINISH, weld symbols, the per-part facts below) keys on this read. Up to two
 # trailing segments are taken — a member of a sub-drawing (07-2-01M) and its hand (-H).
-_RE_DWGNO = re.compile(r"\b(\d{3,6}-\d{2}-[A-Z0-9]{1,4}(?:-[A-Z0-9]{1,4}){0,2})\b")
+# FIVE AND SIX CHARACTERS TOO (D-657). Segments were capped at four, so 12684-02-101SA, 102SA
+# and 103SA never matched: each assembly sheet took the LAST child code its parts list printed
+# (M02, M04, M07), and its title block's POWDER COATED and STEEL were rolled up as those
+# children's own facts, over the baseplate's SEE ASSEMBLY DRAWING and the cross bar's
+# 10mm SQUARE STEEL BAR (12684-02-GA, 3 Nov 2026).
+_RE_DWGNO = re.compile(r"\b(\d{3,6}-\d{2}-[A-Z0-9]{1,6}(?:-[A-Z0-9]{1,6}){0,2})\b")
 # tube/section: "30.00 x 30.00 x 1.50mm TUBE" or "30 x 30 x 1.5mm" (RHS/SHS/tube)
 _RE_TUBE = re.compile(
     r"(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*mm?\b", re.I)
@@ -274,7 +279,7 @@ def extract_drawing_facts(pdf_path: str | Path) -> Dict[str, Any]:
                 # null (the tube section carries its own wall thk; plate thk lives in the views,
                 # which we do NOT guess). Honest null beats a boilerplate-polluted number.
                 thk = None
-                if material:
+                if material and not _names_section_stock(material):
                     mt = _RE_THK_IN_MATERIAL.search(material)
                     if mt:
                         thk = _num(mt.group(1))
@@ -300,17 +305,41 @@ def extract_drawing_facts(pdf_path: str | Path) -> Dict[str, Any]:
     result["spec_block"] = _spec_block(
         (" \n ".join(spec_text_parts) + " \n " + " ".join(all_text_parts)).upper())
 
-    # roll page facts up by part number (a part's own detail sheet is authoritative for it)
-    for rec in result["pages"]:
+    result["by_part"] = roll_up_by_part(result["pages"])
+    return result
+
+
+def _names_section_stock(material: str) -> bool:
+    """Does this material cell name a length of section stock — a tube, bar or rod (D-657)? Its
+    "10mm" is then the section's size, never a plate gauge."""
+    try:
+        from section_profile import stock_in_material_words
+        return bool(stock_in_material_words(material))
+    except Exception:                                                # noqa: BLE001
+        return False
+
+
+def roll_up_by_part(pages: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Each part's printed facts, from the pages whose title block names it (a part's own
+    detail sheet is authoritative for it)."""
+    by_part: Dict[str, Dict[str, Any]] = {}
+    for rec in pages:
         pn = rec.get("sheet_part")
         if not pn:
             continue
-        slot = result["by_part"].setdefault(pn, {"source": "drawing_pdf"})
+        slot = by_part.setdefault(pn, {"source": "drawing_pdf"})
+        # A POINTER IS THE PART'S OWN ANSWER (D-657). "FINISH: SEE ASSEMBLY DRAWING" on its own
+        # sheet says the part takes its assembly's finish; it was nulled and never rolled up, so
+        # any other page claiming the part filled the gap with a finish of its own.
+        if rec.get("finish_pointer") and slot.get("finish") in (None, ""):
+            slot["finish_pointer"] = True
         for k in ("weight_g", "tube_section", "cut_length_mm", "material", "thickness_mm", "finish", "colour"):
             v = rec.get(k)
+            if k == "finish" and slot.get("finish_pointer"):
+                continue
             if v is not None and slot.get(k) in (None, ""):
                 slot[k] = v
-    return result
+    return by_part
 
 
 def extract_drawing_facts_for(pdf_paths: Any) -> Dict[str, Any]:
@@ -328,6 +357,9 @@ def extract_drawing_facts_for(pdf_paths: Any) -> Dict[str, Any]:
         for pn, d in (facts.get("by_part") or {}).items():
             slot = out["by_part"].setdefault(pn, {})
             for k, v in (d or {}).items():
+                # A part's own "SEE ASSEMBLY" stands against another document's finish (D-657).
+                if k == "finish" and slot.get("finish_pointer"):
+                    continue
                 if v not in (None, "") and slot.get(k) in (None, ""):
                     slot[k] = v
         for k, v in (facts.get("spec_block") or {}).items():
