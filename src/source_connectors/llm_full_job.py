@@ -235,6 +235,27 @@ def overlay_drawing_facts(job: Dict[str, Any], facts: Dict[str, Any]) -> Dict[st
     return job
 
 
+# Single-blank work that a sheet can call out on the assembly of its pieces without naming the
+# piece: edging on a box. Kept on the assembly while no piece carries it (D-669).
+_KEPT_ON_ITS_ASSEMBLY = frozenset({"edge_banding", "edgebanding"})
+
+
+def _a_piece_carries(part: Dict[str, Any], op: str, parts: List[Dict[str, Any]]) -> bool:
+    """Does any piece of this assembly already carry `op` — its listed children, or the parts
+    whose code is this one's followed by a hyphen?"""
+    pn = _clean_pn(part.get("part_number"))
+    kids = {_clean_pn(k) for k in (part.get("assembly_children") or []) if k}
+    for other in parts:
+        if not isinstance(other, dict) or other is part:
+            continue
+        opn = _clean_pn(other.get("part_number"))
+        if not opn or not (opn in kids or (pn and opn.startswith(pn + "-"))):
+            continue
+        if op in (other.get("textual_operations") or []):
+            return True
+    return False
+
+
 def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> Dict[str, int]:
     """Fold the LLM whole-document job into the pre-estimate part records. Non-destructive:
     fills a field only where the engine has nothing solid, EXCEPT it deliberately provides
@@ -641,11 +662,23 @@ def apply_routes_to_parts(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> i
             # its own at 3 mm from this read. The same refusal as the bought-in one above.
             if op in _LEAF_ONLY_OPS and (part.get("is_assembly_parent")
                                          or part.get("assembly_children")):
-                part.setdefault("review_flags", []).append(
-                    f"operation '{op}' was read from the drawing pack but NOT applied to "
-                    f"{part.get('part_number') or 'this line'}: it is an assembly, and its "
-                    f"pieces carry their own {op.replace('_', ' ')}")
-                continue
+                # EDGING CALLED OUT ON A BOX STAYS ON THE BOX WHERE NO PIECE CARRIES IT (D-669).
+                # 12203-65-01J's sheet calls "1mm EDGING" on the box its five panel flats were
+                # split from. Refused here, the edging went nowhere: no panel is told which of
+                # its edges are banded, and none carried it. Kept on the box, it is costed once
+                # and its length is asked.
+                if op in _KEPT_ON_ITS_ASSEMBLY and not _a_piece_carries(part, op, parts):
+                    part.setdefault("review_flags", []).append(
+                        f"operation '{op}' read from the drawing pack is kept on "
+                        f"{part.get('part_number') or 'this line'}, the assembly of its pieces: "
+                        f"no piece carries it, and its sheet does not say which piece's edges "
+                        f"are banded. Confirm the banded edges and their metres")
+                else:
+                    part.setdefault("review_flags", []).append(
+                        f"operation '{op}' was read from the drawing pack but NOT applied to "
+                        f"{part.get('part_number') or 'this line'}: it is an assembly, and its "
+                        f"pieces carry their own {op.replace('_', ' ')}")
+                    continue
             # THE NAME IS NOT THE DECISION.
             #
             # This used to `continue` whenever the operation name was already on the part,
