@@ -56,6 +56,11 @@ import config  # noqa: E402
 import live_enquiry_runner as ler  # noqa: E402
 
 IDLE_BEAT_SECONDS = 60          # how often an idle watcher asks the portal whether it is on
+# HOW OFTEN A RUNNING JOB IS CHECKED (D-649). Was the Live Enquiry runner's 30s: a job
+# stopped from the page went on showing "running" on the card for up to half a minute
+# before the watcher even asked, then until the sheet had been read again. Each check is
+# one status call to this machine's portal and one beat to each service.
+JOB_POLL_SECONDS = 10
 # THE WINDOW THE CARD SHOWS (D-626). JG, 2 Nov 2026: the price of each quantity ran, "only
 # show the number ran for the past week and a max of 100, or we'll run out of space". The
 # prices per quantity are D-610's and travel on each attempt; this is the window.
@@ -351,6 +356,17 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
         if attempt.get("status") == "done" and d.row.completed_column:
             write_back(Path(s["workbook"]), d.row, attempt, say=say)
             ler.save_ledger(s["ledger"], ledger)
+        # THE CARD LETS GO OF A JOB THE MOMENT IT ENDS (D-649), not after the sheet and the
+        # Live Enquiry folders have been read again for the next one: a stopped job went on
+        # reading "running" (and its Stop button "Stopping") for all of that read.
+        if attempt.get("status") in {"done", "error"}:
+            current.clear()
+            current_key["key"] = ""
+            ended = "finished" if attempt.get("status") == "done" else "ended without an estimate"
+            switch.beat(report("between jobs",
+                               f"{d.row.drawing} ({d.row.customer}) {ended}; reading the "
+                               f"sheet for the next job", counts=tally,
+                               recent=recent_runs(ledger)))
 
     # ONE JOB AT A TIME, AND THE SHEET IS READ AGAIN AFTER EACH (D-639). The cycle used to
     # read the sheet once and run only the rows ready at that moment, so a row made ready
@@ -360,7 +376,8 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
     # is next. A row is tried at most once a cycle, so a failure cannot loop; a switch
     # turned off, a portal that stops answering, or a job still running at its time limit
     # ends the cycle exactly as before.
-    _wait = wait if wait is not None else {"sleep": sleep_and_beat}
+    _wait = wait if wait is not None else {"sleep": sleep_and_beat,
+                                           "poll_seconds": JOB_POLL_SECONDS}
     tried: set = set()
     ran: List[Dict[str, Any]] = []
     while True:

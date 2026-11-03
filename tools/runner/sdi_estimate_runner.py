@@ -120,6 +120,13 @@ _SAY_QUIET_AFTER = 120
 # seconds, or sooner once this many lines are waiting. Was one post per line.
 _POST_EVERY_SECONDS = float(os.getenv("SDI_RUNNER_POST_SECONDS", "2"))
 _POST_MAX_LINES = 500
+# HOW SOON A STOP IS HEARD AND ACTED ON (D-649). A stop reaches this process only as the
+# answer to a post. The engine is often silent for minutes, so the only post was the 30s
+# beat, and the stop it heard was acted on at the NEXT beat: up to a minute before the
+# engine was even told, then up to 30s more while it unwound Excel and SOLIDWORKS
+# (3 Nov 2026: "why does stop this job take so long to shut down"). Now the runner asks
+# every few seconds while the engine is quiet, and ends the engine the moment it hears.
+_LISTEN_SECONDS = float(os.getenv("SDI_RUNNER_LISTEN_SECONDS", "5"))
 
 # The engine's output tree. Deliverables land in estimates/ (workbook AND the HTML
 # quote/report, which share a folder); the auditable summary lands in json/.
@@ -1033,6 +1040,22 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
             time.sleep(_POST_EVERY_SECONDS)
             flush()
 
+    def until_next_beat() -> None:
+        """Wait out one beat, listening for a stop every _LISTEN_SECONDS, and return the
+        moment one is heard or the engine ends (D-649). A stop heard by the console poster
+        is acted on within a second, not at the end of a 30s sleep."""
+        end = time.time() + _BEAT_SECONDS
+        listened = time.time()
+        while proc.poll() is None and not stop_asked:
+            now = time.time()
+            if now >= end:
+                return
+            if now - listened >= _LISTEN_SECONDS:
+                flush(force=True)
+                listened = time.time()
+                continue
+            time.sleep(min(1.0, end - now))
+
     def beat() -> None:
         """Renew the lease while the ENGINE PROCESS is alive, said or unsaid.
 
@@ -1058,7 +1081,7 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
         said_at = 0.0
         spoke_at = last_said
         while proc.poll() is None:
-            time.sleep(_BEAT_SECONDS)
+            until_next_beat()
             if proc.poll() is not None:
                 break
             if stop_asked:

@@ -414,6 +414,48 @@ def test_a_stop_sent_from_the_card_stays_said_until_the_watcher_reports():
     assert "selfJobBtn.disabled = !!stoppedAt;" in page
 
 
+def test_a_stopped_job_is_let_go_of_before_the_sheet_is_read_again(share, monkeypatch):
+    """D-649: the card drew "running" (and its Stop button "Stopping") from the watcher's last
+    report, which said running until the sheet and the Live Enquiry folders had been read
+    again for the next job. The watcher reports the moment a job ends, with no job current."""
+    monkeypatch.setattr(ler, "read_sheet", lambda path, sheet="": [_row(6, "0360001")])
+
+    class _Stopped(FakePortal):
+        def status(self, run_id):
+            return {"status": "error", "error": "Released by hand from the page."}
+    switch = FakeSwitch([])
+    sr.cycle(_settings(share), _Stopped(), switch, say=lambda s: None,
+             wait={"poll_seconds": 0, "sleep": lambda s: None})
+    phases = [b.get("phase") for b in switch.beats]
+    assert "running" in phases and "between jobs" in phases
+    ended = switch.beats[phases.index("between jobs")]
+    assert phases.index("running") < phases.index("between jobs")
+    assert not ended.get("current"), "the ended job is no longer reported as current"
+    assert "0360001" in ended["message"] and "ended without an estimate" in ended["message"]
+
+
+def test_a_running_job_is_checked_every_ten_seconds(share, monkeypatch):
+    """D-649: the watcher asked after a job every 30s, so a stop pressed on the page waited up
+    to half a minute before the watcher even noticed."""
+    monkeypatch.setattr(ler, "read_sheet", lambda path, sheet="": [_row(6, "0360001")])
+    slept = []
+    monkeypatch.setattr(sr.time, "sleep", slept.append)
+    sr.cycle(_settings(share), FakePortal(), FakeSwitch([]), say=lambda s: None)
+    assert sr.JOB_POLL_SECONDS == 10
+    assert slept and set(slept) == {10}
+
+
+def test_the_card_asks_every_five_seconds_while_a_stop_is_pending():
+    """D-649: after Stop, the card is refreshed every 5s (for a minute at most) until the
+    watcher reports the job ended, not at the page's usual 20s."""
+    page = PAGE.read_text(encoding="utf-8")
+    handler = page[page.index("selfJobBtn.onclick = async"):]
+    handler = handler[:handler.index("refreshSelf();\nsetInterval(refreshSelf, 20000);")]
+    assert "quickSelf();" in handler
+    assert "}, 5000);" in page[page.index("function quickSelf()"):]
+    assert "if(!stoppedAt && selfQuick){ clearInterval(selfQuick); selfQuick = null; }" in page
+
+
 
 class _SwitchPortal:
     def __init__(self, server, answer=None, down=False):
