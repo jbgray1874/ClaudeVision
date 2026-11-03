@@ -135,8 +135,10 @@ def test_the_scope_test_reads_the_board_parts():
     import pathlib
     src = (pathlib.Path(__file__).resolve().parent.parent / "src" / "wb_populate.py"
            ).read_text(encoding="utf-8")
-    start = src.index("_faced_board_job = any(")
-    block = src[start:start + 700]
+    # D-664: the scope test is one function, asked of both lists AND each line's own part
+    # record (tests/test_a_faced_board_job_is_seen_from_the_parts_own_record.py).
+    start = src.index("_faced_board_job = is_faced_board_job(")
+    block = src[start:start + 200]
     assert "list(board_parts or [])" in block, (
         "the faced-board scope is still asked only of bom_parts, which is the one list a "
         "board panel is never in")

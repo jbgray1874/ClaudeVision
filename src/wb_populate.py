@@ -3256,6 +3256,43 @@ def _canonical_finish_signature(
                      "+".join(sorted(colours)) or "COLOUR-UNREAD"))
 
 
+_FACED_FAMILIES = {"MFMDF", "MFC"}
+
+
+def _record_is_faced_board(p: Any) -> bool:
+    """Does this record say its board is bought faced: the laminate in the sheet price?"""
+    if not isinstance(p, dict):
+        return False
+    me = p.get("material_estimate") if isinstance(p.get("material_estimate"), dict) else {}
+    return bool(p.get("_laminate_in_board")
+                or str(p.get("_stated_faced_family") or "").upper() in _FACED_FAMILIES
+                or str(me.get("costing_material_family") or "").upper() in _FACED_FAMILIES
+                or str(p.get("normalized_material") or "").upper() in _FACED_FAMILIES)
+
+
+def is_faced_board_job(summary: Dict[str, Any], parts: Any) -> bool:
+    """Is any of these lines a faced board, read from its costed record OR its own part record
+    (D-664)? The labour rows name the board from either (canonical_labour_groups); the scope of
+    the joinery shop's stated rates must read the same two places.
+
+    12203-66-GA, 3 Nov 2026 19:48: three 13.8 mm laminated MDF panels, every CNC row labelled
+    "13.8mm MFMDF", and Bench Work ran at 10/hr and Packing at 75/hr against the joinery
+    shop's stated 2/hr and 20/hr for faced board. The market rescue had replaced the panels'
+    costed material record without the faced family; the part records still carried it."""
+    lines = [p for p in (parts or []) if isinstance(p, dict)]
+    if any(_record_is_faced_board(p) for p in lines):
+        return True
+    try:
+        _est, raw = _canonical_record_index(summary or {}, lines)
+    except Exception:                                                # noqa: BLE001
+        return False
+    for p in lines:
+        pn = str(p.get("part_number") or "").strip().upper()
+        if pn and _record_is_faced_board(raw.get(pn)):
+            return True
+    return False
+
+
 def _canonical_record_index(
     summary: Dict[str, Any],
     part_estimates: List[Dict[str, Any]],
@@ -7309,13 +7346,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # See the derived-throughput gate below: a stated rate is not a default to be improved
     # on, it is the answer.
     _STATED_THROUGHPUT_ROWS: set = set()
-    _faced_board_job = any(
-        isinstance(_p, dict) and (
-            _p.get("_laminate_in_board")
-            or str((_p.get("material_estimate") or {}).get("costing_material_family")
-                   or "").upper() in {"MFMDF", "MFC"}
-            or str(_p.get("normalized_material") or "").upper() in {"MFMDF", "MFC"})
-        for _p in (list(bom_parts or []) + list(board_parts or [])))
+    _faced_board_job = is_faced_board_job(summary, list(bom_parts or []) + list(board_parts or []))
     if _faced_board_job:
         for _row, _key in (("CNC Joinery",        "joinery_cnc_parts_per_hour"),
                            ("Edge Banding",       "joinery_edge_banding_parts_per_hour"),
@@ -8805,11 +8836,19 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # _faced_board_job): a laminated PANEL with a blank sits in board_parts, so an
         # ask scoped to bom_parts never fired on the very parts that get banded
         # (SCRUM-179 — 12678-01-GA's EDGE row at zero on a laminated podium).
-        _lam_parts = [p for p in (list(bom_parts or []) + list(board_parts or []))
-                      if isinstance(p, dict)
-                      and (p.get("_laminate_in_board")
-                           or (p.get("material_estimate") or {}).get(
-                               "costing_material_family"))]
+        _lam_lines = [p for p in (list(bom_parts or []) + list(board_parts or []))
+                      if isinstance(p, dict)]
+        try:
+            _lam_raw = _canonical_record_index(summary, _lam_lines)[1]
+        except Exception:                                            # noqa: BLE001
+            _lam_raw = {}
+        # AND THE PART'S OWN RECORD (D-664), where a rescue replaced the costed one.
+        _lam_parts = [p for p in _lam_lines
+                      if (p.get("_laminate_in_board")
+                          or (p.get("material_estimate") or {}).get(
+                              "costing_material_family")
+                          or _record_is_faced_board(_lam_raw.get(
+                              str(p.get("part_number") or "").strip().upper())))]
         _bom_says_edging = any("EDG" in str(r.get("description") or "").upper()
                                for r in (summary.get("bom_rows")
                                          or (summary.get("document_analysis") or {}).get(

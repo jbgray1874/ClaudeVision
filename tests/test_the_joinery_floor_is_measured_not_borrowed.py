@@ -205,10 +205,11 @@ def test_the_overlay_only_fires_on_the_family_it_was_measured_on():
     src = open(os.path.join(os.path.dirname(__file__), "..", "src", "wb_populate.py"),
                encoding="utf-8").read()
     assert "_faced_board_job" in src
-    i = src.index("_faced_board_job = any(")
+    # D-664: the family test lives in is_faced_board_job / _FACED_FAMILIES, asked here.
+    assert '_FACED_FAMILIES = {"MFMDF", "MFC"}' in src
+    i = src.index("_faced_board_job = is_faced_board_job(")
     j = src.index('joinery_pack_parts_per_hour', i)
     gate = src[i:j]
-    assert "MFMDF" in gate and "MFC" in gate
     assert "if _faced_board_job:" in gate, "the overlay must sit inside the gate"
 
 

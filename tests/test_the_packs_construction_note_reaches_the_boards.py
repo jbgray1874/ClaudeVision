@@ -123,7 +123,8 @@ def test_the_scan_applies_the_note_before_costing_and_the_sheet_asks_about_the_e
               encoding="utf-8").read()
     # The edging ask reads BOTH material lists: a laminated panel with a blank sits in
     # board_parts, and an ask scoped to bom_parts never fired on the parts that get banded.
-    i = wb.index("_lam_parts = [p for p in")
+    # D-664: the lines are gathered first, then read with each one's own part record.
+    i = wb.index("_lam_lines = [p for p in")
     assert "board_parts" in wb[i:i + 120]
     est = open(os.path.join(os.path.dirname(__file__), "..", "src", "estimator.py"),
                encoding="utf-8").read()
