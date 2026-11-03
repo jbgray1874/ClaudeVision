@@ -13264,6 +13264,18 @@ def _last_resort_price_is_needed(pe: Dict[str, Any]) -> bool:
             return False
     elif (_safe_float(pe.get("extended_total_cost_gbp")) or 0.0) > 0:
         return False
+    # A SIZED BOARD WHOSE ONLY GAP IS THE BOARD'S PRICE IS NOT A PART WITH NO SIZE (D-665).
+    # 12203-66-GA, 3 Nov 2026 19:48: three 13.8 mm faced-MDF panels, each with its blank, its
+    # gauge and its faced family, lacked one thing, the sheet price. This rescue asked the
+    # market for "the raw material for one side panel; its size is not known" and got a
+    # per-piece figure for each: two were refused as conflicting buying bases (SCRUM-182), the
+    # third was rebuilt by the workbook into an £80.98 "sheet price". One board, three answers.
+    # The gap is the board's price, asked once for the board; a per-piece guess cannot fill it.
+    if isinstance(_me, dict) and _safe_float(_me.get("blank_length_mm")) \
+            and _safe_float(_me.get("blank_width_mm")) and (
+                str(_me.get("cost_method") or "") == "faced_board_unpriced"
+                or {str(x) for x in (_me.get("unpriced_inputs") or [])} == {"sheet_price"}):
+        return False
     # Nothing to look a price up against.
     if not str(pe.get("description") or pe.get("part_number") or "").strip():
         return False
