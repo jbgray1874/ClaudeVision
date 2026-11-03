@@ -6787,6 +6787,9 @@ def compile_job_route(
     _withhold_coats_with_nothing_to_coat(decisions, graph, issues)
     # A bond, a coat or a routing is charged at one level of the tree (D-446).
     _withhold_duplicate_level_ops(decisions, graph, issues)
+    # One pass through the booth per coated object (D-656); spot welds by the symbols (D-656).
+    _one_coat_event_per_target(decisions, issues)
+    _spot_welds_by_their_symbols(decisions, graph, issues)
     # NOT GATED, BECAUSE IT MOVES NO MONEY. The family gate above changes what a job charges and
     # so enters only where its evidence is; this one only ever adds a question to the record, and
     # a job that is double-charging a joint deserves the question whichever lane it came down.
@@ -7534,6 +7537,79 @@ def _withhold_duplicate_level_ops(decisions: Sequence[Any], graph: Mapping[str, 
             issues.append({"code": "operation_charged_at_one_level", "operation": _op,
                            "part": _tid, "kept_on": kept})
     return withheld
+
+
+def _one_coat_event_per_target(decisions: Sequence[Any],
+                               issues: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """A coated object goes through the booth once per instance (D-656).
+
+    12684-02-101SA, the hook assembly, 3 Nov 2026: two readers each raised a powder event on
+    it, one per route, both at 33, and the sheet's P.Coat row added them to 66 pieces. JG: the
+    hooks are 33 pieces. Two required coats of the same kind on the same target are one booth
+    pass: the higher count stands (never the sum), the participants they name are joined, and
+    the other is ruled out with the reason. A second coat stated as a count on ONE decision
+    (two coats, a primer) is untouched."""
+    groups: Dict[Tuple[str, str], List[Any]] = {}
+    for d in decisions:
+        op = str(d.operation or "").lower()
+        if d.status == REQUIRED and op in _GATED_COAT_OPS and d.target_id:
+            groups.setdefault((str(d.target_id), op), []).append(d)
+    merged: List[str] = []
+    for (tid, op), ds in groups.items():
+        if len(ds) < 2:
+            continue
+        ds = sorted(ds, key=lambda x: (-(number(x.qty_per_unit, 0.0) or 0.0),
+                                       str(x.decision_id)))
+        keep = ds[0]
+        keep.participants = sorted({p for x in ds for p in (x.participants or [])})
+        for other in ds[1:]:
+            other.status = NOT_APPLICABLE
+            other.reason = ((f"{other.reason}; " if other.reason else "")
+                            + f"the same {op.replace('_', ' ')} of {tid} as {keep.decision_id} — "
+                              f"one pass through the booth per {tid}, counted once at "
+                              f"{number(keep.qty_per_unit, 1.0):g}, not added to it")
+            other.field_provenance["status"] = "one_coat_event_per_target"
+        merged.append(tid)
+        if issues is not None:
+            issues.append({"code": "one_coat_event_per_target", "operation": op, "part": tid,
+                           "kept": keep.decision_id,
+                           "ruled_out": [x.decision_id for x in ds[1:]]})
+    return merged
+
+
+def _spot_welds_by_their_symbols(decisions: Sequence[Any], graph: Mapping[str, Any],
+                                 issues: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """A spot weld is charged per weld its own sheet's symbols show (D-656).
+
+    12684-02-GA's sheet carries 33 ISO spot-weld symbols, one per hook, and weld_symbols.py
+    recorded spot_weld_count 33 — but the Spotweld row took the part's own count, 1. JG: the
+    Spotweld rate is welds per hour. So a required spot weld on a part whose symbols were
+    counted is charged at that count for each instance of the part, where that is more."""
+    quantities = graph.get("quantities") or {}
+    counted: List[str] = []
+    for d in decisions:
+        if d.status != REQUIRED or str(d.operation or "").lower() != "spot_welding":
+            continue
+        rec = _graph_record(graph, str(d.target_id or ""))
+        n = number(rec.get("spot_weld_count"), None) if rec else None
+        if not n or n <= 0:
+            continue
+        per_instance = number(quantities.get(d.target_id), 1.0) or 1.0
+        welds = float(n) * float(per_instance)
+        if welds <= (number(d.qty_per_unit, 0.0) or 0.0):
+            continue
+        was = d.qty_per_unit
+        d.qty_per_unit = welds
+        d.field_provenance["qty_per_unit"] = "spot_weld_symbols"
+        d.reason = ((f"{d.reason}; " if d.reason else "")
+                    + f"{n:g} spot weld(s) on its own sheet, each callout one weld, x "
+                      f"{per_instance:g} per unit = {welds:g} welds a unit (the Spotweld rate "
+                      f"is welds per hour); was {was if was is not None else 'unset'}")
+        counted.append(str(d.target_id))
+        if issues is not None:
+            issues.append({"code": "spot_welds_by_their_symbols", "part": d.target_id,
+                           "welds_per_unit": welds})
+    return counted
 
 
 def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]],
