@@ -72,6 +72,8 @@ what happens to each:
 | 16 | **Products with no cost** left out of YITC (on Check instead) | 937 products had no cost line, 73 of them stocked | **Switched off, 2 Nov.** Loaded at 0, listed on Check for SDI to supply a cost. YITC now has a line for all 16,499 products |
 | 17 | **vw_ITM drops products marked do-not-use or archived** in STK_STOCK (discovery, 31 Oct) | live ones never reached the product file | **Switched off** in `rebuild/`: they come through the master grid; live ones go in and are on Check |
 | 18 | **vw_BOMP drops a hard-coded list of 51 components** and lines with no quantity | BOM lines missing, components never pulled into the product file | **Switched off** for products (`rebuild/` reads ASC_BOM_TBL). The 51 to review in the BOM part |
+| 20 | **County / region never filled** on customer addresses: the template column has no X3 field code | X3 needs a State/Region for CA, AU, AE, US: DRE100, MAR101, PER101 rejected (XSAT), with their delivery addresses | **To fix for Run 3:** fill it for those countries (Run3_master_data_fixes.xlsx). Map the column properly in the customer part of the kit |
+| 21 | **FGSL is not stock-managed in X3** | 451 FGSL products hold stock (1,222 lots, £1.72m); SMR rejected them (1,500+ errors) | **Decision for Marc / Ethan:** make FGSL stock-managed. These are bought-in goods SDI really stocks; otherwise the stock can't load |
 | 19 | **Description 1 is only the code** (STKNAME on sub-assemblies / parts: "10074-02-SA01") | 1,753 loaded products show the code, not a name | **Fixed in `rebuild/`, 2 Nov:** takes description 3, then PMA_DESC (the part master's own description, which vw_ITM never read), then description 2. 1,653 fixed from data held; the other 100 from PMA_DESC on the next extract |
 
 ### 1b. Complete files only, never a top-up (James, 30 Oct)
@@ -163,8 +165,17 @@ Amount, Source Date, Paying Customer, Due Date, Payment Terms, Source Document, 
 comments, Line, Site, Plan code, General accounts, Distribution, Comment, Transaction Amount.
 - MINV / MCRN / MREC / MJDT / MJCT. General account 999100. Plan code 18L.
 - Amounts are the outstanding balance, positive; the document type carries the sign.
-- **Company (column D, new 28 Oct): S01A on every row (James, 28 Oct).** Run
-  `scripts/build_bicy_bisy.py` with `COMPANY=S01A`.
+- **Company (column D, new 28 Oct): C01 on every row (3 Nov).** S01A is the site, already in
+  Site. C01 is the company Acuity put in for Run 2, and BICY then loaded with 0 errors. It's the
+  default in `scripts/build_bicy_bisy.py` (`COMPANY=` overrides it).
+- **Document (NUM, column B) and Source Document (BPRVCR, column N) are swapped (Run 2, Acuity).**
+  NUM now holds the order number (ST_ORDER_NUMBER) and BPRVCR the Access invoice number
+  (ST_HEADER_REF). Every NUM is kept unique, so no two items can merge into one X3 document:
+  - a value used more than once takes -2, -3 (160 BICY items share 68 order numbers);
+  - a blank or 0 takes the invoice number. These are the 18 receipts and journals that Acuity
+    filled with 0 by hand.
+  `SWAP=0` keeps B and N as built. **Ask Ethan whether X3 needs NUM unique**; if it doesn't, the
+  suffixes can go.
 
 **YA004BISY – supplier open items (24 columns, one heading row only). Was YA004BISX (renamed 28 Oct).**
 As BICY, with Supplier and Paying Supplier, and general account 999200. Columns: Invoice Type,
@@ -175,10 +186,13 @@ Document, Supplier, **Company**, Site, Accounting Date, Currency, GBP Amount, ..
   order number as '' not NULL, so the view's COALESCE stopped there. `views_v2.sql` now NULLIFs it,
   and `populate_guides.py` fills any blank with the document reference. The BICY Source Document
   (ST_ORDER_NUMBER) had no blanks.
-- Company in column D, as BICY.
+- Company in column D, as BICY (C01). Document and Source Document swapped as BICY: 454 repeated
+  values take -2, -3. The blanks Acuity filled with BLANK are already filled from the document
+  reference (the 317 above), so none reach X3 blank.
 - **Built by `scripts/build_bicy_bisy.py`** from the BICX / BISX files that `populate_guides.py`
-  makes. It deletes CURLED, inserts Company at D, updates the Mapping, Guide and Notes tabs, and
-  reads every row back. Rows and values are otherwise identical.
+  makes. It deletes CURLED, inserts Company at D, swaps B and N, updates the Mapping, Guide and
+  Notes tabs, reads every row back, and writes the `;` load file (rule 1c). Rows and values are
+  otherwise identical.
 - **Load BICY and BISY from the file, not the macro.** They have one heading row and the
   macro skips two, so it would drop the first item.
 
@@ -755,8 +769,8 @@ are. They need Python 3 with openpyxl.
 | YA004SMR_guide_MAPPED_clean_run | 6,303 lots, £3,437,532.29 |
 | YA004POH_guide_MAPPED_clean_run | 579 lines (479 + 100 new suppliers') |
 | YA004SOHPJ_guide_MAPPED_clean_run | 3,161 lines (2,012 + 1,149 new customers') |
-| YA004BICY_guide_MAPPED (was BICX) | 817 items, £8,788,291.72 (+230, £3.54m). Company = S01A |
-| YA004BISY_guide_MAPPED (was BISX) | 2,280 items, £6,953,942.83 (+253, £0.84m). CURLED removed; Company = S01A |
+| YA004BICY_guide_MAPPED (was BICX) | 817 items, £8,788,291.72 (+230, £3.54m). Company = C01; B and N swapped (3 Nov) |
+| YA004BISY_guide_MAPPED (was BISX) | 2,280 items, £6,953,942.83 (+253, £0.84m). CURLED removed; Company = C01; B and N swapped (3 Nov) |
 
 Data: everything from the 21 Oct export, except the new accounts' rows, which are from 27 Oct.
 The real load needs one fresh extract of everything, on one day.
@@ -852,7 +866,7 @@ fixes themselves are what every rerun must repeat.
 | **SDI_Data_Migration_-_Import_Notes.docx** | Ethan, 23 Oct | Per-template fixes: allowed characters; BP tax rule table (no EU); AG address flag rule; GB and EU VAT formats; products and descriptions more thoroughly; BOMs need loaded products; work centre mapping; costs under material; SOH dates (2024) and DIE/CCE; SMR lots must be X3 lots; BICX/BISX "worked", missing accounts; IME column on BISX to come | Every point applied or asked (sections 5, 6, 14). The X3 lot export is still needed |
 | **YA004SOHPJ** (instructions) | Ethan, 23 Oct | SOH + Dim Code (D02) and Dimension (P00003) between columns M and N | Built as YA004SOHPJ (22 columns), DIE/CCE to confirm |
 | **YA004BPSC_guide.xlsx** | Ethan, 28 Oct | Supplier bank details: BPSNUM, BPAADD, CRY, BIDNUM (XXXX + sort code + account), PAB1, BICCOD, PAB2 blank, CUR, BIDNUMFLG 2. BACS suppliers only | Mapped (section 3); `supplier_bank_details.sql` + `build_bpsc.py`. Built 28 Oct: 626 loaded, 37 on the Check tab |
-| **BICY / BISY layout** | James, 28 Oct | BICX and BISX renamed YA004BICY and YA004BISY; CURLED removed from BISY; new column Company between C (Customer / Supplier) and D (Site) in both | Built (`build_bicy_bisy.py`). Company = S01A (James, 28 Oct) |
+| **BICY / BISY layout** | James, 28 Oct | BICX and BISX renamed YA004BICY and YA004BISY; CURLED removed from BISY; new column Company between C (Customer / Supplier) and D (Site) in both | Built (`build_bicy_bisy.py`). Company = C01, the value that loaded in Run 2 (3 Nov) |
 | **YA004BPCDL_guide.xlsx** | Ethan, 23 Oct (sent twice) | Customer delivery addresses: BPCNUM, BPAADD, BPDNAM. Load after customers | Built, 2,268 rows |
 | **ZSDIITMSUP_Guide_V2.xlsx** | Ethan, 23 Oct (sent twice) | Product-suppliers: ITMREF, BPSNUM, ITMREFBPS (= product code) | Built, 7,679 rows; PIO asked |
 | **YA004MFG_Guide.xlsx** | Ethan, 27 Oct | Works orders: 11 columns, BOM code and routing code 10, update code C, status 1. Example rows are illustrative, not live orders. Standard spreadsheet tools can't read its styles; it was read from the XML | Built, 638 orders; 6 questions asked |
@@ -969,3 +983,71 @@ error logs; the original BPC and BPS template workbooks, to keep with this runbo
    - Marc: service items (installation, delivery, tooling) and the multi-drop ship-to.
 11. **Queries:** read-only against Access; narrow to the codes needed before any join or total;
    check brackets and REPLACE arguments; say what a query changes at the top.
+
+---
+
+## 17. Run 2 results, and Run 3 (4 Nov)
+
+### Run 2, 27–28 Oct: what X3 rejected (Ethan's notes, 28 Oct)
+
+| File | Errors | Cause | Fix | Owner |
+|---|---|---|---|---|
+| ZSDIITM, YA004BOMP, YITC | 0 | – | – | – |
+| ZSDIROU2 | 32 | "Table is full 150": the X3 screen holds 150 operations | Widen the screen | Marc / Ethan |
+| YA004BPS | 22 | 10 FR suppliers have no EECNUM (intra-EU VAT number) or CRN (SIRET), which X3 needs for FR. PLS500 is ES with a GB VAT number. BAL500 is FR on tax rule DOM | Finance to supply the numbers; never a dummy | James / Finance |
+| YA004BPC | 6 | XPOSCOD postcode format: TEC100, TEC105, UNI103. XSAT missing State/Region: DRE100, MAR101, PER101 | Fix the addresses (register 20) | James |
+| YA004BPCDL | 1,400+ | Every one belongs to the six customers above (1,425 addresses; MAR101 alone has 1,205) | Clears once the six load | – |
+| ZSDIITMSUP | 22 | Error messages wrong; the records loaded | Ignore | – |
+| YA004MFG | 3 | Possibly wrong messages | Acuity to investigate | Ethan |
+| YA004POH | 3 | Supplier BAL500 missing (failed in BPS) | Clears with BPS | – |
+| YA004SOHPJ | 900+ | "Sales product missing" on PHANT products. 32 PHANT products are on 82 open lines: sold, so not true phantoms (usage test, group A) | FGML, part of the PHANT decision (SCRUM-168) | Marc / Ethan |
+| YA004SMR | 1,500+ | "Product not in managed stock" on FGSL products: 451 products, £1.72m | Make FGSL stock-managed (register 21) | Marc / Ethan |
+| YA004BISY | 5, then 12 | Blank Source Document (Acuity filled BLANK); then SOG500 and BAL500, which failed in BPS | Blanks were already fixed in our build (the 317, section 3); suppliers clear with BPS | – |
+| YA004BICY | 0 | Acuity added Company = C01, and swapped NUM and BPRVCR | Both now in our build (section 3) | – |
+
+Acuity also noted for SMR: Posted Date (IPTDAT) "probably needs to be the last day of the
+previous period". For Run 3 that's **20261031**, the same as the accounting date. Go-live stays
+20261231.
+
+### Run 3, 4 Nov: the plan (Acuity, 3 Nov)
+- **RTZ on all transaction data. Master data stays** (products, customers, suppliers ...).
+- Import any missing master data, to make it as clean as possible: the failed suppliers and
+  customers above.
+- Imports: BPSC, BICY, BISY, SOHPJ, POH, MFG, essentially every opening-transaction import, with
+  the Run 2 errors fixed.
+- Then reconcile the opening transactions with Jim, to judge their quality and find what's missing.
+
+### Run 3: the extract and build, on the day
+**The transaction data must be extracted on the day.** The files built so far come from the
+21 Oct extract (`run1/out.txt`) plus the 27 Oct new-accounts export. A reconciliation against
+today's Access would fail on everything that has moved since.
+
+On SDILive, in this order (each script says what it changes):
+1. `sql/add_new_accounts_to_xref.sql`. Changes only `migration.XREF_*`. Its checks must show
+   86 customers and 83 suppliers added. On 27 Oct it hadn't been run, so the new accounts'
+   rows were dropped.
+2. `sql/views_v2.sql`. Changes only `migration.` views and ITM_LOOKUP. Save the **whole** output
+   with Results To File, tab-delimited: it's the `run1/out.txt` that `populate_guides.py` reads
+   (grids 7–11). **STOP check:** its "dropped" grid must be 0, or only the accounts left out on
+   purpose. The views still inner-join the cross-reference (register 4).
+3. `sql/works_orders_extract.sql`. Read-only; save grid 2 as `wor/out.txt`.
+4. `sql/bins_and_delivery.sql`. Read-only; grid 1 as `bins/out.txt`, only if bins have changed.
+
+Then build (section 12, step 5), with `STOCK_DATE=20261031`:
+`map_bins.py` → `build_mapped_guides.py` → `populate_guides.py` → `recode_ledgers_v7.py` →
+`build_mfg.py` → `build_bicy_bisy.py` (C01, swap) → `build_sheets.py`.
+BPSC comes from `bank_private/` (confidential; 626 rows; its `.txt` written 3 Nov).
+
+**Before the imports:** the master-data fixes in `out_run3/Run3_master_data_fixes.xlsx`
+(`scripts/run3_fix_lists.py`):
+- the 11 suppliers and what each needs;
+- the 6 customers and their 248 addresses to fix. Examples: GB postcodes with a letter O for a
+  zero (SO21, SE1 0HX, CM12 0BP); Cyprus, Shanghai and Dublin addresses marked GB; postcodes left
+  in the address lines;
+- the 451 FGSL products with stock;
+- the PHANT and RAWML products on open sales orders.
+
+**Reconciliation (Jim):** `views_v2.sql` prints the control totals: customer and supplier
+open items (count and GBP) and opening stock (lots and value, by warehouse). Tie each to X3
+after the load. Any difference is a missing or merged transaction.
+
