@@ -358,10 +358,12 @@ Say "B. THE KEYS - they come with the folder (2 November guide) and are copied" 
 Say "   to $Target\.env on the server. Never into chat. Section 2 above says who"
 Say "   else can read them while they are on K:."
 Say ""
-Say "C. PORT 5020 NEEDS NO OPENING. The App Proxy connector runs ON this server" Yellow
-Say "   (APP_PROXY_GOLIVE.md 3.1), so it reaches Same Day locally: internal URL"
-Say "   http://localhost:5020/ and LITE_TRUST_FROM=127.0.0.1. Leave 5020 and 5030"
-Say "   closed to the office network - open, the team code is the only lock."
+Say "C. WHO CAN REACH PORT 5020 - it depends which way it is published." Yellow
+Say "   Internal first (3 November - no Entra work yet): open 5020 to the office"
+Say "   network only. The team code is then the lock, as on the laptop today."
+Say "   Through App Proxy later: PORT 5020 NEEDS NO OPENING. The connector runs"
+Say "   ON this server (APP_PROXY_GOLIVE.md 3.1), so it reaches Same Day locally:"
+Say "   internal URL http://localhost:5020/ and LITE_TRUST_FROM=127.0.0.1."
 Say ""
 Say "D. OUTBOUND - the server must reach api.openai.com and api.anthropic.com," Yellow
 Say "   and office browsers must reach api.openai.com for the live voice."
