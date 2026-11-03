@@ -3322,6 +3322,17 @@ def is_faced_board_job(summary: Dict[str, Any], parts: Any) -> bool:
     return False
 
 
+def faced_board_line(summary: Dict[str, Any], pe: Any) -> bool:
+    """Is this board line faced board, by its costed record, its unpriced faced result, or its
+    own part record (D-664/D-666)?"""
+    if not isinstance(pe, dict):
+        return False
+    me = pe.get("material_estimate") if isinstance(pe.get("material_estimate"), dict) else {}
+    if _record_is_faced_board(pe) or str(me.get("cost_method") or "") == "faced_board_unpriced":
+        return True
+    return is_faced_board_job(summary, [pe])
+
+
 def _canonical_record_index(
     summary: Dict[str, Any],
     part_estimates: List[Dict[str, Any]],
@@ -7125,7 +7136,16 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                       f"{float(_safe(me.get('cost_per_part_gbp')) or 0):.2f} is a per-piece "
                       f"market allowance, not a sheet price, so it is not multiplied up "
                       f"into one (D-665).", flags)
-        if not _sheet_price:
+        if not _sheet_price and faced_board_line(summary, pe):
+            # A FACED BOARD IS NOT ITS CORE BY WEIGHT (D-666). 12203-66-GA's 19:48 and 20:10
+            # books charged the 13.8 mm laminated front panel £80.98 a sheet: 2800 x 2070 x
+            # 13.8 mm of MDF at 750 kg/m3 and the plain-MDF £1.35/kg, the raw-core money the
+            # estimator's faced-board rule refuses. The faced sheet's price is the gap.
+            _flag(f"Other-sheet {pe.get('part_number')} is faced board: its sheet is NOT "
+                  f"priced from the {str(pe.get('normalized_material') or 'core').upper()} "
+                  f"core's £/kg rate, which would charge raw-core money for a laminated "
+                  f"panel; unpriced until the faced sheet price is given (D-666).", flags)
+        elif not _sheet_price:
             # LAST, AND ONLY A GAP-FILLER: derive the £/sheet from the material's own £/kg rate the
             # same way steel is costed, so a board with a rate in config is never £0. MDF (1.35
             # £/kg, 750 kg/m3) 1235x365x12 stops shipping free.
