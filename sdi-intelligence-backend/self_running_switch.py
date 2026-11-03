@@ -105,7 +105,12 @@ def switch(on: bool, by: str = "") -> Dict[str, Any]:
         # WHEN IT WAS LAST PRESSED, AS A NUMBER (D-644). A watcher that serves more than one
         # service (the laptop's 8072 and the 8071 the phone reaches) obeys the switch pressed
         # most recently on any of them, so Off pressed anywhere still stops it.
-        state["toggled_epoch"] = time.time()
+        #
+        # NEWER THAN ANYTHING THIS SERVICE HAS SEEN (D-650). A press relayed from another
+        # service carries that machine's clock; one a few seconds ahead must not make the
+        # press made here, now, read as the older one and be undone by the relay.
+        state["toggled_epoch"] = max(time.time(),
+                                     float(state.get("toggled_epoch") or 0.0) + 0.001)
         if on:
             state["switched_on_at"] = _now_iso()
             state["run_now"] = True
@@ -122,7 +127,27 @@ def heartbeat(report: Dict[str, Any], now: Optional[float] = None) -> Dict[str, 
     now = time.time() if now is None else now
     with _LOCK:
         state = _load()
-        watcher = {k: v for k, v in (report or {}).items() if k not in ("seen_epoch",)}
+        # ONE SWITCH ON EVERY SCREEN (D-650). Each service keeps its own switch, and the
+        # watcher obeys whichever was pressed last on any of them, so the laptop's page read
+        # "Switched off" while the watcher ran jobs on an On pressed later on the phone
+        # (3 Nov 2026: "the runner still seems to be connected also and queueing up jobs").
+        # The watcher now passes on the press it obeys, and a service takes it when it is
+        # newer than its own, so every screen shows the switch that is actually in force.
+        # It never sets run_now: the service where it was pressed has already asked for that.
+        obeyed = (report or {}).get("obeyed") or {}
+        try:
+            theirs = float(obeyed.get("toggled_epoch") or 0.0)
+        except (TypeError, ValueError):
+            theirs = 0.0
+        if theirs > float(state.get("toggled_epoch") or 0.0):
+            state["enabled"] = bool(obeyed.get("enabled"))
+            state["toggled_epoch"] = theirs
+            for key in ("switched_by", "switched_on_at", "switched_off_at"):
+                if obeyed.get(key):
+                    state[key] = obeyed[key]
+            state["run_now"] = False
+        watcher = {k: v for k, v in (report or {}).items()
+                   if k not in ("seen_epoch", "obeyed")}
         # Keep the last cycle's tallies and runs across the short beats that do not carry them.
         previous = state.get("watcher") or {}
         for keep in ("counts", "recent", "last_cycle_at", "next_cycle_at"):
@@ -137,4 +162,7 @@ def heartbeat(report: Dict[str, Any], now: Optional[float] = None) -> Dict[str, 
         _save(state)
         enabled = bool(state.get("enabled"))
     return {"enabled": enabled, "run_now": run_now,
-            "toggled_epoch": float(state.get("toggled_epoch") or 0.0)}
+            "toggled_epoch": float(state.get("toggled_epoch") or 0.0),
+            "switched_by": state.get("switched_by") or "",
+            "switched_on_at": state.get("switched_on_at"),
+            "switched_off_at": state.get("switched_off_at")}

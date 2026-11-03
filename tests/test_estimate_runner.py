@@ -520,6 +520,88 @@ def test_the_silence_is_measured_from_the_last_line_not_the_start_of_the_run(eng
         f"it is timing from the start of the run, not from the last line")
 
 
+# ── a stop is heard and acted on within seconds (D-649) ─────────────────────
+class _WorksUntilStopped:
+    """An engine in a long silent phase that only ends when it is terminated."""
+
+    def __init__(self):
+        self._alive = True
+        self.returncode = None
+        self.terminated_at = None
+
+    @property
+    def stdout(self):
+        def _lines():
+            yield "   [bom] 28 line(s)\n"
+            while self._alive:
+                time.sleep(0.01)
+        return _lines()
+
+    def poll(self):
+        return None if self._alive else self.returncode
+
+    def terminate(self):
+        self.terminated_at = time.time()
+        self._alive, self.returncode = False, 1
+
+    def kill(self):
+        self.terminate()
+
+    def wait(self, timeout=None):
+        while self._alive:
+            time.sleep(0.01)
+        return self.returncode
+
+
+class _AbandonedRequests:
+    """The service after Stop was pressed: every progress post is refused with a 409."""
+
+    def __init__(self):
+        self.progress, self.completed = [], []
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        (self.completed if url.endswith("/complete") else self.progress).append(json)
+
+        class _R:
+            status_code, ok, text = 409, False, "That run is already error."
+
+            @staticmethod
+            def json():
+                return {}
+
+            @staticmethod
+            def raise_for_status():
+                return None
+        return _R()
+
+
+def test_a_stop_ends_a_silent_engine_within_seconds_not_at_the_next_beat(engine, monkeypatch):
+    """3 Nov 2026: "why does stop this job take so long to shut down". A silent engine's only
+    post was the 30s beat, and a stop it heard was acted on at the beat after that. With the
+    console poster held off, only the runner's own listening can hear this stop, and the
+    engine must be ended long before one 30s beat has passed."""
+    runner, root = engine
+    monkeypatch.setattr(runner, "_BEAT_SECONDS", 30)
+    monkeypatch.setattr(runner, "_POST_EVERY_SECONDS", 60)
+    monkeypatch.setattr(runner, "_LISTEN_SECONDS", 0.05)
+    tpl = root / "Blank Estimate Sheet  WB 2026.xlsx"
+    tpl.write_bytes(b"present is all this check asks")
+    monkeypatch.setenv("SDI_WB_TEMPLATE", str(tpl))
+    proc = _WorksUntilStopped()
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda *a, **k: proc)
+    req = _AbandonedRequests()
+    job = {"run_id": "r1", "client": "Boots", "units": 45, "drawing_number": "11650-00",
+           "job_folder": str(root), "output_path": str(root / "share" / "Boots")}
+    started = time.time()
+    runner._execute(req, "http://x/api/estimate", {}, job, root, Path("python"), "rnr-1")
+    assert proc.terminated_at is not None, "the engine was never ended"
+    assert proc.terminated_at - started < 5, (
+        f"the engine was ended {proc.terminated_at - started:.1f}s after the stop could be "
+        f"heard; the beat is 30s")
+    said = [line for post in req.progress for line in (post.get("lines") or [])]
+    assert any("STOPPING" in line for line in said)
+
+
 # ── a death that leaves evidence ────────────────────────────────────────────
 def test_everything_the_runner_says_goes_to_a_file_as_well(engine, capsys):
     """"IT JUST SEEMS TO RANDOMLY DIE" IS WHAT NO LOG LOOKS LIKE.

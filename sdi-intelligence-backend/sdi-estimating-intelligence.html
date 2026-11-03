@@ -4850,12 +4850,24 @@ function selfStatusLine(v){
    "running" until its next beat — and the 20-second refresh overwrote the "Stop requested"
    line, so a stop that had worked read as one that did nothing (12754-01-GA, 3 Nov 2026). */
 const selfStopped = {};
+/* WHILE A STOP IS PENDING, ASK EVERY 5 SECONDS (D-649), not every 20, so the card lets go of
+   the job as soon as the watcher reports it ended; for a minute at most. */
+let selfQuick = null;
+function quickSelf(){
+  clearInterval(selfQuick);
+  let left = 12;
+  selfQuick = setInterval(() => {
+    if(--left <= 0){ clearInterval(selfQuick); selfQuick = null; }
+    refreshSelf();
+  }, 5000);
+}
 function renderSelf(v){
   const w = v.watcher || {};
   selfRunBtn.hidden = !!v.enabled;
   selfStopBtn.hidden = !v.enabled;
   const job = (w.phase === "running" && w.connected) ? (w.current || {}) : {};
   const stoppedAt = job.run_id ? selfStopped[job.run_id] : "";
+  if(!stoppedAt && selfQuick){ clearInterval(selfQuick); selfQuick = null; }
   selfJobBtn.hidden = !job.run_id;
   selfJobBtn.dataset.runId = job.run_id || "";
   selfJobBtn.disabled = !!stoppedAt;
@@ -4864,8 +4876,8 @@ function renderSelf(v){
     : "Stop this job — " + (job.drawing || job.run_id);
   $("selfStatus").textContent = selfStatusLine(v) + (stoppedAt
     ? " STOP SENT at " + stoppedAt + ": the service has abandoned the run and the runner "
-      + "ends the engine within about a minute; this card says \"running\" until the office "
-      + "watcher next reports."
+      + "ends the engine within about half a minute; this card lets go of the job when the office "
+      + "watcher next reports, within about 15 seconds."
     : "");
   const c = w.counts || {};
   const parts = SELF_LABELS.filter(([k]) => c[k]).map(([k, l]) => c[k] + " " + l);
@@ -4962,6 +4974,7 @@ selfJobBtn.onclick = async () => {
     if(r.ok || r.status === 409){
       selfStopped[id] = new Date().toLocaleTimeString("en-GB");
       refreshSelf();
+      quickSelf();
       return;
     }
     $("selfStatus").textContent = "Could not stop it: " + detailText(j, r, "refused");
