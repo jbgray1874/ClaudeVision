@@ -175,8 +175,13 @@ def test_the_verified_reconstruction_survives_the_templates_scrap_arithmetic():
     assert charged_per_part == pytest.approx(cpp, abs=0.005)
     src = open(os.path.join(os.path.dirname(__file__), "..", "src", "wb_populate.py"),
                encoding="utf-8").read()
+    # D-665: the arithmetic lives in sheet_price_rebuilt_from_part_cost, which the board-row
+    # writer calls, and which refuses a per-piece allowance.
+    helper = src[src.index("def sheet_price_rebuilt_from_part_cost"):]
+    helper = helper[:helper.index("\ndef ")]
+    assert "/ (1.0 + float(_scrap_frac))" in helper
     seg = src[src.index("def _write_board_row"):]
-    assert "/ (1.0 + float(_scrap_frac))" in seg
+    assert "sheet_price_rebuilt_from_part_cost(me)" in seg
 
 
 # ── missing wording is never a presumed match ────────────────────────────────────────

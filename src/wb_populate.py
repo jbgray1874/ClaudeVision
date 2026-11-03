@@ -3256,6 +3256,35 @@ def _canonical_finish_signature(
                      "+".join(sorted(colours)) or "COLOUR-UNREAD"))
 
 
+_PER_PIECE_COST_METHODS = {"last_resort_market_indication"}
+
+
+def per_piece_price_basis(me: Any) -> bool:
+    """Is this material record's money a price for ONE PIECE, not for a stock sheet (D-665)? The
+    last-resort market rescue writes a per-piece allowance; a sheet price cannot be inferred
+    from it, because nothing says the piece was bought as a share of that sheet."""
+    if not isinstance(me, dict):
+        return False
+    return bool(me.get("material_allowance_only")
+                or str(me.get("cost_method") or "") in _PER_PIECE_COST_METHODS)
+
+
+def sheet_price_rebuilt_from_part_cost(me: Any) -> Optional[float]:
+    """The pre-scrap sheet price a nest-costed part implies (cost per part x parts per sheet /
+    (1 + scrap)), or None. Never rebuilt from a per-piece allowance (D-665): 12203-66-GA's
+    front panel took a ~£0.32 market allowance for one piece, and this multiplied it by the
+    sheet's 261 pieces into an "£80.98 sheet price" no supplier quoted, on one of three panels
+    cut from the same board."""
+    if not isinstance(me, dict) or per_piece_price_basis(me):
+        return None
+    _cpp = _safe(me.get("cost_per_part_gbp") or me.get("unit_material_cost_gbp"))
+    _pps = _safe(me.get("parts_per_sheet"))
+    _scrap_frac = _safe(me.get("scrap_pct")) or 0.04
+    if _cpp and _pps:
+        return round(float(_cpp) * float(_pps) / (1.0 + float(_scrap_frac)), 2)
+    return None
+
+
 _FACED_FAMILIES = {"MFMDF", "MFC"}
 
 
@@ -7090,11 +7119,12 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # neither are left blank + flagged (honest £0, not a silent guess).
         _sheet_price = _safe(me.get("sheet_price_gbp"))
         if not _sheet_price:
-            _cpp = _safe(me.get("cost_per_part_gbp") or me.get("unit_material_cost_gbp"))
-            _pps = _safe(me.get("parts_per_sheet"))
-            _scrap_frac = _safe(me.get("scrap_pct")) or 0.04
-            if _cpp and _pps:
-                _sheet_price = round(float(_cpp) * float(_pps) / (1.0 + float(_scrap_frac)), 2)
+            _sheet_price = sheet_price_rebuilt_from_part_cost(me)
+            if _sheet_price is None and per_piece_price_basis(me):
+                _flag(f"Other-sheet {pe.get('part_number')}: its £"
+                      f"{float(_safe(me.get('cost_per_part_gbp')) or 0):.2f} is a per-piece "
+                      f"market allowance, not a sheet price, so it is not multiplied up "
+                      f"into one (D-665).", flags)
         if not _sheet_price:
             # LAST, AND ONLY A GAP-FILLER: derive the £/sheet from the material's own £/kg rate the
             # same way steel is costed, so a board with a rate in config is never £0. MDF (1.35
