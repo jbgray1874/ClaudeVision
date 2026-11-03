@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import auth                                     # noqa: E402
 import config                                   # noqa: E402
 import hr_config as cfg                         # noqa: E402
+import hr_rollcall                              # noqa: E402
 import hr_routes                                # noqa: E402
 
 ALLOWED = {"name": "Pat Example", "email": "pat.example@wearesdi.com", "oid": "1", "kind": "user"}
@@ -32,6 +33,10 @@ ALLOWED = {"name": "Pat Example", "email": "pat.example@wearesdi.com", "oid": "1
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "HR_SNAPSHOT_DIR", str(tmp_path))
+    monkeypatch.setattr(cfg, "HR_ROLLCALL_DIR", str(tmp_path / "Roll calls"))
+    # The spreadsheet is written straight away here, not a few seconds later.
+    monkeypatch.setattr(hr_rollcall, "_schedule_export", hr_rollcall.export)
+    monkeypatch.setattr(hr_routes, "_roll_seen", {"people": []})
     monkeypatch.setattr(cfg, "HR_APP_USERS", {"pat.example@wearesdi.com"})
     monkeypatch.setattr(config, "API_KEY", "machine-key")
     who = {"user": ALLOWED}
@@ -124,7 +129,9 @@ def test_only_a_signed_in_person_on_the_list_gets_in(app, user, code):
     app.who["user"] = user
     for method, path in (("get", "/api/hr/app/status"), ("post", "/api/hr/app/check"),
                          ("post", "/api/hr/app/update"), ("post", "/api/hr/app/issues"),
-                         ("get", "/api/hr/app/rollcall"), ("post", "/api/hr/app/rollcall/new"), ("get", "/api/hr/app/history")):
+                         ("get", "/api/hr/app/rollcall"), ("post", "/api/hr/app/rollcall/new"),
+                         ("get", "/api/hr/app/rollcall/runs"), ("get", "/api/hr/app/rollcall/runs/20261103-140512"),
+                         ("get", "/api/hr/app/history")):
         assert getattr(app, method)(path).status_code == code
     assert app.calls == []
 
@@ -211,6 +218,134 @@ def test_a_tick_is_shared_and_a_new_roll_call_clears_it(app, monkeypatch, tmp_pa
 
 def test_a_tick_needs_a_person(app):
     assert app.post("/api/hr/app/rollcall/tick", json={"ticked": True}).status_code == 400
+
+
+# ── each roll call is kept: present ticked, absent not ──────────────────────
+# Simon asked for every roll call to be saved, the ticked marked present and
+# the rest absent, listed beside the roll call. It is saved at every tick, so
+# nobody has to remember to in an evacuation.
+
+def _tick(app, name, ticked=True):
+    key = next(p["key"] for p in app.get("/api/hr/app/rollcall").json()["people"] if p["name"] == name)
+    assert app.post("/api/hr/app/rollcall/tick", json={"key": key, "ticked": ticked}).status_code == 200
+
+
+def _saved_roll_call(app, monkeypatch, tmp_path):
+    import hr_inventry_api as api
+    monkeypatch.setattr(cfg, "INVENTRY_ACTION_LOCATION", "BRIGHTHR SYNC")
+    monkeypatch.setattr(api, "InVentryAPI", FakeInVentry)
+    _snapshot(tmp_path, ("New", "Starter", datetime.datetime.now(datetime.timezone.utc).isoformat()))
+    app.post("/api/hr/app/rollcall/new")
+    _tick(app, "Ann Desk")
+    _tick(app, "Zoe Test")
+    runs = app.get("/api/hr/app/rollcall/runs").json()
+    assert len(runs["runs"]) == 1
+    return runs
+
+
+def test_a_roll_call_is_saved_with_the_ticked_present_and_the_rest_absent(app, monkeypatch, tmp_path):
+    runs = _saved_roll_call(app, monkeypatch, tmp_path)
+    run = runs["runs"][0]
+    assert (run["present_count"], run["absent_count"], run["count"]) == (2, 1, 3)
+    assert run["started_by"] == "Pat Example" and runs["live"] == run["id"]
+    kept = app.get(f"/api/hr/app/rollcall/runs/{run['id']}").json()
+    assert [p["name"] for p in kept["present"]] == ["Ann Desk", "Zoe Test"]
+    assert [p["name"] for p in kept["absent"]] == ["New Starter"]
+    assert kept["present"][0]["ticked_by"] == "Pat Example" and kept["present"][0]["ticked_at"]
+    assert "brighthr" in kept["absent"][0]       # where they were on the list from
+
+
+def test_unticking_someone_makes_them_absent_again(app, monkeypatch, tmp_path):
+    run = _saved_roll_call(app, monkeypatch, tmp_path)["runs"][0]
+    _tick(app, "Zoe Test", ticked=False)
+    kept = app.get(f"/api/hr/app/rollcall/runs/{run['id']}").json()
+    assert [p["name"] for p in kept["absent"]] == ["New Starter", "Zoe Test"]
+
+
+def test_a_new_roll_call_keeps_the_last_one_in_the_list(app, monkeypatch, tmp_path):
+    first = _saved_roll_call(app, monkeypatch, tmp_path)["runs"][0]
+    # A new roll call in a later second, so the two have different names.
+    later = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=5)
+    monkeypatch.setattr(hr_rollcall, "_now", lambda: later)
+    app.post("/api/hr/app/rollcall/new")
+    _tick(app, "New Starter")
+    runs = app.get("/api/hr/app/rollcall/runs").json()
+    assert [r["id"] for r in runs["runs"]][1] == first["id"]
+    assert runs["live"] == runs["runs"][0]["id"] != first["id"]
+    assert (runs["runs"][0]["present_count"], runs["runs"][0]["absent_count"]) == (1, 2)
+    # The first is exactly as it was left.
+    assert (runs["runs"][1]["present_count"], runs["runs"][1]["absent_count"]) == (2, 1)
+
+
+def test_a_roll_call_nobody_ticked_is_not_listed(app, monkeypatch):
+    import hr_inventry_api as api
+    monkeypatch.setattr(api, "InVentryAPI", FakeInVentry)
+    app.post("/api/hr/app/rollcall/new")
+    assert app.get("/api/hr/app/rollcall/runs").json()["runs"] == []
+
+
+def test_a_left_open_roll_call_is_not_rewritten_by_who_is_in_later(app, monkeypatch, tmp_path):
+    """Only the list seen at the ticks is kept: opening the roll call next week
+    must not add next week's people to last week's drill as absent."""
+    run = _saved_roll_call(app, monkeypatch, tmp_path)["runs"][0]
+    _snapshot(tmp_path, ("Next", "Week", datetime.datetime.now(datetime.timezone.utc).isoformat()))
+    assert "Next Week" in [p["name"] for p in app.get("/api/hr/app/rollcall").json()["people"]]
+    kept = app.get(f"/api/hr/app/rollcall/runs/{run['id']}").json()
+    assert "Next Week" not in [p["name"] for p in kept["present"] + kept["absent"]]
+
+
+def test_each_roll_call_is_a_spreadsheet_in_hrs_folder(app, monkeypatch, tmp_path):
+    from openpyxl import load_workbook
+    run = _saved_roll_call(app, monkeypatch, tmp_path)["runs"][0]
+    sheets = list((tmp_path / "Roll calls").glob("Roll call *.xlsx"))
+    assert len(sheets) == 1 and run["spreadsheet"].endswith(sheets[0].name)
+    rows = [r for r in load_workbook(sheets[0]).active.iter_rows(values_only=True)]
+    head = rows.index(("Status", "Name", "Manager", "Ticked by", "Ticked at", "On InVentry since",
+                       "Clocked in on BrightHR"))
+    body = [(r[0], r[1]) for r in rows[head + 1:]]
+    # Absent first: on a fire roll call they are the names that matter.
+    assert body == [("Absent", "New Starter"), ("Present", "Ann Desk"), ("Present", "Zoe Test")]
+    assert run["spreadsheet_problem"] is None
+
+
+def test_a_folder_the_server_cannot_write_to_is_said_and_the_roll_call_is_still_kept(app, monkeypatch, tmp_path):
+    blocked = tmp_path / "not-a-folder"
+    blocked.write_text("a file where the folder should be", encoding="utf-8")
+    monkeypatch.setattr(cfg, "HR_ROLLCALL_DIR", str(blocked / "Roll calls"))
+    run = _saved_roll_call(app, monkeypatch, tmp_path)["runs"][0]
+    assert run["present_count"] == 2
+    assert "could not be saved in" in run["spreadsheet_problem"]
+    assert "saved in the app" in run["spreadsheet_problem"]
+    # Once the folder is there, opening the roll call saves its spreadsheet.
+    monkeypatch.setattr(cfg, "HR_ROLLCALL_DIR", str(tmp_path / "Roll calls"))
+    app.get(f"/api/hr/app/rollcall/runs/{run['id']}")
+    again = app.get(f"/api/hr/app/rollcall/runs/{run['id']}").json()
+    assert again["spreadsheet_problem"] is None and again["spreadsheet"]
+
+
+def test_a_tick_never_waits_for_the_spreadsheet(app, monkeypatch, tmp_path):
+    """The shared folder is written in the background. A share that stalls
+    must not hold up a tick in an evacuation."""
+    import hr_inventry_api as api
+    monkeypatch.setattr(api, "InVentryAPI", FakeInVentry)
+    waiting = []
+    monkeypatch.setattr(hr_rollcall, "_schedule_export", waiting.append)
+    monkeypatch.setattr(hr_rollcall, "export", lambda rid: pytest.fail("written on the tick's path"))
+    _tick(app, "Ann Desk")
+    assert len(waiting) == 1
+
+
+def test_only_a_kept_roll_call_can_be_opened(app):
+    for bad in ("20261103-140512", "..%2F..%2Fsecrets", "latest", "2026-11-03"):
+        assert app.get(f"/api/hr/app/rollcall/runs/{bad}").status_code == 404
+
+
+def test_a_mapped_drive_is_written_through_its_share(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "DRIVE_MAP", {"K": r"\\sdi-dc01\shareddata$\Shared"})
+    assert hr_rollcall._server_path(r"K:\IT\HRSystemsOutput\Roll calls") == \
+        r"\\sdi-dc01\shareddata$\Shared\IT\HRSystemsOutput\Roll calls"
+    assert hr_rollcall._server_path(r"\\server\share\x") == r"\\server\share\x"
 
 
 def test_the_data_check_reports_without_changing_anything(app, monkeypatch):

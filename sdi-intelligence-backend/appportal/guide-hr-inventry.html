@@ -90,7 +90,8 @@
     <li><b>shows who is clocked in</b> on BrightHR right now;</li>
     <li><b>updates InVentry</b> to match: signs in people who have clocked in, and signs out people the app
     signed in once they clock out;</li>
-    <li><b>runs the fire roll call</b>, with tick boxes every marshal shares;</li>
+    <li><b>runs the fire roll call</b>, with tick boxes every marshal shares, and <b>keeps every roll
+    call</b>: who was present and who was absent;</li>
     <li><b>lists data problems</b> to tidy in InVentry, and forgotten clock-outs to correct in BrightHR.</li>
   </ul>
   <p><b>It never changes BrightHR</b>: it only reads it. In InVentry it only signs existing staff in and
@@ -157,9 +158,27 @@
     People signed in at reception who are BrightHR staff go under their manager too. Sections you open stay
     open as the list refreshes. Visitors, and anyone without a manager in the HR managers list, are under
     <b>No manager listed</b>.</li>
-    <li><b>Start a new roll call</b> clears every tick on every phone.</li>
+    <li><b>Start a new roll call</b> clears every tick on every phone. The roll call before it stays in
+    <b>Saved roll calls</b>.</li>
     <li>Forgotten clock-outs are left out: they are not in the building.</li>
   </ul>
+  <div class="panel">
+    <h4>Saved roll calls</h4>
+    <p><b>Every roll call is saved as people are ticked</b>, from its first tick. Nobody needs to press
+    save. <b>Present</b> means ticked as accounted for. <b>Absent</b> means on the roll call and not ticked.</p>
+    <ul>
+      <li><b>Saved roll calls</b> is beside the roll call (below it on a phone). Each one shows when it
+      started, who started it, and how many were present and absent. The one being ticked now is marked
+      <span class="msg">live</span>.</li>
+      <li><b>Tap one</b> to see who was absent and who was present, with who ticked each person and when.
+      <span class="btnname">Group by manager</span> works here too. <span class="btnname">Back to the live
+      roll call</span> returns to the tick list.</li>
+      <li><b>A spreadsheet of each roll call</b> goes in <b>K:\IT\HRSystemsOutput\Roll calls</b>, one file per
+      roll call, named by when it started, for example <span class="msg">Roll call 2026-11-03 14-05.xlsx</span>.
+      Absent people are listed first. It is updated a few seconds after each tick.</li>
+      <li>A roll call nobody ticked is not saved.</li>
+    </ul>
+  </div>
   <h3>Data issues</h3>
   <p>Press <span class="btnname">Run the data check</span>. In under a minute it compares every BrightHR employee
   with InVentry's staff records, changes nothing, and lists:</p>
@@ -202,6 +221,8 @@
   <p>The panel says when BrightHR was last checked. Names from InVentry are always current. Names from
   BrightHR are as of that check, so someone who clocked out after it may still be listed.</p>
   <p>If the signal drops, keep ticking: ticks are kept on your phone and sent when it returns.</p>
+  <p>Nothing needs saving afterwards: the roll call is in <b>Saved roll calls</b>, and its spreadsheet in
+  K:\IT\HRSystemsOutput\Roll calls, for the fire log.</p>
   <p class="muted">Practise with a drill: start a new roll call, tick a few names on two phones, and check
   both phones agree.</p>
 
@@ -225,6 +246,10 @@
     <tr><td class="msg">Sign-outs held back</td><td>An unusually large number of sign-outs at once, stopped as a
     safety check. Tell James.</td></tr>
     <tr><td class="msg">Not matched</td><td>The person's InVentry record does not match BrightHR. See Data issues.</td></tr>
+    <tr><td class="msg">The spreadsheet could not be saved</td><td>The roll call is saved in the app, but its
+    spreadsheet did not reach K:\IT\HRSystemsOutput\Roll calls. If the spreadsheet is open in Excel, close
+    it, then tap that roll call in Saved roll calls: opening it saves the spreadsheet again. Otherwise tell
+    James.</td></tr>
   </table>
 
   <h2 id="rules">7. How it decides</h2>
