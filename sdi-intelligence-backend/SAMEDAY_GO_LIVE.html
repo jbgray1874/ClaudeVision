@@ -147,8 +147,8 @@ name, or a setting that can be given one. Until then, finding a past job comes b
 <code>secure=True</code>, which a browser refuses to keep on a plain http page, so on
 <code>http://10.0.0.5:5020</code> the right code was accepted and the code screen came straight back
 (4 November). Change it to <code>secure=request.is_secure</code>, on K: and on the laptop. It was changed by hand
-on the server the same day; without the change on K:, an <code>Install-SameDay.ps1 -Update</code> would copy the
-old line back.</li>
+on the server the same day, and it is in the repository (part E); without the change on K:, an
+<code>Install-SameDay.ps1 -Update</code> from K: would copy the old line back.</li>
 <li><b>The picture index.</b> On its first start the server logged <code>search not ready: No such file or
 directory: 'C:\SDI_Automation\all_img_index.npz'</code> (4 November). It was not in the K: folder, so it never
 reached the server. Copy it from the laptop's <code>C:\SDI_Automation\</code> into <code>SDI_Automation</code> on
@@ -166,6 +166,25 @@ is not on the server.</li>
 phone gets the answer instead of an error.</li>
 <li><b>The laptop's name</b> is still in <code>lite_app.py</code> line 4001.</li>
 </ol>
+
+<h2>E. Updating SameDay on the server</h2>
+<p>Since 4 November SameDay's code is in its own private repository, <code>github.com/jbgray1874/sdi-sameday</code>.
+The "any order" and noisy-room changes are there, and so is the cookie fix above. Updates go from the repository
+to the server. <span class="where">Laptop</span> once, to copy the script across:</p>
+<pre>Copy-Item C:\ClaudeVision\sdi-intelligence-backend\deploy\Update-SameDay.ps1 \\10.0.0.5\c$\Tools\</pre>
+<p><span class="where">Server</span> as administrator. To try the new changes before they go onto main:</p>
+<pre>powershell -ExecutionPolicy Bypass -File C:\Tools\Update-SameDay.ps1 -Branch claude/inspiring-planck-8juriz</pre>
+<p>Without <code>-Branch</code> it takes main. It keeps the code it replaces in <code>C:\SDI_Automation\backups\</code>
+and never touches the keys, chats, uploads or spend log. It finishes only when SameDay reports the new version,
+and it says how to put the old code back.</p>
+<div class="card warn">
+<p><b>Not <code>UPDATE_SAME_DAY.bat</code> on the server.</b> Muhammad's batch file copies K: (the older code, without
+the cookie fix) and then starts a second SameDay outside its Windows service, and that copy fights the service
+for port 5020. It is still right for Muhammad's own laptop.</p>
+</div>
+<p><b>Muhammad's changes on K:</b> still reach the repository. <code>Publish-SameDay-Code.ps1</code> puts each copy of K:
+on its own branch (<code>from-k</code>) and merges only what changed on K: since the last copy, so it never undoes
+work made in the repository. If both changed the same lines, it stops and names the files.</p>
 
 <h2>Later, once everyone uses the secure address</h2>
 <div class="card warn">

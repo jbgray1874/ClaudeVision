@@ -47,7 +47,7 @@ class NothingButCodeTests(unittest.TestCase):
 class KeysStopItBeforeAnythingIsSentTests(unittest.TestCase):
     def test_the_key_check_comes_before_the_commit_and_the_push(self):
         self.assertLess(BODY.index("$keyShape ="), BODY.index('RunGit @("commit"'))
-        self.assertLess(BODY.index("$keyShape ="), BODY.index('RunGit @("push"'))
+        self.assertLess(BODY.index("$keyShape ="), BODY.index("$sent = Push"))
 
     def test_a_key_is_reported_by_file_and_line_never_its_text(self):
         for line in BODY.splitlines():
@@ -113,3 +113,48 @@ class ItFailsClosedTests(unittest.TestCase):
         check = (Path(__file__).resolve().parent.parent / "deploy" / "Check-SameDay-Ready.ps1"
                  ).read_text(encoding="utf-8")
         self.assertIn('$Source = "\\\\sdi-dc01\\shareddata$\\Shared\\IT\\', check)
+
+
+class ItSaysWhichRefusalItWasTests(unittest.TestCase):
+    """4 November: the repository had GitHub's starter README; the push was
+    refused as "fetch first" and the script said "Repository not found"."""
+
+    def test_a_starter_commit_is_joined_not_deleted(self):
+        self.assertIn('-match "fetch first|non-fast-forward"', BODY)
+        self.assertIn("merge --no-edit --allow-unrelated-histories -X ours from-k", BODY)
+        self.assertNotIn("--force", BODY)
+        self.assertNotRegex(BODY, r"push[^\n]*\s-f\b")
+
+    def test_not_found_is_said_only_when_github_said_it(self):
+        tail = BODY.split("if ($sent.Code -ne 0) {", 1)[1]
+        self.assertLess(tail.index('-match "not found"'), tail.index("Repository not found"))
+
+
+class KsCopyNeverUndoesTheRepositorysWorkTests(unittest.TestCase):
+    """4 November: the "any order" and noisy-room changes were made in sdi-sameday, not on K:. Committed straight on
+    top of them, the next copy of K: would have undone them file by file. K:'s copies now go on from-k, each on top of
+    the last copy of K:, and only what changed on K: since then is merged into main."""
+
+    def test_the_copy_goes_on_top_of_the_last_copy_of_k(self):
+        self.assertIn('"--grep=^SameDay from K:"', BODY)
+        self.assertIn('RunGit @("checkout", "-q", "-f", "-B", "from-k", $lastK)', BODY)
+        self.assertLess(BODY.index('"-B", "from-k", $lastK'),
+                        BODY.index('Get-ChildItem -LiteralPath $Work -Force | Where-Object { $_.Name -ne ".git" }'))
+        self.assertIn('$message = "SameDay from K:"', BODY)      # how the next run finds it
+
+    def test_from_k_is_sent_before_main_is_merged(self):
+        self.assertLess(BODY.index('$sent = Push "from-k"'), BODY.index("merge --no-edit from-k"))
+        self.assertLess(BODY.index("merge --no-edit from-k"), BODY.index('$sent = Push "main"'))
+
+    def test_a_clash_is_never_settled_by_choosing_a_side(self):
+        self.assertEqual(BODY.count("-X ours"), 1)                  # only for GitHub's starter README
+        self.assertLess(BODY.index("merge-base main from-k"), BODY.index("-X ours"))
+        clash = BODY.split("$both = @(", 1)[1].split('Yes "K:', 1)[0]
+        self.assertIn("merge --abort", clash)
+        self.assertIn("Stop-Main", clash)
+        self.assertIn("--diff-filter=U", BODY)
+
+    def test_a_stop_after_from_k_is_sent_says_main_was_not_changed(self):
+        stop = BODY.split("function Stop-Main", 1)[1].split("}", 1)[0]
+        self.assertIn("main was not changed", stop)
+        self.assertLess(BODY.index("function Stop-Main"), BODY.index("Stop-Main \""))

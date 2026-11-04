@@ -29,6 +29,15 @@
     shaped like an OpenAI, Anthropic or xAI key. One is enough to stop it,
     with nothing committed and nothing sent. A hit is reported by file and
     line, never by its text.
+
+    -- K: AND THE REPOSITORY BOTH CHANGE NOW ----------------------------------
+    4 November: sdi-sameday has work of its own (the "any order" and noisy-room
+    changes), which K: has not got. A copy of K: committed straight on top of
+    that would quietly undo it. So each copy of K: goes on a branch of its own,
+    from-k, on top of the LAST copy of K:, and from-k is then merged into main:
+    only what changed on K: since then reaches main, and the repository's own
+    work stays. Where K: and main changed the same lines, nothing is chosen -
+    it stops, names the files, and main is left as it was.
 #>
 [CmdletBinding()]
 param(
@@ -57,6 +66,14 @@ function Stop-Here([string]$Text) {
     Write-Host ""
     Write-Host "  [STOP]  $Text" -ForegroundColor Red
     Write-Host "          Nothing was committed and nothing was sent to GitHub." -ForegroundColor Red
+    Write-Host ""
+    exit 1
+}
+# Once K:'s copy is on GitHub (from-k), a stop leaves main as it was.
+function Stop-Main([string]$Text) {
+    Write-Host ""
+    Write-Host "  [STOP]  $Text" -ForegroundColor Red
+    Write-Host "          K:'s copy is saved on the from-k branch; main was not changed." -ForegroundColor Red
     Write-Host ""
     exit 1
 }
@@ -116,6 +133,34 @@ if (Test-Path -LiteralPath $Work) {
     & git -C $Work checkout -q -b main 2>$null
 }
 Yes "Working folder: $Work"
+
+# K:'s copies go on from-k, on top of the last copy of K: (see the top).
+if (-not ((& git.exe -C $Work remote get-url origin 2>$null) -join "")) {
+    RunGit @("remote", "add", "origin", $Repo) | Out-Null
+}
+$fetched = & git.exe -C $Work fetch -q origin 2>&1
+if ($LASTEXITCODE -ne 0) {
+    $fetched | Out-Host
+    if (($fetched | Out-String) -match "not found") {
+        Stop-Here "Repository not found: create it first (github.com, New repository, sdi-sameday, Private), signed in as jbgray1874."
+    }
+    Stop-Here "Could not reach sdi-sameday. Sign in as jbgray1874 when asked, on the office network or the VPN."
+}
+$hasMain = [bool]((& git.exe -C $Work rev-parse -q --verify "refs/remotes/origin/main" 2>$null) -join "")
+$hasK = [bool]((& git.exe -C $Work rev-parse -q --verify "refs/remotes/origin/from-k" 2>$null) -join "")
+$lastK = ""
+if ($hasK) {
+    $lastK = "origin/from-k"
+} elseif ($hasMain) {
+    $lastK = ((& git.exe -C $Work log "refs/remotes/origin/main" -1 --format=%H "--grep=^SameDay from K:" 2>$null) -join "").Trim()
+}
+if ($lastK) {
+    if ((RunGit @("checkout", "-q", "-f", "-B", "from-k", $lastK)) -ne 0) { Stop-Here "Could not start from the last copy of K: ($lastK)." }
+    Yes "K:'s copy goes on top of the last one ($lastK)"
+} else {
+    & git.exe -C $Work symbolic-ref HEAD refs/heads/from-k
+    Yes "The first copy of K: (a new from-k branch)"
+}
 
 # -- 2. Copy the code, and nothing else ----------------------------------------------
 Head "2. Copying the code (no keys, data, renders, uploads or big files)"
@@ -178,14 +223,58 @@ if ($pending) {
 } else {
     Yes "Nothing new on K: since the last run"
 }
-if (-not ((& git -C $Work remote get-url origin 2>$null) -join "")) {
-    RunGit @("remote", "add", "origin", $Repo) | Out-Null
+# SAY WHICH REFUSAL IT WAS. 4 November: the repository had been created with
+# GitHub's starter README, the push was refused as "fetch first", and this
+# said "Repository not found" - the one thing it was not.
+function Push([string]$Name) {
+    $said = & git.exe -C $Work push -u origin $Name 2>&1
+    $said | Out-Host
+    return @{ Code = $LASTEXITCODE; Text = ($said | Out-String) }
 }
-if ((RunGit @("push", "-u", "origin", "main")) -ne 0) {
+$sent = Push "from-k"
+if ($sent.Code -eq 0) {
+    # main: what it holds now, plus what changed on K: since its last copy
+    if ($hasMain) {
+        if ((RunGit @("checkout", "-q", "-f", "-B", "main", "origin/main")) -ne 0) { Stop-Main "Could not check out main." }
+        & git.exe -C $Work merge-base main from-k 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            & git.exe -C $Work merge --no-edit from-k | Out-Host
+        } else {
+            # Unrelated: main is only GitHub's starter README. Joined, with
+            # SameDay's own file winning where both have one; nothing is deleted.
+            Say "GitHub already holds a first commit (its starter README) - joining it to SameDay's code."
+            & git.exe -C $Work merge --no-edit --allow-unrelated-histories -X ours from-k | Out-Host
+        }
+        if ($LASTEXITCODE -ne 0) {
+            $both = @(& git.exe -C $Work diff --name-only --diff-filter=U)
+            & git.exe -C $Work merge --abort 2>$null | Out-Null
+            foreach ($f in $both) { Say "changed on K: and in the repository: $f" "Yellow" }
+            Stop-Main "K: and sdi-sameday both changed the same lines - nothing was chosen. Send Claude the file names above."
+        }
+        Yes "K:'s changes joined to main"
+    } elseif ((RunGit @("checkout", "-q", "-B", "main", "from-k")) -ne 0) {
+        Stop-Main "Could not start main from K:'s copy."
+    }
+    $sent = Push "main"
+}
+if ($sent.Code -ne 0 -and $sent.Text -match "fetch first|non-fast-forward") {
+    Write-Host ""
+    Write-Host "  [STOP]  sdi-sameday changed on GitHub while this ran - nothing more was sent." -ForegroundColor Red
+    Say "Run this again: it starts from what is there now."
+    Write-Host ""
+    exit 1
+}
+if ($sent.Code -ne 0) {
     Write-Host ""
     Write-Host "  [STOP]  GitHub did not take it. Nothing else was changed." -ForegroundColor Red
-    Say "Repository not found: create it first - github.com, New repository, name"
-    Say "sdi-sameday, Private, no README - and sign in as jbgray1874 when asked."
+    if ($sent.Text -match "not found") {
+        Say "Repository not found: create it first - github.com, New repository, name"
+        Say "sdi-sameday, Private - and sign in as jbgray1874 when asked."
+    } elseif ($sent.Text -match "denied|403|Authentication") {
+        Say "GitHub refused the sign-in. Sign in as jbgray1874, the account sdi-sameday belongs to."
+    } else {
+        Say "Send Claude the lines above."
+    }
     Write-Host ""
     exit 1
 }
