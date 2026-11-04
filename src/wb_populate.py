@@ -9887,23 +9887,8 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
                 "sheet row", "shares that row with", "why the counts differ"]
             _out_rows = []
             for _r in _routes:
-                _wr = _row_for.get(str(_r.get("decision_id") or ""))
-                _shares, _note = "", ""
-                if _wr:
-                    _others = [p for p in (_wr.get("part_numbers") or [])
-                               if str(p).upper() != str(_r.get("part_or_assembly") or "").upper()]
-                    _shares = ", ".join(str(p) for p in _others)
-                    if _others:
-                        _note = ("one sheet row, several parts — a row is a tooling SETUP, so "
-                                 "this decision and the ones for the parts beside it are "
-                                 "charged once between them")
-                elif str(_r.get(_yes_no)) == "yes":
-                    _note = ("charged, but no sheet row carries this decision id — the join "
-                             "from the route to the sheet is missing for this line")
-                else:
-                    _note = "not charged, so no sheet row is expected"
                 _out_rows.append([_r.get(k) for k in _keys]
-                                 + [(_wr or {}).get("workbook_row"), _shares, _note])
+                                 + list(route_line_on_the_sheet(_r, _row_for, _yes_no)))
             _blocks.append({
                 "title": "2 · Routes — every decision, and which sheet row charged it",
                 "intro": [
@@ -9942,6 +9927,48 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
         print(f"   [wb_populate] BOMs/Routes tabs not added "
               f"({type(_bre_exc).__name__}: {_bre_exc})", flush=True)
     return
+
+
+def route_line_on_the_sheet(route_row: Mapping[str, Any],
+                            row_for: Mapping[str, Mapping[str, Any]],
+                            yes_no: str = "charged") -> Tuple[Any, str, str]:
+    """The Routes tab's last three cells for one route line: the sheet row(s) that charged it,
+    the parts sharing those rows, and why the counts differ.
+
+    EVERY DECISION ID ON THE LINE, NOT THE LINE'S IDS AS ONE STRING (D-685). bom_and_route_extract
+    prints one line per (part, operation) and joins the ids of every decision behind it
+    ("decision:a, decision:b"). The tab looked that whole string up, which no row carries, so
+    12693-01-101's assembly, decided twice and charged on two rows, read "charged, but no sheet
+    row carries this decision id": the one line on the tab that most needed its rows named.
+    Each id is joined on its own, and a line charged on more than one row says so."""
+    _ids = [i.strip() for i in str(route_row.get("decision_id") or "").split(",") if i.strip()]
+    _rows: List[Mapping[str, Any]] = []
+    for _i in _ids:
+        _hit = row_for.get(_i)
+        if _hit is not None and all(_hit is not _w for _w in _rows):
+            _rows.append(_hit)
+    _self = str(route_row.get("part_or_assembly") or "").upper()
+    if _rows:
+        _others = list(dict.fromkeys(
+            str(p) for _w in _rows for p in (_w.get("part_numbers") or [])
+            if str(p).upper() != _self))
+        if len(_rows) > 1:
+            _note = (f"one route line charged on {len(_rows)} sheet rows — each decision behind "
+                     f"it made a row of its own; if they are the same work, it is charged "
+                     f"{len(_rows)} times")
+        elif _others:
+            _note = ("one sheet row, several parts — a row is a tooling SETUP, so this decision "
+                     "and the ones for the parts beside it are charged once between them")
+        else:
+            _note = ""
+        _cell = (", ".join(str(_w.get("workbook_row")) for _w in _rows
+                           if _w.get("workbook_row") is not None)
+                 if len(_rows) > 1 else _rows[0].get("workbook_row"))
+        return _cell, ", ".join(_others), _note
+    if str(route_row.get(yes_no)) == "yes":
+        return None, "", ("charged, but no sheet row carries this decision id — the join from "
+                          "the route to the sheet is missing for this line")
+    return None, "", "not charged, so no sheet row is expected"
 
 
 CANONICAL_BOM_HEADERS = ["Part", "Description", "Kind", "Qty/unit", "Parent(s)", "Children",

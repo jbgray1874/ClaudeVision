@@ -87,7 +87,8 @@ def parse_table(text: Any) -> Optional[Dict[str, Any]]:
     if len(starts) != 1:
         return {"error": "multiple cut-list tables on one sheet"}
     rows: List[Dict[str, Any]] = []
-    for line in lines[starts[0] + 1:]:
+    body = lines[starts[0] + 1:]
+    for i, line in enumerate(body):
         if not line.strip():
             continue
         m = ROW.fullmatch(line)
@@ -98,6 +99,13 @@ def parse_table(text: Any) -> Optional[Dict[str, Any]]:
             # begins like a row and cannot be read is a finding, never dropped.
             if ROW_STARTS_LIKE_A_SECTION.match(line):
                 return {"error": "unread section row", "text": line.strip()}
+            # A TITLE-BLOCK LINE THE TEXT LAYER WOVE INTO THE TABLE IS STEPPED OVER (D-691),
+            # and only that: the table's next row must follow within a few lines.
+            # 12693-01-01M reads "ITEM DESCRIPTION LENGTH QTY / STATUS: / 1 ... / PROTOTYPE
+            # RELEASED / 2 ...", so the check stopped at STATUS:, found no rows, and called a
+            # cut list unread that the costing had priced in full.
+            if _next_row_follows(body[i + 1:], len(rows) + 1):
+                continue
             break
         item, qty = int(m.group(1)), int(m.group(3))
         key = profile(sec)
@@ -108,6 +116,24 @@ def parse_table(text: Any) -> Optional[Dict[str, Any]]:
         rows.append({"item": item, "profile": list(key), "length_mm": float(sec["length_mm"]),
                      "quantity": qty, "text": line.strip()})
     return {"rows": rows} if rows else {"error": "headed cut list has no readable rows"}
+
+
+def _next_row_follows(rest: List[str], item: int, within: int = 3) -> bool:
+    """Is the row numbered `item` among the next few non-blank lines, read as a section?"""
+    from section_profile import detect_section_stock
+    seen = 0
+    for line in rest:
+        if not line.strip():
+            continue
+        seen += 1
+        if seen > within:
+            return False
+        m = ROW.fullmatch(line)
+        if m and int(m.group(1)) == item:
+            sec = detect_section_stock(m.group(2))
+            return bool(sec and sec.get("detection_path") == "canonical_profile"
+                        and positive(sec.get("length_mm")))
+    return False
 
 
 def capture(summary: Dict[str, Any]) -> Dict[str, Any]:
