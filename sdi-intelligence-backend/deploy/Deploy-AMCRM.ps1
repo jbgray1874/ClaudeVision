@@ -78,6 +78,8 @@ $Files = @(
     "appportal/guide-am-crm.html",
     # SDI SameDay Intelligence: its tile in services.json opens this guide, 3 Nov.
     "appportal/guide-sameday.html",
+    # The app portal page: an app in both portals shows one Open button, 3 Nov.
+    "appportal/index.html",
     "appportal/estimating-pocket.html",
     "sdi_ops_routes.py",
     "appportal/sdi-remote-control.html",

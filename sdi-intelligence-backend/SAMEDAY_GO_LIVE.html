@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SameDay Go-Live · SDI Intelligence</title>
+<style>
+  :root{--bg:#f5f4f0;--card:#ffffff;--ink:#1b1b1d;--mute:#66645f;--line:#e3e0d8;--accent:#c8102e;
+        --yellow:#f7d23e;--code:#f1efe8;--ok:#1f8a4c;--warn:#b26b00}
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#111214;--card:#1a1b1e;--ink:#f1f0ec;
+        --mute:#a19d95;--line:#2d2e32;--code:#232428;--ok:#5fd08a;--warn:#ffb648}}
+  :root[data-theme="dark"]{--bg:#111214;--card:#1a1b1e;--ink:#f1f0ec;--mute:#a19d95;--line:#2d2e32;--code:#232428;
+        --ok:#5fd08a;--warn:#ffb648}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15.5px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
+  main{max-width:900px;margin:0 auto;padding:28px 16px 70px}
+  h1{font-size:30px;line-height:1.15;margin:0 0 6px}
+  h2{font-size:21px;margin:38px 0 6px;padding-top:6px;border-top:3px solid var(--yellow);display:inline-block}
+  h3{font-size:16px;margin:22px 0 6px}
+  .sub{color:var(--mute);margin:0 0 18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin:12px 0}
+  .ok{border-left:4px solid var(--ok)} .warn{border-left:4px solid var(--warn)}
+  .where{display:inline-block;font:700 11px/1 system-ui;letter-spacing:.08em;text-transform:uppercase;
+         padding:4px 7px;border-radius:5px;background:var(--code);color:var(--mute);margin-right:6px;vertical-align:2px}
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th,td{text-align:left;vertical-align:top;padding:9px 11px;border-bottom:1px solid var(--line)}
+  th{font-size:13px;color:var(--mute);font-weight:600}
+  code,pre{font-family:Consolas,ui-monospace,monospace;font-size:13.5px;background:var(--code);border-radius:6px}
+  code{padding:1px 6px} pre{padding:11px 13px;overflow-x:auto;white-space:pre}
+  ol li,ul li{margin:5px 0}
+  .who{font-weight:700}
+  @media (max-width:600px){th,td{padding:8px 7px;font-size:14px} h1{font-size:25px}}
+</style>
+</head>
+<body>
+<main>
+<h1>SDI SameDay Intelligence: go live</h1>
+<p class="sub">From the office address it has today to a secure address that works on any phone, behind Microsoft
+sign-in, with the microphone working. Written 3 November 2026. Each step says where it is done.</p>
+
+<div class="card ok">
+<b>Where it stands.</b> SameDay is installed on the server as its own app: the Windows services
+<code>SDISameDay</code> (port 5020) and <code>SDICraft</code> (5030). They start with the server and restart
+themselves if they stop. In the office or on the VPN it opens at <code>http://10.0.0.5:5020</code>, with the
+team access code. It has a tile in the app portal, and after the next Ship-It an entry in the intranet's left
+menu under AI Services. SDI Intelligence was not touched.
+</div>
+
+<h2>What is left, and who does it</h2>
+<table>
+<tr><th>#</th><th>Step</th><th>Who</th><th>Time</th></tr>
+<tr><td>1</td><td>Deploy the intranet menu entry (Ship-It)</td><td class="who">James</td><td>2 min</td></tr>
+<tr><td>2</td><td>Publish SameDay through App Proxy (part A below)</td><td class="who">James</td><td>15 min</td></tr>
+<tr><td>3</td><td>Tell SameDay to trust the connector (part B)</td><td class="who">James</td><td>2 min</td></tr>
+<tr><td>4</td><td>Test it from a phone (part C)</td><td class="who">James, then one other person</td><td>15 min</td></tr>
+<tr><td>5</td><td>Point the tile and the menu at the secure address; add SameDay to the Entra audit</td><td class="who">Claude</td><td>once you send the address</td></tr>
+<tr><td>6</td><td>Past jobs on W:, the keys off K:, the laptop copy off (part D)</td><td class="who">Muhammad</td><td>&mdash;</td></tr>
+</table>
+
+<h2>1. Deploy the intranet menu entry</h2>
+<p><span class="where">Laptop</span> VPN on:</p>
+<pre>cd C:\ClaudeVision
+.\sdi-intelligence-backend\deploy\Ship-It.ps1</pre>
+<p>It copies the catalogue and the app portal page. The intranet then shows <b>SDI SameDay Intelligence</b> under
+<b>AI Services</b> in the left menu; the app portal keeps its tile, now with a single Open button.</p>
+
+<h2>A. Publish it through App Proxy</h2>
+<p>The App Proxy connector is already installed on the server and serves SDI Intelligence; SameDay uses the same
+one. Nothing opens on the firewall: the connector only connects out.</p>
+
+<h3>A1. Create the app</h3>
+<p><span class="where">Entra</span> Identity &rarr; Applications &rarr; Enterprise applications &rarr; <b>New
+application</b> &rarr; <b>Add an on-premises application</b>:</p>
+<table>
+<tr><th>Setting</th><th>Value</th></tr>
+<tr><td>Name</td><td><code>SDI SameDay Intelligence</code></td></tr>
+<tr><td>Internal URL</td><td><code>http://10.0.0.5:5020/</code> &mdash; the same form as SDI Intelligence's own (<code>http://10.0.0.5:8071/</code>)</td></tr>
+<tr><td>External URL</td><td>type <code>sdisameday</code>; the rest is fixed, giving <code>https://sdisameday-sdidisplays.msappproxy.net/</code></td></tr>
+<tr><td>Pre-authentication</td><td><b>Microsoft Entra ID</b></td></tr>
+<tr><td>Connector group</td><td>Default</td></tr>
+<tr><td>Backend application timeout</td><td><b>Long</b> (under Additional settings). A render or a GA can take minutes; the default cuts it off at 85 seconds.</td></tr>
+<tr><td>Translate URLs in headers / application body</td><td>Yes / No (leave the defaults)</td></tr>
+</table>
+<p><b>Create</b>, then copy two things from the app's <b>Overview</b>: the <b>external URL</b> and the
+<b>Application ID</b>. Send both to Claude.</p>
+
+<h3>A2. Let anyone at SDI in</h3>
+<p><span class="where">Entra</span> Same app &rarr; <b>Properties</b> &rarr; <b>Assignment required?</b> =
+<b>No</b> &rarr; Save.</p>
+<p>Anyone with an SDI Microsoft account can then open it, and nobody else can reach it at all. There is nobody
+to assign, so the step that once stopped Kayleigh (AADSTS50105) does not exist for this app.</p>
+
+<h3>A3. Hand SameDay the person's name</h3>
+<p><span class="where">Entra</span> Same app &rarr; <b>Single sign-on</b> &rarr; <b>Header-based</b> &rarr;
+Headers &rarr; <b>Edit</b> &rarr; add two headers, then Save:</p>
+<table>
+<tr><th>Header name</th><th>Source attribute</th></tr>
+<tr><td><code>X-SDI-Email</code></td><td><code>user.mail</code></td></tr>
+<tr><td><code>X-SDI-User</code></td><td><code>user.displayname</code></td></tr>
+</table>
+<p>This is what lets SameDay skip the team code, open each person's own chats, and record who made each brief.
+<code>user.mail</code> rather than the sign-in name, because they differ for some people (Nick's do).</p>
+
+<h3>A4. MFA</h3>
+<p><span class="where">Entra</span> If your Conditional Access MFA policy names its apps (for example
+<i>MFA &mdash; SDI Intelligence</i>), add <b>SDI SameDay Intelligence</b> to its target resources. If MFA
+covers all apps already, there is nothing to do.</p>
+
+<h2>B. Tell SameDay to trust the connector</h2>
+<p><span class="where">Server</span> Remote Desktop, PowerShell opened with <b>Run as administrator</b>:</p>
+<pre>$f = "C:\SDI_Automation\.env"
+$keep = Get-Content $f | Where-Object { $_ -notmatch '^\s*LITE_TRUST_FROM\s*=' }
+[IO.File]::WriteAllLines($f, [string[]]($keep + "LITE_TRUST_FROM=10.0.0.5,127.0.0.1"))
+Restart-Service SDISameDay</pre>
+<p>It prints nothing, and it never shows the keys in the same file. The connector runs on this server, so it
+arrives at SameDay from <code>10.0.0.5</code>: SameDay now believes the name in the headers only when they come
+from there. Someone in the office typing <code>http://10.0.0.5:5020</code> comes from their own address and still
+gets the team code, so nobody can pretend to be somebody else.</p>
+
+<h2>C. Test it</h2>
+<p><span class="where">Phone</span> on 4G, not the SDI Wi-Fi &mdash; from inside, this test proves nothing.</p>
+<ol>
+<li>Open <code>https://sdisameday-sdidisplays.msappproxy.net/</code> &rarr; Microsoft sign-in (and MFA) &rarr;
+SameDay opens <b>with your name and no team code</b>.<br>
+If it asks for the team code, the headers are not arriving. Open <code>/api/me</code> on the same address: it
+says who SameDay thinks you are. Check A3 and B, then tell Claude what <code>/api/me</code> says.</li>
+<li><b>Talk live</b> &rarr; the browser asks for the microphone &rarr; Allow &rarr; brief it out loud.</li>
+<li>Go all the way through: the render (40&ndash;60 seconds) &rarr; say &ldquo;I like it&rdquo; &rarr; the GA and
+the client sheet &rarr; the internal questions &rarr; the brief PDF. Open both PDFs.<br>
+If something fails after about three minutes, that is App Proxy's limit &mdash; note which step.</li>
+<li>Ask one other person to do step 1 on their own phone: their name, their own chats.</li>
+<li>Check <b>AI spend today</b> moved, and that <b>&#9632; Stop</b> stops a render.</li>
+<li>Open the SDI Intelligence portal and AM CRM: unchanged.</li>
+</ol>
+<p>Then send Claude the external URL and the Application ID (A1). The tile and the intranet menu move to the
+secure address &mdash; it works in the office as well as outside, so it becomes the one address &mdash; and
+SameDay joins the Entra audit.</p>
+
+<h2>D. For Muhammad</h2>
+<p>Found by the readiness check on the code on K: (3 November).</p>
+<ol>
+<li><b>Past jobs on W: &mdash; the one that matters.</b> On the server SameDay runs as a Windows service, and a
+service has no mapped drives. <code>lite_app.py</code> reads <code>W:</code> at line 583 (the past-job lookup)
+and <code>S:</code> at lines 1889, 1930, 2445, 2507 and 3405. Each needs the share's <code>\\server\share</code>
+name, or a setting that can be given one. Until then, finding a past job comes back empty.</li>
+<li><b>The keys.</b> <code>SDI_Automation\.env</code> on K: is readable by <b>Everyone</b>. The server has its own
+copy, readable only by the services and administrators, so the K: copy can go &mdash; and since anyone could read
+it, the keys are worth replacing.</li>
+<li><b>One copy.</b> The server is the live SameDay now. Switch off the laptop copy on LC-328802 and its Cloudflare
+link, which puts it on the public internet behind only the team code. Anything made on the laptop since the copy
+is not on the server.</li>
+<li><b>Timeouts.</b> <code>lite_app.py</code> line 1066 allows 240 seconds; App Proxy allows 180. Below 180, the
+phone gets the answer instead of an error.</li>
+<li><b>The laptop's name</b> is still in <code>lite_app.py</code> line 4001.</li>
+</ol>
+
+<h2>Later, once everyone uses the secure address</h2>
+<div class="card warn">
+<p>The office address (<code>http://10.0.0.5:5020</code>) can be closed, so SameDay is reached only through
+Microsoft sign-in. <span class="where">Server</span> as administrator:</p>
+<pre>Get-NetFirewallRule -DisplayName "SDI SameDay*" | Remove-NetFirewallRule</pre>
+<p>That removes only the two rules the installer added. Not before the test in part C has passed.</p>
+</div>
+</main>
+</body>
+</html>

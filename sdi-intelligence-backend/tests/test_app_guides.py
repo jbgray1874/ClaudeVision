@@ -127,7 +127,7 @@ def test_sameday_has_its_square_its_guide_and_a_way_back():
     other apps. anyone can use". Its own app on its own port; the square opens
     it, and the guide opens it too and returns to the portal."""
     (svc,) = [s for s in _services() if s["id"] == "sameday"]
-    assert svc["surface"] == "app" and svc["app_category"] == "Apps"
+    assert svc["surface"] in ("app", "both") and svc["app_category"] == "Apps"
     assert svc["app_url"] == "http://10.0.0.5:5020/"
     assert svc["guide_url"] == "guide-sameday.html"
     guide = (APP_DIR / svc["guide_url"]).read_text(encoding="utf-8")
@@ -144,3 +144,19 @@ def test_sameday_says_what_the_office_address_cannot_do_yet():
     assert "Type for now." in guide
     assert "team access code" in guide
 
+
+
+def test_sameday_is_in_both_portals_with_one_open_button_each():
+    """3 November: "integrate into SDI Intelligence portal off the left menu in
+    the main intranet portal as well as in the app section". `both` puts it in
+    the intranet's AI Services menu (which shows every entry not marked `app`)
+    and in the app portal; the intranet opens it by `link`, the app portal by
+    `app_url`, and the app portal does not show the same address twice."""
+    (svc,) = [s for s in _services() if s["id"] == "sameday"]
+    assert svc["surface"] == "both"
+    assert svc["link"] == svc["app_url"]
+    intranet = (BACKEND / "sdi-intelligence-portal.html").read_text(encoding="utf-8")
+    assert "filter(s=>s.surface!=='app')" in intranet
+    portal = (APP_DIR / "index.html").read_text(encoding="utf-8")
+    assert "if(s.link && s.link!==s.app_url)" in portal
+    assert any("/app/guide-sameday.html" in x["body"] for x in svc["sections"])

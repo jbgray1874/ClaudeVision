@@ -362,8 +362,9 @@ Say "C. WHO CAN REACH PORT 5020 - it depends which way it is published." Yellow
 Say "   Internal first (3 November - no Entra work yet): open 5020 to the office"
 Say "   network only. The team code is then the lock, as on the laptop today."
 Say "   Through App Proxy later: PORT 5020 NEEDS NO OPENING. The connector runs"
-Say "   ON this server (APP_PROXY_GOLIVE.md 3.1), so it reaches Same Day locally:"
-Say "   internal URL http://localhost:5020/ and LITE_TRUST_FROM=127.0.0.1."
+Say "   ON this server (APP_PROXY_GOLIVE.md 3.1). SDI Intelligence's App Proxy app"
+Say "   points at http://10.0.0.5:8071/, so SameDay's points at http://10.0.0.5:5020/"
+Say "   and the connector arrives from the server's own address: LITE_TRUST_FROM=10.0.0.5."
 Say ""
 Say "D. OUTBOUND - the server must reach api.openai.com and api.anthropic.com," Yellow
 Say "   and office browsers must reach api.openai.com for the live voice."
