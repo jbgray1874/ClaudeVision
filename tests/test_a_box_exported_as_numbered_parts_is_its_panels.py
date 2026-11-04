@@ -146,3 +146,91 @@ def test_edging_a_piece_already_carries_is_not_put_on_the_box_too(tmp_path):
     parts[f"{CODE}-01"]["textual_operations"] = ["edge_banding"]
     lj.apply_full_job_to_pre_estimate(list(parts.values()), _job())
     assert "edge_banding" not in (parts[CODE].get("textual_operations") or [])
+
+
+# ── the panels hang on the box, and the product reaches them (D-674) ───────────────────────
+#
+# 12203-65-GA's 4 Nov 09:55 run: the five panels were minted and then set aside, "Not linked to
+# 12203-65-GA, so not priced". The box lists them as its children and each names the box.
+
+def _product(tmp_path):
+    parts, _ = _merge(tmp_path)
+    plist = [{"part_number": "12203-65-GA", "description": "SOFT TEXTILE BOX",
+              "is_assembly_parent": True, "assembly_children": [CODE]}] + list(parts.values())
+    return parts, plist
+
+
+def test_the_box_names_its_panels_and_each_panel_names_the_box(tmp_path):
+    parts, _ = _merge(tmp_path)
+    panels = {f"{CODE}-{n:02d}" for n, _a, _b in PANELS}
+    assert set(parts[CODE]["assembly_children"]) == panels
+    for pn in panels:
+        assert parts[pn]["dxf_minted_piece_of"] == CODE
+        assert parts[pn]["normalized_finish"] == "LAMINATED", "the box's sheet states its face"
+        assert parts[pn]["normalized_finish_inherited_from"] == CODE
+
+
+def test_the_product_reaches_every_panel_once(tmp_path):
+    import route_compiler as rc
+    _parts, plist = _product(tmp_path)
+    g = rc.build_part_graph(plist, {}, [], known_assemblies=["12203-65-GA"])
+    nodes = {n.part_number: n for n in g["nodes"]}
+    for n, _a, _b in PANELS:
+        pn = f"{CODE}-{n:02d}"
+        assert pn in nodes, f"{pn} was set aside"
+        assert CODE in nodes[pn].parents
+        assert g["quantities"].get(pn) == 1, "one of each panel per box, carried once"
+    assert not any(i.get("code") == "not_linked_to_the_product"
+                   for i in g.get("issues") or []), g.get("issues")
+
+
+def test_a_parent_the_extract_states_still_takes_its_panels(tmp_path):
+    import route_compiler as rc
+    _parts, plist = _product(tmp_path)
+    llm = {"assemblies": [{"part_number": "12203-65-GA",
+                           "children": [{"part_number": CODE, "qty": 1}]},
+                          {"part_number": CODE,
+                           "children": [{"part_number": "BUMPERSTOPS", "qty": 4}]}]}
+    g = rc.build_part_graph(plist, llm, [], known_assemblies=["12203-65-GA"])
+    nodes = {n.part_number: n for n in g["nodes"]}
+    assert CODE in nodes[f"{CODE}-05"].parents
+
+
+# ── only the unit that ships is packed (D-674) ─────────────────────────────────────────────
+#
+# The 09:55 book charged Packing Joinery twice: on the box 01J ("fitting the bumpers to the
+# box", read as an assembly) and on the GA (the top assembly). The box is bench-fitted.
+
+def _decision(did, op, target, scope="part", seq=None):
+    return {"decision_id": did, "operation": op, "target_id": target, "participants": [target],
+            "status": "required", "scope": scope, "sequence": seq, "qty_per_unit": 1}
+
+
+def _joinery_groups(decisions, top=("12203-65-GA",)):
+    import wb_populate as wbp
+    payload = {"nodes": [], "decisions": decisions, "top_assemblies": list(top),
+               "top_assembly": top[0] if top else ""}
+    est = [{"part_number": pn, "normalized_material": "MDF", "normalized_thickness_mm": 10.8,
+            "quantity": 1} for pn in ("12203-65-GA", CODE)]
+    return list(wbp.canonical_labour_groups(
+        {"estimate_summary": {"canonical_route_shadow": payload}}, est, 1).values())
+
+
+def test_the_box_inside_the_product_is_not_packed_on_its_own():
+    groups = _joinery_groups([
+        _decision("fit", "assembly", CODE, "assembly", 50),
+        _decision("pack", "assembly", "12203-65-GA", "assembly", 90),
+        _decision("b1", "bench_work", CODE), _decision("b2", "bench_work", "12203-65-GA")])
+    packs = [g for g in groups if g["wb_op"] == "Packing Joinery"]
+    assert [g["decision_ids"] for g in packs] == [["pack"]], "packed once, as the GA"
+    bench = [g for g in groups if g["wb_op"] == "Bench Work Joinery"]
+    assert any("fit" in g["decision_ids"] for g in bench), "the fitting is the bench's"
+    assert any("not a packing of its own" in s for g in bench for s in g.get("fitting_covered", []))
+
+
+def test_a_sub_assembly_nothing_bench_fits_keeps_its_row():
+    groups = _joinery_groups([
+        _decision("fit", "assembly", CODE, "assembly", 50),
+        _decision("pack", "assembly", "12203-65-GA", "assembly", 90)])
+    assert sum(1 for g in groups if g["wb_op"] == "Packing Joinery") == 2, \
+        "nothing else charges its fitting, so it is not removed"

@@ -245,6 +245,7 @@
   </button>
 </div>
 
+<script src="/estimating/sdi-voice.js"></script><!-- the voice choice and spoken form (D-673) -->
 <script>
 // Nothing on this screen is invented. If a record cannot be read, the screen
 // says why instead of showing a plausible-looking row. A confidently wrong
@@ -741,7 +742,8 @@ function fetchVoice(text){
   const p=(async()=>{
     try{
       const r=await fetch('../api/voicecrm/speak',{method:'POST',redirect:'manual',
-        headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({text: window.SDIVoice?window.SDIVoice.forSpeech(text):text})});
       const ct=(r.headers&&r.headers.get('content-type'))||'';
       if(!r.ok||!ct.startsWith('audio/')){ diag('natural voice unavailable ('+r.status+')'); return null; }
       return URL.createObjectURL(await r.blob());
@@ -781,8 +783,12 @@ function speakLocal(text, once){
   const done=()=>{ clearInterval(poll); once(); };
   const go=()=>{
     try{
-      const u=new SpeechSynthesisUtterance(text);
+      // THE BEST VOICE ON THIS DEVICE, SAYING THE SPOKEN FORM (D-673): the browser's default
+      // on Windows is the old desktop voice; sdi-voice.js ranks the natural ones first.
+      const SV=window.SDIVoice;
+      const u=new SpeechSynthesisUtterance(SV?SV.forSpeech(text):text);
       u.lang='en-GB';
+      const best=SV&&SV.bestVoice(); if(best){ u.voice=best; u.lang=best.lang; }
       u.onstart=()=>{ started=true; diag('speaking'); };
       u.onend=()=>{ diag('spoken'); done(); };
       u.onerror=e=>{ diag('speech error '+(e&&e.error||'')); done(); };

@@ -3638,6 +3638,20 @@ def canonical_labour_groups(
                 _g["laser_nest_proven"] = _proven
                 _g["laser_nest_evidence"] = _why
 
+    # PACKING IS THE SHIPPED UNIT'S (D-674). On the joinery card "assembly" maps to Packing
+    # Joinery. 12203-65-GA's 4 Nov 09:55 book charged two packing rows, one on the box 01J (the
+    # read's "fitting the bumpers to the box") and one on the GA (the top assembly, packed
+    # whatever joined it). A box inside the product is not packed on its own. Where bench work
+    # already covers that part, its fitting decision joins the bench row with no time of its
+    # own; where nothing does, it is charged as before.
+    _ships = {str(t).strip().upper() for t in
+              (list(payload.get("top_assemblies") or []) + [payload.get("top_assembly")])
+              if str(t or "").strip()}
+    _bench_targets = {str(d.get("target_id") or "").strip().upper()
+                      for d in (payload.get("decisions") or [])
+                      if isinstance(d, dict) and d.get("status") == "required"
+                      and str(d.get("operation") or "").strip().lower() == "bench_work"}
+    _fitting_on_the_bench: List[Tuple[str, str, str]] = []
     for decision in payload.get("decisions") or []:
         if not isinstance(decision, dict) or decision.get("status") != "required":
             continue
@@ -3767,6 +3781,10 @@ def canonical_labour_groups(
         wb_op = _map_operation(operation, is_acrylic, stock_form, material)
         if wb_op is None:
             wb_op = operation
+        if (wb_op == "Packing Joinery" and _ships and target_id
+                and target_id not in _ships and target_id in _bench_targets):
+            _fitting_on_the_bench.append((decision_id, operation, target_id))
+            continue
         if (
             wb_op == "Weld (CO2)"
             and stock_form in {"wire", "bar"}
@@ -4078,6 +4096,18 @@ def canonical_labour_groups(
                     .get("hole_count"), 0) or 0) * int(qty)
 
     _merge_unread_colour_into_the_known_one(groups)
+    for _did, _op, _tgt in _fitting_on_the_bench:
+        _bench = next((g for g in groups.values() if g.get("wb_op") == "Bench Work Joinery"
+                       and _tgt in (list(g.get("targets") or []) + list(g.get("parts") or []))),
+                      None)
+        if _bench is None:
+            continue
+        _bench["decision_ids"].append(_did)
+        if _op not in _bench["engine_ops"]:
+            _bench["engine_ops"].append(_op)
+        _bench.setdefault("fitting_covered", []).append(
+            f"{_tgt}: its fitting is bench work on this row, not a packing of its own — "
+            f"only {', '.join(sorted(_ships))} is packed")
     _prove_laser_nests(groups)
 
     for group in groups.values():

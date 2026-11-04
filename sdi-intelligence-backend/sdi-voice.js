@@ -19,6 +19,17 @@
    is generated to be spoken. Azure's neural voice where configured (/api/voicecrm/speak), else
    the device's own voice, a sentence at a time; a sentence ends at a stop followed by a space,
    so "£421.37" is read as one figure.
+
+   HOW IT IS SAID (D-673). JG, 4 Nov 2026: "the phone is pretty good but the app is very robotic
+   and mispronounces some words". Two causes. The device voice taken was the first UK voice
+   installed on the machine, which on Windows is the old desktop voice (Hazel, George), while
+   Edge's and Chrome's natural voices were passed over for not being installed locally; and on
+   first use the list was often still empty, so the browser's default spoke. Now the voices are
+   ranked (natural, neural, enhanced, Google and Siri first, the old desktop voices last), the
+   list is waited for, and a person's own choice is remembered on the device. And the text is
+   put into its spoken form before any voice reads it: £185.96 as "185 pounds 96", 375 x 270 as
+   "375 by 270", 10.8mm as "10.8 millimetres", a code such as 12203-65-01J as "one two two oh
+   three, six five, oh one J", MDF as "M D F". The words on screen are not changed.
 */
 (function () {
   "use strict";
@@ -28,6 +39,7 @@
   var IOS = /iPad|iPhone|iPod/.test(UA) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   var ST = {speech_ready: false, speech_stt: "off", speech_tts: false};
   var asked = null, active = null, playing = null, audio = null;
+  var KEY = "";                       // the page's X-SDI-Key, where the service has one (useKey)
 
   function status() {
     if (!asked) {
@@ -54,6 +66,107 @@
     return plain(text).replace(/([.!?])\s+/g, "$1\u0000").split("\u0000")
       .filter(function (x) { return x.trim(); });
   }
+
+  // ── how it is said (D-673) ────────────────────────────────────────────────────────────
+  var DIGIT = ["oh", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
+  // Initials spelt out even though they hold a vowel; a word in capitals ("NOT") is not.
+  var SPELT = {GA: 1, SDI: 1, BOM: 1, ABS: 1, ACM: 1, RAL: 1, PETG: 1, MFMDF: 1, UPC: 1,
+               CAD: 1, AI: 1, UK: 1, EU: 1, ID: 1, PO: 1, OEM: 1};
+  function digitWords(run) {
+    return run.split("").map(function (d) { return DIGIT[+d]; }).join(" ");
+  }
+  function codeWords(tok) {          // "12203-65-01J" -> "one two two oh three, six five, oh one J"
+    return tok.split("-").map(function (part) {
+      return (part.match(/[A-Z]+|\d+/g) || [part]).map(function (run) {
+        if (/^\d+$/.test(run)) return digitWords(run);
+        return run.length <= 3 ? run.split("").join(" ") : run.toLowerCase();
+      }).join(" ");
+    }).join(", ");
+  }
+  function money(pounds, pence) {
+    var p = pounds.replace(/,/g, "");
+    if (pence !== undefined && +p === 0) return (+pence) + " pence";
+    var head = pounds + (p === "1" ? " pound" : " pounds");
+    return pence !== undefined && +pence ? head + " " + pence : head;
+  }
+  /* forSpeech(text): the words a voice should say for `text`. Generic: units, money, sizes,
+     codes and initials; nothing about any job is known here. */
+  function forSpeech(text) {
+    var t = plain(text);
+    t = t.replace(/[\u2014\u2013\u00b7\u2022]/g, ", ").replace(/\s&\s/g, " and ")
+         .replace(/\b0\d{3,}\b/g, digitWords)       // 0355452: a reference, read figure by figure
+         .replace(/\be\.g\./gi, "for example").replace(/\bi\.e\./gi, "that is")
+         .replace(/\bapprox\./gi, "approximately").replace(/\bqty\b/gi, "quantity")
+         .replace(/\bNo\.\s?(?=\d)/g, "number ");
+    t = t.replace(/£\s?\//g, "pounds /")
+         .replace(/£\s?(\d[\d,]*)\.(\d{2})(?!\d)/g, function (m, a, b) { return money(a, b); })
+         .replace(/£\s?(\d[\d,]*)(?![\d.])/g, function (m, a) { return money(a); });
+    t = t.replace(/(\d)\s*[x\u00d7X]\s*(\d+(?:\.\d+)?\s?(?:mins?|minutes?|hrs?|hours?|h)\b)/g,
+                  "$1 times $2")                      // 3 x 15 min: a count, not a size
+         .replace(/(\d)\s*[x\u00d7X]\s*(?=\d)/g, "$1 by ")
+         .replace(/(^|\s)[x\u00d7](\d+)(?![\d.])/g, "$1times $2");
+    t = t.replace(/\/\s?(?:m²|m2)(?![\w²])/g, " per square metre").replace(/\/\s?(?:hr|h)\b/g, " per hour")
+         .replace(/\/\s?kg\b/g, " per kilogram").replace(/\/\s?(sheet|unit|part|metre|m)\b/g,
+                  function (m, w) { return " per " + (w === "m" ? "metre" : w); });
+    t = t.replace(/(\d)\s?(?:mm²|mm2)(?![\w])/g, "$1 square millimetres")
+         .replace(/(\d)\s?(?:m²|m2)(?![\w])/g, "$1 square metres")
+         .replace(/(\d)\s?mm\b/g, "$1 millimetres").replace(/(\d)\s?cm\b/g, "$1 centimetres")
+         .replace(/(\d)\s?kg\b/g, "$1 kilograms").replace(/(\d)\s?g\b/g, "$1 grams")
+         .replace(/(\d)\s?m\b/g, "$1 metres").replace(/(\d)\s?(?:hrs|hr|h)\b/g, "$1 hours")
+         .replace(/(\d)\s?mins?\b/g, "$1 minutes").replace(/\s?°/g, " degrees");
+    t = t.replace(/\b[A-Z0-9]+(?:-[A-Z0-9]+)+\b/g, function (tok) {
+      return (/[A-Z]/.test(tok) || /\d{4}/.test(tok)) ? codeWords(tok) : tok;
+    });
+    t = t.replace(/\b(?=[A-Z]*\d)(?=\d*[A-Z])[A-Z0-9]{2,}\b/g, codeWords);
+    t = t.replace(/(\d)\s?-\s?(?=\d)/g, "$1 to ");     // a range left after the codes: 1-2 days
+    t = t.replace(/\b[A-Z]{2,5}\b/g, function (w) {
+      return (SPELT[w] || !/[AEIOUY]/.test(w)) ? w.split("").join(" ") : w;
+    });
+    return t.replace(/\s+/g, " ").replace(/\s+([,.;:!?])/g, "$1").trim();
+  }
+
+  // ── which device voice (D-673) ────────────────────────────────────────────────────────
+  var VOICES = [];
+  function loadVoices() {
+    if (SYNTH) { try { VOICES = SYNTH.getVoices() || []; } catch (e) { VOICES = []; } }
+    return VOICES;
+  }
+  if (SYNTH) {
+    loadVoices();
+    try { SYNTH.addEventListener("voiceschanged", loadVoices); }
+    catch (e) { SYNTH.onvoiceschanged = loadVoices; }
+  }
+  /* A voice's rank: UK English first, the natural and enhanced voices before the old desktop
+     ones. Below zero: not English, never chosen. */
+  function voiceScore(v) {
+    var n = String(v.name || "") + " " + String(v.voiceURI || ""), s = 0;
+    if (/^en[-_]GB/i.test(v.lang || "")) s += 100;
+    else if (/^en/i.test(v.lang || "")) s += 40;
+    else return -1;
+    if (/natural|neural/i.test(n)) s += 60;
+    if (/premium|enhanced|siri/i.test(n)) s += 45;
+    if (/google/i.test(n)) s += 35;
+    if (/online/i.test(n)) s += 20;
+    if (/\b(hazel|george|susan|david|zira|mark)\b/i.test(n) && !/natural|online/i.test(n)) s -= 30;
+    if (/compact|espeak|eloquence|novelty|bad news|bells|bubbles|whisper|zarvox|trinoids/i.test(n)) s -= 80;
+    if (v["default"]) s += 2;
+    return s;
+  }
+  function rankedVoices() {
+    return loadVoices().filter(function (v) { return voiceScore(v) >= 0; })
+      .sort(function (a, b) { return voiceScore(b) - voiceScore(a); });
+  }
+  function chosenVoice() { try { return localStorage.getItem("sdi.voice") || ""; } catch (e) { return ""; } }
+  /* useVoice(name): remember a person's own choice on this device; "" goes back to the best. */
+  function useVoice(name) {
+    try { if (name) localStorage.setItem("sdi.voice", name); else localStorage.removeItem("sdi.voice"); }
+    catch (e) {}
+  }
+  function bestVoice() {
+    var all = rankedVoices(), want = chosenVoice();
+    for (var i = 0; i < all.length && want; i++) if (all[i].name === want) return all[i];
+    return all[0] || null;
+  }
   function reset(btn) {
     if (btn) { btn.textContent = btn.getAttribute("data-label") || "Listen"; btn.classList.remove("on"); }
   }
@@ -63,14 +176,16 @@
     if (playing) reset(playing);
     playing = null;
   }
-  function deviceVoice(text, btn) {
+  function deviceVoice(text, btn, waited) {
     if (!SYNTH) { reset(btn); playing = null; return; }
-    var parts = sentences(text);
-    var all = SYNTH.getVoices() || [];
-    var v = null;
-    for (var i = 0; i < all.length && !v; i++) if (/^en-GB/i.test(all[i].lang) && all[i].localService) v = all[i];
-    for (i = 0; i < all.length && !v; i++) if (/^en-GB/i.test(all[i].lang)) v = all[i];
-    for (i = 0; i < all.length && !v; i++) if (/^en/i.test(all[i].lang)) v = all[i];
+    // The list arrives after the page does in Chrome and Edge: wait for it once, briefly,
+    // rather than let the browser's default voice speak.
+    if (!loadVoices().length && !waited) {
+      setTimeout(function () { if (playing === btn) deviceVoice(text, btn, true); }, 250);
+      return;
+    }
+    var parts = sentences(forSpeech(text));
+    var v = bestVoice();
     parts.forEach(function (part, n) {
       var u = new SpeechSynthesisUtterance(part.trim());
       if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = "en-GB"; }
@@ -91,13 +206,24 @@
     }
     if (!ST.speech_tts) return deviceVoice(text, btn);
     if (!audio) { audio = new Audio(); audio.setAttribute("playsinline", ""); }
-    fetch("/api/voicecrm/speak", {method: "POST", credentials: "same-origin",
-                                  headers: {"Content-Type": "application/json"},
-                                  body: JSON.stringify({text: plain(text).slice(0, 4000)})})
-      .then(function (r) {
-        var type = r.headers.get("content-type") || "";
-        if (!r.ok || type.indexOf("audio") < 0) throw new Error("no server voice");
-        return r.blob();
+    var said = JSON.stringify({text: forSpeech(text).slice(0, 4000)});
+    function audioFrom(r) {
+      var type = r.headers.get("content-type") || "";
+      if (!r.ok || type.indexOf("audio") < 0) throw new Error("no server voice");
+      return r.blob();
+    }
+    // THE ESTIMATING PAGES' OWN ROUTE FIRST (D-673): it is behind their own gate, so the e-mail
+    // page and the desk page with no CRM sign-in hear the neural voice too; then the CRM's
+    // route for a signed-in phone; then the device's voice.
+    var keyed = {"Content-Type": "application/json"};
+    if (KEY) keyed["X-SDI-Key"] = KEY;
+    fetch("/api/estimate/speak", {method: "POST", credentials: "same-origin", headers: keyed,
+                                  body: said})
+      .then(audioFrom)
+      .catch(function () {
+        return fetch("/api/voicecrm/speak", {method: "POST", credentials: "same-origin",
+                                             headers: {"Content-Type": "application/json"},
+                                             body: said}).then(audioFrom);
       })
       .then(function (blob) {
         if (playing !== (btn || null)) return;
@@ -232,6 +358,11 @@
 
   window.SDIVoice = {status: status, listen: listen, speak: speak, stop: stop,
                      canListen: canListen, canSpeak: canSpeak,
+                     forSpeech: forSpeech, bestVoice: bestVoice, useVoice: useVoice,
+                     useKey: function (k) { KEY = String(k || ""); },
+                     voices: function () {
+                       return rankedVoices().map(function (v) {
+                         return {name: v.name, lang: v.lang, score: voiceScore(v)}; }); },
                      listening: function () { return !!active; },
                      settings: function () { return ST; }};
 })();
