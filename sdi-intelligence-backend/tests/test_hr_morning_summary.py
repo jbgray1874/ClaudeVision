@@ -39,6 +39,7 @@ def server(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "HR_APP_URL", "https://sdi.example/app/hr-inventry.html")
     monkeypatch.setattr(hr_rollcall, "_schedule_export", lambda rid: None)
     monkeypatch.setattr(ms.os, "chdir", lambda path: None)
+    monkeypatch.delenv("SDI_REVIEW_FROM", raising=False)
     s = {"calls": [], "sent": [], "send_ok": True,
          "inventry": [{"name": "Zoe Test", "since": _ago(hours=2), "by": "sync"},
                       {"name": "Ann Desk", "since": _ago(hours=1), "by": "reception"},
@@ -48,13 +49,17 @@ def server(tmp_path, monkeypatch):
 
     def run_blip():
         s["calls"].append("blip")
+        result = s["blip"].pop(0) if len(s["blip"]) > 1 else s["blip"][0]
+        if result["status"] == "busy":
+            return result                                    # another check holds BrightHR
         (tmp_path / "blip_latest.json").write_text(json.dumps({
-            "summary": {"timestamp": NOW.isoformat()},
+            "summary": {"timestamp": NOW.isoformat(), "status": "ok", "on_site": 3,
+                        "employees_checked": 190, "warnings": []},
             "on_site": [{"first_name": "Zoe", "surname": "Test", "clocking": {"start": _ago(hours=2)}},
                         {"first_name": "New", "surname": "Starter", "clocking": {"start": _ago(hours=1)}},
                         {"first_name": "Sam", "surname": "Forgot", "clocking": {"start": _ago(days=80)}}]}),
             encoding="utf-8")
-        return s["blip"].pop(0) if len(s["blip"]) > 1 else s["blip"][0]
+        return result
 
     def run_push(apply=False, **kw):
         s["calls"].append(("push", apply, kw.get("by")))
@@ -164,13 +169,70 @@ def test_not_at_the_weekend(server):
     assert server["calls"] == [] and server["sent"] == []
 
 
+BUSY = {"status": "busy", "on_site": 0, "employees_checked": 0,
+        "warnings": ["A BrightHR Blip query is already running"], "timestamp": NOW.isoformat()}
+
+
 def test_a_check_already_running_is_waited_for(server):
-    busy = {"status": "busy", "on_site": 0, "employees_checked": 0, "warnings": ["busy"],
-            "timestamp": NOW.isoformat()}
-    server["blip"] = [busy, dict(server["blip"][0])]
+    server["blip"] = [BUSY, dict(server["blip"][0])]
     waited = []
     d = ms.gather(now=NOW, sleep=waited.append)
-    assert waited == [ms.BUSY_WAIT_SECONDS] and d["status"] == "ok"
+    assert waited == [ms.BUSY_WAIT_SECONDS] and d["status"] == "ok" and d["clocked_in"] == 3
+
+
+def test_busy_throughout_reports_the_last_check_not_zero(server, tmp_path):
+    """4 November: BrightHR stayed busy and the summary said "0 of 0 staff
+    checked". The figures come from the last check that finished, and say so."""
+    (tmp_path / "blip_latest.json").write_text(json.dumps({
+        "summary": {"timestamp": _ago(minutes=40), "status": "ok", "on_site": 2, "employees_checked": 190,
+                    "warnings": []},
+        "on_site": [{"first_name": "Zoe", "surname": "Test", "clocking": {"start": _ago(hours=2)}},
+                    {"first_name": "New", "surname": "Starter", "clocking": {"start": _ago(hours=1)}}]}),
+        encoding="utf-8")
+    server["blip"] = [BUSY]
+    waited = []
+    d = ms.gather(now=NOW, sleep=waited.append)
+    assert (d["clocked_in"], d["staff_checked"]) == (2, 190)
+    assert len(waited) == ms.BUSY_RETRIES
+    subject, _, text = ms.compose(d, ms.app_url())
+    assert subject.startswith("HR morning summary: 2 clocked in")
+    assert text.count("already running") == 0 and "busy with another check" in text
+
+
+def test_a_check_from_the_last_few_minutes_is_used_as_it_is(server, tmp_path):
+    (tmp_path / "blip_latest.json").write_text(json.dumps({
+        "summary": {"timestamp": _ago(minutes=3), "status": "ok", "on_site": 1, "employees_checked": 190},
+        "on_site": [{"first_name": "Zoe", "surname": "Test", "clocking": {"start": _ago(hours=2)}}]}),
+        encoding="utf-8")
+    d = ms.gather(now=NOW)
+    assert server["calls"] == [] and d["clocked_in"] == 1
+
+
+def test_a_long_list_gives_twenty_names_and_points_to_the_app(server):
+    d = ms.gather(now=NOW)
+    d["not_on_inventry"] = [f"Person {i:02d}" for i in range(89)]
+    _, _, text = ms.compose(d, ms.app_url())
+    assert "Person 19" in text and "Person 20" not in text and "and 69 more: see the app" in text
+    assert "the app's Roll call includes them" in text
+
+
+def test_one_day_is_a_day():
+    d = {"not_on_inventry": [], "not_clocked_in": [], "notes": [], "push": {"status": "ok"},
+         "forgotten": [{"name": "Sam Forgot", "days": 1.2}], "time": NOW.isoformat()}
+    assert ms.attention(d)[0][2] == ["Sam Forgot (1 day)"]
+
+
+def test_it_is_sent_from_the_sdi_intelligence_mailbox_through_microsoft(server, monkeypatch):
+    """Office 365 refused the server's SMTP login (530 5.7.57) on 4 November.
+    The AM CRM morning review sends through Graph from sdi-intelligence@; so
+    does this."""
+    import morning_review
+    graph = []
+    monkeypatch.setenv("SDI_REVIEW_FROM", "sdi-intelligence@wearesdi.com")
+    monkeypatch.setattr(morning_review, "send_via_graph",
+                        lambda to, subject, page: graph.append(to) or {"sent": True})
+    assert ms.main(["--send"], today=datetime.date(2026, 11, 4)) == 0
+    assert graph == [["alex.example@wearesdi.com", "pat.example@wearesdi.com"]] and server["sent"] == []
 
 
 def test_the_task_runs_at_0845_on_weekdays_as_the_service():
