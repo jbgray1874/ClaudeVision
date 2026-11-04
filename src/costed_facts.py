@@ -2239,6 +2239,23 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
                     "label": (label + " at a market sheet price"
                               + (f" of £{_sheet:,.2f}" if _sheet else "")
                               + " — an AI lookup, not a supplier price; replace before quoting")}
+        # A CATALOGUE PRICE FOR ANOTHER BOARD IS NOT FIRM FOR THE SPECIFIED ONE (D-693).
+        # 12693-01-04J is specified MRMDF in EGGER: U999 ST2 and was nested on a plain-MDF row
+        # of SDI Live's, called firm because the row is real. It is real money for a board
+        # the drawing did not specify: provisional, with what is missing said by name.
+        _not_in = [str(x) for x in (me.get("specification_not_in_price") or []) if x]
+        if _not_in:
+            _sheet = _num(me.get("sheet_price_gbp"))
+            _what = (", ".join(_not_in[:-1]) + " and " + _not_in[-1]) if len(_not_in) > 1 \
+                else _not_in[0]
+            return {"class": "board_specification_gap", "firmness": INDICATIVE_HOUSE,
+                    "owner": "estimator",
+                    "label": (label + " at "
+                              + str(me.get("specification_figure_source") or "a family rate")
+                              + (f", £{_sheet:,.2f} a sheet" if _sheet else "")
+                              + f" — NOT the specified {me.get('specified_board') or 'board'}: "
+                              + _what + (" is" if len(_not_in) == 1 else " are")
+                              + " not in this figure; purchasing to price the specified board")}
         return {"class": f"nest_{block}", "firmness": FIRM, "owner": None, "label": label}
     if kind == "assembly" and not money:
         return {"class": "nil_by_design", "firmness": NIL, "owner": "nobody",

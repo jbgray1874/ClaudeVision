@@ -1431,6 +1431,9 @@ def _select_catalogue_section_stock_rate(rows: Any, side_a_mm: Optional[float],
 _SHEET_RATE_CACHE: Dict[Tuple[str, float], Optional[float]] = {}
 # The catalogue rows behind each cached median, under the same key (D-598q).
 _SHEET_RATE_ROWS: Dict[Tuple[Any, ...], List[Dict[str, Any]]] = {}
+# What answered each cached median, under the same key (D-693): the token, whether it was the
+# product, and what of a board's specification its rows do not carry.
+_SHEET_RATE_META: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
 
 # The researched £/m² for a board, by family and gauge, for the life of the run. Three parts
 # cut from one sheet must not be researched three times and must not come back with three
@@ -1505,10 +1508,26 @@ def _plain_stock_rates_gbp_per_m2(rows: Iterable[Any], token: str,
 
 
 def _plain_stock_rows(rows: Iterable[Any], token: str,
-                      thickness_key: float) -> List[Dict[str, Any]]:
+                      thickness_key: float,
+                      glued_prefixes: Iterable[str] = (),
+                      max_gbp_per_m2: Any = "cap",
+                      ) -> List[Dict[str, Any]]:
     """The same filter, keeping each answering row's code and description (D-598q), so the
-    estimate can say which catalogue rows its median came from."""
-    word_re = re.compile(rf"\b{re.escape(token)}\b")
+    estimate can say which catalogue rows its median came from.
+
+    `glued_prefixes` (D-693): the grade codes a board is specified in. A buyer writes
+    moisture-resistant MDF "MRMDF" as often as "MR MDF", and the whole-word test refused the
+    glued spelling, so the one row that IS the specified board could be the one not read. Only
+    passed when the drawing states a grade: a board with none reads exactly the rows it did.
+
+    `max_gbp_per_m2` is the plain-stock outlier cap ("cap": _SHEET_RATE_MAX_GBP_PER_M2). None
+    lifts it, for the one caller that asks for the drawing's exact board (a décor in its
+    texture is a faced board, and a faced board's price is not an outlier when it is the
+    product named)."""
+    _cap = _SHEET_RATE_MAX_GBP_PER_M2 if max_gbp_per_m2 == "cap" else max_gbp_per_m2
+    _pre = [re.escape(str(p).upper()) for p in glued_prefixes or () if str(p).strip()]
+    word_re = re.compile(rf"\b(?:{'|'.join(_pre)})?{re.escape(token)}\b" if _pre
+                         else rf"\b{re.escape(token)}\b")
     kept: List[Dict[str, Any]] = []
     for r in rows or ():
         try:
@@ -1535,7 +1554,7 @@ def _plain_stock_rows(rows: Iterable[Any], token: str,
         if area_m2 < _SHEET_RATE_MIN_AREA_M2:      # tiny offcuts carry an inflated GBP/m2
             continue
         rate = cost / area_m2
-        if rate <= 0 or rate > _SHEET_RATE_MAX_GBP_PER_M2:
+        if rate <= 0 or (_cap is not None and rate > _cap):
             continue
         kept.append({"part_code": str(r[0] or "") if len(r) > 0 else "",
                      "description": desc, "gbp_per_m2": rate,
@@ -2364,6 +2383,29 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
                     for m in _finish_src if m
                     for _src in (by_pn, _rec_by_pn) if str(m).strip().upper() in _src)
                 if _t)
+            # A MEMBER THAT POINTS AT ITS WELDMENT ADDS NO WORDS (D-695). 12693-01-104's line
+            # quoted "LIGHT AGED ZINC PLATED WITH WAXED SEE WELDMENT REFER TO SUB ASSEMBLY":
+            # the weldment's finish with its members' pointers run on. Where the weldment
+            # states a finish, a member's text is kept only if it states one of its own.
+            _wpn = str(pe.get("_plating_weldment") or "").strip().upper()
+            _w_text = " ".join(dict.fromkeys(
+                _part_finish_text(_src[_wpn]) for _src in (by_pn, _rec_by_pn)
+                if _wpn and _wpn in _src)).strip()
+            if _w_text:
+                try:
+                    from finish_rules import states_a_finish_of_its_own as _own_fin
+                except Exception:                                    # noqa: BLE001
+                    _own_fin = None
+                if _own_fin is not None:
+                    _kept = [_w_text] + [
+                        _t for _t in dict.fromkeys(
+                            _part_finish_text(_src[str(m).strip().upper()])
+                            for m in sorted(members) if m
+                            for _src in (by_pn, _rec_by_pn)
+                            if str(m).strip().upper() in _src
+                            and str(m).strip().upper() != _wpn)
+                        if _t and _t not in _w_text and _own_fin(_t)]
+                    _finish_text = " ".join(_kept)
             # AND IF NEITHER OF THEM NAMES A SPEC, ASK THE REST OF THE PACK.
             # A finish stated once for the whole job — on a GA title block, a general note,
             # the BOM's own finish column — is on no plated member's record, and reading only
@@ -2711,17 +2753,45 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
         _t_key = round(float(thickness_mm), 1)
     except (TypeError, ValueError):
         return None
+    # WHAT THE DRAWING SPECIFIES BEYOND THE FAMILY (D-693). 12693-01-04J prints MRMDF and
+    # EGGER: U999 ST2, and was priced from a generic 18 mm MDF row: MR is a qualifier to the
+    # search word, so any MDF row answered, and U999 was asked alone, so U999 PM would have
+    # been called the product. A stated grade must be on the row; a décor named with its
+    # texture must be on the row in that texture; a row naming another board is not this one.
+    # Where no row carries all of it, the rows that carry the most of it price the line and
+    # what they lack is returned, so the line can say so. No grade and no paired décor: None,
+    # and everything below runs exactly as it did.
+    _spec: Optional[Dict[str, Any]] = None
+    if isinstance(part, dict):
+        try:
+            import board_specification as _bspec
+            _spec = _bspec.specification(part, material)
+        except Exception:                                        # noqa: BLE001
+            _spec = None
     # KEYED ON MATERIAL AND GAUGE, NOT GAUGE ALONE. The cache held thickness only, which was
     # correct while exactly one material could reach it and silently wrong the moment a second
     # could: 2mm ABS would have been handed the 2mm HIPS rate, from a cache hit, with a basis
     # string naming the wrong material. One key for two questions. And the product reference
-    # (D-386): an oak-faced board and a white one share a material word and not a rate.
+    # (D-386): an oak-faced board and a white one share a material word and not a rate. And the
+    # specification (D-693): MR MDF and MDF share a word and not a board.
     _cache_key = ((_token, _t_key, "|".join(p[0] for p in _ref_probes)) if _ref_probes
                   else (_token, _t_key))
+    if _spec:
+        _cache_key = _cache_key + (_spec["key"],)
     if _cache_key in _SHEET_RATE_CACHE:
         _cached = _SHEET_RATE_CACHE[_cache_key]
         _rows_cached = _SHEET_RATE_ROWS.get(_cache_key)
-        return None if _cached is None else {
+        if _cached is None:
+            return None
+        # THE CACHED ANSWER SAYS WHAT THE FIRST ONE SAID (D-693). This rebuilt the answer from
+        # the key, naming the FIRST probe as the token and calling it the product whenever the
+        # drawing had a reference: a second 12 mm piece of one board read "product match"
+        # where the first had read "class". Where the run recorded what answered, that is it.
+        _meta = _SHEET_RATE_META.get(_cache_key)
+        if isinstance(_meta, dict) and _meta.get("rate_gbp_per_m2") == _cached:
+            return dict(_meta, rows=_rows_cached,
+                        basis=str(_meta.get("basis") or "").replace("_live", "_cached"))
+        return {
             "rate_gbp_per_m2": _cached, "thickness_mm": _t_key, "material_token": _token,
             "sample_count": len(_rows_cached) if _rows_cached else None,
             "rows": _rows_cached,
@@ -2741,6 +2811,9 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
     rates: List[float] = []
     _matched: List[Dict[str, Any]] = []
     _used, _needed = _token, None
+    _missing: List[Dict[str, str]] = []
+    _near: List[str] = []
+    _glued = [g["code"] for g in (_spec or {}).get("grades") or []]
     try:
         cur = cn.cursor()
         for _try_token, _require in _probes:
@@ -2756,10 +2829,40 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
             if _require:
                 _rows = [r for r in _rows
                          if _require in str(r[1] if len(r) > 1 else "").upper()]
-            _kept = _plain_stock_rows(_rows, _try_token, _t_key)
+            if not _spec:
+                _kept = _plain_stock_rows(_rows, _try_token, _t_key)
+                _gap: List[Dict[str, str]] = []
+            else:
+                _from_ref = (_try_token, _require) in _ref_probes
+                _kept = _plain_stock_rows(_rows, _try_token, _t_key, _glued)
+                if _from_ref and _spec.get("decors"):
+                    # THE DRAWN BOARD IS NOT AN OUTLIER. A décor in its texture is a faced
+                    # board, priced above the plain-stock cap; the row that is all of the
+                    # specification is used at its own price, and said to be the product.
+                    _seen = {k["part_code"] + k["description"] for k in _kept}
+                    for k in _plain_stock_rows(_rows, _try_token, _t_key, _glued,
+                                               max_gbp_per_m2=None):
+                        _j = _bspec.judge_row(_spec, k["description"])
+                        if (k["part_code"] + k["description"] not in _seen and _j["grade_ok"]
+                                and _j["decor_ok"] and _j["substrate_ok"]):
+                            _kept.append(k)
+                    # THE NEAR MISSES, NAMED FOR PURCHASING: every row carrying the drawn
+                    # décor code, whatever its gauge or price, with what it lacks.
+                    for r in _rows:
+                        try:
+                            _d = str(r[1] or "")
+                            _dims = _sheet_dims(_d)
+                            _why = _bspec.near_miss(_spec, _d, _t_key,
+                                                    _dims[2] if _dims else None)
+                            if _why:
+                                _near.append(f"{str(r[0] or '').strip()} {_d.strip()} "
+                                             f"(£{float(r[2]):,.2f}): {_why}")
+                        except (IndexError, TypeError, ValueError):
+                            continue
+                _kept, _gap = _bspec.choose_rows(_spec, _kept, _from_ref)
             if _kept:
                 rates, _used, _needed = [k["gbp_per_m2"] for k in _kept], _try_token, _require
-                _matched = _kept
+                _matched, _missing = _kept, _gap
                 break
     except Exception:
         rates = []
@@ -2776,7 +2879,7 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
     _median = round(_stats.median(rates), 2)
     _SHEET_RATE_CACHE[_cache_key] = _median
     _SHEET_RATE_ROWS[_cache_key] = _matched
-    return {
+    out = {
         "rate_gbp_per_m2": _median,
         "thickness_mm": _t_key,
         "material_token": _used,
@@ -2790,6 +2893,22 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
         "basis": (f"udef_{_used.lower()}_median_live" if not _needed else
                   f"udef_{_used.lower()}_with_{_needed.lower()}_median_live"),
     }
+    if _spec:
+        # A décor named with its texture is the product only where the rows carry both.
+        if _spec.get("decors"):
+            out["product_reference_match"] = not any(
+                m["part"] in ("decor", "texture") for m in _missing)
+        out.update({
+            "specification": {"grades": [dict(g) for g in _spec["grades"]],
+                              "decors": [dict(d) for d in _spec["decors"]],
+                              "substrate": _spec.get("substrate"),
+                              "board": _bspec.specified_board(_spec, _t_key)},
+            "specification_match": not _missing,
+            "specification_missing": _missing,
+            "near_misses": list(dict.fromkeys(_near))[:6],
+        })
+    _SHEET_RATE_META[_cache_key] = {k: v for k, v in out.items() if k != "rows"}
+    return out
 
 
 # The rung of the length search that is a fallback, not a reading. Named once so the
@@ -2977,6 +3096,47 @@ def _bar_metres_per_tonne(diameter_mm: float) -> Optional[float]:
             return float(table[closest])
     kg_per_m = _PI * (diameter_mm / 2000.0) ** 2 * 7850.0
     return (1000.0 / kg_per_m) if kg_per_m > 0 else None
+
+
+# THE WIRE RATE IS AN ALLOWANCE, NOT A PRICE (D-692). Every wire and round-bar line is priced
+# at the estimating template's Wire Cost Per Tonne (the £/t held in WORKBOOK_INPUT_DEFAULTS
+# for it; the sheet's Wire row recalculates from the template's own cell). That figure is an
+# undated template allowance: no purchasing source, no price date. Purchasing holds no mild
+# steel Ø4 or Ø8 wire in the live catalogue — its nearest rows are a 4 mm 304 STAINLESS at
+# £20/kg, which must never stand in for mild steel, and an "8mm WIREWORK" row with no stock
+# detail — so there is no better figure to prefer, and the line must not read as a verified
+# stock price. A reviewer of 12693-01 asked for exactly that to be said on the line, in words.
+WIRE_RATE_PROVISIONAL_FLAG = "wire_rate_is_an_undated_template_allowance"
+
+
+def wire_rate_is_provisional(rate_gbp_per_tonne: float, gauge_mm: Any = None,
+                             material: Any = None) -> Dict[str, Any]:
+    """What a line priced at the template's wire rate says about that rate, and the record of it."""
+    words = " ".join(str(material or "mild steel").replace("_", " ").lower().split())
+    words = words if "wire" in words else f"{words} wire"
+    gauge = _safe_float(gauge_mm)
+    said = (f"PROVISIONAL wire rate: £{rate_gbp_per_tonne:,.0f}/t "
+            f"(£{rate_gbp_per_tonne / 1000.0:.2f}/kg) is the rate held for the estimating "
+            f"template's Wire Cost Per Tonne — an undated template allowance with no purchasing "
+            f"source and no price date, not a verified stock price. Confirm the {words} price"
+            + (f" for Ø{gauge:g}" if gauge else "") + " with purchasing.")
+    return {"status": "provisional", "basis": "estimating_template_wire_cost_per_tonne",
+            "rate_gbp_per_tonne": rate_gbp_per_tonne, "purchasing_source": None,
+            "price_date": None, "said": said}
+
+
+def _wire_rate_price_source(provisional: Dict[str, Any], applied_basis: str) -> Dict[str, Any]:
+    """The price stamp of a line priced at the template's wire rate. Built from nothing the
+    catalogue answered — the rate is the template's, so no catalogue row (the stainless 4 mm
+    least of all) is named as its source — and carrying no price date, because the allowance
+    has none: a date stamped "today" would read as a current price."""
+    stamp = _build_price_source_metadata({}, fallback_source="config_wire_cost_per_tonne",
+                                         applied=True, applied_basis=applied_basis)
+    stamp.update({"price_date": None, "price_effective_at": None,
+                  "supplier_source": "the estimating template's Wire Cost Per Tonne",
+                  "rate_status": provisional["status"],
+                  "review_reason": provisional["said"]})
+    return stamp
 
 
 def _round_stock_from_own_evidence(part: Dict[str, Any],
@@ -6674,6 +6834,116 @@ def _roll_source_name(px: Dict[str, Any]) -> str:
     return str(px.get("source") or "roll_goods_priced")
 
 
+def _the_specified_board_is_not_in_this_figure(part: Dict[str, Any], board: str,
+                                               gap: List[Dict[str, str]], *, source: str,
+                                               figure: str, near: Iterable[str] = ()
+                                               ) -> Dict[str, Any]:
+    """Say, on the part and on its line, that the figure it carries is not the specified board
+    (D-693), and ask purchasing for the board. Returns the material-estimate fields.
+
+    One wording for every rung that can price a board from something that is not the board:
+    the live catalogue's class rows, the config £/kg rate, a house sheet price. The figure
+    stands where the rung order put it; the line keeps the specified board, names each part of
+    the specification the figure does not include, and is provisional (costed_facts reads
+    `specification_not_in_price`). Asked once per part however many passes cost it."""
+    try:
+        from board_specification import said as _said
+        gap_said = _said(gap)
+    except Exception:                                                # noqa: BLE001
+        gap_said = ", ".join(str(m.get("said") or "") for m in gap)
+    verb = "is" if len(gap) == 1 else "are"
+    near_said = [str(n) for n in (near or ())][:4]
+    pn = part.get("part_number")
+    line_note = (f"SPECIFIED {board}: priced at {source}; {gap_said} {verb} NOT in this "
+                 f"figure. Purchasing to price the specified board")
+    flag = (f"SPECIFICATION NOT IN THE PRICE: {pn} is specified {board}. No SDI Live row "
+            f"answered as that board, so the line carries {figure}; {gap_said} {verb} NOT in "
+            f"that figure. The material stays {board}; purchasing to price the specified board.")
+    if flag not in (part.get("review_flags") or []):
+        part.setdefault("review_flags", []).append(flag)
+    if not any(isinstance(q, dict) and q.get("subject") == "board_specification_not_in_price"
+               for q in part.get("manufacturing_questions") or []):
+        part.setdefault("manufacturing_questions", []).append({
+            "issue": f"No SDI Live price for {pn}'s specified board, {board}",
+            "assumption": f"the line carries {figure}; {gap_said} {verb} NOT in that figure",
+            "action": (f"Purchasing: price {board} (supplier, sheet size and price), or say "
+                       f"which board is bought; until then the line is provisional"
+                       + (f". SDI Live's nearest rows: {'; '.join(near_said)}"
+                          if near_said else "")),
+            "source": "estimator.estimate_material",
+            "subject": "board_specification_not_in_price",
+        })
+    print(f"   [board-spec] {pn}: specified {board}; {source} carried, {gap_said} not in it "
+          f"— provisional, purchasing to price", flush=True)
+    return {"specified_board": board, "specification_match": False,
+            "specification_missing": list(gap),
+            "specification_not_in_price": [str(m.get("said") or "") for m in gap],
+            "specification_figure_source": source,
+            "catalogue_near_misses": near_said, "specification_line_note": line_note}
+
+
+# The rungs below the live catalogue that price a board from its FAMILY, never from the board
+# the drawing specified: the config £/kg rate (by mass, or by the drawing's stated weight) and
+# a house sheet price. The live catalogue judges its own rows (D-693); a researched figure is
+# a market figure, and is replaced before quoting whatever it carried.
+_FAMILY_RATE_METHODS = frozenset({"mass_times_price_per_kg", "board_sheet_yield"})
+
+
+def _a_family_rate_is_not_the_specified_board(part: Dict[str, Any],
+                                              me: Dict[str, Any]) -> None:
+    """The same statement for a board priced below the live catalogue (D-693).
+
+    Where SDI Live holds no row of the family at the gauge, an MR MDF in EGGER: U999 ST2 falls
+    to the config MDF £/kg rate, which knows nothing of grade or décor, and would go out as
+    plainly as the £38.49 sheet did. Nothing here changes the figure; it says what it is."""
+    if not isinstance(me, dict) or "specification_match" in me:
+        return                              # the live catalogue has already judged its rows
+    if not _safe_float(me.get("cost_per_part_gbp") or me.get("unit_material_cost_gbp")):
+        return
+    method = str(me.get("cost_method") or "")
+    if method not in _FAMILY_RATE_METHODS and me.get("stock_form") != "stated_weight":
+        return
+    family = me.get("costing_material_family") or me.get("material") \
+        or part.get("normalized_material")
+    try:
+        import board_specification as _bs
+        spec = _bs.specification(part, family)
+    except Exception:                                                # noqa: BLE001
+        spec = None
+    if not spec:
+        return
+    built = me.get("board_construction") if isinstance(me.get("board_construction"), dict) \
+        else None
+    gap: List[Dict[str, str]] = [{"part": "grade", "code": g["code"],
+                                  "said": f"the {g['code']} ({g['name']}) grade"}
+                                 for g in spec.get("grades") or []]
+    if not (built and built.get("facing_is_the_drawn_decor")):
+        for d in spec.get("decors") or []:
+            gap += [{"part": "decor", "code": d["decor"], "said": f"the {d['decor']} décor"},
+                    {"part": "texture", "code": d["texture"],
+                     "said": f"the {d['texture']} texture"}]
+    board = _bs.specified_board(spec, me.get("thickness_mm") or part.get("normalized_thickness_mm"))
+    me["specified_board"] = board
+    me["specification_match"] = not gap
+    if not gap:
+        return
+    if built:
+        source = "a board built from SDI Live rows on a plain core"
+    elif method == "board_sheet_yield":
+        source = f"SDI's own {family} sheet price"
+    else:
+        _kg = _price_per_kg_for_material(part, me.get("material"))
+        source = (f"the config {family} rate" + (f" of £{float(_kg):.2f}/kg" if _kg else ""))
+    how = {"mass_times_price_per_kg": "by the part's mass",
+           "board_sheet_yield": "by the sheet"}.get(method, "by the drawing's stated weight")
+    me.update(_the_specified_board_is_not_in_this_figure(
+        part, board, gap, source=source,
+        figure=f"{source}, charged {how}: a figure for the {family} family"))
+    me["reliability_flags"] = list(me.get("reliability_flags") or []) + \
+        ["specification_not_in_price"]
+    me["note"] = (str(me.get("note") or "") + f" {me['specification_line_note']}.").strip()
+
+
 def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     # BEFORE ANY PER-EACH OR PER-KILO RATE. A thing sold off a roll is priced by the length
     # taken off it; everything below this line prices a blank, a weight or an each, and all
@@ -7060,8 +7330,40 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             _cat_seen = "; ".join(f"{r.get('part_code') or ''} {r.get('description') or ''}".strip()
                                   for r in _cat_rows[:3])
             _stated = str(part.get("material_stated") or "").strip()
+            # A MISSING PRICE DOES NOT CHANGE THE SPECIFIED BOARD, AND A FIGURE THAT IS NOT IT
+            # SAYS SO (D-693, after D-598o). 12693-01-04J is specified 18 mm MRMDF in EGGER:
+            # U999 ST2; SDI Live holds no moisture-resistant board and U999 only in PM and PT,
+            # and the line went out on a generic MDF sheet at £38.49 with nothing on it to say
+            # so: "MDF" is in "MRMDF", so the class-rate question below did not even ask. The
+            # rows that carry the most of the specification price the line (the rung order is
+            # unchanged); the line keeps the specified board, names each part of the
+            # specification its figure does NOT include, is provisional, and asks purchasing
+            # for the board. Whether the line should carry this figure, a researched one or
+            # none while the board is unpriced is the estimators' ruling; until then it is
+            # this figure, said for what it is. The décor is a requirement stated, not a
+            # construction assumed: nothing here prices or adds a laminate.
+            _spec_gap = [m for m in (_hips_rate.get("specification_missing") or [])
+                         if isinstance(m, dict)]
+            _spec_info = _hips_rate.get("specification") or {}
+            _spec_fields: Dict[str, Any] = {}
+            if _spec_info:
+                _spec_fields["specified_board"] = str(_spec_info.get("board") or "")
+                _spec_fields["specification_match"] = not _spec_gap
+            if _spec_gap:
+                _n_rows = _hips_rate.get("sample_count") or len(_cat_rows) or "the"
+                _spec_fields.update(_the_specified_board_is_not_in_this_figure(
+                    part, _spec_fields["specified_board"] or str(_stated or material), _spec_gap,
+                    source=f"SDI Live's {_cat_token} rate",
+                    figure=(f"SDI Live's {_cat_token} rate, £{_rate_m2:.2f}/m² "
+                            f"(£{_rate_m2 * _hips_sheet_area_m2:.2f} a "
+                            f"{float(_hips_dims[0]):g} x {float(_hips_dims[1]):g} sheet), the "
+                            f"median of {_n_rows} row(s) at "
+                            f"{_hips_rate.get('thickness_mm') or thickness}mm"
+                            + (f" ({_cat_seen})" if _cat_seen else "")),
+                    near=_hips_rate.get("near_misses") or ()))
             if (_stated and _cat_token and not _hips_rate.get("product_reference_match")
                     and _cat_token not in _stated.upper()
+                    and not _spec_gap   # asked above, and more exactly
                     and not any(isinstance(q, dict) and q.get("subject") == "catalogue_class_rate"
                                 for q in part.get("manufacturing_questions") or [])):
                 part.setdefault("manufacturing_questions", []).append({
@@ -7106,12 +7408,16 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 "costing_material_family": _cost_family,
                 "part_confidence_overall": _part_confidence_overall(part),
                 "part_geometry_reliability": _part_geometry_reliability(part),
-                "reliability_flags": [],
+                "reliability_flags": (["specification_not_in_price"] if _spec_gap else []),
                 "note": ("%s sheet cost from LIVE UDEF rate £%.2f/m² (%s plain-stock sample(s) at %.1fmm) × %.4f m² area."
                          % (_hips_rate.get("material_token") or material, _rate_m2,
                             _hips_rate.get("sample_count"), _hips_rate.get("thickness_mm") or 0.0,
                             _acr_area_m2)
-                         + (f" Catalogue rows: {_cat_seen}." if _cat_seen else "")),
+                         + (f" Catalogue rows: {_cat_seen}." if _cat_seen else "")
+                         + (f" {_spec_fields['specification_line_note']}."
+                            if _spec_gap else "")),
+                # THE SPECIFIED BOARD AND WHAT OF IT THIS FIGURE DOES NOT INCLUDE (D-693).
+                **_spec_fields,
                 # The rows behind the median and whether they are the drawing's own product
                 # or only its class (D-598q).
                 "catalogue_rows": _cat_rows[:10],
@@ -7336,6 +7642,8 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         _said += (f" — the workbook's Wire Cost Per Tonne £{_rate_t:.0f}/t over "
                   f"{(_mpt or 0):,.0f} m/t, {_scrap * 100:g}% scrap; the sheet's Wire row "
                   f"recalculates it from the same gauge and length")
+        _rate_prov_r = wire_rate_is_provisional(_rate_t, _rd, material)
+        _said += ". " + _rate_prov_r["said"]
         if _said not in (part.get("review_flags") or []):
             part.setdefault("review_flags", []).append(_said)
         # THE SHARED SIGNALS, as document_builder sets them for a bar: the route compiler's
@@ -7380,9 +7688,11 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                                              or not (_chk and _chk["agrees"])),
             "part_confidence_overall": _part_confidence_overall(part),
             "part_geometry_reliability": _part_geometry_reliability(part),
-            "price_source": _build_price_source_metadata(
-                external_result, fallback_source="config_wire_cost_per_tonne",
-                applied=True, applied_basis="bar_diameter_x_own_length_tonne_rate"),
+            "reliability_flags": [WIRE_RATE_PROVISIONAL_FLAG],
+            "rate_provenance": _rate_prov_r,
+            "note": _rate_prov_r["said"],
+            "price_source": _wire_rate_price_source(
+                _rate_prov_r, "bar_diameter_x_own_length_tonne_rate"),
         }
 
     # ── ROUND BAR / STUD path (added 2026-07-13) ─────────────────────────────
@@ -7424,6 +7734,12 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 _scrap = float(getattr(config, "SCRAP_PERCENTAGE", 0.04))
                 _unit = (_price_per_m / 1000.0) * _bar_len * (1.0 + _scrap)
                 _ext = _unit * quantity
+                _rate_prov_b = wire_rate_is_provisional(_wire_per_tonne, _bar_gauge, material)
+                _said_b = (f"{part.get('part_number')}: bar priced Ø{_bar_gauge:g} x "
+                           f"{_bar_len:g}mm by the workbook's bar formula. "
+                           + _rate_prov_b["said"])
+                if _said_b not in (part.get("review_flags") or []):
+                    part.setdefault("review_flags", []).append(_said_b)
                 return {
                     "material": material,
                     "thickness_mm": None,          # a DIAMETER is not a thickness
@@ -7447,10 +7763,11 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                     "requires_flat_blank": False,
                     "part_confidence_overall": _part_confidence_overall(part),
                     "part_geometry_reliability": _part_geometry_reliability(part),
-                    "price_source": _build_price_source_metadata(
-                        external_result, fallback_source="config_wire_cost_per_tonne",
-                        applied=True, applied_basis="bar_diameter_x_length_gauge_lookup",
-                    ),
+                    "reliability_flags": [WIRE_RATE_PROVISIONAL_FLAG],
+                    "rate_provenance": _rate_prov_b,
+                    "note": _rate_prov_b["said"],
+                    "price_source": _wire_rate_price_source(
+                        _rate_prov_b, "bar_diameter_x_length_gauge_lookup"),
                 }
 
     # RECOGNISED AS WIRE/BAR BUT MISSING A TRUSTED DIAMETER OR LENGTH.
@@ -7515,15 +7832,18 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             _length_assumed = True
         _rate_t = float(_wb_w.get("wire_cost_per_tonne_gbp") or 1600.0)
         _scrap = float(getattr(config, "SCRAP_PERCENTAGE", 0.04))
-        _area_m2 = 3.14159265 * ((_wg / 2000.0) ** 2)
-        _kg_per_m = _area_m2 * 7850.0
-        _mpt = (1000.0 / _kg_per_m) if _kg_per_m > 0 else None
+        # THE SHEET'S OWN METRES PER TONNE (D-692). The Wire block prices a row by looking its
+        # gauge up in the template's table; this line worked the section out instead, so the
+        # engine and the sheet it writes disagreed in the fourth figure (Ø4: 10,138 m/t against
+        # the table's 10,140). The table where it holds the gauge, the section where it does not.
+        _mpt = _bar_metres_per_tonne(_wg)
         _unit = _ext = _mass = None
         if _mpt and _mpt > 0:
             _ppm = _rate_t / _mpt
             _unit = (_ppm / 1000.0) * _wl * (1.0 + _scrap)
             _ext = _unit * quantity
             _mass = _wl / 1000.0 / _mpt * 1000.0
+        _rate_prov_w = wire_rate_is_provisional(_rate_t, _wg, material)
         part.setdefault("review_flags", []).append(
             f"{part.get('part_number')}: wire priced Ø{_wg:g} x {_wl:g}mm at the config rate "
             f"£{_rate_t:.0f}/t (the sheet's own Wire Cost Per Tonne cell recalculates the row)"
@@ -7533,7 +7853,8 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                f" — developed length DERIVED from {part.get('wire_length_derived_from')}: the "
                f"wire runs round the outline, so this is the frame's perimeter and no more; "
                f"confirm it, or give the schedule length."
-               if _length_derived else "."))
+               if _length_derived else ".")
+            + " " + _rate_prov_w["said"])
         return {
             "material": material,
             "thickness_mm": None,               # a DIAMETER is not a thickness
@@ -7550,6 +7871,10 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 "length_derived_from": (str(part.get("wire_length_derived_from") or "")
                                         if _length_derived else None),
                 "metres_per_tonne": round(_mpt, 1) if _mpt else None,
+                # WHERE THE SIZE CAME FROM travels with the price (D-692): a size its own
+                # weight singled out is not a printed Ø or a schedule length, and says so.
+                "gauge_source": part.get("wire_gauge_mm_source"),
+                "length_source": part.get("wire_length_mm_source"),
             },
             "cost_method": ("wire_tonne_rate_assumed_length" if _length_assumed
                             else "wire_tonne_rate_outline_length" if _length_derived
@@ -7561,12 +7886,14 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             "estimator_input_required": _length_assumed or _length_derived,
             "part_confidence_overall": _part_confidence_overall(part),
             "part_geometry_reliability": _part_geometry_reliability(part),
-            "price_source": _build_price_source_metadata(
-                external_result, fallback_source="config_wire_cost_per_tonne",
-                applied=True,
-                applied_basis=("assumed_length_x_tonne_rate" if _length_assumed
-                               else "outline_perimeter_x_tonne_rate" if _length_derived
-                               else "bar_diameter_x_length_gauge_lookup")),
+            "reliability_flags": [WIRE_RATE_PROVISIONAL_FLAG],
+            "rate_provenance": _rate_prov_w,
+            "note": _rate_prov_w["said"],
+            "price_source": _wire_rate_price_source(
+                _rate_prov_w,
+                ("assumed_length_x_tonne_rate" if _length_assumed
+                 else "outline_perimeter_x_tonne_rate" if _length_derived
+                 else "bar_diameter_x_length_gauge_lookup")),
         }
 
     # Section/tube/wire path: uses linear stock mass estimate when profile+length is available.
@@ -11564,6 +11891,12 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     except Exception:                                                # noqa: BLE001
         pass
     material = estimate_material(part)
+    # A BOARD PRICED FROM ITS FAMILY SAYS WHAT OF ITS SPECIFICATION IS NOT IN THE FIGURE
+    # (D-693), on every rung below the live catalogue, which says it for its own rows.
+    try:
+        _a_family_rate_is_not_the_specified_board(part, material)
+    except Exception:                                                # noqa: BLE001
+        pass
     # HOW THE MATERIAL WAS BOUGHT, for the process pass (D-531): a section bought as a piece at
     # its own length is not cut here; one priced from a stock length or by weight is.
     part["_material_cost_method"] = str((material or {}).get("cost_method") or "")

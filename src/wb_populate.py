@@ -1852,6 +1852,66 @@ def _powder_consumable_rate(part, engine_rate):
     return None
 
 
+_SHEET_RANGE_REF = re.compile(r"(?<![!A-Z$])\$?([A-Z]{1,3})\$?(\d+)\s*:\s*\$?([A-Z]{1,3})\$?(\d+)")
+
+
+def template_wire_gauges(ws, w: Dict[str, Any]) -> Tuple[List[float], str]:
+    """(the gauges the Wire block's lookup table holds, where they were read) (D-692).
+
+    The Wire block prices a row by looking its gauge up in a table lower on the sheet (gauge,
+    metres per tonne), the lookup taking the largest table gauge NOT ABOVE the row's. A gauge
+    the table does not hold is therefore priced, silently, as a thinner wire (or not at all,
+    below the smallest). The table is read where the template's own formula on the block's
+    first row names it — the template is the source of truth for its own layout — else from
+    the engine's copy of it, config.WIRE_GAUGE_TABLE (template rows 151-159)."""
+    try:
+        from openpyxl.utils import column_index_from_string
+        row = int(w["first_row"])
+        for col in range(int(w["col_length"]) + 1, int(w["col_length"]) + 12):
+            f = ws.cell(row, col).value
+            if not (isinstance(f, str) and "LOOKUP" in f.upper()):
+                continue
+            m = _SHEET_RANGE_REF.search(f.upper())
+            if not m:
+                continue
+            c = column_index_from_string(m.group(1))
+            r0, r1 = sorted((int(m.group(2)), int(m.group(4))))
+            gauges = sorted({float(v) for v in (ws.cell(r, c).value for r in range(r0, r1 + 1))
+                             if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0})
+            if gauges:
+                return gauges, f"the template's gauge table ({m.group(1)}{r0}:{m.group(1)}{r1})"
+    except Exception:                                                # noqa: BLE001
+        pass
+    table = getattr(config, "WIRE_GAUGE_TABLE", {}) if config is not None else {}
+    return (sorted(float(g) for g in (table or {})),
+            "the template's gauge table as the engine holds it (config.WIRE_GAUGE_TABLE)")
+
+
+# THE WIRE ROW SAYS ITS RATE IS AN ALLOWANCE (D-692). The Wire block prices every row from the
+# template's Wire Cost Per Tonne, an undated allowance with no purchasing source or date; a row
+# showing a gauge, a length and a total reads as a stock price unless the row itself says not.
+_WIRE_RATE_TAG = "[PROVISIONAL RATE - CONFIRM WITH PURCHASING]"
+
+
+def template_wire_rate(ws) -> Optional[float]:
+    """The £/t in the template's own Wire Cost Per Tonne cell (the figure beside its label), or
+    None when the sheet has no such label or no figure beside it."""
+    hit = _find_label_cell(ws, "wire cost per tonne")
+    if not hit:
+        return None
+    r, c = hit
+    for col in range(c + 1, c + 5):
+        v = ws.cell(r, col).value
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+            return float(v)
+    return None
+
+
+def _wire_words(material: Any) -> str:
+    words = " ".join(str(material or "mild steel").replace("_", " ").lower().split())
+    return words if "wire" in words else f"{words} wire"
+
+
 def _is_sheet_metal(mat: str) -> bool:
     m = (mat or "").upper()
     return any(k in m for k in ("STEEL", "MILD", "MS", "STAINLESS", "ALUM", "GALV", "CR4"))
@@ -3444,6 +3504,45 @@ def charge_bevel_pass(ws, groups: Dict[Any, Dict[str, Any]], lb: Mapping[str, An
     return changed
 
 
+def _common_stock_sheet(members: Sequence[Dict[str, Any]], estimates: Mapping[str, Any],
+                        order_qty: Any) -> Optional[Tuple[Any, float]]:
+    """(sheet, fraction of it the whole order takes) for the stock sheet, among the ones the
+    members already use, on which EVERY member nests by the template's own rule and the order
+    takes the least; else None. Members without a blank or a material are not guessed."""
+    try:
+        import costed_facts as _cf
+    except Exception:                                                # noqa: BLE001
+        return None
+    pieces = []
+    for g in members:
+        pn = str((g.get("parts") or [""])[0]).strip().upper()
+        pe = estimates.get(pn) or {}
+        se = ((pe.get("material_estimate") or {}).get("stock_estimate") or {})
+        sheet = se.get("candidate_sheet_size_mm")
+        bd = _cf.blank_dimensions(pe) if pe else {}
+        length, width = _safe(bd.get("length_mm")), _safe(bd.get("width_mm"))
+        mat = pe.get("normalized_material") or (pe.get("material_estimate") or {}).get("material")
+        if not (sheet and length and width and mat):
+            return None
+        pieces.append((g, tuple(sheet), float(length), float(width), mat))
+    best: Optional[Tuple[Any, float]] = None
+    for cand in sorted({pc[1] for pc in pieces}):
+        frac = 0.0
+        for g, _own, length, width, mat in pieces:
+            try:
+                nest = _cf.nest_on_sheet(mat, length, width, cand[0], cand[1])
+            except Exception:                                        # noqa: BLE001
+                nest = None
+            pps = _safe((nest or {}).get("parts_per_sheet"))
+            if not pps or pps <= 0:
+                frac = -1.0
+                break
+            frac += ((_safe(g.get("qty"), 1) or 1) * float(order_qty or 1)) / float(pps)
+        if frac > 0 and (best is None or frac < best[1]):
+            best = (cand, frac)
+    return best
+
+
 def allocate_laser_nest_setup(ws, groups: Dict[Any, Dict[str, Any]],
                               lb: Dict[str, int], flags: List[str]) -> None:
     """ONE NEST, ONE SET-UP.
@@ -3670,8 +3769,31 @@ def canonical_labour_groups(
                 _proven, _why = False, (f"no nest result for {', '.join(_bad)} — nothing "
                                         f"proves these share a sheet")
             elif len(_sheets) > 1:
-                _proven, _why = False, (f"members nest on DIFFERENT stock sheets "
-                                        f"({sorted(_sheets)}) — not one program")
+                # ONE STOCK SHEET THEY CAN ALL BE CUT FROM IS ONE PROGRAM (D-695). Each part
+                # picks the stock size that suits it best, so two 12 mm strips of one board,
+                # 12693-01-04J's 1145 x 210 and 725 x 210, landed on a 2440 x 1220 and a
+                # 3050 x 1525 and were refused a shared set-up. Re-nest the members together
+                # on each sheet one of them already uses; where all fit, that is the nest.
+                _common = _common_stock_sheet(_members, estimates, order_qty)
+                if _common:
+                    _sheet_c, _fraction = _common
+                    _one_sheet = _fraction <= 1.0
+                    if _one_sheet or str(_nid).split("|")[0] in _MULTI_SHEET_PROGRAM_CUTTERS:
+                        _n_sh = int(_fraction) + (1 if _fraction % 1 else 0)
+                        _proven, _why = True, (
+                            f"re-nested together on one {_sheet_c} sheet "
+                            + (f"the whole order takes {_fraction:.2f} of it" if _one_sheet
+                               else f"one program run on {_n_sh} of them ({_fraction:.2f})")
+                            + f", by the template's own nesting; each member's material is "
+                              f"still priced on the stock size it was costed on (members "
+                              f"chose {sorted(_sheets)})")
+                    else:
+                        _proven, _why = False, (f"re-nested on {_sheet_c} the order needs "
+                                                f"{_fraction:.2f} sheets — past one sheet")
+                else:
+                    _proven, _why = False, (f"members nest on DIFFERENT stock sheets "
+                                            f"({sorted(_sheets)}) and do not all fit any one "
+                                            f"of them — not one program")
             elif _fraction <= 1.0:
                 _proven, _why = True, (f"the whole order takes {_fraction:.2f} of one "
                                        f"{next(iter(_sheets))} sheet, by the template's "
@@ -7146,6 +7268,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     if wire_parts:
         w = cm["tube"]
         row = w["first_row"]
+        # A GAUGE THE TABLE DOES NOT HOLD IS SAID, AND NO ROW IS INVENTED FOR IT (D-692). The
+        # row's lookup would price it as the next thinner gauge, with nothing on the sheet to
+        # say so; adding a row would put a metres-per-tonne nobody stated into the template.
+        _wire_gauges, _wire_table_where = template_wire_gauges(ws, w)
+        _wire_to_confirm: Dict[str, Set[float]] = {}
         for pe in wire_parts:
             if row > w["last_row"]:
                 _flag(f"Wire overflow: {len(wire_parts)} wire/bar parts but only "
@@ -7156,14 +7283,44 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             length = _safe(me.get("wire_length_mm") or pe.get("wire_length_mm"))
             qty = int(_safe(pe.get("quantity"), 1))
             desc = f"{pe.get('part_number') or ''}  {pe.get('description') or ''}".strip()
+            desc = f"{desc[:120 - len(_WIRE_RATE_TAG) - 1]} {_WIRE_RATE_TAG}"
+            if gauge is not None:
+                _wire_to_confirm.setdefault(
+                    _wire_words(pe.get("normalized_material") or me.get("material")),
+                    set()).add(gauge)
             if gauge is None or length is None:
                 _flag(f"wire part {pe.get('part_number')} missing gauge/length "
                       f"(gauge={gauge}, length={length}) — line will be £0.", flags)
+            elif _wire_gauges and not any(abs(gauge - g) < 1e-6 for g in _wire_gauges):
+                _below = [g for g in _wire_gauges if g < gauge]
+                _gq = (f"{pe.get('part_number')}: Ø{gauge:g} is not a gauge in "
+                       f"{_wire_table_where}, which holds "
+                       f"{', '.join(f'{g:g}' for g in _wire_gauges)} mm — the Wire row's "
+                       f"lookup prices it as "
+                       + (f"Ø{max(_below):g} wire" if _below else
+                          "nothing (it is below the smallest gauge)")
+                       + ". No gauge row has been added to the template; confirm the stock, "
+                         "or add the gauge and its metres per tonne to the table.")
+                _flag(_gq, flags)
+                if _gq not in (pe.get("review_flags") or []):
+                    pe.setdefault("review_flags", []).append(_gq)
             ws.cell(row=row, column=w["col_desc"],   value=str(desc)[:120])
             ws.cell(row=row, column=w["col_qty"],    value=qty)
             ws.cell(row=row, column=w["col_gauge"],  value=gauge)
             ws.cell(row=row, column=w["col_length"], value=length)
             row += 1
+        # Said once for the block, with the sheet's own figure where its cell holds one.
+        if _wire_to_confirm:
+            _wr = template_wire_rate(ws)
+            _flag(f"{block_title('tube')} block: every row is priced from the template's Wire "
+                  f"Cost Per Tonne"
+                  + (f" (£{_wr:,.0f}/t = £{_wr / 1000.0:.2f}/kg)" if _wr else "")
+                  + " — an undated template allowance with no purchasing source and no price "
+                    "date. PROVISIONAL, not a verified stock price: confirm "
+                  + "; ".join(f"the {_words} price for "
+                              + ", ".join(f"Ø{g:g}" for g in sorted(_gs))
+                              for _words, _gs in sorted(_wire_to_confirm.items()))
+                  + " with purchasing.", flags)
 
     # part_number -> the Sheet Steel row it was written to. Used below so the Laser
     # labour row can reference the template's OWN rate calculator instead of our model.
@@ -7340,7 +7497,16 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             _flag(f"other-sheet {pe.get('part_number')} gauge unset — {float(_rej_t):g} mm "
                   f"was refused below the board floor; no gauge and no sheet price until "
                   f"the gauge is confirmed.", flags)
-        ws.cell(row=row, column=o["col_desc"],   value=f"{pe.get('part_number','')}  {pe.get('description','')}")
+        _o_desc = f"{pe.get('part_number','')}  {pe.get('description','')}"
+        # THE SPECIFIED BOARD STAYS ON ITS ROW (D-693). Where the sheet price is SDI Live's
+        # rate for another board (plain MDF for 12693-01-04J's MRMDF in EGGER: U999 ST2), the
+        # row says which board was specified and what of it the figure does not include, as an
+        # unresolved reading does on a BOM line (D-432). The figure stands; it is provisional.
+        _spec_note = str(me.get("specification_line_note") or "").strip()
+        if _spec_note:
+            _o_desc = f"{_o_desc}  —  {_spec_note}"
+            _flag(f"other-sheet {pe.get('part_number')}: {_spec_note}.", flags)
+        ws.cell(row=row, column=o["col_desc"],   value=_o_desc)
         ws.cell(row=row, column=o["col_qty"],    value=int(_safe(pe.get("quantity"), 1)))
         ws.cell(row=row, column=o["col_length"], value=length)
         ws.cell(row=row, column=o["col_width"],  value=width)

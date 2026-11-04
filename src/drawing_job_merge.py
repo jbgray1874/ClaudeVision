@@ -2109,8 +2109,56 @@ def mint_pieces_listed_on_own_table(parts: List[Dict[str, Any]], bom_rows: Seque
                f"piece it is done to — say which. " if _left else "")
             + "The sizes and counts are the drawing's own table, not a flat or a model — the "
               "shop should confirm them")
+        # A ROW OF THE SAME TABLE THAT IS NOT A SIZE IS SAID, NOT SKIPPED (D-694). 12693-01-04J's
+        # table has a fourth line, count 1, with no words the text layer could read; the three
+        # sized rows were costed and the fourth went nowhere. The part is not complete until
+        # someone has read it off the drawing.
+        _unread = _unsized_rows_of_own_table(part, bom_rows)
+        if _unread:
+            _said_u = "; ".join(
+                (f"'{u['description']}'" if u["description"] else "a row with no description")
+                + f" x{u['qty']:g}" for u in _unread)
+            _why_u = (f"{pn}'s own parts table also lists {_said_u}, which is not a size and is "
+                      f"NOT costed. The pieces above are complete only once this is read off "
+                      f"the drawing")
+            part.setdefault("review_flags", []).append(f"TABLE ROW NOT COSTED: {_why_u}")
+            source_precedence.raise_manufacturing_question(
+                part, f"{pn}: a row of its own parts table is not costed", _why_u,
+                "read the row off the drawing: if it is a piece, give its size and count; "
+                "if it is a fixing or a note, say so",
+                "drawing_job_merge.mint_pieces_listed_on_own_table")
         done.append(pn)
     return done
+
+
+def _unsized_rows_of_own_table(part: Mapping[str, Any], bom_rows: Sequence[Any]
+                               ) -> List[Dict[str, Any]]:
+    """Rows of this part's own table, with no identity, not taken by any reader, whose words
+    are not a size: each with its description and count, so they can be said."""
+    from part_identity import is_placeholder_identity
+    pkey = _normalize_part_key(part.get("part_number") or "")
+    out: List[Dict[str, Any]] = []
+    for r in bom_rows or ():
+        if not isinstance(r, dict) or r.get("bom_parent_known") is False or not pkey:
+            continue
+        if _normalize_part_key(str(r.get("bom_parent") or "")) != pkey:
+            continue
+        code = str(r.get("part_number") or "").strip()
+        if r.get("identity_source") or (code and not is_placeholder_identity(code)):
+            continue
+        if r.get("consumed"):
+            continue
+        desc = " ".join(str(r.get("description") or "").split())
+        if _PURE_SIZE_ROW.match(desc):
+            continue
+        try:
+            q = float(r.get("quantity") or 0)
+        except (TypeError, ValueError):
+            q = 0.0
+        if q <= 0 and not desc:
+            continue
+        out.append({"description": desc, "qty": q})
+    return out
 
 
 def _split_parent_flats_to_children(

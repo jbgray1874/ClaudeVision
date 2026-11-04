@@ -4698,6 +4698,15 @@ def _finalize_scan_summary(
         if _sec_len:
             print(f"   [detail-geometry] {', '.join(_sec_len)}: section length read off "
                   f"their own sheet, checked against its stated weight", flush=True)
+        # A WIRE WITH NO SIZE IS SIZED BY ITS OWN WEIGHT (D-692): of the figures its own sheet
+        # prints, the one diameter-and-length pairing that weighs what the sheet states. Here,
+        # after every reader that could give it a printed Ø or a schedule length (and after
+        # its own sheet's weight is re-read above), and before it is costed.
+        from detail_page_geometry import apply_round_stock_sizes_from_own_weight
+        _round_w = apply_round_stock_sizes_from_own_weight(_parts_dg, summary)
+        if _round_w:
+            print(f"   [detail-geometry] {', '.join(_round_w)}: round stock sized from the "
+                  f"figures on its own sheet that its stated weight singles out", flush=True)
         # A BEVEL IS READ FROM THE PANEL'S OWN DRAWING; ITS FLAT ONLY AGREES (D-670): the lines
         # inside a flat's outline are a bevel's edge only where the sheet says bevel.
         try:
