@@ -293,3 +293,33 @@ def test_recovering_the_edging_requirement_adds_no_operation_anywhere():
     flag = next(f for p in parts if p.get("_edging_line") for f in p["review_flags"]
                 if f.startswith("EDGING DERIVED"))
     assert "No trim waste is included" in flag
+
+
+
+def test_the_edging_line_reaches_the_sheet_in_metres_and_says_its_buying_unit(monkeypatch):
+    """D-682, 12203-65 at 14:41: EDGE0056 was written at Qty 1 though the line is 1.441 m,
+    because the estimate kept the quantity and dropped the unit. And SDI Live holds EDGE0056
+    as 'EA': the per-metre reading is said and asked."""
+    import wb_populate as wp
+    sys.path.insert(0, str(ROOT / "tests"))
+    from test_the_drawings_product_reference_prices_the_line import _Conn
+    rows = {"D4428": [("EDGE0056", "35 x 1mm ABS Edging to match Swiss Krono Oak Natural "
+                                   "D4428 OV", 0.65, "EA")]}
+    monkeypatch.setattr(config, "get_connection", lambda timeout=20: _Conn(rows), raising=False)
+    E._SHEET_RATE_CACHE.clear()
+    parent, pieces = _box_as_the_route_leaves_it()
+    parts = [parent] + pieces
+    summary = {"declared_product": BOX, "manufacturing_writeup": {"parts": parts},
+               "document_analysis": {"bom_rows": []}, "pages": [],
+               "llm_full_extract": {"routes": [{"operation": "edge_banding",
+                                                "part_numbers": [BOX],
+                                                "evidence": "1mm EDGING"}]}}
+    es = E.estimate_document(parts, summary=summary)
+    pe = next(p for p in es["part_estimates"] if p.get("part_number") == "EDGE0056")
+    assert pe["unit_of_measure"] == "m" and pe["_edging_line"] is True
+    assert abs(wp._bom_row_quantity(pe) - 1.055) < 1e-9, "metres, not a count of 1"
+    stub = next(p for p in parts if p.get("_edging_line"))
+    flag = next(f for f in stub["review_flags"]
+                if f.startswith("EDGING BUYING UNIT NOT STATED AS METRES"))
+    assert "'EA' at £0.65" in flag
+    E._SHEET_RATE_CACHE.clear()
