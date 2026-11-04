@@ -147,6 +147,12 @@ def test_a_failed_send_is_not_remembered_so_the_roll_calls_come_again(server):
     assert ms.last_sent() is None
 
 
+def test_a_test_goes_to_one_person_and_is_not_the_last_summary(server):
+    assert ms.main(["--send", "--to", "pat.example@wearesdi.com"], today=datetime.date(2026, 11, 4)) == 0
+    (to, _, _), = server["sent"]
+    assert to == ["pat.example@wearesdi.com"] and ms.last_sent() is None
+
+
 def test_nobody_to_send_to_sends_nothing(server, monkeypatch):
     monkeypatch.setattr(cfg, "HR_MORNING_TO", set())
     assert ms.main(["--send"], today=datetime.date(2026, 11, 4)) == 2

@@ -4,6 +4,7 @@ roll calls since the last summary, emailed with a link to HRInventry Anywhere.
     python tools/hr_morning_summary.py                    # print it
     python tools/hr_morning_summary.py --send             # and email it to SDI_HR_MORNING_TO
     python tools/hr_morning_summary.py --send --update    # update InVentry first
+    python tools/hr_morning_summary.py --send --to me@wearesdi.com   # a test, to one person
 
 Runs a fresh BrightHR check. Without --update it changes nothing in BrightHR
 or InVentry. With it, InVentry is updated exactly as the app's Update InVentry
@@ -243,14 +244,20 @@ def main(argv, sleep=time.sleep, today=None) -> int:
     print(text)
     if "--send" not in argv:
         return 0
-    if not cfg.HR_MORNING_TO:
-        print("SDI_HR_MORNING_TO is not set in .env; nothing sent.")
+    # --to sends a test to someone else instead; a test is not "the last summary",
+    # so the real one still carries the roll calls.
+    test = "--to" in argv
+    to = (sorted(a.strip() for a in (argv[argv.index("--to") + 1:] or [""])[0].split(",") if a.strip())
+          if test else sorted(cfg.HR_MORNING_TO))
+    if not to:
+        print("SDI_HR_MORNING_TO is not set in .env; nothing sent." if not test else "--to needs an address.")
         return 2
     import estimate_email      # the SDI Intelligence mailbox, as the other HR report uses
-    result = estimate_email.send(sorted(cfg.HR_MORNING_TO), subject, page, text)
+    result = estimate_email.send(to, subject, page, text)
     if result.get("sent"):
-        _mark_sent(_parse(d["time"]))
-        print("sent")
+        if not test:
+            _mark_sent(_parse(d["time"]))
+        print(f"sent to {', '.join(to)}")
         return 0
     print(f"NOT sent: {result.get('reason')}")
     return 2
