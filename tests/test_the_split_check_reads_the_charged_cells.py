@@ -174,6 +174,9 @@ def test_a_cnc_row_that_carries_the_bevel_pass_prices_the_bevel(tmp_path):
     for row in rec["workbook_labour"]["rows"]:
         n = row["workbook_row"] - 150
         row["bevel_pass_min_by_part"] = {f"{CODE}-{n:02d}": 0.86}
+        # D-681: what the row's cells charge for it; the book's rate column reads 12.
+        row["bevel_pass_charged"] = {"rate_before_per_hour": 13.0,
+                                     "rate_after_per_hour": 12, "setup_min_added": 5}
     rec["manufacturing_writeup"]["parts"][0]["review_flags"] = [
         "EDGE BANDING TIMED ON ITS PIECES' SHOWING EDGES, PROVISIONAL: 1.4 m"]
     path.write_text(json.dumps(rec))
@@ -192,3 +195,14 @@ def test_a_cnc_row_that_carries_the_bevel_pass_prices_the_bevel(tmp_path):
     assert "includes " + f"{CODE}-01's bevel pass" in out
     assert "edging length not proven" not in out
     assert "no edging material is charged" not in out
+
+
+def test_a_bevel_pass_recorded_but_not_in_the_charged_rate_is_not_priced(tmp_path):
+    path = _record(tmp_path)
+    rec = json.loads(path.read_text())
+    for row in rec["workbook_labour"]["rows"]:
+        n = row["workbook_row"] - 150
+        row["bevel_pass_min_by_part"] = {f"{CODE}-{n:02d}": 0.86}
+    path.write_text(json.dumps(rec))
+    code, out = _run(path, _book(tmp_path, board_price=4.2), CODE, *ARGS)
+    assert "machining not priced" in out and "not in this row's charged rate" in out

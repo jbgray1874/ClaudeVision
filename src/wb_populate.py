@@ -3364,6 +3364,67 @@ def _nest_word(nest_id: Any) -> str:
     return "laser nest" if dept.startswith("Laser") else f"{dept} nest"
 
 
+def charge_bevel_pass(ws, groups: Dict[Any, Dict[str, Any]], lb: Mapping[str, Any],
+                      flags: List[str]) -> List[int]:
+    """Put a bevelled panel's bevel pass into its cutting row's charged cells (D-681).
+
+    The CNC Joinery row is charged at the department's STATED rate (Tony Ford's 12/hr), which
+    rightly overrides the engine's derived routing time, and so the bevel pass the engine
+    timed (estimator, bevel_machining) never reached the sheet: 12203-65's 12:19 book charged
+    the five mitred panels exactly as square-edged ones. The bevel is work beyond the routing
+    that rate was measured on, so it is added to it, not instead of it:
+
+        rate = qty / (qty / stated rate + bevel minutes a unit / 60)
+
+    and the bevel tool's set-up joins the row's own set-up lookup as "=(lookup)+minutes",
+    before the nest pass divides a proven nest's one set-up (so a shared program shares one
+    bevel set-up; an unproven one keeps its own). Both are house allowances, said on the row.
+    Returns the rows changed."""
+    changed: List[int] = []
+    for g in groups.values():
+        passes = g.get("bevel_pass_min_by_part") or {}
+        r = g.get("workbook_row")
+        if not passes or not r:
+            continue
+        r = int(r)
+        tp_cell = ws.cell(row=r, column=lb["col_throughput"])
+        tp = _safe(tp_cell.value)
+        if not tp or tp <= 0:
+            _flag(f"bevel pass NOT added to row {r}: its rate is not a number "
+                  f"({tp_cell.value!r}), so the bevel on {', '.join(passes)} is described, "
+                  f"not charged.", flags)
+            continue
+        qty = _safe(g.get("qty"), 1) or 1.0
+        per_piece = qty / max(1, len(passes))
+        extra_h = sum(float(v) for v in passes.values()) * per_piece / 60.0
+        new_tp = float(qty) / (float(qty) / float(tp) + extra_h)
+        tp_cell.value = round(new_tp, 4)
+        bs = _safe(g.get("bevel_setup_min")) or 0.0
+        s_cell = ws.cell(row=r, column=lb["col_setup"])
+        setup_added = 0.0
+        if bs > 0:
+            if isinstance(s_cell.value, str) and s_cell.value.startswith("="):
+                s_cell.value = "=(%s)+%g" % (s_cell.value[1:], bs)
+                setup_added = bs
+            elif _safe(s_cell.value) is not None:
+                s_cell.value = float(_safe(s_cell.value)) + bs
+                setup_added = bs
+        g["bevel_pass_charged"] = {
+            "rate_before_per_hour": round(float(tp), 4), "rate_after_per_hour": round(new_tp, 4),
+            "pass_min_by_part": dict(passes), "setup_min_added": setup_added,
+            "basis": "house allowance: LABOUR_RULES cnc_routing bevel_sec_per_mm, "
+                     "bevel_setup_min"}
+        _flag(f"BEVEL PASS CHARGED on row {r} ({', '.join(passes)}): the department's "
+              f"{float(tp):g}/hr for the routing plus "
+              f"{sum(float(v) for v in passes.values()):.2f} min of bevel pass a piece = "
+              f"{new_tp:.2f}/hr"
+              + (f", and {setup_added:g} min of bevel-tool set-up on the row's own set-up"
+                 if setup_added else ", no set-up cell to add the bevel tool to")
+              + ". House allowances: confirm against the CAM cycle time.", flags)
+        changed.append(r)
+    return changed
+
+
 def allocate_laser_nest_setup(ws, groups: Dict[Any, Dict[str, Any]],
                               lb: Dict[str, int], flags: List[str]) -> None:
     """ONE NEST, ONE SET-UP.
@@ -3929,6 +3990,8 @@ def canonical_labour_groups(
                 if isinstance(_bm, Mapping) and _safe(_bm.get("run_min")):
                     group.setdefault("bevel_pass_min_by_part", {})[str(target_id)] = round(
                         float(_bm["run_min"]), 2)
+                    group["bevel_setup_min"] = max(_safe(group.get("bevel_setup_min")) or 0.0,
+                                                   _safe(_bm.get("setup_min")) or 0.0)
                 group["laser_nest_id"] += "|" + (f"{_sig}:{target_id or decision_id}"
                                                  if _sig.startswith(_OWN_SETUP) else _sig)
         if decision_id not in group["decision_ids"]:
@@ -5522,6 +5585,8 @@ def build_workbook_labour(
                 "holes_cut_basis": g.get("holes_cut_basis"),
                 # THE BEVEL PASS EACH PANEL'S CUT INCLUDES (D-677), minutes a part.
                 "bevel_pass_min_by_part": dict(g.get("bevel_pass_min_by_part") or {}),
+                # AND WHAT THE ROW'S CELLS NOW CHARGE FOR IT (D-681): absent, it is described.
+                "bevel_pass_charged": g.get("bevel_pass_charged"),
                 # HOW THE RATE WAS ARRIVED AT — template_calculated / size_banded /
                 # historical / historical_unbanded / engine_derived / unmeasured_default.
                 # Without this the audit tabs present an unmeasured constant and the
@@ -9002,6 +9067,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         g["workbook_row"] = row
         row += 1
 
+    charge_bevel_pass(ws, _groups, lb, flags)
     allocate_laser_nest_setup(ws, _groups, lb, flags)
 
     # The canonical route record — built here, after the write loop, so every row carries

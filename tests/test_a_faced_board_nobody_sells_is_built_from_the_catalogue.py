@@ -118,6 +118,7 @@ def test_the_panel_is_priced_on_the_built_sheet_and_says_how(catalogue):
     flag = next(f for f in r["review_flags"] if f.startswith("FACED BOARD BUILT FROM THE CATALOGUE"))
     assert "LAMINATE234" in flag and "house allowances to confirm" in flag
     assert "The facing is the drawn décor." in flag
+    assert "BUILT 10.6 mm AGAINST THE DRAWN 10.8 mm" in flag
 
 
 def test_a_catalogue_row_for_the_finished_board_wins(catalogue, monkeypatch):

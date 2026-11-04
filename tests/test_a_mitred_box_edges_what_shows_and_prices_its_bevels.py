@@ -234,3 +234,62 @@ def test_the_quoted_thickness_picks_the_1mm_oak_row_not_the_2mm(monkeypatch):
     assert stub["part_number"] == "EDGE0056"
     assert pieces[0]["edging_on_exposed_edges"]["callout"] == "1MM EDGING"
     E._SHEET_RATE_CACHE.clear()
+
+
+def _labour_sheet(rate, setup):
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.cell(151, 9, rate)
+    ws.cell(151, 12, setup)
+    return ws
+
+
+LB = {"col_throughput": 9, "col_setup": 12}
+
+
+def test_the_bevel_pass_is_in_the_cnc_rows_charged_cells():
+    """D-681: the row charges the department's stated 12/hr for the routing; the bevel pass
+    is added to it, and the bevel tool's set-up joins the template's own set-up lookup."""
+    import wb_populate as wp
+    ws = _labour_sheet(12, "=VLOOKUP(C151,Rates,4,0)")
+    g = {"workbook_row": 151, "qty": 1, "parts": [f"{BOX}-05"],
+         "bevel_pass_min_by_part": {f"{BOX}-05": 0.86}, "bevel_setup_min": 5.0}
+    flags = []
+    assert wp.charge_bevel_pass(ws, {"k": g}, LB, flags) == [151]
+    want = 1.0 / (1.0 / 12 + 0.86 / 60.0)
+    assert abs(ws.cell(151, 9).value - round(want, 4)) < 1e-6
+    assert ws.cell(151, 12).value == "=(VLOOKUP(C151,Rates,4,0))+5"
+    assert g["bevel_pass_charged"]["rate_before_per_hour"] == 12
+    assert any(f.startswith("BEVEL PASS CHARGED on row 151") for f in flags)
+
+
+def test_a_row_without_a_numeric_rate_says_the_bevel_is_not_charged():
+    import wb_populate as wp
+    ws = _labour_sheet("=W12", "=VLOOKUP(C151,Rates,4,0)")
+    g = {"workbook_row": 151, "qty": 1, "bevel_pass_min_by_part": {f"{BOX}-05": 0.86}}
+    flags = []
+    assert wp.charge_bevel_pass(ws, {"k": g}, LB, flags) == []
+    assert "bevel_pass_charged" not in g
+    assert any("bevel pass NOT added to row 151" in f for f in flags)
+
+
+def test_recovering_the_edging_requirement_adds_no_operation_anywhere():
+    """The box's edging is read to measure and buy the edging, not to put edge banding back on
+    the box or onto its panels: the route's removal stands, and nothing is charged twice."""
+    parent, pieces = _box_as_the_route_leaves_it()
+    parts = [parent] + pieces
+    summary = {"declared_product": BOX, "manufacturing_writeup": {"parts": parts},
+               "document_analysis": {"bom_rows": []}, "pages": [],
+               "llm_full_extract": {"routes": [{"operation": "edge_banding",
+                                                "part_numbers": [BOX],
+                                                "evidence": "1mm EDGING"}]}}
+    E.estimate_document(parts, summary=summary)
+    assert "edge_banding" not in (parent.get("textual_operations") or [])
+    assert "edge_banding" in parent["removed_operations"]
+    for p in pieces:
+        for key in ("textual_operations", "inferred_operations"):
+            assert "edge_banding" not in (p.get(key) or []), (p["part_number"], key)
+    flag = next(f for p in parts if p.get("_edging_line") for f in p["review_flags"]
+                if f.startswith("EDGING DERIVED"))
+    assert "No trim waste is included" in flag

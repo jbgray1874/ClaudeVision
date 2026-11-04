@@ -270,11 +270,20 @@ def main() -> int:
                                        f"cannot be justified"))
         if _BEVEL_ROWS.search(str(op)) or _BEVEL_ROWS.search(str(desc)):
             bevel_priced.update(hit)
-        # A CUTTING ROW WHOSE TIME INCLUDES A PANEL'S BEVEL PASS SAYS SO (D-677).
+        # A CUTTING ROW WHOSE CHARGED CELLS INCLUDE A PANEL'S BEVEL PASS SAYS SO (D-677,
+        # D-681): the minutes alone are a description; the rate the row charges must carry them.
+        _bpc = rr.get("bevel_pass_charged") or {}
         for _bp, _bmin in (rr.get("bevel_pass_min_by_part") or {}).items():
             if _num(_bmin) > 0 and str(_bp).upper() in hit:
-                bevel_priced.add(str(_bp).upper())
-                print(f"      includes {str(_bp).upper()}'s bevel pass, {_num(_bmin):.2f} min a part")
+                if _bpc and _num(_bpc.get("rate_after_per_hour")) == _num(rate):
+                    bevel_priced.add(str(_bp).upper())
+                    print(f"      includes {str(_bp).upper()}'s bevel pass, {_num(_bmin):.2f} min "
+                          f"a part: {_num(_bpc.get('rate_before_per_hour')):g}/hr -> "
+                          f"{_num(_bpc.get('rate_after_per_hour')):g}/hr, set-up +"
+                          f"{_num(_bpc.get('setup_min_added')):g} min")
+                else:
+                    print(f"      {str(_bp).upper()}'s bevel pass is recorded but its rate is "
+                          f"not in this row's charged rate ({rate})")
         if str(op).startswith("Edge Banding"):
             edging_rows.append(row)
     for nid, members in sorted(nests.items()):
