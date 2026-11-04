@@ -2383,6 +2383,29 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
                     for m in _finish_src if m
                     for _src in (by_pn, _rec_by_pn) if str(m).strip().upper() in _src)
                 if _t)
+            # A MEMBER THAT POINTS AT ITS WELDMENT ADDS NO WORDS (D-695). 12693-01-104's line
+            # quoted "LIGHT AGED ZINC PLATED WITH WAXED SEE WELDMENT REFER TO SUB ASSEMBLY":
+            # the weldment's finish with its members' pointers run on. Where the weldment
+            # states a finish, a member's text is kept only if it states one of its own.
+            _wpn = str(pe.get("_plating_weldment") or "").strip().upper()
+            _w_text = " ".join(dict.fromkeys(
+                _part_finish_text(_src[_wpn]) for _src in (by_pn, _rec_by_pn)
+                if _wpn and _wpn in _src)).strip()
+            if _w_text:
+                try:
+                    from finish_rules import states_a_finish_of_its_own as _own_fin
+                except Exception:                                    # noqa: BLE001
+                    _own_fin = None
+                if _own_fin is not None:
+                    _kept = [_w_text] + [
+                        _t for _t in dict.fromkeys(
+                            _part_finish_text(_src[str(m).strip().upper()])
+                            for m in sorted(members) if m
+                            for _src in (by_pn, _rec_by_pn)
+                            if str(m).strip().upper() in _src
+                            and str(m).strip().upper() != _wpn)
+                        if _t and _t not in _w_text and _own_fin(_t)]
+                    _finish_text = " ".join(_kept)
             # AND IF NEITHER OF THEM NAMES A SPEC, ASK THE REST OF THE PACK.
             # A finish stated once for the whole job — on a GA title block, a general note,
             # the BOM's own finish column — is on no plated member's record, and reading only

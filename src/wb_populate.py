@@ -3504,6 +3504,45 @@ def charge_bevel_pass(ws, groups: Dict[Any, Dict[str, Any]], lb: Mapping[str, An
     return changed
 
 
+def _common_stock_sheet(members: Sequence[Dict[str, Any]], estimates: Mapping[str, Any],
+                        order_qty: Any) -> Optional[Tuple[Any, float]]:
+    """(sheet, fraction of it the whole order takes) for the stock sheet, among the ones the
+    members already use, on which EVERY member nests by the template's own rule and the order
+    takes the least; else None. Members without a blank or a material are not guessed."""
+    try:
+        import costed_facts as _cf
+    except Exception:                                                # noqa: BLE001
+        return None
+    pieces = []
+    for g in members:
+        pn = str((g.get("parts") or [""])[0]).strip().upper()
+        pe = estimates.get(pn) or {}
+        se = ((pe.get("material_estimate") or {}).get("stock_estimate") or {})
+        sheet = se.get("candidate_sheet_size_mm")
+        bd = _cf.blank_dimensions(pe) if pe else {}
+        length, width = _safe(bd.get("length_mm")), _safe(bd.get("width_mm"))
+        mat = pe.get("normalized_material") or (pe.get("material_estimate") or {}).get("material")
+        if not (sheet and length and width and mat):
+            return None
+        pieces.append((g, tuple(sheet), float(length), float(width), mat))
+    best: Optional[Tuple[Any, float]] = None
+    for cand in sorted({pc[1] for pc in pieces}):
+        frac = 0.0
+        for g, _own, length, width, mat in pieces:
+            try:
+                nest = _cf.nest_on_sheet(mat, length, width, cand[0], cand[1])
+            except Exception:                                        # noqa: BLE001
+                nest = None
+            pps = _safe((nest or {}).get("parts_per_sheet"))
+            if not pps or pps <= 0:
+                frac = -1.0
+                break
+            frac += ((_safe(g.get("qty"), 1) or 1) * float(order_qty or 1)) / float(pps)
+        if frac > 0 and (best is None or frac < best[1]):
+            best = (cand, frac)
+    return best
+
+
 def allocate_laser_nest_setup(ws, groups: Dict[Any, Dict[str, Any]],
                               lb: Dict[str, int], flags: List[str]) -> None:
     """ONE NEST, ONE SET-UP.
@@ -3730,8 +3769,31 @@ def canonical_labour_groups(
                 _proven, _why = False, (f"no nest result for {', '.join(_bad)} — nothing "
                                         f"proves these share a sheet")
             elif len(_sheets) > 1:
-                _proven, _why = False, (f"members nest on DIFFERENT stock sheets "
-                                        f"({sorted(_sheets)}) — not one program")
+                # ONE STOCK SHEET THEY CAN ALL BE CUT FROM IS ONE PROGRAM (D-695). Each part
+                # picks the stock size that suits it best, so two 12 mm strips of one board,
+                # 12693-01-04J's 1145 x 210 and 725 x 210, landed on a 2440 x 1220 and a
+                # 3050 x 1525 and were refused a shared set-up. Re-nest the members together
+                # on each sheet one of them already uses; where all fit, that is the nest.
+                _common = _common_stock_sheet(_members, estimates, order_qty)
+                if _common:
+                    _sheet_c, _fraction = _common
+                    _one_sheet = _fraction <= 1.0
+                    if _one_sheet or str(_nid).split("|")[0] in _MULTI_SHEET_PROGRAM_CUTTERS:
+                        _n_sh = int(_fraction) + (1 if _fraction % 1 else 0)
+                        _proven, _why = True, (
+                            f"re-nested together on one {_sheet_c} sheet "
+                            + (f"the whole order takes {_fraction:.2f} of it" if _one_sheet
+                               else f"one program run on {_n_sh} of them ({_fraction:.2f})")
+                            + f", by the template's own nesting; each member's material is "
+                              f"still priced on the stock size it was costed on (members "
+                              f"chose {sorted(_sheets)})")
+                    else:
+                        _proven, _why = False, (f"re-nested on {_sheet_c} the order needs "
+                                                f"{_fraction:.2f} sheets — past one sheet")
+                else:
+                    _proven, _why = False, (f"members nest on DIFFERENT stock sheets "
+                                            f"({sorted(_sheets)}) and do not all fit any one "
+                                            f"of them — not one program")
             elif _fraction <= 1.0:
                 _proven, _why = True, (f"the whole order takes {_fraction:.2f} of one "
                                        f"{next(iter(_sheets))} sheet, by the template's "
