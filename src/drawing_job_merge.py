@@ -1829,6 +1829,28 @@ def _split_parent_flats_to_children(
             # Which part's flats it was split from, so a reader of that part's own sheet (its
             # detail of each piece, D-670) can be asked about this piece.
             orphan["dxf_flat_of_parent"] = str(parent.get("part_number") or "")
+            # AND IT IS THAT PART'S CHILD, OR THE PRODUCT NEVER REACHES IT (D-674, as D-384 for
+            # the "-01J-1" spelling). 12203-65-GA's 4 Nov 09:55 run minted the box's five panels
+            # 12203-65-01J-01..05 from its PART1..PART5 flats and then listed them "Not linked
+            # to 12203-65-GA, so not priced": the records existed and hung on nothing, so the
+            # box was an assembly with no panels and no board. The part whose flats they are
+            # names them as its children, through the field the route compiler reads, and each
+            # names its part, so a parent the extract already stated still takes them.
+            _ppn = str(parent.get("part_number") or "")
+            if _ppn and _normalize_part_key(_ppn) != _normalize_part_key(pn):
+                orphan["dxf_minted_piece_of"] = _ppn
+                _kids = parent.setdefault("assembly_children", [])
+                if isinstance(_kids, list) and not any(
+                        _normalize_part_key(k) == _normalize_part_key(pn) for k in _kids):
+                    _kids.append(pn)
+                parent["is_assembly_parent"] = True
+                # THE PART'S OWN SHEET STATES ITS PIECES' FINISH, as for role pieces (D-598j):
+                # "LAMINATED" on the box's sheet is every panel's face.
+                _fin = str(parent.get("normalized_finish") or "").strip()
+                if _fin and not orphan.get("normalized_finish"):
+                    if _apply_field(orphan, "normalized_finish", _fin, "drawing_deterministic"):
+                        orphan["surface_finishes"] = list(parent.get("surface_finishes") or [_fin])
+                        orphan["normalized_finish_inherited_from"] = _ppn
             orphan.setdefault("review_flags", []).append("distinct_child_flat_promoted_by_geometry")
             parts.append(orphan)
             parts_by_key[_normalize_part_key(pn)] = orphan
