@@ -5206,6 +5206,90 @@ def _middle_row(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return good[len(good) // 2]
 
 
+_PACK_SIZE_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(KGS?|KILOS?|LTRS?|LITRES?|LITERS?|ML|L|G)\b")
+_PACK_DIMENSION = {"KG": ("kg", 1.0), "KGS": ("kg", 1.0), "KILO": ("kg", 1.0),
+                   "KILOS": ("kg", 1.0), "G": ("kg", 0.001), "L": ("L", 1.0),
+                   "LTR": ("L", 1.0), "LTRS": ("L", 1.0), "LITRE": ("L", 1.0),
+                   "LITRES": ("L", 1.0), "LITER": ("L", 1.0), "LITERS": ("L", 1.0),
+                   "ML": ("L", 0.001)}
+_NOT_A_GLUE_TIN = ("TAPE", "STICK", "PAD", "DOT", "GUN", "NOZZLE", "CLEANER", "REMOVER",
+                   "SPRAY", "AEROSOL")
+
+
+def _adhesive_by_its_pack(spec: Dict[str, Any], unit: str) -> Dict[str, Any]:
+    """What SDI Live's adhesive costs per `unit`, from the rows that ARE that adhesive and state
+    their pack in that unit (D-678).
+
+    {"gbp_per_unit", "unit", "row", "rows", "gap"}: gbp_per_unit None with the gap named when
+    nothing qualifies. A row must carry every word of the spec; its pack size is read off its
+    own description; a pack in another unit is not converted (no density is assumed)."""
+    words = tuple(str(w).upper() for w in (spec.get("all_words") or ()) if str(w).strip())
+    unit = "L" if str(unit).strip().upper() in ("L", "LITRE", "LITRES") else "kg"
+    out: Dict[str, Any] = {"gbp_per_unit": None, "unit": unit, "row": None, "rows": [],
+                           "gap": ""}
+    if not words:
+        out["gap"] = "no adhesive is specified for the laminate's bond"
+        return out
+    key = ("__adhesive__|" + "+".join(words) + "|" + unit, 0.0)
+    if key in _SHEET_RATE_CACHE:
+        return _SHEET_RATE_CACHE[key]  # type: ignore[return-value]
+    try:
+        import config as _cfg
+        cn = _cfg.get_connection(timeout=20)
+    except Exception:                                                # noqa: BLE001
+        out["gap"] = "SDI Live could not be asked"
+        return out
+    matching, other_unit, no_pack = [], [], []
+    try:
+        cur = cn.cursor()
+        cur.execute(
+            """SELECT [Part code],[Description],[System cost per]
+               FROM dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING
+               WHERE [System cost per] > 0 AND [Description] LIKE ?""",
+            (f"%{max(words, key=len)}%",),
+        )
+        for r in cur.fetchall() or []:
+            code, desc, gbp = str(r[0]), str(r[1] or "").upper(), _safe_float(r[2])
+            if not gbp or gbp <= 0 or not all(w in desc for w in words) \
+                    or any(w in desc for w in _NOT_A_GLUE_TIN):
+                continue
+            m = _PACK_SIZE_RE.search(desc)
+            if not m:
+                no_pack.append(code)
+                continue
+            dim, factor = _PACK_DIMENSION[m.group(2)]
+            size = float(m.group(1)) * factor
+            if size <= 0:
+                continue
+            row = {"part_code": code, "description": desc, "pack_gbp": float(gbp),
+                   "pack_size": round(size, 4), "pack_unit": dim,
+                   "gbp_per_unit": round(float(gbp) / size, 4)}
+            (matching if dim == unit else other_unit).append(row)
+    except Exception:                                                # noqa: BLE001
+        out["gap"] = "SDI Live's adhesive rows could not be read"
+    finally:
+        try:
+            cn.close()
+        except Exception:                                            # noqa: BLE001
+            pass
+    if matching:
+        matching.sort(key=lambda x: (x["gbp_per_unit"], x["part_code"]))
+        out.update(gbp_per_unit=matching[(len(matching) - 1) // 2]["gbp_per_unit"],
+                   row=matching[(len(matching) - 1) // 2], rows=matching)
+    elif not out["gap"]:
+        bits = [f"no SDI Live row is {spec.get('name') or ' '.join(words).lower()} "
+                f"with its pack in {unit}"]
+        if other_unit:
+            bits.append("sold in another unit and not converted: " + ", ".join(
+                f"{x['part_code']} ({x['pack_size']:g} {x['pack_unit']})" for x in other_unit))
+        if no_pack:
+            bits.append("no pack size stated: " + ", ".join(no_pack))
+        out["gap"] = "; ".join(bits)
+    _SHEET_RATE_CACHE[key] = out  # type: ignore[assignment]
+    return out
+
+
 def _constructed_faced_board(part: Dict[str, Any], family: str,
                              thickness: Optional[float]) -> Optional[Dict[str, Any]]:
     """A faced board priced as the shop would build it, from SDI Live rows (D-676).
@@ -5265,29 +5349,65 @@ def _constructed_faced_board(part: Dict[str, Any], family: str,
                       float(frow["length_mm"]), float(frow["width_mm"]))
     core_m2 = cL * cW / 1_000_000.0
     per_face = max(1, int(-(-(cL * cW) // (fL * fW))))
-    adhesive = float(cfg.get("adhesive_gbp_per_m2_per_face") or 0.0)
+    _use = cfg.get("adhesive_consumption_per_m2_per_face") or {}
+    spread, spread_unit = float(_use.get("amount") or 0.0), str(_use.get("unit") or "kg")
+    _found = (_adhesive_by_its_pack(cfg.get("adhesive_spec") or {}, spread_unit)
+              if spread > 0 else {"gap": "no adhesive consumption is set"})
+    glue = _found if _found.get("gbp_per_unit") else None
     minutes = float(cfg.get("laminating_minutes_per_m2_per_face") or 0.0)
     rate = float((getattr(config, "HOURLY_RATES_GBP", {}) or {}).get(
         cfg.get("laminating_rate_key") or "glue") or 0.0)
     parts = {
         "core": round(float(crow["sheet_gbp"]), 2),
         "facing": round(faces * per_face * float(frow["sheet_gbp"]), 2),
-        "adhesive": round(faces * core_m2 * adhesive, 2),
         "laminating": round(faces * core_m2 * minutes / 60.0 * rate, 2),
     }
+    adhesive = None
+    if glue:
+        _used = faces * core_m2 * spread
+        parts["adhesive"] = round(_used * float(glue["gbp_per_unit"]), 2)
+        import datetime as _dt
+        # WHAT WAS BOUGHT, AT WHAT PRICE, AND HOW MUCH OF IT, SAVED WITH THE RUN (D-678).
+        adhesive = {"spec": (cfg.get("adhesive_spec") or {}).get("name"),
+                    "part_code": glue["row"]["part_code"],
+                    "description": glue["row"]["description"],
+                    "pack_gbp": glue["row"]["pack_gbp"], "pack_size": glue["row"]["pack_size"],
+                    "pack_unit": glue["row"]["pack_unit"],
+                    "gbp_per_unit": glue["gbp_per_unit"], "unit": glue["unit"],
+                    "consumption_per_m2_per_face": spread, "bonded_m2": round(faces * core_m2, 4),
+                    "quantity_used": round(_used, 4), "allowance_gbp": parts["adhesive"],
+                    "price_date": None, "read_on": _dt.date.today().isoformat(),
+                    "price_date_note": "SDI Live's parts table holds no price date; read on "
+                                       "the run date",
+                    "bonds": "the laminate to the core, inside this board price; the box's "
+                             "assembly glue is the Glue row on its assembly, not this"}
     total = round(sum(parts.values()), 2)
     decor = bool(facing.get("product_reference_match"))
     built = core_t + faces * facing_t
+    if adhesive:
+        glue_said = (f"laminate adhesive £{parts['adhesive']:.2f} ({faces} x {core_m2:.2f} m2 x "
+                     f"{spread:g} {adhesive['unit']}/m2 = {adhesive['quantity_used']:g} "
+                     f"{adhesive['unit']} at £{adhesive['gbp_per_unit']:.2f}/{adhesive['unit']}: "
+                     f"{adhesive['part_code']} {adhesive['description']}, "
+                     f"£{adhesive['pack_gbp']:.2f} a {adhesive['pack_size']:g} "
+                     f"{adhesive['pack_unit']} pack, read {adhesive['read_on']}, no price date "
+                     f"held)")
+    else:
+        glue_said = f"laminate adhesive NOT PRICED ({_found.get('gap') or 'nothing answered'})"
     note = (f"BUILT FROM SDI LIVE: core {crow['part_code']} {crow['description']} "
             f"£{parts['core']:.2f} + {faces} face(s) x {per_face} x {frow['part_code']} "
-            f"{frow['description']} £{parts['facing']:.2f} + adhesive £{parts['adhesive']:.2f} + "
+            f"{frow['description']} £{parts['facing']:.2f} + {glue_said} + "
             f"laminating £{parts['laminating']:.2f} = £{total:.2f} per {cL:g} x {cW:g} sheet; "
             f"{core_t:g} + {faces} x {facing_t:g} = {built:g} mm against the drawn {t:g} mm")
     return {"sheet_gbp": total, "sheet_mm": (max(cL, cW), min(cL, cW)), "components": parts,
             "core_row": crow, "facing_row": frow, "faces": faces, "core_thickness_mm": core_t,
             "facing_thickness_mm": facing_t, "built_mm": built, "drawn_mm": t,
             "facing_is_the_drawn_decor": decor, "note": note,
-            "allowances": {"faces": faces, "adhesive_gbp_per_m2_per_face": adhesive,
+            "adhesive": adhesive, "adhesive_priced": bool(adhesive),
+            "adhesive_gap": None if adhesive else (_found.get("gap") or "nothing answered"),
+            "allowances": {"faces": faces,
+                           "adhesive_consumption_per_m2_per_face": {"unit": spread_unit,
+                                                                    "amount": spread},
                            "laminating_minutes_per_m2_per_face": minutes,
                            "laminating_rate_gbp_per_hour": rate}}
 
@@ -8042,9 +8162,12 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 + ("The facing is the drawn décor." if _constructed["facing_is_the_drawn_decor"]
                    else "The facing is the catalogue's median laminate, NOT the drawn décor: "
                         "no SDI Live row carries the drawing's code.")
-                + f" Faces ({_constructed['faces']}), adhesive and laminating time are house "
-                  f"allowances to confirm; a supplier price for the finished board replaces "
-                  f"this.")
+                + f" Faces ({_constructed['faces']}), the adhesive spread and the laminating "
+                  f"time are house allowances to confirm; a supplier price for the finished "
+                  f"board replaces this."
+                + ("" if _constructed.get("adhesive_priced") else
+                   f" The laminate adhesive is NOT in this price, so the material is "
+                   f"incomplete: {_constructed.get('adhesive_gap')}."))
     if _faced_family:
         if not _board_rate:
             # ── RUNG 4 FOR A BOARD, BECAUSE IT IS THE LAST RUNG AND NOT A BOUGHT-IN'S ──
@@ -8181,7 +8304,10 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             "part_confidence_overall": _part_confidence_overall(part),
             "part_geometry_reliability": _part_geometry_reliability(part),
             "reliability_flags": (["board_sheet_priced", "indicative_price"]
-                                  + (["board_constructed_provisional"] if _constructed else [])),
+                                  + (["board_constructed_provisional"] if _constructed else [])
+                                  + (["board_adhesive_unpriced"]
+                                     if _constructed and not _constructed.get("adhesive_priced")
+                                     else [])),
             **({"board_construction": _constructed} if _constructed else {}),
             "note": f"Faced board, sheet-nested: {_board_note}",
             "price_source": _build_price_source_metadata(

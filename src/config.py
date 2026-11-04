@@ -4833,10 +4833,12 @@ SHEET_BOARD_TOKENS = ("MDF", "PLYWOOD", "PLY", "CHIPBOARD", "OSB", "HARDBOARD")
 # catalogue row sells that board, but SDI Live holds the laminate in that décor (LAMINATE234,
 # 2600 x 1300 x 0.8 mm) and plain MDF cores. The board is priced as the shop would build it:
 # one core sheet, the facing sheets that cover it on each face, adhesive and laminating time.
-# The core is the stocked thickness at or just under (drawn - faces x facing). The money comes
-# from SDI Live rows, each named on the line; the faces, the adhesive and the laminating time
-# below are HOUSE ALLOWANCES, NOT CONFIRMED, and every line built this way says so. A supplier
-# price for the finished board, or a catalogue row for it, always wins over this.
+# The core is the stocked thickness at or just under (drawn - faces x facing). ALL THE MONEY
+# COMES FROM SDI LIVE ROWS, each named on the line: core, facing and the adhesive's own pack
+# ("we can't hard code prices", JG 15 Sep 2026). What is held here is quantity and time only:
+# the faces, the adhesive spread a square metre and the laminating minutes are HOUSE
+# ALLOWANCES, NOT CONFIRMED, and every line built this way says so. A supplier price for the
+# finished board, or a catalogue row for it, always wins over this.
 FACED_BOARD_CONSTRUCTION = {
     "enabled": True,
     "faces": 2,                                    # both faces in the décor (no balancer)
@@ -4844,7 +4846,15 @@ FACED_BOARD_CONSTRUCTION = {
     "facing_thicknesses_mm": (0.8, 0.7, 0.6, 1.0, 1.2),
     "core_word_by_family": {"MFMDF": "MDF", "MFC": "CHIPBOARD"},
     "core_thicknesses_mm": (3, 6, 9, 12, 15, 18, 22, 25),
-    "adhesive_gbp_per_m2_per_face": 1.50,          # HOUSE ALLOWANCE — confirm
+    # THE LAMINATE'S BOND, NOT ANY CATALOGUE GLUE (D-678). The adhesive the shop bonds this
+    # laminate to an MDF core with. Every word below must be on the SDI Live row, so a wood
+    # glue, a spray can or a tape is never taken for it. SHOP ASSUMPTION: confirm the product.
+    # It is not the box's assembly glue: that is the Glue row on the assembly.
+    "adhesive_spec": {"name": "contact adhesive, laminate to MDF",
+                      "all_words": ("CONTACT", "ADHESIVE")},
+    # CONSUMPTION IN THE UNIT THE TIN IS BOUGHT IN. A row sold in any other unit is NOT
+    # converted (no density is assumed): it is named as the gap. HOUSE ALLOWANCE: confirm.
+    "adhesive_consumption_per_m2_per_face": {"unit": "kg", "amount": 0.15},
     "laminating_minutes_per_m2_per_face": 6.0,     # HOUSE ALLOWANCE — confirm
     "laminating_rate_key": "glue",                 # HOURLY_RATES_GBP: the Glue department
 }

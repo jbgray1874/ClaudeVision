@@ -31,6 +31,11 @@ ROWS = {
                  ("LAMINATE234", "LAMINATE 2600 x 1300 x 0.8mm D4428 OV", 85.75)],
     "MDF": [("MDF09", "MDF 2440 x 1220 x 9mm", 18.0), ("MDF12", "MDF 2440 x 1220 x 12mm", 22.0),
             ("MDF18", "MDF 2440 x 1220 x 18mm", 30.0)],
+    "ADHESIVE": [("GLUE05", "CONTACT ADHESIVE 5KG TIN", 40.0),
+                 ("GLUE04", "CONTACT ADHESIVE 5 LTR TIN", 35.0),
+                 ("GLUE06", "CONTACT ADHESIVE SPRAY GUN NOZZLE", 3.0),
+                 ("GLUE07", "CONTACT ADHESIVE (EACH)", 9.0),
+                 ("PVA01", "PVA WOOD ADHESIVE 5KG", 12.0)],
 }
 
 
@@ -63,7 +68,18 @@ def test_the_board_is_built_from_a_core_and_the_drawn_decor(catalogue):
     c = got["components"]
     assert c["core"] == 18.0 and c["facing"] == 2 * 85.75, "one 2600 x 1300 sheet covers a face"
     area = 2.44 * 1.22
-    assert abs(c["adhesive"] - round(2 * area * 1.50, 2)) < 0.01
+    use = e.config.FACED_BOARD_CONSTRUCTION["adhesive_consumption_per_m2_per_face"]
+    assert use["unit"] == "kg"
+    assert abs(c["adhesive"] - round(2 * area * use["amount"] * 40.0 / 5, 2)) < 0.01, (
+        "the contact adhesive's own tin over its own pack, in the consumption's unit: not the "
+        "PVA, not the nozzle, not the row with no pack, not the litre tin")
+    a = got["adhesive"]
+    assert a["part_code"] == "GLUE05" and a["pack_size"] == 5 and a["pack_unit"] == "kg"
+    assert a["consumption_per_m2_per_face"] == use["amount"]
+    assert abs(a["quantity_used"] - 2 * area * use["amount"]) < 1e-3
+    assert a["allowance_gbp"] == c["adhesive"] and a["read_on"] and a["price_date"] is None
+    assert "assembly glue is the Glue row" in a["bonds"]
+    assert "GLUE05" in got["note"] and "no price date held" in got["note"]
     assert c["laminating"] > 0
     assert got["sheet_gbp"] == round(sum(c.values()), 2)
     assert got["sheet_mm"] == (2440.0, 1220.0)
@@ -115,3 +131,39 @@ def test_the_panels_take_the_boxs_decor(tmp_path):
                                      box._pack(tmp_path), reestimate=False)
     by = {p["part_number"]: p for p in out["manufacturing_writeup"]["parts"]}
     assert by[f"{box.CODE}-05"]["colours"] == [DECOR]
+
+
+def test_no_money_is_held_in_config_for_the_board():
+    """'We can't hard code prices' (JG, 15 Sep 2026): config holds quantities and time only."""
+    import config
+    cfg = config.FACED_BOARD_CONSTRUCTION
+    assert not any("gbp" in str(k).lower() for k in cfg), cfg
+
+
+def _with_adhesive_rows(monkeypatch, glue_rows):
+    import config
+    rows = dict(ROWS, ADHESIVE=glue_rows)
+    monkeypatch.setattr(config, "get_connection", lambda timeout=20: _Conn(rows), raising=False)
+    e._SHEET_RATE_CACHE.clear()
+
+
+def test_a_tin_sold_in_another_unit_is_named_not_converted(monkeypatch):
+    _with_adhesive_rows(monkeypatch, [("GLUE04", "CONTACT ADHESIVE 5 LTR TIN", 35.0)])
+    got = e._constructed_faced_board(_panel(), "MFMDF", 10.8)
+    assert "adhesive" not in got["components"] and got["adhesive_priced"] is False
+    assert "GLUE04 (5 L)" in got["adhesive_gap"] and "not converted" in got["adhesive_gap"]
+    assert "laminate adhesive NOT PRICED" in got["note"]
+    r = e.estimate_part(_panel(), job_quantity=1)
+    me = r["material_estimate"]
+    assert "board_adhesive_unpriced" in me["reliability_flags"]
+    flag = next(f for f in r["review_flags"] if f.startswith("FACED BOARD BUILT FROM THE CATALOGUE"))
+    assert "material is incomplete" in flag and "GLUE04" in flag
+    e._SHEET_RATE_CACHE.clear()
+
+
+def test_any_catalogue_glue_is_not_the_laminates_adhesive(monkeypatch):
+    _with_adhesive_rows(monkeypatch, [("PVA01", "PVA WOOD ADHESIVE 5KG", 12.0)])
+    got = e._constructed_faced_board(_panel(), "MFMDF", 10.8)
+    assert got["adhesive_priced"] is False
+    assert "no SDI Live row is contact adhesive" in got["adhesive_gap"]
+    e._SHEET_RATE_CACHE.clear()
