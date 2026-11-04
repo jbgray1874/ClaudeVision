@@ -78,9 +78,20 @@ class ItShowsWhatPastWorkSameDayCanFindTests(unittest.TestCase):
         self.assertIn("Get-Item -LiteralPath $f -ErrorAction SilentlyContinue", BODY)
 
     def test_a_failed_past_job_lookup_in_the_log_is_shown(self):
-        for word in ("past job lookup", "past by name", "past-work", "search not ready"):
+        for word in ("past job lookup", "past by name", "past-work", "search not ready", "ref lookup"):
             with self.subTest(word=word):
                 self.assertIn(word, BODY.split("$pattern = ", 1)[1].split("\n", 1)[0])
+
+
+
+class ItShowsATurnThatHeldTheCallUpTests(unittest.TestCase):
+    """4 Nov: Andy's call "froze". SameDay now logs a turn that took too long, or waited behind another render."""
+
+    def test_slow_and_waiting_turns_are_shown(self):
+        line = BODY.split("$pattern = ", 1)[1].split("\n", 1)[0]
+        for word in ("took [0-9]+s", "waited [0-9]+s", "live files"):
+            with self.subTest(word=word):
+                self.assertIn(word, line)
 
 
 if __name__ == "__main__":
