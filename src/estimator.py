@@ -15255,8 +15255,9 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         # THE EDGES OF A MITRED BOX THAT SHOW (D-677): each bevelled piece of an edged box
         # is stamped with its outline less its mitred joints, before the edging line reads it.
         try:
-            from edge_banding import stamp_exposed_edges_of_mitred_pieces as _stamp_ex
-            _exposed = _stamp_ex(parts)
+            from edge_banding import (edging_route_quotes as _edge_quotes,
+                                      stamp_exposed_edges_of_mitred_pieces as _stamp_ex)
+            _exposed = _stamp_ex(parts, _edge_quotes(summary))
         except Exception:                                        # noqa: BLE001
             _exposed = {"measured": [], "not_measured": []}
 

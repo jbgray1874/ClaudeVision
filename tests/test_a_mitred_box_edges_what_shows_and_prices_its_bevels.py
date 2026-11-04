@@ -192,3 +192,45 @@ def test_the_piece_costing_tool_reads_a_costed_record(tmp_path, capsys):
     out = capsys.readouterr().out
     assert f"== {BOX}: 5 piece(s)" in out and "bevel pass: 1290.0 mm" in out
     assert "== edging line(s): 1" in out and "EDGE-ABS-D4428" in out
+
+
+def _box_as_the_route_leaves_it():
+    """12203-65 at 12:19, replayed: the route compiler moved edge_banding off the box into
+    removed_operations (an assembly cannot band), and the reader's quote stays in
+    operation_evidence. No note on the record says EDGING."""
+    parent, pieces = _box()
+    parent.pop("notes")
+    parent["textual_operations"] = []
+    parent["removed_operations"] = ["edge_banding"]
+    parent["operation_evidence"] = {"edge_banding": "1mm EDGING"}
+    return parent, pieces
+
+
+def test_an_edging_moved_off_the_box_still_says_the_box_is_edged():
+    parent, pieces = _box_as_the_route_leaves_it()
+    got = eb.stamp_exposed_edges_of_mitred_pieces([parent] + pieces)
+    assert got["measured"] == [f"{BOX}-01", f"{BOX}-03", f"{BOX}-04"]
+    assert pieces[0]["edging_on_exposed_edges"]["callout"] == "1MM EDGING"
+
+
+def test_the_quoted_thickness_picks_the_1mm_oak_row_not_the_2mm(monkeypatch):
+    sys.path.insert(0, str(ROOT / "tests"))
+    from test_the_drawings_product_reference_prices_the_line import _Conn
+    rows = {"D4428": [
+        ("EDGE0052", "23 x 2mm ABS Edging to match Swiss Krono Oak Natural D4428 OV", 0.48),
+        ("EDGE0056", "35 x 1mm ABS Edging to match Swiss Krono Oak Natural D4428 OV", 0.65)]}
+    monkeypatch.setattr(config, "get_connection", lambda timeout=20: _Conn(rows), raising=False)
+    E._SHEET_RATE_CACHE.clear()
+    parent, pieces = _box_as_the_route_leaves_it()
+    parent.pop("operation_evidence")            # the quote is on the reader's route only
+    parts = [parent] + pieces
+    summary = {"declared_product": BOX, "manufacturing_writeup": {"parts": parts},
+               "document_analysis": {"bom_rows": []}, "pages": [],
+               "llm_full_extract": {"routes": [{"operation": "edge_banding",
+                                                "part_numbers": [BOX],
+                                                "evidence": "1mm EDGING"}]}}
+    E.estimate_document(parts, summary=summary)
+    stub = next(p for p in parts if p.get("_edging_line"))
+    assert stub["part_number"] == "EDGE0056"
+    assert pieces[0]["edging_on_exposed_edges"]["callout"] == "1MM EDGING"
+    E._SHEET_RATE_CACHE.clear()
