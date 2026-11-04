@@ -230,7 +230,8 @@ SELECT 'BOM' AS grid,
        CAST(LTRIM(RTRIM(BOM_OWNED_PART_ONLY)) AS nvarchar(60))  AS component,
        CAST(ISNULL(BOM_QTY_USED, 0) AS decimal(18, 6))          AS qty_used,
        ISNULL(CONVERT(char(8), BOM_EFFECT_ON_DATE, 112), '')    AS effective_from,
-       ISNULL(CONVERT(char(8), BOM_EFFECT_OFF_DATE, 112), '')   AS effective_to
+       ISNULL(CONVERT(char(8), BOM_EFFECT_OFF_DATE, 112), '')   AS effective_to,
+       BOM_UNIQUE                                               AS line_id   -- X3 sequence order
 FROM   dbo.ASC_BOM_TBL
 WHERE  LTRIM(RTRIM(ISNULL(BOM_PARENT_PART_ONLY, ''))) <> ''
   AND  LTRIM(RTRIM(ISNULL(BOM_OWNED_PART_ONLY, ''))) <> '';
