@@ -576,7 +576,7 @@ address is settled.
   whose VAT number never reached the file. It also showed GAL500 and ICE500 are stored in Access
   with no prefix: the "GB" was added by the earlier build.
 - **Supplier postcodes:** the customer rule 1 is applied to every supplier address. French and
-  Spanish suppliers had the postcode before the town in an address line: 22 fixes, e.g.
+  Spanish suppliers had the postcode before the town in an address line: 11 postcodes (22 field changes), e.g.
   AMG500 "75018 PARIS", BAL500 "F-36330 ARTHON", PLS500 "03802 ALCOY".
 - **Tax codes:** Access has the FR suppliers on FZ / FV and BAL500 on SV (standard VAT), which is
   why BAL500 came out DOM. Finance to decide.
@@ -927,7 +927,7 @@ fixes themselves are what every rerun must repeat.
 
 | File | Fixes applied |
 |---|---|
-| **YA004BPS** suppliers | **4 Nov (`scripts/fix_suppliers.py`), Run 2's FR rejections:** 3 VAT numbers restored from Access: GAL500 → FR65572062594, ICE500 → FR73539546192 and BUR500 → FR96790182786. All pass the French key and SIREN checks. 22 supplier postcodes moved out of the address lines (continental order). The other 8 have nothing valid in Access. Each is listed on "Supplier check" with what Finance must supply: EECNUM; CRN = the 14-digit SIRET, whose 5-digit site number isn't in Access; BAL500's tax rule DOM; PLS500 is ES with a GB number. **VAT:** 186 dummy numbers blanked. These were two Polish numbers copied across 117 suppliers, TEMPJAF placeholders, and GB numbers on overseas companies; they were the cause of the 180 rejections in UAT. **Tax rule:** 28 suppliers on EU set to ROWS. **Text:** 211 name and address cells cleaned. Address flag 2 on all (already right). A reload file of the 179 rejected suppliers was made for UAT. |
+| **YA004BPS** suppliers | **4 Nov (`scripts/fix_suppliers.py`), Run 2's FR rejections:** 3 VAT numbers restored from Access: GAL500 → FR65572062594, ICE500 → FR73539546192 and BUR500 → FR96790182786. All pass the French key and SIREN checks. 11 supplier postcodes moved out of the address lines (continental order; 22 field changes). The other 8 have nothing valid in Access. Each is listed on "Supplier check" with what Finance must supply: EECNUM; CRN = the 14-digit SIRET, whose 5-digit site number isn't in Access; BAL500's tax rule DOM; PLS500 is ES with a GB number. **VAT:** 186 dummy numbers blanked. These were two Polish numbers copied across 117 suppliers, TEMPJAF placeholders, and GB numbers on overseas companies; they were the cause of the 180 rejections in UAT. **Tax rule:** 28 suppliers on EU set to ROWS. **Text:** 211 name and address cells cleaned. Address flag 2 on all (already right). A reload file of the 179 rejected suppliers was made for UAT. |
 | **YA004BPC** customers | **4 Nov (`scripts/fix_customer_addresses.py`), Run 2's XPOSCOD / XSAT rejections: 507 address fixes by rule, on every customer** (223 on the six X3 rejected), each listed on "Address fixes"; rules in section 6.5. **1 address left to check.** First pass, for the record:
   - postcode moved out of the address lines, 120;
   - GB postcode O/0 or I/1 confusion and spacing, 12, only where one reading is valid and the district is unchanged;
