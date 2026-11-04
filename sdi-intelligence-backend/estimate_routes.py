@@ -59,7 +59,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
 
@@ -2926,6 +2926,27 @@ def speech_status():
     return {"speech_ready": bool(st.get("speech_ready")),
             "speech_stt": str(st.get("speech_stt") or "off"),
             "speech_tts": bool(st.get("speech_tts"))}
+
+
+class SpeakRequest(BaseModel):
+    text: str = ""
+
+
+@router.post("/speak")
+def speech_speak(req: SpeakRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """The neural voice for the estimating pages, behind the estimating pages' own gate (D-673).
+
+    JG, 4 Nov 2026: "the phone is pretty good but the app is very robotic". The pages asked
+    the AM CRM's /api/voicecrm/speak, which needs a signed-in CRM user. The e-mail walkthrough
+    page and the desk page on the estimating laptop have none, so the request was refused and
+    the device's own voice read the answer; a phone signed in through the portal heard Azure.
+    The same voice, the same text limit, the same configuration (voicecrm_speech)."""
+    _check_key(x_sdi_key)
+    import voicecrm_speech
+    audio, err = voicecrm_speech.synthesize(str(req.text or ""))
+    if err:
+        return JSONResponse(status_code=503, content=err)
+    return Response(content=audio, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
 
 
 # ── Parity by job number (D-619, D-621) ──────────────────────────────────────
