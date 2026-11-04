@@ -8261,7 +8261,15 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                   f"board replaces this."
                 + ("" if _constructed.get("adhesive_priced") else
                    f" The laminate adhesive is NOT in this price, so the material is "
-                   f"incomplete: {_constructed.get('adhesive_gap')}."))
+                   f"incomplete: {_constructed.get('adhesive_gap')}.")
+                # THE BUILD AGAINST THE DRAWING, SAID ON ITS OWN (D-681): 9 + 2 x 0.8 is
+                # 10.6 mm where 12203-65 draws 10.8; a reviewer must not have to find it in
+                # the arithmetic.
+                + (f" BUILT {_constructed['built_mm']:g} mm AGAINST THE DRAWN "
+                   f"{_constructed['drawn_mm']:g} mm: confirm the core and facing make the "
+                   f"drawn board."
+                   if abs(float(_constructed.get("built_mm") or 0)
+                          - float(_constructed.get("drawn_mm") or 0)) > 0.05 else ""))
     if _faced_family:
         if not _board_rate:
             # ── RUNG 4 FOR A BOARD, BECAUSE IT IS THE LAST RUNG AND NOT A BOUGHT-IN'S ──
@@ -15421,7 +15429,8 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                         f"EDGING DERIVED, PROVISIONAL: the box's sheet calls out edging and "
                         f"draws mitred joints; the metres are each piece's outline less its "
                         f"bevelled edges ({', '.join(sorted(set(_edge_for)))}). Confirm the "
-                        f"edged edges against the drawing."
+                        f"edged edges against the drawing. No trim waste is included: the "
+                        f"metres are the edges themselves; the shop's allowance is to add."
                         + (f" NOT MEASURED: {', '.join(_unmeasured)} (no bevel reading), so "
                            f"this line may be short." if _unmeasured else ""))
                 _stub.setdefault("review_flags", []).append(

@@ -257,6 +257,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     _print_changes(before_lines, after_lines, summary)
     _print_evidence(summary)
 
+    # WHICH RECORD, ON WHICH BUILD (D-681). A replay's output is read later, by name; it says
+    # what it replayed and with what code, so a stale or foreign file cannot pass for it.
+    try:
+        import subprocess
+        _build = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=str(ROOT),
+                                capture_output=True, text=True, timeout=20).stdout.strip()
+    except Exception:                                                # noqa: BLE001
+        _build = ""
+    summary["replay_of"] = str(a.summary)
+    summary["replay_build"] = _build or "unknown"
     a.out.mkdir(parents=True, exist_ok=True)
     out_json = a.out / f"{job}_replay.json"
     out_json.write_text(json.dumps(summary, indent=1, default=str), encoding="utf-8")
@@ -268,6 +278,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     except Exception as exc:                                         # noqa: BLE001
         print(f"\nreport NOT built ({type(exc).__name__}: {exc})")
     print(f"record: {out_json}")
+    print(f"REPLAY COMPLETE: {a.summary} on build {summary['replay_build']}")
     print("note: the final workbook charge (the sheet's nest and formulas) is verified only "
           "on the book — a passing replay is the ticket to run it, not a substitute for it")
 

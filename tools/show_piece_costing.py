@@ -48,6 +48,8 @@ def main(argv: List[str] = None) -> int:
     pieces = sorted((p for p in recs if re.match(rf"^{re.escape(code)}-\d{{1,2}}$",
                                                  str(p.get("part_number") or "").upper())),
                     key=lambda p: str(p.get("part_number")))
+    if doc.get("replay_of"):
+        print(f"== replay of {doc.get('replay_of')} on build {doc.get('replay_build')}")
     print(f"== {code}: {len(pieces)} piece(s); decor "
           f"{parent.get('normalized_colour') or parent.get('colours') or '(none on record)'}")
     tot = parent.get("edging_on_its_pieces") or {}
@@ -89,8 +91,23 @@ def main(argv: List[str] = None) -> int:
     lines = [p for p in recs if p.get("_edging_line")] or \
         [pe for pe in est.values() if pe.get("_edging_line")]
     print(f"\n== edging line(s): {len(lines)}")
+    shows = {str(p.get("part_number")): (p.get("edging_on_exposed_edges") or {}).get("mm")
+             for p in pieces if (p.get("edging_on_exposed_edges") or {}).get("mm")}
     for ln in lines:
         print(f"   {ln.get('part_number')} x{ln.get('quantity')} m: {ln.get('description')}")
+        row = ln.get("_edging_row") or {}
+        if row:
+            print(f"   SDI Live row: {row.get('part_code')} {row.get('width_mm')} x "
+                  f"{row.get('thickness_mm')} mm, row price {row.get('row_gbp')}")
+        print(f"   metres by piece: " + (", ".join(f"{k} {v:g} mm" for k, v in shows.items())
+                                         or "none recorded")
+              + f"; for {ln.get('_edging_for')}")
+        print("   waste: none included; the metres are the edges themselves")
+        lpe = est.get(_sq(ln.get("part_number"))) or {}
+        lme = lpe.get("material_estimate") or {}
+        print(f"   priced: £{lme.get('unit_material_cost_gbp')} a {ln.get('unit_of_measure')}, "
+              f"method {lme.get('cost_method')}; source "
+              f"{json.dumps(lme.get('price_source') or {}, default=str)[:300]}")
         for f in ln.get("review_flags") or []:
             if isinstance(f, str) and f.startswith("EDGING"):
                 print(f"      {f[:220]}")
