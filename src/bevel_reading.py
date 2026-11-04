@@ -356,7 +356,18 @@ def drawing_evidence(part: Mapping[str, Any], summary: Mapping[str, Any],
     parent = _parent_of(part, by_pn)
     if parent is None:
         return empty
-    psheets = own_sheets(parent, summary)
+    # EVERY SHEET TITLED WITH THE PART'S NUMBER, NOT ONLY THE PAGES BOUND TO ITS RECORD (D-679).
+    # 12203-65-01J's details, each panel under its balloon with its 45 degrees, are sheet 3/3,
+    # titled 12203-65-01J; the record was bound to sheet 2/3 alone, so the reader saw the
+    # balloons on the exploded view, no sizes beside them, and took no bevel. The balloon and
+    # the panel's own size in its detail still have to agree before anything is taken.
+    try:
+        from detail_page_geometry import _page_index
+        _all = sorted(_page_index(summary))
+    except Exception:                                                # noqa: BLE001
+        _all = []
+    psheets = own_sheets({**dict(parent), "pages": sorted(set(
+        [p for p in (parent.get("pages") or []) if isinstance(p, int)] + _all))}, summary)
     n = _piece_number(part)
     if not psheets or not n:
         return {**empty, "whose": str(parent.get("part_number") or ""),
@@ -447,7 +458,9 @@ def apply_bevel_readings(parts: Iterable[Any], summary: Mapping[str, Any]) -> Li
     by_pn = {str(p.get("part_number") or "").upper(): p for p in plist if p.get("part_number")}
     taken: List[str] = []
     for part in plist:
-        if part.get("bevel_reading"):
+        # A TAKEN READING IS NOT TAKEN TWICE: the panel is already solid. One NOT taken is read
+        # again (D-679), so a replay of a saved record asks the drawing with the current code.
+        if (part.get("bevel_reading") or {}).get("taken"):
             continue
         try:
             got = read_bevel(part, summary, by_pn)

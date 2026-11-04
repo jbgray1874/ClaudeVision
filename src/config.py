@@ -4540,8 +4540,8 @@ FINISH_SHEEN_WORDS = ("GLOSS", "MATT", "MATTE", "SATIN", "SILK", "TEXTURE", "TEX
 # maker, a decor and two product references, which is what SDI Live files a board under and a
 # supplier lists it by. product_reference.py reads these fields off every part; the price
 # ladder asks SDI Live by the references first, then the market with them in the brief.
-PRODUCT_REFERENCE_FIELDS = ("colours", "colour", "surface_finishes", "finish",
-                            "material_text_as_printed", "decor", "product_reference")
+PRODUCT_REFERENCE_FIELDS = ("colours", "colour", "normalized_colour", "surface_finishes",
+                            "finish", "material_text_as_printed", "decor", "product_reference")
 # Qualifiers of a colour or finish that never name a product.
 PRODUCT_REFERENCE_STOP_WORDS = (
     "MATT", "MATTE", "GLOSS", "SATIN", "SILK", "TEXTURED", "TEXTURE", "SMOOTH", "FINISH",
@@ -4846,6 +4846,14 @@ FACED_BOARD_CONSTRUCTION = {
     "facing_thicknesses_mm": (0.8, 0.7, 0.6, 1.0, 1.2),
     "core_word_by_family": {"MFMDF": "MDF", "MFC": "CHIPBOARD"},
     "core_thicknesses_mm": (3, 6, 9, 12, 15, 18, 22, 25),
+    # THE CORE IS PLAIN BOARD, AND CLOSE TO THE DRAWN BUILD (D-679). A row naming a face, a
+    # finish or a colour is a faced board, not a core ("18mm white matt MF MDF" carries the
+    # word MDF). A core more than this far under (drawn - faces x facing) builds a thinner
+    # board than drawn, and is not used.
+    "core_exclude_words": ("MF MDF", "MFMDF", "MF-MDF", "MELAMINE", "LAMINAT", "VENEER",
+                           "FACED", "FOIL", "PRIMED", "PAINTED", "LACQUER", "GLOSS",
+                           "TEXTURED", "MATT", "WHITE", "BLACK", "GREY", "GRAY", "OAK"),
+    "core_tolerance_mm": 1.0,
     # THE LAMINATE'S BOND, NOT ANY CATALOGUE GLUE (D-678). The adhesive the shop bonds this
     # laminate to an MDF core with. Every word below must be on the SDI Live row, so a wood
     # glue, a spray can or a tape is never taken for it. SHOP ASSUMPTION: confirm the product.
