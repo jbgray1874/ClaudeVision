@@ -39,6 +39,19 @@ def _parse(ts):
     return t if t.tzinfo else t.replace(tzinfo=datetime.timezone.utc)
 
 
+def inventry_on_site():
+    """Who InVentry shows on site now, or (None, reason) if it is not answering."""
+    import hr_inventry_api as api
+    try:
+        people = api.InVentryAPI().get_personnel()
+    except api.InVentryAPIError as exc:
+        return None, f"InVentry did not answer ({exc}), so this list is from BrightHR only."
+    return [{"name": f"{api._field(r, 'FirstName')} {api._field(r, 'Surname')}".strip() or "?",
+             "since": str(api._field(r, "LastActivityDate") or ""),
+             "by": "sync" if api.signed_in_by_us(r) else "reception"}
+            for r in people if api.is_on_site(r)], None
+
+
 def build(inventry_on_site, snapshot, now=None, max_age_hours=None):
     """The roll call entries, one per person, merged by name.
 

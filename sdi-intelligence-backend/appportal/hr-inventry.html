@@ -552,8 +552,10 @@ async function loadHistory(){
 $('hload').addEventListener('click',loadHistory);
 
 /* ── status and jobs ── */
+let opened=false;                    // a link such as ...hr-inventry.html#roll opens that tab
 function apply(j){
   $('who').textContent=j.user||''; $('gate').style.display='none'; $('app').style.display='';
+  if(!opened){ opened=true; const t=document.querySelector('.tab[data-v="'+location.hash.slice(1)+'"]'); if(t) t.click(); }
   LAST=j.last||{}; RUNNING=j.running||null;
   renderLatest(); renderIssues();
   if($('v-forgot').classList.contains('on')) renderForgotten();

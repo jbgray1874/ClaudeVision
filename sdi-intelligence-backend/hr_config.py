@@ -212,3 +212,11 @@ HR_APP_USERS = {e.strip().lower() for e in _opt("SDI_HR_APP_USERS").split(",") i
 # Who gets the weekly forgotten clock-outs report (tools/forgotten_clockouts.py
 # --send). Email addresses, comma separated. Empty means it is not sent.
 HR_REPORT_TO = {e.strip() for e in _opt("SDI_HR_REPORT_TO").split(",") if e.strip()}
+
+# Who gets the weekday morning summary (tools/hr_morning_summary.py --send,
+# scheduled by deploy/install_hr_morning_task.ps1). Email addresses, comma
+# separated. Empty means it is not sent.
+HR_MORNING_TO = {e.strip() for e in _opt("SDI_HR_MORNING_TO").split(",") if e.strip()}
+
+# The link in that email. Empty: HRInventry Anywhere on the first SDI_PUBLIC_HOSTS.
+HR_APP_URL = _opt("SDI_HR_APP_URL")
