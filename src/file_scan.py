@@ -4647,6 +4647,25 @@ def _finalize_scan_summary(
               f"{type(_row_ev_err).__name__}: {_row_ev_err}", flush=True)
 
     try:
+        # A BOARD PART'S OWN TABLE LISTS ITS PIECES (D-688): 12693-01-04J's sheet prints its
+        # 18 mm top and three 12 mm pieces as sized rows, and with no flat to corroborate,
+        # nothing read them. Here, after every reader has given the part its material, its
+        # row evidence and its route, so each piece takes the part's final stock and cutting;
+        # and before the detail-sheet sizing, the person's confirmations and the canonical
+        # graph, so each of those sees the pieces as parts of the job.
+        from drawing_job_merge import mint_pieces_listed_on_own_table
+        _listed = mint_pieces_listed_on_own_table(
+            summary["manufacturing_writeup"]["parts"],
+            (summary.get("document_analysis") or {}).get("bom_rows") or [])
+        for _lp in _listed:
+            print(f"   [bom-evidence] {_lp} is costed as the pieces its own parts table lists "
+                  f"— no flat of its own; sizes and counts from the table, to confirm",
+                  flush=True)
+    except Exception as _lp_err:                                       # noqa: BLE001
+        print(f"   [bom-evidence] listed pieces not read: "
+              f"{type(_lp_err).__name__}: {_lp_err}", flush=True)
+
+    try:
         # THE PART'S OWN DETAIL SHEET SIZES IT — beside the BOM-row stamper above and for the
         # same reason. The row gives material, gauge and mass; the sheet gives the blank. Both
         # go through source_precedence, so a DXF or a model still outranks either, and a part

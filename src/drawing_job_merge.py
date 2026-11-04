@@ -1764,6 +1764,355 @@ def inherit_product_onto_pieces(parts: Any) -> List[str]:
     return changed
 
 
+# ── A BOARD PART IS THE PIECES ITS OWN TABLE LISTS (D-688) ──────────────────────────────
+#
+# A row is a piece only when its words are nothing but a size with a thickness: "1145 x 210 x
+# 12 mm". A row with any other word ("25.00 x 25.00 x 1.50mm TUBE 1000") belongs to another
+# reader: the section cut list (D-383), the edging (D-381), the bought-in minter (D-381).
+_PURE_SIZE_ROW = re.compile(
+    r"^\s*(\d+(?:\.\d+)?)\s*(?:mm)?\s*[xX×]\s*(\d+(?:\.\d+)?)\s*(?:mm)?\s*[xX×]\s*"
+    r"(\d+(?:\.\d+)?)\s*mm\.?\s*$", re.I)
+# Solid timber is cut to length like a section; a made board is cut from a sheet. A drawing
+# that names only a species ("PINE", "OAK") is not a board, whatever block costs it.
+_SOLID_TIMBER_WORDS = re.compile(r"\b(?:TIMBER|PINE|SOFTWOOD|HARDWOOD|SPRUCE|BEECH|OAK|WOOD)\b")
+_MADE_BOARD_WORDS = re.compile(
+    r"MDF|MFC|PLY|BOARD|CHIPBOARD|OSB|MELAMINE|VENEER|LAMINATE|ACRYLIC|PERSPEX|PMMA")
+# The words a part's material is stated in. A piece is cut from the part's own stock, so it
+# keeps them all: "MRMDF" on the title block stays moisture-resistant on every piece.
+_MATERIAL_WORDING_FIELDS = ("material", "material_stated", "material_text_as_printed",
+                            "materials", "material_grade")
+# Where a part carries its operations, and what each operation carries with it.
+_OPERATION_LIST_FIELDS = ("textual_operations", "inferred_operations", "operations",
+                          "required_operations")
+_OPERATION_DETAIL_FIELDS = ("operation_sources", "operation_evidence", "operation_sequence",
+                            "operation_scope", "operation_qty_per_unit",
+                            "operation_department_read")
+
+
+def _material_words(part: Mapping[str, Any]) -> str:
+    words = [str(part.get("normalized_material") or "")]
+    for f in ("material", "material_stated", "material_text_as_printed"):
+        words.append(str(part.get(f) or ""))
+    mats = part.get("materials")
+    if isinstance(mats, (list, tuple)):
+        words.extend(str(m) for m in mats if isinstance(m, str))
+    return " ".join(w for w in words if w).upper().replace("_", " ")
+
+
+def _is_board_or_sheet_stock(part: Mapping[str, Any]) -> bool:
+    """Is this part cut from a sheet of board or plastic (MDF, MFC, MFMDF, plywood, chipboard,
+    acrylic and the like), rather than a section, a tube or wire, which have cut lists of their
+    own?"""
+    try:
+        from costed_facts import is_other_sheet_material
+    except Exception:                                                # noqa: BLE001
+        return False
+    nm = str(part.get("normalized_material") or "").upper().replace("_", " ")
+    if nm and not is_other_sheet_material(nm):
+        return False                     # the normalised material rules: steel is steel
+    words = _material_words(part)
+    if not words or not is_other_sheet_material(words):
+        return False
+    if _SOLID_TIMBER_WORDS.search(words) and not _MADE_BOARD_WORDS.search(words):
+        return False
+    _ss = part.get("section_stock")
+    if isinstance(_ss, Mapping) and any(_ss.get(k) for k in ("a", "b", "t", "cut_lengths_mm")):
+        return False
+    if str(part.get("stock_form") or "").lower() in ("tube", "section", "bar", "wire"):
+        return False
+    try:
+        from detail_page_geometry import _is_section_stock
+        if _is_section_stock(part):
+            return False
+    except Exception:                                                # noqa: BLE001
+        pass
+    return True
+
+
+def _has_flats_of_its_own(part: Mapping[str, Any], parts: Sequence[Any]) -> bool:
+    """A flat a DXF, a model or a measured mirror supplied, or pieces already split from its
+    numbered flats (D-669): either way the part's geometry is measured and its table only
+    corroborates it (_listed_pieces)."""
+    if _has_measured_flat(dict(part)) or part.get("dxf_pieces") or part.get("dxf_path"):
+        return True
+    try:
+        from detail_page_geometry import has_measured_flat
+        if has_measured_flat(part):
+            return True
+    except Exception:                                                # noqa: BLE001
+        pass
+    pkey = _normalize_part_key(part.get("part_number") or "")
+    return any(isinstance(o, Mapping) and o is not part and not o.get("listed_piece_of")
+               and _normalize_part_key(o.get("dxf_minted_piece_of")
+                                       or o.get("dxf_flat_of_parent") or "") == pkey
+               for o in parts or ())
+
+
+def _sized_rows_of_own_table(part: Mapping[str, Any], bom_rows: Sequence[Any]
+                             ) -> List[Dict[str, Any]]:
+    """The uncoded rows of this part's OWN parts table whose words are only "L x W x T mm",
+    each with its figures and whole-number count. A row read twice under one item number is
+    one row; two rows at two item numbers (or none) are two pieces."""
+    from part_identity import is_placeholder_identity
+    pkey = _normalize_part_key(part.get("part_number") or "")
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for r in bom_rows or ():
+        if not isinstance(r, dict) or r.get("bom_parent_known") is False:
+            continue
+        if _normalize_part_key(str(r.get("bom_parent") or "")) != pkey or not pkey:
+            continue
+        code = str(r.get("part_number") or "").strip()
+        if r.get("identity_source") or (code and not is_placeholder_identity(code)):
+            continue                     # a row with an identity is an item, not a piece
+        if r.get("consumed"):
+            continue                     # a reader already took it
+        desc = " ".join(str(r.get("description") or "").split())
+        m = _PURE_SIZE_ROW.match(desc)
+        if not m:
+            continue                     # the blank row, and every row with words, is not one
+        try:
+            length, width, thick = (float(x) for x in m.groups())
+            q = float(r.get("quantity") or 1)
+        except (TypeError, ValueError):
+            continue
+        if min(length, width, thick) <= 0 or q <= 0 or not float(q).is_integer():
+            continue
+        item = str(r.get("bom_item_no") or r.get("item_number") or "").strip()
+        if item:
+            if (item, desc.upper()) in seen:
+                continue
+            seen.add((item, desc.upper()))
+        out.append({"row": r, "description": desc, "length": length, "width": width,
+                    "thickness": thick, "qty": int(q), "item": item})
+    return out
+
+
+def _listed_piece_name(parent_pn: str, item: str, index: int, taken: set) -> str:
+    """`<part>-NN`, as D-669 names a numbered flat: the item number the table printed (the
+    balloon a person finds the piece by), else its place in the table, else the next free
+    number. Neither the padded nor the bare spelling may already be in the job."""
+    base = _normalize_part_key(parent_pn) or "PART"
+
+    def _free(n: int) -> Optional[str]:
+        name = f"{base}-{n:02d}"
+        keys = {_normalize_part_key(name), _normalize_part_key(f"{base}-{n}")}
+        if keys & taken:
+            return None
+        taken.update(keys)
+        return name
+
+    tries = ([int(item)] if item.isdigit() and int(item) > 0 else []) + [index + 1]
+    for n in tries:
+        hit = _free(n)
+        if hit:
+            return hit
+    n = 1
+    while True:
+        hit = _free(n)
+        if hit:
+            return hit
+        n += 1
+
+
+def mint_pieces_listed_on_own_table(parts: List[Dict[str, Any]], bom_rows: Sequence[Any]
+                                    ) -> List[str]:
+    """A board part whose own sheet lists the pieces it is made of is costed as those pieces
+    (D-688).
+
+    12693-01-04J LARGE TOP INSERT is MDF (its title block prints MRMDF), and its own sheet
+    carries a parts table of uncoded rows that are sizes and nothing else, read by both table
+    readers under 12693-01-04J:
+
+        1145 x 1145 x 18 mm   1
+        1145 x 210 x 12 mm    2
+        725 x 210 x 12 mm     1
+
+    There is no DXF for it (the job folder's "12693-01-04J_18+12mm MDF_REV A.STEP" is not
+    read). D-669 makes a part the assembly of its numbered flats, and _listed_pieces reads
+    exactly these rows, but only to corroborate flats; with no flats nothing read them, every
+    row was classed parent_size and nothing consumed it, and 04J was costed as ONE blank on
+    one 18 mm board. The three 12 mm pieces, their board and their machining were missing
+    from the price.
+
+    Where a part has no flat of its own (no DXF, no model flat, no pieces split from flats),
+    is cut from a sheet of board or plastic (not a section, a tube or wire, which have their
+    own cut-list readers, D-383 and D-548), and its own table lists two or more such rows or
+    one row at a count above one, each row becomes a piece, as D-669 makes them:
+
+      * named <part>-NN from the row's item number, a child of the part (assembly_children,
+        dxf_minted_piece_of: the field every reader of a piece looks its part up by), with the
+        part an assembly parent (is_assembly_parent), so its own blank is not costed beside
+        its pieces;
+      * its blank (L x W) and thickness from the row, at drawing_deterministic: the table is
+        the drawing's own statement, the rank the section cut list reads it at (D-383);
+      * its material and the part's own words for it, so moisture-resistant MDF stays
+        moisture-resistant; the part's finish and product, as D-669 pieces take them;
+      * its count per part from the row, so the BOM roll-up multiplies by the part's own
+        count (quantity, and the bom_parents edge the graph reads);
+      * the part's cutting route: each piece is its own blank, so each takes the cutting
+        operations the part carried (its CNC routing), and the part keeps none, so an
+        assembly is never routed (D-598l). Other single-blank work (a bore, a band) is not
+        spread over the pieces: the table does not say which piece it is done to, so it is
+        named on the part and asked.
+
+    A single row at a count of one is the part's own blank, and nothing is done. Each row
+    read is marked consumed (row_role parent_piece) and the reading is said on the part.
+    Returns the parts that became the assembly of their listed pieces."""
+    plist = [p for p in (parts or []) if isinstance(p, dict)]
+    if not plist or not bom_rows:
+        return []
+    cut_ops = set(_CUT_OPS) | {"saw", "cnc", "cnc_machining", "cnc_joinery", "pin_router",
+                               "laser"}
+    try:
+        from bought_in_policy import LEAF_ONLY_OPS as _leaf_ops
+    except Exception:                                                # noqa: BLE001
+        _leaf_ops = frozenset()
+    taken = {_normalize_part_key(p.get("part_number") or "") for p in plist}
+    taken.discard("")
+    done: List[str] = []
+    for part in list(plist):
+        pn = str(part.get("part_number") or "").strip()
+        if not pn or part.get("listed_pieces") or part.get("listed_piece_of"):
+            continue                     # minted already, or itself a piece
+        if _ASSEMBLY_CODE.search(pn):
+            continue                     # a general arrangement is never a cut blank
+        if part.get("is_bought_in") or part.get("supplied_by_third_party") \
+                or "bought_in" in {str(r).lower() for r in (part.get("page_roles") or [])}:
+            continue                     # a bought item's table is not our cutting list
+        if _has_flats_of_its_own(part, plist) or not _is_board_or_sheet_stock(part):
+            continue
+        rows = _sized_rows_of_own_table(part, bom_rows)
+        if not rows or (len(rows) == 1 and rows[0]["qty"] == 1):
+            continue                     # one row of one is the part's own blank
+        # WHAT CUTS THE PART CUTS EACH PIECE. Read once, before any piece is made, so every
+        # piece takes the same route and the part is left with what is not cutting.
+        moved: Dict[str, List[str]] = {}
+        for f in _OPERATION_LIST_FIELDS:
+            vals = part.get(f)
+            if isinstance(vals, list):
+                for op in vals:
+                    if str(op).strip().lower() in cut_ops:
+                        moved.setdefault(f, [])
+                        if op not in moved[f]:
+                            moved[f].append(op)
+        _moved_ops = sorted({str(o).strip().lower() for ops in moved.values() for o in ops})
+        mat_src = source_precedence.source_of(part, "normalized_material") or \
+            "drawing_deterministic"
+        sheet = next((str(x["row"].get("bom_sheet")) for x in rows
+                      if x["row"].get("bom_sheet")), "") or \
+            str(rows[0]["row"].get("source_pdf") or pn)
+        both = all(str(x["row"].get("bom_source") or "").upper() == "BOTH" for x in rows)
+        minted: List[Dict[str, Any]] = []
+        for i, x in enumerate(rows):
+            name = _listed_piece_name(pn, x["item"], i, taken)
+            size = f"{x['length']:g} x {x['width']:g} x {x['thickness']:g} mm"
+            # The item number stays on the row's record below, never the part's: a position
+            # in a table is not an identity (D-344).
+            piece = _empty_part_record(name, description=f"{part.get('description') or pn} — "
+                                                         f"{size}", quantity=None)
+            # Per part, from the row: the graph multiplies it by the part's own count.
+            _apply_field(piece, "quantity", x["qty"], "bom_tree")
+            piece["bom_parents"] = [{"parent": pn, "qty": x["qty"]}]
+            piece["page_roles"] = ["listed_piece"]
+            piece["source"] = "own_parts_table_piece"
+            piece["is_bought_in"] = False
+            piece["stock_form"] = "sheet"
+            # The field every reader of a piece looks its part up by (the graph's stated-parent
+            # rule, the product and edging passes); listed_piece_of says no flat was read.
+            piece["dxf_minted_piece_of"] = pn
+            piece["listed_piece_of"] = pn
+            piece["listed_piece_row"] = {
+                "description": x["description"], "quantity": x["qty"],
+                "item": x["item"] or None, "sheet": sheet,
+                "bom_source": x["row"].get("bom_source")}
+            # THE SIZE IS THE ROW'S. Long side first, as every blank on the sheet is written.
+            big, small = max(x["length"], x["width"]), min(x["length"], x["width"])
+            for f, v in (("blank_length_mm", big), ("blank_width_mm", small),
+                         ("overall_length_mm", big), ("overall_width_mm", small),
+                         ("normalized_geometry.blank_length_mm", big),
+                         ("normalized_geometry.blank_width_mm", small),
+                         ("normalized_thickness_mm", x["thickness"])):
+                _apply_field(piece, f, v, "drawing_deterministic")
+            piece["blank_area_mm2"] = round(big * small, 1)
+            piece["thicknesses_mm"] = [x["thickness"]]
+            piece["geometry_source"] = "own_parts_table_size"
+            piece["normalized_geometry"]["geometry_source"] = "own_parts_table_size"
+            # THE PART'S STOCK, IN THE PART'S WORDS.
+            if part.get("normalized_material"):
+                _apply_field(piece, "normalized_material", part["normalized_material"], mat_src)
+            for f in _MATERIAL_WORDING_FIELDS:
+                v = part.get(f)
+                if v and not piece.get(f):
+                    piece[f] = (list(v) if isinstance(v, list)
+                                else dict(v) if isinstance(v, dict) else v)
+            _fin = str(part.get("normalized_finish") or "").strip()
+            if _fin and _apply_field(piece, "normalized_finish", _fin, "drawing_deterministic"):
+                piece["surface_finishes"] = list(part.get("surface_finishes") or [_fin])
+                piece["normalized_finish_inherited_from"] = pn
+            inherit_parent_product(piece, part)
+            # AND THE PART'S CUTTING, each operation with its source and its words, so the
+            # route claims it on the piece exactly as it was read for the part.
+            for f, ops in moved.items():
+                piece[f] = list(ops)
+            for f in _OPERATION_DETAIL_FIELDS:
+                src = part.get(f)
+                if isinstance(src, dict):
+                    got = {k: v for k, v in src.items() if str(k).strip().lower() in _moved_ops}
+                    if got:
+                        piece[f] = got
+            if part.get("cut_method") and _moved_ops:
+                piece["cut_method"] = part.get("cut_method")
+            if _moved_ops:
+                piece["operations_inherited_from"] = pn
+            piece["review_flags"].append(
+                f"piece of {pn}: row '{x['description']}' x{x['qty']} of {pn}'s own parts table "
+                f"({sheet}); its size, thickness and count are the table's — see {pn}")
+            plist.append(piece)
+            parts.append(piece)
+            kids = part.setdefault("assembly_children", [])
+            if isinstance(kids, list) and not any(_normalize_part_key(k) == _normalize_part_key(name)
+                                                  for k in kids):
+                kids.append(name)
+            x["row"]["row_role"], x["row"]["consumed"] = "parent_piece", True
+            x["row"]["consumed_as"] = name
+            minted.append({"row": x["description"], "qty": x["qty"], "item": x["item"] or None,
+                           "costed_as": name, "thickness_mm": x["thickness"],
+                           "blank_mm": [big, small]})
+        # THE PART IS ITS PIECES: no blank of its own, and nothing cut on it.
+        part["is_assembly_parent"] = True
+        part["listed_pieces"] = minted
+        part["listed_pieces_sheet"] = sheet
+        for f, ops in moved.items():
+            part[f] = [o for o in part.get(f) or [] if o not in ops]   # precedence: direct-write ok — moves ops to the pieces, adds no evidence
+        if _moved_ops:
+            part["operations_moved_to_pieces"] = {
+                op: [m["costed_as"] for m in minted] for op in _moved_ops}
+        _left = sorted({str(o).strip().lower() for f in _OPERATION_LIST_FIELDS
+                        for o in (part.get(f) or []) if isinstance(part.get(f), list)
+                        and str(o).strip().lower() in _leaf_ops})
+        said = "; ".join(f"'{m['row']}' x{m['qty']} as {m['costed_as']}" for m in minted)
+        _stock_said = (part.get("material_text_as_printed") or part.get("material_stated")
+                       or part.get("normalized_material") or part.get("material")
+                       or "its board")
+        part.setdefault("review_flags", []).append(
+            f"PIECES FROM ITS OWN PARTS TABLE: {pn} has no flat of its own, and its own sheet's "
+            f"parts table ({sheet}"
+            + (", read alike by both table readers" if both else "")
+            + f") lists the pieces it is made of: {said}. Each is costed as its own blank of "
+            f"{_stock_said} at the "
+            f"size, thickness and count its row prints, per {pn}; {pn} itself is costed "
+            f"through its pieces only, not as a blank of its own. "
+            + (f"Its cutting ({', '.join(_moved_ops)}) is each piece's. " if _moved_ops else
+               "No cutting operation was on it to give its pieces — say how they are cut. ")
+            + (f"{', '.join(_left)} is not given to any piece: the table does not say which "
+               f"piece it is done to — say which. " if _left else "")
+            + "The sizes and counts are the drawing's own table, not a flat or a model — the "
+              "shop should confirm them")
+        done.append(pn)
+    return done
+
+
 def _split_parent_flats_to_children(
     parent: Dict[str, Any],
     clusters: List[Tuple[Optional[Tuple[float, float]], List[Path]]],
