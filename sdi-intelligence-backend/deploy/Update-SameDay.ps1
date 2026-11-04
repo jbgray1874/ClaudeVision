@@ -87,8 +87,10 @@ function Restart-One([string]$Name) {
     do { Start-Sleep -Seconds 2; $state = Get-ServiceState $Name } until ($state -eq "RUNNING" -or (Get-Date) -gt $deadline)
     return ($state -eq "RUNNING")
 }
+$script:Answer = $null
 function RunningVersion {
-    try { return [string](Invoke-RestMethod -Uri $Version -TimeoutSec 5).version } catch { return "" }
+    try { $script:Answer = Invoke-RestMethod -Uri $Version -TimeoutSec 5; return [string]$script:Answer.version }
+    catch { return "" }
 }
 # A log tail fit to be pasted into chat: anything key-shaped is removed first.
 function SafeTail([string]$Path, [int]$Lines = 20) {
@@ -196,6 +198,20 @@ Write-Host ""
 Write-Host ("=" * 72) -ForegroundColor DarkGray
 if ($now -eq $want) {
     Write-Host "  SameDay is running the new code: $now" -ForegroundColor Green
+    # Past work: can SameDay itself (the service) read the drives its indexes point at?
+    $reads = $script:Answer.can_read
+    if ($reads) {
+        foreach ($d in @("W", "S", "K")) {
+            $ok = [bool]$reads.$d
+            Write-Host ("    SameDay can read ${d}:  " + $(if ($ok) { "yes" } else { "NO" })) -ForegroundColor $(if ($ok) { "Green" } else { "Yellow" })
+        }
+        if (-not $reads.W) {
+            Write-Host "  W: is where past jobs live. Its log says why it could not be mapped:" -ForegroundColor Yellow
+            Say "Select-String 'drive W' \\$Server\c$\SDI_Automation\logs\SDISameDay.log | Select-Object -Last 1"
+            Say "If the name is wrong, set LITE_DRIVES in C:\SDI_Automation\.env; if it is access denied, the"
+            Say "service account needs read access to the share (send Claude the line)."
+        }
+    }
     Write-Host "  Next, if SDI Intelligence has changed too: Ship-It." -ForegroundColor White
 } else {
     Write-Host "  SameDay is NOT answering with the new code yet." -ForegroundColor Yellow
