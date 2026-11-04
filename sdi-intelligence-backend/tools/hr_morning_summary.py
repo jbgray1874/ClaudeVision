@@ -1,0 +1,260 @@
+"""The weekday morning summary for HR: who is in, what needs attention, and the
+roll calls since the last summary, emailed with a link to HRInventry Anywhere.
+
+    python tools/hr_morning_summary.py                    # print it
+    python tools/hr_morning_summary.py --send             # and email it to SDI_HR_MORNING_TO
+    python tools/hr_morning_summary.py --send --update    # update InVentry first
+
+Runs a fresh BrightHR check. Without --update it changes nothing in BrightHR
+or InVentry. With it, InVentry is updated exactly as the app's Update InVentry
+button does, with the same safety checks, and the summary says what changed.
+
+Meant to run from Task Scheduler on SDI-App01 at 08:45, Monday to Friday:
+deploy/install_hr_morning_task.ps1. Every run is in the app's History tab.
+"""
+import datetime
+import html
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+BACKEND = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BACKEND))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import hr_config as cfg          # noqa: E402
+
+BY = "Morning summary (scheduled)"
+BUSY_RETRIES = 3
+BUSY_WAIT_SECONDS = 60
+STALE_UPDATE_HOURS = 24
+
+
+def _now():
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _parse(ts):
+    try:
+        t = datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=datetime.timezone.utc)
+
+
+def _local(ts, fmt="%a %d %b %H:%M") -> str:
+    t = _parse(ts) if ts else None
+    return t.astimezone().strftime(fmt) if t else "?"
+
+
+def _state_path() -> Path:
+    return Path(cfg.HR_SNAPSHOT_DIR) / "hr_morning_summary.json"
+
+
+def last_sent():
+    try:
+        return _parse(json.loads(_state_path().read_text(encoding="utf-8")).get("last_sent"))
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _mark_sent(when) -> None:
+    p = _state_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"last_sent": when.isoformat()}), encoding="utf-8")
+
+
+def app_url() -> str:
+    if cfg.HR_APP_URL:
+        return cfg.HR_APP_URL
+    hosts = sorted(h.strip().lower() for h in os.getenv("SDI_PUBLIC_HOSTS", "").split(",") if h.strip())
+    return f"https://{hosts[0]}/app/hr-inventry.html" if hosts else ""
+
+
+# ── what it reads ────────────────────────────────────────────────────────────
+
+def _check(sleep=time.sleep) -> dict:
+    """A fresh BrightHR check. If one is already running, wait for it."""
+    import hr_blip
+    for attempt in range(BUSY_RETRIES + 1):
+        blip = hr_blip.run_blip()
+        if blip.get("status") != "busy" or attempt == BUSY_RETRIES:
+            return blip
+        sleep(BUSY_WAIT_SECONDS)
+    return blip
+
+
+def gather(update=False, now=None, sleep=time.sleep) -> dict:
+    import forgotten_clockouts
+    import hr_history
+    import hr_rollcall
+    now = now or _now()
+    blip = _check(sleep)
+    notes = list(blip.get("warnings") or [])
+    if blip.get("status") == "busy":
+        notes.insert(0, "A BrightHR check was still running, so these figures are from the last "
+                        "check that finished.")
+    push = None
+    if update and blip.get("status") != "busy":
+        import hr_onsite_push
+        push = hr_onsite_push.run_push(apply=True, by=BY)      # writes its own History line
+    elif blip.get("status") != "busy":
+        hr_history.record({"time": now.isoformat(), "kind": "check", "by": BY,
+                           "status": blip.get("status"), "brighthr_on_site": blip.get("on_site"),
+                           "staff_checked": blip.get("employees_checked")})
+    try:
+        snap = json.loads((Path(cfg.HR_SNAPSHOT_DIR) / "blip_latest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        snap = None
+    on_site, inventry_problem = hr_rollcall.inventry_on_site()        # read after any update
+    people, _ = hr_rollcall.build(on_site, snap, now=now)
+    since = last_sent() or now - datetime.timedelta(hours=24)
+    calls = []
+    for r in hr_rollcall.runs():
+        started = _parse(r.get("started"))
+        if started and started >= since:
+            calls.append(dict(r, absent=[p["name"] for p in (hr_rollcall.saved(r["id"]) or {}).get("absent", [])]))
+    last_update = next((e for e in hr_history.recent(200)
+                        if e.get("kind") == "update" and e.get("status") == "ok"), None)
+    # With InVentry not answering there is nothing to compare: everyone would
+    # look missing from it.
+    compared = [] if on_site is None else people
+    return {
+        "time": now.isoformat(), "checked": (snap or {}).get("summary", {}).get("timestamp") or blip.get("timestamp"),
+        "status": blip.get("status"), "clocked_in": blip.get("on_site"),
+        "staff_checked": blip.get("employees_checked"), "notes": notes, "push": push,
+        "inventry_problem": inventry_problem,
+        "on_inventry": None if on_site is None else len(on_site),
+        "at_reception": sum(1 for p in on_site or [] if p.get("by") == "reception"),
+        "not_on_inventry": [p["name"] for p in compared if p.get("brighthr") and not p.get("inventry")],
+        "not_clocked_in": [p["name"] for p in compared
+                           if (p.get("inventry") or {}).get("by") == "sync" and not p.get("brighthr")],
+        "forgotten": forgotten_clockouts.forgotten(snap or {}, now=now),
+        "roll_calls": calls, "since": since.isoformat(), "last_update": last_update,
+    }
+
+
+# ── what it says ─────────────────────────────────────────────────────────────
+
+def _people(n) -> str:
+    return f"{n} {'person' if n == 1 else 'people'}"
+
+
+def attention(d: dict) -> list:
+    """(heading, explanation, names) for each thing someone should look at."""
+    out = []
+    push = d.get("push")
+    if d.get("inventry_problem"):
+        out.append(("InVentry did not answer", d["inventry_problem"], []))
+    if push and push.get("status") != "ok":
+        out.append(("InVentry was not updated", (push.get("warnings") or ["A safety check stopped it."])[0], []))
+    if d["not_on_inventry"]:
+        out.append((f"Clocked in, not on InVentry's fire list: {_people(len(d['not_on_inventry']))}",
+                    "Not matched to an InVentry record, so the update cannot sign them in. See Data issues "
+                    "in the app." if push and push.get("status") == "ok" else
+                    "Press Update InVentry in the app to sign them in, or check Data issues if they stay.",
+                    d["not_on_inventry"]))
+    if d["not_clocked_in"]:
+        out.append((f"On InVentry, no longer clocked in: {_people(len(d['not_clocked_in']))}",
+                    "Signed in by the sync earlier and clocked out since. Update InVentry signs them out.",
+                    d["not_clocked_in"]))
+    if d["forgotten"]:
+        out.append((f"Forgotten clock-outs: {_people(len(d['forgotten']))}",
+                    "Still clocked in on BrightHR from an earlier shift. Their hours are wrong until the "
+                    "clocking is closed in BrightHR with the time they left.",
+                    [f"{r['name']} ({r['days']:.0f} days)" for r in d["forgotten"]]))
+    last = d.get("last_update")
+    if not push:
+        t = _parse((last or {}).get("time"))
+        if t is None or (_parse(d["time"]) - t).total_seconds() > STALE_UPDATE_HOURS * 3600:
+            out.append(("InVentry has not been updated in the last day",
+                        f"Last update: {_local(last['time']) + ' by ' + str(last.get('by') or '?') if last else 'none recorded'}. "
+                        "Press Update InVentry in the app so the fire list matches BrightHR.", []))
+    for n in d["notes"]:
+        out.append(("Note", n, []))
+    return out
+
+
+def compose(d: dict, link: str) -> tuple:
+    todo = attention(d)
+    push = d.get("push")
+    things = sum(1 for h, _, _ in todo if h != "Note")
+    subject = (f"HR morning summary: {d['clocked_in'] if d['clocked_in'] is not None else '?'} clocked in, "
+               + (f"{things} to check" if things else "nothing to check"))
+    figures = [("Clocked in on BrightHR", f"{d['clocked_in']} of {d['staff_checked']} staff checked"),
+               ("On InVentry's fire list", "InVentry did not answer" if d["on_inventry"] is None else
+                f"{d['on_inventry']}" + (f" ({d['at_reception']} signed in at reception)" if d["at_reception"] else ""))]
+    if push and push.get("status") == "ok":
+        figures.append(("InVentry updated", f"{len(push.get('signed_in_names') or [])} signed in, "
+                                             f"{len(push.get('signed_out_names') or [])} signed out"))
+    head = f"Checked {_local(d['checked'])}."
+
+    text = [head, ""] + [f"{k}: {v}" for k, v in figures] + [""]
+    page = [f"<p>{html.escape(head)}</p><table cellpadding='4' cellspacing='0'>"
+            + "".join(f"<tr><td><b>{html.escape(k)}</b></td><td>{html.escape(v)}</td></tr>" for k, v in figures)
+            + "</table>"]
+
+    text.append("NEEDS ATTENTION" if todo else "Nothing needs attention.")
+    page.append("<h3>Needs attention</h3>" if todo else "<p><b>Nothing needs attention.</b></p>")
+    for heading, why, names in todo:
+        text += [f"- {heading}", f"  {why}"] + [f"    {n}" for n in names]
+        page.append(f"<p><b>{html.escape(heading)}</b><br>{html.escape(why)}"
+                    + (f"<br>{html.escape(', '.join(names))}" if names else "") + "</p>")
+
+    text += ["", "ROLL CALLS SINCE THE LAST SUMMARY"]
+    page.append("<h3>Roll calls since the last summary</h3>")
+    if not d["roll_calls"]:
+        text.append("None.")
+        page.append("<p>None.</p>")
+    for r in d["roll_calls"]:
+        line = (f"{_local(r['started'])}: {r['present_count']} present, {r['absent_count']} absent"
+                + (f", started by {r['started_by']}" if r.get("started_by") else ""))
+        absent = f"Absent: {', '.join(r['absent'])}" if r["absent"] else "Nobody absent."
+        text += [f"- {line}", f"  {absent}"]
+        page.append(f"<p><b>{html.escape(line)}</b><br>{html.escape(absent)}</p>")
+    if d["roll_calls"]:
+        import hr_rollcall
+        where = f"Each is in Saved roll calls in the app, and as a spreadsheet in {hr_rollcall.folder()}."
+        text.append(where)
+        page.append(f"<p>{html.escape(where)}</p>")
+
+    if link:
+        text += ["", f"Open HRInventry Anywhere: {link}", f"The roll call: {link}#roll"]
+        page.append(f"<p><a href='{html.escape(link)}'>Open HRInventry Anywhere</a> &nbsp;·&nbsp; "
+                    f"<a href='{html.escape(link)}#roll'>The roll call</a></p>")
+    foot = ("This summary is sent each weekday morning by SDI Intelligence. Names and figures are as at "
+            "the check above.")
+    text += ["", foot]
+    page.append(f"<p style='color:#666'>{html.escape(foot)}</p>")
+    return subject, "".join(page), "\n".join(text)
+
+
+def main(argv, sleep=time.sleep, today=None) -> int:
+    if "--weekdays-only" in argv and (today or datetime.date.today()).weekday() >= 5:
+        print("Weekend - no summary sent.")
+        return 0
+    os.chdir(BACKEND)
+    import config  # noqa: F401  - the service's settings, as the other scheduled emails load them
+    d = gather(update="--update" in argv, sleep=sleep)
+    subject, page, text = compose(d, app_url())
+    print(subject)
+    print(text)
+    if "--send" not in argv:
+        return 0
+    if not cfg.HR_MORNING_TO:
+        print("SDI_HR_MORNING_TO is not set in .env; nothing sent.")
+        return 2
+    import estimate_email      # the SDI Intelligence mailbox, as the other HR report uses
+    result = estimate_email.send(sorted(cfg.HR_MORNING_TO), subject, page, text)
+    if result.get("sent"):
+        _mark_sent(_parse(d["time"]))
+        print("sent")
+        return 0
+    print(f"NOT sent: {result.get('reason')}")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

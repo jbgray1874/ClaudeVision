@@ -317,16 +317,8 @@ def app_issues(request: Request):
 
 
 def _inventry_on_site():
-    """Who InVentry shows on site now, or (None, reason) if it is not answering."""
-    import hr_inventry_api as api
-    try:
-        people = api.InVentryAPI().get_personnel()
-    except api.InVentryAPIError as exc:
-        return None, f"InVentry did not answer ({exc}), so this list is from BrightHR only."
-    return [{"name": f"{api._field(r, 'FirstName')} {api._field(r, 'Surname')}".strip() or "?",
-             "since": str(api._field(r, "LastActivityDate") or ""),
-             "by": "sync" if api.signed_in_by_us(r) else "reception"}
-            for r in people if api.is_on_site(r)], None
+    import hr_rollcall
+    return hr_rollcall.inventry_on_site()
 
 
 # The list as the phones last saw it. A tick keeps it with the roll call, so
