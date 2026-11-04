@@ -3,7 +3,8 @@
 X3 rejected TEC100, TEC105, UNI103 (postcode format) and DRE100, MAR101, PER101 (State/Region),
 and with them 1,425 delivery addresses. Each rule below is applied to every customer address,
 not only those six, and every change is listed on the 'Address fixes' tab:
-  1. a postcode left in the address lines (postcode blank) moves to the postcode field
+  1. a postcode left in the address lines (postcode blank) moves to the postcode field: at
+     the end of a line, or before the town in continental order ("75018 PARIS", "F-36330 ARTHON")
   2. a GB postcode with the letter O and the digit 0 confused ("SE1 OHX", "S021 3SP") is put
      right, only where exactly one correction gives a valid GB postcode
   3. a postcode holding country text ("77990,FRAN") keeps just the postcode
@@ -16,6 +17,9 @@ not only those six, and every change is listed on the 'Address fixes' tab:
      that was typed into the postcode, AE from the emirate named in the address. X3's own
      codes to confirm with Ethan
   7. AE has no postcodes: a number in its postcode is a PO box, moved into the address
+  Access's own address fields are used as evidence where we have them (bp_identifiers_run3.sql):
+  AD_COUNTRY's text names the real country where AD_COUNTRY_CODE says GB; AD_ADDRESS_USER1 / 2 and
+  AD_COUNTRY hold postcodes (a Dutch postcode split "3315" / "LG Dordrecht" is joined).
   Also: a country name typed in the postcode field sets the country; "DUBLIN 15" is IE, routing
   key D15; a Polish postcode is written NN-NNN; I / 1 confused like O / 0
 Anything a rule can't settle goes on 'Address check'. A complete file (rule 1b), with its
@@ -35,12 +39,15 @@ from openpyxl import load_workbook
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "rebuild"))
 sys.path.insert(0, HERE)
-from common import add_sheet, write_load  # noqa: E402
+from common import add_sheet, read_grids, write_load  # noqa: E402
 from run3_fix_lists import NO_POSTCODE, POSTCODE  # noqa: E402  one copy of the formats
 
 BASE = "/tmp/claude-0/-home-user-ClaudeVision/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dadea/scratchpad"
-IN_FILE = os.environ.get("IN_FILE", f"{BASE}/Current_mapped_set_2026-11-04/YA004BPC_customers_MAPPED.xlsx")
+IN_FILE = os.environ.get("IN_FILE", f"{BASE}/out_sheets/YA004BPC_customers_MAPPED.xlsx")    # the 27 Oct build, before any fix
 OUT = os.environ.get("OUT_DIR", f"{BASE}/out_run3")
+# every Access field for the rejected customers (bp_identifiers_run3.sql): SL_ADDRESSES.AD_COUNTRY holds
+# the real country as text where AD_COUNTRY_CODE says GB, and AD_ADDRESS_USER1 / 2 hold towns and postcodes
+BP_IDENTIFIERS = os.environ.get("BP_IDENTIFIERS", f"{BASE}/runs/2026-11-04/extract/bp_identifiers.txt")
 LINES, POSCOD, STATE, CRY, PHONES = (19, 20, 21), 22, 23, 24, (25, 26)   # 0-based columns
 FAILED = {"TEC100", "TEC105", "UNI103", "DRE100", "MAR101", "PER101"}
 
@@ -54,7 +61,11 @@ COUNTRY_WORDS = {"CYPRUS": "CY", "IRELAND": "IE", "DUBLIN": "IE", "FRANCE": "FR"
                  "SAUDI": "SA", "KUWAIT": "KW", "BAHRAIN": "BH", "MALTA": "MT", "GIBRALTAR": "GI",
                  "JINGAN": "CN", "NANJING": "CN", "GUANGZHOU": "CN", "SHENZHEN": "CN", "ROMANIA": "RO",
                  "MALAYSIA": "MY", "MEXICO": "MX", "BRAZIL": "BR", "ARGENTINA": "AR", "MONACO": "MC",
-                 "BERMUDA": "BM", "SOUTH AFRICA": "ZA", "NEW ZEALAND": "NZ", "ISRAEL": "IL", "EGYPT": "EG"}
+                 "BERMUDA": "BM", "SOUTH AFRICA": "ZA", "NEW ZEALAND": "NZ", "ISRAEL": "IL", "EGYPT": "EG",
+                 "THAILAND": "TH", "BANGKOK": "TH", "PARAGUAY": "PY", "NEDERLAND": "NL", "COPENHAGEN": "DK",
+                 "KOBENHAVN": "DK"}
+CA_NAMES = {"ONTARIO": "ON", "QUEBEC": "QC", "BRITISH COLUMBIA": "BC", "ALBERTA": "AB", "MANITOBA": "MB",
+            "SASKATCHEWAN": "SK", "NOVA SCOTIA": "NS", "NEW BRUNSWICK": "NB", "NEWFOUNDLAND": "NL"}
 CA_PROVINCE = {"A": "NL", "B": "NS", "C": "PE", "E": "NB", "G": "QC", "H": "QC", "J": "QC", "K": "ON", "L": "ON",
                "M": "ON", "N": "ON", "P": "ON", "R": "MB", "S": "SK", "T": "AB", "V": "BC", "X": "NT", "Y": "YT"}
 EIRCODE = r"[AC-FHKNPRTV-Y]\d[\dW] ?[0-9AC-FHKNPRTV-Y]{4}"
@@ -127,21 +138,46 @@ def postcode_in_text(cry, lines):
     """(line index, postcode, line without it) for a postcode at the end of an address line."""
     if cry not in POSTCODE:
         return None
+    for i, line in enumerate(lines):          # continental order: postcode before the town
+        m = re.fullmatch(r"(?:[A-Z]{1,2}-)?(" + POSTCODE[cry] + r")\s+([A-Z][^0-9]*)", (line or "").strip().upper())
+        if m:
+            return i, m.group(1), (line or "").strip()[m.start(2):].strip()
     for i in reversed(range(len(lines))):
         text = (lines[i] or "").strip()
         for m in re.finditer(r"(?=(\b(?:" + POSTCODE[cry] + r")))\b", text.upper()):
             pc = m.group(1)
             rest = (text[:m.start(1)] + text[m.start(1) + len(pc):]).strip(" ,-")
+            rest = re.sub(r"\s+[A-Z]{1,2}$", "", rest) if re.search(r"\b[A-Z]{1,2}-" + re.escape(pc) + r"$",
+                                                                 text.upper()) else rest   # "DK-2650", "A-8605"
             if text.upper().rstrip(" ,.").endswith(pc):
                 return i, pc, rest
     return None
 
 
+def access_addresses():
+    """{(customer, address code): [AD_COUNTRY, AD_ADDRESS_USER1, AD_ADDRESS_USER2]} where we have them."""
+    if not os.path.exists(BP_IDENTIFIERS):
+        return {}
+    g, _ = read_grids(BP_IDENTIFIERS)
+    cols = [r[2] for r in g["COLUMN"] if r[0] == "SL_ADDRESSES"]
+    sage = {r[2].strip(): r[1] for r in g["CODES"] if r[0] == "C"}
+    out = {}
+    for r in g.get("SLADR", []):
+        v = lambda c: "" if r[cols.index(c)].strip() == "NULL" else r[cols.index(c)].strip()
+        out[(sage.get(v("AD_ACC_CODE")), v("AD_CODE").zfill(3))] = [v("AD_COUNTRY"), v("AD_ADDRESS_USER1"),
+                                                                   v("AD_ADDRESS_USER2")]
+    return out
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
+    extra = access_addresses()
     path = f"{OUT}/YA004BPC_customers_MAPPED.xlsx"
     shutil.copy(IN_FILE, path)
     wb = load_workbook(path)
+    for t in ("Supplier fixes", "Supplier check", "Address fixes", "Address check"):
+        if t in wb.sheetnames:
+            raise SystemExit(f"{IN_FILE} already has a '{t}' tab - start from the unfixed build (IN_FILE)")
     ws = wb["Data with Headings"]
     fixes, check, rule = [], [], Counter()
 
@@ -159,7 +195,19 @@ def main():
             continue
         get = lambda c: str(ws.cell(r, c + 1).value or "").strip()
         cry, pc = get(CRY), get(POSCOD).upper()
-        text = " ".join(get(c) for c in LINES).upper()
+        acc = extra.get((cust, get(17).zfill(3)), ["", "", ""])
+        text = " ".join([get(c) for c in LINES] + acc).upper()
+        # Access's own fields first: a postcode typed into AD_COUNTRY ("S9 1TQ") with junk in the
+        # postcode field ("FAO-"); a GB postcode stored unspaced whose only reading is valid ("G13SQ")
+        for a in acc:
+            if cry == "GB" and not valid("GB", pc) and a and valid("GB", a.upper()):
+                change(r, POSCOD, a.upper(), "1 postcode: from Access's address fields (AD_COUNTRY / USER)")
+                pc = a.upper()
+        if cry == "GB" and pc and not valid("GB", pc) and " " in pc and len(pc.split()[-1]) < 3:
+            t = pc.replace(" ", "")
+            if valid("GB", f"{t[:-3]} {t[-3:]}"):
+                change(r, POSCOD, f"{t[:-3]} {t[-3:]}", "2 postcode: spacing (the inward code was split)")
+                pc = f"{t[:-3]} {t[-3:]}"
 
         # 4. country first, so the postcode rules use the right format
         if pc in COUNTRY_WORDS and not valid(cry, pc):           # "IRELAND" typed as the postcode
@@ -177,7 +225,9 @@ def main():
                 change(r, CRY, "IE", "4 country: Dublin Eircode marked GB")
                 cry = "IE"
             else:
-                named = {v for k, v in COUNTRY_WORDS.items() if re.search(rf"\b{re.escape(k)}\b", text)}
+                named = {v for k, v in COUNTRY_WORDS.items() if re.search(rf"\b{re.escape(k)}\b", acc[0].upper())}
+                if not named:
+                    named = {v for k, v in COUNTRY_WORDS.items() if re.search(rf"\b{re.escape(k)}\b", text)}
                 if len(named) == 1:
                     change(r, CRY, named.pop(), "4 country: the address names another country")
                     cry = get(CRY)
@@ -218,6 +268,18 @@ def main():
                        f"7 postcode: {cry} has no postcodes, PO box moved to the address")
             change(r, POSCOD, "", f"7 postcode: {cry} has no postcodes, PO box moved to the address")
             pc = ""
+        # NL postcode split across fields: "3315" in the postcode, "LG Dordrecht" in an address field
+        if cry == "NL" and re.fullmatch(r"\d{4}", pc):
+            m = next((re.match(r"([A-Z]{2})\b", a.upper()) for a in acc + [get(c) for c in LINES]
+                      if re.match(r"[A-Z]{2}\b", (a or "").upper())), None)
+            if m:
+                change(r, POSCOD, f"{pc} {m.group(1)}", "1 postcode: NL letters joined from the address (3315 + LG)")
+                pc = f"{pc} {m.group(1)}"
+        if not pc and any(acc):
+            found = postcode_in_text(cry, acc)
+            if found:
+                change(r, POSCOD, found[1], "1 postcode: from Access's address fields (AD_COUNTRY / USER)")
+                pc = found[1]
         # 1. postcode left in the address lines
         if not pc:
             found = postcode_in_text(cry, [get(c) for c in LINES])
@@ -237,6 +299,8 @@ def main():
                   au_state(pc) if cry == "AU" and re.fullmatch(r"\d{4}", pc) else
                   us_state(pc) if cry == "US" and re.match(r"\d{5}", pc) else
                   ae_emirate(text) if cry == "AE" else None)
+            if not st and cry == "CA":
+                st = next((c for k, c in CA_NAMES.items() if k in text), None)
             if not st and cry in STATES:
                 named = {w for w in re.findall(r"[A-Z]{2,3}", text) if w in STATES[cry]}
                 st = named.pop() if len(named) == 1 else None

@@ -510,8 +510,10 @@ ones X3 rejected. Every change goes on the "Address fixes" tab; anything a rule 
 on "Address check". **They must run on every rebuild of the customer file.**
 
 1. **Postcode left in the address text → moved into the postcode field.** This applies when the
-   postcode is blank and an address line ends with a postcode in that country's format. It's
-   removed from the line. 120 on 4 Nov.
+   postcode is blank. It covers a postcode at the end of a line, and the continental order with the
+   postcode before the town ("75018 PARIS", "4815 HK BREDA", "F-36330 ARTHON", "DK-2650 Hvidovre"),
+   with any country prefix stripped. It's removed from the line. Access's own address fields are
+   used as evidence too (next item).
 2. **Mistyped GB postcodes:**
    - letter O and zero, or letter I and one, are swapped back (SE1 OHX → SE1 0HX, S021 3SP →
      SO21 3SP, IG10 ILJ → IG10 1LJ). This applies only where one reading with the fewest changes
@@ -542,8 +544,20 @@ on "Address check". **They must run on every rebuild of the customer file.**
    whether X3's region codes are these ISO codes.
 7. **AE has no postcodes:** a number in an AE postcode is a PO box, so it's moved into the address
    as "PO BOX nnnnnn" and the postcode is left blank (DRE100's 239600).
+8. **Access's own address fields are evidence** (from `bp_identifiers_run3.sql`, so for the
+   accounts it covers). These fields are in `SL_ADDRESSES` but **the customer build never used
+   them; the customer part of the kit must:**
+   - **AD_COUNTRY** holds the real country as text where AD_COUNTRY_CODE says GB ("CANADA",
+     "BRAZIL", "Nederland", "BANGKOK, THAILAND"). It decides the country before the address text does;
+   - **AD_ADDRESS_USER1 / 2 and AD_COUNTRY** hold towns and postcodes ("L5L 5Y5", "S9 1TQ" typed in
+     AD_COUNTRY with "FAO-" in the postcode field);
+   - a Dutch postcode split across fields ("3315" + "LG Dordrecht") is joined: 3315 LG;
+   - a GB postcode whose inward part was split ("G13 SQ", stored by Access as "G13SQ") takes its
+     only valid reading, G1 3SQ (79 Gordon Street, Glasgow).
 
-On 4 Nov: 220 fixes (96 on the six X3 rejected), 10 addresses left to check.
+On 4 Nov: **507 fixes (223 on the six X3 rejected); 1 address left to check** (BEA101, AU, no
+postcode or state; it isn't one of the six, so it wasn't in the Access query). Every rejected
+address is settled.
 
 #### Supplier VAT rule (4 Nov, from Run 2's FR rejections)
 
@@ -557,6 +571,15 @@ On 4 Nov: 220 fixes (96 on the six X3 rejected), 10 addresses left to check.
 - The CRN (SIRET, 14 digits) can't be derived: it's the SIREN plus a 5-digit site number Access
   doesn't hold. Ethan has been asked whether X3 accepts the 9-digit SIREN meanwhile.
 - Each rejected supplier is listed on "Supplier check" with what it still needs.
+- **The VAT numbers are read straight from Access** (PL_ACCOUNTS.SU_VAT_REG_NO, via
+  `bp_identifiers_run3.sql`). That found a third: BUR500 → FR96790182786, a new account of 27 Oct
+  whose VAT number never reached the file. It also showed GAL500 and ICE500 are stored in Access
+  with no prefix: the "GB" was added by the earlier build.
+- **Supplier postcodes:** the customer rule 1 is applied to every supplier address. French and
+  Spanish suppliers had the postcode before the town in an address line: 22 fixes, e.g.
+  AMG500 "75018 PARIS", BAL500 "F-36330 ARTHON", PLS500 "03802 ALCOY".
+- **Tax codes:** Access has the FR suppliers on FZ / FV and BAL500 on SV (standard VAT), which is
+  why BAL500 came out DOM. Finance to decide.
 
 #### Stock and product prices (checked 4 Nov)
 
@@ -904,8 +927,8 @@ fixes themselves are what every rerun must repeat.
 
 | File | Fixes applied |
 |---|---|
-| **YA004BPS** suppliers | **4 Nov (`scripts/fix_suppliers.py`), Run 2's FR rejections:** 2 VAT numbers restored. GAL500 → FR65572062594 and ICE500 → FR73539546192: Access had them with a GB prefix, and both pass the French key and SIREN checks, so they're real, not dummies. The other 9 have nothing valid in Access. Each is listed on "Supplier check" with what Finance must supply: EECNUM; CRN = the 14-digit SIRET, whose 5-digit site number isn't in Access; BAL500's tax rule DOM; PLS500 is ES with a GB number. **VAT:** 186 dummy numbers blanked. These were two Polish numbers copied across 117 suppliers, TEMPJAF placeholders, and GB numbers on overseas companies; they were the cause of the 180 rejections in UAT. **Tax rule:** 28 suppliers on EU set to ROWS. **Text:** 211 name and address cells cleaned. Address flag 2 on all (already right). A reload file of the 179 rejected suppliers was made for UAT. |
-| **YA004BPC** customers | **4 Nov (`scripts/fix_customer_addresses.py`), Run 2's XPOSCOD / XSAT rejections: 220 address fixes by rule, on every customer** (96 on the six X3 rejected), each listed on "Address fixes":
+| **YA004BPS** suppliers | **4 Nov (`scripts/fix_suppliers.py`), Run 2's FR rejections:** 3 VAT numbers restored from Access: GAL500 → FR65572062594, ICE500 → FR73539546192 and BUR500 → FR96790182786. All pass the French key and SIREN checks. 22 supplier postcodes moved out of the address lines (continental order). The other 8 have nothing valid in Access. Each is listed on "Supplier check" with what Finance must supply: EECNUM; CRN = the 14-digit SIRET, whose 5-digit site number isn't in Access; BAL500's tax rule DOM; PLS500 is ES with a GB number. **VAT:** 186 dummy numbers blanked. These were two Polish numbers copied across 117 suppliers, TEMPJAF placeholders, and GB numbers on overseas companies; they were the cause of the 180 rejections in UAT. **Tax rule:** 28 suppliers on EU set to ROWS. **Text:** 211 name and address cells cleaned. Address flag 2 on all (already right). A reload file of the 179 rejected suppliers was made for UAT. |
+| **YA004BPC** customers | **4 Nov (`scripts/fix_customer_addresses.py`), Run 2's XPOSCOD / XSAT rejections: 507 address fixes by rule, on every customer** (223 on the six X3 rejected), each listed on "Address fixes"; rules in section 6.5. **1 address left to check.** First pass, for the record:
   - postcode moved out of the address lines, 120;
   - GB postcode O/0 or I/1 confusion and spacing, 12, only where one reading is valid and the district is unchanged;
   - text removed from the postcode, 13, with a US / AU state code kept as the State/Region;
