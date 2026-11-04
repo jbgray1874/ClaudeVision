@@ -123,4 +123,37 @@ code,kbd{background:color-mix(in srgb,var(--ink) 8%,transparent);padding:1px 6px
 </ul>
 </div>
 <p class="sub">Questions: Muhammad Yazir, AI &amp; Automation.</p>
-</main></body></html>
+</main>
+<script>
+// 4 Nov 2026 (James, on his phone: "Open SameDay doesn't do anything - it just hangs"). An app on the office
+// network (10.x, 172.16-31.x, 192.168.x) can't be reached from a phone outside the office: the browser just waits.
+// So it is tried, and if it hasn't opened in 10 seconds the wait is stopped and the reason is said.
+(function(){
+  const OFFICE=/^http:\/\/(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i;
+  let box=null;
+  function note(msg){
+    if(!box){ box=document.createElement('div'); box.setAttribute('role','status');
+      box.style.cssText='position:fixed;left:12px;right:12px;bottom:16px;z-index:999;max-width:560px;margin:0 auto;'
+        +'padding:14px 16px;border-radius:12px;background:#17181B;color:#fff;font:15px/1.45 system-ui,sans-serif;'
+        +'box-shadow:0 8px 30px rgba(0,0,0,.35)';
+      box.addEventListener('click',()=>{ box.remove(); box=null; });
+      document.body.appendChild(box); }
+    box.textContent=msg;
+  }
+  document.addEventListener('click',e=>{
+    const a=e.target.closest&&e.target.closest('a[href]');
+    if(!a||a.target==='_blank'||!OFFICE.test(a.href)||e.metaKey||e.ctrlKey||e.shiftKey) return;
+    e.preventDefault();
+    const name=(a.textContent||'').replace(/^\s*Open\s+/i,'').replace(/[\s→↗]+$/,'').trim()||'This app';
+    note('Opening '+name+'…');
+    const t=setTimeout(()=>{
+      try{ window.stop(); }catch(_){}
+      note(name+" didn't open from here. For now it only opens on the office network or the VPN, so on a phone "
+        +"connect to the VPN first. Opening it from anywhere, with the microphone, comes with its secure address.");
+    },10000);
+    window.addEventListener('pagehide',()=>clearTimeout(t),{once:true});
+    location.href=a.href;
+  },true);
+})();
+</script>
+</body></html>
