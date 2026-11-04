@@ -12378,6 +12378,16 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # record — and none of it reached the sheet, because the only pool the sheet reads
         # is this dict. The part laser-cut at 368/hr against its own mirror image's 287.
         "geometry_rollup": part.get("geometry_rollup") or {},
+        # THE FLAT'S OWN COUNT OF CUT-OUTS TRAVELS TOO (D-684). The contour walk counts every
+        # closed profile the laser pierces, slots and cut-outs as well as round holes, and it
+        # stayed on the raw record: 12693-01-03M's twenty tab slots reached the laser row as
+        # no holes at all, because the row could only ask for circles.
+        **({"dxf_raw_geometry": {
+            _k: (part.get("dxf_raw_geometry") or {}).get(_k)
+            for _k in ("estimated_pierce_count", "estimated_pierce_count_source",
+                       "estimated_pierce_count_uncertain", "pierce_count_incomplete",
+                       "closed_contour_count", "estimated_hole_count")}}
+           if isinstance(part.get("dxf_raw_geometry"), dict) else {}),
         # WHAT THE PART IS FOR TRAVELS WITH THE MONEY TOO.
         #
         # wb_populate decides which block a part belongs in from `page_roles` — a
