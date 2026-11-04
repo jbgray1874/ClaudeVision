@@ -3465,6 +3465,12 @@ def section_words_on_line(desc: Any, material_estimate: Any) -> str:
     return text
 
 
+# Departments that cut every panel of one board in one program: their panels share one row and
+# one set-up whatever route position the read gave each (D-670). The lasers are not here: they
+# keep a row per component and share their set-up only across a proven nest.
+_ONE_PROGRAM_PER_BOARD = frozenset({"CNC Joinery"})
+
+
 def canonical_labour_groups(
     summary: Dict[str, Any],
     part_estimates: List[Dict[str, Any]],
@@ -3806,6 +3812,18 @@ def canonical_labour_groups(
             if sequence is None:
                 for _existing in groups:
                     if _existing[:4] == key[:4]:
+                        key = _existing
+                        break
+            elif wb_op in _ONE_PROGRAM_PER_BOARD:
+                # PANELS OF ONE BOARD ARE ONE PROGRAM (D-670). 12203-66's three panels took
+                # three CNC Joinery rows and three 15-minute set-ups because the drawing read
+                # numbered their cutting 10, 20 and 30: a route position per panel, not a
+                # second visit. Panels of one material and thickness on this department join
+                # one row and share its one set-up; only a second cut of the SAME panel keeps
+                # a row of its own.
+                for _existing, _eg in groups.items():
+                    if (isinstance(_existing, tuple) and _existing[:4] == key[:4]
+                            and target_id not in (_eg.get("targets") or [])):
                         key = _existing
                         break
 

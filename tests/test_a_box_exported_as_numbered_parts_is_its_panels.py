@@ -108,7 +108,7 @@ def test_the_parts_own_drawing_export_is_set_aside_not_a_sixth_panel(tmp_path):
 
 def test_the_report_names_the_set_aside_view():
     from costed_facts import DXF_REASON_SENTENCES
-    assert "not costed" in DXF_REASON_SENTENCES["unnumbered_view_beside_numbered_pieces"]
+    assert "not cut geometry" in DXF_REASON_SENTENCES["unnumbered_view_beside_numbered_pieces"]
 
 
 def test_without_the_view_the_five_panels_still_stand(tmp_path):
