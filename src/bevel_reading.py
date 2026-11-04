@@ -182,28 +182,188 @@ def _parent_of(part: Mapping[str, Any], by_pn: Mapping[str, Mapping[str, Any]]) 
     return None
 
 
+# ── a callout belongs to the panel whose detail it sits in ──────────────────────────────
+#
+# A sheet that details several panels (12203-65-01J's sheet 3/3 draws all five, each under its
+# balloon) carries several panels' callouts, possibly at different angles. A callout is this
+# panel's only where it sits nearer this panel's balloon than any other, and that balloon's
+# area also carries one of this panel's own sizes (D-671 review).
+
+_TOKEN_CACHE: Dict[Tuple[str, float, int], Optional[Dict[str, Any]]] = {}
+_BALLOON = re.compile(r"^\d{1,2}$")
+_ANGLE_WORD = re.compile(r"^(\d{1,2}(?:[.,]\d{1,2})?)\s*[°º]$")
+_FIGURE_WORD = re.compile(r"^\d{2,4}(?:[.,]\d{1,2})?$")
+
+
+def _ringed(points: Sequence[Tuple[float, float]], cx: float, cy: float) -> bool:
+    """A lone number inside a ring: twelve or more drawn points at one radius (within 15%)
+    of 5 to 30 points around it. A circle drawn as curves or as many short lines both pass;
+    a table cell's four corners do not."""
+    ds = sorted(math.hypot(px - cx, py - cy) for px, py in points
+                if abs(px - cx) < 40 and abs(py - cy) < 40)
+    ds = [d for d in ds if d > 2.0]
+    if len(ds) < 12:
+        return False
+    med = ds[len(ds) // 2]
+    return 5.0 <= med <= 30.0 and sum(1 for d in ds if abs(d - med) <= 0.15 * med) >= 12
+
+
+def page_tokens(sheet: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """{"balloons": {n: (x, y)}, "angles": [(deg, x, y)], "figures": [(mm, x, y)],
+    "words": [(WORD, x, y)]} read off a sheet's PDF page, or None without the PDF."""
+    import os
+    path = str(sheet.get("source_pdf_path") or "")
+    try:
+        from detail_page_geometry import _local_page_number
+        local = _local_page_number(sheet)
+        key = (path, os.path.getmtime(path), int(local or 0))
+    except Exception:                                                # noqa: BLE001
+        return None
+    if key in _TOKEN_CACHE:
+        return _TOKEN_CACHE[key]
+    out: Optional[Dict[str, Any]] = None
+    try:
+        import fitz                                                  # noqa: WPS433
+        doc = fitz.open(path)
+        try:
+            if 0 < key[2] <= doc.page_count:
+                pg = doc.load_page(key[2] - 1)
+                pts: List[Tuple[float, float]] = []
+                for d in pg.get_drawings():
+                    for it in d.get("items") or []:
+                        for q in it[1:]:
+                            if hasattr(q, "x") and hasattr(q, "y"):
+                                pts.append((float(q.x), float(q.y)))
+                            elif hasattr(q, "x0"):
+                                pts += [(float(q.x0), float(q.y0)), (float(q.x1), float(q.y1))]
+                out = {"balloons": {}, "angles": [], "figures": [], "words": []}
+                for w in pg.get_text("words") or []:
+                    x, y, word = (w[0] + w[2]) / 2.0, (w[1] + w[3]) / 2.0, str(w[4]).strip()
+                    m = _ANGLE_WORD.match(word)
+                    if m:
+                        out["angles"].append((float(m.group(1).replace(",", ".")), x, y))
+                    elif _BALLOON.match(word) and _ringed(pts, x, y):
+                        out["balloons"].setdefault(int(word), (x, y))
+                    elif _FIGURE_WORD.match(word):
+                        out["figures"].append((float(word.replace(",", ".")), x, y))
+                    if _BEVEL_WORDS.fullmatch(word.strip(".,:;")):
+                        out["words"].append((word.strip(".,:;").upper(), x, y))
+        finally:
+            doc.close()
+    except Exception:                                                # noqa: BLE001
+        out = None
+    _TOKEN_CACHE[key] = out
+    return out
+
+
+_CHAIN_GAP_PT = 250.0
+
+
+def detail_areas(tok: Mapping[str, Any]) -> Dict[Tuple[str, int], int]:
+    """Which balloon's detail each figure, angle and word belongs to: grown from the balloons
+    through the nearest token each time (single linkage), so a callout joins the detail whose
+    figures it sits among, not merely the nearest balloon. A token further than 250 pt from
+    every detail joins none."""
+    toks: List[Tuple[str, int, float, float]] = []
+    for kind in ("figures", "angles", "words"):
+        for i, t in enumerate(tok.get(kind) or []):
+            toks.append((kind, i, float(t[1]), float(t[2])))
+    held: List[Tuple[float, float, int]] = [(x, y, n) for n, (x, y) in (tok.get("balloons") or {}).items()]
+    out: Dict[Tuple[str, int], int] = {}
+    free = list(toks)
+    while free and held:
+        best = None
+        for j, (kind, i, x, y) in enumerate(free):
+            for hx, hy, n in held:
+                d = math.hypot(hx - x, hy - y)
+                if best is None or d < best[0]:
+                    best = (d, j, n)
+        if best is None or best[0] > _CHAIN_GAP_PT:
+            break
+        _d, j, n = best
+        kind, i, x, y = free.pop(j)
+        out[(kind, i)] = n
+        held.append((x, y, n))
+    return out
+
+
+def panel_cell_evidence(sheets: Sequence[Mapping[str, Any]], piece_no: int,
+                        sizes: Sequence[float]) -> Dict[str, Any]:
+    """The angles and bevel words in piece `piece_no`'s own detail on a sheet of several:
+    tokens in the detail grown from its balloon, on a page where that detail also carries one
+    of its own sizes. {"angles", "words", "pages", "how"}."""
+    angles: set = set()
+    words: set = set()
+    pages: List[Any] = []
+    seen_balloon = False
+    for sheet in sheets:
+        tok = page_tokens(sheet)
+        if not tok or piece_no not in tok["balloons"]:
+            continue
+        seen_balloon = True
+        area = detail_areas(tok)
+        own_size = any(area.get(("figures", i)) == piece_no and
+                       any(abs(v - s) <= max(0.5, 0.005 * s) for s in sizes if s)
+                       for i, (v, x, y) in enumerate(tok["figures"]))
+        if not own_size:
+            continue
+        pages.append(sheet.get("page_number"))
+        angles |= {a for i, (a, x, y) in enumerate(tok["angles"])
+                   if 5.0 < a < 85.0 and area.get(("angles", i)) == piece_no}
+        words |= {w for i, (w, x, y) in enumerate(tok["words"])
+                  if area.get(("words", i)) == piece_no}
+    how = (f"balloon {piece_no}'s own detail (page {', '.join(str(p) for p in pages)}), which "
+           f"carries this panel's own size" if pages else
+           (f"balloon {piece_no} is drawn, but no area of it carries this panel's own size"
+            if seen_balloon else
+            f"no balloon {piece_no} on the sheet ties a callout to this panel"))
+    return {"angles": sorted(angles), "words": sorted(words), "pages": pages, "how": how}
+
+
+def _piece_number(part: Mapping[str, Any]) -> Optional[int]:
+    """The number its flat's name gives it, else the number its code ends in."""
+    path = _flat_path(part)
+    if path is not None:
+        try:
+            from drawing_job_merge import member_number_from_filename
+            n = member_number_from_filename(path)
+            if n:
+                return int(n)
+        except Exception:                                            # noqa: BLE001
+            pass
+    m = re.search(r"-(\d{1,2})$", str(part.get("part_number") or ""))
+    return int(m.group(1)) if m else None
+
+
 def drawing_evidence(part: Mapping[str, Any], summary: Mapping[str, Any],
                      by_pn: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
-    """{"angles": [...], "words": [...], "pages": [...], "whose": code} from the panel's own
-    sheet, else the sheet of the part it was split from."""
+    """{"angles": [...], "words": [...], "pages": [...], "whose": code, "how": sentence} from
+    the panel's own sheet; else from ITS OWN DETAIL on the sheet of the part it was split
+    from, never from that sheet as a whole."""
+    empty = {"angles": [], "words": [], "pages": [], "whose": "", "how": "no sheet"}
     try:
         from detail_page_geometry import own_sheets
     except Exception:                                                # noqa: BLE001
-        return {"angles": [], "words": [], "pages": [], "whose": ""}
-    whose = part
+        return empty
     sheets = own_sheets(part, summary)
-    if not sheets:
-        parent = _parent_of(part, by_pn)
-        if parent is not None:
-            whose = parent
-            sheets = own_sheets(parent, summary)
-    text = _sheet_text(sheets) if sheets else ""
-    angles = sorted({float(a.replace(",", ".")) for a in _ANGLE_TEXT.findall(text)
-                     if 5.0 < float(a.replace(",", ".")) < 85.0})
-    words = sorted({w.upper() for w in _BEVEL_WORDS.findall(text)})
-    return {"angles": angles, "words": words,
-            "pages": [s.get("page_number") for s in sheets],
-            "whose": str(whose.get("part_number") or "")}
+    if sheets:
+        text = _sheet_text(sheets)
+        return {"angles": sorted({float(a.replace(",", ".")) for a in _ANGLE_TEXT.findall(text)
+                                  if 5.0 < float(a.replace(",", ".")) < 85.0}),
+                "words": sorted({w.upper() for w in _BEVEL_WORDS.findall(text)}),
+                "pages": [s.get("page_number") for s in sheets],
+                "whose": str(part.get("part_number") or ""), "how": "its own sheet"}
+    parent = _parent_of(part, by_pn)
+    if parent is None:
+        return empty
+    psheets = own_sheets(parent, summary)
+    n = _piece_number(part)
+    if not psheets or not n:
+        return {**empty, "whose": str(parent.get("part_number") or ""),
+                "how": "no piece number ties it to a detail on its part's sheet"}
+    sizes = [_num(part.get("overall_length_mm")) or 0.0, _num(part.get("overall_width_mm")) or 0.0]
+    cell = panel_cell_evidence(psheets, n, sizes)
+    return {**cell, "whose": str(parent.get("part_number") or "")}
 
 
 def _flat_path(part: Mapping[str, Any]) -> Optional[Path]:
@@ -247,6 +407,7 @@ def read_bevel(part: Mapping[str, Any], summary: Mapping[str, Any],
     base = {"inset_mm": round(mid, 2), "insets_mm": [round(x, 2) for x in ins],
             "thickness_mm": t, "sheet_of": ev["whose"], "pages": ev["pages"],
             "angles_printed": ev["angles"], "words_printed": ev["words"],
+            "evidence_from": ev.get("how"),
             "layer_support": support, "model": MODEL_NOT_READ, **geo}
     if found:
         return {"taken": True, **base, **found}

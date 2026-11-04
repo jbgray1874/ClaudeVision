@@ -3358,6 +3358,12 @@ def _canonical_record_index(
     return estimates, raw
 
 
+def _nest_word(nest_id: Any) -> str:
+    """"laser nest" for a laser's, "CNC Joinery nest" for the joinery CNC's."""
+    dept = str(nest_id or "").split("|")[0]
+    return "laser nest" if dept.startswith("Laser") else f"{dept} nest"
+
+
 def allocate_laser_nest_setup(ws, groups: Dict[Any, Dict[str, Any]],
                               lb: Dict[str, int], flags: List[str]) -> None:
     """ONE NEST, ONE SET-UP.
@@ -3398,7 +3404,7 @@ def allocate_laser_nest_setup(ws, groups: Dict[Any, Dict[str, Any]],
         if not all(_m.get("laser_nest_proven") for _m in _members):
             _why_np = next((str(_m.get("laser_nest_evidence") or "") for _m in _members
                             if _m.get("laser_nest_evidence")), "no nesting proof")
-            _flag(f"laser nest {_nid}: rows split per component but the ONE-set-up "
+            _flag(f"{_nest_word(_nid)} {_nid}: rows split per component but the ONE-set-up "
                   f"allocation was NOT applied — the nest is not proven to fit one "
                   f"sheet ({_why_np}). Each of the {_n} rows carries a full department "
                   f"set-up; if these genuinely share a sheet program, reduce it on the "
@@ -3424,14 +3430,14 @@ def allocate_laser_nest_setup(ws, groups: Dict[Any, Dict[str, Any]],
                 _l_cell.value = "=(%s)/%d" % (str(_l_cell.value)[1:], _n)
                 _m["setup_share"] = ("1/%d of the department set-up "
                                      "(template's own lookup, divided)" % _n)
-            _flag(f"laser nest {_nid}: {_n} component rows "
+            _flag(f"{_nest_word(_nid)} {_nid}: {_n} component rows "
                   f"(sheet rows {_rows_ok}) share ONE department set-up — each row carries "
                   f"the template's own set-up lookup divided by {_n}, so the nest's total "
                   f"is exactly one allowance and moves if the estimators change their "
                   f"table. Components of one material and gauge nest on one sheet "
                   f"(Howard Thurley, 7332-01).", flags)
         else:
-            _flag(f"laser nest {_nid}: the rows split per component but the set-up could "
+            _flag(f"{_nest_word(_nid)} {_nid}: the rows split per component but the set-up could "
                   f"NOT be allocated — the template's hours/set-up cells on row(s) "
                   f"{_rows_bad} are not the shape this build knows (J reading L). EVERY "
                   f"row is carrying a FULL department set-up: {_n} set-ups charged where "
@@ -3465,10 +3471,31 @@ def section_words_on_line(desc: Any, material_estimate: Any) -> str:
     return text
 
 
-# Departments that cut every panel of one board in one program: their panels share one row and
-# one set-up whatever route position the read gave each (D-670). The lasers are not here: they
-# keep a row per component and share their set-up only across a proven nest.
-_ONE_PROGRAM_PER_BOARD = frozenset({"CNC Joinery"})
+# SHEET CUTTERS: a row per component, one set-up only across a PROVEN nest (D-671). The joinery
+# CNC joined the lasers here after D-670 had merged its panels on material and thickness alone:
+# that shows the panels could share stock, not that they share a program, tooling, workholding
+# or machining face.
+_SHEET_NEST_CUTTERS = frozenset({"Laser (Metal)", "Laser (Acrylic)", "CNC Joinery"})
+# Where one program may run several sheets of one stock: loading a further sheet is not a full
+# new set-up there. The lasers keep the one-sheet condition Howard set (7332-01).
+_MULTI_SHEET_PROGRAM_CUTTERS = frozenset({"CNC Joinery"})
+_OWN_SETUP = "own set-up"
+
+
+def machining_setup_signature(record: Mapping[str, Any]) -> str:
+    """What a panel's cutting program has to do beyond its outline, as far as the record says
+    (D-671): "outline", "bevel 45" (the angles its bevelled edges take), or "own set-up" where
+    an inner feature is still a question nobody has answered. Panels share a set-up only with
+    the same signature; flips, fixtures and tool changes are not read, and the evidence says
+    so."""
+    if not isinstance(record, Mapping):
+        return "outline"
+    if any(isinstance(q, Mapping) and q.get("subject") == "nested_outline_frame_or_step"
+           for q in (record.get("manufacturing_questions") or [])):
+        return _OWN_SETUP
+    be = record.get("bevelled_edges") if isinstance(record.get("bevelled_edges"), Mapping) else {}
+    ang = _safe(be.get("angle_deg"))
+    return f"bevel {ang:g}" if ang else "outline"
 
 
 def canonical_labour_groups(
@@ -3513,6 +3540,7 @@ def canonical_labour_groups(
         _out_of_scope = set()
     tube_pns = tube_part_numbers(summary)
     groups: Dict[Any, Dict[str, Any]] = {}
+    _first_visit: Dict[Tuple[str, str], Any] = {}
 
     def _prove_laser_nests(groups_in: Dict[Any, Dict[str, Any]]) -> None:
         """ONE SHEET, PROVEN — NOT PRESUMED FROM MATERIAL AND GAUGE.
@@ -3536,7 +3564,14 @@ def canonical_labour_groups(
             if len(_members) < 2:
                 for _g in _members:
                     _g["laser_nest_proven"] = True
-                    _g["laser_nest_evidence"] = "single row — nothing shared, nothing to prove"
+                    _sg = str(_g.get("setup_signature") or "")
+                    _g["laser_nest_evidence"] = (
+                        f"its own set-up: a further visit to this panel ({_sg.split(', ', 1)[1]})"
+                        if _sg.startswith(_OWN_SETUP + ", ") else
+                        "its own set-up: an inner feature on this panel is still a question, "
+                        "so its machining is not shown to match any other panel's"
+                        if _sg == _OWN_SETUP else
+                        "single row — nothing shared, nothing to prove")
                 continue
             _fraction, _sheets, _bad = 0.0, set(), []
             for _g in _members:
@@ -3561,6 +3596,13 @@ def canonical_labour_groups(
                 _proven, _why = True, (f"the whole order takes {_fraction:.2f} of one "
                                        f"{next(iter(_sheets))} sheet, by the template's "
                                        f"own nesting")
+            elif str(_nid).split("|")[0] in _MULTI_SHEET_PROGRAM_CUTTERS:
+                # ONE PROGRAM, SEVERAL SHEETS (D-671): loading a further sheet of the same
+                # stock and the same program is not a full new set-up.
+                _proven, _why = True, (f"one program run on {int(_fraction) + (1 if _fraction % 1 else 0)} "
+                                       f"{next(iter(_sheets))} sheets ({_fraction:.2f} by the "
+                                       f"template's own nesting); loading each further sheet "
+                                       f"is not charged as a set-up — confirm")
             else:
                 _proven, _why = False, (f"the order needs {_fraction:.2f} sheets — past "
                                         f"one sheet, Howard's one-set-up condition is not "
@@ -3588,6 +3630,10 @@ def canonical_labour_groups(
                     f"estimator-confirmed nesting group: {_confirmed}. Not derived — a "
                     f"person who knows the job stated these components share one program, "
                     f"which is the condition Howard set for one set-up")
+            _sig = _members[0].get("setup_signature")
+            if _sig and _proven:
+                _why += (f"; the same machining on every panel ({_sig}); flips, fixtures and "
+                         f"tool changes are not read — confirm one program covers them")
             for _g in _members:
                 _g["laser_nest_proven"] = _proven
                 _g["laser_nest_evidence"] = _why
@@ -3777,7 +3823,7 @@ def canonical_labour_groups(
             key = ("canonical-event", decision_id)
         elif wb_op == "Robomac":
             key = ("canonical-event", decision_id)
-        elif wb_op in ("Laser (Metal)", "Laser (Acrylic)"):
+        elif wb_op in _SHEET_NEST_CUTTERS:
             # ── ONE LABOUR ROW PER COMPONENT ON THE LASER ────────────────────────────
             #
             # "Labour rates should be separate line each component as reflect the
@@ -3797,6 +3843,13 @@ def canonical_labour_groups(
             # worse than the blended row it replaces.
             key = ("canonical-part-setup", wb_op, material.upper(),
                    "%g" % thickness, target_id or decision_id)
+            # A SECOND VISIT TO THE SAME PANEL IS A SECOND SET-UP (D-671): a later cut of a
+            # panel this department already cuts, at another route position, is further
+            # machining with its own row and its own set-up, never a share of the nest's.
+            if wb_op in _MULTI_SHEET_PROGRAM_CUTTERS and sequence is not None:
+                _first = _first_visit.setdefault((wb_op, target_id or decision_id), sequence)
+                if sequence != _first:
+                    key = key + ("visit %g" % sequence,)
         else:
             # Compatible leaf events share one tooling setup. Decision identities remain
             # attached individually, so no event disappears in the grouping.
@@ -3812,18 +3865,6 @@ def canonical_labour_groups(
             if sequence is None:
                 for _existing in groups:
                     if _existing[:4] == key[:4]:
-                        key = _existing
-                        break
-            elif wb_op in _ONE_PROGRAM_PER_BOARD:
-                # PANELS OF ONE BOARD ARE ONE PROGRAM (D-670). 12203-66's three panels took
-                # three CNC Joinery rows and three 15-minute set-ups because the drawing read
-                # numbered their cutting 10, 20 and 30: a route position per panel, not a
-                # second visit. Panels of one material and thickness on this department join
-                # one row and share its one set-up; only a second cut of the SAME panel keeps
-                # a row of its own.
-                for _existing, _eg in groups.items():
-                    if (isinstance(_existing, tuple) and _existing[:4] == key[:4]
-                            and target_id not in (_eg.get("targets") or [])):
                         key = _existing
                         break
 
@@ -3855,6 +3896,16 @@ def canonical_labour_groups(
             # The nest this row shares its set-up with: same laser, same material, same
             # gauge — the tuple that decides whether parts can share a sheet program.
             group["laser_nest_id"] = "%s|%s|%g" % (wb_op, material.upper(), thickness)
+            if wb_op in _MULTI_SHEET_PROGRAM_CUTTERS:
+                # SAME STOCK IS NOT THE SAME SET-UP (D-671): the panel's machining joins the
+                # key, and a panel whose inner feature is unanswered keeps a set-up of its own.
+                _sig = machining_setup_signature(raw.get(target_id) or estimates.get(target_id)
+                                                 or {})
+                if len(key) > 5:
+                    _sig = f"{_OWN_SETUP}, {key[5]}"
+                group["setup_signature"] = _sig
+                group["laser_nest_id"] += "|" + (f"{_sig}:{target_id or decision_id}"
+                                                 if _sig.startswith(_OWN_SETUP) else _sig)
         if decision_id not in group["decision_ids"]:
             group["decision_ids"].append(decision_id)
         if operation not in group["engine_ops"]:
