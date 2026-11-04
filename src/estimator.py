@@ -2437,6 +2437,17 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
             note += (". NOT INCLUDED and NOT PRICED: freight to and from the plater needs "
                      "a CURRENT transport quote for this job — MISSING: the haulage figure; "
                      "ASK: SDI transport department")
+        # A RATE WITH AN ORDER MINIMUM IS TWO NUMBERS, NOT ONE (D-689). The card's unit is
+        # max(mass x rate, minimum / order); 12693-01-104's line read £95 a unit in every
+        # quantity column, the 1-off minimum copied to 50 off, where mass x rate is the
+        # price. The break table needs both halves to work the sum at each quantity.
+        if unit is not None and method == "subcontract_plating_indicative":
+            _rate_kg = _safe_float((policy or {}).get("gbp_per_kg")) or 0.0
+            _min_order = _safe_float((policy or {}).get("vat_minimum_gbp")) or 0.0
+            if _rate_kg and mass:
+                pe["unit_with_order_minimum"] = {
+                    "unit_gbp": round(float(mass) * _rate_kg, 5),
+                    "order_minimum_gbp": round(_min_order, 2)}
         qty = max(1, int(pe.get("quantity") or 1))
         ext = round((unit or 0.0) * qty, 2)
         pe["unit_material_cost_gbp"] = unit or 0.0

@@ -6976,7 +6976,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _at_breaks = _cl_rec.get("order_gbp_at_breaks") or (
             {"order": _cl_rec["order_gbp"]} if _safe(_cl_rec.get("order_gbp")) else None)
         _mpb_cfg = dict(getattr(config, "MATERIAL_PRICE_BREAK", {}) or {})
-        if _at_breaks and _mpb_cfg.get("enabled"):
+        # AND A UNIT RATE WITH AN ORDER MINIMUM (D-689): the plating card's minimum moves
+        # with the quantity like any order figure, so its cell reads the break row too.
+        _with_minimum = isinstance(pe.get("unit_with_order_minimum"), dict) \
+            and price is not None
+        if (_at_breaks or _with_minimum) and _mpb_cfg.get("enabled"):
             _t = row + int(_mpb_cfg.get("row_offset", -6))
             _sheet_name = str(_mpb_cfg.get("sheet") or "Material Price Break")
             # WITH THE RUN'S OWN FIGURE AS THE FALLBACK. A run that never fills the break
