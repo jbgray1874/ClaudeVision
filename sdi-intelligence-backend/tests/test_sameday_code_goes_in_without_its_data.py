@@ -84,3 +84,32 @@ class PowerShellTrapsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ItFailsClosedTests(unittest.TestCase):
+    """4 November: run in a window that could not see K:, the readability
+    check ERRORED - and an error inside an if's condition makes PowerShell
+    skip the whole if, so it printed "[ok] readable" and went on. Robocopy
+    then stopped it; nothing was sent, but the check had said yes."""
+
+    def test_the_share_is_read_by_its_full_name_not_a_drive_letter(self):
+        self.assertIn('$Source = "\\\\sdi-dc01\\shareddata$\\Shared\\IT\\', BODY)
+        self.assertNotIn('$Source = "K:', BODY)
+
+    def test_no_path_from_the_share_is_built_by_a_command_that_can_throw(self):
+        self.assertNotRegex(BODY, r"Join-Path \$(Source|auto)\b")
+
+    def test_the_readability_check_is_caught_and_stops(self):
+        check = BODY.split("$readable = $false", 1)[1].split('Yes "SameDay', 1)[0]
+        self.assertIn("-ErrorAction Stop } catch { $readable = $false }", check)
+        self.assertIn("if (-not $readable) {", check)
+        self.assertIn("Stop-Here", check)
+
+    def test_the_copy_is_checked_before_anything_is_committed(self):
+        self.assertLess(BODY.index('"The copy does not hold brief_lite\\lite_app.py'),
+                        BODY.index('RunGit @("commit"'))
+
+    def test_the_readiness_check_reads_the_same_share(self):
+        check = (Path(__file__).resolve().parent.parent / "deploy" / "Check-SameDay-Ready.ps1"
+                 ).read_text(encoding="utf-8")
+        self.assertIn('$Source = "\\\\sdi-dc01\\shareddata$\\Shared\\IT\\', check)

@@ -28,7 +28,9 @@
 [CmdletBinding()]
 param(
     # Where Muhammad put it. The folder that HOLDS SDI_Automation.
-    [string]$Source = "K:\IT\AI & Automation\Design\SDI Same Day Intelligence",
+    # Where Muhammad put it - K:'s share by its full name, so a window opened
+    # as administrator (which cannot see mapped drives) reads it too.
+    [string]$Source = "\\sdi-dc01\shareddata$\Shared\IT\AI & Automation\Design\SDI Same Day Intelligence",
     [string]$Server = "10.0.0.5",
     # The deploy guide's path. Several files read C:\SDI_Automation by name.
     [string]$Target = "C:\SDI_Automation",
@@ -108,7 +110,8 @@ if (-not (Test-Path -LiteralPath $app)) {
 }
 Yes "Found brief_lite\lite_app.py"
 $letter = $Source.Substring(0, 1)
-$drive = Get-PSDrive -Name $letter -ErrorAction SilentlyContinue
+$drive = $null
+if ($Source -match '^[A-Za-z]:') { $drive = Get-PSDrive -Name $letter -ErrorAction SilentlyContinue }
 if ($drive -and $drive.DisplayRoot) {
     Say "${letter}: on this laptop is $($drive.DisplayRoot) - the server will need that"
     Say "share by its UNC name, because a service has no ${letter}: drive."
