@@ -200,6 +200,13 @@ def reconciled_bom_rows_for_job(
                                 if r.get("item_number") not in (None, "") else None),
                 "bom_also_on_sheets": list(r.get("also_on_sheets") or []) or None,
             }
+            # THE OTHER SPELLING OF THIS LINE, where a sheet read its code cut short at a
+            # space and the parent merge folded that reading in (D-687): its code, its words
+            # and the sheet it came off. Only on a line that has one, so every other row is
+            # byte-identical.
+            if r.get("also_read_as"):
+                _row_out["bom_also_read_as"] = [dict(x) for x in r["also_read_as"]
+                                                if isinstance(x, dict)]
             # --- THE ROW'S OWN PRINTED SPECIFICATION SURVIVES THE FLATTEN. The readers
             #     were taught to keep material / thickness / mass, and this dict is
             #     where the review probe found them dying: a new dictionary that copied

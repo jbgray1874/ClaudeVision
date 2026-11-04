@@ -409,6 +409,87 @@ def code_quality_findings(parent_label: str, rows: List[Dict[str, Any]]) -> List
 
 
 # ---------------------------------------------------------------------------
+# One line on two sheets, its code cut at a space on one of them (D-687).
+# ---------------------------------------------------------------------------
+# The cells a reading that cut the code short got wrong: the code, everything derived from
+# the code, and the description the rest of it was pushed into. Every other cell of that
+# reading (the quantity it agreed on, a material, a length) was read where it sits and is
+# merged as any line seen on two sheets is.
+_CUT_CELLS = ("part_ref", "part_number", "code_token", "kind", "description",
+              "segmentation_uncertain")
+
+
+def _code_of(row: Dict[str, Any]) -> str:
+    return str(row.get("part_number") or row.get("part_ref") or "")
+
+
+def _whole_code_of_a_cut_row(prior: Dict[str, Any], row: Dict[str, Any]) -> str:
+    """"prior" or "row": which of two readings of one item carries the whole code, when the
+    other is the same printed text with its code cut short at a space. "" when they are not.
+
+    The caller has already matched the parent and the item number. The quantity must agree
+    as well: a reading that disagrees on the count is not shown to be the same line, and is
+    left to the "sheets disagree" branch, which keeps both and says so."""
+    try:
+        if float(prior.get("quantity")) != float(row.get("quantity")):
+            return ""
+    except (TypeError, ValueError):
+        return ""
+    try:
+        from part_identity import same_row_code_cut_at_a_space as _cut
+    except Exception:                                                 # pragma: no cover
+        return ""
+    if _cut(_code_of(prior), prior.get("description"), _code_of(row), row.get("description")):
+        return "prior"
+    if _cut(_code_of(row), row.get("description"), _code_of(prior), prior.get("description")):
+        return "row"
+    return ""
+
+
+def _keep_the_whole_code(prior: Dict[str, Any], row: Dict[str, Any], sheet: str,
+                         row_is_whole: bool, label: str, item: str) -> List[str]:
+    """Fold `row` into the line `prior` as one line, carrying the WHOLE code (D-687).
+
+    The line keeps its place in the table, the sheet it was first read on and the reader
+    verdict it arrived with, as any line seen on two sheets does. What changes is which
+    reading's code and words it carries: always the whole one. Where the whole code arrived
+    second, its cut cells replace the cut ones on the line before the merge, so the line
+    never carries the cut code beside the whole one's words.
+
+    NOTHING OF THE CUT READING IS LOST. It is kept whole on the line under `also_read_as`
+    (its code, its words, its count and the sheet it came off), its sheet joins
+    `also_on_sheets`, and the finding returned says what was folded and why."""
+    cut, cut_sheet = (prior, prior.get("sheet")) if row_is_whole else (row, sheet)
+    cut_reading = {"part_ref": _code_of(cut), "description": cut.get("description"),
+                   "quantity": cut.get("quantity"), "sheet": cut_sheet,
+                   "source": cut.get("source")}
+    cut_reading = {k: v for k, v in cut_reading.items() if v not in (None, "")}
+    if row_is_whole:
+        # The whole reading's cells, with their provenance stamps; a cell it does not carry
+        # is cleared rather than left holding the cut reading's value.
+        for _cell in _CUT_CELLS:
+            for _key in (_cell, f"{_cell}_source", f"{_cell}_confidence"):
+                if _key in row:
+                    prior[_key] = row[_key]
+                else:
+                    prior.pop(_key, None)
+    _seen = prior.setdefault("also_on_sheets", [])
+    if sheet not in _seen and sheet != prior.get("sheet"):
+        _seen.append(sheet)
+    notes = _merge_records(prior, row, winner_source=PATH_A_SOURCE, loser_source=PATH_A_SOURCE,
+                           decided=("item_number",) + _CUT_CELLS,
+                           label=f"[{label}] item {item} on {sheet}")
+    prior.setdefault("also_read_as", []).append(cut_reading)
+    notes.append(
+        f"[{label}] item {item}: '{cut_reading.get('part_ref', '')}' / "
+        f"{str(cut_reading.get('description') or '')!r} on {cut_sheet} is '{_code_of(prior)}' read "
+        f"with its code cut short at a space — the rest of the code opens that reading's "
+        f"description, and the count agrees. One line, not two: kept as "
+        f"'{_code_of(prior)}' / {str(prior.get('description') or '')!r}")
+    return notes
+
+
+# ---------------------------------------------------------------------------
 # Run both readers over a job.
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
@@ -443,6 +524,9 @@ def merge_pages_into_parents(pages: List[Dict[str, Any]]) -> Tuple[List[Dict[str
     number is unique — that is what an item number is for. So:
 
         same parent, same item, same code      one line, seen on two sheets
+        same parent, same item, same quantity, one line, the whole code kept: one
+          one sheet's code cut at a space      reading stopped the code early and pushed
+                                               the rest into the description (D-687)
         same parent, different item            two lines (a continuation sheet)
         same parent, same item, DIFFERENT code the sheets disagree; both are emitted
                                                and flagged, because dropping either
@@ -503,6 +587,16 @@ def merge_pages_into_parents(pages: List[Dict[str, Any]]) -> Tuple[List[Dict[str
                     prior, row, winner_source=PATH_A_SOURCE, loser_source=PATH_A_SOURCE,
                     decided=("item_number",),
                     label=f"[{entry['label']}] item {item} on {_sheet}"))
+                continue
+            # THE SAME LINE, ITS CODE CUT AT A SPACE ON ONE SHEET (D-687). Not a disagreement
+            # between the sheets: one reading stopped the code early and carried the rest of it
+            # into the description. Only across sheets: two rows of one sheet under one item
+            # number are reconcile_page's to settle, not this merge's.
+            _whole = (_whole_code_of_a_cut_row(prior, row)
+                      if _sheet != prior.get("sheet") else "")
+            if _whole:
+                findings.extend(_keep_the_whole_code(prior, row, _sheet, _whole == "row",
+                                                     entry["label"], item))
                 continue
             _r = dict(row, sheet=_sheet)
             _r["flag"] = ((_r.get("flag") or "") + "; " if _r.get("flag") else "") + (
