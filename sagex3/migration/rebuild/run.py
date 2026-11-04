@@ -26,12 +26,14 @@ def main():
     ap.add_argument("--today", help="the run's date, yyyymmdd (default today)")
     ap.add_argument("--phant", choices=("usage", "access"), default="usage")
     ap.add_argument("--recent-years", type=int, default=2)
+    ap.add_argument("--loaded", help="the product file loaded into X3 (default: ZSDIITM in --previous)")
     ap.add_argument("--previous-costs", help="the YITC spreadsheet loaded last: its costs are kept")
     ap.add_argument("--suppliers", help="the YA004BPS spreadsheet: product-suppliers keep these suppliers")
     a = ap.parse_args()
     run = Path(a.run_dir)
 
-    path, summary, rows, code = products.build(run, a.today, a.phant, a.recent_years)
+    loaded = a.loaded or (Path(a.previous) / "ZSDIITM_products_MAPPED.xlsx" if a.previous else None)
+    path, summary, rows, code = products.build(run, a.today, a.phant, a.recent_years, loaded)
     print(f"Products: {path.name}")
     for k, v in summary.items():
         print(f"  {k}: {v}")

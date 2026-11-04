@@ -32,7 +32,7 @@ Settings that change per run (dates, company) are passed in, not edited in code:
 | `common.py`: code rule, character rule, readers and writers, sheet tabs, one copy each | done |
 | `changes.py`: the what-changed write-up | done; tested on the 30 Oct cost change (9,597 → 15,562) |
 | `sql/00_discover.sql`: full view definitions and the Access product-table columns | written; a cross-check only now, since the product extract uses columns already proven |
-| `sql/extract_products.sql` + `products.py`: ZSDIITM with live products in, the PHANT usage test, and Check, Not migrated, Held back and Why tabs | **done**; waiting on the first live run. Tested on the original vw_ITM data: it reproduces the loaded file (137 V6 additions not in the test data; 108 descriptions kept longer) |
+| `sql/extract_products.sql` + `products.py`: ZSDIITM with live products in, already-loaded products kept, the PHANT usage test, live shared codes flagged, and Check, Not migrated, Held back and Why tabs | **done; first live run 4 Nov:** 19,868 products (+3,369, 0 removed) |
 | `run.py` | done for products; each builder joins it as it's written |
 | `costs.py`: YITC, a cost line for every product (loaded costs kept; new products costed from Access) | **done 4 Nov**, tested |
 | `product_suppliers.py`: ZSDIITMSUP, every supplier pair with a PIO priority (input: `product_suppliers_v4.sql`) | **done 4 Nov**, tested: 7,603 main + 3,147 alternatives |

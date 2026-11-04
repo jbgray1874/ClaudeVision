@@ -7,6 +7,7 @@ grade, plus everything the current load rule takes:
   * vw_DQ_ITM grades it GOOD or INCOMPLETE (the rule the loaded file was built on)
   * it is a component, at any depth, of a BOM whose parent goes in - so no BOM line is held
     back for a missing component
+  * it is already loaded in X3 (--loaded): it stays, whatever today's grade
 Every other product Access holds is on the "Not migrated" tab with what it was last doing.
 Nothing is left out without a line saying why.
 
@@ -93,8 +94,17 @@ def load(extract):
     return item, master, use, bom, rate
 
 
-def build(run_dir, today=None, phant="usage", recent_years=2):
+def loaded_codes(path):
+    """{product code: description 1} from a product file already loaded into X3."""
+    if not path or not Path(path).exists():
+        return {}
+    ws = load_workbook(path, read_only=True)["Data with Headings"]
+    return {r[1]: (r[2] or "") for r in ws.iter_rows(min_row=4, values_only=True) if r and r[1]}
+
+
+def build(run_dir, today=None, phant="usage", recent_years=2, loaded=None):
     run_dir = Path(run_dir)
+    loaded = loaded_codes(loaded)
     today = today or dt.date.today().strftime("%Y%m%d")
     recent = f"{int(today[:4]) - recent_years}{today[4:]}"
     item, master, use, bom_raw, rate = load(run_dir / "extract" / "extract_products.txt")
@@ -151,6 +161,11 @@ def build(run_dir, today=None, phant="usage", recent_years=2):
                 why[x].append(f"{label} since {recent}")
         if a["grade"] in LOADED:
             why[x].append(f"graded {a['grade']}")
+        if x in loaded:
+            # in X3 already, with its BOMs, routes and links: it stays, whatever today's grade
+            # (395 loaded in October had aged from GOOD to REVIEW / OLD by 4 Nov)
+            why[x].append("already loaded in X3")
+    loaded_lost = sorted(set(loaded) - set(act))
     todo = list(why)
     while todo:                              # every component of a BOM that goes in, at any depth
         p = todo.pop()
@@ -171,12 +186,14 @@ def build(run_dir, today=None, phant="usage", recent_years=2):
     for x in sorted(why):
         cands = [(c, r) for c in raws[x] for r in item.get(c, [])]
         if cands:
-            # a code on two Access products: the made one where the code has a BOM, then the
-            # busier one, then the first (runbook 4.1, the 33 shared codes)
+            # a code on two Access products: the one graded GOOD / INCOMPLETE (the grades the
+            # loaded file was built on, so a loaded code keeps its product), then the made one
+            # where the code has a BOM, then the busier one, then the first (runbook 4.1)
             def rank(cr):
                 c, r = cr
                 u = use.get(c, [""] * 21)
-                return (-(r[1] in MAKE and x in comps), -num(u[2]), -(num(u[3]) + num(u[4]) + num(u[5])), c)
+                return (-(r[13] in LOADED), -(r[1] in MAKE and x in comps), -num(u[2]),
+                        -(num(u[3]) + num(u[4]) + num(u[5])), c)
             cands.sort(key=rank)
             c, r = cands[0]
             cat = r[1] or bom_category(x)
@@ -205,6 +222,10 @@ def build(run_dir, today=None, phant="usage", recent_years=2):
             if found:
                 codes_only.append([x, d1, found[0], found[1]])
                 d1 = found[0]
+            elif loaded.get(x) and loaded[x] != d1:
+                # Access offers only the code; X3 already holds better text - keep it, never worse
+                codes_only.append([x, d1, loaded[x], "the description already loaded in X3"])
+                d1 = loaded[x]
             else:
                 d1 = d1 or d3 or d2 or x[:30]
                 codes_only.append([x, d1, "", "no description anywhere in Access - SDI to supply"])
@@ -253,6 +274,21 @@ def build(run_dir, today=None, phant="usage", recent_years=2):
                           + " - vw_ITM left it out; it goes in on rule 1a"])
         if len(x) > MAX_CODE:
             check.append([x, r[2], r[0], a["grade"], "; ".join(why[x]), f"code longer than {MAX_CODE} characters"])
+    # a held-back Access product that is live: its stock and orders would land on the kept code
+    live_shared = []
+    for h in held:
+        u = use.get(h[2])
+        if u and (num(u[1]) > 0 or num(u[3]) or num(u[4]) or num(u[5])):
+            live_shared.append(h[2])
+            h[4] += (f" - LIVE: stock {num(u[1]):g} (GBP {num(u[2]):,.2f}), {int(num(u[3]))} open SO lines, "
+                     f"{int(num(u[4]))} open PO lines, {int(num(u[5]))} open works orders would land on {h[1]}. "
+                     f"SDI to decide; suggested code {h[1][:18]}-2")
+            check.append([h[1], h[3], h[0], "", f"Access product {h[2]} shares this code",
+                          f"LIVE PRODUCT HIDDEN BY A SHARED CODE: {h[2]}'s transactions would land on {h[1]} - "
+                          f"SDI to decide (suggested {h[1][:18]}-2)"])
+    for x in loaded_lost:
+        check.append([x, "", "", "", "already loaded in X3",
+                      "LOADED PRODUCT NOT FOUND in Access under any code - check before the load"])
     for p in phant_rows:
         if p[2] == "C":
             check.append([p[0], p[1], p[4], act[p[0]]["grade"], "; ".join(why[p[0]]),
@@ -343,7 +379,7 @@ def build(run_dir, today=None, phant="usage", recent_years=2):
 
     txt, n, lost = write_load(out, "Data with Headings", 4)
     assert n == len(data), (n, len(data))
-    summary = dict(load_file=f"{txt.name} ({n:,} lines" + (f", {lost} characters not in cp850)" if lost else ")"),
+    summary = dict(loaded_not_found=len(loaded_lost), live_shared_codes=len(live_shared), load_file=f"{txt.name} ({n:,} lines" + (f", {lost} characters not in cp850)" if lost else ")"),
                    products=len(data), categories=dict(cats), held=len(held), check=len(check),
                    not_migrated=len(not_migrated), phant=dict(groups), rates=rate, shared=len(shared))
     return out, summary, rows, code
@@ -355,8 +391,9 @@ def main():
     ap.add_argument("--today", help="the run's date, yyyymmdd (default today)")
     ap.add_argument("--phant", choices=("usage", "access"), default="usage")
     ap.add_argument("--recent-years", type=int, default=2)
+    ap.add_argument("--loaded", help="the product file already loaded into X3: every product in it stays")
     a = ap.parse_args()
-    out, summary, _, _ = build(a.run_dir, a.today, a.phant, a.recent_years)
+    out, summary, _, _ = build(a.run_dir, a.today, a.phant, a.recent_years, a.loaded)
     print(out)
     for k, v in summary.items():
         print(f"  {k}: {v}")

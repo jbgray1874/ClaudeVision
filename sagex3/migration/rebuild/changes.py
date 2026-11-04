@@ -23,7 +23,7 @@ FILES = {
     "YITC_product_costs_MAPPED": ("YITC", 3, (2,), "product cost"),
     "YA00408BOM_boms_MAPPED": ("Data with Headings", 3, (0, 1, 7), "BOM line"),
     "ZSDIROU2_routes_MAPPED": ("ZSDROU2", 4, (0, 1, 6), "route operation"),
-    "ZSDIITMSUP_product_suppliers_MAPPED": ("Template", 3, (0,), "product-supplier"),
+    "ZSDIITMSUP_product_suppliers_MAPPED": ("Template", 3, (0, 1), "product-supplier pair"),
     "YA004BPS_suppliers_MAPPED": ("Data with Headings", 3, (1,), "supplier"),
     "YA004BPSC_bank_details_MAPPED": ("Data with Headings", 3, (0,), "supplier bank"),
     "YA004BPC_customers_MAPPED": ("Data with Headings", 3, (1, 17), "customer address"),

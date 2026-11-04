@@ -27,6 +27,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from build_yitc import GUIDE, YITC  # noqa: E402  the template layout, one copy
 
 
+FALLBACK_RATES = {"EUR": 0.8643, "USD": 0.7484}     # GBP per unit, Access's ledger rates on 30 Oct
+
+
 def previous_costs(path):
     """{product: (cost, source)} from a previous YITC spreadsheet, if there is one."""
     if not path or not Path(path).exists():
@@ -44,6 +47,12 @@ def build(run_dir, rows, code, previous=None):
     run_dir = Path(run_dir)
     extract = run_dir / "extract" / "extract_products.txt"
     _, _, use, _, rate = load(extract)
+    rate_note = "Access's own rate from the purchase ledger (RATE grid)"
+    if not rate:
+        # the RATE grid comes back empty when no open purchase-ledger item is in a foreign
+        # currency; then the rates Access held on 30 Oct (runbook register 1) are used
+        rate = {k: (v, v, v, "30 Oct") for k, v in FALLBACK_RATES.items()}
+        rate_note = "no RATE grid in this extract: Access's ledger rates of 30 Oct used (EUR 0.8643, USD 0.7484)"
     grids, _ = read_grids(extract)
     prev = previous_costs(previous)
 
@@ -143,6 +152,7 @@ def build(run_dir, rows, code, previous=None):
                                     "USD at Access's own ledger rate); 4 the BOM material roll-up; 5 loaded at 0"],
                ["Check tab", f"{len(check):,} products with no cost anywhere in Access, loaded at 0 - SDI to supply. "
                              f"{sum(1 for r in check if r[3].startswith('HOLDS')):,} of them hold stock"],
+               ["Exchange rates", rate_note],
                ["Layout", "Cost type 1, the whole cost as Material Cost, per unit"]], index=0)
     wb.save(path)
     got = [r for r in load_workbook(path, read_only=True)["YITC"].iter_rows(min_row=3, values_only=True) if r[0]]
