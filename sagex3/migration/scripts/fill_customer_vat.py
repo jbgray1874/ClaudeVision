@@ -50,6 +50,11 @@ def gb_ok(digits):
     return s % 97 == 0 or (s + 55) % 97 == 0
 
 
+def firm(name):
+    """The first two words of a name, for 'same company': TECHTRONIC INDUSTRIES, SAS KURT."""
+    return " ".join(re.sub(r"[^A-Z0-9 ]", " ", str(name or "").upper()).split()[:2])
+
+
 def clean(raw, country):
     """(number with prefix, None) if it is valid, else (None, reason)."""
     v = re.sub(r"[\s\xa0.\-/]", "", str(raw or "")).upper()
@@ -122,7 +127,9 @@ def main(vat_file):
             if k.startswith("!"):
                 why, raw = k[1:].split("|", 1)
                 check.append([c, name[c], country[c], raw, why, ", ".join(f"{s} {n}" for s, n in e["sources"].items())])
-        mine = {k: e for k, e in good.items() if owners[k] == {c}}
+        same = lambda o: firm(name[o]) == firm(name[c])
+        mine = {k: e for k, e in good.items() if owners[k] == {c}
+                or (e["sources"]["ACCOUNT"] and all(same(o) for o in owners[k]))}
         for k, e in good.items():
             if k not in mine:
                 check.append([c, name[c], country[c], k, "also held by " + ", ".join(sorted(owners[k] - {c})),
@@ -131,31 +138,37 @@ def main(vat_file):
         if len(pick) == 1:
             k = pick[0]
             filled.append([c, name[c], country[c], k, " / ".join(sorted(map(str, mine[k]["raw"]))),
-                           ", ".join(f"{s} {n}" for s, n in mine[k]["sources"].items())])
+                           ", ".join(f"{s} {n}" for s, n in mine[k]["sources"].items()),
+                           "shared with " + ", ".join(sorted(owners[k] - {c})) + " (same company)"
+                           if owners[k] != {c} else ""])
         elif mine:
             for k, e in mine.items():
                 check.append([c, name[c], country[c], k, f"one of {len(mine)} different numbers for this customer",
                               ", ".join(f"{s} {n}" for s, n in e["sources"].items())])
     fill = {f[0]: f[3] for f in filled}
+    for ch in check:                       # a stray number on a delivery address of a customer now filled
+        if ch[0] in fill:
+            ch[4] = f"ignored - filled with {fill[ch[0]]}; this one is {ch[4]}"
     for r in rows:
         c = ws.cell(r, CUS + 1).value
         if c in fill:
             ws.cell(r, EECNUM + 1).value = fill[c]
 
+    open_check = {ch[0] for ch in check if ch[0] not in fill}
     head = ["Customer", "Name", "Country", "VAT number", "As Access holds it", "Where (rows)"]
-    add_sheet(wb, "VAT filled", head, filled, [10, 34, 8, 18, 22, 30])
+    add_sheet(wb, "VAT filled", head + ["Note"], filled, [10, 34, 8, 18, 22, 30, 30])
     add_sheet(wb, "VAT check", head[:4] + ["Why not filled", "Where (rows)"], check, [10, 34, 8, 18, 40, 30])
     blank = sum(1 for c, v in current.items() if not v and c not in fill)
     n = wb["Notes"]
     n.append([])
     n.append(["VAT numbers (4 Nov)", f"{len(filled):,} blank EECNUMs filled from Access's address VAT numbers "
               f"(SL_ADDRESSES), each checked against its country's format and unique to the customer. "
-              f"{len({c[0] for c in check}):,} customers on 'VAT check'. {blank:,} customers still have no VAT "
+              f"{len(open_check):,} customers on 'VAT check' still without a number. {blank:,} customers still have no VAT "
               f"number - Access holds none for them. Numbers already in the file are unchanged"])
     wb.save(BPC_FILE)
     txt, lines, _ = write_load(BPC_FILE, "Data with Headings", 3)
     print(f"{BPC_FILE}\n  customers {len(current):,}; had VAT {sum(1 for v in current.values() if v):,}; "
-          f"filled {len(filled):,}; to check {len({c[0] for c in check}):,}; still blank {blank:,}\n"
+          f"filled {len(filled):,} ({sum(1 for f in filled if f[6])} shared); left to check {len(open_check):,}; still blank {blank:,}\n"
           f"  reasons: {dict(Counter(c[4].split(' held by')[0] for c in check))}\n  {lines:,} rows | {txt}")
 
 

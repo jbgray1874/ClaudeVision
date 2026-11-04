@@ -234,7 +234,11 @@ wb.save(path)
 made.append((path, check(path, "Data with headings", 3, rows), 0))
 
 # works orders: our mapped guide, on the clean-run codes
-rows = read(f"{V8}/YA004MFG_load8_works_orders.txt")
+# From run_transactions.py (MIG_BASE set): this run's works orders, as build_mfg.py just wrote them. It
+# already holds back any whose product has no BOM or route in the files given, which is what V8 added.
+# out_v8 is the 27 Oct set, linked in: reading it here gave 27 Oct's works orders (found 4 Nov evening).
+rows = read(f"{BASE}/out_mfg/YA004MFG_load7_clean_run.txt" if os.environ.get("MIG_BASE")
+            else f"{V8}/YA004MFG_load8_works_orders.txt")
 path = f"{OUT}/YA004MFG_works_orders_MAPPED_clean_run.xlsx"
 shutil.copy(f"{BASE}/out_mfg/YA004MFG_guide_MAPPED.xlsx", path)
 wb = load_workbook(path)

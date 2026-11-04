@@ -639,6 +639,28 @@ Tested on the six customers' addresses held from `bp_identifiers_run3.sql`:
 - PER101 gets NL001875607B01;
 - a number shared with another account, and a GB number with bad check digits, are both held for checking.
 
+**One company, two accounts.** A shared number is filled when every account holding it has the
+same first two words of name and Access holds it on this account's own record. Examples:
+SAS100 / SAS101, and TEC110 / TEC115 (TECHTRONIC). X3 doesn't require EECNUM to be unique. These
+are marked "shared with …" on "VAT filled".
+
+**Result, 4 Nov evening (output of 18:32):**
+- **24 filled, 10 of them shared** (BOO104, CAS100, HHA100, LIP100, PER101, SAS100/101, SIM101,
+  TEC106–112, TEC114, TEC115, TEC118–122, TES102, WIL102). **56 of 303 customers now have a VAT
+  number, against 32.**
+- **5 left on "VAT check":**
+
+  | Customer | Number in Access | Why not filled |
+  |---|---|---|
+  | LIN101, LIN102 (CH) | the UK company's GB number, on delivery addresses | GB number on a Swiss customer |
+  | PET101 (GB, NI) | PET100's IE number | not a UK number |
+  | ROL100 | 8 digits | not a GB number |
+  | TEC116 (PL) | TEC103's DE number | not a PL number |
+
+- **The other 247 have no number anywhere in Access.**
+- Stray numbers on delivery addresses of filled customers are listed and ignored, e.g. TEC119's
+  "864199168801" (8 for B).
+
 #### Stock and product prices (checked 4 Nov)
 
 **Every product holding stock is in the product file with a cost line:** 4,888 products,
@@ -835,6 +857,12 @@ There is no data dictionary for Access; everything below was found by querying t
   `COALESCE(NULLIF(a,''), NULLIF(b,''), c)`.
 - **Supplier rejections cascade:** a rejected supplier takes its product-supplier rows, open
   items and purchase orders with it. Load suppliers first and read the log.
+- **Linked folders in the transaction chain hold the 27 Oct set** (`out_v8`, `tmpl_t2`,
+  `uploads_tmpl5`). Use them for templates only, never data. `build_sheets.py` read the works
+  orders from `out_v8/YA004MFG_load8_works_orders.txt`, so the first evening build had 27 Oct's
+  638 works orders. It was caught because the change report showed 0 changes. It now reads that
+  run's `out_mfg/YA004MFG_load7_clean_run.txt`. **A file showing no change after a week is a
+  question, not good news.**
 
 ---
 
@@ -1299,6 +1327,32 @@ It builds three complete files, each with its `;` load file and the change repor
   files loaded in Run 2:
   - identical: ZSDIITM (before the 4 Nov descriptions), BPCDL, POH, SOHPJ, MFG;
   - different: YITC, BPC (the 2 hand fixes), SMR (columns D and E), BICY and BISY.
+
+### Run 3 build from the evening extract (4 Nov, 18:40)
+
+`add_new_accounts_to_xref.sql` ended "AFTER COMMIT 86 83 0". The rerun of
+`extract_transactions.sql` at 18:39:59 showed:
+- new accounts 86 / 83;
+- dropped rows 56 SO lines / 4 PO lines / 5 customer items / 16 supplier items: the accounts left
+  out on purpose.
+
+`extract_products.sql` was run the same evening. Built in
+`Current_mapped_set_2026-11-04-pm` (scratchpad):
+
+| File | Rows | Held back | Ties to |
+|---|---|---|---|
+| ZSDIITM / YITC | 19,883 | 129 (code on two products) | +15 products since the morning, 0 removed |
+| ZSDIITMSUP | 14,746 | 4,148 | +17 pairs |
+| YA004SMR | 8,621 | 0 | 8,621 lots, £4,090,220.20 = Σ qty × price in the view (the control total £4,090,221.33 is per-lot values rounded to 2 dp: £1.13) |
+| YA004POH | 733 | 1 (credit line) | 734 lines |
+| YA004SOHPJ | 3,712 | 16 (credit lines) | 3,728 lines |
+| YA004MFG | 634 | 135 (95 no BOM, 38 nothing left to make, 2 no route) | 769 open WOs |
+| YA004BICY | 814 | 0 | 814 items, £8,506,050.44 (Σ of amounts, all types) |
+| YA004BISY | 2,056 | 0 | 2,056 items, £6,813,472.18 |
+
+The change report can't pair SMR, POH and SOHPJ rows, because the document number is blank: X3
+numbers them itself. Their "added / removed" counts there are the whole file. Compare counts and
+totals instead.
 
 **Reconciliation (Jim):** `views_v2.sql` prints the control totals: customer and supplier
 open items (count and GBP) and opening stock (lots and value, by warehouse). Tie each to X3
