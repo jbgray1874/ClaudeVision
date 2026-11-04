@@ -634,27 +634,57 @@ _EDGING_OPS = ("edge_banding", "edgebanding")
 
 
 def _ops_of(part: Dict[str, Any]) -> List[str]:
+    # AND THE OPERATIONS TAKEN OFF AN ASSEMBLY BECAUSE THEY BELONG TO ITS PIECES (D-679). The
+    # route compiler moves edge_banding off 12203-65-01J into removed_operations: an assembly
+    # cannot band. That is exactly the case this reads it for: the box is edged, on its pieces.
     ops: List[str] = []
-    for key in ("textual_operations", "operations", "required_operations"):
+    for key in ("textual_operations", "inferred_operations", "operations",
+                "required_operations", "removed_operations"):
         v = part.get(key)
         if isinstance(v, (list, tuple)):
             ops.extend(str(x).strip().lower() for x in v if isinstance(x, str))
     return ops
 
 
-def _edging_callout(part: Dict[str, Any]) -> str:
-    """The words on this part's own record that say it is edged, or "" when none do."""
-    text = _text_of(part)
+def _edging_callout(part: Dict[str, Any], route_quote: str = "") -> str:
+    """The words on this part's own record that say it is edged, or "" when none do. The
+    quote the reader kept for its edging operation counts ("1mm EDGING" on 12203-65-01J, in
+    operation_evidence): it is the drawing's own words, and it carries the edging's
+    thickness."""
+    _ev = part.get("operation_evidence") if isinstance(part.get("operation_evidence"), dict) else {}
+    quotes = " ".join(_clean(_ev.get(op)) for op in _EDGING_OPS if _ev.get(op))
+    # And the quote of the reader's own edging route for this part (D-679): "1mm EDGING" is
+    # the evidence of 12203-65-01J's edge_banding route, kept with the route, not the part.
+    quotes = (quotes + " " + _clean(route_quote)).strip()
+    text = (_text_of(part) + " " + quotes.upper().replace("-", " ")).strip()
     for w in _BANDING_WORDS:
         if w in text:
             m = re.search(r"(?:\d+(?:\.\d+)?\s*MM\s*)?" + re.escape(w), text)
             return (m.group(0) if m else w).strip()
-    if any(op in _EDGING_OPS for op in _ops_of(part)):
+    if any(op in _EDGING_OPS for op in _ops_of(part)) or route_quote:
         return "edge banding"
     return ""
 
 
-def stamp_exposed_edges_of_mitred_pieces(parts: Any) -> Dict[str, List[str]]:
+def edging_route_quotes(summary: Any) -> Dict[str, str]:
+    """{part number: the drawing's words} for every edging route the whole-document read
+    made, from its own quote."""
+    out: Dict[str, str] = {}
+    llm = (summary or {}).get("llm_full_extract") if isinstance(summary, dict) else None
+    for r in ((llm or {}).get("routes") or []) if isinstance(llm, dict) else []:
+        if not isinstance(r, dict) or str(r.get("operation") or "").strip().lower() \
+                not in _EDGING_OPS:
+            continue
+        q = _clean(r.get("evidence") or r.get("drawing_note") or r.get("quote"))
+        for pn in r.get("part_numbers") or []:
+            key = _clean(pn).upper()
+            if key and q:
+                out.setdefault(key, q)
+    return out
+
+
+def stamp_exposed_edges_of_mitred_pieces(parts: Any,
+                                         quotes: Any = None) -> Dict[str, List[str]]:
     """Stamp `edging_on_exposed_edges` on each bevelled piece of a part whose record says it is
     edged. Returns {"measured": [codes], "not_measured": [codes]} for the pieces of edged
     parts: a piece with no bevel reading is named, not guessed."""
@@ -669,7 +699,8 @@ def stamp_exposed_edges_of_mitred_pieces(parts: Any) -> Dict[str, List[str]]:
         parent = by_pn.get(parent_pn)
         if not parent or parent is piece:
             continue
-        callout = _edging_callout(parent)
+        callout = _edging_callout(parent, (quotes or {}).get(parent_pn, "")
+                                  if isinstance(quotes, dict) else "")
         if not callout:
             continue
         pn = str(piece.get("part_number") or "").strip().upper()
