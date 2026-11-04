@@ -5854,6 +5854,29 @@ def point_bom_lines_at_nest_rows(ws, bom: Mapping[str, Any],
     return moved
 
 
+def scale_estimate_columns(ws, setting: Any) -> List[str]:
+    """Multiply each column's own template width from the first to the last letter by the
+    factor (config.ESTIMATE_COLUMN_WIDTH_SCALE). A column the template gives no width keeps
+    the sheet default; a width the template sets for a range reaching outside these columns
+    is left alone rather than changed for columns nobody asked about. Returns the letters set."""
+    from openpyxl.utils import column_index_from_string, get_column_letter
+    if not setting:
+        return []
+    first, last, factor = setting
+    lo, hi = column_index_from_string(str(first)), column_index_from_string(str(last))
+    done: List[str] = []
+    for _key, dim in list(ws.column_dimensions.items()):
+        # A width loaded from the template carries its column range; one set in code has only
+        # its letter until the book is saved.
+        own = column_index_from_string(str(getattr(dim, "index", "") or _key))
+        a, b = int(dim.min or 0) or own, int(dim.max or 0) or own
+        if not (a and b and lo <= a and b <= hi) or not dim.width:
+            continue
+        dim.width = round(float(dim.width) * float(factor), 2)    # a set width is custom
+        done += [get_column_letter(c) for c in range(a, b + 1)]
+    return sorted(done, key=column_index_from_string)
+
+
 def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional[str]:
     """Open the template, populate inputs from `summary`, save-as to output dir.
     `job_folder_name` is the drawing-folder basename, used for the output filename.
@@ -9285,6 +9308,19 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         open_on_sheet(wb, cm["estimate_sheet"])
     except Exception as _oe:                                          # noqa: BLE001
         _flag(f"could not set the book to open on the Estimate sheet ({_oe}).", flags)
+
+    # ── The Estimate sheet's columns G to M at half the template's width ──────
+    # James Gray, 4 Nov 2026. Each column keeps its own proportion; see config.
+    try:
+        _scaled = scale_estimate_columns(wb[cm["estimate_sheet"]],
+                                         getattr(config, "ESTIMATE_COLUMN_WIDTH_SCALE", None))
+        if _scaled:
+            print(f"   [wb_populate] Estimate columns {', '.join(_scaled)} set to "
+                  f"{config.ESTIMATE_COLUMN_WIDTH_SCALE[2]:g} of the template's width",
+                  flush=True)
+    except Exception as _cw:                                          # noqa: BLE001
+        _flag(f"the Estimate sheet's column widths were left as the template has them "
+              f"({type(_cw).__name__}: {_cw}).", flags)
 
     # ── Save-As to output dir with folder-name + timestamp ─────────────────
     os.makedirs(cm["output_dir"], exist_ok=True)
