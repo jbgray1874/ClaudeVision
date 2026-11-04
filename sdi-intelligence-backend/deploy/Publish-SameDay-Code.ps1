@@ -181,11 +181,33 @@ if ($pending) {
 if (-not ((& git -C $Work remote get-url origin 2>$null) -join "")) {
     RunGit @("remote", "add", "origin", $Repo) | Out-Null
 }
-if ((RunGit @("push", "-u", "origin", "main")) -ne 0) {
+# SAY WHICH REFUSAL IT WAS. 4 November: the repository had been created with
+# GitHub's starter README, the push was refused as "fetch first", and this
+# said "Repository not found" - the one thing it was not.
+function Push {
+    $said = & git.exe -C $Work push -u origin main 2>&1
+    $said | Out-Host
+    return @{ Code = $LASTEXITCODE; Text = ($said | Out-String) }
+}
+$sent = Push
+if ($sent.Code -ne 0 -and $sent.Text -match "fetch first|non-fast-forward") {
+    # Something already there - GitHub's starter README. Joined to this, with
+    # SameDay's own file winning where both have one; nothing is deleted.
+    Say "GitHub already holds a first commit (its starter README) - joining it to SameDay's code."
+    & git.exe -C $Work pull --no-rebase --allow-unrelated-histories -X ours --no-edit origin main | Out-Host
+    if ($LASTEXITCODE -eq 0) { $sent = Push }
+}
+if ($sent.Code -ne 0) {
     Write-Host ""
     Write-Host "  [STOP]  GitHub did not take it. Nothing else was changed." -ForegroundColor Red
-    Say "Repository not found: create it first - github.com, New repository, name"
-    Say "sdi-sameday, Private, no README - and sign in as jbgray1874 when asked."
+    if ($sent.Text -match "not found") {
+        Say "Repository not found: create it first - github.com, New repository, name"
+        Say "sdi-sameday, Private - and sign in as jbgray1874 when asked."
+    } elseif ($sent.Text -match "denied|403|Authentication") {
+        Say "GitHub refused the sign-in. Sign in as jbgray1874, the account sdi-sameday belongs to."
+    } else {
+        Say "Send Claude the lines above."
+    }
     Write-Host ""
     exit 1
 }

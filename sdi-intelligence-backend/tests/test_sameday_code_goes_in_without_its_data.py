@@ -47,7 +47,7 @@ class NothingButCodeTests(unittest.TestCase):
 class KeysStopItBeforeAnythingIsSentTests(unittest.TestCase):
     def test_the_key_check_comes_before_the_commit_and_the_push(self):
         self.assertLess(BODY.index("$keyShape ="), BODY.index('RunGit @("commit"'))
-        self.assertLess(BODY.index("$keyShape ="), BODY.index('RunGit @("push"'))
+        self.assertLess(BODY.index("$keyShape ="), BODY.index("$sent = Push"))
 
     def test_a_key_is_reported_by_file_and_line_never_its_text(self):
         for line in BODY.splitlines():
@@ -113,3 +113,19 @@ class ItFailsClosedTests(unittest.TestCase):
         check = (Path(__file__).resolve().parent.parent / "deploy" / "Check-SameDay-Ready.ps1"
                  ).read_text(encoding="utf-8")
         self.assertIn('$Source = "\\\\sdi-dc01\\shareddata$\\Shared\\IT\\', check)
+
+
+class ItSaysWhichRefusalItWasTests(unittest.TestCase):
+    """4 November: the repository had GitHub's starter README; the push was
+    refused as "fetch first" and the script said "Repository not found"."""
+
+    def test_a_starter_commit_is_joined_not_deleted(self):
+        self.assertIn('-match "fetch first|non-fast-forward"', BODY)
+        self.assertIn("pull --no-rebase --allow-unrelated-histories -X ours --no-edit origin main",
+                      BODY)
+        self.assertNotIn("--force", BODY)
+        self.assertNotRegex(BODY, r"push[^\n]*\s-f\b")
+
+    def test_not_found_is_said_only_when_github_said_it(self):
+        tail = BODY.split("if ($sent.Code -ne 0) {", 1)[1]
+        self.assertLess(tail.index('-match "not found"'), tail.index("Repository not found"))
