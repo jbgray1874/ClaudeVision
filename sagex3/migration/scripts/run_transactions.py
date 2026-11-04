@@ -121,9 +121,15 @@ def main():
             raise SystemExit(f"extract_transactions.txt: no {missing} grid - was the whole script saved?")
         for k, n in GRIDS:
             widths = Counter(len(r) for r in g[k])
-            if set(widths) != {n}:
+            if min(widths) < n or len(widths) > 1:
                 raise SystemExit(f"{k}: rows of {dict(widths)} columns, the chain expects {n} - has the view changed?")
-        blocks = [["X\t0"]] * 6 + [["\t".join(r) for r in g[k]] for k, _ in GRIDS]
+        # the views add reference columns (Access codes, document type) after the template's columns:
+        # the chain takes the first n, as it did with the 27 Oct new-accounts export (checked 4 Nov)
+        blocks = [["X\t0"]] * 6 + [["\t".join(r[:n]) for r in g[k]] for k, n in GRIDS]
+        n_accounts = {r[0]: r[1] for r in g["CHECK"]}
+        if n_accounts.get("new customer accounts in the cross-reference") == "0":
+            raise SystemExit("STOP: the cross-reference has none of the 86 / 83 new accounts - run "
+                             "add_new_accounts_to_xref.sql (it must end AFTER COMMIT 86 / 83 / 0) and re-extract")
         (work / "run1" / "out.txt").write_text("\n\n".join("\n".join(b) for b in blocks) + "\n", encoding="utf-8")
         (work / "wor" / "out.txt").write_text("\n".join("\t".join(r) for r in g["WOR"]) + "\n", encoding="utf-8")
         summary.append("## Extract checks\n")

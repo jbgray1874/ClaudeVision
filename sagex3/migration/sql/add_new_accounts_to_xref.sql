@@ -1,4 +1,4 @@
--- add_new_accounts_to_xref.sql  -  run once, before the re-export
+-- add_new_accounts_to_xref.sql  -  run before the transaction extract (re-runnable)
 --
 -- Changes ONLY our own migration tables (migration.XREF_SAGE_BPC and XREF_SAGE_BPS), never
 -- Access data. Brings them up to date without re-running the full xref_sage_codes.sql:
@@ -11,6 +11,11 @@
 USE SDILive;
 GO
 SET NOCOUNT ON;
+-- 4 Nov: the rows went in (the checks said 86 / 83) but were gone minutes later - a session with
+-- implicit transactions left them uncommitted and closing the tab rolled them back. So: no implicit
+-- transactions, and an explicit COMMIT at the end, checked again after it.
+SET IMPLICIT_TRANSACTIONS OFF;
+SET XACT_ABORT ON;
 UPDATE migration.XREF_SAGE_BPC SET SAGE_CODE = 'WCP101', MATCHED_BY = 'manual'
 WHERE ACCESS_CODE = 'WCP02' AND SAGE_CODE <> 'WCP101';
 INSERT INTO migration.XREF_SAGE_BPC (ACCESS_CODE, SAGE_CODE, ACCESS_NAME, SAGE_NAME, MATCHED_BY)
@@ -235,4 +240,13 @@ SELECT COUNT(*) AS new_accounts_added, 83 AS expected,
           ON o.SAGE_CODE = n.SAGE_CODE AND o.ACCESS_CODE <> n.ACCESS_CODE
         WHERE n.MATCHED_BY = 'new account') AS new_codes_clashing
 FROM migration.XREF_SAGE_BPS WHERE MATCHED_BY = 'new account';
+GO
+
+-- Commit anything still open, then check again in a batch of its own: this is the figure that counts
+IF @@TRANCOUNT > 0 COMMIT TRANSACTION;
+GO
+SELECT 'AFTER COMMIT' AS [check],
+       (SELECT COUNT(*) FROM migration.XREF_SAGE_BPC WHERE MATCHED_BY = 'new account') AS new_customers_86,
+       (SELECT COUNT(*) FROM migration.XREF_SAGE_BPS WHERE MATCHED_BY = 'new account') AS new_suppliers_83,
+       @@TRANCOUNT AS open_transactions_must_be_0;
 GO
