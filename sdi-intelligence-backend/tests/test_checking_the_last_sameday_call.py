@@ -61,5 +61,27 @@ class ItShowsWhatStopsARenderTests(unittest.TestCase):
         self.assertIn("[string]$Chat", BODY)
 
 
+class ItShowsWhatPastWorkSameDayCanFindTests(unittest.TestCase):
+    """4 Nov: "can it see the W:/ ? It keeps saying it can't see past jobs". It could read W:; the search needed a
+    picture index the server didn't have. This shows what it can find, and the index files on the server."""
+
+    def test_what_it_can_find(self):
+        for part in ('$ver = Ask "/api/version"', "$ver.past_work", "[int]$past.jobs", "$past.estimates", "$past.pictures"):
+            with self.subTest(part=part):
+                self.assertIn(part, BODY)
+
+    def test_the_index_files_on_the_server_by_reading_only(self):
+        self.assertIn('$Auto = "\\\\$Server\\c$\\SDI_Automation"', BODY)
+        for f in (r"$Auto\brief_lite\projects.db", r"$Auto\brief_lite\knowledge.db", r"$Auto\all_img_index.npz"):
+            with self.subTest(file=f):
+                self.assertIn(f, BODY)
+        self.assertIn("Get-Item -LiteralPath $f -ErrorAction SilentlyContinue", BODY)
+
+    def test_a_failed_past_job_lookup_in_the_log_is_shown(self):
+        for word in ("past job lookup", "past by name", "past-work", "search not ready"):
+            with self.subTest(word=word):
+                self.assertIn(word, BODY.split("$pattern = ", 1)[1].split("\n", 1)[0])
+
+
 if __name__ == "__main__":
     unittest.main()

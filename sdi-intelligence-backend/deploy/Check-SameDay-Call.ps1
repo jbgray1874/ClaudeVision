@@ -29,6 +29,7 @@ $ErrorActionPreference = "Continue"
 $Via = "http://${Server}:8071/sameday"
 $Log = "\\$Server\c$\SDI_Automation\logs\SDISameDay.log"
 $Logs = "\\$Server\c$\SDI_Automation\logs"
+$Auto = "\\$Server\c$\SDI_Automation"
 
 # -- Helpers, all defined before anything uses them -------------------------
 function Head([string]$Text) {
@@ -70,6 +71,29 @@ if ($cap -gt 0 -and $spent -ge $cap * 0.9) {
     Warn "$money - at or near today's cap, which stops renders first"
     $hints += "Today's AI cap is (nearly) used up. Raise brief_lite_daily_cap_usd in C:\SDI_Automation\studio_data\ai_switch.json (no restart needed)."
 } else { Yes $money }
+# Past work (4 Nov 2026: "it keeps saying it can't see past jobs"). SameDay searches indexes made from W: and K:,
+# not the drives file by file: what it can find, then the index files themselves on the server.
+$ver = Ask "/api/version"
+$past = if ($ver) { $ver.past_work } else { $null }
+if ($past) {
+    $jobs = [int]$past.jobs
+    if ($jobs -gt 0) { Yes ("Past jobs it can find: " + $jobs) }
+    else {
+        Warn ("Past jobs it can find: NONE - " + $past.why)
+        $hints += "SameDay has no job index: copy projects.db from Muhammad's laptop (C:\SDI_Automation\brief_lite) to the server's, then restart SDISameDay."
+    }
+    if ($past.estimates) { Yes "Old estimates (K:): there" } else { Warn "Old estimates (K:): no knowledge.db" }
+    if ($past.pictures) { Yes "Look-alike pictures: on" }
+    else { Say ("Look-alike pictures: off (" + $past.why + ") - past jobs are still found by number, name and words") }
+} else {
+    Warn "This SameDay does not say what past work it can find: it is older than the 4 November fix."
+    $hints += "Run Update-SameDay.ps1 -Branch claude/inspiring-planck-8juriz: before it, past jobs needed the picture index, which the server does not have."
+}
+foreach ($f in @("$Auto\brief_lite\projects.db", "$Auto\brief_lite\knowledge.db", "$Auto\all_img_index.npz")) {
+    $i = Get-Item -LiteralPath $f -ErrorAction SilentlyContinue
+    if ($i) { Say ("{0,-20} {1,7:N0} MB   {2:d MMM yyyy HH:mm}" -f $i.Name, ($i.Length / 1MB), $i.LastWriteTime) }
+    else { Say ("{0,-20} not on the server" -f (Split-Path $f -Leaf)) }
+}
 
 # -- 2. The last chat ----------------------------------------------------------------
 Head "2. The last chat, as SameDay kept it"
@@ -122,7 +146,7 @@ try { $files = @(Get-ChildItem -LiteralPath $Logs -Filter "SDISameDay*.log" -Err
 if (-not $files.Count) {
     Warn "Can't read $Logs over the admin share (the same rights Ship-It uses)."
 } else {
-    $pattern = 'rt tool|rt done|Traceback|Error|error|refused|budget|credit|429|timed out|timeout|image|visual|render|live voice|drive '
+    $pattern = 'rt tool|rt done|Traceback|Error|error|refused|budget|credit|429|timed out|timeout|image|visual|render|live voice|drive |past job lookup|past by name|past-work|search not ready'
     $hits = @()
     foreach ($f in $files) { $hits += @(Get-Content -LiteralPath $f.FullName -Tail 1500 -ErrorAction SilentlyContinue | Select-String -Pattern $pattern) }
     Say ("Read: " + (($files | ForEach-Object { $_.Name }) -join ", "))

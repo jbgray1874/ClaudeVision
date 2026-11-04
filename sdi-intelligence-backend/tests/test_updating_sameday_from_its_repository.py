@@ -131,6 +131,15 @@ class ItProvesItRunsTheNewCodeTests(unittest.TestCase):
         self.assertIn('foreach ($d in @("W", "S", "K"))', BODY)
         self.assertIn("LITE_DRIVES", BODY)
 
+    def test_it_says_what_past_work_sameday_can_find(self):
+        """4 Nov: "it keeps saying it can't see past jobs" - W: was readable, but SameDay searches indexes made from W:
+        and K:. It says how many past jobs it can find, whether the K: estimates are there, and picture matching."""
+        self.assertIn("$past = $script:Answer.past_work", BODY)
+        self.assertIn('-match "job index still loading"', BODY)      # waits out the first seconds after a start
+        for part in ("Past jobs it can find:", "Old estimates (K:):", "Look-alike pictures:", "projects.db and knowledge.db"):
+            with self.subTest(part=part):
+                self.assertIn(part, BODY)
+
     def test_a_log_pasted_into_chat_has_no_keys(self):
         self.assertIn("[key removed]", BODY)
 
