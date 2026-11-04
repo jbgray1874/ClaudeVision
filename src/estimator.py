@@ -2216,6 +2216,21 @@ def plating_unit_price(mass_kg: Any, order_qty: Any,
                   "zinc candidate deliberately",
                 "subcontract_plating_spec_unidentified")
 
+    # A DECORATIVE EFFECT ON A CARD WORD IS STILL NOT THE CARD. The cover test above asks
+    # only whether a card word appears; "light aged zinc with waxed finish" has one and is a
+    # decorative effect, not trade zinc and passivate.
+    _deco = [w for w in ((policy or {}).get("not_covered_when") or ())
+             if re.search(str(w), _fin_u)]
+    if _deco:
+        _named = str(finish_text or "").strip()
+        return (None,
+                f"DECORATIVE FINISH STATED, NOT PRICED — the finish reads {_named!r}. That is "
+                f"a decorative effect, not trade zinc/passivate, so the £{float(rate):.2f}/kg "
+                f"card does not price it; its arithmetic (£{unit:.2f} a unit) is NOT charged. "
+                f"MISSING: the finisher's price for this effect on this job. ASKED OF: the "
+                f"estimator — get the quote and enter it in this job's answers file",
+                "subcontract_plating_quote_needed")
+
     return unit, note, "subcontract_plating_indicative"
 
 
