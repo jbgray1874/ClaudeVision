@@ -404,6 +404,12 @@ ESTIMATE_COMPACT_UNUSED_SLOTS = os.getenv("SDI_ESTIMATE_COMPACT", "1").strip().l
 # but which face the sheet opens on, and they can toggle it back.
 SHOW_FORMULAS_ON_ESTIMATE = False
 SHOW_FORMULAS_SHEETS = ("Estimate",)
+# THE ESTIMATE SHEET'S COLUMNS G TO M AT HALF THE TEMPLATE'S WIDTH. James Gray, 4 Nov 2026:
+# "halve the column widths from G to M in the estimating sheet". The template carries them at
+# 42 to 73 characters; the book we write takes each one's own width times this factor. The
+# template on the share is not touched. (first column, last column, factor); None leaves the
+# template's widths as they are.
+ESTIMATE_COLUMN_WIDTH_SCALE = ("G", "M", 0.5)
 
 # --- One sheet for every quantity: the Material Price Break table -----------------
 #
