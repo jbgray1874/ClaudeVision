@@ -1,6 +1,7 @@
 # SDI Displays – Access SupplyChain to Sage X3: migration runbook
 
-Last updated 27 October 2026. Go-live 4 January 2027.
+Last updated 4 November 2026, evening (Run 3 build from the 18:39 live extract). Go-live run 31 Dec 2026; go-live 4 January 2027.
+**Start with section 19:** the current files, what was found on 4 Nov, and the open decisions.
 
 This is the record of how the migration files are built and every rule behind them, so each
 rerun between now and go-live starts from fresh Access data and the agreed rules, never from
@@ -1363,16 +1364,16 @@ after the load. Any difference is a missing or merged transaction.
 ## 18. Everything held back or left out – review (4 Nov)
 
 Under rule 1a, every item here needs a named decision or a fix. The figures are from the current
-set. **Items 1–4 affect Run 3 directly.**
+set. **Items 1–4 affect Run 3 directly.** **4 Nov evening:** the live build (section 17) cleared item 1 for the transactions. The figures now are SMR 0 held, POH 1, SOHPJ 16 (both credits, item 5), MFG 135 (item 6).
 
 | # | What | Where | How many | Why | Revisit: what to do |
 |---|---|---|---|---|---|
-| 1 | **Products X3 doesn't hold** (live products graded OLD; do-not-use / archived products that are live) | SMR, SOHPJ, POH, MFG Held back; ZSDIITMSUP | **2,176 stock lots (£603k), 405 SO lines, 204 PO lines, 25 works orders; 6,265 product-supplier pairs on 5,689 products (1,752 bought since 2025)** | Product not in the product file | **Run `rebuild/sql/extract_products.sql` and `sql/product_suppliers_v4.sql`, then `rebuild/run.py`. It builds the products, a cost for each and every product-supplier pair.** Import the missing products before the transactions. They're the "missing master data" for Run 3. Without them every one of these rows fails again |
+| 1 | **Products X3 doesn't hold** (live products graded OLD; do-not-use / archived products that are live) | SMR, SOHPJ, POH, MFG Held back; ZSDIITMSUP | **2,176 stock lots (£603k), 405 SO lines, 204 PO lines, 25 works orders; 6,265 product-supplier pairs on 5,689 products (1,752 bought since 2025)**. **4 Nov evening: 0. Every stock lot, SO, PO and WO line has its product** | Product not in the product file | **Run `rebuild/sql/extract_products.sql` and `sql/product_suppliers_v4.sql`, then `rebuild/run.py`. It builds the products, a cost for each and every product-supplier pair.** Import the missing products before the transactions. They're the "missing master data" for Run 3. Without them every one of these rows fails again |
 | 2 | FGSL products with stock | SMR | 1,222 lots, 451 products, £1.72m | X3's FGSL isn't stock-managed | Marc / Ethan: make FGSL stock-managed (register 21) |
-| 3 | Customers and suppliers X3 rejected | BPS, BPC, BPCDL, POH, BISY | 11 suppliers, 6 customers, 1,425 delivery addresses, 3 PO lines, 12 BISY items | FR numbers missing; postcodes; State/Region | **Fixed as far as the data goes, 4 Nov:** customers, 220 fixes by rule with 10 addresses to check; suppliers, 2 FR VAT numbers restored, with the rest needing Finance. `sql/bp_identifiers_run3.sql` pulls every Access field for the 17 accounts, in case more is there. Assumptions and questions sent to Ethan. **Lesson: apply a fix the data settles the day it's raised; list only what genuinely needs someone.** The rules are in section 6.5. `bp_identifiers_run3.sql` is optional: it only looks for anything Access holds that we haven't mapped (a SIRET, a county) |
+| 3 | Customers and suppliers X3 rejected | BPS, BPC, BPCDL, POH, BISY | 11 suppliers, 6 customers, 1,425 delivery addresses, 3 PO lines, 12 BISY items | FR numbers missing; postcodes; State/Region | **4 Nov evening: customer VAT gaps filled from Access addresses (24 customers; 56 of 303 now have one; 5 to check; section 6.5).** **Fixed as far as the data goes, 4 Nov:** customers, 220 fixes by rule with 10 addresses to check; suppliers, 2 FR VAT numbers restored, with the rest needing Finance. `sql/bp_identifiers_run3.sql` pulls every Access field for the 17 accounts, in case more is there. Assumptions and questions sent to Ethan. **Lesson: apply a fix the data settles the day it's raised; list only what genuinely needs someone.** The rules are in section 6.5. `bp_identifiers_run3.sql` is optional: it only looks for anything Access holds that we haven't mapped (a SIRET, a county) |
 | 4 | PHANT products on open sales orders | SOHPJ | 32 products, 82 lines | PHANT has no sales data in X3 | **In the product rebuild:** the usage test makes them FGML (group A). They load with the product file; X3 needs the category updated on the existing records |
-| 5 | Credits on sales orders (negative lines) | SOHPJ Held back | 16 lines (+1 with no product); £93k on 27 Oct | X3 takes a credit as a credit note, not an order line | Marc: raise them as credit notes, or Finance to confirm they're open |
-| 6 | Works orders | MFG Held back | 42 no BOM on code 10, 36 nothing left to make, 3 no route (25 no product: item 1) | No BOM / route to make them with, or already made | Re-check the 42 and 3 once BOMs and routes are rebuilt from ASC_BOM_TBL; the 36 are finished, so close them in Access |
+| 5 | Credits on sales orders (negative lines) | SOHPJ Held back | 16 SO lines and 1 PO line on 4 Nov evening (£93k on 27 Oct) | X3 takes a credit as a credit note, not an order line | Marc: raise them as credit notes, or Finance to confirm they're open |
+| 6 | Works orders | MFG Held back | 4 Nov evening: **95 no BOM on code 10, 38 nothing left to make, 2 no route** (of 769 open; 634 load). The 95 are mostly the products added on 4 Nov, whose BOMs aren't in the 27 Oct BOM file | No BOM / route to make them with, or already made | BOM and route kit from ASC_BOM_TBL (SCRUM-164), then rerun. The 38 are finished, so close them in Access |
 | 7 | Shared product codes | ZSDIITM Held back; YITC Held back | 129 on 4 Nov (was 33), **22 live** (register 23); 27 costs | Two Access products clean to one X3 code | SDI: which product keeps the code. Proposal: the other takes a suffix (-B) so neither is lost |
 | 8 | BOMs and routes on bought-in products | BOM Held back; ROU Held back | 11 BOM lines; 71 route lines (36 products) | X3 builds and routes manufactured products only (Ethan) | Check each: if SDI makes it, the product is FGML, not FGSL / RAWML, and the lines load |
 | 9 | BOM components missing | BOM Missing components | 215 lines on 92 BOMs | Component not in the product file | Clears with item 1 (components at any depth) |
@@ -1384,6 +1385,83 @@ set. **Items 1–4 affect Run 3 directly.**
 | 15 | Suppliers with no address | BPS Check new accounts | 19 | Blank in Access | X3 may need one; Finance / Purchasing |
 | 16 | Supplier banks | BPSC Check | 37; 44 on transfer terms not loaded | Not BACS, or details incomplete | Ethan's template is BACS only; Finance to confirm the others |
 | 17 | Accounts missing from the cross-reference | the order and open-item views (inner join) | 0 once `add_new_accounts_to_xref.sql` has run; the views' check grid shows it | Inner join drops the row | Switch the views to LEFT JOIN with a Held back reason (register 4) |
-| 18 | Costs at zero | YITC Check | 937 (73 stocked) | No cost in Access | Loaded at 0. SDI to supply a cost for the 73 at least |
+| 18 | Costs at zero | YITC Check | 4 Nov evening: 1,178 (159 stocked; Access values that stock at £0 too). Was 937 (73 stocked) before the 3,384 products added on 4 Nov | No cost in Access | Loaded at 0. SDI to supply a cost for the 159 stocked at least |
 | 19 | Descriptions | ZSDIITM | 100 still only the code | No other text in the file | PMA_DESC on the product extract |
 
+---
+
+## 19. Where everything stands – 4 Nov 2026, evening
+
+### 19.1 The current files
+
+**`Current_mapped_set_2026-11-04-pm`** (scratchpad) holds every mapped spreadsheet with its `;`
+load file, plus `Current_set_manifest.xlsx` (rows and source per file), `RUN_SUMMARY.md` and
+`WHAT_CHANGED_2026-11-04-pm.md`. The morning set (`Current_mapped_set_2026-11-04`) is kept for
+the comparison.
+
+| File | Rows | Built from | Last changed |
+|---|---|---|---|
+| ZSDIITM products | 19,883 | `extract_products.sql`, 4 Nov evening + `rebuild/run.py` | 4 Nov evening (+15 since the morning) |
+| YITC product costs | 19,883 | same build; 1,178 at 0 (159 stocked) | 4 Nov evening |
+| ZSDIITMSUP product-suppliers | 14,746 (with PIO) | `product_suppliers_v4.sql`, 4 Nov 18:14 | 4 Nov evening |
+| YA004SMR / POH / SOHPJ / MFG / BICY / BISY | 8,621 / 733 / 3,712 / 634 / 814 / 2,056 | `extract_transactions.sql`, 4 Nov 18:39:59 + `scripts/run_transactions.py --stock-date 20261031` | 4 Nov evening |
+| YA004BPC customers | 6,169 rows, 303 customers | 27 Oct build + address fixes (`fix_customer_addresses.py`) + VAT (`fill_customer_vat.py`, from `customer_vat_numbers.sql` 4 Nov 18:32) | 4 Nov evening |
+| YA004BPC / BPCDL **without Tesco** | 4,466 / 4,466 | `exclude_customers.py TESCO` on the set above (TES100–102 and Tesco-named addresses out) | 4 Nov evening |
+| **YA004BPS suppliers** | 706 (623 + 83 new) | 27 Oct build + `fix_suppliers.py` (4 Nov: FR VAT for GAL500, ICE500, BUR500; 11 postcodes; VAT read from Access via `bp_identifiers_run3.sql`, 14:55) | 4 Nov 14:58. Not rebuilt since: supplier VAT has no other source in Access (6.5) |
+| YA004BPSC supplier banks | – | `bank_private/` only, never in git or e-mail | 3 Nov |
+| YA004BPCDL delivery addresses | 6,169 | 27 Oct build | 27 Oct |
+| YA00408BOM / ZSDIROU2 | 30,131 / 31,255 | 27 Oct build | 27 Oct. The kit build from ASC_BOM_TBL is SCRUM-164 |
+| Tesco customer pack | – | `build_customer_pack.py` → `out_packs/Tesco_customer_pack.xlsx` | 4 Nov |
+
+**Master data is built from 27 Oct and 4 Nov extracts, not a single one.** The customer,
+supplier, delivery-address, BOM and route files are still the 27 Oct builds with 4 Nov fixes. RTZ
+keeps master data in X3, so Run 3 only needs those already loaded. **The go-live run rebuilds all
+of them from that morning's extract (rule 1; SCRUM-166, 164, 165).**
+
+### 19.2 What 4 Nov found and fixed
+
+| # | Finding | What was done | Where |
+|---|---|---|---|
+| 1 | Transactions were first built on the 21 Oct extract | Rule 1: every extract is live on the day. The transactions were rebuilt from the 18:39 extract | 1, 17 |
+| 2 | `add_new_accounts_to_xref.sql` rolled back (implicit transaction) | Explicit COMMIT and an "AFTER COMMIT 86 83 0" check; `run_transactions.py` stops on 0 accounts | 17 |
+| 3 | `extract_transactions.sql` run before the commit (17:06): 0 / 0 accounts, 1,458 SO lines dropped | Rerun at 18:39; rule 1d: ask James for missing or unusable data by name | 1d |
+| 4 | `build_sheets.py` read works orders from the linked 27 Oct folder | Now reads the run's own works orders; 218 added, 222 removed vs 27 Oct | 11 |
+| 5 | 2,176 stock lots, 405 SO, 204 PO lines held for products X3 lacked | Product rebuild (+3,384 products); tonight 0 held for want of a product | 6.1, 18 |
+| 6 | Zero-cost products were left out | Loaded at 0 and listed (1,178; 159 stocked) | 18 item 18 |
+| 7 | SA / zombie parts had the code as description | Description 3, then 2; 1,653 filled, 100 left | 6.1 |
+| 8 | PHANT on sold, made or stocked products | Usage test: 534 to FGML (97 sold, 437 made or stocked), 11 bought, flagged | register 11 |
+| 9 | Run 2 customer rejections (XPOSCOD / XSAT) | 507 address fixes by rule; 1 left to check (BEA101) | 6.5 |
+| 10 | Run 2 supplier rejections (FR VAT) | 3 FR VAT numbers restored from Access with the FR key and Luhn check; 11 postcodes | 6.5 |
+| 11 | Users: "VAT numbers are in Access" | Every VAT column searched (`vat_sources_discovery.sql`). Suppliers: only SU_VAT_REG_NO (79). Customers: addresses hold more, so 24 filled; 56 of 303 have one | 6.5 |
+| 12 | Tesco to be taken out of the customer files | Without-Tesco BPC / BPCDL; a Tesco-only pack too | 19.1 |
+| 13 | Invoice PIN-S01A000015 asked about | X3's own document number; Access numbers are kept in the open items' document fields | 17 |
+| 14 | Stock control total differs by £1.13 | Per-lot rounding in the control total; the file equals Σ qty × price | 17 |
+
+### 19.3 Open decisions (also SCRUM-168)
+
+| Decision | Who | Blocks |
+|---|---|---|
+| 22 live products hidden by a shared code: which keeps the code | SDI | 22 products' stock and orders |
+| FGSL stock-managed in X3 (451 products, £1.72m stock) | Marc / Ethan | SMR on those products |
+| PHANT group B (437 made or stocked sub-assemblies): FGML or a category of their own; group C (11 bought) | Marc / Ethan | Product categories |
+| X3 accepts the 9-digit SIREN in CRN until Finance gives SIRETs | Ethan | FR suppliers |
+| BAL500 tax rule (SV in Access); PLS500; FR VAT / SIRET for the rest | Finance | FR suppliers |
+| 5 customer VAT numbers on "VAT check" | Finance | – (customers load without) |
+| County / region field code (SAT) | Ethan | Customer addresses |
+| Does X3 need NUM unique (BICY / BISY) | Ethan | Open items |
+| Do reimports update or skip existing records | Marc | Every rerun |
+| Take Tesco out of the transaction files too | James | SOHPJ, BICY |
+| TES102 open items (£13.9k) need the account in X3 | Finance / Marc | BICY |
+| 17 credit lines (16 SO, 1 PO): credit notes or not open | Marc / Finance | SOHPJ, POH |
+| 38 finished works orders still open in Access | SDI | MFG |
+
+### 19.4 Still to do
+
+- **SCRUM-164 BOM kit**, then rerun MFG. 95 works orders wait on BOMs, mostly products added 4 Nov.
+- SCRUM-165 / 166: routes, customers, suppliers, banks and delivery addresses into the kit, so
+  the go-live run rebuilds everything from one live extract.
+- SCRUM-160: the automatic e-mail after each rebuild. `RUN_SUMMARY.md` and `WHAT_CHANGED.md` are
+  its content.
+- E-mail drafts to Ethan (assumptions and questions, the Run 2 fixes) were written on 4 Nov. Send
+  them bcc, per Claire Newall's rule, with no supplier names on CC.
+- Reconcile the Run 3 load with Jim against the control totals in section 17.
