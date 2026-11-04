@@ -146,7 +146,7 @@ try { $files = @(Get-ChildItem -LiteralPath $Logs -Filter "SDISameDay*.log" -Err
 if (-not $files.Count) {
     Warn "Can't read $Logs over the admin share (the same rights Ship-It uses)."
 } else {
-    $pattern = 'rt tool|rt done|Traceback|Error|error|refused|budget|credit|429|timed out|timeout|image|visual|render|live voice|drive |past job lookup|past by name|past-work|search not ready'
+    $pattern = 'rt tool|rt done|Traceback|Error|error|refused|budget|credit|429|timed out|timeout|image|visual|render|live voice|drive |past job lookup|past by name|past-work|search not ready|ref lookup|took [0-9]+s|waited [0-9]+s|live files'
     $hits = @()
     foreach ($f in $files) { $hits += @(Get-Content -LiteralPath $f.FullName -Tail 1500 -ErrorAction SilentlyContinue | Select-String -Pattern $pattern) }
     Say ("Read: " + (($files | ForEach-Object { $_.Name }) -join ", "))
