@@ -106,6 +106,13 @@ two can't disagree (`rebuild/common.py`, `write_load`). The format is the one Ja
 The writer stops if a value holds a `;` or a line break. Tested 2 Nov: the ZSDIITM and YITC files
 match the loaded V1.3 files byte for byte on every unchanged row.
 
+### 1e. Every file, every run - master data too (James, 4 Nov)
+
+**A run rebuilds every file from the day's extract, the master data included.** BOMs and routes
+were left as the 27 Oct build on 4 Nov, and it showed: 95 works orders held for no BOM. If a
+file can't be rebuilt (its live source isn't extracted yet), the handover names it: which file,
+why, and what's needed (rule 1d).
+
 ### 1d. Missing or unusable data: ask James for it, by name (James, 4 Nov)
 
 **When an extract is missing, out of date, from the wrong moment or fails a check, say so and ask
@@ -1347,7 +1354,8 @@ It builds three complete files, each with its `;` load file and the change repor
 | YA004SMR | 8,621 | 0 | 8,621 lots, £4,090,220.20 = Σ qty × price in the view (the control total £4,090,221.33 is per-lot values rounded to 2 dp: £1.13) |
 | YA004POH | 733 | 1 (credit line) | 734 lines |
 | YA004SOHPJ | 3,712 | 16 (credit lines) | 3,728 lines |
-| YA004MFG | 634 | 135 (95 no BOM, 38 nothing left to make, 2 no route) | 769 open WOs |
+| YA004MFG | 642 | 127 (80 no route, 38 nothing left to make, 9 no BOM) after the BOM rebuild; was 634 / 135 (95 no BOM) on the 27 Oct BOMs | 769 open WOs |
+| YA00408BOM | 32,941 lines, 7,189 BOMs | 170 (155 no quantity, 10 component not a product, 4 exact repeats, 1 on a bought-in parent) | Rebuilt from ASC_BOM_TBL (`rebuild/boms.py`). Of the 6,333 BOMs in both files, 6,210 are identical in content; 856 BOMs are new |
 | YA004BICY | 814 | 0 | 814 items, £8,506,050.44 (Σ of amounts, all types) |
 | YA004BISY | 2,056 | 0 | 2,056 items, £6,813,472.18 |
 
@@ -1373,7 +1381,7 @@ set. **Items 1–4 affect Run 3 directly.** **4 Nov evening:** the live build (s
 | 3 | Customers and suppliers X3 rejected | BPS, BPC, BPCDL, POH, BISY | 11 suppliers, 6 customers, 1,425 delivery addresses, 3 PO lines, 12 BISY items | FR numbers missing; postcodes; State/Region | **4 Nov evening: customer VAT gaps filled from Access addresses (24 customers; 56 of 303 now have one; 5 to check; section 6.5).** **Fixed as far as the data goes, 4 Nov:** customers, 220 fixes by rule with 10 addresses to check; suppliers, 2 FR VAT numbers restored, with the rest needing Finance. `sql/bp_identifiers_run3.sql` pulls every Access field for the 17 accounts, in case more is there. Assumptions and questions sent to Ethan. **Lesson: apply a fix the data settles the day it's raised; list only what genuinely needs someone.** The rules are in section 6.5. `bp_identifiers_run3.sql` is optional: it only looks for anything Access holds that we haven't mapped (a SIRET, a county) |
 | 4 | PHANT products on open sales orders | SOHPJ | 32 products, 82 lines | PHANT has no sales data in X3 | **In the product rebuild:** the usage test makes them FGML (group A). They load with the product file; X3 needs the category updated on the existing records |
 | 5 | Credits on sales orders (negative lines) | SOHPJ Held back | 16 SO lines and 1 PO line on 4 Nov evening (£93k on 27 Oct) | X3 takes a credit as a credit note, not an order line | Marc: raise them as credit notes, or Finance to confirm they're open |
-| 6 | Works orders | MFG Held back | 4 Nov evening: **95 no BOM on code 10, 38 nothing left to make, 2 no route** (of 769 open; 634 load). The 95 are mostly the products added on 4 Nov, whose BOMs aren't in the 27 Oct BOM file | No BOM / route to make them with, or already made | BOM and route kit from ASC_BOM_TBL (SCRUM-164), then rerun. The 38 are finished, so close them in Access |
+| 6 | Works orders | MFG Held back | 4 Nov evening, after the BOM rebuild: **80 no route, 38 nothing left to make, 9 no BOM** (of 769 open; 642 load). The 80 are products whose route isn't in the 27 Oct route file | No BOM / route to make them with, or already made | Routes from the live table (`extract_routes.sql`), then rerun. The 38 are finished, so close them in Access |
 | 7 | Shared product codes | ZSDIITM Held back; YITC Held back | 129 on 4 Nov (was 33), **22 live** (register 23); 27 costs | Two Access products clean to one X3 code | SDI: which product keeps the code. Proposal: the other takes a suffix (-B) so neither is lost |
 | 8 | BOMs and routes on bought-in products | BOM Held back; ROU Held back | 11 BOM lines; 71 route lines (36 products) | X3 builds and routes manufactured products only (Ethan) | Check each: if SDI makes it, the product is FGML, not FGSL / RAWML, and the lines load |
 | 9 | BOM components missing | BOM Missing components | 215 lines on 92 BOMs | Component not in the product file | Clears with item 1 (components at any depth) |
@@ -1404,17 +1412,18 @@ the comparison.
 | ZSDIITM products | 19,883 | `extract_products.sql`, 4 Nov evening + `rebuild/run.py` | 4 Nov evening (+15 since the morning) |
 | YITC product costs | 19,883 | same build; 1,178 at 0 (159 stocked) | 4 Nov evening |
 | ZSDIITMSUP product-suppliers | 14,746 (with PIO) | `product_suppliers_v4.sql`, 4 Nov 18:14 | 4 Nov evening |
-| YA004SMR / POH / SOHPJ / MFG / BICY / BISY | 8,621 / 733 / 3,712 / 634 / 814 / 2,056 | `extract_transactions.sql`, 4 Nov 18:39:59 + `scripts/run_transactions.py --stock-date 20261031` | 4 Nov evening |
+| YA004SMR / POH / SOHPJ / MFG / BICY / BISY | 8,621 / 733 / 3,712 / 642 / 814 / 2,056 | `extract_transactions.sql`, 4 Nov 18:39:59 + `scripts/run_transactions.py --stock-date 20261031` | 4 Nov evening |
 | YA004BPC customers | 6,169 rows, 303 customers | 27 Oct build + address fixes (`fix_customer_addresses.py`) + VAT (`fill_customer_vat.py`, from `customer_vat_numbers.sql` 4 Nov 18:32) | 4 Nov evening |
 | YA004BPC / BPCDL **without Tesco** | 4,466 / 4,466 | `exclude_customers.py TESCO` on the set above (TES100–102 and Tesco-named addresses out) | 4 Nov evening |
 | **YA004BPS suppliers** | 706 (623 + 83 new) | 27 Oct build + `fix_suppliers.py` (4 Nov: FR VAT for GAL500, ICE500, BUR500; 11 postcodes; VAT read from Access via `bp_identifiers_run3.sql`, 14:55) | 4 Nov 14:58. Not rebuilt since: supplier VAT has no other source in Access (6.5) |
 | YA004BPSC supplier banks | – | `bank_private/` only, never in git or e-mail | 3 Nov |
 | YA004BPCDL delivery addresses | 6,169 | 27 Oct build | 27 Oct |
-| YA00408BOM / ZSDIROU2 | 30,131 / 31,255 | 27 Oct build | 27 Oct. The kit build from ASC_BOM_TBL is SCRUM-164 |
+| YA00408BOM | 32,941 lines, 7,189 BOMs | `extract_products.sql` BOM grid (ASC_BOM_TBL, every line), 4 Nov evening + `rebuild/boms.py` | 4 Nov evening |
+| **ZSDIROU2 routes** | 31,255 | **Still the 27 Oct build, from migration.LOAD_ROU: a table made once by a one-off script, not live data.** `rebuild/sql/extract_routes.sql` pulls the live ASC_PLN_TBL (64,830 rows) with LOAD_ROU and vw_ROU to rebuild it | **To rebuild: waiting on James to run `extract_routes.sql`** |
 | Tesco customer pack | – | `build_customer_pack.py` → `out_packs/Tesco_customer_pack.xlsx` | 4 Nov |
 
 **Master data is built from 27 Oct and 4 Nov extracts, not a single one.** The customer,
-supplier, delivery-address, BOM and route files are still the 27 Oct builds with 4 Nov fixes. RTZ
+supplier, delivery-address and route files are still the 27 Oct builds with 4 Nov fixes (BOMs rebuilt 4 Nov evening). RTZ
 keeps master data in X3, so Run 3 only needs those already loaded. **The go-live run rebuilds all
 of them from that morning's extract (rule 1; SCRUM-166, 164, 165).**
 
@@ -1435,6 +1444,7 @@ of them from that morning's extract (rule 1; SCRUM-166, 164, 165).**
 | 11 | Users: "VAT numbers are in Access" | Every VAT column searched (`vat_sources_discovery.sql`). Suppliers: only SU_VAT_REG_NO (79). Customers: addresses hold more, so 24 filled; 56 of 303 have one | 6.5 |
 | 12 | Tesco to be taken out of the customer files | Without-Tesco BPC / BPCDL; a Tesco-only pack too | 19.1 |
 | 13 | Invoice PIN-S01A000015 asked about | X3's own document number; Access numbers are kept in the open items' document fields | 17 |
+| 15 | **BOMs and routes were left as the 27 Oct build** (James: "everything had to be rebuilt") | BOMs rebuilt from tonight's ASC_BOM_TBL lines: works orders held for no BOM 95 → 9. That moved 78 to "no route" (2 → 80): their products have no route in the 27 Oct file. Routes need live data: `extract_routes.sql` asked for. **Rule: every file is rebuilt every run, master data included; a file not rebuilt is named as such, with the reason, when the set is handed over** | 1, 19.1 |
 | 14 | Stock control total differs by £1.13 | Per-lot rounding in the control total; the file equals Σ qty × price | 17 |
 
 ### 19.3 Open decisions (also SCRUM-168)
@@ -1457,7 +1467,7 @@ of them from that morning's extract (rule 1; SCRUM-166, 164, 165).**
 
 ### 19.4 Still to do
 
-- **SCRUM-164 BOM kit**, then rerun MFG. 95 works orders wait on BOMs, mostly products added 4 Nov.
+- **Routes: run `rebuild/sql/extract_routes.sql`** (James), then the route builder in the kit (SCRUM-165) and rerun MFG. 80 works orders wait on a route. BOMs done in the kit (`rebuild/boms.py`, SCRUM-164).
 - SCRUM-165 / 166: routes, customers, suppliers, banks and delivery addresses into the kit, so
   the go-live run rebuilds everything from one live extract.
 - SCRUM-160: the automatic e-mail after each rebuild. `RUN_SUMMARY.md` and `WHAT_CHANGED.md` are

@@ -13,6 +13,7 @@ finishes has passed its checks. Builders are added here as they are written (REA
 import argparse
 from pathlib import Path
 
+import boms
 import changes
 import costs
 import product_suppliers
@@ -35,6 +36,11 @@ def main():
     loaded = a.loaded or (Path(a.previous) / "ZSDIITM_products_MAPPED.xlsx" if a.previous else None)
     path, summary, rows, code = products.build(run, a.today, a.phant, a.recent_years, loaded)
     print(f"Products: {path.name}")
+    for k, v in summary.items():
+        print(f"  {k}: {v}")
+
+    path, summary = boms.build(run, rows, code)
+    print(f"BOMs: {path.name}")
     for k, v in summary.items():
         print(f"  {k}: {v}")
 
