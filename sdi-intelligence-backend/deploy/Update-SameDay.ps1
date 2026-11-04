@@ -212,6 +212,32 @@ if ($now -eq $want) {
             Say "service account needs read access to the share (send Claude the line)."
         }
     }
+    # Past work (4 Nov 2026, "it keeps saying it can't see past jobs"): what SameDay can find. It searches indexes
+    # made from W: and K: (projects.db, knowledge.db, all_img_index.npz), not the drives file by file. The job
+    # index loads in the first seconds after a start.
+    $past = $script:Answer.past_work
+    $until = (Get-Date).AddSeconds(60)
+    while ($past -and ([string]$past.why -match "job index still loading") -and (Get-Date) -lt $until) {
+        Start-Sleep -Seconds 5
+        [void](RunningVersion)
+        $past = $script:Answer.past_work
+    }
+    if ($past) {
+        $jobs = [int]$past.jobs
+        if ($jobs -gt 0) { Write-Host ("    Past jobs it can find:  " + $jobs) -ForegroundColor Green }
+        else { Write-Host ("    Past jobs it can find:  NONE - " + $past.why) -ForegroundColor Yellow }
+        if ($past.estimates) { Write-Host "    Old estimates (K:):     yes" -ForegroundColor Green }
+        else { Write-Host "    Old estimates (K:):     NO - no knowledge.db" -ForegroundColor Yellow }
+        if ($past.pictures) { Write-Host "    Look-alike pictures:    yes" -ForegroundColor Green }
+        elseif ($jobs -gt 0) { Write-Host ("    Look-alike pictures:    off (" + $past.why + ") - past jobs are still found by number, name and words") -ForegroundColor Gray }
+        if ($jobs -le 0 -or -not $past.estimates) {
+            Write-Host "  The index files are made on Muhammad's laptop from W: and K:. Copy them to the server:" -ForegroundColor Yellow
+            Say "projects.db and knowledge.db into \\$Server\c$\SDI_Automation\brief_lite\ (and all_img_index.npz"
+            Say "into \\$Server\c$\SDI_Automation\, from the same day), then: Restart-Service SDISameDay on the server."
+        }
+    } else {
+        Say "(This SameDay does not report its past work yet.)"
+    }
     Write-Host "  Next, if SDI Intelligence has changed too: Ship-It." -ForegroundColor White
 } else {
     Write-Host "  SameDay is NOT answering with the new code yet." -ForegroundColor Yellow

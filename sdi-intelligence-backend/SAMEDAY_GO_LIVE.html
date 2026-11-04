@@ -142,7 +142,9 @@ SameDay joins the Entra audit.</p>
 <li><b>Past jobs on W: &mdash; the one that matters.</b> On the server SameDay runs as a Windows service, and a
 service has no mapped drives. <code>lite_app.py</code> reads <code>W:</code> at line 583 (the past-job lookup)
 and <code>S:</code> at lines 1889, 1930, 2445, 2507 and 3405. Each needs the share's <code>\\server\share</code>
-name, or a setting that can be given one. Until then, finding a past job comes back empty.</li>
+name, or a setting that can be given one. <b>Done in the repository (4 November):</b> SameDay maps W:, S: and K:
+for itself at start (<code>LITE_DRIVES</code> in <code>.env</code> overrides), and <code>Update-SameDay.ps1</code>
+showed it can read all three.</li>
 <li><b>The sign-in cookie.</b> <code>lite_app.py</code> line 4371 sets the team-code cookie with
 <code>secure=True</code>, which a browser refuses to keep on a plain http page, so on
 <code>http://10.0.0.5:5020</code> the right code was accepted and the code screen came straight back
@@ -155,7 +157,10 @@ reached the server. Copy it from the laptop's <code>C:\SDI_Automation\</code> in
 K:; on the server, as administrator:
 <pre>Copy-Item "\\sdi-dc01\shareddata$\Shared\IT\AI &amp; Automation\Design\SDI Same Day Intelligence\SDI_Automation\all_img_index.npz" C:\SDI_Automation\
 Restart-Service SDISameDay</pre>
-It most likely points at pictures on W:, so it needs the change above as well.</li>
+It most likely points at pictures on W:, so it needs the change above as well. Until 4 November its absence stopped
+every past-job look-up, a job's own number too. Since then it only adds look-alike picture matching: past jobs are
+found from <code>brief_lite\projects.db</code> without it. Copy it together with that <code>projects.db</code> from the
+same day: picture <i>n</i> is job <i>n</i> in the index, so a newer picture file is refused.</li>
 <li><b>The keys.</b> <code>SDI_Automation\.env</code> on K: is readable by <b>Everyone</b>. The server has its own
 copy, readable only by the services and administrators, so the K: copy can go &mdash; and since anyone could read
 it, the keys are worth replacing.</li>
