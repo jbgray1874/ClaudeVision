@@ -124,6 +124,13 @@ class ItProvesItRunsTheNewCodeTests(unittest.TestCase):
         self.assertIn("exists and is not this script's", BODY)
         self.assertIn("belongs to another repository", BODY)
 
+    def test_it_says_whether_sameday_can_read_the_drives(self):
+        """Past jobs live on W:; a Windows service has no mapped drives, so SameDay maps them itself and says
+        (in /api/version) whether it can read them - printed here, with what to do if not."""
+        self.assertIn("$reads = $script:Answer.can_read", BODY)
+        self.assertIn('foreach ($d in @("W", "S", "K"))', BODY)
+        self.assertIn("LITE_DRIVES", BODY)
+
     def test_a_log_pasted_into_chat_has_no_keys(self):
         self.assertIn("[key removed]", BODY)
 
