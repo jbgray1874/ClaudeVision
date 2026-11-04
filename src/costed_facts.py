@@ -2637,6 +2637,15 @@ def _hierarchy_children(source: Any) -> Dict[str, Set[str]]:
     return children
 
 
+# The compiler's review marks for a weld charged on an assembly and on its member where the
+# drawings themselves tell the two welds apart: both sheets draw their own, or the member is a
+# weldment in its own right whose sheet draws the welds that make it (D-685).
+_SETTLED_BY_THE_DRAWINGS = frozenset({
+    "joining_on_assembly_and_member_both_drawn",
+    "joining_member_is_a_weldment_of_its_own",
+})
+
+
 def parent_child_overlaps(source: Any) -> Optional[List[Dict[str, Any]]]:
     """Every operation charged on an assembly and AGAIN on something it contains, as EVENTS.
 
@@ -2655,7 +2664,9 @@ def parent_child_overlaps(source: Any) -> Optional[List[Dict[str, Any]]]:
         202-and-06M and 201-and-202, never 201-and-06M on top of them.
       * SETTLED BY THE DRAWINGS. Where the compiler read an arc weld drawn on the assembly's
         own sheet and on the member's (field_provenance review
-        'joining_on_assembly_and_member_both_drawn'), each charge is its own drawn weld.
+        'joining_on_assembly_and_member_both_drawn'), each charge is its own drawn weld. So
+        where the member is a weldment in its own right whose own sheet draws its welds
+        ('joining_member_is_a_weldment_of_its_own', D-685): its line is its own joints.
       * THE DECISION IDS ARE THE PAIR'S, not the operation's first six.
     A legacy decision with no target (older extracts, test shapes) keeps the old reading:
     each participant is its own charge.
@@ -2717,8 +2728,7 @@ def parent_child_overlaps(source: Any) -> Optional[List[Dict[str, Any]]]:
         _review = str(((d.get("field_provenance") or {}) if isinstance(
             d.get("field_provenance"), Mapping) else {}).get("review") or "")
         events.setdefault(op, []).append(
-            (_id, holders, members, bool(tgt),
-             _review == "joining_on_assembly_and_member_both_drawn"))
+            (_id, holders, members, bool(tgt), _review in _SETTLED_BY_THE_DRAWINGS))
     asked: Dict[Tuple[str, str], str] = {}
     for iss in (shadow.get("issues") or []):
         if not isinstance(iss, Mapping):

@@ -5407,6 +5407,7 @@ def compile_job_route(
             })
 
         targets: List[Tuple[str, str, List[str]]] = []
+        _rehomed = False
         if declared_scope == "part":
             targets = [("part", participant, [participant])
                        for participant in participants]
@@ -5443,12 +5444,42 @@ def compile_job_route(
                 for participant in participants:
                     if participant not in covered:
                         targets.append(("part", participant, [participant]))
-                issues.append({
-                    "code": "mixed_scope_route_split",
-                    "route_id": base_route_id,
-                    "operation": operation,
-                    "targets": [item[1] for item in targets],
-                })
+                # AN ASSEMBLY LINE THAT NAMES THINGS SIDE BY SIDE IS THEIR JOINING, AT THE
+                # ASSEMBLY THAT HOLDS THEM (D-685). The split above is right for a coat: a
+                # weldment and a loose bracket are two objects in the booth. It is wrong for
+                # the assemble itself. 12693-01-GA's extract read "BOLTED TOGETHER FROM
+                # UNDERSIDE" on the GA as one assembly line naming the frame 101 and the
+                # worktop 102; split, it became "build 101 from its members" and "build 102
+                # from its members", so the frame (a weldment, which its weld builds) took an
+                # Assemble/pack row on a GA note. Its inferred line for fitting the MDF insert
+                # into the worktop named 104, 04J and the wood inserts; split, it charged an
+                # assemble on the weldment 104 and a Packing Joinery row on the insert, while
+                # 102's own assembly already fitted both. A line naming one assembly is that
+                # assembly's build, and keeps the substitution above; a line naming several
+                # things is one event where they meet, which the hierarchy names.
+                _meet = (_lowest_common_assembly(participants, graph["parents"], kinds)
+                         if operation == "assembly" and len(targets) > 1 else "")
+                if _meet:
+                    issues.append({
+                        "code": "assembly_route_homed_where_its_parts_meet",
+                        "route_id": base_route_id,
+                        "operation": operation,
+                        "split_would_have_been": [item[1] for item in targets],
+                        "target": _meet,
+                    })
+                    targets = [("assembly", _meet,
+                                [p for p in participants if p != _meet] or [_meet])]
+                    # The line's stated quantity counted the things it named, not the place
+                    # they meet: "qty 2" for a frame and a worktop is one bolting-together per
+                    # table. The meeting assembly happens once per instance of itself.
+                    _rehomed = True
+                else:
+                    issues.append({
+                        "code": "mixed_scope_route_split",
+                        "route_id": base_route_id,
+                        "operation": operation,
+                        "targets": [item[1] for item in targets],
+                    })
             else:
                 target = _lowest_common_assembly(
                     participants, graph["parents"], kinds)
@@ -5513,7 +5544,8 @@ def compile_job_route(
                 # each part the product contains.
                 qty_per_unit=(
                     _floored_qty
-                    if (route.get("qty_per_unit") is not None and len(targets) == 1)
+                    if (route.get("qty_per_unit") is not None and len(targets) == 1
+                        and not _rehomed)
                     else graph_quantities.get(target_id, 1.0)
                 ),
                 sequence=route.get("sequence"),
@@ -5521,7 +5553,8 @@ def compile_job_route(
                 reason=_route_reason,
                 route_id=route_id,
             )
-            if _floored and route.get("qty_per_unit") is not None and len(targets) == 1:
+            if (_floored and route.get("qty_per_unit") is not None and len(targets) == 1
+                    and not _rehomed):
                 issues.append({
                     "code": "assembly_op_floored_to_target_count",
                     "route_id": route_id,
@@ -6798,6 +6831,8 @@ def compile_job_route(
             "note": (f"{_key[0]} on {_key[1]} was described by more than one reading; they "
                      f"are one joint, charged once, with every reading kept as evidence"),
         })
+    # And the assemble of one assembly, read twice at one visit, is one event too (D-685).
+    _one_assembly_event_per_visit(claims_by_event, issues)
 
     decisions = [
         arbitrate_event(event_id, claims)
@@ -6878,6 +6913,52 @@ def compile_job_route(
     _spot_welds_by_their_symbols(decisions, graph, issues)
     # A bought-in item is fitted by the assembly it goes into, once (D-661).
     _bought_in_fitted_by_its_assembly(decisions, graph, issues)
+    # AN INFERRED ASSEMBLE THAT NAMES ONLY WHAT THE INSERTION FITS, ON AN ASSEMBLY ITS OWN WELD
+    # BUILDS, IS THE INSERTION READ AGAIN (D-685). 12693-01-101 is a weldment: its weld joins the
+    # tube frame and the plates, and its hardware insertion presses the four M8 hank bushes.
+    # The engine's own inference added "the GA has 4 glides that need a thread in the frame ...
+    # booked once for the frame" as an assemble naming the bushes and nothing else, and the
+    # sheet charged an Assemble/pack row beside the insertion's row for the same four bushes.
+    # The 11350 rule (a generic assemble does not repeat the joining we already named) cannot
+    # see it: the frame's other members are joined by its weld, which that rule deliberately
+    # does not count (SPECIFIC_JOINING_OPERATIONS). This one asks the narrower question: every
+    # part the assemble names is already fitted by the insertion on the same target, the target
+    # is welded (so the hierarchy gives it no assemble of its own) and does not ship, and
+    # nothing stronger than the engine's inference raised the line. A stated line stays.
+    # After the gates, so a weld the family gate rules off (a timber assembly) builds nothing.
+    try:
+        from source_precedence import rank as _src_rank
+        _inferred_rank = _src_rank("inference") or 0
+    except Exception:                                                # noqa: BLE001
+        _src_rank, _inferred_rank = None, 0
+    _welded_now = {
+        str(_d.target_id) for _d in decisions
+        if _d.status == REQUIRED and _d.operation in (_JOINING_OPS - {"dress_welds"})}
+    _inserted_on: Dict[str, Set[str]] = {}
+    for _s in decisions:
+        if _s.status == REQUIRED and _s.operation in SPECIFIC_JOINING_OPERATIONS:
+            _inserted_on.setdefault(str(_s.target_id), set()).update(
+                str(p) for p in (_s.participants or []) if p)
+    for _d in decisions:
+        if (_src_rank is None or _d.status != REQUIRED or _d.operation != "assembly"
+                or _d.target_id in _roots_that_ship(graph)
+                or str(_d.target_id) not in _welded_now
+                or (_src_rank(str(_d.source or "")) or 0) > _inferred_rank):
+            continue
+        _named = {str(p) for p in (_d.participants or []) if p and p != _d.target_id}
+        if not _named or not _named <= (_inserted_on.get(str(_d.target_id)) or set()):
+            continue
+        _d.status = NOT_APPLICABLE
+        _d.reason = ((f"{_d.reason}; " if _d.reason else "")
+                     + f"not charged: {', '.join(sorted(_named))} "
+                       f"{'is' if len(_named) == 1 else 'are'} fitted by the hardware insertion "
+                       f"on {_d.target_id}, and {_d.target_id} is built by its own weld, so this "
+                       f"assemble names no work the insertion and the weld do not already "
+                       f"charge — put it back only if it is a separate stage")
+        _d.field_provenance["status"] = "insertion_covers_this_assemble"
+        issues.append({"code": "assemble_is_the_insertion_read_again",
+                       "assembly": _d.target_id, "parts": sorted(_named),
+                       "ruled_out": _d.decision_id})
     # NOT GATED, BECAUSE IT MOVES NO MONEY. The family gate above changes what a job charges and
     # so enters only where its evidence is; this one only ever adds a question to the record, and
     # a job that is double-charging a joint deserves the question whichever lane it came down.
@@ -6945,6 +7026,111 @@ _HOLE_MAKING_OPS = frozenset({
 _JOINING_OPS = frozenset({
     "welding", "dress_welds", "spot_welding", "spotweld", "resistance_welding", "brazing",
 })
+
+# What takes an assembly OFF the bench between two readings of its assemble: its own weld, a
+# coat, a plate, a polish, or the trip to the plater the shop packs for. Fitted up, welded and
+# then assembled; assembled, plated and then assembled again: each is two visits to the bench.
+# Dressing is not here; it follows the weld it dresses, at the weld bay.
+_TAKES_IT_OFF_THE_BENCH = frozenset({
+    "powder_coating", "wet_spray", "plating", "anodising", "diamond_polish",
+    "diamond_polishing", "plater_pack", "plater_final_pack",
+}) | (_JOINING_OPS - {"dress_welds"})
+
+
+def _one_assembly_event_per_visit(claims_by_event: Dict[str, List[OperationClaim]],
+                                  issues: Optional[List[Dict[str, Any]]] = None
+                                  ) -> List[Dict[str, Any]]:
+    """Two readings of one assembly's assemble are one event, unless the assembly leaves the
+    bench between them (D-685).
+
+    12693-01-GA, 4 Nov 2026 17:16 book: 12693-01-101 carried two Assemble/pack (Metal) rows,
+    each 75/hr with a 15-minute set-up and each "general assembly and pack — NOT a plating
+    pack stage": one route line, "times decided = 2", two sheet rows. Every reading of an
+    assemble became an event of its own, so two readings of one assemble were two charges.
+    (The extract's reading there was the GA's note, split onto the frame; the route split now
+    homes it on the GA, where it meets the engine's own reading of the GA's assemble, and the
+    same rule makes those one.) D-397 already says this about a joint ("one joint on one
+    assembly is one event, however many readings describe it"); the assemble is the same kind
+    of fact. The readings' claims are pooled, so the strongest stands and the others stay on
+    the decision as evidence, and the participants are the union of what each reading named.
+
+    TWO VISITS STAY TWO. Each reading's place in the route is its sequence (a reading with
+    none is placed where the shop puts an assemble). Two readings at one place are one visit.
+    Two at different places are two visits when the assembly is taken off the bench between
+    them (_TAKES_IT_OFF_THE_BENCH, decided on the same target), or when it is taken off and the
+    route does not say where, since then nothing here can show they are one visit. Different
+    operations are never pooled: plater_pack and plater_final_pack keep their own rows.
+
+    Only REQUIRED readings at assembly scope are pooled, and a pool whose arbitration would
+    not stay required is left as it was. Returns the pools, and records each as an issue."""
+    decided = {eid: arbitrate_event(eid, cl) for eid, cl in claims_by_event.items() if cl}
+    order = {eid: n for n, eid in enumerate(claims_by_event)}
+
+    def _place(d: OperationDecision) -> Optional[float]:
+        _s = number(d.sequence)
+        if _s is None:
+            _s = number(DEFAULT_OPERATION_SEQUENCE.get(d.operation))
+        return _s
+
+    off_bench: Dict[str, List[Optional[float]]] = {}
+    readings: Dict[str, List[Tuple[float, int, str]]] = {}
+    for eid, d in decided.items():
+        if d.status != REQUIRED:
+            continue
+        tid = str(d.target_id or "")
+        if d.operation in _TAKES_IT_OFF_THE_BENCH:
+            off_bench.setdefault(tid, []).append(_place(d))
+        elif (d.operation == "assembly" and tid
+              and all(str(c.scope or "").lower() == "assembly"
+                      for c in claims_by_event[eid])):
+            _p = _place(d)
+            readings.setdefault(tid, []).append(
+                (_p if _p is not None else float(DEFAULT_OPERATION_SEQUENCE["assembly"]),
+                 order[eid], eid))
+
+    pools: List[Dict[str, Any]] = []
+    for tid, rs in readings.items():
+        if len(rs) < 2:
+            continue
+        rs.sort()
+        stops = off_bench.get(tid) or []
+        visits: List[List[Tuple[float, int, str]]] = [[rs[0]]]
+        for prev, cur in zip(rs, rs[1:]):
+            apart = cur[0] != prev[0] and any(
+                s is None or prev[0] < s < cur[0] for s in stops)
+            if apart:
+                visits.append([cur])
+            else:
+                visits[-1].append(cur)
+        for visit in visits:
+            if len(visit) < 2:
+                continue
+            keep = min(visit, key=lambda r: r[1])[2]
+            others = [r[2] for r in sorted(visit, key=lambda r: r[1]) if r[2] != keep]
+            merged = list(claims_by_event[keep]) + [
+                c for e in others for c in claims_by_event[e]]
+            if arbitrate_event(keep, merged).status != REQUIRED:
+                continue
+            # The union on every claim, as D-397 does for a joint: a reading that named fewer
+            # of the parts is not disagreeing about which parts the event joins.
+            _all = sorted({str(p) for c in merged for p in (c.participants or []) if p})
+            for c in merged:
+                c.participants = list(_all)
+            claims_by_event[keep] = merged
+            for e in others:
+                del claims_by_event[e]
+            pool = {
+                "code": "assembly_readings_pooled_on_target",
+                "operation": "assembly", "assembly": tid,
+                "into": keep, "merged_events": others,
+                "note": (f"the assemble of {tid} was described by {len(visit)} readings at one "
+                         f"visit to the bench; they are one event, charged once, with every "
+                         f"reading kept as evidence"),
+            }
+            pools.append(pool)
+            if issues is not None:
+                issues.append(pool)
+    return pools
 
 
 def _flag_possible_joint_double_charge(decisions: Sequence[Any],
@@ -7019,6 +7205,28 @@ def _flag_possible_joint_double_charge(decisions: Sequence[Any],
                         f"{_ws_say(_kc, _kp)} — each charge is its own drawn weld.")
                     _d.field_provenance.setdefault(
                         "review", "joining_on_assembly_and_member_both_drawn")
+                    continue
+                # A MEMBER THAT IS A WELDMENT IN ITS OWN RIGHT IS NOT ITS PARENT'S JOINT SEEN
+                # TWICE (D-685). 12693-01-01M, a tube frame whose own sheet draws four fillets and
+                # whose own parts table lists its ten tube lengths, is welded from its pieces and
+                # then welded into 101 with the plates. D-566 charged its own joints beside 101's
+                # for exactly that reason, and this flag then asked whether that line "charges it
+                # a second time", saying the weld-symbol reading did not settle it, beside a
+                # reading that had: the member's sheet draws the welds that make it. The two
+                # charges are two welds; the member's line is its own.
+                _kid_rec = _raw.get(str(_kid)) or {}
+                if (_arc_n is not None and _arc_n(_kc)
+                        and _d.operation in ("welding", "dress_welds")
+                        and isinstance(_kid_rec, Mapping)
+                        and _weldment_has_its_own_joints(_kid_rec, str(_kid), graph)):
+                    _d.reason = ((_d.reason + " ") if _d.reason else "") + (
+                        f"{_parent} is charged {_d.operation} too, for the joint that fixes "
+                        f"{_kid} to its siblings. This line is {_kid}'s own: {_kid} is made from "
+                        f"pieces of its own and its own sheet draws the welds that join them "
+                        f"({_ws_say(_kc, _kp)}), so the two charges are two welds, each charged "
+                        f"once.")
+                    _d.field_provenance.setdefault(
+                        "review", "joining_member_is_a_weldment_of_its_own")
                     continue
                 _read = (f"The weld-symbol reading does not settle it (for {_parent}, "
                          f"{_ws_say(_pc, _pp)}; for {_kid}, {_ws_say(_kc, _kp)}), so"
