@@ -810,18 +810,29 @@ never CC (Claire Newall). Supplier and customer lists are not kept in git.
 
 ## 14. Fixes applied – both tracks, file by file
 
-Counts are from the 21–27 October build. They will move with each fresh extract, but the
+**This is the summary of every improvement made to each mapped spreadsheet. Keep it current:**
+add each new fix here the day it's made.
+
+Counts are from the 21 Oct – 4 Nov builds. They will move with each fresh extract, but the
 fixes themselves are what every rerun must repeat.
+
+**Applies to every file (from 31 Oct):**
+- Complete files only, never a top-up (rule 1b).
+- A `;` load file built from each saved spreadsheet, in the format of the V1.3 files James
+  loaded (rule 1c).
+- No exclusions by assumption (rule 1a). **Zero prices and costs are never a reason to leave
+  anything out (4 Nov check).** Rows at zero, all loaded: 15,154 products (base price), 602 SO
+  lines, 22 PO lines, 241 stock lots, and 937 costs (loaded at 0 since 2 Nov).
 
 ### Track 1 – opening transactions
 
 | File | Fixes applied |
 |---|---|
-| **YA004SMR** opening stock | Mapped column for column to the template. **Description (column E) = the product code, the product key on each line, and Posted Date (column D) = the day the stock is loaded, 20261028 for UAT (28 Oct)**, on the Held back tab too. Full lot cost (material + labour) from the lot records. Product codes as loaded. **Locations:** every Access bin mapped to Marc's list (437 exact, 253 by rule, 27 suggested, 1,213 to A001); 2,317 lots on a real location, 3,986 in A001. **Supplier lots:** 232 cleaned, spaces to hyphens. Held back 2,176 lots (£603,150.76) whose product is not in the product load. Clean run: 131 product codes changed to the V7 codes. |
+| **YA004SMR** opening stock | Mapped column for column to the template. **Description (column E) = the product code, the product key on each line. Posted Date (column D) = 20261031 for Run 3, the last day of the previous period (Ethan, Run 2; was 20261028); 20261231 at go-live**, on the Held back tab too. Full lot cost (material + labour) from the lot records. Product codes as loaded. **Locations:** every Access bin mapped to Marc's list (437 exact, 253 by rule, 27 suggested, 1,213 to A001); 2,317 lots on a real location, 3,986 in A001. **Supplier lots:** 232 cleaned, spaces to hyphens. Held back 2,176 lots (£603,150.76) whose product is not in the product load. Clean run: 131 product codes changed to the V7 codes. |
 | **YA004SOH → YA004SOHPJ** open sales orders | New template: Dim Code (DIE) = D02 and Dimension (CCE) = P00003 added between Header text and Line (22 columns). **Dates:** 293 lines with a ship or delivery date before 2025 moved to 20261031; 64 lines shipping before their order date given the requested delivery date; order dates unchanged; header dates the same on every line of an order (253 lines). **Text:** 145 cells cleaned to Ethan's rule; 878 blank descriptions filled from the product file. Lines renumbered from 1000 per order (271); 30 orders rearranged so identical headers are never adjacent. Units to EA, £ to GBP, outstanding quantity, discounted price. Held back 200 lines, including the credits on orders (£93,241.98). Clean run: 47 product codes changed. |
 | **YA004POH** open purchase orders | Mapped to the template. **Text:** 36 descriptions cleaned (M&S-TOOLING → M AND S-TOOLING). 272 blank descriptions filled. Lines renumbered (33), 26 orders rearranged. Held back 193 lines. Clean run: 5 product codes changed. |
-| **YA004BICX** customer open items | Mapped to the template. Outstanding balances, positive values, £ to GBP, Sage customer codes via the cross-reference, repeated references suffixed. Reconciles to Access to the penny. The character rule found nothing to change. |
-| **YA004BISX → BISY** supplier open items | **28 Oct:** 317 blank Source Documents filled with the document reference. As BICX, plus CURLED = GBP (removed in BISY). **References:** 84 document references with spaces or / cleaned (2026158/77 → 2026158-77), still unique. 3,134 text cells tidied (dashes, double spaces). A 23-column version without CURLED exists in case X3 rejects it. |
+| **YA004BICX → BICY** customer open items | Mapped to the template. Outstanding balances, positive values, £ to GBP, Sage customer codes via the cross-reference, repeated references suffixed. Reconciles to Access to the penny. The character rule found nothing to change. **28 Oct:** renamed BICY; Company column added at D. **3 Nov:** Company = C01; Document and Source Document swapped as Acuity did, with every Document kept unique (160 suffixed; the 18 receipts and journals with order number 0 take the invoice number). **27 Oct:** +230 items for the new accounts. |
+| **YA004BISX → BISY** supplier open items | **3 Nov:** Company = C01; Document and Source Document swapped, every Document kept unique (454 suffixed). **28 Oct:** CURLED removed, Company added at D; 317 blank Source Documents filled with the document reference. As BICX, plus CURLED = GBP (removed in BISY). **References:** 84 document references with spaces or / cleaned (2026158/77 → 2026158-77), still unique. 3,134 text cells tidied (dashes, double spaces). A 23-column version without CURLED exists in case X3 rejects it. |
 | **YA004MFG** works orders (new) | 638 of the 744 open Access works orders, one line each. Quantity = ordered less made. Start = created date. End = scheduled date (13 that ended before they started now end on the start date). Held back 106: 36 with nothing left to make, 42 with no BOM, 25 not a product (all 16 prototypes), 3 with no route. Clean run: 42 codes changed. |
 
 ### Track 2 – master data
@@ -831,11 +842,12 @@ fixes themselves are what every rerun must repeat.
 | **YA004BPS** suppliers | **VAT:** 186 dummy numbers blanked. These were two Polish numbers copied across 117 suppliers, TEMPJAF placeholders, and GB numbers on overseas companies; they were the cause of the 180 rejections in UAT. **Tax rule:** 28 suppliers on EU set to ROWS. **Text:** 211 name and address cells cleaned. Address flag 2 on all (already right). A reload file of the 179 rejected suppliers was made for UAT. |
 | **YA004BPC** customers | **Tax rule:** the 10 EU customers (56 address rows) set to ROW / ROWC, as UNI100. **VAT:** ROL100's 8-digit number blanked. **TEC100:** postcodes moved out of the address lines (POSCOD error). **Two rows** split by a semicolon between emails put back to 34 fields. **Text:** 367 cells cleaned. Address flag (AG) checked: 001 = 2, others = 1. |
 | **YA004BPCDL** delivery addresses (new) | 2,268 rows, one per customer address. For customers with several addresses the name is built from company + store line + postcode, within 30 characters. Built from the cleaned customer file. |
-| **ZSDIITM** products | **Codes (V7):** 451 changed, 160 because of a symbol, 291 only to upper case, with no new duplicates. **Descriptions (V8):** 4,426 cells cleaned (Dowel£s → Dowels, £ per 1000 → GBP per 1000, 50° → 50 deg, & → AND). 68 blank descriptions filled. 137 missing in-use products added (V6). Held back 33 rows: a code on two products. |
+| **ZSDIITM** products | **4 Nov: 1,653 descriptions filled.** Where description 1 was only the code (sub-assemblies, "zombie" parts: "10074-02-SA01" → "BASE WELDMENT"), it takes description 3, then 2 (`scripts/fill_product_descriptions.py`). The other 100 wait for PMA_DESC on the product extract. **Codes (V7):** 451 changed, 160 because of a symbol, 291 only to upper case, with no new duplicates. **Descriptions (V8):** 4,426 cells cleaned (Dowel£s → Dowels, £ per 1000 → GBP per 1000, 50° → 50 deg, & → AND). 68 blank descriptions filled. 137 missing in-use products added (V6). Held back 33 rows: a code on two products. |
 | **ZSDIITMSUP** product-suppliers (new) | 7,679 products with their main supplier, from purchase history since Sept 2022. 3,150 alternatives held for a priority column. The cause of the blank suppliers in planning: 2,143 rows belonged to the 179 suppliers rejected on VAT. |
 | **YA00408BOM** BOMs | **V6:** every code rewritten to the product file's spelling, Excel damage repaired, lines split into loadable and held back. 33,596 held: parent or component not in the product load (14,304 products). **V7:** 10 recovered by the code rule. **V8:** 11 lines on bought-in FGSL products held, 1 exact duplicate dropped, 1 clashing sequence moved on. 92 BOMs load with a component missing (listed). |
 | **ZSDIROU2** routes | Work centres checked against X3's list: all 31 used are X3 codes, and each operation is on the right type of centre. 4,607 operation descriptions cleaned (P/C → P-C). 71 lines on 36 bought-in products held. Use status 1 kept (guide example; asked Ethan). |
-| **YITC** product costs | Codes aligned to the product file and Excel damage repaired (V6). Confirmed all under material (cost type 1). 28 second costs held, for codes that were on two products. |
+| **YITC** product costs | **2 Nov: a cost line for every product, 16,499** (Run 2 loaded 9,597). Sources, in order: Access standard cost 9,597; stock lot cost 778; last purchase price 2,049 (393 EUR / USD at Access's own ledger rate); BOM roll-up 3,138; **no cost in Access, loaded at 0, 937** (73 of them hold stock), all on Check. Codes aligned to the product file and Excel damage repaired (V6). Confirmed all under material (cost type 1). 28 second costs held, for codes that were on two products. |
+| **YA004BPSC** supplier banks (new, 28 Oct) | 626 BACS suppliers. BIDNUM = "XXXX" + 6-digit sort code + 8-digit account. 37 on Check. Confidential: kept in the restricted bank folder, never in git or e-mail. `.txt` written 3 Nov. |
 
 ### Mapping and cross-reference work behind both tracks
 - **Customer and supplier codes:** the cross-reference was rebuilt by name against the loaded
@@ -1047,7 +1059,62 @@ BPSC comes from `bank_private/` (confidential; 626 rows; its `.txt` written 3 No
 - the 451 FGSL products with stock;
 - the PHANT and RAWML products on open sales orders.
 
+**What RTZ means:** "Reset To Zero", Sage X3's reset of transaction data (RAZ, *remise à zéro*,
+in the French product). It deletes the transactions for the company or site: stock, orders,
+works orders, open items and journals. Setup and master data are kept. For Run 3 this means:
+- the opening transactions load again **complete**, which suits rule 1b;
+- master data is **not** reloaded. Any fix to a product, customer or supplier (descriptions,
+  PHANT / FGSL categories, costs, the 6 customers, the 11 suppliers) has to go in by an update
+  import or by hand. Ask Marc whether an import updates an existing record or skips it.
+- **Products missing from X3 come first:** every stock lot, order line or works order on a product
+  X3 doesn't hold fails again (section 18, item 1).
+
+**Learned 3–4 Nov:**
+- **X3 numbers documents itself:** type, site, sequence, e.g. PIN-S01A000015 (purchase invoice;
+  creation author ASL = Acuity's user) and MFG-S01A000001. Those numbers are never in our files,
+  which carry the Access references. To trace one back, take its supplier, amount and source
+  document from X3. Asked Ethan what X3 uses the NUM column for (section 3, BICY).
+- **Routes over 150 operations:** only 2 of 6,348, TES-4495-00-08 and TES-4495-00-12 (162 each).
+  They caused Run 2's "table is full 150". The screen needs about 170.
+- **BPC hand fixes in the loaded V1.3:** James fixed 2 lines by hand: GAL100 phone "0046 (0)
+  470705100" → "0046 0 470705100", and TEC105 address 152's postcode "77990,FRAN". The customer
+  build must apply both itself: brackets out of phone numbers, and a postcode with no country
+  text.
+- **The current mapped set** (`Current_mapped_set_2026-11-04`) was checked line by line against the
+  files loaded in Run 2:
+  - identical: ZSDIITM (before the 4 Nov descriptions), BPCDL, POH, SOHPJ, MFG;
+  - different: YITC, BPC (the 2 hand fixes), SMR (columns D and E), BICY and BISY.
+
 **Reconciliation (Jim):** `views_v2.sql` prints the control totals: customer and supplier
 open items (count and GBP) and opening stock (lots and value, by warehouse). Tie each to X3
 after the load. Any difference is a missing or merged transaction.
+
+---
+
+## 18. Everything held back or left out – review (4 Nov)
+
+Under rule 1a, every item here needs a named decision or a fix. The figures are from the current
+set. **Items 1–4 affect Run 3 directly.**
+
+| # | What | Where | How many | Why | Revisit: what to do |
+|---|---|---|---|---|---|
+| 1 | **Products X3 doesn't hold** (live products graded OLD; do-not-use / archived products that are live) | SMR, SOHPJ, POH, MFG Held back | **2,176 stock lots (£603k), 405 SO lines, 204 PO lines, 25 works orders** | Product not in the product file | **Run `rebuild/sql/extract_products.sql` and import the missing products before the transactions.** They're the "missing master data" for Run 3. Without them every one of these rows fails again |
+| 2 | FGSL products with stock | SMR | 1,222 lots, 451 products, £1.72m | X3's FGSL isn't stock-managed | Marc / Ethan: make FGSL stock-managed (register 21) |
+| 3 | Customers and suppliers X3 rejected | BPS, BPC, BPCDL, POH, BISY | 11 suppliers, 6 customers, 1,425 delivery addresses, 3 PO lines, 12 BISY items | FR numbers missing; postcodes; State/Region | Fix list (`Run3_master_data_fixes.xlsx`); Finance for the FR numbers |
+| 4 | PHANT products on open sales orders | SOHPJ | 32 products, 82 lines | PHANT has no sales data in X3 | FGML (usage test), the PHANT decision |
+| 5 | Credits on sales orders (negative lines) | SOHPJ Held back | 16 lines (+1 with no product); £93k on 27 Oct | X3 takes a credit as a credit note, not an order line | Marc: raise them as credit notes, or Finance to confirm they're open |
+| 6 | Works orders | MFG Held back | 42 no BOM on code 10, 36 nothing left to make, 3 no route (25 no product: item 1) | No BOM / route to make them with, or already made | Re-check the 42 and 3 once BOMs and routes are rebuilt from ASC_BOM_TBL; the 36 are finished, so close them in Access |
+| 7 | Shared product codes | ZSDIITM Held back; YITC Held back | 33 products; 27 costs | Two Access products clean to one X3 code | SDI: which product keeps the code. Proposal: the other takes a suffix (-B) so neither is lost |
+| 8 | BOMs and routes on bought-in products | BOM Held back; ROU Held back | 11 BOM lines; 71 route lines (36 products) | X3 builds and routes manufactured products only (Ethan) | Check each: if SDI makes it, the product is FGML, not FGSL / RAWML, and the lines load |
+| 9 | BOM components missing | BOM Missing components | 215 lines on 92 BOMs | Component not in the product file | Clears with item 1 (components at any depth) |
+| 10 | Components vw_BOMP drops by a hard-coded list | (never extracted) | 51 components | No reason recorded | SDI / Acuity: why. The kit reads ASC_BOM_TBL, so they come back unless excluded by name |
+| 11 | Alternative suppliers | ZSDIITMSUP | 3,150 | The template has no priority column | Ethan: a PIO column |
+| 12 | Accounts left out on purpose | BPC / BPS, and their orders and items | Customers: 4 intercompany, ESD01, FSC01, IBS01. Suppliers: 72 employee expense, 6 non-suppliers. 56 SO lines, 1 customer item | Not trading accounts | Finance to confirm; the SO lines and item must be dealt with if they're real |
+| 13 | Dormant accounts | not migrated | (none open) | No trade for 2 years, nothing open | SDI to confirm |
+| 14 | Address text that didn't fit | BPC Check new accounts | 31 lines left out, 5 blank | Over three address lines | Fold into line 3 / 2 rather than lose it, or put the extra in the address description |
+| 15 | Suppliers with no address | BPS Check new accounts | 19 | Blank in Access | X3 may need one; Finance / Purchasing |
+| 16 | Supplier banks | BPSC Check | 37; 44 on transfer terms not loaded | Not BACS, or details incomplete | Ethan's template is BACS only; Finance to confirm the others |
+| 17 | Accounts missing from the cross-reference | the order and open-item views (inner join) | 0 once `add_new_accounts_to_xref.sql` has run; the views' check grid shows it | Inner join drops the row | Switch the views to LEFT JOIN with a Held back reason (register 4) |
+| 18 | Costs at zero | YITC Check | 937 (73 stocked) | No cost in Access | Loaded at 0. SDI to supply a cost for the 73 at least |
+| 19 | Descriptions | ZSDIITM | 100 still only the code | No other text in the file | PMA_DESC on the product extract |
 
