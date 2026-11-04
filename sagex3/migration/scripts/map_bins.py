@@ -8,6 +8,7 @@ Each mapping says how it was made, because they are not equally safe:
   default          no X3 equivalent: a person's name, a work area, a subcontractor.
                    Sent to the single general location A001 for UAT
 """
+import os
 import csv
 import json
 import re
@@ -17,7 +18,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-BASE = "/tmp/claude-0/-home-user-ClaudeVision/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dadea/scratchpad"
+BASE = os.environ.get("MIG_BASE", "/tmp/claude-0/-home-user-ClaudeVision/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dadea/scratchpad")   # run_transactions.py sets a fresh folder per run
 DEFAULT = "A001"
 
 loc = json.load(open(f"{BASE}/loclist/loc.json"))["xl/worksheets/sheet2.xml"][1:]

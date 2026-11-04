@@ -4,10 +4,11 @@ The load1 files stay on the codes loaded in UAT. These copies change only the pr
 code column: SMR col 8, SOHPJ col 17, POH col 8. SMR's Description (col 5) is the product
 code, so it follows.
 """
+import os
 import csv
 import zipfile
 
-BASE = "/tmp/claude-0/-home-user-ClaudeVision/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dadea/scratchpad"
+BASE = os.environ.get("MIG_BASE", "/tmp/claude-0/-home-user-ClaudeVision/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dadea/scratchpad")   # run_transactions.py sets a fresh folder per run
 
 
 def read(p):

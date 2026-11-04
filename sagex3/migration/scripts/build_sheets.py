@@ -16,7 +16,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-BASE = "/tmp/claude-0/-home-user-ClaudeVision/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dadea/scratchpad"
+BASE = os.environ.get("MIG_BASE", "/tmp/claude-0/-home-user-ClaudeVision/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dadea/scratchpad")   # run_transactions.py sets a fresh folder per run
 V8, OUT, T = f"{BASE}/out_v8", f"{BASE}/out_sheets", f"{BASE}/tmpl_t2"
 os.makedirs(OUT, exist_ok=True)
 HF, FILL = Font(bold=True, color="FFFFFF"), PatternFill("solid", fgColor="44546A")

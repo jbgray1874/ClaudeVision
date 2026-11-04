@@ -32,7 +32,7 @@ from collections import Counter
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
-BASE = "/tmp/claude-0/-home-user-ClaudeVision/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dadea/scratchpad"
+BASE = os.environ.get("MIG_BASE", "/tmp/claude-0/-home-user-ClaudeVision/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dadea/scratchpad")   # run_transactions.py sets a fresh folder per run
 OUT = os.environ.get("OUT_DIR", f"{BASE}/out_mapped")
 LOADS = f"{OUT}/load_files"
 os.makedirs(LOADS, exist_ok=True)

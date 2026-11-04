@@ -28,7 +28,7 @@ from openpyxl.styles import Font
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "rebuild"))
 from common import write_load  # noqa: E402  the X3 load file, one writer for the whole kit
 
-BASE = "/tmp/claude-0/-home-user-ClaudeVision/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dadea/scratchpad"
+BASE = os.environ.get("MIG_BASE", "/tmp/claude-0/-home-user-ClaudeVision/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dadea/scratchpad")   # run_transactions.py sets a fresh folder per run
 SRC = os.environ.get("SRC_DIR", f"{BASE}/out_mapped")
 OUT = os.environ.get("OUT_DIR", f"{BASE}/out_mapped")
 COMPANY = os.environ.get("COMPANY", "C01")

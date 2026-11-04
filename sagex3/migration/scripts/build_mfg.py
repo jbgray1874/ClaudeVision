@@ -9,6 +9,7 @@ One line per open Access works order with something still to make:
 Held back, with the reason: nothing left to make, product not in the product file, or
 product with no BOM or route on code 10.
 """
+import os
 import csv
 import re
 from collections import Counter
@@ -17,7 +18,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-BASE = "/tmp/claude-0/-home-user-ClaudeVision/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dadea/scratchpad"
+BASE = os.environ.get("MIG_BASE", "/tmp/claude-0/-home-user-ClaudeVision/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dadea/scratchpad")   # run_transactions.py sets a fresh folder per run
 OUT = f"{BASE}/out_mfg"
 ENC = "cp850"
 

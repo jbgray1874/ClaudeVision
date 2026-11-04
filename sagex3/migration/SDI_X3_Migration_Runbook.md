@@ -20,10 +20,15 @@ an old file. Read section 1 before every run.
    ITM_LOOKUP and the views. Anything that touches `dbo` is SELECT only. Every write script must
    say at the top which migration objects it changes. Check before sending it: no INSERT, UPDATE,
    DELETE or ALTER may name anything outside `migration.`.
-1. **Extract everything fresh, on the same day, at a fixed as-at time.** Stock moved £21k in an
-   hour while we worked. Products are selected by last activity against today's date (see 6.1),
-   so an old product extract misses new products that are on live orders. Every file in a run
-   comes from the same extract.
+1. **Every extract is live, taken on the day of the run, at a fixed as-at time (James, 4 Nov).**
+   Never build or hand over a file from an earlier extract as if it were current. Stock moved
+   £21k in an hour while we worked. Products are selected by last activity against today's date
+   (see 6.1), so an old product extract misses new products that are on live orders. Every file in
+   a run comes from the same extract, and each file states the extract it came from.
+   - **What went wrong on 3–4 Nov:** BICY and BISY were rebuilt for Company C01 and the column
+     swap, and the transaction set was presented as current. All of it was still the 21 Oct
+     extract (plus the 27 Oct new accounts). The fixes were right; the data was 2 weeks old. A
+     rebuild that changes the rules must run on a fresh extract, or say plainly that it doesn't.
 2. **The product file is the master.** Build it first. Routes, BOMs, costs, product-suppliers,
    works orders, stock and orders all take their product codes from it, never from their own
    source.
@@ -1125,7 +1130,41 @@ previous period". For Run 3 that's **20261031**, the same as the accounting date
   the Run 2 errors fixed.
 - Then reconcile the opening transactions with Jim, to judge their quality and find what's missing.
 
-### Run 3: the extract and build, on the day
+### Run 3: the extract and build, on the day (replaced 4 Nov: see the next section)
+
+**Superseded.** `views_v2.sql` no longer outputs the data grids (it now ends with checks). Built
+as below, the transactions would have had no stock grid and the other grids in the wrong
+positions. Use "Opening transactions from a live extract" below.
+
+### Opening transactions from a live extract (4 Nov; use this)
+
+**One morning, three scripts on SDILive, one command:**
+1. `sql/add_new_accounts_to_xref.sql`. It changes only `migration.XREF_*` and is re-runnable. Its
+   checks should show 86 customers and 83 suppliers.
+2. `sql/views_v2.sql`. It changes only `migration.` views and ITM_LOOKUP. Its output isn't needed.
+3. `rebuild/sql/extract_transactions.sql`. Read-only. Save the **whole** output, Results To File,
+   tab-delimited, as `<run>/extract/extract_transactions.txt`. Its labelled grids are:
+   - CHECK: new accounts in the cross-reference and rows dropped for want of an account (the STOP check);
+   - TOTALS: the control totals for the reconciliation;
+   - SOH, POH, SMR, BICX, BISX, WOR: the data.
+
+Then `python scripts/run_transactions.py <run> --stock-date 20261031`. `<run>/out` must hold the
+day's product build (`rebuild/run.py`), so the transactions use exactly that product file's codes.
+
+It runs the proven chain unchanged (map_bins → build_mapped_guides → populate_guides →
+recode_ledgers_v7 → build_mfg → build_bicy_bisy → build_sheets) in a fresh `<run>/work` folder.
+Reference files are generated from the product build, replacing the old UAT product lists. It
+writes the six spreadsheets with their `;` load files, `RUN_SUMMARY.md` (the checks, control
+totals, rows and held-back reasons per file) and the change report.
+
+**Tested 4 Nov on the old (21 Oct) extract, to prove the chain:**
+- the products from the 4 Nov build cut what's held back: stock lots 2,176 → 83 (8,396 lots load);
+  PO lines 205 → 3 (781 load); SO lines 422 → 18 (3,565 load; 17 of the 18 are credits on orders);
+- BICY and BISY come out identical to the current set;
+- the SO and PO lines that differ are renumbered (new lines on the same orders) or carry a
+  filled description. None is lost.
+- Works orders: 66 are held for "no BOM", because new products have no BOM in the BOM file until
+  the BOM part of the kit is built (SCRUM-164).
 **The transaction data must be extracted on the day.** The files built so far come from the
 21 Oct extract (`run1/out.txt`) plus the 27 Oct new-accounts export. A reconciliation against
 today's Access would fail on everything that has moved since.
