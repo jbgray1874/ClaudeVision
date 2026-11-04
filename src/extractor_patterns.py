@@ -71,26 +71,40 @@ def normalize_text(text: str) -> str:
 # the header nothing was struck: every assembly and bought-in line took "STEEL REV" as its
 # material (a material no rate exists for) and the finish carried the row's date. A row whose
 # number column says ALL or "-" is still a row; it supersedes nothing.
+#
+# AND A THIRD HOUSE STYLE: "REVISIONS / ZONE REV. CN REASON DATE APPROVED ON APPROVED BY"
+# (D-690). 12693-01's sheets print it, with rows such as "A // INITIAL DESIGN 30/09/2026
+# 27/10/2026 EXT": a change number of "//", and two dates before the initials. Neither the
+# header nor the row was recognised, so nothing was struck, and every field ran on into the
+# table: the insert's material read "MRMDF REVISIONS", its finish "/ ZONE REV. CN REASON",
+# and every steel part's finish "SEE WELDMENT ZONE REV. CN REASON".
+_ZONE_HEADER = (r"ZONE\s+REV\.?\s+CN\s+REASON(?:\s+DATE)?(?:\s+APPROVED\s+ON)?"
+                r"(?:\s+APPROVED\s+BY)?")
 _REVISION_TABLE_CONTEXT = re.compile(
-    r"REVISION\s+TABLE|REV\s+D[RW]G\s*NO|D[RW]G\s*NO\s+DESCRIPTION\s+DATE", re.IGNORECASE)
+    r"REVISION\s+TABLE|REV\s+D[RW]G\s*NO|D[RW]G\s*NO\s+DESCRIPTION\s+DATE|" + _ZONE_HEADER,
+    re.IGNORECASE)
 _REVISION_TABLE_HEADER = re.compile(
     r"REVISION\s+TABLE|REV\s+D[RW]G\s*NO\s+DESCRIPTION\s+DATE(?:\s+BY)?"
-    r"|D[RW]G\s*NO\s+DESCRIPTION\s+DATE(?:\s+BY)?", re.IGNORECASE)
+    r"|D[RW]G\s*NO\s+DESCRIPTION\s+DATE(?:\s+BY)?|" + _ZONE_HEADER, re.IGNORECASE)
+# The table's own title on that style, struck only where its header is on the page.
+_ZONE_TABLE_TITLE = re.compile(r"\bREVISIONS\b", re.IGNORECASE)
+_ZONE_CONTEXT = re.compile(_ZONE_HEADER, re.IGNORECASE)
 # What a struck header or row leaves behind: a word every labelled-field reader stops at
 # (TITLE_BLOCK_STOP_LABELS), so a field the table was interleaved with ends where the table
 # began instead of running on into the description of a prior issue. Not a word any reader
 # takes as a value, a code or a revision letter.
 REVISION_TABLE_STOP = "ENDOFREVISIONTABLE"
-_NO_NUMBER = {"ALL", "-"}
+_NO_NUMBER = {"ALL", "-", "//"}
 
 
 def _revision_row_re() -> "re.Pattern":
     # rev letter · the drawing number of that issue (or ALL / -) · what changed · date · initials
     from config import PART_NUMBER_PATTERN as _PN
+    # A second date may follow the first (the "APPROVED ON" column) before the initials.
     return re.compile(
-        r"\b([A-Z]\d?)\s+(" + _PN + r"|ALL\b|-(?=\s))\s+"
+        r"\b([A-Z]\d?)\s+(" + _PN + r"|ALL\b|-(?=\s)|//(?=\s))\s+"
         r"((?:(?!\d{1,2}/\d{1,2}/\d{2,4}).){0,90}?)\s*"
-        r"(\d{1,2}/\d{1,2}/\d{2,4})\s+([A-Z]{1,3})\b")
+        r"(\d{1,2}/\d{1,2}/\d{2,4})(?:\s+\d{1,2}/\d{1,2}/\d{2,4})?\s+([A-Z]{1,3})\b")
 
 
 def parse_revision_table(text: str) -> Dict[str, Any]:
@@ -120,8 +134,12 @@ def strip_revision_table(text: str) -> str:
     t = normalize_text(text or "")
     if not _REVISION_TABLE_CONTEXT.search(t):
         return t
+    _zone = bool(_ZONE_CONTEXT.search(t))
     t = _revision_row_re().sub(f" {REVISION_TABLE_STOP} ", t)
-    return " ".join(_REVISION_TABLE_HEADER.sub(f" {REVISION_TABLE_STOP} ", t).split())
+    t = _REVISION_TABLE_HEADER.sub(f" {REVISION_TABLE_STOP} ", t)
+    if _zone:
+        t = _ZONE_TABLE_TITLE.sub(f" {REVISION_TABLE_STOP} ", t)
+    return " ".join(t.split())
 
 
 # ── THE SPECIFICATION LEGEND IS NOT WORK — ONE READER FOR EVERY DOOR ─────────────────────
@@ -1377,7 +1395,11 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
     # the text every field below reads — a prior issue's number is not a part, and a
     # revision row's words are not a finish, a colour or a description.
     revision_table = parse_revision_table(text or "")
-    raw_text = strip_revision_table(text or "") if revision_table["rows"] else (text or "")
+    # A HEADER WITH NO ROW READ IS STILL A TABLE (D-690): its words are struck all the same,
+    # so a field cannot run on into it while its rows are in a style not yet read.
+    raw_text = (strip_revision_table(text or "")
+                if revision_table["rows"] or _REVISION_TABLE_HEADER.search(text or "")
+                else (text or ""))
     normalized_text = normalize_text(raw_text)
     part_number_values = _extract_part_number_candidates(normalized_text)
     # Material is read PRIMARY from the labelled "MATERIAL:" field (authoritative, the
