@@ -1,7 +1,10 @@
 <#
     PUT SDI SAMEDAY'S CODE INTO ITS PRIVATE REPOSITORY - CODE ONLY.
 
-    Run FROM THE LAPTOP, with K: mapped (in the office, or on the VPN):
+    Run FROM THE LAPTOP, in the office or on the VPN. K: does not need to be
+    mapped: the share is read by its full name, which also works in a
+    PowerShell window opened as administrator (Windows hides a person's
+    mapped drives from those - 4 November, "Cannot find drive K").
 
         cd C:\ClaudeVision
         .\sdi-intelligence-backend\deploy\Publish-SameDay-Code.ps1
@@ -30,7 +33,8 @@
 [CmdletBinding()]
 param(
     # The folder that HOLDS SDI_Automation and Muhammad's documents.
-    [string]$Source = "K:\IT\AI & Automation\Design\SDI Same Day Intelligence",
+    # K: is this share (Check-SameDay-Ready, 3 November).
+    [string]$Source = "\\sdi-dc01\shareddata$\Shared\IT\AI & Automation\Design\SDI Same Day Intelligence",
     # The user name in the address makes the sign-in ask for THAT account: the
     # laptop's saved GitHub sign-in is a different one (jbgraysdi2026).
     [string]$Repo = "https://jbgray1874@github.com/jbgray1874/sdi-sameday.git",
@@ -79,11 +83,16 @@ Write-Host "  $(Get-Date -Format 'dddd d MMMM yyyy, HH:mm')" -ForegroundColor Da
 
 # -- 1. Checks ---------------------------------------------------------------------
 Head "1. Checks"
-$auto = Join-Path $Source "SDI_Automation"
-if (-not (Test-Path -LiteralPath (Join-Path $auto "brief_lite\lite_app.py"))) {
-    Stop-Here "Cannot see $auto\brief_lite\lite_app.py - is K: mapped?"
+# FAIL CLOSED. An error INSIDE an if's condition makes PowerShell skip the
+# whole if - so a failed check here once printed "[ok] readable" and went on.
+# Plain strings for the paths, and the test itself caught.
+$auto = "$Source\SDI_Automation"
+$readable = $false
+try { $readable = Test-Path -LiteralPath "$auto\brief_lite\lite_app.py" -ErrorAction Stop } catch { $readable = $false }
+if (-not $readable) {
+    Stop-Here "Cannot read $auto\brief_lite\lite_app.py. Connect FortiClient VPN (or be in the office) and run this again."
 }
-Yes "SameDay's code is readable on K:"
+Yes "SameDay's code is readable on K:'s share"
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Stop-Here "git is not installed on this laptop." }
 
 # The working folder is emptied (except its history) before each copy, so it
@@ -116,8 +125,11 @@ $robo = @($auto, (Join-Path $Work "SDI_Automation"), "/E", "/MAX:5000000", "/R:1
           "/NP", "/NFL", "/NDL", "/NJH", "/NJS") + @("/XD") + $skipDirs + @("/XF") + $skipFiles
 & robocopy @robo | Out-Null
 if ($LASTEXITCODE -ge 8) { Stop-Here "Copying from K: failed (robocopy $LASTEXITCODE)." }
+if (-not (Test-Path -LiteralPath (Join-Path $Work "SDI_Automation\brief_lite\lite_app.py"))) {
+    Stop-Here "The copy does not hold brief_lite\lite_app.py - it did not complete."
+}
 foreach ($doc in $docs) {
-    $from = Join-Path $Source $doc
+    $from = "$Source\$doc"
     if (Test-Path -LiteralPath $from) { Copy-Item -LiteralPath $from -Destination $Work }
 }
 # What stays behind for being big - named, so nothing is missing silently.
@@ -153,7 +165,7 @@ Yes "Nothing key-shaped in $($files.Count) file(s)"
 # -- 4. Commit and send ----------------------------------------------------------------
 Head "4. Into sdi-sameday"
 $version = ""
-$stamp = Join-Path $auto "brief_lite\VERSION.txt"
+$stamp = "$auto\brief_lite\VERSION.txt"
 if (Test-Path -LiteralPath $stamp) { $version = ((Get-Content -LiteralPath $stamp -TotalCount 1) -join "").Trim() }
 if ((RunGit @("add", "-A")) -ne 0) { Stop-Here "git add failed." }
 $pending = (& git -C $Work status --porcelain) -join ""
