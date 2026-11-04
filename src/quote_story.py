@@ -565,7 +565,17 @@ def job_facts(summary: Dict[str, Any], parts: List[Dict[str, Any]],
             if lab[0] < len(_ROUTE_ORDER):
                 by_dept.setdefault(lab[1], set()).update(
                     str(x) for x in (d.get("participants") or [d.get("target_id")]) if x)
+    # LINES THE PACK DRAWS THAT THE BILL DOES NOT CARRY (D-675). 12203-65-GA's 4 Nov 09:55 quote
+    # said "0 parts SDI makes" and "No made parts — every line is bought in" while the box's
+    # five panels sat in the pack, recognised, and set aside as not linked to the product. A
+    # count of the bill is not a fact about the product when the bill is short: such lines are
+    # named, and no sentence below presents the costed count as the whole.
+    not_costed = sorted({str(e.get("part_number") or "") for e in
+                         (summary.get("set_aside_outside_product") or [])
+                         if isinstance(e, dict) and e.get("part_number")
+                         and e.get("reason") == "not_linked_to_the_product"})
     return {
+        "not_costed": not_costed,
         "parts_by_dept": by_dept,
         "pages": pages, "sources": srcs, "page_count": len(pages) or int(
             summary.get("page_count") or 0),
@@ -672,9 +682,11 @@ def evidence_items(summary: Dict[str, Any], facts: Dict[str, Any]) -> List[Dict[
          or _parts_list_quote(facts["pages"], used, codes)
          or _quote_for("parts", facts["pages"], used))
     top = sorted(made, key=lambda p: -(_num(p.get("unit_total_cost_gbp")) or 0))[:3]
+    short = _not_costed_words(facts)
     out.append({
         "topic": "parts", "title": _TOPICS["parts"]["title"], "saw": q,
-        "concluded": (f"{len(made)} part{'s' if len(made) != 1 else ''} SDI makes "
+        "concluded": (f"{short} Costed so far: " if short else "") + (
+                      f"{len(made)} part{'s' if len(made) != 1 else ''} SDI makes "
                       f"({_g(facts['made_pieces'])} pieces a unit) and {len(bought)} bought "
                       f"in" + (f" — led by the " + ", the ".join(
                           _lower_words(_nice(p.get('description') or p.get('part_number')))
@@ -713,7 +725,7 @@ def evidence_items(summary: Dict[str, Any], facts: Dict[str, Any]) -> List[Dict[
         "concluded": ("Made from " + "; ".join(
             _material_phrase(_name_case(m, lower=True) if i else m, gs)
             for i, (m, gs) in enumerate(_by_material(facts["made"])[:3])) + "."
-            if groups else "No made parts — every line is bought in."),
+            if groups else (_not_costed_words(facts) or "No made parts — every line is bought in.")),
         "bill": (_money(facts, sheet_val, "Sheet and section material {} a unit, nested on "
                         "SDI's stock", "Sheet and section material, nested on SDI's stock")
                  if sheet_val else "Material on the bill of materials"),
@@ -1148,6 +1160,17 @@ def _traced_words(facts: Dict[str, Any]) -> str:
             f"{_g(n)} item{'s' if n != 1 else ''} {'are' if n != 1 else 'is'} still being confirmed.")
 
 
+def _not_costed_words(facts: Dict[str, Any]) -> str:
+    """The sentence that says the costed bill is not yet the whole pack, or "" (D-675)."""
+    nc = list(facts.get("not_costed") or [])
+    if not nc:
+        return ""
+    shown = ", ".join(nc[:6]) + (f" and {len(nc) - 6} more" if len(nc) > 6 else "")
+    return (f"Not complete: {len(nc)} line{'s' if len(nc) != 1 else ''} drawn in your pack "
+            f"{'are' if len(nc) != 1 else 'is'} not on the costed bill yet ({shown}), so what "
+            f"follows covers only what has been costed.")
+
+
 def _route_claim(facts: Dict[str, Any]) -> str:
     """"All 9 made parts given a blank, a gauge and a path…" — COUNTED, never asserted (D-589).
     The sentence was fixed text: 0351292's page said every made part had a blank while the
@@ -1212,7 +1235,9 @@ def reading_page(summary: Dict[str, Any], facts: Dict[str, Any], *, customer: st
         ("02 · CONCLUDED", "Decided how it is built",
          built,
          f"Materials, gauges and joints — {len(facts['made'])} parts SDI makes, "
-         f"{len(facts['bought'])} bought in."),
+         f"{len(facts['bought'])} bought in"
+         + (f" so far; {len(facts['not_costed'])} more drawn in your pack are still being "
+            f"added to the estimate." if facts.get("not_costed") else ".")),
         ("03 · CONNECTED", "Turned the design into a route", chain_route,
          _route_claim(facts)),
         ("04 · COSTED", "Priced it in SDI's workbook", costed, _sourced_words(facts)),
@@ -1402,7 +1427,10 @@ def costing_page(summary: Dict[str, Any], facts: Dict[str, Any], *, customer: st
                   f'in SDI\'s own costing workbook from {_g(facts["page_count"])} pages of your '
                   f'{"brief" if facts["concept"] else "drawings"}; {len(made)} made part'
                   f'{"s" if len(made) != 1 else ""} sized from '
-                  f'{"your visuals and stated dimensions" if facts["concept"] else "your drawings"}.</p>')
+                  f'{"your visuals and stated dimensions" if facts["concept"] else "your drawings"}'
+                  + (f'; {len(facts["not_costed"])} more drawn line'
+                     f'{"s" if len(facts["not_costed"]) != 1 else ""} not yet costed'
+                     if facts.get("not_costed") else "") + '.</p>')
     return f"""
   <div class="sheet qs">
     {_head(sdi_logo, cust_header, f"SDI to {customer} · {job_number}")}
