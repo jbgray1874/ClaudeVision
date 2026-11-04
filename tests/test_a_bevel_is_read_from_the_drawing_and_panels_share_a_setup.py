@@ -93,7 +93,7 @@ def test_the_panels_own_45_degrees_and_its_flat_agree_so_it_is_solid(tmp_path, m
     assert edges["sheet_of"] == CODE
     assert "balloon 5" in base["bevel_reading"]["evidence_from"]
     flag = next(f for f in base["review_flags"] if f.startswith("BEVEL, NOT A CUT-OUT"))
-    assert "No bevel rate is configured" in flag and "not read for bevels" in flag
+    assert "second pass over that length" in flag and "not read for bevels" in flag
 
 
 def test_every_panel_with_its_own_callout_is_read(tmp_path, monkeypatch):

@@ -164,3 +164,31 @@ def test_an_unsplit_part_is_never_reported_complete(tmp_path):
     wb.save(book)
     code, out = _run(rec, book, CODE, *ARGS)
     assert code == 1 and "estimate INCOMPLETE" in out and "own material row has no price" in out
+
+
+def test_a_cnc_row_that_carries_the_bevel_pass_prices_the_bevel(tmp_path):
+    """D-677: the bevel is timed on the CNC row that cuts the panel; the row's record names the
+    minutes it includes for each panel, and that is the bevel's machining priced."""
+    path = _record(tmp_path)
+    rec = json.loads(path.read_text())
+    for row in rec["workbook_labour"]["rows"]:
+        n = row["workbook_row"] - 150
+        row["bevel_pass_min_by_part"] = {f"{CODE}-{n:02d}": 0.86}
+    rec["manufacturing_writeup"]["parts"][0]["review_flags"] = [
+        "EDGE BANDING TIMED ON ITS PIECES' SHOWING EDGES, PROVISIONAL: 1.4 m"]
+    path.write_text(json.dumps(rec))
+    book = _book(tmp_path, board_price=4.2)
+    import openpyxl
+    wb = openpyxl.load_workbook(book)
+    ws = wb["Estimate"]
+    ws.cell(19, 3, "Bill of Materials")
+    for c, v in zip(range(3, 14), ["EDGE23X1ABS  ABS edging", 1.437, None, None, None, None,
+                                   None, None, None, None, 0.62]):
+        ws.cell(21, c, v)                     # row 20 is the block's header row
+    ws.cell(22, 3, "Total Bill of Materials")
+    wb.save(book)
+    code, out = _run(path, book, CODE, *ARGS)
+    assert "machining not priced" not in out, out
+    assert "includes " + f"{CODE}-01's bevel pass" in out
+    assert "edging length not proven" not in out
+    assert "no edging material is charged" not in out

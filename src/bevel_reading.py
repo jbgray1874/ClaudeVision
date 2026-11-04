@@ -466,6 +466,7 @@ def apply_bevel_readings(parts: Iterable[Any], summary: Mapping[str, Any]) -> Li
             part["bevelled_edges"] = {"angle_deg": got["angle_deg"], "run_mm": got["run_mm"],
                                       "edges": got["edges"],
                                       "length_mm": round(got["bevelled_edge_mm"], 1),
+                                      "outline_perimeter_mm": round(got["outline_perimeter_mm"], 1),
                                       "evidence": got["because"], "sheet_of": got["sheet_of"]}
             pages = ", ".join(str(p) for p in got["pages"] if p)
             part.setdefault("review_flags", []).append(
@@ -474,8 +475,9 @@ def apply_bevel_readings(parts: Iterable[Any], summary: Mapping[str, Any]) -> Li
                 f"({got['sheet_of']}'s sheet, page {pages}). The panel is solid: area "
                 f"{got['outline_area_mm2']:,.0f} mm2, cut path the outline. "
                 f"{got['bevelled_edge_mm']:,.0f} mm of edge is bevelled at "
-                f"{got['angle_deg']:g} degrees: machining the CNC row must cover. No bevel rate "
-                f"is configured; confirm the CNC time covers the bevel tool and its set-up."
+                f"{got['angle_deg']:g} degrees: machining the CNC row must cover. The CNC row "
+                f"times it as a second pass over that length with a bevel-tool set-up, both "
+                f"house allowances (LABOUR_RULES cnc_routing): confirm them."
                 + (f" The inner lines' layer ({', '.join(got['layer_support'])}) agrees."
                    if got["layer_support"] else "")
                 + f" Not checked: {MODEL_NOT_READ}.")

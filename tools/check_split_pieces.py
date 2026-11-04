@@ -270,6 +270,11 @@ def main() -> int:
                                        f"cannot be justified"))
         if _BEVEL_ROWS.search(str(op)) or _BEVEL_ROWS.search(str(desc)):
             bevel_priced.update(hit)
+        # A CUTTING ROW WHOSE TIME INCLUDES A PANEL'S BEVEL PASS SAYS SO (D-677).
+        for _bp, _bmin in (rr.get("bevel_pass_min_by_part") or {}).items():
+            if _num(_bmin) > 0 and str(_bp).upper() in hit:
+                bevel_priced.add(str(_bp).upper())
+                print(f"      includes {str(_bp).upper()}'s bevel pass, {_num(_bmin):.2f} min a part")
         if str(op).startswith("Edge Banding"):
             edging_rows.append(row)
     for nid, members in sorted(nests.items()):

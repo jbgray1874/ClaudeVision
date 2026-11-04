@@ -1507,7 +1507,8 @@ def _plain_stock_rows(rows: Iterable[Any], token: str,
         if rate <= 0 or rate > _SHEET_RATE_MAX_GBP_PER_M2:
             continue
         kept.append({"part_code": str(r[0] or "") if len(r) > 0 else "",
-                     "description": desc, "gbp_per_m2": rate})
+                     "description": desc, "gbp_per_m2": rate,
+                     "length_mm": L, "width_mm": W, "thickness_mm": T, "sheet_gbp": cost})
     return kept
 
 
@@ -5179,6 +5180,118 @@ def _faced_board_promotion(part: Dict[str, Any], material: Optional[str]):
     return family, " and ".join(evidence[:2])
 
 
+def _decor_probe(part: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """A stand-in record carrying only the product CODES the drawing prints for this part,
+    each with its letters-and-digits stem ("D4428OV" and "D4428"): a catalogue writes the same
+    décor "D4428 OV". Decor words (OAK, KRONO) are left out — they name a family of décors,
+    and a laminate found by "OAK" is not the drawn one."""
+    try:
+        from product_reference import product_reference
+        codes = list(product_reference(part or {}).get("codes") or [])
+    except Exception:                                                # noqa: BLE001
+        codes = []
+    stems = []
+    for c in codes:
+        m = re.match(r"^[A-Z]*\d+", c)
+        if m and len(m.group(0)) >= 4 and m.group(0) not in codes + stems:
+            stems.append(m.group(0))
+    return {"product_reference": " ".join(codes + stems)} if codes else None
+
+
+def _middle_row(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    good = [r for r in rows or [] if _safe_float(r.get("sheet_gbp")) and _safe_float(r.get("length_mm"))]
+    if not good:
+        return None
+    good.sort(key=lambda r: float(r.get("gbp_per_m2") or 0))
+    return good[len(good) // 2]
+
+
+def _constructed_faced_board(part: Dict[str, Any], family: str,
+                             thickness: Optional[float]) -> Optional[Dict[str, Any]]:
+    """A faced board priced as the shop would build it, from SDI Live rows (D-676).
+
+    One core sheet + the facing sheets that cover it on each face + adhesive + laminating
+    time, per core sheet. The core is the stocked thickness at or just under (drawn - faces x
+    facing). The facing is the drawing's own décor where a catalogue row carries its code,
+    else the catalogue's median facing, said as such. None when either cannot be found."""
+    cfg = getattr(config, "FACED_BOARD_CONSTRUCTION", None) or {}
+    t = _safe_float(thickness)
+    if not cfg or not cfg.get("enabled", True) or not t or t <= 0:
+        return None
+    core_word = (cfg.get("core_word_by_family") or {}).get(str(family or "").upper())
+    if not core_word:
+        return None
+    faces = int(cfg.get("faces") or 2)
+    probe = _decor_probe(part)
+    facing, facing_t, class_only = None, None, None
+    for lt in cfg.get("facing_thicknesses_mm") or ():
+        r = _resolve_board_sheet_rate_gbp_per_m2(cfg.get("facing_word") or "LAMINATE",
+                                                 float(lt), probe)
+        if not r or not r.get("rows"):
+            continue
+        if r.get("product_reference_match"):
+            facing, facing_t = r, float(lt)
+            break
+        if class_only is None:
+            class_only = (r, float(lt))
+    if facing is None and class_only:
+        facing, facing_t = class_only
+    if facing is None:
+        # NO ROW CARRIES THE DRAWN CODE: the catalogue's own facings, asked by the facing word
+        # itself, and said to be the class, never the décor.
+        _word = str(cfg.get("facing_word") or "LAMINATE").upper()
+        for lt in cfg.get("facing_thicknesses_mm") or ():
+            r = _resolve_board_sheet_rate_gbp_per_m2(_word, float(lt),
+                                                     {"product_reference": _word})
+            if r and r.get("rows"):
+                facing, facing_t = dict(r, product_reference_match=False), float(lt)
+                break
+    if facing is None:
+        return None
+    target = t - faces * facing_t
+    core, core_t = None, None
+    for ct in sorted((float(c) for c in cfg.get("core_thicknesses_mm") or ()
+                      if float(c) <= target + 0.25), reverse=True):
+        r = _resolve_board_sheet_rate_gbp_per_m2(core_word, ct, None)
+        if r and r.get("rows"):
+            core, core_t = r, ct
+            break
+    if core is None:
+        return None
+    crow, frow = _middle_row(core.get("rows") or []), _middle_row(facing.get("rows") or [])
+    if not crow or not frow:
+        return None
+    cL, cW, fL, fW = (float(crow["length_mm"]), float(crow["width_mm"]),
+                      float(frow["length_mm"]), float(frow["width_mm"]))
+    core_m2 = cL * cW / 1_000_000.0
+    per_face = max(1, int(-(-(cL * cW) // (fL * fW))))
+    adhesive = float(cfg.get("adhesive_gbp_per_m2_per_face") or 0.0)
+    minutes = float(cfg.get("laminating_minutes_per_m2_per_face") or 0.0)
+    rate = float((getattr(config, "HOURLY_RATES_GBP", {}) or {}).get(
+        cfg.get("laminating_rate_key") or "glue") or 0.0)
+    parts = {
+        "core": round(float(crow["sheet_gbp"]), 2),
+        "facing": round(faces * per_face * float(frow["sheet_gbp"]), 2),
+        "adhesive": round(faces * core_m2 * adhesive, 2),
+        "laminating": round(faces * core_m2 * minutes / 60.0 * rate, 2),
+    }
+    total = round(sum(parts.values()), 2)
+    decor = bool(facing.get("product_reference_match"))
+    built = core_t + faces * facing_t
+    note = (f"BUILT FROM SDI LIVE: core {crow['part_code']} {crow['description']} "
+            f"£{parts['core']:.2f} + {faces} face(s) x {per_face} x {frow['part_code']} "
+            f"{frow['description']} £{parts['facing']:.2f} + adhesive £{parts['adhesive']:.2f} + "
+            f"laminating £{parts['laminating']:.2f} = £{total:.2f} per {cL:g} x {cW:g} sheet; "
+            f"{core_t:g} + {faces} x {facing_t:g} = {built:g} mm against the drawn {t:g} mm")
+    return {"sheet_gbp": total, "sheet_mm": (max(cL, cW), min(cL, cW)), "components": parts,
+            "core_row": crow, "facing_row": frow, "faces": faces, "core_thickness_mm": core_t,
+            "facing_thickness_mm": facing_t, "built_mm": built, "drawn_mm": t,
+            "facing_is_the_drawn_decor": decor, "note": note,
+            "allowances": {"faces": faces, "adhesive_gbp_per_m2_per_face": adhesive,
+                           "laminating_minutes_per_m2_per_face": minutes,
+                           "laminating_rate_gbp_per_hour": rate}}
+
+
 def _board_sheet_rate(material: Optional[str], thickness: Optional[float]):
     """(GBP per full sheet, how it was arrived at) for a faced board, or (None, "").
 
@@ -7915,6 +8028,23 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     # only place it could be overtaken), and `_faced_family` / `_cost_family` carry its
     # answer down here. Asking again would double the evidence flag on every faced part.
     _board_rate, _board_note = _board_sheet_rate(_cost_family, thickness)
+    _constructed = None
+    if _faced_family and not _board_rate:
+        # BUILT FROM THE CATALOGUE BEFORE ANY MARKET GUESS (D-676): see FACED_BOARD_CONSTRUCTION.
+        try:
+            _constructed = _constructed_faced_board(part, _faced_family, thickness)
+        except Exception:                                            # noqa: BLE001
+            _constructed = None
+        if _constructed:
+            _board_rate, _board_note = _constructed["sheet_gbp"], _constructed["note"]
+            part.setdefault("review_flags", []).append(
+                f"FACED BOARD BUILT FROM THE CATALOGUE, PROVISIONAL: {_constructed['note']}. "
+                + ("The facing is the drawn décor." if _constructed["facing_is_the_drawn_decor"]
+                   else "The facing is the catalogue's median laminate, NOT the drawn décor: "
+                        "no SDI Live row carries the drawing's code.")
+                + f" Faces ({_constructed['faces']}), adhesive and laminating time are house "
+                  f"allowances to confirm; a supplier price for the finished board replaces "
+                  f"this.")
     if _faced_family:
         if not _board_rate:
             # ── RUNG 4 FOR A BOARD, BECAUSE IT IS THE LAST RUNG AND NOT A BOUGHT-IN'S ──
@@ -8003,7 +8133,8 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         # states its sheet (£172 buys a 3080x1220), the nester's preferred stock size is
         # overridden: dividing one sheet's price by a bigger sheet's yield understates
         # every part on the job.
-        _b_paid_sheet = _board_priced_sheet_mm(_cost_family, thickness)
+        _b_paid_sheet = (tuple(_constructed["sheet_mm"]) if _constructed
+                         else _board_priced_sheet_mm(_cost_family, thickness))
         if _b_paid_sheet:
             _paid_nest = _costed_facts.nest_on_sheet(
                 _cost_family, blank_length, blank_width,
@@ -8049,7 +8180,9 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             "costing_material_family": _cost_family,
             "part_confidence_overall": _part_confidence_overall(part),
             "part_geometry_reliability": _part_geometry_reliability(part),
-            "reliability_flags": ["board_sheet_priced", "indicative_price"],
+            "reliability_flags": (["board_sheet_priced", "indicative_price"]
+                                  + (["board_constructed_provisional"] if _constructed else [])),
+            **({"board_construction": _constructed} if _constructed else {}),
             "note": f"Faced board, sheet-nested: {_board_note}",
             "price_source": _build_price_source_metadata(
                 {}, fallback_source="sdi_history_board_sheet_price",
@@ -10061,6 +10194,28 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         setup_times_min["cnc_routing"] = round(float(cnc_rule.get("setup_min", 4.0)), 2)
         sec_per_mm = float(cnc_rule.get("sec_per_mm_contour", 0.04))
         run_sec = max(float(cnc_rule.get("min_run_min", 8.0)) * 60.0, cut_length_mm * sec_per_mm)
+        # THE BEVEL IS PRICED, NOT LEFT TO THE OUTLINE'S MINIMUM (D-677). A panel whose flat
+        # and drawing agree on a bevel (bevel_reading, D-670) has its bevelled edges run a
+        # second time with a bevel tool. That pass is its length at the bevel feed, added
+        # after the minimum run, and the tool takes its own set-up. Both are house
+        # allowances, said on the line.
+        _bev = part.get("bevelled_edges") if isinstance(part.get("bevelled_edges"), dict) else {}
+        _bev_mm = _safe_float(_bev.get("length_mm")) or 0.0
+        if _bev_mm > 0:
+            _bev_sec = _bev_mm * float(cnc_rule.get("bevel_sec_per_mm", sec_per_mm))
+            _bev_setup = float(cnc_rule.get("bevel_setup_min", 0.0))
+            run_sec += _bev_sec
+            setup_times_min["cnc_routing"] = round(setup_times_min["cnc_routing"] + _bev_setup, 2)
+            part["bevel_machining"] = {
+                "length_mm": round(_bev_mm, 1), "angle_deg": _bev.get("angle_deg"),
+                "run_min": round(_bev_sec / 60.0, 2), "setup_min": round(_bev_setup, 2),
+                "basis": "house allowance: LABOUR_RULES cnc_routing bevel_sec_per_mm and "
+                         "bevel_setup_min"}
+            part.setdefault("review_flags", []).append(
+                f"BEVEL PRICED ON THE CNC ROW, PROVISIONAL: {_bev_mm:,.0f} mm bevelled at "
+                f"{_safe_float(_bev.get('angle_deg')) or 0:g} degrees is a second pass of "
+                f"{_bev_sec / 60.0:.2f} min, with {_bev_setup:g} min for the bevel tool's "
+                f"set-up. House allowances: confirm against the CAM cycle time.")
         run_times_min["cnc_routing"] = round(run_sec / 60.0, 2)
         # THE HOLES THE PROGRAM COVERS, NAMED (D-512). "Holes are in the CNC program" was a
         # bare assertion the 12343-01J review could not verify — the workbook's hole inputs
@@ -10148,6 +10303,19 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         except Exception:                                            # noqa: BLE001
             _eb = {}
         edge_mm = _safe_float(_eb.get("mm")) or 0.0
+        # A BOX KEEPS ITS EDGING TIME, ON THE EDGES ITS MITRED PIECES SHOW (D-677).
+        _pieces_eb = part.get("edging_on_its_pieces") \
+            if isinstance(part.get("edging_on_its_pieces"), dict) else {}
+        _from_pieces = edge_mm <= 0 and (_safe_float(_pieces_eb.get("mm")) or 0.0) > 0
+        if _from_pieces:
+            edge_mm = float(_pieces_eb["mm"])
+            part.setdefault("review_flags", []).append(
+                f"EDGE BANDING TIMED ON ITS PIECES' SHOWING EDGES, PROVISIONAL: "
+                f"{edge_mm / 1000.0:g} m, each mitred piece's outline less its bevelled "
+                f"joints ({', '.join(_pieces_eb.get('pieces') or [])})."
+                + (f" Not measured: {', '.join(_pieces_eb['not_measured'])}."
+                   if _pieces_eb.get("not_measured") else "")
+                + " Derived from the drawing: confirm the edged edges.")
         if edge_mm <= 0:
             edge_mm = 2.0 * ((blank_length_pm or 0.0) + (blank_width_pm or 0.0))
             if edge_mm > 0:
@@ -10165,7 +10333,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                     "assembly, which has no blank of its own, and nothing gives the banded "
                     "length. Timed at the bander's minimum run. Confirm the banded edges and "
                     "their metres, and the minutes follow the length.")
-        else:
+        elif not _from_pieces:
             part.setdefault("review_flags", []).append(
                 f"Edge banding timed on {edge_mm / 1000.0:g} m of banded edge "
                 f"({_eb.get('basis')}) — not the perimeter.")
@@ -14856,6 +15024,14 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                       + f" — project costs £{_pc_total:,.2f} the order, charged once, "
                         f"kept out of the unit price", flush=True)
 
+        # THE EDGES OF A MITRED BOX THAT SHOW (D-677): each bevelled piece of an edged box
+        # is stamped with its outline less its mitred joints, before the edging line reads it.
+        try:
+            from edge_banding import stamp_exposed_edges_of_mitred_pieces as _stamp_ex
+            _exposed = _stamp_ex(parts)
+        except Exception:                                        # noqa: BLE001
+            _exposed = {"measured": [], "not_measured": []}
+
         # ── ABS EDGING: A MATERIAL LINE, NOT A QUESTION ───────────────────────────────
         #
         # Tony Ford, 11908-21: "Not all materials calculated no ABS edging Allowed." The
@@ -14940,6 +15116,10 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             # fact, and a reader deciding whether to trust the line needs to know which.
             _edge_said = ("confirmed by " + _bm_who
                           if "estimator_confirmed" in _edge_from
+                          else "measured on the edges of the mitred pieces that are not "
+                               "joints, where the box's sheet calls out edging without "
+                               "naming them"
+                          if _edge_from == {"exposed_edges_beside_mitres"}
                           else "measured from the edges the drawing marks as banded")
             if _edge_code and _edge_m > 0 and not _already:
                 _stub = _bought_in_part_stub(
@@ -14979,6 +15159,16 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                         f"edging specification ({_spec.get('description') or _edge_code}) "
                         f"while the banded part states {', '.join(_decors)} — confirm the "
                         f"edging matches the decor before quoting.")
+                if "exposed_edges_beside_mitres" in _edge_from:
+                    _unmeasured = [c for c in (_exposed.get("not_measured") or [])
+                                   if c not in set(_edge_for)]
+                    _stub.setdefault("review_flags", []).append(
+                        f"EDGING DERIVED, PROVISIONAL: the box's sheet calls out edging and "
+                        f"draws mitred joints; the metres are each piece's outline less its "
+                        f"bevelled edges ({', '.join(sorted(set(_edge_for)))}). Confirm the "
+                        f"edged edges against the drawing."
+                        + (f" NOT MEASURED: {', '.join(_unmeasured)} (no bevel reading), so "
+                           f"this line may be short." if _unmeasured else ""))
                 _stub.setdefault("review_flags", []).append(
                     f"EDGING {_edge_m:g} m a unit on code {_edge_code} "
                     f"({_spec.get('description') or 'ABS edging'}). The METRES are "
