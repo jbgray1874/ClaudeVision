@@ -25,14 +25,14 @@ code,kbd{background:color-mix(in srgb,var(--ink) 8%,transparent);padding:1px 6px
      to the portal, the way into SameDay, and what the office address can and cannot do. -->
 <div class="top">
   <a href="./">&larr; All apps</a>
-  <a class="open" href="http://10.0.0.5:5020/">Open SameDay &rarr;</a>
+  <a class="open" href="/sameday/">Open SameDay &rarr;</a>
 </div><main>
 <h1>SDI Same Day</h1>
 <p class="sub">A simple guide for account managers and designers. Talk or type the client's brief. Same Day asks what's missing, draws the concept, makes the client pack, and makes the SDI brief PDF.</p>
 
 <div class="card office">
-<p><b>In the office or on the VPN.</b> Open SameDay with the button above (<code>10.0.0.5:5020</code>) and enter the team access code &mdash; ask Muhammad Yazir for it.</p>
-<p><b>Type for now.</b> Browsers only allow the microphone on secure (https) pages, and the office address is not one yet, so <b>Talk live</b>, <b>Hold the mic</b> and voice notes come later, with SameDay's secure address. Typed briefs, client files, renders, the GA, the client sheet and the brief PDF all work today.</p>
+<p><b>On your phone, from anywhere.</b> Open SameDay with the button above. It signs you in with your SDI account (no team code), and everything works, <b>Talk live</b> included. Add it to your home screen from the browser's menu and it opens like an app.</p>
+<p><b>On the office address</b> (<code>10.0.0.5</code>, plain http) the browser won't give it the microphone, so type there, or open the app portal's secure address on that computer too. Typed briefs, client files, renders, the GA, the client sheet and the brief PDF work everywhere.</p>
 <p>If it can't find a past SDI job, that is expected for now: past work lives on W:, and the server cannot read it yet.</p>
 </div>
 
@@ -123,4 +123,37 @@ code,kbd{background:color-mix(in srgb,var(--ink) 8%,transparent);padding:1px 6px
 </ul>
 </div>
 <p class="sub">Questions: Muhammad Yazir, AI &amp; Automation.</p>
-</main></body></html>
+</main>
+<script>
+// 4 Nov 2026 (James, on his phone: "Open SameDay doesn't do anything - it just hangs"). An app on the office
+// network (10.x, 172.16-31.x, 192.168.x) can't be reached from a phone outside the office: the browser just waits.
+// So it is tried, and if it hasn't opened in 10 seconds the wait is stopped and the reason is said.
+(function(){
+  const OFFICE=/^http:\/\/(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i;
+  let box=null;
+  function note(msg){
+    if(!box){ box=document.createElement('div'); box.setAttribute('role','status');
+      box.style.cssText='position:fixed;left:12px;right:12px;bottom:16px;z-index:999;max-width:560px;margin:0 auto;'
+        +'padding:14px 16px;border-radius:12px;background:#17181B;color:#fff;font:15px/1.45 system-ui,sans-serif;'
+        +'box-shadow:0 8px 30px rgba(0,0,0,.35)';
+      box.addEventListener('click',()=>{ box.remove(); box=null; });
+      document.body.appendChild(box); }
+    box.textContent=msg;
+  }
+  document.addEventListener('click',e=>{
+    const a=e.target.closest&&e.target.closest('a[href]');
+    if(!a||a.target==='_blank'||!OFFICE.test(a.href)||e.metaKey||e.ctrlKey||e.shiftKey) return;
+    e.preventDefault();
+    const name=(a.textContent||'').replace(/^\s*Open\s+/i,'').replace(/[\s→↗]+$/,'').trim()||'This app';
+    note('Opening '+name+'…');
+    const t=setTimeout(()=>{
+      try{ window.stop(); }catch(_){}
+      note(name+" didn't open from here. For now it only opens on the office network or the VPN, so on a phone "
+        +"connect to the VPN first. Opening it from anywhere, with the microphone, comes with its secure address.");
+    },10000);
+    window.addEventListener('pagehide',()=>clearTimeout(t),{once:true});
+    location.href=a.href;
+  },true);
+})();
+</script>
+</body></html>
