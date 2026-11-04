@@ -1069,6 +1069,28 @@ works orders, open items and journals. Setup and master data are kept. For Run 3
 - **Products missing from X3 come first:** every stock lot, order line or works order on a product
   X3 doesn't hold fails again (section 18, item 1).
 
+**Run 3 master data from the extract (4 Nov).** Run `rebuild/sql/extract_products.sql` and
+`sql/product_suppliers_v4.sql`, saved as `<run>/extract/extract_products.txt` and
+`product_suppliers.txt`. Then:
+`python rebuild/run.py <run> --previous <current set> --previous-costs <current YITC> --suppliers <current BPS>`.
+It builds three complete files, each with its `;` load file and the change report:
+- **ZSDIITM:** every live product, including the OLD ones holding stock, live do-not-use / archived
+  products, PHANT by the usage test, and descriptions from PMA_DESC;
+- **YITC:** a cost line for every product; a loaded cost is kept, a new product is costed from Access;
+- **ZSDIITMSUP:** every supplier pair with a PIO priority.
+
+**Words used with Acuity:**
+- **FGSL** = Finished Good, Sold, bought in: a product SDI buys and resells without making it. It's
+  one of the four X3 product categories in the template guide: FGML (finished good, made), FGSL
+  (finished good, bought in), RAWML (raw material, bought in) and PHANT (sub-assembly). In the
+  product file a product is FGSL when it's in no BOM, neither as a parent nor as a component.
+- **The FR numbers** = the two identifiers X3 requires on a French supplier:
+  - **EECNUM**, the intra-EU VAT number: "FR" + 2 check characters + the 9-digit SIREN, e.g.
+    FR12345678901;
+  - **CRN**, the company registration number: the SIRET, 14 digits (the 9-digit SIREN plus a
+    5-digit site number).
+  Both are on the supplier's invoices and letterhead. Finance supplies them; they're never made up.
+
 **Learned 3–4 Nov:**
 - **X3 numbers documents itself:** type, site, sequence, e.g. PIN-S01A000015 (purchase invoice;
   creation author ASL = Acuity's user) and MFG-S01A000001. Those numbers are never in our files,
@@ -1098,17 +1120,17 @@ set. **Items 1–4 affect Run 3 directly.**
 
 | # | What | Where | How many | Why | Revisit: what to do |
 |---|---|---|---|---|---|
-| 1 | **Products X3 doesn't hold** (live products graded OLD; do-not-use / archived products that are live) | SMR, SOHPJ, POH, MFG Held back | **2,176 stock lots (£603k), 405 SO lines, 204 PO lines, 25 works orders** | Product not in the product file | **Run `rebuild/sql/extract_products.sql` and import the missing products before the transactions.** They're the "missing master data" for Run 3. Without them every one of these rows fails again |
+| 1 | **Products X3 doesn't hold** (live products graded OLD; do-not-use / archived products that are live) | SMR, SOHPJ, POH, MFG Held back; ZSDIITMSUP | **2,176 stock lots (£603k), 405 SO lines, 204 PO lines, 25 works orders; 6,265 product-supplier pairs on 5,689 products (1,752 bought since 2025)** | Product not in the product file | **Run `rebuild/sql/extract_products.sql` and `sql/product_suppliers_v4.sql`, then `rebuild/run.py`. It builds the products, a cost for each and every product-supplier pair.** Import the missing products before the transactions. They're the "missing master data" for Run 3. Without them every one of these rows fails again |
 | 2 | FGSL products with stock | SMR | 1,222 lots, 451 products, £1.72m | X3's FGSL isn't stock-managed | Marc / Ethan: make FGSL stock-managed (register 21) |
 | 3 | Customers and suppliers X3 rejected | BPS, BPC, BPCDL, POH, BISY | 11 suppliers, 6 customers, 1,425 delivery addresses, 3 PO lines, 12 BISY items | FR numbers missing; postcodes; State/Region | Fix list (`Run3_master_data_fixes.xlsx`); Finance for the FR numbers |
-| 4 | PHANT products on open sales orders | SOHPJ | 32 products, 82 lines | PHANT has no sales data in X3 | FGML (usage test), the PHANT decision |
+| 4 | PHANT products on open sales orders | SOHPJ | 32 products, 82 lines | PHANT has no sales data in X3 | **In the product rebuild:** the usage test makes them FGML (group A). They load with the product file; X3 needs the category updated on the existing records |
 | 5 | Credits on sales orders (negative lines) | SOHPJ Held back | 16 lines (+1 with no product); £93k on 27 Oct | X3 takes a credit as a credit note, not an order line | Marc: raise them as credit notes, or Finance to confirm they're open |
 | 6 | Works orders | MFG Held back | 42 no BOM on code 10, 36 nothing left to make, 3 no route (25 no product: item 1) | No BOM / route to make them with, or already made | Re-check the 42 and 3 once BOMs and routes are rebuilt from ASC_BOM_TBL; the 36 are finished, so close them in Access |
 | 7 | Shared product codes | ZSDIITM Held back; YITC Held back | 33 products; 27 costs | Two Access products clean to one X3 code | SDI: which product keeps the code. Proposal: the other takes a suffix (-B) so neither is lost |
 | 8 | BOMs and routes on bought-in products | BOM Held back; ROU Held back | 11 BOM lines; 71 route lines (36 products) | X3 builds and routes manufactured products only (Ethan) | Check each: if SDI makes it, the product is FGML, not FGSL / RAWML, and the lines load |
 | 9 | BOM components missing | BOM Missing components | 215 lines on 92 BOMs | Component not in the product file | Clears with item 1 (components at any depth) |
 | 10 | Components vw_BOMP drops by a hard-coded list | (never extracted) | 51 components | No reason recorded | SDI / Acuity: why. The kit reads ASC_BOM_TBL, so they come back unless excluded by name |
-| 11 | Alternative suppliers | ZSDIITMSUP | 3,150 | The template has no priority column | Ethan: a PIO column |
+| 11 | Alternative suppliers | ZSDIITMSUP | 3,150 | The template has no priority column | **Done in the kit, 4 Nov (`rebuild/product_suppliers.py`):** every pair goes in, with a PIO column (column D) from Access's own purchase ranking (1 = last bought from). Nothing invented. Ethan to map PIO in the import; the three template columns load every pair without it. Tested: 7,603 main + 3,147 alternatives |
 | 12 | Accounts left out on purpose | BPC / BPS, and their orders and items | Customers: 4 intercompany, ESD01, FSC01, IBS01. Suppliers: 72 employee expense, 6 non-suppliers. 56 SO lines, 1 customer item | Not trading accounts | Finance to confirm; the SO lines and item must be dealt with if they're real |
 | 13 | Dormant accounts | not migrated | (none open) | No trade for 2 years, nothing open | SDI to confirm |
 | 14 | Address text that didn't fit | BPC Check new accounts | 31 lines left out, 5 blank | Over three address lines | Fold into line 3 / 2 rather than lose it, or put the extra in the address description |

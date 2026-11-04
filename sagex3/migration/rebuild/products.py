@@ -346,7 +346,7 @@ def build(run_dir, today=None, phant="usage", recent_years=2):
     summary = dict(load_file=f"{txt.name} ({n:,} lines" + (f", {lost} characters not in cp850)" if lost else ")"),
                    products=len(data), categories=dict(cats), held=len(held), check=len(check),
                    not_migrated=len(not_migrated), phant=dict(groups), rates=rate, shared=len(shared))
-    return out, summary, rows
+    return out, summary, rows, code
 
 
 def main():
@@ -356,7 +356,7 @@ def main():
     ap.add_argument("--phant", choices=("usage", "access"), default="usage")
     ap.add_argument("--recent-years", type=int, default=2)
     a = ap.parse_args()
-    out, summary, _ = build(a.run_dir, a.today, a.phant, a.recent_years)
+    out, summary, _, _ = build(a.run_dir, a.today, a.phant, a.recent_years)
     print(out)
     for k, v in summary.items():
         print(f"  {k}: {v}")

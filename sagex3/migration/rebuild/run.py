@@ -14,6 +14,8 @@ import argparse
 from pathlib import Path
 
 import changes
+import costs
+import product_suppliers
 import products
 
 
@@ -24,13 +26,26 @@ def main():
     ap.add_argument("--today", help="the run's date, yyyymmdd (default today)")
     ap.add_argument("--phant", choices=("usage", "access"), default="usage")
     ap.add_argument("--recent-years", type=int, default=2)
+    ap.add_argument("--previous-costs", help="the YITC spreadsheet loaded last: its costs are kept")
+    ap.add_argument("--suppliers", help="the YA004BPS spreadsheet: product-suppliers keep these suppliers")
     a = ap.parse_args()
     run = Path(a.run_dir)
 
-    path, summary, _ = products.build(run, a.today, a.phant, a.recent_years)
+    path, summary, rows, code = products.build(run, a.today, a.phant, a.recent_years)
     print(f"Products: {path.name}")
     for k, v in summary.items():
         print(f"  {k}: {v}")
+
+    path, summary = costs.build(run, rows, code, a.previous_costs)
+    print(f"Costs: {path.name}")
+    for k, v in summary.items():
+        print(f"  {k}: {v}")
+
+    if (run / "extract" / "product_suppliers.txt").exists() and a.suppliers:
+        path, summary = product_suppliers.build(run, rows, code, a.suppliers)
+        print(f"Product-suppliers: {path.name}")
+        for k, v in summary.items():
+            print(f"  {k}: {v}")
 
     if a.previous:
         print()

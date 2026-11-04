@@ -34,8 +34,9 @@ Settings that change per run (dates, company) are passed in, not edited in code:
 | `sql/00_discover.sql`: full view definitions and the Access product-table columns | written; a cross-check only now, since the product extract uses columns already proven |
 | `sql/extract_products.sql` + `products.py`: ZSDIITM with live products in, the PHANT usage test, and Check, Not migrated, Held back and Why tabs | **done**; waiting on the first live run. Tested on the original vw_ITM data: it reproduces the loaded file (137 V6 additions not in the test data; 108 descriptions kept longer) |
 | `run.py` | done for products; each builder joins it as it's written |
-| Costs (fold in `build_yitc.py`): the extract already carries Access material cost, lot cost, last purchase price and Access's own exchange rates | next |
-| BOMs, routes, product-suppliers | after costs |
+| `costs.py`: YITC, a cost line for every product (loaded costs kept; new products costed from Access) | **done 4 Nov**, tested |
+| `product_suppliers.py`: ZSDIITMSUP, every supplier pair with a PIO priority (input: `product_suppliers_v4.sql`) | **done 4 Nov**, tested: 7,603 main + 3,147 alternatives |
+| BOMs, routes | next (the extract carries the BOM lines and line ids) |
 | Customers, suppliers, banks, delivery addresses | after that |
 | Stock, orders, open items, works orders | last; already close to repeatable via `views_v2.sql` |
 
