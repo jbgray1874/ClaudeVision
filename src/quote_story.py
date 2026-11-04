@@ -396,11 +396,21 @@ def _is_assembly(p: Dict[str, Any]) -> bool:
     """An assembly by the canonical graph's word, or by its sheet's role where the graph
     said nothing. A BOUGHT ARTICLE LISTED ON AN ASSEMBLY SHEET IS A BOUGHT LINE (D-587):
     0351292's five fasteners are bound to the GA, so its role read "assembly", and the
-    quote told the customer "11 parts SDI makes, 0 bought in" beside five bought lines."""
-    if str(p.get("_canonical_kind") or "").lower() == "assembly":
+    quote told the customer "11 parts SDI makes, 0 bought in" beside five bought lines.
+
+    WHERE THE GRAPH SPOKE, ITS WORD STANDS (D-668). 12203-66's three panels are drawn on
+    pages of the GA's own PDF, so each page read "assembly". The graph called each a leaf and
+    the sheet costed all three, yet the quote told the customer "0 parts SDI makes" and "No
+    made parts — every line is bought in". The page's role decides only when the graph said
+    nothing; a blank on the costed record is a made part's, as one on the part itself is."""
+    kind = str(p.get("_canonical_kind") or "").strip().lower()
+    if kind == "assembly":
         return True
+    if kind in ("leaf", "bought_in"):
+        return False
+    me = p.get("material_estimate") if isinstance(p.get("material_estimate"), dict) else {}
     if "assembly" not in {str(r).lower() for r in (p.get("page_roles") or [])} \
-            or _num(p.get("blank_length_mm")):
+            or _num(p.get("blank_length_mm")) or _num(me.get("blank_length_mm")):
         return False
     return not _is_bought(p)
 
@@ -409,9 +419,28 @@ def _qty(p: Dict[str, Any]) -> float:
     return _num(p.get("quantity")) or 1.0
 
 
+_BOARD_ACRONYMS = frozenset({"MDF", "MFC", "MFMDF", "HPL", "ABS", "PVC", "ACM", "PETG",
+                             "HDPE", "GRP", "OSB"})
+
+
+def _keeps_its_capitals(word: str) -> bool:
+    """A board's or plastic's initials stay capitals: "MDF", not "Mdf" (D-668). A short word
+    with no vowel is initials too; a word like STEEL or OAK is not."""
+    w = word.strip(".,;:()").upper()
+    return w in _BOARD_ACRONYMS or (1 < len(w) <= 5 and w.isalpha()
+                                    and not set(w) & set("AEIOUY"))
+
+
+def _name_case(text: str, lower: bool = False) -> str:
+    """Title case (or lower case) for a material's name, its initials left as capitals."""
+    return " ".join(w.upper() if _keeps_its_capitals(w) else (w.lower() if lower else
+                                                              w.capitalize())
+                    for w in str(text or "").split())
+
+
 def _material_name(p: Dict[str, Any]) -> str:
     m = str(p.get("normalized_material") or "").replace("_", " ").strip()
-    return m.title() if m else ""
+    return _name_case(m) if m else ""
 
 
 def _code_in(text: Any) -> str:
@@ -682,7 +711,7 @@ def evidence_items(summary: Dict[str, Any], facts: Dict[str, Any]) -> List[Dict[
     out.append({
         "topic": "material", "title": _TOPICS["material"]["title"], "saw": q,
         "concluded": ("Made from " + "; ".join(
-            _material_phrase(m.lower() if i else m, gs)
+            _material_phrase(_name_case(m, lower=True) if i else m, gs)
             for i, (m, gs) in enumerate(_by_material(facts["made"])[:3])) + "."
             if groups else "No made parts — every line is bought in."),
         "bill": (_money(facts, sheet_val, "Sheet and section material {} a unit, nested on "

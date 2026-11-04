@@ -160,6 +160,9 @@ DXF_REASON_SENTENCES: Dict[str, str] = {
         "say which"),
     "numbered_piece_or_separate_item_unresolved": (
         "could be a numbered piece or a separate item — not attached; say which"),
+    "unnumbered_view_beside_numbered_pieces": (
+        "a view of the whole part beside its numbered piece flats — no piece number and no "
+        "stock in its name, so not costed and its circles not read as holes"),
     "distinct_blanks_no_children_in_scope_pick_best": (
         "a different view of a part whose flat was costed from another export — not costed "
         "as a second blank"),

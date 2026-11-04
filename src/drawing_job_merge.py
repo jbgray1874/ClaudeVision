@@ -1230,11 +1230,20 @@ def flat_stock_key(path: Path) -> Tuple[Optional[float], str]:
 # `01A-07`, and the clusterer to refuse to merge it with `01A-03` — and a pass that read it
 # differently would name parts it had already thrown away.
 _MEMBER_NUMBER_RE = re.compile(r"[_\s-]-(\d{1,3})(?=[_\s.-])")
+# SDI'S THIRD SPELLING OF A MEMBER NUMBER (D-669): the word PART (or PIECE) and its number
+# after the part code — "12203-65-01J_PART5_10.8mm LAM MDF_revA.DXF". 12203-65's box is five
+# panels exported PART1..PART5 under the one code 01J. Read as nothing, the five flats were
+# five outlines of one part: the base was costed as the box and the two sides, the back and
+# the front were dropped as "a different view". A separator must come before the word, so a
+# code that is itself spelt PART… never supplies one.
+_PIECE_WORD_NUMBER_RE = re.compile(
+    r"(?<=[_\s-])(?:PART|PIECE)[\s_-]?(\d{1,2})(?=[_\s-]|\.(?!\d)|$)", re.I)
 
 
 def member_number_from_filename(path: Path) -> str:
-    """"…-01A -03 5MM…" -> "03"; "" when the name carries no member number."""
-    _m = _MEMBER_NUMBER_RE.search(Path(path).stem)
+    """"…-01A -03 5MM…" -> "03", "…-01J_PART5_…" -> "5"; "" when the name carries none."""
+    _stem = Path(path).stem
+    _m = _MEMBER_NUMBER_RE.search(_stem) or _PIECE_WORD_NUMBER_RE.search(_stem)
     return _m.group(1).lstrip("0") or "0" if _m else ""
 
 
@@ -1509,6 +1518,10 @@ def _member_suffix_of_flat(path: Path) -> Optional[str]:
     ("12349-02-69-01A") cannot supply one, and a revision marker ("_REV[A]") has none.
     """
     m = _MEMBER_SUFFIX.search(str(getattr(path, "name", path)))
+    if m:
+        return m.group(1)
+    # "…-01J_PART5_10.8mm…": the word and its number (D-669).
+    m = _PIECE_WORD_NUMBER_RE.search(Path(str(getattr(path, "name", path))).stem)
     if m:
         return m.group(1)
     # SDI's other spelling: the piece number joined straight to a lettered part code —
@@ -3627,6 +3640,24 @@ def augment_summary_with_dxf(
 
     for pid, paths in by_part.items():
         part = part_by_id[pid]
+        # A VIEW OF THE WHOLE PART IS NOT ONE OF ITS PIECES (D-669). Beside 12203-65-01J's five
+        # numbered panel flats sat "12203-65-01J.dxf": no member number and no stock in its
+        # name, the export of the part's drawing. Read as a sixth flat it is a phantom piece
+        # the size of the sheet; read as a "second view" its balloons became 26 holes. Where
+        # two or more files carry distinct member numbers, a file carrying neither a number nor
+        # a stock is set aside and said, never costed.
+        _numbered = {_member_suffix_of_flat(p) for p in paths} - {None}
+        if len(_numbered) > 1:
+            _views = [p for p in paths if _member_suffix_of_flat(p) is None
+                      and flat_stock_key(p) == (None, "")]
+            for _v in _views:
+                report["skipped"].append({
+                    "path": str(_v), "part_number": part.get("part_number"),
+                    "reason": "unnumbered_view_beside_numbered_pieces",
+                    "detail": (f"{len(_numbered)} numbered piece flats of "
+                               f"{part.get('part_number')} sit beside it; it carries no piece "
+                               f"number and no stock")})
+            paths = [p for p in paths if p not in _views]
         _as_pieces = [p for p in paths if str(p) in piece_files]
         # PIECES BY ROLE (D-598j): every flat names a different role and the part has no child
         # in scope to bind them to. Same blank and same stock no longer read as revisions.

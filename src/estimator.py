@@ -10156,6 +10156,15 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                     f"part says which edges are banded, so the time is a CEILING and not a "
                     f"measurement. Mark the banded edges on the drawing, or confirm the "
                     f"metres, and the minutes follow the length.")
+            else:
+                # NO LENGTH AND NO BLANK (D-669): the edging is called out on the assembly
+                # of its pieces, which has no flat of its own. Timed at the bander's minimum
+                # run and said, never presented as a measured length.
+                part.setdefault("review_flags", []).append(
+                    "EDGE BANDING AT THE MINIMUM RUN: the edging is called out on this "
+                    "assembly, which has no blank of its own, and nothing gives the banded "
+                    "length. Timed at the bander's minimum run. Confirm the banded edges and "
+                    "their metres, and the minutes follow the length.")
         else:
             part.setdefault("review_flags", []).append(
                 f"Edge banding timed on {edge_mm / 1000.0:g} m of banded edge "
