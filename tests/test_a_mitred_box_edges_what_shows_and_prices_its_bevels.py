@@ -98,13 +98,43 @@ def test_the_edging_line_is_made_from_the_edges_that_show():
     E.estimate_document(parts, summary=summary)
     stub = next((p for p in parts if p.get("_edging_line")), None)
     assert stub is not None, "the edging line must mint"
-    assert stub["part_number"] == config.FACED_BOARD_EDGING_CODE
+    assert stub["part_number"] != config.FACED_BOARD_EDGING_CODE, (
+        "the config spec is white W1001: a line in another decor never carries its code")
+    assert stub["part_number"] == "EDGE-ABS-D4428"
+    assert "1 mm ABS edging to match SWISS KRONO OAK D4428OV" in stub["description"]
+    assert any(f.startswith("EDGING DECOR NOT IN SDI LIVE") for f in stub["review_flags"])
     assert abs(float(stub["quantity"]) - round((SLOPE + 270 + 402) / 1000, 3)) < 1e-9
     assert stub["_edging_basis"] == ["exposed_edges_beside_mitres"]
     assert stub["_edging_for"] == [f"{BOX}-01", f"{BOX}-03", f"{BOX}-04"]
     flag = next(f for f in stub["review_flags"] if f.startswith("EDGING DERIVED, PROVISIONAL"))
     assert f"NOT MEASURED: {BOX}-02" in flag
     assert any("D4428OV" in f for f in stub["review_flags"]), "the decor is said"
+
+
+def test_the_edging_is_sdi_lives_row_in_the_drawn_decor_and_thickness(monkeypatch):
+    """SDI Live holds oak D4428 OV edging at 35 x 1 mm (EDGE0056) and 23 x 2 mm (EDGE0052);
+    the box's sheet calls out 1 mm, so the line is EDGE0056."""
+    sys.path.insert(0, str(ROOT / "tests"))
+    from test_the_drawings_product_reference_prices_the_line import _Conn
+    rows = {"D4428": [
+        ("EDGE0052", "23 x 2mm ABS Edging to match Swiss Krono Oak Natural D4428 OV", 0.48),
+        ("EDGE0056", "35 x 1mm ABS Edging to match Swiss Krono Oak Natural D4428 OV", 0.65),
+        ("LAMINATE234", "2600 x 1300mm 0.8mm Laminate Ref Swiss Krono Oak Natural D4428 OV",
+         85.75)]}
+    monkeypatch.setattr(config, "get_connection", lambda timeout=20: _Conn(rows), raising=False)
+    E._SHEET_RATE_CACHE.clear()
+    parent, pieces = _box()
+    parts = [parent] + pieces
+    summary = {"declared_product": BOX, "drawing_number": BOX,
+               "manufacturing_writeup": {"parts": parts},
+               "document_analysis": {"bom_rows": []}, "llm_full_extract": {}, "pages": []}
+    E.estimate_document(parts, summary=summary)
+    stub = next(p for p in parts if p.get("_edging_line"))
+    assert stub["part_number"] == "EDGE0056", "1 mm called out: not the 2 mm row"
+    assert stub["description"].startswith("35 x 1mm ABS Edging to match Swiss Krono Oak")
+    assert any(f.startswith("EDGING IN THE DRAWN DECOR: EDGE0056") for f in stub["review_flags"])
+    assert not any(f.startswith("EDGING DECOR NOT IN SDI LIVE") for f in stub["review_flags"])
+    E._SHEET_RATE_CACHE.clear()
 
 
 def _cnc(r):
@@ -145,3 +175,20 @@ def test_the_boxs_edging_time_follows_its_pieces_metres():
                 .get("edge_banding") or 0)
     assert abs(run - round(want, 2)) < 0.02
     assert any(f.startswith("EDGE BANDING TIMED ON ITS PIECES' SHOWING EDGES") for f in flags)
+
+
+def test_the_piece_costing_tool_reads_a_costed_record(tmp_path, capsys):
+    import json
+    sys.path.insert(0, str(ROOT / "tools"))
+    import show_piece_costing
+    parent, pieces = _box()
+    parts = [parent] + pieces
+    summary = {"declared_product": BOX, "manufacturing_writeup": {"parts": parts},
+               "document_analysis": {"bom_rows": []}, "llm_full_extract": {}, "pages": []}
+    summary["estimate_summary"] = E.estimate_document(parts, summary=summary)
+    path = tmp_path / "record.json"
+    path.write_text(json.dumps(summary, default=str))
+    assert show_piece_costing.main([str(path), BOX]) == 0
+    out = capsys.readouterr().out
+    assert f"== {BOX}: 5 piece(s)" in out and "bevel pass: 1290.0 mm" in out
+    assert "== edging line(s): 1" in out and "EDGE-ABS-D4428" in out

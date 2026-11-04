@@ -18,8 +18,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Iterable, List
 
-_FIELDS_DEFAULT = ("colours", "colour", "surface_finishes", "finish", "material_text_as_printed",
-                   "decor", "product_reference")
+_FIELDS_DEFAULT = ("colours", "colour", "normalized_colour", "surface_finishes", "finish",
+                   "material_text_as_printed", "decor", "product_reference")
 # Words that qualify a colour or finish and never name a product.
 _STOP_DEFAULT = (
     "MATT", "MATTE", "GLOSS", "SATIN", "SILK", "TEXTURED", "TEXTURE", "SMOOTH", "FINISH",

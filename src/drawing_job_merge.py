@@ -1724,6 +1724,46 @@ def recheck_dxf_pieces_against_model(parts: Sequence[Dict[str, Any]],
     return asked
 
 
+# THE FIELDS THAT NAME A PART'S PRODUCT, which a piece split from it shares (D-676, D-679). The
+# decor can arrive by several readers and under several names: the whole-document read puts
+# "SWISS KRONO OAK D4428OV" in `normalized_colour` (12203-65-01J, 4 Nov 12:19), which the first
+# version of this list left out, so all five panels were asked for a board with no decor.
+PIECE_PRODUCT_FIELDS = ("colours", "colour", "normalized_colour", "decor",
+                        "material_text_as_printed", "product_reference")
+
+
+def inherit_parent_product(piece: Dict[str, Any], parent: Dict[str, Any]) -> List[str]:
+    """Copy the product-naming fields a piece lacks from the part it was split from; returns
+    the fields copied."""
+    got: List[str] = []
+    if not isinstance(piece, dict) or not isinstance(parent, dict):
+        return got
+    for f in PIECE_PRODUCT_FIELDS:
+        v = parent.get(f)
+        if v and not piece.get(f):
+            piece[f] = list(v) if isinstance(v, list) else v
+            got.append(f)
+    if got:
+        piece.setdefault("product_reference_inherited_from",
+                         str(parent.get("part_number") or "").strip())
+    return got
+
+
+def inherit_product_onto_pieces(parts: Any) -> List[str]:
+    """Every piece split from a part's numbered flats takes the part's product fields it lacks,
+    once every reader has run (the decor may be read after the split). Returns the pieces
+    changed."""
+    plist = [p for p in (parts or []) if isinstance(p, dict)]
+    by_pn = {_normalize_part_key(p.get("part_number")): p for p in plist if p.get("part_number")}
+    changed: List[str] = []
+    for piece in plist:
+        ppn = piece.get("dxf_minted_piece_of") or piece.get("dxf_flat_of_parent")
+        parent = by_pn.get(_normalize_part_key(ppn)) if ppn else None
+        if parent is not None and parent is not piece and inherit_parent_product(piece, parent):
+            changed.append(str(piece.get("part_number") or ""))
+    return changed
+
+
 def _split_parent_flats_to_children(
     parent: Dict[str, Any],
     clusters: List[Tuple[Optional[Tuple[float, float]], List[Path]]],
@@ -1853,12 +1893,7 @@ def _split_parent_flats_to_children(
                         orphan["normalized_finish_inherited_from"] = _ppn
                 # AND THE PRODUCT IT NAMES (D-676): "SWISS KRONO OAK D4428OV" on the box's
                 # sheet is the décor of every panel, which is what the catalogue is asked for.
-                for _rf in ("colours", "colour", "decor", "material_text_as_printed",
-                            "product_reference"):
-                    if parent.get(_rf) and not orphan.get(_rf):
-                        orphan[_rf] = (list(parent[_rf]) if isinstance(parent[_rf], list)
-                                       else parent[_rf])
-                        orphan.setdefault("product_reference_inherited_from", _ppn)
+                inherit_parent_product(orphan, parent)
             orphan.setdefault("review_flags", []).append("distinct_child_flat_promoted_by_geometry")
             parts.append(orphan)
             parts_by_key[_normalize_part_key(pn)] = orphan

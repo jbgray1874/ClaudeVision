@@ -2731,6 +2731,18 @@ def pre_costing_passes(summary: Dict[str, Any]) -> None:
               flush=True)
 
 
+    # A BEVEL READ FROM THE DRAWING, AGAIN WHERE IT WAS NOT TAKEN (D-679): the scan reads it
+    # once (_finalize_scan_summary); this pass is what a replay of a saved record runs, so the
+    # current reader asks the drawing for every panel whose bevel the saved run did not take.
+    try:
+        from bevel_reading import apply_bevel_readings as _bevels
+        _bev2 = _bevels(summary["manufacturing_writeup"]["parts"], summary)
+        if _bev2:
+            print(f"   [bevel] {', '.join(_bev2)}: bevel read from the drawing, the flat's "
+                  f"inner lines agreeing", flush=True)
+    except Exception as _bev_exc:                                    # noqa: BLE001
+        print(f"   [bevel] not read ({type(_bev_exc).__name__}: {_bev_exc})", flush=True)
+
     # A SECTION SCHEDULE ON A PART'S OWN SHEET REACHES ITS RECORD (D-576), after every
     # pre-costing pass that could have lost it: the requirement is captured from the sheet's
     # words, a record with no members and no pieces is given them, and the hand-off audit

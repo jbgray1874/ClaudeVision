@@ -327,3 +327,61 @@ def test_the_lasers_keep_the_one_sheet_condition():
     rows = [g for g in wbp.canonical_labour_groups(summary, est, 20).values()
             if str(g.get("wb_op") or "").startswith("Laser")]
     assert rows and not any(g["laser_nest_proven"] for g in rows)
+
+
+def test_the_parts_detail_sheet_is_read_though_its_record_is_bound_to_another(tmp_path):
+    """D-679, 12203-65 at 12:19: 01J's record was bound to sheet 2/3, the exploded view with
+    the balloons and no sizes beside them; every panel's 45 degrees is on sheet 3/3, titled
+    12203-65-01J and bound to nothing. The reader asks every sheet titled with the part's own
+    number, and the balloon and the panel's own size still have to agree."""
+    import fitz
+    parts, _ = box._merge(tmp_path)
+    view = tmp_path / "sheet2.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=1190, height=842)
+    for n in range(1, 6):
+        page.draw_circle((900 + 40 * n, 140), 14)
+        page.insert_text((896 + 40 * n, 144), str(n), fontsize=12)
+    doc.save(view)
+    detail = _sheet_pdf(tmp_path, ALL_45)[0]
+    titled = {"title_block": {"drawing_numbers": [CODE]}}
+    summary = {"pages": [
+        {"page_number": 2, "source_pdf_path": str(view), "source_page_number": 1,
+         "page_analysis": titled},
+        {**detail, "page_analysis": titled}]}
+    parts[CODE]["pages"] = [2]
+    taken = br.apply_bevel_readings(list(parts.values()), summary)
+    assert sorted(taken) == [f"{CODE}-{n:02d}" for n in range(1, 6)], [
+        (p, (parts[p].get("bevel_reading") or {}).get("evidence_from")) for p in parts]
+    assert "page 3" in parts[f"{CODE}-05"]["bevel_reading"]["evidence_from"]
+
+
+def test_a_sheet_titled_with_another_number_is_not_the_parts(tmp_path):
+    parts, _ = box._merge(tmp_path)
+    detail = _sheet_pdf(tmp_path, ALL_45)[0]
+    summary = {"pages": [{**detail, "page_analysis": {
+        "title_block": {"drawing_numbers": ["99999-01J"]}}}]}
+    parts[CODE]["pages"] = []
+    assert br.apply_bevel_readings(list(parts.values()), summary) == []
+
+
+def test_a_reading_not_taken_is_asked_again_and_a_taken_one_is_not(tmp_path, monkeypatch):
+    """D-679: a replay of the 12:19 record carries five 'not taken' readings; the current
+    reader asks again. A panel already made solid by a taken reading is left alone."""
+    parts, _ = box._merge(tmp_path)
+    _sheets(monkeypatch, {CODE: "nothing printed"})
+    assert br.apply_bevel_readings(list(parts.values()), {}) == []
+    assert parts[f"{CODE}-05"]["bevel_reading"]["taken"] is False
+    _sheets(monkeypatch, {CODE: _sheet_pdf(tmp_path, ALL_45)})
+    taken = br.apply_bevel_readings(list(parts.values()), {})
+    assert sorted(taken) == [f"{CODE}-{n:02d}" for n in range(1, 6)]
+    assert br.apply_bevel_readings(list(parts.values()), {}) == [], "taken once, not twice"
+
+
+def test_the_pre_costing_passes_read_the_bevel(tmp_path, monkeypatch):
+    import file_scan
+    parts, _ = box._merge(tmp_path)
+    _sheets(monkeypatch, {CODE: _sheet_pdf(tmp_path, ALL_45)})
+    summary = {"manufacturing_writeup": {"parts": list(parts.values())}, "pages": []}
+    file_scan.pre_costing_passes(summary)
+    assert parts[f"{CODE}-05"]["bevel_reading"]["taken"] is True

@@ -1456,6 +1456,37 @@ _SHEET_DIM_RE = re.compile(
     re.IGNORECASE)
 _SHEET_RATE_MAX_GBP_PER_M2 = 60.0
 _SHEET_RATE_MIN_AREA_M2 = 0.05
+# A SHEET'S SIZE IS WRITTEN MORE THAN ONE WAY (D-679). SDI Live writes "2600 x 1300mm 0.8mm"
+# (LAMINATE234), "18mm 2800 x 2070" and "12mm x 2440 x 1220mm" as well as "2440 x 1220 x 15mm";
+# only the last was read, so the laminate in 12203-65's decor and most MFMDF rows were dropped
+# unseen. The two sheet sides are three or four digits; the thickness is the third factor, or
+# the one other "<n>mm" on the row. Two different thicknesses on one row ("18mm ... + 2mm ABS
+# edging") say nothing about which is the sheet, and the row is not used.
+_SHEET_PAIR_RE = re.compile(r"(?<![\d.])(\d{3,4}(?:\.\d+)?)\s*[xX×]\s*(\d{3,4}(?:\.\d+)?)(?:\s*mm)?",
+                            re.IGNORECASE)
+_SHEET_GAUGE_RE = re.compile(r"(?<![\d.])(\d{1,2}(?:\.\d+)?)\s*mm\b", re.IGNORECASE)
+
+
+def _sheet_dims(desc: Any) -> Optional[Tuple[float, float, float]]:
+    """(length, width, thickness) in mm from a catalogue row's description, or None."""
+    text = str(desc or "")
+    m = _SHEET_DIM_RE.search(text)
+    if m:
+        try:
+            return float(m.group(1)), float(m.group(2)), float(m.group(3))
+        except (TypeError, ValueError):
+            return None
+    pair = _SHEET_PAIR_RE.search(text)
+    if not pair:
+        return None
+    rest = text[:pair.start()] + " " + text[pair.end():]
+    gauges = {float(g) for g in _SHEET_GAUGE_RE.findall(rest) if 0 < float(g) <= 60}
+    if len(gauges) != 1:
+        return None
+    try:
+        return float(pair.group(1)), float(pair.group(2)), gauges.pop()
+    except (TypeError, ValueError):
+        return None
 
 
 def _plain_stock_rates_gbp_per_m2(rows: Iterable[Any], token: str,
@@ -1490,11 +1521,11 @@ def _plain_stock_rows(rows: Iterable[Any], token: str,
             continue
         if any(bad in du for bad in _SHEET_RATE_EXCLUDE):
             continue
-        m = _SHEET_DIM_RE.search(desc)
-        if not m:
+        dims = _sheet_dims(desc)
+        if not dims:
             continue
         try:
-            L, W, T = float(m.group(1)), float(m.group(2)), float(m.group(3))
+            L, W, T = dims
             cost = float(cost_raw)
         except (TypeError, ValueError):
             continue
@@ -5290,6 +5321,65 @@ def _adhesive_by_its_pack(spec: Dict[str, Any], unit: str) -> Dict[str, Any]:
     return out
 
 
+_EDGING_SIZE_RE = re.compile(r"(?<![\d.])(\d{2})\s*[xX×]\s*(\d(?:\.\d+)?)\s*mm", re.IGNORECASE)
+
+
+def _edging_row_in_decor(probes: Iterable[str], thickness_mm: Optional[float],
+                         board_mm: Optional[float]) -> Optional[Dict[str, Any]]:
+    """SDI Live's edging row in the drawn decor (D-679): a row naming the decor's code and
+    edging, at the drawing's edging thickness where it states one, at least as wide as the
+    board, the narrowest of those. None when SDI Live holds none."""
+    key = ("__edging__|" + "+".join(probes) + f"|{thickness_mm}|{board_mm}", 0.0)
+    if key in _SHEET_RATE_CACHE:
+        return _SHEET_RATE_CACHE[key]  # type: ignore[return-value]
+    got: Optional[Dict[str, Any]] = None
+    try:
+        import config as _cfg
+        cn = _cfg.get_connection(timeout=20)
+    except Exception:                                                # noqa: BLE001
+        return None
+    try:
+        cur = cn.cursor()
+        for probe in probes or ():
+            if len(str(probe)) < 4:
+                continue
+            cur.execute(
+                """SELECT [Part code],[Description],[System cost per]
+                   FROM dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING
+                   WHERE [System cost per] > 0 AND [Description] LIKE ?""",
+                (f"%{probe}%",),
+            )
+            found = []
+            for r in cur.fetchall() or []:
+                desc = str(r[1] or "")
+                if "EDG" not in desc.upper() or str(probe).upper() not in desc.upper():
+                    continue
+                m = _EDGING_SIZE_RE.search(desc)
+                if not m:
+                    continue
+                w, t = float(m.group(1)), float(m.group(2))
+                if thickness_mm and abs(t - float(thickness_mm)) > 0.05:
+                    continue
+                if board_mm and w < float(board_mm):
+                    continue
+                found.append({"part_code": str(r[0]), "description": desc,
+                              "width_mm": w, "thickness_mm": t,
+                              "row_gbp": _safe_float(r[2])})
+            if found:
+                found.sort(key=lambda x: (x["width_mm"], x["part_code"]))
+                got = found[0]
+                break
+    except Exception:                                                # noqa: BLE001
+        got = None
+    finally:
+        try:
+            cn.close()
+        except Exception:                                            # noqa: BLE001
+            pass
+    _SHEET_RATE_CACHE[key] = got  # type: ignore[assignment]
+    return got
+
+
 def _constructed_faced_board(part: Dict[str, Any], family: str,
                              thickness: Optional[float]) -> Optional[Dict[str, Any]]:
     """A faced board priced as the shop would build it, from SDI Live rows (D-676).
@@ -5333,16 +5423,20 @@ def _constructed_faced_board(part: Dict[str, Any], family: str,
     if facing is None:
         return None
     target = t - faces * facing_t
-    core, core_t = None, None
+    core, core_t, core_rows = None, None, []
+    _faced_words = tuple(str(w).upper() for w in (cfg.get("core_exclude_words") or ()))
+    _tol = float(cfg.get("core_tolerance_mm") or 1.0)
     for ct in sorted((float(c) for c in cfg.get("core_thicknesses_mm") or ()
-                      if float(c) <= target + 0.25), reverse=True):
+                      if target - _tol <= float(c) <= target + 0.25), reverse=True):
         r = _resolve_board_sheet_rate_gbp_per_m2(core_word, ct, None)
-        if r and r.get("rows"):
-            core, core_t = r, ct
+        plain = [row for row in ((r or {}).get("rows") or [])
+                 if not any(w in str(row.get("description") or "").upper() for w in _faced_words)]
+        if plain:
+            core, core_t, core_rows = r, ct, plain
             break
     if core is None:
         return None
-    crow, frow = _middle_row(core.get("rows") or []), _middle_row(facing.get("rows") or [])
+    crow, frow = _middle_row(core_rows), _middle_row(facing.get("rows") or [])
     if not crow or not frow:
         return None
     cL, cW, fL, fW = (float(crow["length_mm"]), float(crow["width_mm"]),
@@ -15150,6 +15244,14 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                       + f" — project costs £{_pc_total:,.2f} the order, charged once, "
                         f"kept out of the unit price", flush=True)
 
+        # A PIECE SHARES ITS PART'S PRODUCT (D-679): the decor may be read after the split, so
+        # the pieces take it here, once every reader has run and before anything is costed.
+        try:
+            from drawing_job_merge import inherit_product_onto_pieces as _inherit
+            _inherit(parts)
+        except Exception:                                        # noqa: BLE001
+            pass
+
         # THE EDGES OF A MITRED BOX THAT SHOW (D-677): each bevelled piece of an edged box
         # is stamped with its outline less its mitred joints, before the edging line reads it.
         try:
@@ -15248,43 +15350,69 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                           if _edge_from == {"exposed_edges_beside_mitres"}
                           else "measured from the edges the drawing marks as banded")
             if _edge_code and _edge_m > 0 and not _already:
+                # THE EDGING IS THE DRAWN DECOR'S, NOT THE CONFIG SPEC'S (D-679). Config's
+                # spec is Tony Ford's W1001 ST9 white; 12203-65 is oak D4428OV and SDI Live
+                # stocks "35 x 1mm ABS Edging to match Swiss Krono Oak Natural D4428 OV"
+                # (EDGE0056). Where the banded parts name a decor, the line is SDI Live's
+                # edging row in that decor at the drawing's edging thickness; with no such
+                # row it names the decor and the gap, and never carries the white spec code.
+                _decor_names = sorted({str(c).strip() for _pp in (parts or [])
+                                       if isinstance(_pp, dict)
+                                       and str(_pp.get("part_number") or "").strip().upper()
+                                       in set(_edge_for)
+                                       for c in ([_pp.get("normalized_colour")]
+                                                 + list(_pp.get("colours") or []))
+                                       if str(c or "").strip()})
+                _banded_parts = [_pp for _pp in (parts or []) if isinstance(_pp, dict)
+                                 and str(_pp.get("part_number") or "").strip().upper()
+                                 in set(_edge_for)]
+                _probe_e = next((_decor_probe(_pp) for _pp in _banded_parts
+                                 if _decor_probe(_pp)), None)
+                _callouts = " ".join(
+                    str(((_pp.get("edging_on_exposed_edges") or {}).get("callout")) or "")
+                    for _pp in _banded_parts)
+                _cm = re.search(r"(\d+(?:\.\d+)?)\s*MM", _callouts.upper())
+                _edge_t = float(_cm.group(1)) if _cm else None
+                _board_t = max([_safe_float(_pp.get("normalized_thickness_mm")) or 0.0
+                                for _pp in _banded_parts] or [0.0])
+                _decor_row = (_edging_row_in_decor(
+                    str(_probe_e["product_reference"]).split(), _edge_t, _board_t)
+                    if _probe_e else None)
+                _line_code, _line_desc = _edge_code, (_spec.get("description") or "ABS edging")
+                if _decor_row:
+                    _line_code, _line_desc = _decor_row["part_code"], _decor_row["description"]
+                elif _decor_names:
+                    _stem = str((_probe_e or {}).get("product_reference") or "").split()
+                    _line_code = "EDGE-ABS-" + (_stem[-1] if _stem else "DECOR")
+                    _line_desc = (f"{_edge_t:g} mm " if _edge_t else "") + \
+                        f"ABS edging to match {_decor_names[0]}"
                 _stub = _bought_in_part_stub(
-                    _edge_code,
-                    (f"{_spec.get('description') or 'ABS edging'} — {_edge_m:g} m a unit, "
-                     f"{_edge_said}"),
-                    _edge_m)
+                    _line_code, f"{_line_desc} — {_edge_m:g} m a unit, {_edge_said}", _edge_m)
                 _stub["unit_of_measure"] = "m"
                 _stub["supplier"] = _spec.get("supplier") or ""
+                if _decor_row or _decor_names:
+                    _stub["supplier"] = ""      # the spec's supplier sells the spec's decor
                 _stub["_edging_line"] = True
                 _stub["_edging_basis"] = sorted(b for b in _edge_from if b)
-                # WHOSE EDGES THESE METRES ARE (D-516). The product-scope rule keeps this
-                # line only on this provenance: the parts whose banded lengths created it,
-                # validated against the graph at write-out — never a blanket exemption.
                 _stub["_edging_for"] = sorted(set(_edge_for))
-                # AND THE LINE HANGS UNDER THE PART IT BANDS (D-517). The 11:58 book proved
-                # the set-aside was the COMPILER's own not_linked issue, not the late-line
-                # filter: the stub is in the parts list when the canonical route compiles,
-                # and a record with no edge to anything is rightly refused. bom_parent is
-                # the record-level edge the compiler already reads (D-277, minted
-                # fasteners), so the edging links under its first banded part and is scoped
-                # like any bought-in under the product — no exemption anywhere.
                 if _edge_for:
                     _stub["bom_parent"] = sorted(set(_edge_for))[0]
-                # THE SPEC NAMES ONE DECOR AND THE DRAWING MAY NAME ANOTHER. Config's
-                # edging spec is Tony Ford's identified product (W1001 ST9); this job's
-                # drawing states its own decor, and matching them is a person's call —
-                # said on the line, never silently assumed compatible.
-                _decors = sorted({str(c).strip() for _pp in (parts or [])
-                                  if isinstance(_pp, dict)
-                                  and str(_pp.get("part_number") or "").strip().upper()
-                                  in set(_edge_for)
-                                  for c in (_pp.get("colours") or []) if str(c).strip()})
-                if _decors:
+                if _decor_row:
+                    _stub["_edging_row"] = _decor_row
                     _stub.setdefault("review_flags", []).append(
-                        f"EDGING SPEC VS THE DRAWING'S DECOR: this line is the config "
-                        f"edging specification ({_spec.get('description') or _edge_code}) "
-                        f"while the banded part states {', '.join(_decors)} — confirm the "
-                        f"edging matches the decor before quoting.")
+                        f"EDGING IN THE DRAWN DECOR: {_decor_row['part_code']} "
+                        f"{_decor_row['description']}, SDI Live's edging row for "
+                        f"{', '.join(_decor_names) or 'the drawn decor'}"
+                        + (f" at the drawing's {_edge_t:g} mm" if _edge_t else "")
+                        + f", {_decor_row['width_mm']:g} mm wide on {_board_t:g} mm board.")
+                elif _decor_names:
+                    _stub.setdefault("review_flags", []).append(
+                        f"EDGING DECOR NOT IN SDI LIVE: the banded parts state "
+                        f"{', '.join(_decor_names)} and no SDI Live edging row carries it"
+                        + (f" at {_edge_t:g} mm" if _edge_t else "")
+                        + f". The config spec ({_spec.get('description') or _edge_code}) is "
+                          f"another decor and is not used. A named gap: give the edging code "
+                          f"or a supplier price.")
                 if "exposed_edges_beside_mitres" in _edge_from:
                     _unmeasured = [c for c in (_exposed.get("not_measured") or [])
                                    if c not in set(_edge_for)]
@@ -15296,8 +15424,8 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                         + (f" NOT MEASURED: {', '.join(_unmeasured)} (no bevel reading), so "
                            f"this line may be short." if _unmeasured else ""))
                 _stub.setdefault("review_flags", []).append(
-                    f"EDGING {_edge_m:g} m a unit on code {_edge_code} "
-                    f"({_spec.get('description') or 'ABS edging'}). The METRES are "
+                    f"EDGING {_edge_m:g} m a unit on code {_line_code} "
+                    f"({_line_desc}). The METRES are "
                     f"{_edge_said} — not the perimeter. The RATE is asked of SDI Live and "
                     f"the supplier catalogue; if neither answers, the line stays visibly "
                     f"unpriced rather than carrying a rate off an old manual sheet.")

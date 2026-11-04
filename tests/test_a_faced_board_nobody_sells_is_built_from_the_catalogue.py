@@ -26,10 +26,15 @@ from test_the_drawings_product_reference_prices_the_line import _Conn  # noqa: E
 
 DECOR = "SWISS KRONO OAK D4428OV"
 ROWS = {
-    "D4428": [("LAMINATE234", "LAMINATE 2600 x 1300 x 0.8mm D4428 OV", 85.75)],
+    # The laminate row as SDI Live writes it (D-679): the sides and the gauge apart.
+    "D4428": [("LAMINATE234", "2600 x 1300mm 0.8mm Laminate Ref Swiss Krono Oak Natural D4428 OV",
+               85.75),
+              ("EDGE0056", "35 x 1mm ABS Edging to match Swiss Krono Oak Natural D4428 OV", 0.65)],
     "LAMINATE": [("LAMINATE001", "LAMINATE WHITE 3050 x 1300 x 0.8mm", 40.0),
-                 ("LAMINATE234", "LAMINATE 2600 x 1300 x 0.8mm D4428 OV", 85.75)],
-    "MDF": [("MDF09", "MDF 2440 x 1220 x 9mm", 18.0), ("MDF12", "MDF 2440 x 1220 x 12mm", 22.0),
+                 ("LAMINATE234", "2600 x 1300mm 0.8mm Laminate Ref Swiss Krono Oak Natural "
+                                 "D4428 OV", 85.75)],
+    "MDF": [("MFMDF007", "9mm white matt MF MDF - 2440 x 1220", 25.0),
+            ("MDF09", "MDF 2440 x 1220 x 9mm", 18.0), ("MDF12", "MDF 2440 x 1220 x 12mm", 22.0),
             ("MDF18", "MDF 2440 x 1220 x 18mm", 30.0)],
     "ADHESIVE": [("GLUE05", "CONTACT ADHESIVE 5KG TIN", 40.0),
                  ("GLUE04", "CONTACT ADHESIVE 5 LTR TIN", 35.0),
@@ -167,3 +172,35 @@ def test_any_catalogue_glue_is_not_the_laminates_adhesive(monkeypatch):
     assert got["adhesive_priced"] is False
     assert "no SDI Live row is contact adhesive" in got["adhesive_gap"]
     e._SHEET_RATE_CACHE.clear()
+
+
+def test_a_faced_board_is_never_taken_for_the_core(catalogue):
+    got = e._constructed_faced_board(_panel(), "MFMDF", 10.8)
+    assert got["core_row"]["part_code"] == "MDF09", "MF MDF carries the word MDF and is faced"
+
+
+def test_a_core_far_thinner_than_the_drawn_build_is_not_used(monkeypatch):
+    """Only 6 mm and 18 mm plain MDF stocked: 6 + 2 x 0.8 = 7.6 mm is not a 10.8 mm board."""
+    import config
+    rows = dict(ROWS, MDF=[("MDF06", "MDF 2440 x 1220 x 6mm", 14.0),
+                           ("MDF18", "MDF 2440 x 1220 x 18mm", 30.0)])
+    monkeypatch.setattr(config, "get_connection", lambda timeout=20: _Conn(rows), raising=False)
+    e._SHEET_RATE_CACHE.clear()
+    e._SHEET_RATE_ROWS.clear()
+    assert e._constructed_faced_board(_panel(), "MFMDF", 10.8) is None
+    e._SHEET_RATE_CACHE.clear()
+    e._SHEET_RATE_ROWS.clear()
+
+
+def test_the_decor_read_into_normalized_colour_reaches_the_panels():
+    """D-679, 12:19 record: the box held its decor in normalized_colour, which neither the
+    reference reader nor the pieces' inheritance read."""
+    import drawing_job_merge as d
+    import product_reference as pr
+    box = {"part_number": "12203-65-01J", "normalized_colour": DECOR}
+    panel = {"part_number": "12203-65-01J-05", "dxf_minted_piece_of": "12203-65-01J"}
+    assert "D4428OV" in pr.product_reference(box)["codes"]
+    assert d.inherit_product_onto_pieces([box, panel]) == ["12203-65-01J-05"]
+    assert panel["normalized_colour"] == DECOR
+    assert panel["product_reference_inherited_from"] == "12203-65-01J"
+    assert e._decor_probe(panel) == {"product_reference": "D4428OV D4428"}
