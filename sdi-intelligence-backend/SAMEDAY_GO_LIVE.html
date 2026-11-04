@@ -143,6 +143,13 @@ SameDay joins the Entra audit.</p>
 service has no mapped drives. <code>lite_app.py</code> reads <code>W:</code> at line 583 (the past-job lookup)
 and <code>S:</code> at lines 1889, 1930, 2445, 2507 and 3405. Each needs the share's <code>\\server\share</code>
 name, or a setting that can be given one. Until then, finding a past job comes back empty.</li>
+<li><b>The picture index.</b> On its first start the server logged <code>search not ready: No such file or
+directory: 'C:\SDI_Automation\all_img_index.npz'</code> (4 November). It was not in the K: folder, so it never
+reached the server. Copy it from the laptop's <code>C:\SDI_Automation\</code> into <code>SDI_Automation</code> on
+K:; on the server, as administrator:
+<pre>Copy-Item "\\sdi-dc01\shareddata$\Shared\IT\AI &amp; Automation\Design\SDI Same Day Intelligence\SDI_Automation\all_img_index.npz" C:\SDI_Automation\
+Restart-Service SDISameDay</pre>
+It most likely points at pictures on W:, so it needs the change above as well.</li>
 <li><b>The keys.</b> <code>SDI_Automation\.env</code> on K: is readable by <b>Everyone</b>. The server has its own
 copy, readable only by the services and administrators, so the K: copy can go &mdash; and since anyone could read
 it, the keys are worth replacing.</li>
