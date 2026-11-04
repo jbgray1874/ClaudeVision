@@ -1851,6 +1851,14 @@ def _split_parent_flats_to_children(
                     if _apply_field(orphan, "normalized_finish", _fin, "drawing_deterministic"):
                         orphan["surface_finishes"] = list(parent.get("surface_finishes") or [_fin])
                         orphan["normalized_finish_inherited_from"] = _ppn
+                # AND THE PRODUCT IT NAMES (D-676): "SWISS KRONO OAK D4428OV" on the box's
+                # sheet is the décor of every panel, which is what the catalogue is asked for.
+                for _rf in ("colours", "colour", "decor", "material_text_as_printed",
+                            "product_reference"):
+                    if parent.get(_rf) and not orphan.get(_rf):
+                        orphan[_rf] = (list(parent[_rf]) if isinstance(parent[_rf], list)
+                                       else parent[_rf])
+                        orphan.setdefault("product_reference_inherited_from", _ppn)
             orphan.setdefault("review_flags", []).append("distinct_child_flat_promoted_by_geometry")
             parts.append(orphan)
             parts_by_key[_normalize_part_key(pn)] = orphan

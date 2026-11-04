@@ -3922,6 +3922,13 @@ def canonical_labour_groups(
                 if len(key) > 5:
                     _sig = f"{_OWN_SETUP}, {key[5]}"
                 group["setup_signature"] = _sig
+                # THE BEVEL PASS THIS ROW'S TIME INCLUDES, BY PANEL (D-677): the record times
+                # it on the CNC row (estimator, bevel_machining), so the row says it carries it.
+                _bm = (raw.get(target_id) or estimates.get(target_id) or {}).get(
+                    "bevel_machining")
+                if isinstance(_bm, Mapping) and _safe(_bm.get("run_min")):
+                    group.setdefault("bevel_pass_min_by_part", {})[str(target_id)] = round(
+                        float(_bm["run_min"]), 2)
                 group["laser_nest_id"] += "|" + (f"{_sig}:{target_id or decision_id}"
                                                  if _sig.startswith(_OWN_SETUP) else _sig)
         if decision_id not in group["decision_ids"]:
@@ -5513,6 +5520,8 @@ def build_workbook_labour(
                 "holes_cut": g.get("holes_cut"),
                 "holes_cut_by_part": dict(g.get("holes_cut_by_part") or {}),
                 "holes_cut_basis": g.get("holes_cut_basis"),
+                # THE BEVEL PASS EACH PANEL'S CUT INCLUDES (D-677), minutes a part.
+                "bevel_pass_min_by_part": dict(g.get("bevel_pass_min_by_part") or {}),
                 # HOW THE RATE WAS ARRIVED AT — template_calculated / size_banded /
                 # historical / historical_unbanded / engine_derived / unmeasured_default.
                 # Without this the audit tabs present an unmeasured constant and the

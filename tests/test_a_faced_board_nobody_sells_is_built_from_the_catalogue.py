@@ -1,0 +1,117 @@
+"""A faced board nobody sells is priced as the shop builds it, from SDI Live rows (D-676).
+
+JG, 4 Nov 2026: "we need everything priced." 12203-65's five panels are 10.8 mm MDF faced in
+Swiss Krono D4428OV. No catalogue row sells that board, so each panel was "FACED BOARD
+UNPRICED". SDI Live holds the laminate in that décor (LAMINATE234, 2600 x 1300 x 0.8 mm D4428
+OV) and plain MDF cores, so the board is built: one core sheet at the stocked thickness at or
+under (drawn - 2 x facing), the facing sheets that cover it on both faces, adhesive and
+laminating time. The money is the catalogue's; the faces, adhesive and laminating time are
+house allowances, flagged on every line built this way.
+"""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "tests"))
+os.environ.setdefault("SDI_OFFLINE", "1")
+
+import estimator as e                                                  # noqa: E402
+from test_the_drawings_product_reference_prices_the_line import _Conn  # noqa: E402
+
+DECOR = "SWISS KRONO OAK D4428OV"
+ROWS = {
+    "D4428": [("LAMINATE234", "LAMINATE 2600 x 1300 x 0.8mm D4428 OV", 85.75)],
+    "LAMINATE": [("LAMINATE001", "LAMINATE WHITE 3050 x 1300 x 0.8mm", 40.0),
+                 ("LAMINATE234", "LAMINATE 2600 x 1300 x 0.8mm D4428 OV", 85.75)],
+    "MDF": [("MDF09", "MDF 2440 x 1220 x 9mm", 18.0), ("MDF12", "MDF 2440 x 1220 x 12mm", 22.0),
+            ("MDF18", "MDF 2440 x 1220 x 18mm", 30.0)],
+}
+
+
+@pytest.fixture()
+def catalogue(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "get_connection", lambda timeout=20: _Conn(ROWS), raising=False)
+    e._SHEET_RATE_CACHE.clear()
+    e._SHEET_RATE_ROWS.clear()
+    yield
+    e._SHEET_RATE_CACHE.clear()
+    e._SHEET_RATE_ROWS.clear()
+
+
+def _panel(t=10.8, colour=DECOR):
+    return {"part_number": "BOX-01J-05", "description": "BASE PANEL", "normalized_material": "MDF",
+            "normalized_finish": "LAMINATED", "normalized_thickness_mm": t, "quantity": 1,
+            "blank_length_mm": 375.0, "blank_width_mm": 270.0, "colours": [colour] if colour else [],
+            "dxf_source_file": "BOX-01J_PART5_10.8mm LAM MDF_revA.DXF", "dxf_augmented": True,
+            "normalized_geometry": {"blank_length_mm": 375.0, "blank_width_mm": 270.0,
+                                    "geometry_source": "dxf_flat_pattern"},
+            "textual_operations": ["cnc_routing"]}
+
+
+def test_the_board_is_built_from_a_core_and_the_drawn_decor(catalogue):
+    got = e._constructed_faced_board(_panel(), "MFMDF", 10.8)
+    assert got["core_row"]["part_code"] == "MDF09", "9 + 2 x 0.8 = 10.6 under the drawn 10.8"
+    assert got["facing_row"]["part_code"] == "LAMINATE234"
+    assert got["facing_is_the_drawn_decor"] is True
+    c = got["components"]
+    assert c["core"] == 18.0 and c["facing"] == 2 * 85.75, "one 2600 x 1300 sheet covers a face"
+    area = 2.44 * 1.22
+    assert abs(c["adhesive"] - round(2 * area * 1.50, 2)) < 0.01
+    assert c["laminating"] > 0
+    assert got["sheet_gbp"] == round(sum(c.values()), 2)
+    assert got["sheet_mm"] == (2440.0, 1220.0)
+
+
+def test_the_tray_takes_a_12mm_core(catalogue):
+    got = e._constructed_faced_board(_panel(t=13.8), "MFMDF", 13.8)
+    assert got["core_row"]["part_code"] == "MDF12"
+
+
+def test_without_the_drawn_code_the_facing_is_said_to_be_the_catalogues_median(catalogue):
+    got = e._constructed_faced_board(_panel(colour=""), "MFMDF", 10.8)
+    assert got["facing_is_the_drawn_decor"] is False
+
+
+def test_no_core_in_the_catalogue_leaves_the_board_unpriced(monkeypatch):
+    import config
+    rows = {k: v for k, v in ROWS.items() if k != "MDF"}
+    monkeypatch.setattr(config, "get_connection", lambda timeout=20: _Conn(rows), raising=False)
+    e._SHEET_RATE_CACHE.clear()
+    assert e._constructed_faced_board(_panel(), "MFMDF", 10.8) is None
+
+
+def test_the_panel_is_priced_on_the_built_sheet_and_says_how(catalogue):
+    r = e.estimate_part(_panel(), job_quantity=1)
+    me = r["material_estimate"]
+    assert me["cost_method"] == "board_sheet_yield"
+    assert me["unit_material_cost_gbp"] and me["unit_material_cost_gbp"] > 0
+    assert me["sheet_price_gbp"] == me["board_construction"]["sheet_gbp"]
+    assert "board_constructed_provisional" in me["reliability_flags"]
+    flag = next(f for f in r["review_flags"] if f.startswith("FACED BOARD BUILT FROM THE CATALOGUE"))
+    assert "LAMINATE234" in flag and "house allowances to confirm" in flag
+    assert "The facing is the drawn décor." in flag
+
+
+def test_a_catalogue_row_for_the_finished_board_wins(catalogue, monkeypatch):
+    monkeypatch.setattr(e, "_board_sheet_rate", lambda fam, t: (99.0, "bought as one sheet"))
+    r = e.estimate_part(_panel(), job_quantity=1)
+    assert "board_construction" not in r["material_estimate"]
+
+
+def test_the_panels_take_the_boxs_decor(tmp_path):
+    import test_a_box_exported_as_numbered_parts_is_its_panels as box
+    import drawing_job_merge as d
+    parts = [{"part_number": box.CODE, "description": "BOX", "quantity": 1,
+              "normalized_material": "MDF", "normalized_finish": "LAMINATED",
+              "colours": [DECOR]}]
+    out = d.augment_summary_with_dxf({"manufacturing_writeup": {"parts": parts}, "pages": []},
+                                     box._pack(tmp_path), reestimate=False)
+    by = {p["part_number"]: p for p in out["manufacturing_writeup"]["parts"]}
+    assert by[f"{box.CODE}-05"]["colours"] == [DECOR]

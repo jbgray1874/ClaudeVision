@@ -3371,6 +3371,12 @@ LABOUR_RULES = {
         "setup_min": 4.0,
         "min_run_min": 8.0,
         "sec_per_mm_contour": 0.04,
+        # A BEVELLED EDGE IS A SECOND PASS (D-677). 12203-65's panels are mitred at 45
+        # degrees on their joint edges: after the outline is cut, a bevel tool runs those
+        # edges again. Timed as that length at this feed, added after the minimum run, with
+        # its own tool set-up. HOUSE ALLOWANCES until CAM cycle times answer: confirm.
+        "bevel_sec_per_mm": 0.04,
+        "bevel_setup_min": 5.0,
     },
     "edge_banding": {
         "setup_min": 3.0,
@@ -4822,6 +4828,26 @@ BOARD_CATALOGUE_SYNONYMS = {
               ("LAMINATED", "CHIPBOARD")),
 }
 SHEET_BOARD_TOKENS = ("MDF", "PLYWOOD", "PLY", "CHIPBOARD", "OSB", "HARDBOARD")
+# A FACED BOARD NOBODY SELLS IS BUILT FROM WHAT SOMEBODY DOES (D-676). JG, 4 Nov 2026: "we need
+# everything priced." 12203-65/-66 are 10.8 and 13.8 mm MDF faced in Swiss Krono D4428OV: no
+# catalogue row sells that board, but SDI Live holds the laminate in that décor (LAMINATE234,
+# 2600 x 1300 x 0.8 mm) and plain MDF cores. The board is priced as the shop would build it:
+# one core sheet, the facing sheets that cover it on each face, adhesive and laminating time.
+# The core is the stocked thickness at or just under (drawn - faces x facing). The money comes
+# from SDI Live rows, each named on the line; the faces, the adhesive and the laminating time
+# below are HOUSE ALLOWANCES, NOT CONFIRMED, and every line built this way says so. A supplier
+# price for the finished board, or a catalogue row for it, always wins over this.
+FACED_BOARD_CONSTRUCTION = {
+    "enabled": True,
+    "faces": 2,                                    # both faces in the décor (no balancer)
+    "facing_word": "LAMINATE",
+    "facing_thicknesses_mm": (0.8, 0.7, 0.6, 1.0, 1.2),
+    "core_word_by_family": {"MFMDF": "MDF", "MFC": "CHIPBOARD"},
+    "core_thicknesses_mm": (3, 6, 9, 12, 15, 18, 22, 25),
+    "adhesive_gbp_per_m2_per_face": 1.50,          # HOUSE ALLOWANCE — confirm
+    "laminating_minutes_per_m2_per_face": 6.0,     # HOUSE ALLOWANCE — confirm
+    "laminating_rate_key": "glue",                 # HOURLY_RATES_GBP: the Glue department
+}
 SOLID_TIMBER_TOKENS = ("TIMBER", "WOOD", "PINE", "SOFTWOOD", "HARDWOOD", "OAK",
                        "SPRUCE", "BEECH", "BIRCH", "REDWOOD", "WHITEWOOD", "ASH")
 # Thinnest stock we will accept as a real thickness on a joinery part. Below this the value
