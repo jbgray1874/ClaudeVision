@@ -158,7 +158,7 @@ def test_a_tin_sold_in_another_unit_is_named_not_converted(monkeypatch):
     got = e._constructed_faced_board(_panel(), "MFMDF", 10.8)
     assert "adhesive" not in got["components"] and got["adhesive_priced"] is False
     assert "GLUE04 (5 L)" in got["adhesive_gap"] and "not converted" in got["adhesive_gap"]
-    assert "laminate adhesive NOT PRICED" in got["note"]
+    assert "laminate adhesive UNPRICED" in got["note"]
     r = e.estimate_part(_panel(), job_quantity=1)
     me = r["material_estimate"]
     assert "board_adhesive_unpriced" in me["reliability_flags"]
@@ -205,3 +205,19 @@ def test_the_decor_read_into_normalized_colour_reaches_the_panels():
     assert panel["normalized_colour"] == DECOR
     assert panel["product_reference_inherited_from"] == "12203-65-01J"
     assert e._decor_probe(panel) == {"product_reference": "D4428OV D4428"}
+
+
+
+def test_the_board_flag_reaches_the_reports_notes(monkeypatch):
+    """D-682, 14:41 report: a sentence carrying NOT PRICED is set aside for the decisions
+    list, and the board's note said the adhesive was NOT PRICED, so the whole flag, the
+    10.6 mm build with it, vanished while the board was priced."""
+    from job_report_html import part_review_notes
+    _with_adhesive_rows(monkeypatch, [("GLUE04", "CONTACT ADHESIVE 5 LTR TIN", 35.0)])
+    r = e.estimate_part(_panel(), job_quantity=1)
+    notes = [n["note"] for n in part_review_notes([r])]
+    flag = next((n for n in notes if n.startswith("FACED BOARD BUILT FROM THE CATALOGUE")), None)
+    assert flag, "the board's flag must reach the report"
+    assert "BUILT 10.6 mm AGAINST THE DRAWN 10.8 mm" in flag
+    assert "material is incomplete" in flag
+    e._SHEET_RATE_CACHE.clear()

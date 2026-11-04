@@ -3746,7 +3746,10 @@ def _render_summary(summary: Dict[str, Any], record: Dict[str, Any],
     if plating.get("charged"):
         _mem = ", ".join(plating.get("members") or []) or "no member"
         _exc = plating.get("excluded") or []
+        _unm = plating.get("unmassed") or []
         facts.append(f"Plating {_money(plating.get('ext_gbp'))} is priced on <b>{_esc(_mem)}</b>"
+                     + (f"; plated with the weldment but no mass resolved, so not in the "
+                        f"priced weight: {_esc(', '.join(_unm))}" if _unm else "")
                      + (f"; excluded because their own detail states another finish: "
                         f"{_esc(', '.join(_exc))}" if _exc else "") + ".")
     basis = ("not a price — this run costed nothing, so no figure on the sheet is one"

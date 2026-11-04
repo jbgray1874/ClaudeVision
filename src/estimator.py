@@ -1692,7 +1692,11 @@ def plated_steel_member_pns(parts: Any, summary: Any, parents: Any = None) -> se
         # finished, and "CHROME PLATED METAL" made them members of the bar's plating.
         if part.get("concept_kind") == "bought_in" or part.get("is_bought_in"):
             continue
-        _own = _part_finish_text(part)
+        # A FINISH THE DOCUMENT FILLED IN IS NOT THE MEMBER'S OWN (D-686). The title-block
+        # stamp writes the GA's POWDER COATED onto a member that states none and marks it
+        # finish_inherited_from; read as the member's own, it took a member of a plated
+        # weldment out of the plating. A member of a weldment is finished with the weldment.
+        _own = "" if part.get("finish_inherited_from") else _part_finish_text(part)
         if _is_plate_finish(_own):
             members.add(pn)
             continue
@@ -1748,7 +1752,8 @@ def plated_members_deferred_to_their_own_finish(parts: Any, summary: Any,
         # finished, and "CHROME PLATED METAL" made them members of the bar's plating.
         if part.get("concept_kind") == "bought_in" or part.get("is_bought_in"):
             continue
-        own = _part_finish_text(part)
+        # The document's words are not the member's detail (D-686), as above.
+        own = "" if part.get("finish_inherited_from") else _part_finish_text(part)
         if not own or _is_plate_finish(own):
             continue
         try:
@@ -2216,6 +2221,21 @@ def plating_unit_price(mass_kg: Any, order_qty: Any,
                   "zinc candidate deliberately",
                 "subcontract_plating_spec_unidentified")
 
+    # A DECORATIVE EFFECT ON A CARD WORD IS STILL NOT THE CARD. The cover test above asks
+    # only whether a card word appears; "light aged zinc with waxed finish" has one and is a
+    # decorative effect, not trade zinc and passivate.
+    _deco = [w for w in ((policy or {}).get("not_covered_when") or ())
+             if re.search(str(w), _fin_u)]
+    if _deco:
+        _named = str(finish_text or "").strip()
+        return (None,
+                f"DECORATIVE FINISH STATED, NOT PRICED — the finish reads {_named!r}. That is "
+                f"a decorative effect, not trade zinc/passivate, so the £{float(rate):.2f}/kg "
+                f"card does not price it; its arithmetic (£{unit:.2f} a unit) is NOT charged. "
+                f"MISSING: the finisher's price for this effect on this job. ASKED OF: the "
+                f"estimator — get the quote and enter it in this job's answers file",
+                "subcontract_plating_quote_needed")
+
     return unit, note, "subcontract_plating_indicative"
 
 
@@ -2283,6 +2303,12 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
         # plater is quoted for — an estimator cannot confirm a plated weight against a number
         # with no member list, and a RAW part wrongly swept in is invisible without it.
         _contrib = sorted(m for m in members if m in by_pn and _member_mass_kg(by_pn[m]) > 0)
+        # A MEMBER WITH NO MASS IS STILL A MEMBER (D-686). 12693-01's wires 05M and 06M are
+        # welded into the plated worktop 104 and go in the tank with it; 05M's length was never
+        # read and 06M was priced at market with no weight, so both resolved no mass and the
+        # filter above dropped them without a word: the line read "plated members: 03M, 07M".
+        # They are named as members, and the line says the plated weight is short by theirs.
+        _unmassed = sorted(m for m in members if m in by_pn and _member_mass_kg(by_pn[m]) <= 0)
         try:
             _deferred = sorted(plated_members_deferred_to_their_own_finish(
                 parts if parts is not None else part_estimates, summary,
@@ -2422,6 +2448,17 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
             note += (". NOT INCLUDED and NOT PRICED: freight to and from the plater needs "
                      "a CURRENT transport quote for this job — MISSING: the haulage figure; "
                      "ASK: SDI transport department")
+        # A RATE WITH AN ORDER MINIMUM IS TWO NUMBERS, NOT ONE (D-689). The card's unit is
+        # max(mass x rate, minimum / order); 12693-01-104's line read £95 a unit in every
+        # quantity column, the 1-off minimum copied to 50 off, where mass x rate is the
+        # price. The break table needs both halves to work the sum at each quantity.
+        if unit is not None and method == "subcontract_plating_indicative":
+            _rate_kg = _safe_float((policy or {}).get("gbp_per_kg")) or 0.0
+            _min_order = _safe_float((policy or {}).get("vat_minimum_gbp")) or 0.0
+            if _rate_kg and mass:
+                pe["unit_with_order_minimum"] = {
+                    "unit_gbp": round(float(mass) * _rate_kg, 5),
+                    "order_minimum_gbp": round(_min_order, 2)}
         qty = max(1, int(pe.get("quantity") or 1))
         ext = round((unit or 0.0) * qty, 2)
         pe["unit_material_cost_gbp"] = unit or 0.0
@@ -2443,6 +2480,7 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
         pe["_price_explicitly_withheld"] = unit is None
         pe["_plating_members_costed"] = _contrib
         pe["_plating_members_deferred"] = _deferred
+        pe["_plating_members_unmassed"] = _unmassed
         # THE OPEN QUESTION GOES ON THE LINE, NOT INTO A DECISION.
         #
         # A weldment goes into the tank assembled, so a part welded into a PLATED weldment is
@@ -2455,6 +2493,10 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
             note
             + (f" ; plated members: {', '.join(_contrib)}" if _contrib
                else " ; no plated member resolved a mass")
+            + (f" ; plated members with NO MASS resolved, so not in the {round(mass, 3):g} kg: "
+               f"{', '.join(_unmassed)} — welded into the plated weldment, they go in the tank "
+               f"with it; the plated weight is short by theirs until it is resolved"
+               if _unmassed else "")
             + (f" ; NOT included, own detail states another finish: {', '.join(_deferred)} — "
                f"a weldment is plated assembled, so if these go in the tank they belong in the "
                f"mass; weldment-vs-leaf is your call" if _deferred else "")
@@ -2518,8 +2560,8 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
                                      "subcontract_plating_historical_comparator",
                                      "estimator_stated_price",
                                      "inherited_estimator_decision")
-        if _per_unit_price and (_contrib or _deferred):
-            _all_members = sorted(set(_contrib) | set(_deferred))
+        if _per_unit_price and (_contrib or _deferred or _unmassed):
+            _all_members = sorted(set(_contrib) | set(_deferred) | set(_unmassed))
             _base = str(pe.get("description") or "").split(" — plated members:")[0]
             pe["description"] = (
                 f"{_base} — plated members: {', '.join(_all_members)} "
@@ -2527,9 +2569,13 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
                 f"an input and no member is excluded from it)")
             pe["_plating_members_costed"] = _all_members
             pe["_plating_members_deferred"] = []
-        elif _contrib or _deferred:
+            pe["_plating_members_unmassed"] = []
+        elif _contrib or _deferred or _unmassed:
             _base = str(pe.get("description") or "").split(" — plated members:")[0]
-            _desc = f"{_base} — plated members: {', '.join(_contrib) or 'none'}"
+            _desc = (f"{_base} — plated members: "
+                     f"{', '.join(sorted(set(_contrib) | set(_unmassed))) or 'none'}")
+            if _unmassed:
+                _desc += f" (no mass resolved, not in the plated weight: {', '.join(_unmassed)})"
             if _deferred:
                 _desc += f" (excluded, own detail differs: {', '.join(_deferred)})"
             pe["description"] = _desc
@@ -5344,7 +5390,7 @@ def _edging_row_in_decor(probes: Iterable[str], thickness_mm: Optional[float],
             if len(str(probe)) < 4:
                 continue
             cur.execute(
-                """SELECT [Part code],[Description],[System cost per]
+                """SELECT [Part code],[Description],[System cost per],[UOM]
                    FROM dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING
                    WHERE [System cost per] > 0 AND [Description] LIKE ?""",
                 (f"%{probe}%",),
@@ -5364,7 +5410,8 @@ def _edging_row_in_decor(probes: Iterable[str], thickness_mm: Optional[float],
                     continue
                 found.append({"part_code": str(r[0]), "description": desc,
                               "width_mm": w, "thickness_mm": t,
-                              "row_gbp": _safe_float(r[2])})
+                              "row_gbp": _safe_float(r[2]),
+                              "uom": str(r[3] or "").strip() if len(r) > 3 else ""})
             if found:
                 found.sort(key=lambda x: (x["width_mm"], x["part_code"]))
                 got = found[0]
@@ -5487,7 +5534,10 @@ def _constructed_faced_board(part: Dict[str, Any], family: str,
                      f"{adhesive['pack_unit']} pack, read {adhesive['read_on']}, no price date "
                      f"held)")
     else:
-        glue_said = f"laminate adhesive NOT PRICED ({_found.get('gap') or 'nothing answered'})"
+        # "UNPRICED", never "NOT PRICED" (D-682): the report sets aside every sentence carrying
+        # NOT PRICED for its decisions list, so this whole note, the 10.6 mm build with it,
+        # vanished from the 14:41 report while the board itself was priced.
+        glue_said = f"laminate adhesive UNPRICED ({_found.get('gap') or 'nothing answered'})"
     note = (f"BUILT FROM SDI LIVE: core {crow['part_code']} {crow['description']} "
             f"£{parts['core']:.2f} + {faces} face(s) x {per_face} x {frow['part_code']} "
             f"{frow['description']} £{parts['facing']:.2f} + {glue_said} + "
@@ -8260,7 +8310,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                   f"time are house allowances to confirm; a supplier price for the finished "
                   f"board replaces this."
                 + ("" if _constructed.get("adhesive_priced") else
-                   f" The laminate adhesive is NOT in this price, so the material is "
+                   f" The laminate adhesive is missing from this price, so the material is "
                    f"incomplete: {_constructed.get('adhesive_gap')}.")
                 # THE BUILD AGAINST THE DRAWING, SAID ON ITS OWN (D-681): 9 + 2 x 0.8 is
                 # 10.6 mm where 12203-65 draws 10.8; a reviewer must not have to find it in
@@ -12359,6 +12409,16 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # record — and none of it reached the sheet, because the only pool the sheet reads
         # is this dict. The part laser-cut at 368/hr against its own mirror image's 287.
         "geometry_rollup": part.get("geometry_rollup") or {},
+        # THE FLAT'S OWN COUNT OF CUT-OUTS TRAVELS TOO (D-684). The contour walk counts every
+        # closed profile the laser pierces, slots and cut-outs as well as round holes, and it
+        # stayed on the raw record: 12693-01-03M's twenty tab slots reached the laser row as
+        # no holes at all, because the row could only ask for circles.
+        **({"dxf_raw_geometry": {
+            _k: (part.get("dxf_raw_geometry") or {}).get(_k)
+            for _k in ("estimated_pierce_count", "estimated_pierce_count_source",
+                       "estimated_pierce_count_uncertain", "pierce_count_incomplete",
+                       "closed_contour_count", "estimated_hole_count")}}
+           if isinstance(part.get("dxf_raw_geometry"), dict) else {}),
         # WHAT THE PART IS FOR TRAVELS WITH THE MONEY TOO.
         #
         # wb_populate decides which block a part belongs in from `page_roles` — a
@@ -15414,6 +15474,19 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                         f"{', '.join(_decor_names) or 'the drawn decor'}"
                         + (f" at the drawing's {_edge_t:g} mm" if _edge_t else "")
                         + f", {_decor_row['width_mm']:g} mm wide on {_board_t:g} mm board.")
+                    # THE BUYING UNIT, AS SDI LIVE STATES IT (D-682). EDGE0056 is held as
+                    # "EA" at £0.65: a per-metre reading is the only one that fits, but the
+                    # row does not say so, and a reel price read per metre would be the
+                    # 11908-21 error. Said and asked, never assumed silently.
+                    _row_uom = str(_decor_row.get("uom") or "").strip()
+                    if _row_uom.lower() not in ("m", "mtr", "mtrs", "metre", "metres",
+                                                "meter", "meters", "lm"):
+                        _stub.setdefault("review_flags", []).append(
+                            f"EDGING BUYING UNIT NOT STATED AS METRES: SDI Live holds "
+                            f"{_decor_row['part_code']} as '{_row_uom or 'no unit'}' at "
+                            f"£{_decor_row.get('row_gbp') or 0:.2f}; the line reads it as a "
+                            f"price per metre. Confirm with purchasing that it is not a reel "
+                            f"or pack price.")
                 elif _decor_names:
                     _stub.setdefault("review_flags", []).append(
                         f"EDGING DECOR NOT IN SDI LIVE: the banded parts state "
@@ -15930,6 +16003,15 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             print(f"   [cost] {part_number} COULD NOT BE COSTED — {_why_part}. The rest of "
                   f"the job is costed and this line is on the outstanding list.", flush=True)
             continue
+        # A LINE BOUGHT BY THE METRE IS STILL ONE ON ITS ESTIMATE (D-682). 12203-65's 14:41
+        # book wrote EDGE0056 at Qty 1 though the line is 1.441 m: the estimate kept the
+        # quantity and dropped the unit, and the sheet's quantity rule (D-520) floors a
+        # count. The unit and the edging line's own fields travel with it.
+        if isinstance(part_estimate, dict):
+            for _k in ("unit_of_measure", "_edging_line", "_edging_for", "_edging_basis",
+                       "_edging_row"):
+                if part.get(_k) is not None and part_estimate.get(_k) is None:
+                    part_estimate[_k] = part[_k]
         part_estimates.append(part_estimate)
         if debug:
             print(

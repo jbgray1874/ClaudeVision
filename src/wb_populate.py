@@ -1965,6 +1965,25 @@ _HOLE_CUTTING_OPS = frozenset(set(getattr(config, "READ_PROFILE_CUTS", ()) or ()
                               | {"hole_machining", "drilling", "punch"})
 
 
+def measured_internal_cutouts(pe: Mapping[str, Any]) -> Optional[int]:
+    """Internal cut-outs the DXF contour walk measured: every closed profile but the outline.
+
+    Only a complete walk answers. A walk that could not close its loops is a floor, and a
+    raw-parser figure can count one profile twice (see drawing_job_merge._arbitrate_pierces),
+    so neither is put on the sheet as a measurement. None when there is no measured count."""
+    g = pe.get("dxf_raw_geometry") if isinstance(pe, Mapping) else None
+    if not isinstance(g, Mapping):
+        return None
+    if g.get("estimated_pierce_count_source") != "dxf_contour_walk" \
+            or g.get("pierce_count_incomplete") or g.get("estimated_pierce_count_uncertain"):
+        return None
+    try:
+        n = int(g.get("estimated_pierce_count") or 0)
+    except (TypeError, ValueError):
+        return None
+    return n - 1 if n > 1 else None
+
+
 def costed_geometry_value(pe: Dict[str, Any], *names: str) -> Any:
     """A geometry datum off a COSTED part record, from whichever of its two geometry
     records has one — normalized_geometry first, geometry_rollup second.
@@ -6957,7 +6976,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _at_breaks = _cl_rec.get("order_gbp_at_breaks") or (
             {"order": _cl_rec["order_gbp"]} if _safe(_cl_rec.get("order_gbp")) else None)
         _mpb_cfg = dict(getattr(config, "MATERIAL_PRICE_BREAK", {}) or {})
-        if _at_breaks and _mpb_cfg.get("enabled"):
+        # AND A UNIT RATE WITH AN ORDER MINIMUM (D-689): the plating card's minimum moves
+        # with the quantity like any order figure, so its cell reads the break row too.
+        _with_minimum = isinstance(pe.get("unit_with_order_minimum"), dict) \
+            and price is not None
+        if (_at_breaks or _with_minimum) and _mpb_cfg.get("enabled"):
             _t = row + int(_mpb_cfg.get("row_offset", -6))
             _sheet_name = str(_mpb_cfg.get("sheet") or "Material Price Break")
             # WITH THE RUN'S OWN FIGURE AS THE FALLBACK. A run that never fills the break
@@ -7261,6 +7284,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # blank (not 0) when not read, so a genuine no-hole part is not a false claim.
         # Both geometry records, asked in order — see costed_geometry_value.
         _holes = costed_geometry_value(pe, "hole_count", "estimated_hole_count")
+        _cutouts = measured_internal_cutouts(pe)
+        if _cutouts and _cutouts > int(_holes or 0):
+            # A SLOT IS PIERCED LIKE A HOLE (D-684). S counts every internal start the laser
+            # makes; the hole count knows only circles.
+            _flag(f"steel {pe.get('part_number')}: S = {_cutouts} internal cut-outs the DXF "
+                  f"contour walk measured ({int(_holes or 0)} of them round holes)", flags)
+            _holes = _cutouts
         if isinstance(_holes, (int, float)) and int(_holes) > 0:
             ws.cell(row=row, column=s["col_holes"], value=int(_holes))
         _cutlen = _safe(costed_geometry_value(

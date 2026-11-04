@@ -1909,6 +1909,50 @@ def _read_agrees_with_own_weight(part: Mapping[str, Any], big: float, small: flo
     return ""
 
 
+def _outline_beaten_by_a_measured_member(parent_pn: str, env: Mapping[str, Any],
+                                         parts: Sequence[Any], parent_of: Mapping[str, str],
+                                         bare_code: Any, allowance: float,
+                                         tol: float) -> Optional[str]:
+    """The measured member of `parent_pn` that this outline cannot contain, as words; else None.
+
+    AN OUTLINE ITS OWN MEASURED MEMBER EXCEEDS IS NOT A SIZE (D-684). 12693-01-04J, the MDF
+    insert of a worktop, was read 1145 x 1145 mm off its own sheet and its own parts table, and
+    was costed on 1145 x 500 because the worktop 12693-01-102 carried an outline of 1161 x 500.
+    The same worktop holds 12693-01-03M, whose DXF measures 1250 x 1250 before its folds: a
+    measured member, developed at the same flange allowance, already proves 500 is not the
+    worktop's width. The check that protects against a misread member must not be run against
+    an outline the job's own measurement has already contradicted. Members are found through
+    the parts-list tree, at any depth below the parent."""
+    target = bare_code(parent_pn)
+    if not target:
+        return None
+    for member in parts:
+        if not isinstance(member, Mapping) or not has_measured_flat(member):
+            continue
+        code = bare_code(str(member.get("part_number") or ""))
+        seen, up = set(), parent_of.get(code)
+        inside = False
+        while up and bare_code(up) not in seen:
+            if bare_code(up) == target:
+                inside = True
+                break
+            seen.add(bare_code(up))
+            up = parent_of.get(bare_code(up))
+        if not inside:
+            continue
+        ml, mw = _blank_pair(member)
+        if not (ml and mw):
+            continue
+        folds = _fold_count(member)
+        cap_l = float(env["length"]) + folds * allowance
+        cap_w = float(env["width"]) + folds * allowance
+        big, small = max(ml, mw), min(ml, mw)
+        if big > cap_l * (1 + tol) or small > cap_w * (1 + tol):
+            return (f"{member.get('part_number')}, measured {big:g} x {small:g} mm "
+                    f"with {folds} fold(s)")
+    return None
+
+
 def check_parts_against_their_assembly(parts: Any, summary: Mapping[str, Any]) -> List[str]:
     """A PART READ LARGER THAN THE ASSEMBLY IT SITS IN IS ASKED, AND COSTED ON THAT ASSEMBLY
     (D-508).
@@ -1984,6 +2028,21 @@ def check_parts_against_their_assembly(parts: Any, summary: Mapping[str, Any]) -
                      f"{big:g} x {small:g} mm off that part's own sheet, which its own stated "
                      f"weight confirms ({agrees}). The member's size stands; this outline is "
                      f"not used as a size check on it.")
+            parent.setdefault("review_flags", [])
+            if doubt not in parent["review_flags"]:
+                parent["review_flags"].append(doubt)
+            continue
+        beaten = _outline_beaten_by_a_measured_member(parent_pn, env, parts, parent_of,
+                                                      bare_code, allowance, tol)
+        if beaten:
+            part["_blank_kept_over_assembly"] = {
+                "read_mm": [round(big, 1), round(small, 1)], "read_source": src or "unrecorded",
+                "assembly": parent_pn, "assembly_outline_mm": [env["length"], env["width"]],
+                "measured_member": beaten}
+            doubt = (f"OUTLINE IN DOUBT — {parent_pn}'s outline, {float(env['length']):g} x "
+                     f"{float(env['width']):g} mm, cannot hold its own measured member "
+                     f"{beaten}. It is not used to resize {pn}, read {big:g} x {small:g} mm "
+                     f"off that part's own sheet; that reading stands.")
             parent.setdefault("review_flags", [])
             if doubt not in parent["review_flags"]:
                 parent["review_flags"].append(doubt)

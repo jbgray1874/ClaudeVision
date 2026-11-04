@@ -1938,6 +1938,12 @@ PLATE_SUBCONTRACT_POLICY = {
     "vat_minimum_gbp": 95.0,
     "label": "plating — INDICATIVE zinc/passivate, verify against plater quote",
     "rate_covers": ("ZINC", "PASSIVAT", "GALVAN", "ELECTRO-ZINC", "ELECTROZINC"),
+    # A DECORATIVE WORD TAKES THE FINISH OFF THE CARD. "LIGHT AGED ZINC WITH WAXED FINISH"
+    # (12693-01's worktop) contains ZINC, and the card read that as its own trade process. An
+    # aged, antiqued, patinated or waxed effect is a decorative finish quoted job by job, the
+    # same lesson as the Harrods brass. Regular expressions, matched on the upper-cased text.
+    "not_covered_when": (r"\bAGED\b", r"\bANTIQU", r"\bPATIN", r"\bDISTRESS", r"\bWAX",
+                         r"\bEFFECT\b", r"\bBURNISH", r"\bRUSTIC\b", r"\bVINTAGE\b"),
 }
 
 # A NAMED PLATE SPEC IS A QUOTED PRICE, NOT A RATE PER KILO.

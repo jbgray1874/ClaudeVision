@@ -2938,6 +2938,8 @@ def costed_job(source: Any) -> Dict[str, Any]:
             "review_flags": flags,
             "plating_members": list(part.get("_plating_members_costed") or []),
             "plating_excluded": list(part.get("_plating_members_deferred") or []),
+            # Plated members whose mass was not resolved (D-686): in the tank, not in the kilos.
+            "plating_unmassed": list(part.get("_plating_members_unmassed") or []),
         })
 
     # ── EVERY SHEET ROW THAT CARRIES MONEY IS ON THE RECORD ─────────────────────
@@ -3001,7 +3003,7 @@ def costed_job(source: Any) -> Dict[str, Any]:
                 "price_origin": _origin,
                 "operations": [], "route_operations": [], "length": None,
                 "section_profile": None, "review_flags": [],
-                "plating_members": [], "plating_excluded": [],
+                "plating_members": [], "plating_excluded": [], "plating_unmassed": [],
             })
 
     # ── the gap lists, once ─────────────────────────────────────────────────────
@@ -3048,6 +3050,7 @@ def costed_job(source: Any) -> Dict[str, Any]:
                 parent = l["part_number"][:-6]
             plating = {"charged": True, "line": l["part_number"], "parent": parent,
                        "members": l["plating_members"], "excluded": l["plating_excluded"],
+                       "unmassed": l.get("plating_unmassed") or [],
                        "ext_gbp": _money_of(l), "label": l["price_origin"]["label"]}
             break
 
@@ -3120,6 +3123,9 @@ def costed_job(source: Any) -> Dict[str, Any]:
             "part": plating.get("parent") or plating.get("line"), "kind": "manufacturing_decision",
             "issue": f"Which members of {plating.get('parent') or 'the weldment'} are plated after welding",
             "assumption": (f"mass priced on {', '.join(plating.get('members') or []) or 'no member'}"
+                           + (f"; plated with the weldment but no mass resolved, so not in the "
+                              f"priced weight: {', '.join(plating.get('unmassed'))}"
+                              if plating.get("unmassed") else "")
                            + (f"; excluded because their own detail states another finish: "
                               f"{', '.join(plating.get('excluded'))}" if plating.get("excluded") else "")),
             "action": "confirm the plated member list and the process against the plater's quote",
