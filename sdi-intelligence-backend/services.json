@@ -1026,7 +1026,7 @@
       "detail": "Built by Muhammad Yazir (AI &amp; Automation) for account managers and designers, for anyone in the company to use. It is its own app: it runs beside SDI Intelligence on the same server, on its own port, with its own data, and touches nothing else in this portal.",
       "sections": [
         {
-          "title": "What it does",
+          "title": "A brief, start to finish",
           "body": "During or straight after a client call, talk or type the brief. SameDay asks the missing questions one at a time, draws a concept render, takes changes as new options (A, B, C…), and from the one you choose makes the GA drawing and a one-page client sheet. Then it asks the internal questions and makes the brief PDF for the studio. Everything is kept in the chat, under Images and Sheets &amp; PDFs."
         },
         {
