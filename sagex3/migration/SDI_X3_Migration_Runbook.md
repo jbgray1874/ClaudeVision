@@ -105,6 +105,20 @@ two can't disagree (`rebuild/common.py`, `write_load`). The format is the one Ja
 The writer stops if a value holds a `;` or a line break. Tested 2 Nov: the ZSDIITM and YITC files
 match the loaded V1.3 files byte for byte on every unchanged row.
 
+### 1d. Missing or unusable data: ask James for it, by name (James, 4 Nov)
+
+**When an extract is missing, out of date, from the wrong moment or fails a check, say so and ask
+James for exactly what's needed.** Don't build round it, don't fall back to an older extract, and
+don't leave it implied. Every request names:
+- the script (path in the repo);
+- when to run it, and after what (e.g. after `add_new_accounts_to_xref.sql` has committed);
+- what its check grid should show, so a bad run is caught at once;
+- why it's needed and which file waits on it.
+
+The 4 Nov lesson: `extract_transactions.sql` was run at 17:06, before the cross-reference commit
+landed. Its CHECK grid showed 0 / 0 new accounts and 1,458 SOH lines dropped, against 56 after the
+commit. The evening upload didn't include a rerun, and that had to be asked for plainly.
+
 
 
 | # | Template | What it is | Track |
@@ -585,6 +599,45 @@ address is settled.
   AMG500 "75018 PARIS", BAL500 "F-36330 ARTHON", PLS500 "03802 ALCOY".
 - **Tax codes:** Access has the FR suppliers on FZ / FV and BAL500 on SV (standard VAT), which is
   why BAL500 came out DOM. Finance to decide.
+
+#### Where Access keeps VAT numbers (`sql/vat_sources_discovery.sql`, 4 Nov)
+
+The users said Access SupplyChain holds VAT numbers the files don't have. Every VAT or registration
+column in SDILive was checked:
+
+| Column | Values (distinct) | Used for |
+|---|---|---|
+| `PL_ACCOUNTS.SU_VAT_REG_NO` | 79 (79) | supplier file, already |
+| `SL_ACCOUNTS.CU_VAT_REG_NO` | 90 (85) | customer file, already |
+| `SL_ADDRESSES.AD_VAT_REG_NO` | 631 (89) | **customer file: fills gaps (below)** |
+| `SL_ADDRESSES_COPYA.AD_VAT_REG_NO` | 122 (70) | customer file: fills gaps (below) |
+| `ASC_PL_ACCOUNTS.SUP_COMPANY_REG_NO`, `PL_ACCOUNTS.SU_COMPANY_REG_NUMBER` / `SU_CIS_COMPANY_REG_NO`, `ASC_COM_TBL`, `SL_ACC_TEMP`, `SOP_TRN_TEMP` VAT fields | 0 | – |
+
+**Suppliers: there is nowhere else.** The gaps in the supplier file are gaps in Access. A blank
+VAT number loads on a non-FR supplier, so Finance only has to supply the FR ones.
+
+#### Customer VAT rule (4 Nov)
+
+`sql/customer_vat_numbers.sql` (read-only; run after `add_new_accounts_to_xref.sql`) lists every
+number per customer, from the account and from every address. Then `scripts/fill_customer_vat.py
+<output>` works on the address-fixed BPC in place.
+
+Of the 303 customers, 32 had a number. A blank EECNUM is filled only when all of these hold:
+- the number passes its country's format (EU VIES formats, GB/XI with HMRC check digits, CH, NO);
+- it's for the customer's own country;
+- no other customer has it;
+- it's the customer's only number, or the only one on an invoice, statement or main address.
+
+Spaces, dots, dashes and NBSP are removed and the country prefix added (GB342074427), matching the
+numbers already in the file. Everything else goes on the "VAT check" tab with the reason, e.g.
+a Dutch-format number on a UK customer, or a number shared with another customer. Numbers
+already in the file are never changed. Afterwards, copy the file to the current set and rerun
+`exclude_customers.py` for the without-Tesco copy.
+
+Tested on the six customers' addresses held from `bp_identifiers_run3.sql`:
+- TEC105 gets GB342074427 (one copy in Access has NBSPs);
+- PER101 gets NL001875607B01;
+- a number shared with another account, and a GB number with bad check digits, are both held for checking.
 
 #### Stock and product prices (checked 4 Nov)
 
@@ -1142,7 +1195,9 @@ positions. Use "Opening transactions from a live extract" below.
 1. `sql/add_new_accounts_to_xref.sql`. It changes only `migration.XREF_*` and is re-runnable. Its
    checks should show 86 customers and 83 suppliers.
 2. `sql/views_v2.sql`. It changes only `migration.` views and ITM_LOOKUP. Its output isn't needed.
-3. `rebuild/sql/extract_transactions.sql`. Read-only. Save the **whole** output, Results To File,
+3. `rebuild/sql/extract_transactions.sql`, **only after step 1 has committed** (its last line
+   reads "AFTER COMMIT 86 83 0"). Run before the commit, its CHECK grid reads 0 / 0 and about
+   1,900 rows are dropped: the 17:06 run on 4 Nov. Read-only. Save the **whole** output, Results To File,
    tab-delimited, as `<run>/extract/extract_transactions.txt`. Its labelled grids are:
    - CHECK: new accounts in the cross-reference and rows dropped for want of an account (the STOP check);
    - TOTALS: the control totals for the reconciliation;
