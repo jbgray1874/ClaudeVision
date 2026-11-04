@@ -215,6 +215,7 @@ _PUBLIC_ALLOW = (
     "/api/private-email",      # separate private registration and owner gate
     "/api/tti",                # Sue's TTI despatch view - named people, read only
     "/api/ops",                # SDI Remote Control Intelligence - named people, read only
+    "/sameday",                # SDI SameDay, carried for phones - signed-in people only (sameday_proxy.py)
     "/favicon.ico",
 )
 
@@ -998,6 +999,11 @@ install_ops(app)
 
 from voicecrm import router as voicecrm_router
 app.include_router(voicecrm_router)
+
+# SDI SameDay on the phone (4 November 2026): SameDay itself runs on this server at 127.0.0.1:5020; this carries it at
+# /sameday/ on this service's own https address, behind the same Microsoft sign-in. SDI_SAMEDAY_ENABLED=no removes it.
+from sameday_proxy import install as install_sameday
+install_sameday(app)
 
 if not auth.ENABLED:
     print("[WARN] Entra SSO is NOT configured — every visitor is anonymous. "

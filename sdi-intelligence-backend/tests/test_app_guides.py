@@ -128,21 +128,24 @@ def test_sameday_has_its_square_its_guide_and_a_way_back():
     it, and the guide opens it too and returns to the portal."""
     (svc,) = [s for s in _services() if s["id"] == "sameday"]
     assert svc["surface"] in ("app", "both") and svc["app_category"] == "Apps"
-    assert svc["app_url"] == "http://10.0.0.5:5020/"
+    # 4 November: "the app needs to work on the phone" - carried by SDI Intelligence (sameday_proxy.py)
+    assert svc["app_url"] == "/sameday/"
     assert svc["guide_url"] == "guide-sameday.html"
     guide = (APP_DIR / svc["guide_url"]).read_text(encoding="utf-8")
-    assert 'href="http://10.0.0.5:5020/"' in guide
+    assert 'href="/sameday/"' in guide
     assert 'href="./"' in guide                                       # back to all apps
 
 
 def test_sameday_says_what_the_office_address_cannot_do_yet():
     """Plain http: the browser will not give it the microphone. Said on the
-    square and in the guide, so nobody presses Talk live and decides it is broken."""
+    square and in the guide, so nobody presses Talk live and decides it is broken.
+    4 November: on a phone it now works from anywhere, signed in, mic and all."""
     (svc,) = [s for s in _services() if s["id"] == "sameday"]
-    assert "microphone" in svc["requires"] and "VPN" in svc["requires"]
+    assert "microphone" in svc["requires"] and "http" in svc["requires"] and "phone" in svc["requires"]
     guide = (APP_DIR / "guide-sameday.html").read_text(encoding="utf-8")
-    assert "Type for now." in guide
-    assert "team access code" in guide
+    assert "On your phone, from anywhere." in guide
+    assert "won't give it the microphone" in guide
+    assert "no team code" in guide
 
 
 

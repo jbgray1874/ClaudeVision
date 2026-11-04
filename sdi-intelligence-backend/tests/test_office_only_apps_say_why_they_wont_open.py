@@ -48,8 +48,11 @@ class EveryPageWithASameDayLinkTests(unittest.TestCase):
         for page in PAGES.values():
             self.assertIn("a.target==='_blank'", page)
 
-    def test_sameday_is_still_linked_by_its_office_address(self):
-        self.assertIn('href="http://10.0.0.5:5020/"', PAGES["guide-sameday.html"])
+    def test_sameday_itself_is_no_longer_office_only(self):
+        """Later the same day SameDay was carried by SDI Intelligence at /sameday/ (sameday_proxy.py), which a
+        phone reaches; the rule stays for any other app on an office address."""
+        self.assertIn('href="/sameday/"', PAGES["guide-sameday.html"])
+        self.assertIsNone(office_rule(PAGES["index.html"]).match("/sameday/"))
 
 
 if __name__ == "__main__":
