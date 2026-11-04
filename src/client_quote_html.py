@@ -175,7 +175,15 @@ def _clean_customer_name(name: str) -> str:
 
 
 def _title_material(m: str) -> str:
-    return (m or "").replace("_", " ").title()
+    """A material as the customer reads it, by the one rule the whole quote uses (D-675): a
+    board's initials stay capitals, "MDF" and never "Mdf". The first page titled the word
+    itself while the pages after it kept the initials, so one quote named one board twice."""
+    text = (m or "").replace("_", " ")
+    try:
+        from quote_story import _name_case
+        return _name_case(text)
+    except Exception:                                                # noqa: BLE001
+        return text.title()
 
 
 # ── customer + logo ─────────────────────────────────────────────────────────
