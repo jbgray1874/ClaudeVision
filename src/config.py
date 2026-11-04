@@ -4983,6 +4983,19 @@ WIRE_OUTLINE_LABEL_WORDS = ("EXT.", "EXT", "EXTERNAL", "O/A", "OVERALL")
 WIRE_PART_WORDS = ("WIRE MESH", "WELDED WIRE", "WIRE FORM", "WIREWORK", "WIRE WORK", "WIRE ")
 WIRE_FRAME_WORDS = ("FRAME", "LOOP", "RING", "HOOP")
 
+# A ROUND STOCK'S SIZE FROM ITS OWN SHEET'S FIGURES AND ITS STATED WEIGHT (D-692,
+# detail_page_geometry.apply_round_stock_sizes_from_own_weight). Every pairing of the figures its
+# own sheet prints is tried: a diameter in this range (below 1.5 mm is a tolerance or a sheet
+# count, not a bar a shop forms), a length at least this many diameters long and no longer than
+# the longest bar bought. Exactly one pairing must weigh the stated weight within the tolerance;
+# the reasoning for ±5% is beside the rule.
+ROUND_STOCK_FROM_OWN_WEIGHT = {
+    "diameter_mm": (1.5, 25.0),
+    "min_length_to_diameter": 10.0,
+    "max_length_mm": 6000.0,
+    "weight_tolerance": 0.05,
+}
+
 WIRE_GAUGE_TABLE = {
     2.0:  40550.0,
     2.5:  25950.0,

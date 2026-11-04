@@ -1852,6 +1852,66 @@ def _powder_consumable_rate(part, engine_rate):
     return None
 
 
+_SHEET_RANGE_REF = re.compile(r"(?<![!A-Z$])\$?([A-Z]{1,3})\$?(\d+)\s*:\s*\$?([A-Z]{1,3})\$?(\d+)")
+
+
+def template_wire_gauges(ws, w: Dict[str, Any]) -> Tuple[List[float], str]:
+    """(the gauges the Wire block's lookup table holds, where they were read) (D-692).
+
+    The Wire block prices a row by looking its gauge up in a table lower on the sheet (gauge,
+    metres per tonne), the lookup taking the largest table gauge NOT ABOVE the row's. A gauge
+    the table does not hold is therefore priced, silently, as a thinner wire (or not at all,
+    below the smallest). The table is read where the template's own formula on the block's
+    first row names it — the template is the source of truth for its own layout — else from
+    the engine's copy of it, config.WIRE_GAUGE_TABLE (template rows 151-159)."""
+    try:
+        from openpyxl.utils import column_index_from_string
+        row = int(w["first_row"])
+        for col in range(int(w["col_length"]) + 1, int(w["col_length"]) + 12):
+            f = ws.cell(row, col).value
+            if not (isinstance(f, str) and "LOOKUP" in f.upper()):
+                continue
+            m = _SHEET_RANGE_REF.search(f.upper())
+            if not m:
+                continue
+            c = column_index_from_string(m.group(1))
+            r0, r1 = sorted((int(m.group(2)), int(m.group(4))))
+            gauges = sorted({float(v) for v in (ws.cell(r, c).value for r in range(r0, r1 + 1))
+                             if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0})
+            if gauges:
+                return gauges, f"the template's gauge table ({m.group(1)}{r0}:{m.group(1)}{r1})"
+    except Exception:                                                # noqa: BLE001
+        pass
+    table = getattr(config, "WIRE_GAUGE_TABLE", {}) if config is not None else {}
+    return (sorted(float(g) for g in (table or {})),
+            "the template's gauge table as the engine holds it (config.WIRE_GAUGE_TABLE)")
+
+
+# THE WIRE ROW SAYS ITS RATE IS AN ALLOWANCE (D-692). The Wire block prices every row from the
+# template's Wire Cost Per Tonne, an undated allowance with no purchasing source or date; a row
+# showing a gauge, a length and a total reads as a stock price unless the row itself says not.
+_WIRE_RATE_TAG = "[PROVISIONAL RATE - CONFIRM WITH PURCHASING]"
+
+
+def template_wire_rate(ws) -> Optional[float]:
+    """The £/t in the template's own Wire Cost Per Tonne cell (the figure beside its label), or
+    None when the sheet has no such label or no figure beside it."""
+    hit = _find_label_cell(ws, "wire cost per tonne")
+    if not hit:
+        return None
+    r, c = hit
+    for col in range(c + 1, c + 5):
+        v = ws.cell(r, col).value
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+            return float(v)
+    return None
+
+
+def _wire_words(material: Any) -> str:
+    words = " ".join(str(material or "mild steel").replace("_", " ").lower().split())
+    return words if "wire" in words else f"{words} wire"
+
+
 def _is_sheet_metal(mat: str) -> bool:
     m = (mat or "").upper()
     return any(k in m for k in ("STEEL", "MILD", "MS", "STAINLESS", "ALUM", "GALV", "CR4"))
@@ -7146,6 +7206,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     if wire_parts:
         w = cm["tube"]
         row = w["first_row"]
+        # A GAUGE THE TABLE DOES NOT HOLD IS SAID, AND NO ROW IS INVENTED FOR IT (D-692). The
+        # row's lookup would price it as the next thinner gauge, with nothing on the sheet to
+        # say so; adding a row would put a metres-per-tonne nobody stated into the template.
+        _wire_gauges, _wire_table_where = template_wire_gauges(ws, w)
+        _wire_to_confirm: Dict[str, Set[float]] = {}
         for pe in wire_parts:
             if row > w["last_row"]:
                 _flag(f"Wire overflow: {len(wire_parts)} wire/bar parts but only "
@@ -7156,14 +7221,44 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             length = _safe(me.get("wire_length_mm") or pe.get("wire_length_mm"))
             qty = int(_safe(pe.get("quantity"), 1))
             desc = f"{pe.get('part_number') or ''}  {pe.get('description') or ''}".strip()
+            desc = f"{desc[:120 - len(_WIRE_RATE_TAG) - 1]} {_WIRE_RATE_TAG}"
+            if gauge is not None:
+                _wire_to_confirm.setdefault(
+                    _wire_words(pe.get("normalized_material") or me.get("material")),
+                    set()).add(gauge)
             if gauge is None or length is None:
                 _flag(f"wire part {pe.get('part_number')} missing gauge/length "
                       f"(gauge={gauge}, length={length}) — line will be £0.", flags)
+            elif _wire_gauges and not any(abs(gauge - g) < 1e-6 for g in _wire_gauges):
+                _below = [g for g in _wire_gauges if g < gauge]
+                _gq = (f"{pe.get('part_number')}: Ø{gauge:g} is not a gauge in "
+                       f"{_wire_table_where}, which holds "
+                       f"{', '.join(f'{g:g}' for g in _wire_gauges)} mm — the Wire row's "
+                       f"lookup prices it as "
+                       + (f"Ø{max(_below):g} wire" if _below else
+                          "nothing (it is below the smallest gauge)")
+                       + ". No gauge row has been added to the template; confirm the stock, "
+                         "or add the gauge and its metres per tonne to the table.")
+                _flag(_gq, flags)
+                if _gq not in (pe.get("review_flags") or []):
+                    pe.setdefault("review_flags", []).append(_gq)
             ws.cell(row=row, column=w["col_desc"],   value=str(desc)[:120])
             ws.cell(row=row, column=w["col_qty"],    value=qty)
             ws.cell(row=row, column=w["col_gauge"],  value=gauge)
             ws.cell(row=row, column=w["col_length"], value=length)
             row += 1
+        # Said once for the block, with the sheet's own figure where its cell holds one.
+        if _wire_to_confirm:
+            _wr = template_wire_rate(ws)
+            _flag(f"{block_title('tube')} block: every row is priced from the template's Wire "
+                  f"Cost Per Tonne"
+                  + (f" (£{_wr:,.0f}/t = £{_wr / 1000.0:.2f}/kg)" if _wr else "")
+                  + " — an undated template allowance with no purchasing source and no price "
+                    "date. PROVISIONAL, not a verified stock price: confirm "
+                  + "; ".join(f"the {_words} price for "
+                              + ", ".join(f"Ø{g:g}" for g in sorted(_gs))
+                              for _words, _gs in sorted(_wire_to_confirm.items()))
+                  + " with purchasing.", flags)
 
     # part_number -> the Sheet Steel row it was written to. Used below so the Laser
     # labour row can reference the template's OWN rate calculator instead of our model.

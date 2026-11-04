@@ -321,6 +321,13 @@ SOURCE_RANK: Dict[str, int] = {
     # (which knows nothing about this part) and below the printed overall (which names the
     # overall). A provisional blank, labelled as one wherever it is shown.
     "printed_extents_provisional": 30,
+    # A ROUND STOCK'S SIZE, FIGURES ON ITS OWN SHEET THAT ITS STATED WEIGHT SINGLES OUT (D-692).
+    # 12693-01-05M prints "1100", "0.5" and "4" with no Ø, and WEIGHT 0.11: only Ø4 x 1100 of
+    # steel weighs that. Not a measurement, and not a reading of a printed Ø — so it fills a
+    # wire's empty diameter or length and gives way to any printed callout (70), the BOM (60), a
+    # person's inference (45) and every measurement. Above the provisional extents (30), which
+    # nothing but their size singles out, because here the weight chose one pairing of many.
+    "own_figures_confirmed_by_stated_weight": 35,
     # A FLAT BOARD'S GAUGE FROM ITS MODEL'S SMALLEST EXTENT (D-512): a labelled fallback
     # for a verified flat, constant-thickness board whose model carries no cut list — below
     # every stated gauge (drawing callout, DXF filename, cut list), above a bare inference.
@@ -559,6 +566,8 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "inference":              "engine inference",
     "geometry_inference":     "engine inference from geometry",
     "printed_extents_provisional": "the largest dimensions printed on its own sheet (provisional)",
+    "own_figures_confirmed_by_stated_weight":
+        "figures on its own sheet that its stated weight singles out (not measured)",
     "model_extents_board_gauge": "the model's smallest extent — a flat board's gauge (provisional)",
     "assembly_envelope_allowance": "the outline of the assembly it sits in (provisional — the part read larger)",
     "assembly_members": "its members' material — the parts the compiled hierarchy gives it",

@@ -3075,6 +3075,47 @@ def _bar_metres_per_tonne(diameter_mm: float) -> Optional[float]:
     return (1000.0 / kg_per_m) if kg_per_m > 0 else None
 
 
+# THE WIRE RATE IS AN ALLOWANCE, NOT A PRICE (D-692). Every wire and round-bar line is priced
+# at the estimating template's Wire Cost Per Tonne (the £/t held in WORKBOOK_INPUT_DEFAULTS
+# for it; the sheet's Wire row recalculates from the template's own cell). That figure is an
+# undated template allowance: no purchasing source, no price date. Purchasing holds no mild
+# steel Ø4 or Ø8 wire in the live catalogue — its nearest rows are a 4 mm 304 STAINLESS at
+# £20/kg, which must never stand in for mild steel, and an "8mm WIREWORK" row with no stock
+# detail — so there is no better figure to prefer, and the line must not read as a verified
+# stock price. A reviewer of 12693-01 asked for exactly that to be said on the line, in words.
+WIRE_RATE_PROVISIONAL_FLAG = "wire_rate_is_an_undated_template_allowance"
+
+
+def wire_rate_is_provisional(rate_gbp_per_tonne: float, gauge_mm: Any = None,
+                             material: Any = None) -> Dict[str, Any]:
+    """What a line priced at the template's wire rate says about that rate, and the record of it."""
+    words = " ".join(str(material or "mild steel").replace("_", " ").lower().split())
+    words = words if "wire" in words else f"{words} wire"
+    gauge = _safe_float(gauge_mm)
+    said = (f"PROVISIONAL wire rate: £{rate_gbp_per_tonne:,.0f}/t "
+            f"(£{rate_gbp_per_tonne / 1000.0:.2f}/kg) is the rate held for the estimating "
+            f"template's Wire Cost Per Tonne — an undated template allowance with no purchasing "
+            f"source and no price date, not a verified stock price. Confirm the {words} price"
+            + (f" for Ø{gauge:g}" if gauge else "") + " with purchasing.")
+    return {"status": "provisional", "basis": "estimating_template_wire_cost_per_tonne",
+            "rate_gbp_per_tonne": rate_gbp_per_tonne, "purchasing_source": None,
+            "price_date": None, "said": said}
+
+
+def _wire_rate_price_source(provisional: Dict[str, Any], applied_basis: str) -> Dict[str, Any]:
+    """The price stamp of a line priced at the template's wire rate. Built from nothing the
+    catalogue answered — the rate is the template's, so no catalogue row (the stainless 4 mm
+    least of all) is named as its source — and carrying no price date, because the allowance
+    has none: a date stamped "today" would read as a current price."""
+    stamp = _build_price_source_metadata({}, fallback_source="config_wire_cost_per_tonne",
+                                         applied=True, applied_basis=applied_basis)
+    stamp.update({"price_date": None, "price_effective_at": None,
+                  "supplier_source": "the estimating template's Wire Cost Per Tonne",
+                  "rate_status": provisional["status"],
+                  "review_reason": provisional["said"]})
+    return stamp
+
+
 def _round_stock_from_own_evidence(part: Dict[str, Any],
                                    material: Any) -> Optional[Dict[str, Any]]:
     """Round bar the part's OWN evidence names, with its length (D-653), or None.
@@ -7578,6 +7619,8 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         _said += (f" — the workbook's Wire Cost Per Tonne £{_rate_t:.0f}/t over "
                   f"{(_mpt or 0):,.0f} m/t, {_scrap * 100:g}% scrap; the sheet's Wire row "
                   f"recalculates it from the same gauge and length")
+        _rate_prov_r = wire_rate_is_provisional(_rate_t, _rd, material)
+        _said += ". " + _rate_prov_r["said"]
         if _said not in (part.get("review_flags") or []):
             part.setdefault("review_flags", []).append(_said)
         # THE SHARED SIGNALS, as document_builder sets them for a bar: the route compiler's
@@ -7622,9 +7665,11 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                                              or not (_chk and _chk["agrees"])),
             "part_confidence_overall": _part_confidence_overall(part),
             "part_geometry_reliability": _part_geometry_reliability(part),
-            "price_source": _build_price_source_metadata(
-                external_result, fallback_source="config_wire_cost_per_tonne",
-                applied=True, applied_basis="bar_diameter_x_own_length_tonne_rate"),
+            "reliability_flags": [WIRE_RATE_PROVISIONAL_FLAG],
+            "rate_provenance": _rate_prov_r,
+            "note": _rate_prov_r["said"],
+            "price_source": _wire_rate_price_source(
+                _rate_prov_r, "bar_diameter_x_own_length_tonne_rate"),
         }
 
     # ── ROUND BAR / STUD path (added 2026-07-13) ─────────────────────────────
@@ -7666,6 +7711,12 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 _scrap = float(getattr(config, "SCRAP_PERCENTAGE", 0.04))
                 _unit = (_price_per_m / 1000.0) * _bar_len * (1.0 + _scrap)
                 _ext = _unit * quantity
+                _rate_prov_b = wire_rate_is_provisional(_wire_per_tonne, _bar_gauge, material)
+                _said_b = (f"{part.get('part_number')}: bar priced Ø{_bar_gauge:g} x "
+                           f"{_bar_len:g}mm by the workbook's bar formula. "
+                           + _rate_prov_b["said"])
+                if _said_b not in (part.get("review_flags") or []):
+                    part.setdefault("review_flags", []).append(_said_b)
                 return {
                     "material": material,
                     "thickness_mm": None,          # a DIAMETER is not a thickness
@@ -7689,10 +7740,11 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                     "requires_flat_blank": False,
                     "part_confidence_overall": _part_confidence_overall(part),
                     "part_geometry_reliability": _part_geometry_reliability(part),
-                    "price_source": _build_price_source_metadata(
-                        external_result, fallback_source="config_wire_cost_per_tonne",
-                        applied=True, applied_basis="bar_diameter_x_length_gauge_lookup",
-                    ),
+                    "reliability_flags": [WIRE_RATE_PROVISIONAL_FLAG],
+                    "rate_provenance": _rate_prov_b,
+                    "note": _rate_prov_b["said"],
+                    "price_source": _wire_rate_price_source(
+                        _rate_prov_b, "bar_diameter_x_length_gauge_lookup"),
                 }
 
     # RECOGNISED AS WIRE/BAR BUT MISSING A TRUSTED DIAMETER OR LENGTH.
@@ -7757,15 +7809,18 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             _length_assumed = True
         _rate_t = float(_wb_w.get("wire_cost_per_tonne_gbp") or 1600.0)
         _scrap = float(getattr(config, "SCRAP_PERCENTAGE", 0.04))
-        _area_m2 = 3.14159265 * ((_wg / 2000.0) ** 2)
-        _kg_per_m = _area_m2 * 7850.0
-        _mpt = (1000.0 / _kg_per_m) if _kg_per_m > 0 else None
+        # THE SHEET'S OWN METRES PER TONNE (D-692). The Wire block prices a row by looking its
+        # gauge up in the template's table; this line worked the section out instead, so the
+        # engine and the sheet it writes disagreed in the fourth figure (Ø4: 10,138 m/t against
+        # the table's 10,140). The table where it holds the gauge, the section where it does not.
+        _mpt = _bar_metres_per_tonne(_wg)
         _unit = _ext = _mass = None
         if _mpt and _mpt > 0:
             _ppm = _rate_t / _mpt
             _unit = (_ppm / 1000.0) * _wl * (1.0 + _scrap)
             _ext = _unit * quantity
             _mass = _wl / 1000.0 / _mpt * 1000.0
+        _rate_prov_w = wire_rate_is_provisional(_rate_t, _wg, material)
         part.setdefault("review_flags", []).append(
             f"{part.get('part_number')}: wire priced Ø{_wg:g} x {_wl:g}mm at the config rate "
             f"£{_rate_t:.0f}/t (the sheet's own Wire Cost Per Tonne cell recalculates the row)"
@@ -7775,7 +7830,8 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                f" — developed length DERIVED from {part.get('wire_length_derived_from')}: the "
                f"wire runs round the outline, so this is the frame's perimeter and no more; "
                f"confirm it, or give the schedule length."
-               if _length_derived else "."))
+               if _length_derived else ".")
+            + " " + _rate_prov_w["said"])
         return {
             "material": material,
             "thickness_mm": None,               # a DIAMETER is not a thickness
@@ -7792,6 +7848,10 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 "length_derived_from": (str(part.get("wire_length_derived_from") or "")
                                         if _length_derived else None),
                 "metres_per_tonne": round(_mpt, 1) if _mpt else None,
+                # WHERE THE SIZE CAME FROM travels with the price (D-692): a size its own
+                # weight singled out is not a printed Ø or a schedule length, and says so.
+                "gauge_source": part.get("wire_gauge_mm_source"),
+                "length_source": part.get("wire_length_mm_source"),
             },
             "cost_method": ("wire_tonne_rate_assumed_length" if _length_assumed
                             else "wire_tonne_rate_outline_length" if _length_derived
@@ -7803,12 +7863,14 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             "estimator_input_required": _length_assumed or _length_derived,
             "part_confidence_overall": _part_confidence_overall(part),
             "part_geometry_reliability": _part_geometry_reliability(part),
-            "price_source": _build_price_source_metadata(
-                external_result, fallback_source="config_wire_cost_per_tonne",
-                applied=True,
-                applied_basis=("assumed_length_x_tonne_rate" if _length_assumed
-                               else "outline_perimeter_x_tonne_rate" if _length_derived
-                               else "bar_diameter_x_length_gauge_lookup")),
+            "reliability_flags": [WIRE_RATE_PROVISIONAL_FLAG],
+            "rate_provenance": _rate_prov_w,
+            "note": _rate_prov_w["said"],
+            "price_source": _wire_rate_price_source(
+                _rate_prov_w,
+                ("assumed_length_x_tonne_rate" if _length_assumed
+                 else "outline_perimeter_x_tonne_rate" if _length_derived
+                 else "bar_diameter_x_length_gauge_lookup")),
         }
 
     # Section/tube/wire path: uses linear stock mass estimate when profile+length is available.
