@@ -1826,6 +1826,9 @@ def _split_parent_flats_to_children(
             pn = _orphan_child_pn(parent, chosen, _ci, _taken_keys)
             orphan = _create_orphan_dxf_part(summary, pn, chosen)
             orphan["part_number"] = pn
+            # Which part's flats it was split from, so a reader of that part's own sheet (its
+            # detail of each piece, D-670) can be asked about this piece.
+            orphan["dxf_flat_of_parent"] = str(parent.get("part_number") or "")
             orphan.setdefault("review_flags", []).append("distinct_child_flat_promoted_by_geometry")
             parts.append(orphan)
             parts_by_key[_normalize_part_key(pn)] = orphan
@@ -3656,7 +3659,12 @@ def augment_summary_with_dxf(
                     "reason": "unnumbered_view_beside_numbered_pieces",
                     "detail": (f"{len(_numbered)} numbered piece flats of "
                                f"{part.get('part_number')} sit beside it; it carries no piece "
-                               f"number and no stock")})
+                               f"number, so it is not one of them")})
+                # KEPT AS A DRAWING OF THE PART, NOT DISCARDED (D-670 review): it is evidence
+                # a reader may consult, never cut geometry and never a hole inventory.
+                _dv = part.setdefault("dxf_drawing_views", [])
+                if isinstance(_dv, list) and str(_v) not in _dv:
+                    _dv.append(str(_v))
             paths = [p for p in paths if p not in _views]
         _as_pieces = [p for p in paths if str(p) in piece_files]
         # PIECES BY ROLE (D-598j): every flat names a different role and the part has no child

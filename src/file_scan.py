@@ -4667,6 +4667,18 @@ def _finalize_scan_summary(
         if _sec_len:
             print(f"   [detail-geometry] {', '.join(_sec_len)}: section length read off "
                   f"their own sheet, checked against its stated weight", flush=True)
+        # A BEVEL IS READ FROM THE PANEL'S OWN DRAWING; ITS FLAT ONLY AGREES (D-670): the lines
+        # inside a flat's outline are a bevel's edge only where the sheet says bevel.
+        try:
+            from bevel_reading import apply_bevel_readings
+            _bev = apply_bevel_readings(_parts_dg, summary)
+            if _bev:
+                print(f"   [detail-geometry] {', '.join(_bev)}: bevel read from the drawing, "
+                      f"the flat's inner lines agreeing — solid panels, bevelled edges "
+                      f"recorded", flush=True)
+        except Exception as _bev_exc:                                # noqa: BLE001
+            print(f"   [detail-geometry] bevel reading skipped "
+                  f"({type(_bev_exc).__name__}: {_bev_exc})", flush=True)
         # THE OTHER HAND TAKES ITS BASE'S PROVISIONAL BLANK (D-508), now that the base has one,
         # and THEN every part read off a drawing is held against the assembly it sits in.
         from detail_page_geometry import (check_parts_against_their_assembly,
