@@ -160,3 +160,14 @@ def test_sameday_is_in_both_portals_with_one_open_button_each():
     portal = (APP_DIR / "index.html").read_text(encoding="utf-8")
     assert "if(s.link && s.link!==s.app_url)" in portal
     assert any("/app/guide-sameday.html" in x["body"] for x in svc["sections"])
+
+
+def test_no_section_repeats_the_heading_the_intranet_already_gives_it():
+    """The intranet's detail page opens every service with its own "What it
+    does" (from `detail`); a section with the same title printed it twice -
+    seen on SameDay's page, 4 November."""
+    for svc in _services():
+        if svc.get("surface") == "app":
+            continue
+        for sec in svc.get("sections", []):
+            assert sec["title"].strip().lower() != "what it does", svc["id"]
