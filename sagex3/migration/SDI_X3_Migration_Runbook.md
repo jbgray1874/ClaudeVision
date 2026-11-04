@@ -503,6 +503,69 @@ codes, descriptions, names, addresses, operation descriptions, comments.
 - Customer TEC100: postcodes moved out of the address lines (POSCOD error).
 - A semicolon between two emails split two customer rows. The first email was kept.
 
+#### Customer address rules (4 Nov, from Run 2's XPOSCOD / XSAT rejections)
+
+`scripts/fix_customer_addresses.py` applies these to **every customer address**, not only the
+ones X3 rejected. Every change goes on the "Address fixes" tab; anything a rule can't settle goes
+on "Address check". **They must run on every rebuild of the customer file.**
+
+1. **Postcode left in the address text → moved into the postcode field.** This applies when the
+   postcode is blank and an address line ends with a postcode in that country's format. It's
+   removed from the line. 120 on 4 Nov.
+2. **Mistyped GB postcodes:**
+   - letter O and zero, or letter I and one, are swapped back (SE1 OHX → SE1 0HX, S021 3SP →
+     SO21 3SP, IG10 ILJ → IG10 1LJ). This applies only where one reading with the fewest changes
+     is a valid GB postcode, and only to a postcode that already contains letters, so a foreign
+     number like "10310" is never "corrected";
+   - a space misplaced inside the inward code is fixed (DN2 4 PE → DN2 4PE), but only if the
+     district stays as typed. "G13 SQ" is left alone: a digit is missing, not a space;
+   - a Polish postcode is written NN-NNN (055 32 → 05-532).
+3. **Text in the postcode field → the postcode only** ("77990,FRAN" → 77990). A US or AU state
+   code found there ("NY 10013", "NSW 2000") moves to State/Region.
+4. **Wrong country:**
+   - a Dublin Eircode, or a Dublin district ("DUBLIN 15"), marked GB → IE, with the routing
+     key as the postcode (D15);
+   - a GB address that names another country in its text, with no valid GB postcode → that
+     country (the rule used for the new accounts on 27 Oct). Cyprus, Shanghai, Dublin and so on;
+   - a country name typed into the postcode field ("IRELAND", "TURKEY", "MALAYSIA") → that
+     country, with the postcode left blank.
+5. **Phone numbers → brackets removed** ("0046 (0) 470705100" → "0046 0 470705100", as James
+   did by hand for Run 2).
+6. **State/Region** (the template's "County / region" column, never filled before), using the
+   standard ISO 3166-2 codes:
+   - CA: from the postcode's first letter (M → ON);
+   - AU: from the postcode range (2000 → NSW);
+   - US: from the ZIP code range (10013 → NY), or the state code typed with it;
+   - AE: from the emirate named in the address (Ras Al Khor, Jebel Ali or Dubai → DU; Sharjah → SH);
+   - otherwise a state code written in the address.
+   **Asked of Ethan:** the X3 field code for that column (it has none in the template; SAT?) and
+   whether X3's region codes are these ISO codes.
+7. **AE has no postcodes:** a number in an AE postcode is a PO box, so it's moved into the address
+   as "PO BOX nnnnnn" and the postcode is left blank (DRE100's 239600).
+
+On 4 Nov: 220 fixes (96 on the six X3 rejected), 10 addresses left to check.
+
+#### Supplier VAT rule (4 Nov, from Run 2's FR rejections)
+
+`scripts/fix_suppliers.py`. Run 2 blanked VAT numbers as dummies; the Access values are now
+**checked, not assumed**:
+- A French VAT number is FR + a 2-digit key + the 9-digit SIREN, where the key is
+  (12 + 3 × (SIREN mod 97)) mod 97 and the SIREN passes the Luhn check. A value passing both is
+  a real FR VAT number whatever prefix Access gave it, so it's restored with FR. GAL500 →
+  FR65572062594 and ICE500 → FR73539546192 (Access had "GB…").
+- A value passing no check (FR, GB or SIREN) stays blank, for Finance. Nothing is made up.
+- The CRN (SIRET, 14 digits) can't be derived: it's the SIREN plus a 5-digit site number Access
+  doesn't hold. Ethan has been asked whether X3 accepts the 9-digit SIREN meanwhile.
+- Each rejected supplier is listed on "Supplier check" with what it still needs.
+
+#### Stock and product prices (checked 4 Nov)
+
+**Every product holding stock is in the product file with a cost line:** 4,888 products,
+£4,065,281 at Access lot cost. 4,727 have a real cost. 161 are at 0, and Access values their
+stock at £0 too, so the opening stock still ties to Access. SDI should still give them a cost.
+Base price (BASPRI) comes from Access STK_BASEPRICE; 0 where Access holds none, and loaded all
+the same.
+
 ### 6.6 Sales orders
 - Ship (SHIDAT) and requested delivery (DEMDLVDAT) dates before 2025 move to the accounting
   date. 2024 dates were rejected.
@@ -1135,7 +1198,7 @@ set. **Items 1–4 affect Run 3 directly.**
 |---|---|---|---|---|---|
 | 1 | **Products X3 doesn't hold** (live products graded OLD; do-not-use / archived products that are live) | SMR, SOHPJ, POH, MFG Held back; ZSDIITMSUP | **2,176 stock lots (£603k), 405 SO lines, 204 PO lines, 25 works orders; 6,265 product-supplier pairs on 5,689 products (1,752 bought since 2025)** | Product not in the product file | **Run `rebuild/sql/extract_products.sql` and `sql/product_suppliers_v4.sql`, then `rebuild/run.py`. It builds the products, a cost for each and every product-supplier pair.** Import the missing products before the transactions. They're the "missing master data" for Run 3. Without them every one of these rows fails again |
 | 2 | FGSL products with stock | SMR | 1,222 lots, 451 products, £1.72m | X3's FGSL isn't stock-managed | Marc / Ethan: make FGSL stock-managed (register 21) |
-| 3 | Customers and suppliers X3 rejected | BPS, BPC, BPCDL, POH, BISY | 11 suppliers, 6 customers, 1,425 delivery addresses, 3 PO lines, 12 BISY items | FR numbers missing; postcodes; State/Region | **Fixed as far as the data goes, 4 Nov:** customers, 220 fixes by rule with 10 addresses to check; suppliers, 2 FR VAT numbers restored, with the rest needing Finance. `sql/bp_identifiers_run3.sql` pulls every Access field for the 17 accounts, in case more is there. Assumptions and questions sent to Ethan. **Lesson: apply a fix the data settles the day it's raised; list only what genuinely needs someone** |
+| 3 | Customers and suppliers X3 rejected | BPS, BPC, BPCDL, POH, BISY | 11 suppliers, 6 customers, 1,425 delivery addresses, 3 PO lines, 12 BISY items | FR numbers missing; postcodes; State/Region | **Fixed as far as the data goes, 4 Nov:** customers, 220 fixes by rule with 10 addresses to check; suppliers, 2 FR VAT numbers restored, with the rest needing Finance. `sql/bp_identifiers_run3.sql` pulls every Access field for the 17 accounts, in case more is there. Assumptions and questions sent to Ethan. **Lesson: apply a fix the data settles the day it's raised; list only what genuinely needs someone.** The rules are in section 6.5. `bp_identifiers_run3.sql` is optional: it only looks for anything Access holds that we haven't mapped (a SIRET, a county) |
 | 4 | PHANT products on open sales orders | SOHPJ | 32 products, 82 lines | PHANT has no sales data in X3 | **In the product rebuild:** the usage test makes them FGML (group A). They load with the product file; X3 needs the category updated on the existing records |
 | 5 | Credits on sales orders (negative lines) | SOHPJ Held back | 16 lines (+1 with no product); £93k on 27 Oct | X3 takes a credit as a credit note, not an order line | Marc: raise them as credit notes, or Finance to confirm they're open |
 | 6 | Works orders | MFG Held back | 42 no BOM on code 10, 36 nothing left to make, 3 no route (25 no product: item 1) | No BOM / route to make them with, or already made | Re-check the 42 and 3 once BOMs and routes are rebuilt from ASC_BOM_TBL; the 36 are finished, so close them in Access |
