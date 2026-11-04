@@ -113,9 +113,93 @@ def product_reference(part: Any) -> Dict[str, Any]:
     return {"text": "; ".join(texts), "codes": codes, "words": words}
 
 
+# A board maker's texture codes (config DECOR_TEXTURE_CODES): Egger's ST2, ST10, PM, PT.
+_TEXTURE_DEFAULT = (r"ST\d{1,3}", "PM", "PT", "PG", "HG", "SM", "MT", "PE", "SU")
+
+
+def _texture_re() -> "re.Pattern[str]":
+    try:
+        import config as _c
+        pats = getattr(_c, "DECOR_TEXTURE_CODES", None) or _TEXTURE_DEFAULT
+    except Exception:                                            # noqa: BLE001
+        pats = _TEXTURE_DEFAULT
+    # Not upper-cased: that would turn the pattern's \d into \D. The codes it is asked of are.
+    return re.compile("^(?:" + "|".join(str(p) for p in pats) + ")$")
+
+
+def _code_re(code: str) -> "re.Pattern[str]":
+    return re.compile(rf"(?<![A-Z0-9]){re.escape(code)}(?![A-Z0-9])")
+
+
+def decor_textures(part: Any) -> List[Dict[str, str]]:
+    """Each décor the drawing names as a décor code WITH its texture code (D-693), as
+    [{"decor": "U999", "texture": "ST2", "as_printed": "EGGER: U999 ST2"}], or [].
+
+    12693-01-04J prints COLOUR: EGGER: U999 ST2. U999 is the décor and ST2 the texture, and
+    SDI Live holds U999 in PM and PT: three different boards under one décor code. The texture
+    is the code printed straight after the décor code that is one of a maker's texture codes
+    (config DECOR_TEXTURE_CODES); a décor printed with no texture after it is not paired, and
+    is looked up as before."""
+    texts = _texts(part)
+    if not texts:
+        return []
+    tex = _texture_re()
+    codes = [c for c in product_reference(part)["codes"] if not tex.match(c)]
+    out: List[Dict[str, str]] = []
+    seen: set = set()
+    for t in texts:
+        up = " ".join(t.upper().split())
+        for code in codes:
+            for m in re.finditer(rf"(?<![A-Z0-9]){re.escape(code)}(?![A-Z0-9])[\s:;,/-]*"
+                                 rf"([A-Z0-9]+)", up):
+                if tex.match(m.group(1)) and (code, m.group(1)) not in seen:
+                    seen.add((code, m.group(1)))
+                    out.append({"decor": code, "texture": m.group(1),
+                                "as_printed": " ".join(t.split())})
+    return out
+
+
+def decor_on_row(description: Any, pairs: Iterable[Dict[str, str]]) -> Dict[str, Any]:
+    """What a catalogue row says of the drawn décor and texture (D-693).
+
+    {"decor": the drawn décor code the row carries or None, "texture": True when the row also
+    carries that décor's drawn texture, "row_texture": the texture code printed after the décor
+    on the row, if any}. Whole words: TEXTUREDU999 is not U999, ST22 is not ST2; the texture may
+    be glued to its décor ("U999ST2")."""
+    up = " ".join(str(description or "").upper().split())
+    tex = _texture_re()
+    got: Dict[str, Any] = {"decor": None, "texture": False, "row_texture": None}
+    for p in pairs or ():
+        d, t = str(p.get("decor") or "").upper(), str(p.get("texture") or "").upper()
+        if not d or not _code_re(d).search(up):
+            if d and t and _code_re(d + t).search(up):
+                return {"decor": d, "texture": True, "row_texture": t}
+            continue
+        after = re.search(rf"(?<![A-Z0-9]){re.escape(d)}(?![A-Z0-9])[\s:;,/-]*([A-Z0-9]+)", up)
+        row_t = after.group(1) if after and tex.match(after.group(1)) else None
+        has_t = bool(t) and (bool(_code_re(t).search(up)) or bool(_code_re(d + t).search(up)))
+        if has_t:
+            return {"decor": d, "texture": True, "row_texture": row_t or t}
+        if got["decor"] is None:
+            got = {"decor": d, "texture": False, "row_texture": row_t}
+    return got
+
+
 def reference_probes(part: Any, limit: int = 6) -> List[str]:
     """The tokens to look a product up by in a catalogue, most specific first: every code,
-    then the longest decor words. Bounded, because each is a catalogue query."""
+    then the longest decor words. Bounded, because each is a catalogue query.
+
+    A DÉCOR WITH ITS TEXTURE IS ASKED BY ITS DÉCOR CODE ONLY (D-693). The texture alone (ST2)
+    answers for every décor in that texture and the maker's name (EGGER) for every décor the
+    maker makes; neither is the product. The row the décor code finds is the product only when
+    it carries the texture too, which the caller checks with decor_on_row."""
+    pairs = decor_textures(part)
+    if pairs:
+        out: List[str] = []
+        for p in pairs:
+            if p["decor"] not in out:
+                out.append(p["decor"])
+        return out[:limit]
     ref = product_reference(part)
     out = list(ref["codes"]) + list(ref["words"])
     return out[:limit]

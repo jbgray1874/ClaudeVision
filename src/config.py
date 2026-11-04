@@ -3076,6 +3076,8 @@ _MATERIAL_TOKEN_SYNONYMS = {
     frozenset({"S275"}): "MILD STEEL",
     frozenset({"DC01"}): "MILD STEEL",
     frozenset({"FLEXI", "MDF"}): "MDF",
+    # MR MDF IS MDF FOR THE RATE KEY, THE DENSITY AND THE BLOCK. The grade is not dropped from
+    # what is bought: BOARD_GRADES carries it to the catalogue search (D-693).
     frozenset({"MOISTURE", "RESISTANT", "MDF"}): "MDF",
     frozenset({"MR", "MDF"}): "MDF",
     frozenset({"BIRCH", "PLY"}): "BIRCH_PLYWOOD",
@@ -4461,7 +4463,8 @@ CUT_LIST_MASS_TOLERANCE = 0.15
 # ── WHAT A CODELESS PARTS-LIST ROW IS (D-383) ──────────────────────────────────────────────
 # Words that qualify a sheet or board rather than name it ("3mm CLEAR PETG SHEET" is PETG;
 # "18mm MR MDF" is MDF). The estimator's catalogue sheet-rate search and the parts-list row
-# classifier read this one list.
+# classifier read this one list. MR, FR and EXT are never the word a board is searched by, and
+# they are still required of the row that prices it: BOARD_GRADES (D-693).
 MATERIAL_QUALIFIER_WORDS = (
     "SHEET", "SHEETS", "PLATE", "PANEL", "BOARD", "STOCK", "MATERIAL", "GRADE",
     "CLEAR", "OPAL", "WHITE", "BLACK", "GREY", "GRAY", "MATT", "GLOSS", "SATIN",
@@ -4872,6 +4875,43 @@ FACED_BOARD_CONSTRUCTION = {
     "laminating_minutes_per_m2_per_face": 6.0,     # HOUSE ALLOWANCE — confirm
     "laminating_rate_key": "glue",                 # HOURLY_RATES_GBP: the Glue department
 }
+# ── A BOARD'S GRADE AND ITS DÉCOR ARE PART OF WHAT IS BOUGHT (D-693) ─────────────────────────
+#
+# 12693-01-04J's own sheet prints MATERIAL: MRMDF and COLOUR: EGGER: U999 ST2, and the workbook
+# priced it from a generic 18 mm MDF sheet at £38.49. A reviewer: "A generic £38.49 MDF sheet
+# rate does not establish that the required moisture-resistant board and surface specification
+# are included." The grade was dropped before the catalogue was asked (MR MDF is MDF for the
+# family, the density and the block, and the sheet-rate search reads MR as a qualifier), and
+# the décor was asked one code at a time, so U999 alone answered for any U999 texture.
+#
+# THE GRADE. A grade the drawing states travels with the part as a required property while the
+# family stays the family: a catalogue row is the specified board only when it states the grade
+# in one of these spellings (whole words; "M.R." and "M/R" read as MR; a grade glued to a board
+# word, "MRMDF", is that grade). Vocabulary only: a grade added here can price nothing, it can
+# only stop a row that does not state it from being called the specified board.
+BOARD_GRADES = {
+    "MR": {"name": "moisture resistant",
+           "spellings": ("MR", "MOISTURE RESISTANT", "MOISTURE RESISTING")},
+    "FR": {"name": "fire retardant",
+           "spellings": ("FR", "FIRE RETARDANT", "FLAME RETARDANT", "FIRE RATED")},
+    "EXT": {"name": "exterior",
+            "spellings": ("EXT", "EXTERIOR")},
+}
+# The board a word names, for the grade (a grade is read only on a board) and to keep a décor
+# found on another substrate from being called this board: U999 ST2 on MFC is not U999 ST2 MDF.
+# A faced family is its core's substrate (FACED_BOARD_CONSTRUCTION core_word_by_family).
+BOARD_SUBSTRATE_BY_WORD = {
+    "MDF": "MDF", "MFMDF": "MDF", "MFC": "CHIPBOARD", "CHIPBOARD": "CHIPBOARD",
+    "PARTICLEBOARD": "CHIPBOARD", "PLY": "PLYWOOD", "PLYWOOD": "PLYWOOD", "OSB": "OSB",
+    "HARDBOARD": "HARDBOARD",
+}
+# THE DÉCOR. A board maker names a décor by a décor code and a texture (surface) code: Egger
+# "U999 ST2", "H1145 ST10", "W1000 PM"; the texture is half of the product, and U999 PM or PT
+# is another board from U999 ST2. A code printed straight after a décor code that matches one
+# of these is the décor's texture; the décor is then the pair, and a row carrying the décor in
+# another texture, or none, is a near miss and not the product. Read only in that position, so
+# a two-letter code here cannot be taken from anywhere else on a drawing.
+DECOR_TEXTURE_CODES = (r"ST\d{1,3}", "PM", "PT", "PG", "HG", "SM", "MT", "PE", "SU")
 SOLID_TIMBER_TOKENS = ("TIMBER", "WOOD", "PINE", "SOFTWOOD", "HARDWOOD", "OAK",
                        "SPRUCE", "BEECH", "BIRCH", "REDWOOD", "WHITEWOOD", "ASH")
 # Thinnest stock we will accept as a real thickness on a joinery part. Below this the value

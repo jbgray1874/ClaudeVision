@@ -7340,7 +7340,16 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             _flag(f"other-sheet {pe.get('part_number')} gauge unset — {float(_rej_t):g} mm "
                   f"was refused below the board floor; no gauge and no sheet price until "
                   f"the gauge is confirmed.", flags)
-        ws.cell(row=row, column=o["col_desc"],   value=f"{pe.get('part_number','')}  {pe.get('description','')}")
+        _o_desc = f"{pe.get('part_number','')}  {pe.get('description','')}"
+        # THE SPECIFIED BOARD STAYS ON ITS ROW (D-693). Where the sheet price is SDI Live's
+        # rate for another board (plain MDF for 12693-01-04J's MRMDF in EGGER: U999 ST2), the
+        # row says which board was specified and what of it the figure does not include, as an
+        # unresolved reading does on a BOM line (D-432). The figure stands; it is provisional.
+        _spec_note = str(me.get("specification_line_note") or "").strip()
+        if _spec_note:
+            _o_desc = f"{_o_desc}  —  {_spec_note}"
+            _flag(f"other-sheet {pe.get('part_number')}: {_spec_note}.", flags)
+        ws.cell(row=row, column=o["col_desc"],   value=_o_desc)
         ws.cell(row=row, column=o["col_qty"],    value=int(_safe(pe.get("quantity"), 1)))
         ws.cell(row=row, column=o["col_length"], value=length)
         ws.cell(row=row, column=o["col_width"],  value=width)
