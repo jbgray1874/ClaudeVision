@@ -1,8 +1,10 @@
 """Update-SameDay.ps1: the server's SameDay from its private repository - the code, and nothing else.
 
-4 November 2026: the "any order" and noisy-room changes were made in sdi-sameday. Muhammad's UPDATE_SAME_DAY.bat
-copies K: (the older code) and starts a second SameDay outside its service, so the server needs its own update. What
-must never happen: the keys, chats, uploads or spend log replaced; SDI Intelligence touched; the old code lost.
+4 November 2026: the "any order", noisy-room and phone changes were made in sdi-sameday. Muhammad's
+UPDATE_SAME_DAY.bat copies K: (the older code) and starts a second SameDay outside its service. The first version of
+this ran on the server and stopped at "git is not installed on this server"; the server has no git and needs none -
+like Ship-It, this runs on the laptop and copies over the admin share. What must never happen: the keys, chats,
+uploads or spend log replaced; SDI Intelligence touched; the old code lost.
 
 There is no PowerShell here, so these read the script.
 """
@@ -23,14 +25,23 @@ BODY = code(SCRIPT)
 
 
 class WhereAndHowItRunsTests(unittest.TestCase):
-    def test_it_says_it_runs_on_the_server_and_how_it_gets_there(self):
+    def test_it_runs_from_the_laptop_like_ship_it(self):
         head = SCRIPT.split("#>", 1)[0]
-        self.assertIn("Run ON THE SERVER (10.0.0.5)", head)
-        self.assertIn("FROM THE LAPTOP", head)
-        self.assertIn(r"\\10.0.0.5\c$\Tools", head)
+        self.assertIn("Run FROM THE LAPTOP, VPN connected", head)
+        self.assertIn(r".\sdi-intelligence-backend\deploy\Update-SameDay.ps1 -Branch claude/inspiring-planck-8juriz", head)
+        self.assertIn("The server has no git, and needs none", head)          # why it runs on the laptop
+        self.assertIn('$Target = "\\\\$Server\\c$\\SDI_Automation"', BODY)
+        self.assertNotIn("C:\\Tools", BODY)
 
     def test_ascii_only(self):
         self.assertTrue(all(ord(c) < 128 for c in SCRIPT))
+
+    def test_no_variable_is_read_as_a_drive(self):
+        """"$Server:" in a double-quoted string is a drive-qualified variable to PowerShell - a parse error."""
+        for line in BODY.splitlines():
+            for s in re.findall(r'"[^"]*"', line):
+                with self.subTest(line=line.strip()):
+                    self.assertIsNone(re.search(r"\$(?!env:)[A-Za-z_]\w*:", s))
 
     def test_it_takes_the_private_repository_only(self):
         self.assertIn('$Repo = "https://jbgray1874@github.com/jbgray1874/sdi-sameday.git"', BODY)
@@ -38,15 +49,20 @@ class WhereAndHowItRunsTests(unittest.TestCase):
         self.assertNotIn("UPDATE_SAME_DAY.bat", BODY)
         self.assertNotIn("shareddata", BODY)          # never K:
 
+    def test_its_own_working_copy_never_the_publish_scripts(self):
+        self.assertIn('$Code = "C:\\SameDayDeploy"', BODY)
+        self.assertNotIn("C:\\SameDayRepo", BODY)
+
     def test_no_function_shadows_git(self):
         self.assertNotRegex(BODY, r"(?im)^\s*function\s+git\b")
         self.assertIn("& git.exe -C $Code @Arguments | Out-Host", BODY)
 
-    def test_it_must_be_the_server_with_sameday_installed(self):
+    def test_it_fails_closed_before_anything_is_changed(self):
         checks = BODY.split('Head "2.', 1)[0]
-        for part in ('Get-Service -Name "SDIIntelligence"', "Install-SameDay.ps1 comes first", "IsInRole"):
-            self.assertIn(part, checks)
-        self.assertIn("-ErrorAction Stop } catch { $installed = $false }", checks)    # fails closed
+        self.assertIn("-ErrorAction Stop } catch { $installed = $false }", checks)
+        self.assertIn("Connect FortiClient VPN", checks)
+        self.assertIn('"MISSING"', checks)
+        self.assertIn("UNKNOWN*", checks)
 
 
 class NothingButCodeTests(unittest.TestCase):
@@ -77,31 +93,33 @@ class TheOldCodeIsKeptTests(unittest.TestCase):
     def test_a_failed_copy_never_restarts_anything(self):
         failed = BODY.split("$robo = @($auto, $Target", 1)[1].split("[IO.File]::WriteAllLines", 1)[0]
         self.assertIn("exit 1", failed)
-        self.assertLess(BODY.index("[IO.File]::WriteAllLines"), BODY.index("Restart-Service"))
+        self.assertLess(BODY.index("[IO.File]::WriteAllLines"), BODY.index("Restart-One $name"))
 
 
 class OnlySameDayIsRestartedTests(unittest.TestCase):
     def test_only_its_own_two_services(self):
         self.assertIn('$Services = @("SDISameDay", "SDICraft")', BODY)
-        self.assertIn("Restart-Service -Name $name -Force", BODY)
+        self.assertIn('& sc.exe "\\\\$Server" stop $Name', BODY)
+        self.assertIn('& sc.exe "\\\\$Server" start $Name', BODY)
         for line in BODY.splitlines():
             if "SDIIntelligence" in line:
                 with self.subTest(line=line.strip()):
-                    self.assertNotRegex(line, r"(Restart|Stop|Start)-Service|nssm")
+                    self.assertNotRegex(line, r"Restart-One|stop|start|Restart-Service")
 
     def test_no_second_copy_outside_the_service(self):
         self.assertNotIn("Start-Process", BODY)
-        self.assertNotIn("lite_app.py\"", BODY.split("Head \"5.", 1)[1])
+        self.assertNotIn("lite_app.py\"", BODY.split('Head "5.', 1)[1])
 
 
 class ItProvesItRunsTheNewCodeTests(unittest.TestCase):
     def test_the_running_version_names_the_branch_and_commit(self):
         self.assertIn('$want = ("$stamp repo $Branch $commit").Trim()', BODY)
         self.assertIn("(New-Object Text.ASCIIEncoding)", BODY)    # no byte-order mark in VERSION.txt
-        self.assertIn('"http://localhost:5020/api/status"', BODY)
+        # /api/version answers without the team code (the laptop is not the server); /api/status would not
+        self.assertIn('$Version = "http://${Server}:5020/api/version"', BODY)
         self.assertIn("if ($now -eq $want) { break }", BODY)
 
-    def test_the_servers_copy_of_the_repository_is_always_exactly_the_branch(self):
+    def test_the_laptops_copy_is_always_exactly_the_branch(self):
         self.assertIn('RunGit @("reset", "-q", "--hard", "origin/$Branch")', BODY)
         self.assertIn("exists and is not this script's", BODY)
         self.assertIn("belongs to another repository", BODY)

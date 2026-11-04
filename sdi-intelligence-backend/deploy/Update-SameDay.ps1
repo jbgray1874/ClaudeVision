@@ -1,36 +1,33 @@
 <#
     UPDATE SDI SAMEDAY ON THE SERVER FROM ITS PRIVATE REPOSITORY.
 
-    Run ON THE SERVER (10.0.0.5), over Remote Desktop, in PowerShell (not
-    the ISE) opened with "Run as administrator".
-    First copy this one file across, FROM THE LAPTOP:
+    Run FROM THE LAPTOP, VPN connected, the same way as Ship-It:
 
-        Copy-Item C:\ClaudeVision\sdi-intelligence-backend\deploy\Update-SameDay.ps1 \\10.0.0.5\c$\Tools\
+        cd C:\ClaudeVision
+        git pull jbg claude/app-portal-main-2026
+        .\sdi-intelligence-backend\deploy\Update-SameDay.ps1 -Branch claude/inspiring-planck-8juriz
 
-    then, on the server:
+    Without -Branch it takes main. The first time, a GitHub sign-in window
+    may open: sign in as jbgray1874, the account the private repository
+    belongs to.
 
-        powershell -ExecutionPolicy Bypass -File C:\Tools\Update-SameDay.ps1
+    -- WHY FROM THE LAPTOP ---------------------------------------------------
+    4 November 2026: run on the server it stopped at "git is not installed on
+    this server". The server has no git, and needs none: like Ship-It, this
+    fetches the code on the laptop and copies it over the server's admin share
+    (\\10.0.0.5\c$), then restarts the services with sc.exe.
 
-    To try a branch before it is merged, name it:
+    -- WHY NOT UPDATE_SAME_DAY.bat ON THE SERVER -----------------------------
+    Muhammad's batch file copies K: (the older code) and starts a second copy
+    of SameDay outside its service, which fights the service for port 5020.
 
-        powershell -ExecutionPolicy Bypass -File C:\Tools\Update-SameDay.ps1 -Branch claude/inspiring-planck-8juriz
+    -- WHAT IT CHANGES -----------------------------------------------------------
+    The code in C:\SDI_Automation on the server, then it restarts SDISameDay
+    and SDICraft. The code it replaces is kept first, in
+    C:\SDI_Automation\backups\ on the server, and the end of the run says how
+    to put it back.
 
-    The first time, a GitHub sign-in window opens: sign in as jbgray1874, the
-    account the private repository belongs to.
-
-    -- WHY THIS EXISTS -------------------------------------------------------
-    4 November 2026: SameDay's code now lives in github.com/jbgray1874/sdi-sameday
-    (private), where the "any order" and noisy-room changes were made. Muhammad's
-    UPDATE_SAME_DAY.bat copies K: instead, so on this server it would put the
-    older code back - and it starts a second copy of SameDay outside its
-    service, which then fights the service for port 5020. Use this here.
-
-    -- WHAT IT CHANGES ---------------------------------------------------------
-    The code in C:\SDI_Automation, from the repository, and then it restarts
-    the SDISameDay and SDICraft services. The code it replaces is kept first in
-    C:\SDI_Automation\backups\, and the end of the run says how to put it back.
-
-    -- WHAT IT NEVER TOUCHES ---------------------------------------------------
+    -- WHAT IT NEVER TOUCHES -----------------------------------------------------
     The keys (.env), the chats (lite.db), Craft's log, renders and uploads
     (out\, client_files\), the spend log (studio_data\), logs, the Python
     packages (.venv-gpu), K:, and every other service - SDIIntelligence
@@ -39,15 +36,17 @@
 [CmdletBinding()]
 param(
     [string]$Branch = "main",
+    [string]$Server = "10.0.0.5",
     [string]$Repo = "https://jbgray1874@github.com/jbgray1874/sdi-sameday.git",
-    # The server's own copy of the repository, used for nothing else.
-    [string]$Code = "C:\Tools\sdi-sameday",
-    [string]$Target = "C:\SDI_Automation"
+    # The laptop's own copy of the repository for this, used for nothing else
+    # (C:\SameDayRepo belongs to Publish-SameDay-Code.ps1, which empties it).
+    [string]$Code = "C:\SameDayDeploy"
 )
 
 $ErrorActionPreference = "Continue"
+$Target = "\\$Server\c$\SDI_Automation"
 $Services = @("SDISameDay", "SDICraft")
-$Status = "http://localhost:5020/api/status"
+$Version = "http://${Server}:5020/api/version"
 
 # -- Helpers, all defined before anything uses them -------------------------
 function Head([string]$Text) {
@@ -72,42 +71,58 @@ function RunGit([string[]]$Arguments) {
     & git.exe -C $Code @Arguments | Out-Host
     return $LASTEXITCODE
 }
+function Get-ServiceState([string]$Name) {
+    $q = (& sc.exe "\\$Server" query $Name 2>&1) -join " "
+    if ($q -match "STATE\s*:\s*\d+\s+(\w+)") { return $Matches[1] }
+    if ($q -match "1060") { return "MISSING" }
+    return "UNKNOWN: $q"
+}
+function Restart-One([string]$Name) {
+    # Stop, wait, start, wait. True when it is RUNNING again.
+    & sc.exe "\\$Server" stop $Name 2>&1 | Out-Null
+    $deadline = (Get-Date).AddSeconds(60)
+    do { Start-Sleep -Seconds 2; $state = Get-ServiceState $Name } until ($state -eq "STOPPED" -or (Get-Date) -gt $deadline)
+    & sc.exe "\\$Server" start $Name 2>&1 | Out-Null
+    $deadline = (Get-Date).AddSeconds(60)
+    do { Start-Sleep -Seconds 2; $state = Get-ServiceState $Name } until ($state -eq "RUNNING" -or (Get-Date) -gt $deadline)
+    return ($state -eq "RUNNING")
+}
+function RunningVersion {
+    try { return [string](Invoke-RestMethod -Uri $Version -TimeoutSec 5).version } catch { return "" }
+}
 # A log tail fit to be pasted into chat: anything key-shaped is removed first.
 function SafeTail([string]$Path, [int]$Lines = 20) {
-    if (-not (Test-Path -LiteralPath $Path)) { Say "(no log yet at $Path)"; return }
+    if (-not (Test-Path -LiteralPath $Path)) { Say "(no log at $Path)"; return }
     foreach ($line in (Get-Content -LiteralPath $Path -Tail $Lines -ErrorAction SilentlyContinue)) {
         Say ($line -replace 'sk-[A-Za-z0-9_\-]{16,}|xai-[A-Za-z0-9]{16,}', '[key removed]')
     }
 }
-function RunningVersion {
-    try { return [string](Invoke-RestMethod -Uri $Status -TimeoutSec 5).version } catch { return "" }
-}
 
 Write-Host ""
-Write-Host "  SDI SAMEDAY - UPDATE FROM ITS REPOSITORY ($Branch)" -ForegroundColor White
+Write-Host "  SDI SAMEDAY - UPDATE FROM ITS REPOSITORY ($Branch)  ->  $Server" -ForegroundColor White
 Write-Host "  $(Get-Date -Format 'dddd d MMMM yyyy, HH:mm')" -ForegroundColor DarkGray
 
-# -- 1. Checks: the right machine, and SameDay installed ---------------------------
+# -- 1. Checks: git here, the server reachable, SameDay installed there ---------------
 Head "1. Checks before anything is changed"
-$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-         ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $admin) { Stop-Here "Open PowerShell with 'Run as administrator' and run this again." }
-Yes "Running as administrator"
-if (-not (Get-Service -Name "SDIIntelligence" -ErrorAction SilentlyContinue)) {
-    Stop-Here "This is not the SDI Intelligence server (no SDIIntelligence service). Run it on 10.0.0.5."
+if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
+    Stop-Here "git is not installed on this computer. Run this on the laptop, where Ship-It runs."
 }
-foreach ($name in $Services) {
-    if (-not (Get-Service -Name $name -ErrorAction SilentlyContinue)) {
-        Stop-Here "There is no $name service: SameDay is not installed here yet. Install-SameDay.ps1 comes first."
-    }
-}
+Yes "git is here"
+# FAIL CLOSED: an error inside an if's condition makes PowerShell skip the if.
 $installed = $false
 try { $installed = Test-Path -LiteralPath "$Target\brief_lite\lite_app.py" -ErrorAction Stop } catch { $installed = $false }
-if (-not $installed) { Stop-Here "No $Target\brief_lite\lite_app.py - SameDay is not installed here yet." }
-if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) { Stop-Here "git is not installed on this server." }
-Yes "SameDay is installed and its services are here - SDI Intelligence will not be touched"
+if (-not $installed) {
+    Stop-Here "Can't reach $Target\brief_lite\lite_app.py. Connect FortiClient VPN (or be in the office) and run this again."
+}
+Yes "The server's SameDay folder is reachable ($Target)"
+foreach ($name in $Services) {
+    $state = Get-ServiceState $name
+    if ($state -eq "MISSING") { Stop-Here "There is no $name service on ${Server} - Install-SameDay.ps1 comes first." }
+    if ($state -like "UNKNOWN*") { Stop-Here "Can't ask $Server about $name ($state). This needs the same rights Ship-It uses." }
+}
+Yes "SDISameDay and SDICraft are there - SDI Intelligence will not be touched"
 $before = RunningVersion
-if ($before) { Say "Running now: $before" } else { Warn "SameDay is not answering at $Status right now." }
+if ($before) { Say "Running now: $before" } else { Say "Running now: (an older SameDay that does not say its version)" }
 
 # -- 2. The code, from the repository ----------------------------------------------
 Head "2. Fetching $Branch from sdi-sameday"
@@ -120,7 +135,7 @@ if (Test-Path -LiteralPath $Code) {
     & git.exe clone -q --branch $Branch $Repo $Code | Out-Host
     if ($LASTEXITCODE -ne 0) { Stop-Here "Could not clone sdi-sameday ($Branch). Sign in as jbgray1874 when asked." }
 }
-# The server's copy is never edited by hand: it is always exactly the branch.
+# This copy is never edited by hand: it is always exactly the branch.
 if ((RunGit @("checkout", "-q", "-B", $Branch, "origin/$Branch")) -ne 0) { Stop-Here "Could not check out $Branch." }
 if ((RunGit @("reset", "-q", "--hard", "origin/$Branch")) -ne 0) { Stop-Here "Could not match $Code to origin/$Branch." }
 $commit = ((& git.exe -C $Code rev-parse --short HEAD) -join "").Trim()
@@ -131,13 +146,13 @@ $hits = @(Get-ChildItem -LiteralPath $auto -Recurse -File -Force | Select-String
 if ($hits.Count) { Stop-Here "Key-shaped text in the repository ($($hits[0].Path)). Nothing was copied." }
 $stamp = ""
 if (Test-Path -LiteralPath "$auto\brief_lite\VERSION.txt") { $stamp = ((Get-Content -LiteralPath "$auto\brief_lite\VERSION.txt" -TotalCount 1) -join "").Trim() }
-# What this server will report at /api/status: the stamp, the branch and the
-# commit - so "is it running the new code?" has a yes or no answer.
+# What the server will report: the stamp, the branch and the commit - so "is
+# it running the new code?" has a yes or no answer.
 $want = ("$stamp repo $Branch $commit").Trim()
 Yes "Fetched $Branch at $commit"
 
 # -- 3. Keep the code it replaces -----------------------------------------------
-Head "3. Keeping a copy of the code being replaced"
+Head "3. Keeping a copy of the code being replaced (on the server)"
 $skipDirs = @(".git", "backups", ".venv", ".venv-gpu", "venv", "__pycache__", "out", "client_files", "studio_data", "logs")
 $skipFiles = @(".env", "*.db", "*.db-wal", "*.db-shm", "*.npz", "*.pyc", "*.log", "PHONE_LINK.txt", "client_profiles.json")
 $keep = "$Target\backups\before-update-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
@@ -148,7 +163,7 @@ if ($LASTEXITCODE -ge 8) { Stop-Here "Could not keep a copy of the current code 
 Yes "Current code kept in $keep"
 
 # -- 4. The new code in place ------------------------------------------------------
-Head "4. Copying the new code into $Target"
+Head "4. Copying the new code to $Target"
 $robo = @($auto, $Target, "/E", "/R:2", "/W:5", "/NP", "/NFL", "/NDL", "/NJH", "/NJS") + @("/XD") + $skipDirs + @("/XF") + $skipFiles
 & robocopy @robo | Out-Null
 if ($LASTEXITCODE -ge 8) {
@@ -159,39 +174,37 @@ if ($LASTEXITCODE -ge 8) {
 # ASCII, no byte-order mark: PowerShell 5.1's "UTF8" adds one, and the app
 # reads this file as plain text.
 [IO.File]::WriteAllLines("$Target\brief_lite\VERSION.txt", [string[]]@($want), (New-Object Text.ASCIIEncoding))
-Yes "Copied - this will report: $want"
+Yes "Copied - it will report: $want"
 
 # -- 5. Restart and check -----------------------------------------------------------
 Head "5. Restarting SameDay and checking it runs the new code (up to 2 minutes)"
 foreach ($name in $Services) {
-    try { Restart-Service -Name $name -Force -ErrorAction Stop; Yes "Restarted $name" }
-    catch { Warn "Could not restart $name - $($_.Exception.Message)" }
+    if (Restart-One $name) { Yes "Restarted $name" } else { Warn "$name did not come back as RUNNING" }
 }
 $now = ""
 $deadline = (Get-Date).AddSeconds(150)
 while ((Get-Date) -lt $deadline) {
-    Start-Sleep -Seconds 5
     $now = RunningVersion
     if ($now -eq $want) { break }
+    Start-Sleep -Seconds 5
 }
-$craftUp = $false
-try { $craftUp = (Invoke-WebRequest -Uri "http://localhost:5030/" -UseBasicParsing -TimeoutSec 10).StatusCode -eq 200 } catch { $craftUp = $false }
-if ((Get-Service -Name "SDIIntelligence").Status -eq "Running") { Yes "SDI Intelligence is still running, untouched" }
-else { Warn "SDI Intelligence is not running - this script did not touch it; check it separately." }
+$intel = Get-ServiceState "SDIIntelligence"
+if ($intel -eq "RUNNING") { Yes "SDI Intelligence is still running, untouched" }
+else { Warn "SDI Intelligence reports $intel - this script did not touch it; check it separately." }
 
 Write-Host ""
 Write-Host ("=" * 72) -ForegroundColor DarkGray
 if ($now -eq $want) {
     Write-Host "  SameDay is running the new code: $now" -ForegroundColor Green
-    if (-not $craftUp) { Write-Host "  (SDI Craft on 5030 did not answer yet - check it in a minute.)" -ForegroundColor Yellow }
-    Write-Host "  Open http://10.0.0.5:5020 in the office or on the VPN." -ForegroundColor White
+    Write-Host "  Next, if SDI Intelligence has changed too: Ship-It." -ForegroundColor White
 } else {
     Write-Host "  SameDay is NOT answering with the new code yet." -ForegroundColor Yellow
-    Say ("It reports: " + $(if ($now) { $now } else { "nothing - it is not answering" }))
+    Say ("It reports: " + $(if ($now) { $now } else { "nothing at $Version" }))
     Say "The end of its log (keys removed):"
     SafeTail "$Target\logs\SDISameDay.log"
-    Say "To put the old code back:"
-    Say "  robocopy `"$keep`" `"$Target`" /E   then   Restart-Service SDISameDay, SDICraft"
+    Say "To put the old code back (from this laptop):"
+    Say "  robocopy `"$keep`" `"$Target`" /E   then run this script's restart again, or on the server:"
+    Say "  Restart-Service SDISameDay, SDICraft"
 }
 Write-Host ("=" * 72) -ForegroundColor DarkGray
 Write-Host ""

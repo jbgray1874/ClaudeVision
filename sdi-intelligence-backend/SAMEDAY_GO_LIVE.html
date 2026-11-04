@@ -170,11 +170,14 @@ phone gets the answer instead of an error.</li>
 <h2>E. Updating SameDay on the server</h2>
 <p>Since 4 November SameDay's code is in its own private repository, <code>github.com/jbgray1874/sdi-sameday</code>.
 The "any order" and noisy-room changes are there, and so is the cookie fix above. Updates go from the repository
-to the server. <span class="where">Laptop</span> once, to copy the script across:</p>
-<pre>Copy-Item C:\ClaudeVision\sdi-intelligence-backend\deploy\Update-SameDay.ps1 \\10.0.0.5\c$\Tools\</pre>
-<p><span class="where">Server</span> as administrator. To try the new changes before they go onto main:</p>
-<pre>powershell -ExecutionPolicy Bypass -File C:\Tools\Update-SameDay.ps1 -Branch claude/inspiring-planck-8juriz</pre>
-<p>Without <code>-Branch</code> it takes main. It keeps the code it replaces in <code>C:\SDI_Automation\backups\</code>
+to the server, from the laptop, the same way as Ship-It (the server has no git, and needs none).
+<span class="where">Laptop</span> VPN on:</p>
+<pre>cd C:\ClaudeVision
+git pull jbg claude/app-portal-main-2026
+.\sdi-intelligence-backend\deploy\Update-SameDay.ps1 -Branch claude/inspiring-planck-8juriz</pre>
+<p>Then Ship-It, so SDI Intelligence carries SameDay to phones at <code>/sameday/</code>. SameDay goes first: Ship-It
+points the tile at <code>/sameday/</code>, which only the updated SameDay understands.</p>
+<p>Without <code>-Branch</code> it takes main. It keeps the code it replaces in <code>C:\SDI_Automation\backups\</code> on the server
 and never touches the keys, chats, uploads or spend log. It finishes only when SameDay reports the new version,
 and it says how to put the old code back.</p>
 <div class="card warn">
