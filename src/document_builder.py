@@ -1651,7 +1651,24 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 _ops.add("deburring")
             if "CONTACT POINT" in doc_page_text_upper:
                 _ops.add("resistance_welding")
-            if "POWDER" in doc_page_text_upper or "P/C" in doc_page_text_upper:
+            # THE WIRE'S OWN SHEET IS QUOTED; THE PACK'S WORD IS NOT ITS OWN (D-686). This read
+            # "POWDER" anywhere in the pack, so 12693-01's wires 05M and 06M, whose own sheets
+            # say REFER TO SUB ASSEMBLY inside a zinc-plated worktop weldment, took the frame's
+            # POWDER COATED and the GA's MATTE BLACK as a coat of their own, and the route
+            # printed it as "an unrecorded source". Where the wire's own pages (legend removed)
+            # carry the words, the coat now carries them, so a member of a differently
+            # finished weldment keeps a coat its own sheet states. A coat read only off
+            # another sheet is still added, as before, for a loose wire in a coated pack; it
+            # stays unsourced, and the route compiler finishes a member of a weldment with
+            # that weldment (_member_coat_is_its_weldments).
+            _pc_own = re.search(r"POWDER[\s-]*COAT\w*|\bPOWDER\b|\bP/C\b", cue_upper)
+            if _pc_own:
+                _ops.add("powder_coating")
+                part.setdefault("operation_evidence", {}).setdefault(
+                    "powder_coating", _pc_own.group(0))
+                part.setdefault("operation_sources", {}).setdefault(
+                    "powder_coating", "drawing_notes")
+            elif "POWDER" in doc_page_text_upper or "P/C" in doc_page_text_upper:
                 _ops.add("powder_coating")
             _ops.add("handling")
             part["textual_operations"] = list(_ops)

@@ -39,6 +39,8 @@ __all__ = [
     "states_only_a_process",
     "names_one_face",
     "own_or_mirror_finish",
+    "states_a_finish_of_its_own",
+    "finished_with_its_weldment",
 ]
 
 # A finish that defers to another drawing states nothing about THIS part. Treating one as a
@@ -361,6 +363,52 @@ def finish_contradiction(operation: str, finish_text: str) -> Optional[str]:
                 f"coat on the assembly it goes into is that assembly's, not this part's")
     return (f"the drawing states {finish!r}, which is "
             f"{', '.join(sorted(named))}, not {op.replace('_', ' ')}")
+
+
+def states_a_finish_of_its_own(finish_text: Any) -> bool:
+    """True when a part's own finish field decides its finish by itself: it names a family
+    this module recognises, or it states only a process (FINISH: WELDED, which the coat gates
+    read as bare). Blank, a pointer ("SEE WELDMENT", "REFER TO SUB ASSEMBLY") and words
+    nobody recognises state nothing, and a part like that is finished with what holds it."""
+    text = str(finish_text or "").strip().upper()
+    if not text:
+        return False
+    return bool(finish_families(text)) or states_only_a_process(text)
+
+
+def finished_with_its_weldment(operation: str, own_finish: Any, weldment: str,
+                               weldment_finish: Any, member: str = "") -> Optional[str]:
+    """Why a finishing operation on a member of a weldment is ruled out by the weldment's own
+    stated finish, or None.
+
+    A MEMBER OF A WELDMENT IS FINISHED WITH THE WELDMENT (D-686). It is welded in before the
+    frame goes to the booth or the plater, so the finish it leaves the shop with is the one the
+    weldment's sheet states. 12693-01-104, a worktop weldment, states LIGHT AGED ZINC PLATED
+    WITH WAXED; its wires 05M and 06M say REFER TO SUB ASSEMBLY, and each still carried a
+    powder coat no reader had a source for. They were charged on the P.Coat row beside the
+    powder-coated frame 101 and fell out of the plated weldment's members.
+
+    Only a member whose own sheet states nothing is decided here (states_a_finish_of_its_own):
+    a member that names a finish keeps it, and finish_contradiction already weighs it. The
+    caller decides only for an operation with no recorded source of its own; one a reader
+    quoted or a person confirmed stands, because that is evidence about this member and the
+    weldment's sheet is not."""
+    op = str(operation or "").strip().lower()
+    if _OPERATION_FAMILY.get(op) is None:
+        return None
+    if states_a_finish_of_its_own(own_finish):
+        return None
+    w_finish = str(weldment_finish or "").strip().upper()
+    if not w_finish or not finish_contradiction(op, w_finish):
+        return None
+    who = str(member or "").strip() or "this member"
+    own = re.sub(r"\s+", " ", str(own_finish or "")).strip().upper()
+    return (f"{who} is welded into {weldment} and finished with it: {weldment}'s own sheet "
+            f"states {w_finish!r}, which is {', '.join(sorted(finish_families(w_finish)))}, "
+            f"not {op.replace('_', ' ')}. {who}'s own sheet states no finish of its own"
+            + (f" ({own!r})" if own else "")
+            + f", and nothing recorded where its {op.replace('_', ' ')} came from — it is in "
+              f"{weldment}'s finish, not on a row of its own")
 
 
 def mirror_base_number(record: Mapping[str, Any]) -> str:

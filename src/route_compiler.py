@@ -6866,6 +6866,10 @@ def compile_job_route(
     # assembly's joint (D-387); a coat stated on an assembly holding nothing to coat is carried
     # on its members' own lines (D-387). Both leave the ruled-out decision and its reason.
     _member_finish_weld_is_the_assemblys(decisions, graph, issues)
+    # A member of a weldment is finished with the weldment: an unsourced coat its weldment's
+    # own finish contradicts is not the member's to charge (D-686). Before the coat pass, so
+    # that pass sees the member as coated with its assembly, not on a line of its own.
+    _member_coat_is_its_weldments(decisions, graph, issues)
     _withhold_coats_with_nothing_to_coat(decisions, graph, issues)
     # A bond, a coat or a routing is charged at one level of the tree (D-446).
     _withhold_duplicate_level_ops(decisions, graph, issues)
@@ -7398,6 +7402,129 @@ def _member_finish_weld_is_the_assemblys(decisions: Sequence[Any], graph: Mappin
         if issues is not None:
             issues.append({"code": "member_weld_is_the_assemblys", "part": _tid,
                            "owner": _owner, "finish": _fin})
+    return moved
+
+
+# What makes an assembly a weldment: a required joint of its own. Dressing is not a joint.
+_WELDMENT_JOINS = frozenset({"welding", "spot_welding", "spotweld", "resistance_welding",
+                             "brazing"})
+# A claim with one of these sources is nobody's reading of this member.
+_NO_SOURCE_OF_ITS_OWN = frozenset({"", "unrecorded", "unknown"})
+
+
+def _coat_claim_is_the_members_own(source: Any, rec: Mapping[str, Any]) -> bool:
+    """Does this claim rest on something read about THIS member? An unrecorded one does not,
+    and neither does the document's coat the estimator stamps onto a member that states no
+    finish: it records drawing_deterministic and marks the record finish_inherited_from — the
+    GA's words, not the member's sheet."""
+    s = str(source or "").strip().lower()
+    if s in _NO_SOURCE_OF_ITS_OWN:
+        return False
+    if rec.get("finish_inherited_from") and s == "drawing_deterministic":
+        return False
+    return True
+
+
+def _the_weldment_finish_a_member_takes(target_id: str, graph: Mapping[str, Any],
+                                        welded: Set[str]) -> Tuple[str, str]:
+    """(the weldment, its own stated finish) this member is finished with, or ("", "").
+
+    Climbed through welded parents only: a member bolted into an assembly is not finished with
+    it. A weldment that states no finish, only RAW, or only WELDED is itself finished with the
+    weldment it is welded into, so the climb goes on through it. Two weldments that state
+    different families decide nothing."""
+    from finish_rules import finish_families, stated_finish
+    parents = graph.get("parents") or {}
+    found: Dict[str, str] = {}
+    stack: List[Tuple[str, frozenset]] = [(target_id, frozenset({target_id}))]
+    while stack:
+        pn, seen = stack.pop()
+        for par in sorted(parents.get(pn) or ()):
+            if par in seen or par not in welded:
+                continue
+            rec = _graph_record(graph, par)
+            fin = "" if rec.get("finish_inherited_from") else stated_finish(rec)
+            if finish_families(fin) - {"bare"}:
+                found[par] = fin
+            else:
+                stack.append((par, seen | {par}))
+    families = {frozenset(finish_families(f) - {"bare"}) for f in found.values()}
+    if len(families) != 1:
+        return "", ""
+    owner = sorted(found)[0]
+    return owner, found[owner]
+
+
+def _member_coat_is_its_weldments(decisions: Sequence[Any], graph: Mapping[str, Any],
+                                  issues: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """A member of a weldment is finished with the weldment (D-686).
+
+    12693-01, 4 Nov: the worktop weldment 104 states LIGHT AGED ZINC PLATED WITH WAXED. Its
+    wires 05M and 06M state REFER TO SUB ASSEMBLY, and each carried a required powder coat
+    whose only claim was "textual_operations on existing part record — no reader recorded a
+    source", minted by the wire route from the frame's and the GA's POWDER. They were charged
+    on the P.Coat row beside the powder-coated frame 101, and the plating line named only 03M
+    and 07M as plated.
+
+    The member's finish is the weldment's unless its own sheet states one. A finishing
+    decision is made not applicable here when: it is required on a member of a welded
+    assembly; every claim requiring it has no recorded source of its own
+    (_coat_claim_is_the_members_own); the member's own sheet states no finish (blank, a
+    pointer, or words nobody recognises); and the nearest welded ancestor that states a
+    finish states one that contradicts it (finish_rules.finished_with_its_weldment). A member
+    whose sheet states its own finish, a coat a reader quoted or a person confirmed, and a
+    part in no weldment are untouched. The ruled-out decision keeps the reason, and the
+    member stays in the weldment's finish — for a plate, on the plating line's members."""
+    kinds = {getattr(n, "part_number", ""): getattr(n, "kind", "") for n in (graph.get("nodes") or [])}
+    parents = graph.get("parents") or {}
+    welded = {
+        str(d.target_id or "") for d in decisions
+        if d.status == REQUIRED and str(d.operation or "").lower() in _WELDMENT_JOINS
+        and kinds.get(str(d.target_id or "")) == "assembly"}
+    # A sheet that names the object a weldment says it is welded, whether or not a weld
+    # decision reached this graph.
+    for _pn, _kind in kinds.items():
+        if _kind == "assembly" and re.search(
+                r"\bWELD(?:MENT|ED)\b", str(_graph_record(graph, _pn).get("description") or ""),
+                re.I):
+            welded.add(str(_pn))
+    if not welded:
+        return []
+    try:
+        from finish_rules import (_OPERATION_FAMILY, finished_with_its_weldment,
+                                  own_or_mirror_finish)
+    except Exception:                                                # pragma: no cover
+        return []
+    moved: List[str] = []
+    for _d in list(decisions):
+        if _d.status != REQUIRED or str(_d.scope or "") != "part":
+            continue
+        _op = str(_d.operation or "").lower()
+        if _op not in _OPERATION_FAMILY:
+            continue
+        _tid = str(_d.target_id or "")
+        if not parents.get(_tid):
+            continue
+        _rec = _graph_record(graph, _tid)
+        if any(_coat_claim_is_the_members_own(s, _rec) for s in _claim_sources(_d)):
+            continue
+        # A finish the document filled in is the document's words, not this member's sheet.
+        _own = "" if _rec.get("finish_inherited_from") else own_or_mirror_finish(
+            _rec, lambda pn: _graph_record(graph, pn))
+        _owner, _owner_fin = _the_weldment_finish_a_member_takes(_tid, graph, welded)
+        if not _owner:
+            continue
+        _why = finished_with_its_weldment(_op, _own, _owner, _owner_fin, member=_tid)
+        if not _why:
+            continue
+        _d.status = NOT_APPLICABLE
+        _d.reason = (f"{_d.reason}; " if _d.reason else "") + _why
+        _d.field_provenance["status"] = "member_finished_with_its_weldment"
+        _d.field_provenance["finish_owner"] = _owner
+        moved.append(_tid)
+        if issues is not None:
+            issues.append({"code": "member_finished_with_its_weldment", "part": _tid,
+                           "operation": _op, "weldment": _owner, "finish": _owner_fin})
     return moved
 
 

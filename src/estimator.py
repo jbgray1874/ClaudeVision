@@ -1692,7 +1692,11 @@ def plated_steel_member_pns(parts: Any, summary: Any, parents: Any = None) -> se
         # finished, and "CHROME PLATED METAL" made them members of the bar's plating.
         if part.get("concept_kind") == "bought_in" or part.get("is_bought_in"):
             continue
-        _own = _part_finish_text(part)
+        # A FINISH THE DOCUMENT FILLED IN IS NOT THE MEMBER'S OWN (D-686). The title-block
+        # stamp writes the GA's POWDER COATED onto a member that states none and marks it
+        # finish_inherited_from; read as the member's own, it took a member of a plated
+        # weldment out of the plating. A member of a weldment is finished with the weldment.
+        _own = "" if part.get("finish_inherited_from") else _part_finish_text(part)
         if _is_plate_finish(_own):
             members.add(pn)
             continue
@@ -1748,7 +1752,8 @@ def plated_members_deferred_to_their_own_finish(parts: Any, summary: Any,
         # finished, and "CHROME PLATED METAL" made them members of the bar's plating.
         if part.get("concept_kind") == "bought_in" or part.get("is_bought_in"):
             continue
-        own = _part_finish_text(part)
+        # The document's words are not the member's detail (D-686), as above.
+        own = "" if part.get("finish_inherited_from") else _part_finish_text(part)
         if not own or _is_plate_finish(own):
             continue
         try:
@@ -2298,6 +2303,12 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
         # plater is quoted for — an estimator cannot confirm a plated weight against a number
         # with no member list, and a RAW part wrongly swept in is invisible without it.
         _contrib = sorted(m for m in members if m in by_pn and _member_mass_kg(by_pn[m]) > 0)
+        # A MEMBER WITH NO MASS IS STILL A MEMBER (D-686). 12693-01's wires 05M and 06M are
+        # welded into the plated worktop 104 and go in the tank with it; 05M's length was never
+        # read and 06M was priced at market with no weight, so both resolved no mass and the
+        # filter above dropped them without a word: the line read "plated members: 03M, 07M".
+        # They are named as members, and the line says the plated weight is short by theirs.
+        _unmassed = sorted(m for m in members if m in by_pn and _member_mass_kg(by_pn[m]) <= 0)
         try:
             _deferred = sorted(plated_members_deferred_to_their_own_finish(
                 parts if parts is not None else part_estimates, summary,
@@ -2469,6 +2480,7 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
         pe["_price_explicitly_withheld"] = unit is None
         pe["_plating_members_costed"] = _contrib
         pe["_plating_members_deferred"] = _deferred
+        pe["_plating_members_unmassed"] = _unmassed
         # THE OPEN QUESTION GOES ON THE LINE, NOT INTO A DECISION.
         #
         # A weldment goes into the tank assembled, so a part welded into a PLATED weldment is
@@ -2481,6 +2493,10 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
             note
             + (f" ; plated members: {', '.join(_contrib)}" if _contrib
                else " ; no plated member resolved a mass")
+            + (f" ; plated members with NO MASS resolved, so not in the {round(mass, 3):g} kg: "
+               f"{', '.join(_unmassed)} — welded into the plated weldment, they go in the tank "
+               f"with it; the plated weight is short by theirs until it is resolved"
+               if _unmassed else "")
             + (f" ; NOT included, own detail states another finish: {', '.join(_deferred)} — "
                f"a weldment is plated assembled, so if these go in the tank they belong in the "
                f"mass; weldment-vs-leaf is your call" if _deferred else "")
@@ -2544,8 +2560,8 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
                                      "subcontract_plating_historical_comparator",
                                      "estimator_stated_price",
                                      "inherited_estimator_decision")
-        if _per_unit_price and (_contrib or _deferred):
-            _all_members = sorted(set(_contrib) | set(_deferred))
+        if _per_unit_price and (_contrib or _deferred or _unmassed):
+            _all_members = sorted(set(_contrib) | set(_deferred) | set(_unmassed))
             _base = str(pe.get("description") or "").split(" — plated members:")[0]
             pe["description"] = (
                 f"{_base} — plated members: {', '.join(_all_members)} "
@@ -2553,9 +2569,13 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
                 f"an input and no member is excluded from it)")
             pe["_plating_members_costed"] = _all_members
             pe["_plating_members_deferred"] = []
-        elif _contrib or _deferred:
+            pe["_plating_members_unmassed"] = []
+        elif _contrib or _deferred or _unmassed:
             _base = str(pe.get("description") or "").split(" — plated members:")[0]
-            _desc = f"{_base} — plated members: {', '.join(_contrib) or 'none'}"
+            _desc = (f"{_base} — plated members: "
+                     f"{', '.join(sorted(set(_contrib) | set(_unmassed))) or 'none'}")
+            if _unmassed:
+                _desc += f" (no mass resolved, not in the plated weight: {', '.join(_unmassed)})"
             if _deferred:
                 _desc += f" (excluded, own detail differs: {', '.join(_deferred)})"
             pe["description"] = _desc
