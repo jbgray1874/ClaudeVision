@@ -25,6 +25,9 @@ openai          # xAI is OpenAI-compatible; the client the VISION BOM reader cal
 # (CI / Linux), where the rest of the pipeline still runs on PDF + DXF.
 # Requires a licensed SolidWorks seat on the machine — no key is held in this repo.
 pywin32; sys_platform == "win32"
+# The SOLIDWORKS Document Manager backup reader (D-711): its class factory has no IDispatch,
+# so pywin32 cannot reach it; comtypes binds to its interfaces from the type library.
+comtypes; sys_platform == "win32"
 
 # ── Optional / feature-specific ──────────────────────────────────────────
 # Uncomment as needed; these are heavier and not on the core estimate path.
