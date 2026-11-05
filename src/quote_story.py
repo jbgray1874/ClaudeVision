@@ -1365,10 +1365,23 @@ def costing_page(summary: Dict[str, Any], facts: Dict[str, Any], *, customer: st
         lo, hi = model[0], model[-1]
         why = ""
         if len(model) >= 2 and lo["setup"] > 0:
+            # THE SENTENCE SAYS WHAT THE TABLE BELOW IT PRINTS (D-700). 12693-01's quote read
+            # "running work holds at £173.25" over a table showing £173.22 at 1 off and
+            # £173.25 at 50 off. "Holds" only where both columns print the same figure; a
+            # small move is named as one, and a large one is not called unchanged at all.
+            _run_lo, _run_hi = _gbp(lo["running"]), _gbp(hi["running"])
+            if _run_lo == _run_hi:
+                _running = (f"running work holds at {_run_hi} because the work in each unit "
+                            f"does not change")
+            elif abs(float(hi["running"]) - float(lo["running"])) <= \
+                    0.02 * max(abs(float(lo["running"])), abs(float(hi["running"])), 0.01):
+                _running = (f"running work barely moves, from {_run_lo} to {_run_hi}, because "
+                            f"the work in each unit does not change")
+            else:
+                _running = f"running work goes from {_run_lo} to {_run_hi}"
             why = (f"At {_g(lo['quantity'])} off, {_gbp(lo['setup'])} of machine and line "
                    f"set-up rests on each unit; at {_g(hi['quantity'])} off it is "
-                   f"{_gbp(hi['setup'])}, while running work holds at {_gbp(hi['running'])} "
-                   f"because the work in each unit does not change.")
+                   f"{_gbp(hi['setup'])}, while {_running}.")
             if lo.get("order_charges") and hi.get("order_charges") is not None \
                     and lo["order_charges"] > hi["order_charges"]:
                 why += (f" Packaging and delivery, priced for the whole order, fall from "
