@@ -151,6 +151,8 @@ cache/
 tests/replay/*/summary.json
 tests/replay/*/provenance.json
 tests/replay/*/fingerprint.json
+# A drafted facts file is unreviewed until a person renames it (tools/draft_accepted_facts.py).
+tests/replay/*/accepted_facts.draft.json
 
 # ── SDI Intelligence app portal ──
 !sdi-intelligence-backend/services.json

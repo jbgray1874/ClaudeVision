@@ -168,26 +168,37 @@ def test_every_job_directory_either_is_frozen_or_fails_the_suite():
         "all three tiers must load through the strict loader"
 
 
-def test_the_unfrozen_packs_are_reported_as_unprotected_right_now():
-    """Honesty about today's state: both reviewed packs have accepted facts and no frozen
-    record, so neither is protected. This test PASSES while that is true and documents it; it
-    is the freeze of each pack that removes the hole, not this file."""
-    unfrozen = sorted(d.name for d in REPLAY.iterdir()
-                      if d.is_dir() and (d / "accepted_facts.json").is_file()
-                      and not (d / "summary.json").is_file())
-    assert unfrozen == ["10975-02", "7332-01"], (
-        f"the set of unprotected packs changed to {unfrozen} — if a pack was just frozen, "
-        f"update this list; if one was added unfrozen, freeze it")
+REVIEWED = sorted(d.name for d in REPLAY.iterdir()
+                  if d.is_dir() and (d / "accepted_facts.json").is_file())
 
 
-@pytest.mark.parametrize("job", ["7332-01", "10975-02"])
+def test_the_reviewed_packs_are_the_ones_we_think():
+    """Which packs carry estimator-reviewed facts is versioned; whether each is FROZEN is not.
+
+    This used to assert the unfrozen set, which is true in the cloud (records are never
+    committed) and false on the laptop the moment a pack is frozen there, so the one place a
+    baseline is protected would have gone red for being protected. The frozen state of each
+    pack is reported per job by tools/run_replay_baselines.py on the laptop (SCRUM-134); this
+    pins only that a pack cannot be added or lost without somebody saying so."""
+    assert REVIEWED == ["10975-02", "7332-01"], (
+        f"the reviewed packs changed to {REVIEWED}: if a pack was just reviewed, add it here")
+
+
+KNOWN_KEYS = {"_reviewed", "_review", "_money_note", "bom_identities", "quantities",
+              "required_operations", "forbidden_operations",
+              "forbidden_operations_anywhere", "material_charged", "materials",
+              "no_duplicate_operations", "allowed_repeats", "no_minted_children",
+              "decisions_expected", "forbidden_names_everywhere", "phrase_counts"}
+
+
+@pytest.mark.parametrize("job", REVIEWED)
 def test_every_reviewed_pack_has_accepted_facts_that_parse(job: str):
     facts = json.loads((REPLAY / job / "accepted_facts.json").read_text(encoding="utf-8"))
     assert isinstance(facts, dict) and facts, f"{job}: accepted facts are empty"
-    known = {"_reviewed", "_money_note", "bom_identities", "quantities",
-             "required_operations", "forbidden_operations",
-             "forbidden_operations_anywhere", "material_charged", "no_minted_children",
-             "decisions_expected", "forbidden_names_everywhere", "phrase_counts"}
+    assert "DRAFT" not in str(facts.get("_reviewed") or "").upper(), (
+        f"{job}: accepted_facts.json still carries the draft notice; a person has to review "
+        f"and sign it before it gates anything")
+    known = KNOWN_KEYS
     unknown = sorted(set(facts) - known)
     assert not unknown, (
         f"{job}: accepted facts carry key(s) {unknown} that no check reads — a pin nobody "
@@ -216,7 +227,7 @@ def test_money_is_still_not_pinned_in_the_fast_layer():
     """Rates move; this layer pins structure. £40.89 / £33.59 / £80.09 are reconciled by the
     Windows run with Excel and read-back. A number creeping in here would make the fast layer
     fail on a rate change and teach everyone to edit the baseline."""
-    for job in ("7332-01", "10975-02"):
+    for job in REVIEWED:
         facts = json.loads(
             (REPLAY / job / "accepted_facts.json").read_text(encoding="utf-8"))
         for key, value in facts.items():
@@ -321,3 +332,170 @@ def test_canonical_decisions_does_not_duplicate_one_decision_found_twice():
 def test_an_absent_route_is_not_an_error_just_an_empty_set():
     assert required_ops_for({}, "X-002") == set()
     assert canonical_decisions({}) == []
+
+
+# ── SCRUM-134: swapped materials and duplicate operations are caught ─────────────────
+
+
+def test_a_material_pin_catches_a_swapped_material():
+    facts = {"materials": {"X-002": "STAINLESS 304"}}
+    assert_accepted_structure("synthetic", facts,
+                              [_line("X-002", material_label="Stainless Steel 304 2B")])
+    with pytest.raises(AssertionError, match="missing"):
+        assert_accepted_structure("synthetic", facts,
+                                  [_line("X-002", material_label="Mild Steel CR4")])
+
+
+def test_a_material_pin_on_a_part_that_vanished_fails():
+    with pytest.raises(AssertionError, match="is missing"):
+        assert_accepted_structure("synthetic", {"materials": {"X-002": "OAK"}},
+                                  [_line("X-003", material_label="Oak")])
+
+
+def test_a_material_printed_differently_is_not_a_swap():
+    """Case, punctuation and word order are print, not material."""
+    facts = {"materials": {"X-002": "MFMDF Oak"}}
+    assert_accepted_structure("synthetic", facts,
+                              [_line("X-002", material_label="oak-faced mfmdf, 18 core")])
+
+
+def test_an_operation_charged_on_two_rows_of_one_part_is_caught():
+    facts = {"no_duplicate_operations": True}
+    lines = [_line("X-002", operation_charges={"laser_cutting": 2, "folding": 1})]
+    with pytest.raises(AssertionError, match="X-002 laser_cutting x2"):
+        assert_accepted_structure("synthetic", facts, lines)
+
+
+def test_a_repeat_the_estimator_accepted_still_passes():
+    facts = {"no_duplicate_operations": True,
+             "allowed_repeats": {"x-002": ["Folding"]}}
+    assert_accepted_structure("synthetic", facts,
+                              [_line("X-002", operation_charges={"folding": 2})])
+    with pytest.raises(AssertionError, match="laser_cutting"):
+        assert_accepted_structure(
+            "synthetic", facts,
+            [_line("X-002", operation_charges={"folding": 2, "laser_cutting": 2})])
+
+
+def test_without_the_pin_a_repeat_is_not_judged():
+    assert_accepted_structure("synthetic", {},
+                              [_line("X-002", operation_charges={"laser_cutting": 3})])
+
+
+def test_the_record_counts_the_rows_that_charge_each_operation():
+    """costed_facts publishes the count the pin reads, from the priced rows themselves."""
+    import costed_facts as cf
+    summary = {"workbook_labour": {"rows": [
+        {"workbook_row": 10, "part_numbers": ["X-002"], "engine_operations": ["laser_cutting"]},
+        {"workbook_row": 11, "part_numbers": ["X-002", "X-003"],
+         "engine_operations": ["laser_cutting"]},
+        {"workbook_row": 12, "part_numbers": ["X-002"], "engine_operations": ["folding"]},
+    ]}}
+    assert cf.operation_charge_counts(summary, "X-002") == {"laser_cutting": 2, "folding": 1}
+    assert cf.operation_charge_counts(summary, "X-003") == {"laser_cutting": 1}
+
+
+# ── every committed pack's rules run in CI on a synthetic record ──────────────────────
+
+
+def _synthetic_record(facts: dict) -> list:
+    """The smallest record that satisfies every structural pin in `facts`.
+
+    Built from the FACTS, never from a job's record, which stays on the laptop. It lets CI
+    execute each committed pack's own pins, so a pin that could never fail or never pass is
+    found here and not on the day the pack is frozen (SCRUM-134)."""
+    ids = list(facts.get("bom_identities") or [])
+    for key in ("quantities", "required_operations", "materials"):
+        ids += list((facts.get(key) or {}).keys())
+    ids += list(facts.get("material_charged") or [])
+    ids = list(dict.fromkeys(str(i) for i in ids))
+    allowed = {str(k).upper(): v for k, v in (facts.get("allowed_repeats") or {}).items()}
+    lines = []
+    for pn in ids:
+        routed = [str(o).lower() for o in (facts.get("required_operations") or {}).get(pn, [])]
+        charges = {op: 1 for op in routed}
+        charges.update({str(op).lower(): 2 for op in allowed.get(pn.upper(), [])})
+        lines.append(_line(pn, qty_per_unit=float((facts.get("quantities") or {}).get(pn, 1)),
+                           route_operations=routed,
+                           material_label=str((facts.get("materials") or {}).get(pn, "")),
+                           operation_charges=charges))
+    return lines
+
+
+def _plants(facts: dict, lines: list):
+    """(what was broken, the broken record) for every break this pack's pins should catch."""
+    import copy
+
+    def broken(fn):
+        out = copy.deepcopy(lines)
+        fn(out)
+        return out
+
+    def first(d):
+        return next(iter((d or {}).items()), (None, None))
+
+    if facts.get("bom_identities") and len(lines) > 1:
+        yield "a missing part", broken(lambda ls: ls.pop())
+        yield "an extra part", broken(lambda ls: ls.append(_line("PLANTED-EXTRA")))
+    pn, q = first(facts.get("quantities"))
+    if pn is not None:
+        def _qty(ls, pn=pn, q=q):
+            next(l for l in ls if l["part_number"] == pn)["qty_per_unit"] = float(q) + 1
+        yield "a wrong quantity", broken(_qty)
+    pn, _ = first(facts.get("materials"))
+    if pn is not None:
+        def _swap(ls, pn=pn):
+            next(l for l in ls if l["part_number"] == pn)["material_label"] = "PLANTEDSWAP"
+        yield "a swapped material", broken(_swap)
+    if facts.get("no_duplicate_operations") and lines:
+        def _dup(ls):
+            ls[0]["operation_charges"]["planted_op"] = 2
+        yield "a duplicate operation", broken(_dup)
+    pn, ops = first(facts.get("required_operations"))
+    if pn is not None and ops:
+        def _drop(ls, pn=pn):
+            next(l for l in ls if l["part_number"] == pn)["route_operations"] = []
+        yield "a required operation lost", broken(_drop)
+    for op in (facts.get("forbidden_operations_anywhere") or [])[:1]:
+        def _forbid(ls, op=op):
+            ls[0]["operations"] = list(ls[0]["operations"]) + [op]
+        yield "a ruled-out operation charged", broken(_forbid)
+    for pn in (facts.get("material_charged") or [])[:1]:
+        def _free(ls, pn=pn):
+            next(l for l in ls if l["part_number"] == pn)["engine_unit_gbp"] = 0.0
+        yield "a made part with no material money", broken(_free)
+
+
+@pytest.mark.parametrize("job", REVIEWED)
+def test_each_reviewed_pack_s_rules_pass_a_record_that_keeps_them(job: str):
+    facts = json.loads((REPLAY / job / "accepted_facts.json").read_text(encoding="utf-8"))
+    assert_accepted_structure(job, facts, _synthetic_record(facts))
+
+
+@pytest.mark.parametrize("job", REVIEWED)
+def test_each_reviewed_pack_s_rules_catch_every_planted_break(job: str):
+    facts = json.loads((REPLAY / job / "accepted_facts.json").read_text(encoding="utf-8"))
+    lines = _synthetic_record(facts)
+    missed = []
+    planted = 0
+    for what, record in _plants(facts, lines):
+        planted += 1
+        try:
+            assert_accepted_structure(job, facts, record)
+        except AssertionError:
+            continue
+        missed.append(what)
+    assert planted, f"{job}: its facts pin nothing a planted break could test"
+    assert not missed, f"{job}: the pins let these planted breaks through: {missed}"
+
+
+def test_the_synthetic_record_is_proved_on_the_new_pins_too():
+    """The two new pins take part in the per-pack plant, so a pack that uses them is held."""
+    facts = {"bom_identities": ["A", "B"], "quantities": {"A": 2},
+             "materials": {"A": "OAK MFMDF"}, "no_duplicate_operations": True,
+             "allowed_repeats": {"B": ["folding"]}}
+    lines = _synthetic_record(facts)
+    assert_accepted_structure("synthetic", facts, lines)
+    kinds = [what for what, _ in _plants(facts, lines)]
+    assert {"a swapped material", "a duplicate operation", "a wrong quantity",
+            "a missing part"} <= set(kinds)
