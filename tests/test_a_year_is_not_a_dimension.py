@@ -81,3 +81,18 @@ def test_dates_are_stripped_before_the_band_is_applied():
     i = SRC.index("# A DATE IS NOT A DIMENSION.")
     block = SRC[i:SRC.index("reverse=True,", i)]
     assert block.index("_page_text = re.sub(") < block.index("1990 <= float(v)")
+
+
+# ── a number that measures something else is not a size (D-721) ───────────────
+
+def test_a_grit_a_micron_a_weight_or_a_phone_number_is_not_a_size():
+    """11908-22: the border's "400 GRIT FINAL POLISH" became the length of every panel."""
+    border = ("POWDERCOATING: BETWEEN 80 - 120 MICRON  CHROME PLATING POLISHING SPECIFICATION "
+              "IS 400 GRIT FINAL POLISH  WEIGHT: 1085g  0116 274 7040  45°  ")
+    assert _scan(border + " 290  340")[:2] == [340.0, 290.0]
+
+
+def test_the_part_is_sized_from_its_own_sheet_when_its_pages_are_known():
+    i = SRC.index("# A DATE IS NOT A DIMENSION.")
+    block = SRC[i:SRC.index("reverse=True,", i)]
+    assert "_own_detail" in block and 'part.get("pages")' in block

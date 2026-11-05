@@ -1853,7 +1853,24 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 # "(C) 2026"). The cost of that is a genuine 1990–2099mm part refused HERE —
                 # correct, for a guess of last resort: a part that size has to come from a
                 # measurement, not from the largest number anybody printed on the page.
-                _page_text = " ".join(str(_get_page_text(p)) for p in _detail_pages)
+                # ITS OWN SHEET BEFORE ANY OTHER (D-721). Every detail page was read for every
+                # part, so the largest numbers on the pack sized each part alike: 11908-22's
+                # base and four sides all became 400 x 350, the 350 off one side's sheet.
+                # Where the part's own pages are known, only they size it.
+                _own_pages = {p for p in (part.get("pages") or []) if isinstance(p, int)}
+                _own_detail = [_p for _p in _detail_pages
+                               if _p.get("page_number") in _own_pages]
+                _page_text = " ".join(str(_get_page_text(p))
+                                      for p in (_own_detail or _detail_pages))
+                # A NUMBER THAT MEASURES SOMETHING ELSE IS NOT A SIZE (D-721). The border's
+                # finish notes print "400 GRIT FINAL POLISH" and "80 - 120 MICRON", and the
+                # address block prints a telephone number; 400 became the length of every
+                # panel on 11908-22. A figure followed by a non-length unit is dropped.
+                _page_text = re.sub(
+                    r"\b\d+(?:\.\d+)?\s*(?:-\s*\d+(?:\.\d+)?\s*)?(?:GRIT|MICRONS?|UM|KGS?|G|GSM|%|DEG(?:REES?)?)\b",
+                    " ", _page_text, flags=re.IGNORECASE)
+                _page_text = re.sub(r"\d+(?:\.\d+)?\s*°", " ", _page_text)
+                _page_text = re.sub(r"\b0\d{3,4}\s+\d{3}\s+\d{3,4}\b", " ", _page_text)
                 _page_text = re.sub(
                     r"\b\d{1,4}\s*[/.\-]\s*\d{1,2}\s*[/.\-]\s*\d{1,4}\b", " ", _page_text)
                 _page_text = re.sub(
