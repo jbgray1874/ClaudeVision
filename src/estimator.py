@@ -3108,6 +3108,41 @@ def _bar_metres_per_tonne(diameter_mm: float) -> Optional[float]:
 # stock price. A reviewer of 12693-01 asked for exactly that to be said on the line, in words.
 WIRE_RATE_PROVISIONAL_FLAG = "wire_rate_is_an_undated_template_allowance"
 
+# ONE WIRE RATE, FROM THE SHEET THAT CHARGES IT (D-697). Every wire path read the config's
+# WORKBOOK_INPUT_DEFAULTS (£1,500/t) while the template the workbook is built from holds its own
+# Wire Cost Per Tonne (£1,600/t on 12693-01-GA) and prices every Wire row at that. The report
+# then stated a rate the sheet did not charge. The template's cell is read once per template
+# path; the config figure answers only where the template cannot be read, and says so.
+_WIRE_RATE_BY_TEMPLATE: Dict[str, Tuple[float, str]] = {}
+
+
+def wire_rate_per_tonne() -> Tuple[float, str]:
+    """(£ per tonne, where it came from): the build template's Wire Cost Per Tonne where the
+    template can be read, else the config default ("config")."""
+    _cfg_rate = float((getattr(config, "WORKBOOK_INPUT_DEFAULTS", {}) or {}).get(
+        "wire_cost_per_tonne_gbp") or 1600.0)
+    try:
+        from wb_populate import template_path as _tp_fn
+        _tp = str(_tp_fn() or "").strip()
+    except Exception:                                                # noqa: BLE001
+        _tp = ""
+    if not _tp:
+        return _cfg_rate, "config"
+    if _tp in _WIRE_RATE_BY_TEMPLATE:
+        return _WIRE_RATE_BY_TEMPLATE[_tp]
+    got: Tuple[float, str] = (_cfg_rate, "config")
+    try:
+        if Path(_tp).is_file():
+            from estimate_sheet_discovery import read_estimate_workbook_inputs
+            _scan = read_estimate_workbook_inputs(Path(_tp)) or {}
+            _v = _safe_float(_scan.get("wire_cost_per_tonne_gbp")) if _scan.get("ok") else None
+            if _v and _v > 0:
+                got = (float(_v), "template")
+    except Exception:                                                # noqa: BLE001
+        pass
+    _WIRE_RATE_BY_TEMPLATE[_tp] = got
+    return got
+
 
 def wire_rate_is_provisional(rate_gbp_per_tonne: float, gauge_mm: Any = None,
                              material: Any = None) -> Dict[str, Any]:
@@ -7609,8 +7644,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     # before the blank gate.)
     if _round:
         _rd, _rl = float(_round["diameter_mm"]), float(_round["length_mm"])
-        _wb_r = getattr(config, "WORKBOOK_INPUT_DEFAULTS", {}) or {}
-        _rate_t = float(_wb_r.get("wire_cost_per_tonne_gbp") or 1600.0)
+        _rate_t, _rate_from = wire_rate_per_tonne()
         _mpt = _bar_metres_per_tonne(_rd)
         _scrap = float(getattr(config, "SCRAP_PERCENTAGE", 0.04))
         _ppm = _rate_t / _mpt if _mpt else None
@@ -7715,8 +7749,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         _bar_gauge = _safe_float(part.get("wire_gauge_mm"))
         _bar_len = _safe_float(part.get("wire_length_mm"))
         if _bar_gauge and _bar_len:
-            wb_defaults = getattr(config, "WORKBOOK_INPUT_DEFAULTS", {}) or {}
-            _wire_per_tonne = float(wb_defaults.get("wire_cost_per_tonne_gbp") or 1600.0)
+            _wire_per_tonne, _wire_rate_from = wire_rate_per_tonne()
             _gauge_table = getattr(config, "WIRE_GAUGE_TABLE", {}) or {}
             _m_per_tonne = None
             if _gauge_table:
@@ -7800,7 +7833,6 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     _ss_wire = part.get("section_stock") or {}
     _is_profile_tube = bool(_ss_wire.get("a") and _ss_wire.get("b") and _ss_wire.get("t"))
     if _is_wire_stock and not _is_profile_tube:
-        _wb_w = getattr(config, "WORKBOOK_INPUT_DEFAULTS", {}) or {}
         _wg = (_safe_float(part.get("wire_gauge_mm"))
                or _safe_float(_mi_wire.get("wire_gauge_mm"))
                or _safe_float(_me_wire.get("wire_gauge_mm"))
@@ -7830,7 +7862,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                         else _bands.get("formed", 900.0))
             _wl = min(_wl, 1500.0)
             _length_assumed = True
-        _rate_t = float(_wb_w.get("wire_cost_per_tonne_gbp") or 1600.0)
+        _rate_t, _rate_from = wire_rate_per_tonne()
         _scrap = float(getattr(config, "SCRAP_PERCENTAGE", 0.04))
         # THE SHEET'S OWN METRES PER TONNE (D-692). The Wire block prices a row by looking its
         # gauge up in the template's table; this line worked the section out instead, so the
@@ -7845,8 +7877,12 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             _mass = _wl / 1000.0 / _mpt * 1000.0
         _rate_prov_w = wire_rate_is_provisional(_rate_t, _wg, material)
         part.setdefault("review_flags", []).append(
-            f"{part.get('part_number')}: wire priced Ø{_wg:g} x {_wl:g}mm at the config rate "
-            f"£{_rate_t:.0f}/t (the sheet's own Wire Cost Per Tonne cell recalculates the row)"
+            f"{part.get('part_number')}: wire priced Ø{_wg:g} x {_wl:g}mm at "
+            + (f"£{_rate_t:,.0f}/t, the Wire Cost Per Tonne in the workbook template it is "
+               f"charged on"
+               if _rate_from == "template" else
+               f"the config rate £{_rate_t:,.0f}/t; the template's Wire Cost Per Tonne cell "
+               f"was not read, and the sheet recalculates the row at whatever that cell holds")
             + (" — [AI ESTIMATE - INDICATIVE, NOT A QUOTE]; developed length ASSUMED, overwrite "
                "when a schedule / CL callout or Tim gives it (a PDF outline is not a length)."
                if _length_assumed else
@@ -8101,8 +8137,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         desc_upper = str(part.get("description") or "").upper()
         is_wire = any(kw in desc_upper for kw in ("WIRE MESH", "WELDED WIRE", "WIRE FORM", "WIREWORK", "WIRE "))
         if is_wire and length_mm:
-            wb_defaults = getattr(config, "WORKBOOK_INPUT_DEFAULTS", {}) or {}
-            wire_per_tonne = float(wb_defaults.get("wire_cost_per_tonne_gbp") or 1600.0)
+            wire_per_tonne, _wire_rate_from = wire_rate_per_tonne()
             wire_gauge_table = getattr(config, "WIRE_GAUGE_TABLE", {}) or {}
             gauge_mm = _safe_thickness_mm(part) or 3.0
             metres_per_tonne: Optional[float] = None
@@ -13746,6 +13781,18 @@ def _merge_sheet_into_estimate_workbook_inputs(out_doc: Dict[str, Any], summary:
     tb = ss.get("template_workbook")
     if tb:
         candidates.append(Path(str(tb)))
+    # THE TEMPLATE THE WORKBOOK IS BUILT FROM IS A SOURCE OF ITS SHOP RATES (D-697). The
+    # estimate read the wire rate from the candidates above, none of which was the template
+    # wb_populate writes into, so 12693-01-GA's report said "the config rate £1500/t" while
+    # that template's Wire Cost Per Tonne cell, £1,600, priced every Wire row. One rate, from
+    # the sheet that charges it.
+    try:
+        from wb_populate import template_path as _wb_template_path
+        _tp = str(_wb_template_path() or "").strip()
+        if _tp:
+            candidates.append(Path(_tp))
+    except Exception:                                                # noqa: BLE001
+        pass
     seen: set[str] = set()
     for path in candidates:
         try:
@@ -13779,8 +13826,10 @@ def _merge_sheet_into_estimate_workbook_inputs(out_doc: Dict[str, Any], summary:
             ewb["assumed_job_quantity_source"] = "discovered_sheet"
         if scan.get("wire_cost_per_tonne_gbp") is not None:
             ewb["wire_cost_per_tonne_gbp"] = scan["wire_cost_per_tonne_gbp"]
+            ewb["wire_cost_per_tonne_source"] = str(path)
         if scan.get("sheet_steel_cost_per_tonne_gbp") is not None:
             ewb["sheet_steel_cost_per_tonne_gbp"] = scan["sheet_steel_cost_per_tonne_gbp"]
+            ewb["sheet_steel_cost_per_tonne_source"] = str(path)
         return
 
 

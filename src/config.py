@@ -4965,7 +4965,12 @@ SHEET_STEEL_RATE_FAMILY_TOLERANCE = 0.5
 WORKBOOK_INPUT_DEFAULTS = {
     "default_job_quantity": DEFAULT_JOB_QUANTITY,
     # L3 in workbook: Wire Cost Per Tonne. Blank sheet = £1600. Override via env or workbook scan.
-    "wire_cost_per_tonne_gbp": float(os.getenv("WORKBOOK_WIRE_COST_PER_TONNE_GBP", "1500.0")),  # SDI rate £1500/tonne
+    # THE WORKBOOK'S FIGURE, EVERY TIME ONE EXISTS (James Gray, 5 Nov 2026: "the workbook
+    # charges £1,600 per tonne, we take a workbook price where one exists every time"). The
+    # estimate reads the build template's own Wire Cost Per Tonne cell (D-697); this default
+    # answers only when no template can be read, and now matches that cell instead of the
+    # £1,500 that left 12693-01-GA's report stating a rate its sheet did not charge.
+    "wire_cost_per_tonne_gbp": float(os.getenv("WORKBOOK_WIRE_COST_PER_TONNE_GBP", "1600.0")),
     # L5 in workbook: Sheet Steel Cost Per Tonne. Blank sheet = £900. Override via env or workbook scan.
     "sheet_steel_cost_per_tonne_gbp": float(os.getenv("WORKBOOK_SHEET_STEEL_COST_PER_TONNE_GBP", "950.0")),  # F: Tim rate £950/tonne
     "scrap_pct": SCRAP_PERCENTAGE * 100.0,
