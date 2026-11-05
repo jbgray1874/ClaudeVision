@@ -85,6 +85,10 @@ $Files = @(
     "appportal/sdi-remote-control.html",
     "private-email-readonly.html",
     "private-email.html",
+    # SameDay watch: checks SameDay every 15 minutes and emails James when something
+    # is wrong - a scheduled task, set up by Install-SameDay-Watch.ps1, 5 Nov.
+    "sameday_watch.py",
+    "sameday_watch.cmd",
     # The app portal's catalogue. Not Python, so it copies without a restart -
     # the service reads it from disk on each request.
     "services.json"
