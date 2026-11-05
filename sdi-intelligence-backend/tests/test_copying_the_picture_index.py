@@ -70,6 +70,22 @@ class HalfCopiedTests(unittest.TestCase):
         self.assertLess(back.index("start SDISameDay"), back.index("/ENABLE"))
 
 
+class WeeklyRefreshTests(unittest.TestCase):
+    """5 Nov (Muhammad): "It refreshes automatically every week ... BUILD.txt: which build it is". The server keeps
+    its own copy, so this is run again for a new build - and does nothing when the server already has it."""
+
+    def test_the_server_remembers_its_build_only_after_a_good_swap(self):
+        keep_build = at('Copy-Item -LiteralPath "$From\\BUILD.txt" -Destination "$Target\\all_img_index.BUILD.txt"')
+        self.assertGreater(keep_build, at("Move-Item -LiteralPath $newDb"))
+        self.assertIn("if ($ok) {", BODY[keep_build - 200:keep_build])
+
+    def test_the_same_build_again_changes_nothing(self):
+        same = at("$build -eq $serverBuild")
+        self.assertLess(same, at("New-Item -ItemType Directory -Force -Path $keep"))   # before any change
+        self.assertIn("$before.pictures", BODY[same:same + 120])                     # and only if it is working
+        self.assertIn("-not $Force", BODY[same:same + 120])
+
+
 class SafetyTests(unittest.TestCase):
     def test_a_failed_swap_puts_back_what_was_there(self):
         self.assertIn('@("$keep\\projects.db", "$Target\\brief_lite\\projects.db")', BODY)

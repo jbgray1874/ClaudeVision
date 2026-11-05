@@ -35,6 +35,8 @@ param(
     # Where Muhammad puts it - K: by its full name (works without K: mapped, and as administrator).
     [string]$From = "\\sdi-dc01\shareddata$\Shared\IT\AI & Automation\Design\SDI Same Day Intelligence\index-for-server",
     [switch]$NoThumbs,          # kept so older instructions still run: the thumbnails are never copied now
+    # Copy even when the server already has the build that is on K:.
+    [switch]$Force,
     [string]$Watch = "SDI SameDay Watch"
 )
 
@@ -151,6 +153,19 @@ try {
 } catch { Stop-Here "Couldn't read the server's free space - nothing is copied onto a production server without that." }
 $before = Past-Work
 if ($before) { Say ("SameDay now: " + $before.jobs + " past jobs, pictures " + $(if ($before.pictures) { "on" } else { "off (" + $before.why + ")" })) }
+# 5 Nov 2026 (Muhammad: "it refreshes automatically every week"): BUILD.txt says which build is on K:, and the server
+# keeps a copy beside its index - so running this weekly copies only a newer build, and says when there is none.
+$build = if (There "$From\BUILD.txt") { ((Get-Content -LiteralPath "$From\BUILD.txt" -TotalCount 6) -join " | ").Trim() } else { "" }
+$serverBuild = if (There "$Target\all_img_index.BUILD.txt") { ((Get-Content -LiteralPath "$Target\all_img_index.BUILD.txt" -TotalCount 6) -join " | ").Trim() } else { "" }
+if ($build) { Yes "On K: $build" } else { Warn "No BUILD.txt on K: - which build this is can't be told." }
+if ($serverBuild) { Say "On the server: $serverBuild" }
+if ($build -and $build -eq $serverBuild -and $before -and $before.pictures -and -not $Force) {
+    Write-Host ""
+    Write-Host "  The server already has this build, and picture matching is on. Nothing to do." -ForegroundColor Green
+    Write-Host "  (-Force copies it again anyway.)" -ForegroundColor Gray
+    Write-Host ""
+    exit 0
+}
 
 # -- 2. Keep what is replaced --------------------------------------------------------------
 Head "2. Keeping the server's current job list"
@@ -205,7 +220,10 @@ try {     # a rename on the server's own disk - seconds, not a copy
 }
 & sc.exe "\\$Server" start SDISameDay | Out-Null
 & schtasks.exe /Change /S $Server /TN $Watch /ENABLE 2>&1 | Out-Null
-if ($ok) { Yes "Swapped in; SameDay is starting, the watch is back on" }
+if ($ok) {
+    Yes "Swapped in; SameDay is starting, the watch is back on"
+    if (There "$From\BUILD.txt") { Copy-Item -LiteralPath "$From\BUILD.txt" -Destination "$Target\all_img_index.BUILD.txt" -Force }
+}
 
 # -- 5. Does SameDay use it? ------------------------------------------------------------
 Head "5. Waiting for SameDay to load it (the first time can take a few minutes)"
