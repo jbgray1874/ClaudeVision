@@ -3148,7 +3148,7 @@ def settle_mirrored_folds(parts: List[Dict[str, Any]], summary: Any = None) -> i
                      f"{_h['count']}, {base.get('part_number')} {_b['count']}"),
                     ("confirm the fold count of the pair against both sheets; if the hands "
                      "fold alike, the one count applies to both"),
-                    "drawing_job_merge.settle_mirrored_folds")
+                    "drawing_job_merge.settle_mirrored_folds", operations=["folding"])
             continue
         evidence = {k: base.get(k) for k in _FOLD_EVIDENCE_FIELDS if not _is_blank(base.get(k))}
         _dash = (base.get("geometry_rollup") or {}).get("dashed_long_axis_lines") \

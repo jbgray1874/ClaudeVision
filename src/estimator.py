@@ -11297,7 +11297,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 _ask_weld(part, f"Welding of {_pn_w}: timed as one joint",
                           f"{_why_w}, so the weld is not timed from them",
                           "give the weld length or the number of joints",
-                          "estimator.estimate_process_times")
+                          "estimator.estimate_process_times", operations=["welding"])
             except Exception:                                        # noqa: BLE001
                 pass
         else:
@@ -12056,7 +12056,13 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # PER PART FITTED (D-364). The allowance is named min_per_part and was charged once
         # for the whole assembly: M&S's plywood bin — eight panels, a lid on two hinges, four
         # castors — was fitted in 2 minutes, and the floor guard then cut that to 45 seconds.
-        _fitted = len(part.get("assembly_children") or []) or 1
+        # COUNTED IN PIECES, NOT PART TYPES (D-701). 12693-02-04J's own table lists five
+        # pieces in three rows (1 + 2 + 2); the allowance counted its three child records and
+        # fitted five pieces in 6 minutes. Where the part's pieces come from its own parts
+        # table, each row's count is how many are fitted; otherwise its child records.
+        _listed = [x for x in (part.get("listed_pieces") or []) if isinstance(x, dict)]
+        _fitted = (sum(max(1, int(_safe_float(x.get("qty")) or 1)) for x in _listed)
+                   if _listed else 0) or len(part.get("assembly_children") or []) or 1
         _house_min = float((config.LABOUR_RULES.get("bench_work") or {}).get(
             "min_per_part", 2.0)) * _fitted
         _bench_rate = float((getattr(config, "SHOP_STATED", None) or {}).get(
@@ -12081,8 +12087,11 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         part.setdefault("review_flags", []).append(
             f"bench fitting: {_bench_min:g} min of Bench Work Joinery on this board "
             f"assembly before it is packed. THE DRAWING DOES NOT ANNOTATE THIS — it is the "
-            f"assembly's own structure ({len(part.get('assembly_children') or []) or 'its'} "
-            f"children have to be put together) costed at {_bench_why}, with the "
+            f"assembly's own structure ("
+            + (f"{_fitted} pieces in {len(_listed)} rows of its own parts table"
+               if _listed else
+               f"{len(part.get('assembly_children') or []) or 'its'} children")
+            + f" have to be put together) costed at {_bench_why}, with the "
             f"department's set-up charged once per order. Confirm it applies to an "
             f"assembly this size")
 

@@ -5655,7 +5655,7 @@ def carry_stated_finish(unit: Optional[Dict[str, Any]], parts: List[Any],
                 "this sequence",
                 "give the polishing minutes a unit for this part, grit by grit, or rule how "
                 "it is covered",
-                "concept_scan.carry_stated_finish")
+                "concept_scan.carry_stated_finish", operations=["polishing"])
             changes.append({"kind": "asked", "item": f"polishing: {polish}", "to": [pn],
                             "why": st.get("polish_source") or "the read's operations"})
     return changes
