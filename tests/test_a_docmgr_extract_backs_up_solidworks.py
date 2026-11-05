@@ -273,7 +273,7 @@ def test_the_backup_reader_writes_the_native_schema(tmp_path, capsys, key_env):
     assert rs["bbox_mm"] is None and rs["volume_mm3"] is None and rs["surface_area_mm2"] is None
     for missing in ("bounding box", "volume", "surface area"):
         assert missing in rs["not_saved"]
-    assert any("not saved in the file; needs the SolidWorks worker" in n for n in rs["notes"])
+    assert any("not saved in the file; only the SolidWorks worker measures it" in n for n in rs["notes"])
     # Every file opened read-only, and every document closed again.
     assert all(ro is True for _p, _t, ro in factory._app.opened)
     for path, doc in factory._app._docs.items():
@@ -722,7 +722,7 @@ def test_a_saved_flat_fills_a_part_with_no_dxf_under_its_own_source():
     assert sp.source_of(part, "normalized_material") == "solidworks_docmgr"
     assert part["solidworks_reader"] == "solidworks_docmgr"
     assert "bounding box" in part["solidworks_not_saved"]
-    assert any("not saved in the file; needs the SolidWorks worker" in f
+    assert any("not saved in the file; only the SolidWorks worker measures them" in f
                for f in part["review_flags"])
     assert "bbox_mm" not in part, "nothing stands in for the envelope"
 

@@ -92,6 +92,14 @@ seat reads those files next time. A file SolidWorks read in part keeps the worke
 summary names the files as `docmgr_topped_up`, and anything neither reader could open as
 `docmgr_still_unread`.
 
+**Opened is not read; unknown is not no (D-714).** An assembly whose components the library
+cannot hand back is a FAILED read, with the reason as its error, never an assembly with no
+parts; a sub-assembly that cannot be read fails its parent the same way. A part whose cut list
+cannot be read keeps sheet metal and bends UNKNOWN (null, not false and 0) and is flagged
+`needs_solidworks_worker`. A thickness that is only a linked property's saved value is said and
+not taken unless a sheet-metal cut list stands behind it. `--trace` prints, per file, what each
+call into the library answered.
+
 **Checking it against SolidWorks (D-710, SCRUM-184 acceptance).** Run by hand, the reader
 takes its key from the engine's `.env` (a key already set in the shell wins), so nothing else
 needs setting:

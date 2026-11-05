@@ -3113,7 +3113,7 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
         # which, once, rather than left to notice what is absent.
         if _docmgr and nat.not_saved:
             _ns = (f"SolidWorks Document Manager (backup reader): {', '.join(nat.not_saved)} — "
-                   f"not saved in the file; needs the SolidWorks worker. Nothing was inferred "
+                   f"not saved in the file; only the SolidWorks worker measures them. Nothing was inferred "
                    f"in their place")
             if _ns not in flags:
                 flags.append(_ns)

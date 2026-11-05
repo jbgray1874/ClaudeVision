@@ -189,3 +189,83 @@ def test_without_trace_nothing_extra_is_printed(tmp_path, capsys, monkeypatch):
     assert dm.main([str(folder), "--out", str(tmp_path / "t.json")],
                    class_factory=base.FakeFactory(app)) == 0
     assert "trace:" not in capsys.readouterr().out
+
+
+# ── opened is not read; unknown is not no (D-714) ───────────────────────────────────────
+#
+# The laptop's trace of 12678-01-GA, 5 Nov 2026: GetComponents() and GetCutListItems() raised
+# KeyError: 13 (comtypes could not unpack an array of interface pointers), so the assemblies
+# read as having no components and 04M as not sheet metal with no bends; and the MDF panel
+# 01J's thickness came from a linked property's saved value, 1.5mm, that SolidWorks did not
+# report.
+
+def _one(tmp_path, monkeypatch, name, doc):
+    monkeypatch.setenv(dm.KEY_ENV, base.KEY)
+    folder = tmp_path / "pack"
+    folder.mkdir(exist_ok=True)
+    path = folder / name
+    path.write_bytes(b"\0")
+    app = base.FakeApp({str(path): doc})
+    rec = dm.analyse_file(app, str(path))
+    return rec
+
+
+class _Raises:
+    def __init__(self, exc):
+        self.exc = exc
+
+    def __call__(self, *a, **k):
+        raise self.exc
+
+
+def test_a_cut_list_that_cannot_be_read_leaves_the_part_unknown_and_calls_the_worker(
+        tmp_path, monkeypatch):
+    cfg = base.FakeConfig()
+    cfg.GetCutListItems2 = _Raises(KeyError(13))
+    doc = base.FakeDoc(props={"Thickness": ("2.5mm", '"Thickness@Default@04M.SLDPRT"mm')},
+                       config=cfg)
+    rs = _one(tmp_path, monkeypatch, "J-04M.SLDPRT", doc)["route_signals"]
+    assert rs["is_sheet_metal"] is None and rs["bend_count"] is None, "unknown, not no"
+    assert rs["needs_solidworks_worker"] is True
+    assert "cut list could not be read" in rs["needs_solidworks_worker_reason"]
+    assert rs["thickness_mm"] is None, "a linked value with no cut list behind it is not taken"
+
+
+def test_a_part_with_no_cut_list_saved_is_known_not_sheet_metal(tmp_path, monkeypatch):
+    doc = base.FakeDoc(props={"Thickness": ("18mm", "")}, config=base.FakeConfig(cut_list=()))
+    rs = _one(tmp_path, monkeypatch, "J-01J.SLDPRT", doc)["route_signals"]
+    assert rs["is_sheet_metal"] is False and not rs["needs_solidworks_worker"]
+    assert rs["thickness_mm"] == 18.0, "a typed thickness is the designer's word"
+
+
+def test_a_linked_thickness_on_a_board_part_is_said_and_not_taken(tmp_path, monkeypatch):
+    doc = base.FakeDoc(props={"Thickness": ("1.5mm", '"Thickness@Default@01J.SLDPRT"mm')},
+                       config=base.FakeConfig(cut_list=()))
+    rs = _one(tmp_path, monkeypatch, "J-01J.SLDPRT", doc)["route_signals"]
+    assert rs["thickness_mm"] is None
+    assert any("saved value of the linked expression" in n for n in rs["notes"])
+    assert any(n.startswith("thickness (only a linked") for n in rs["not_saved"])
+
+
+def test_an_assembly_whose_components_cannot_be_read_is_a_failed_read(tmp_path, monkeypatch):
+    cfg = base.FakeConfig()
+    cfg.GetComponents = _Raises(KeyError(13))
+    rec = _one(tmp_path, monkeypatch, "J-101SA.SLDASM", base.FakeDoc(config=cfg))
+    assert rec["errors"] and "components could not be read" in rec["errors"][0]
+    assert rec["bom"] == [], "no quantities are invented"
+
+
+def test_a_sub_assembly_whose_components_cannot_be_read_fails_its_parent(tmp_path, monkeypatch):
+    monkeypatch.setenv(dm.KEY_ENV, base.KEY)
+    folder = tmp_path / "pack"
+    folder.mkdir()
+    ga, sub = folder / "J-GA.SLDASM", folder / "J-101SA.SLDASM"
+    for p in (ga, sub):
+        p.write_bytes(b"\0")
+    bad = base.FakeConfig()
+    bad.GetComponents = _Raises(KeyError(13))
+    docs = {str(ga): base.FakeDoc(config=base.FakeConfig(components=[base.FakeComponent(sub)])),
+            str(sub): base.FakeDoc(config=bad)}
+    rec = dm.analyse_file(base.FakeApp(docs), str(ga))
+    assert rec["errors"] and "sub-assembly J-101SA" in rec["errors"][0]
+    assert "quantities below it are unknown" in rec["errors"][0]
