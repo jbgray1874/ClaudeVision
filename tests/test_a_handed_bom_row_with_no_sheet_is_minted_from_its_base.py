@@ -190,36 +190,3 @@ def test_a_base_with_no_mirrorable_blank_still_mints_the_record():
     minted = mint_missing_hand_records(parts, [_hand_row()])
     assert minted == ["12665-03-01M-H"]
     assert parts[1]["normalized_material"] == "MILD STEEL"
-
-
-# ── a code that names no hand is nobody's other hand (D-716) ──────────────────
-
-def test_a_bought_in_row_is_not_minted_as_the_hand_of_a_record_with_no_number():
-    """12676-01-GA2: the bumpers and the UPC sticker carry no hand marker, so mirror_base
-    names nothing. A record with no part number answered to that empty name, and both rows
-    were minted as "the other hand of " a blank. They are bought in; no hand is minted and
-    no handed question is raised."""
-    nameless = _base_part(part_number="")
-    parts = [_base_part(part_number="12676-01-04M"), nameless]
-    rows = [{"parent": "12676-01-GA2", "part_number": "E2105", "quantity": 2,
-             "description": "CLEAR BUMPER"},
-            {"parent": "12676-01-GA2", "part_number": "UPC STICKER", "quantity": 1,
-             "description": "UPC STICKER"}]
-    assert mint_missing_hand_records(parts, rows) == []
-    assert len(parts) == 2
-    assert not any("other hand" in str(q) for p in parts
-                   for q in (p.get("manufacturing_questions") or []))
-
-
-def test_a_hand_whose_base_has_no_number_is_not_minted():
-    """The empty key is refused from the base's side too: a record with no number is not a
-    base any hand can name."""
-    parts = [_base_part(part_number=" ")]
-    assert mint_missing_hand_records(parts, [_hand_row(pn=" -H")]) == []
-
-
-def test_a_real_hand_still_mints_beside_a_record_with_no_number():
-    """The guard does not cost the D-509 mint its case."""
-    parts = [_base_part(), _base_part(part_number="")]
-    assert mint_missing_hand_records(parts, [_hand_row()]) == ["12665-03-01M-H"]
-    assert parts[-1]["mirror_of"] == "12665-03-01M"

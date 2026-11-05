@@ -2292,15 +2292,8 @@ def mint_missing_hand_records(parts: Any, bom_rows: Any) -> List[str]:
             continue                           # a record already answers to this row
         if carries_assembly_role(pn):
             continue                           # a handed ASSEMBLY mirrors as a route, not a blank
-        # A CODE THAT NAMES NO HAND IS NOBODY'S OTHER HAND (D-716). mirror_base answers "" for
-        # a code with no hand marker, and "" was looked up like any code: 12676-01-GA2's two
-        # bought-in bumpers and its UPC sticker matched a record with no part number, were
-        # minted as "the other hand of " nothing, took that record's stock and were asked
-        # about as mirrored fabrications. Only a code that names its base is a hand.
-        _base_code = mirror_base(pn)
-        base = by_key.get(_key(_base_code)) if _key(_base_code) else None
-        if base is None or not_cut_from_a_blank(base) \
-                or not str(base.get("part_number") or "").strip():
+        base = by_key.get(_key(mirror_base(pn)))
+        if base is None or not_cut_from_a_blank(base):
             continue                           # nothing to be the other hand OF
         base_pn = str(base.get("part_number") or "")
         try:

@@ -5899,23 +5899,6 @@ def compile_job_route(
                         # the old flattening symptom. Preserve it, but do not silently assert
                         # that the parent performs it.
                         claim_status = UNVERIFIED
-                    _unsupported_weld = (
-                        template is None and _demoted
-                        and operation in _UNSUPPORTED_WELD_OPS
-                        and kinds.get(part_number) != "assembly"
-                        and not ((graph.get("children") or {}).get(part_number))
-                    )
-                    if _unsupported_weld and claim_status == REQUIRED:
-                        # A WELD ON ONE PIECE THAT NOTHING EVIDENCES IS ASKED, NOT CHARGED
-                        # (D-715). 12676-01-GA2's stand, 04M, is one continuous folded sheet; its
-                        # record carried welding and dress_welds with no recorded source, no
-                        # words from the sheet and no weld symbol, and the book charged £68.26
-                        # at 1 off for them while the model read no weld at all. A weld joins
-                        # pieces, or closes a seam the drawing shows; on a part with no parts of
-                        # its own and nothing saying so, it is a question about whether the
-                        # work exists. Any recorded source, quote or counted symbol, or an
-                        # assembly target, keeps the charge as before.
-                        claim_status = UNVERIFIED
                     add_claim(event_id, make_claim(
                         operation, claim_status, source,
                         subject_id=part_number,
@@ -5949,16 +5932,10 @@ def compile_job_route(
                             else graph["quantities"].get(target_id, 1.0)
                         ),
                         sequence=sequences.get(operation),
-                        reason=(
-                            f"UNSUPPORTED: {operation.replace('_', ' ')} on {part_number}, a "
-                            f"single piece, rests on nothing — no reader recorded a source, "
-                            f"the sheet quotes no weld and no weld symbol was counted. Not "
-                            f"charged: confirm whether {part_number} is welded, and where"
-                            if _unsupported_weld and claim_status == UNVERIFIED else
-                            f"{field_name} on existing part record"
-                            + (" — no reader recorded a source or the drawing's words "
-                               "for it; priced, not promoted to a note" if _demoted
-                               else "")),
+                        reason=(f"{field_name} on existing part record"
+                                + (" — no reader recorded a source or the drawing's words "
+                                   "for it; priced, not promoted to a note" if _demoted
+                                   else "")),
                         route_id=route_id,
                         evidence=_op_evidence,
                         evidence_where=_op_evidence_where,
@@ -7662,10 +7639,6 @@ _WELDMENT_JOINS = frozenset({"welding", "spot_welding", "spotweld", "resistance_
                              "brazing"})
 # A claim with one of these sources is nobody's reading of this member.
 _NO_SOURCE_OF_ITS_OWN = frozenset({"", "unrecorded", "unknown"})
-
-# Welding and the work that follows it, held to evidence on a single piece (D-715).
-_UNSUPPORTED_WELD_OPS = frozenset({"welding", "dress_welds", "spot_welding", "tig_welding",
-                                   "mig_welding"})
 
 
 def _coat_claim_is_the_members_own(source: Any, rec: Mapping[str, Any]) -> bool:

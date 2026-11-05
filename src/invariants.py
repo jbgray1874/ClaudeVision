@@ -3056,14 +3056,10 @@ def check_canonical_route_shadow(summary: Any) -> List[Dict[str, Any]]:
             # All six of 11650's blockers are the second kind. An estimator told "conflicts"
             # goes looking for two claims to choose between and finds none.
             _conflicts = decision.get("conflicts") or []
-            _reason = str(decision.get("reason") or "")
             _why = (
                 (f"has {len(_conflicts)} conflicting claim(s) at equal rank and cannot be "
                  f"priced automatically.")
                 if _conflicts else
-                # THE THIRD KIND (D-715): the work is on the record and nothing evidences it.
-                ("is UNSUPPORTED: " + _reason.split(":", 1)[-1].strip())
-                if _reason.startswith("UNSUPPORTED") else
                 ("is UNOWNED: nothing in this pack says who performs it. The drawing names "
                  "the work and no route claims it, so pricing it would be a guess about "
                  "which assembly does the job -- and could charge it twice. NOT a tie "
@@ -3071,9 +3067,6 @@ def check_canonical_route_shadow(summary: Any) -> List[Dict[str, Any]]:
             ) if cutover else (
                 f"has {len(_conflicts)} equal-ranked or metadata conflict(s). Legacy pricing "
                 f"still stands." if _conflicts else
-                ("is UNSUPPORTED: " + _reason.split(":", 1)[-1].strip()
-                 + ". Legacy pricing still stands.")
-                if _reason.startswith("UNSUPPORTED") else
                 "is UNOWNED -- nothing claims to perform it. Legacy pricing still stands."
             )
             out.append(_violation(
