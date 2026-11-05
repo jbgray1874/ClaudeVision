@@ -174,6 +174,25 @@ _CUT_IFACES = ("ISwDMCutListItem2", "ISwDMCutListItem")
 _BINDING: Dict[str, Any] = {"via": "", "types": None}
 
 
+# --trace (D-713): what each call into the library answered, per file, so a reading that comes
+# back empty can be traced to the call that returned nothing. None when tracing is off.
+_TRACE: Optional[List[str]] = None
+
+
+def _t(msg: str) -> None:
+    if _TRACE is not None and len(_TRACE) < 200:
+        _TRACE.append(msg)
+
+
+def _shape(v: Any) -> str:
+    """What a call returned, in a few words, never its content."""
+    if v is None:
+        return "None"
+    if isinstance(v, (tuple, list)):
+        return f"{type(v).__name__} of {len(v)}" + (f" ({type(v[0]).__name__})" if v else "")
+    return type(v).__name__
+
+
 def _is_int(v: Any) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
 
@@ -197,18 +216,25 @@ def _member(obj, name: str, ifaces: Sequence[str] = ()):
     try:
         found = getattr(obj, name)
         return found
-    except Exception:                                                    # noqa: BLE001
-        pass
+    except Exception as exc:                                             # noqa: BLE001
+        first = f"{type(exc).__name__}"
     if ifaces and _BINDING.get("via") == "comtypes" and _BINDING.get("types") is not None:
+        tried = []
         for iface in ifaces:
             cls = getattr(_BINDING["types"], iface, None)
             if cls is None:
+                tried.append(f"{iface}: not in the type library")
                 continue
             try:
-                return getattr(obj.QueryInterface(cls), name)
-            except Exception:                                            # noqa: BLE001
-                continue
+                found = getattr(obj.QueryInterface(cls), name)
+                _t(f"{name}: reached through {iface}")
+                return found
+            except Exception as exc:                                     # noqa: BLE001
+                tried.append(f"{iface}: {type(exc).__name__}")
+        _t(f"{name}: not on {type(obj).__name__} ({first}); " + "; ".join(tried))
         return None
+    if ifaces or first:
+        _t(f"{name}: not on {type(obj).__name__} ({first})")
     if not ifaces or not getattr(_nat, "_COM_AVAILABLE", False):
         return None
     try:
@@ -236,7 +262,8 @@ def _get(obj, name: str, ifaces: Sequence[str] = ()):
         return attr
     try:
         return attr() if callable(attr) else attr
-    except Exception:                                                    # noqa: BLE001
+    except Exception as exc:                                             # noqa: BLE001
+        _t(f"{name}(): {type(exc).__name__}: {redact(exc)[:160]}")
         return None
 
 
@@ -499,11 +526,15 @@ def active_configuration_name(doc) -> str:
 def get_configuration(doc, name: str):
     """ISwDMConfigurationMgr.GetConfigurationByName(name) -> ISwDMConfiguration."""
     cm = configuration_manager(doc)
+    _t(f"ConfigurationManager -> {_shape(cm)}")
     if cm is None or not name:
         return None
     try:
-        return cm.GetConfigurationByName(name)
-    except Exception:                                                    # noqa: BLE001
+        cfg = cm.GetConfigurationByName(name)
+        _t(f"GetConfigurationByName({name!r}) -> {_shape(cfg)}")
+        return None if _is_null(cfg) else cfg
+    except Exception as exc:                                             # noqa: BLE001
+        _t(f"GetConfigurationByName({name!r}): {type(exc).__name__}: {redact(exc)[:160]}")
         return None
 
 
@@ -514,8 +545,10 @@ def configuration_components(cfg) -> List[Any]:
     LEVEL ONLY and walks sub-assemblies by opening them (walk_assembly). If a Windows check
     shows it returns every level, walk_assembly must stop recursing or counts double."""
     if cfg is None:
+        _t("GetComponents: no configuration to ask")
         return []
     v = _get(cfg, "GetComponents", _CFG_IFACES)
+    _t(f"GetComponents -> {_shape(v)}")
     if v is None or isinstance(v, (str, bytes)):
         return []
     try:
@@ -530,16 +563,19 @@ def component_info(comp) -> Dict[str, Any]:
     UNVERIFIED member spellings: PathName (the referenced file as last saved), Name2 (instance
     name, ISwDMComponent6+; Name on older interfaces), ConfigurationName (the referenced
     configuration), DocumentType (SwDmDocumentType), IsSuppressed() (ISwDMComponent2+)."""
-    name = _str(_get(comp, "Name2", _COMP_IFACES)) or _str(_get(comp, "Name"))
+    name = _str(_get(comp, "Name2", _COMP_IFACES)) or _str(_get(comp, "Name", _COMP_IFACES))
     try:
-        doc_type = int(_get(comp, "DocumentType"))
+        doc_type = int(_get(comp, "DocumentType", _COMP_IFACES))
     except (TypeError, ValueError):
         doc_type = None
     suppressed = _get(comp, "IsSuppressed", _COMP_IFACES)
+    _path = _str(_get(comp, "PathName", _COMP_IFACES))
+    _t(f"component {type(comp).__name__}: name={name!r} path={'set' if _path else 'EMPTY'} "
+       f"suppressed={suppressed!r}")
     return {
-        "path": _str(_get(comp, "PathName")),
+        "path": _path,
         "name": name,
-        "config": _str(_get(comp, "ConfigurationName")),
+        "config": _str(_get(comp, "ConfigurationName", _COMP_IFACES)),
         "doc_type": doc_type,
         "suppressed": bool(suppressed) if suppressed is not None else False,
     }
@@ -551,9 +587,11 @@ def cut_list_items(cfg) -> List[Any]:
     Document Manager release answers; both are tried. Empty when the file saved none — a part
     that is not sheet metal, a weldment or multi-body has no cut list."""
     if cfg is None:
+        _t("cut list: no configuration to ask")
         return []
     for meth in ("GetCutListItems2", "GetCutListItems"):
         v = _get(cfg, meth, _CFG_IFACES)
+        _t(f"{meth} -> {_shape(v)}")
         if v is None or isinstance(v, (str, bytes)):
             continue
         try:
@@ -869,6 +907,14 @@ def signals_from_saved(title: str, props: Dict[str, Dict[str, str]],
             sig.thickness_mm = float(cp["thickness"])
     if sig.thickness_mm is None:
         sig.thickness_mm = _thickness_from_props(values)
+        if sig.thickness_mm is not None:
+            _tn, _te = _prop_entry(props, "Thickness", "Sheet Thickness", "Gauge",
+                                   "Material Thickness")
+            _t(f"thickness {sig.thickness_mm:g} from property {_tn!r} = "
+               f"{_str((_te or {}).get('value'))!r}, linked to "
+               f"{_str((_te or {}).get('linked_to'))!r}")
+    else:
+        _t(f"thickness {sig.thickness_mm:g} from the cut list")
 
     # ── material, and whether the designer typed it ──────────────────────────────────────
     # A property LINKED to SW-Material is the library's applied material (the appearance
@@ -1213,6 +1259,7 @@ def analyse_file(app, path: str) -> Dict[str, Any]:
         # The configuration the file was saved in; failing that, its first one — a part has
         # at least one, and reading none would report a populated file as empty.
         cfg_name = active_configuration_name(doc) or (cfg_names[0] if cfg_names else "")
+        _t(f"configurations {cfg_names!r}, active {cfg_name!r}")
         rec["configurations"] = cfg_names
         rec["active_configuration"] = cfg_name
         file_props, cfg_props, cfg = _merged_properties(doc, cfg_name)
@@ -1354,12 +1401,16 @@ def main(argv: Optional[Sequence[str]] = None, *, class_factory=None) -> int:
         print(redact(msg, key), flush=True)
 
     usage = ("Usage: python sw_docmgr_analyse.py <file_or_folder> [--out <json path>] "
-             "[--only <model file> ...] [--only-from <text file, one path a line>]")
+             "[--only <model file> ...] [--only-from <text file, one path a line>] [--trace]")
     # Accepted and ignored: the production extractor's flatten switches mean nothing to a
     # reader that never rebuilds a model, and a script that passes them must not break.
     for flag in ("--flatten", "--no-flatten"):
         while flag in args:
             args.remove(flag)
+    global _TRACE
+    trace = "--trace" in args
+    while "--trace" in args:
+        args.remove("--trace")
     out_override = None
     if "--out" in args:
         i = args.index("--out")
@@ -1444,6 +1495,7 @@ def main(argv: Optional[Sequence[str]] = None, *, class_factory=None) -> int:
     records: List[Dict[str, Any]] = []
     for p in paths:
         say(f"\n=== {p} ===")
+        _TRACE = [] if trace else None
         try:
             r = analyse_file(app, p)
         except Exception as exc:                                         # noqa: BLE001
@@ -1461,6 +1513,9 @@ def main(argv: Optional[Sequence[str]] = None, *, class_factory=None) -> int:
             say(f"  not saved: {', '.join(rs.get('not_saved') or [])}")
         if r.get("errors"):
             say(f"Errors: {r['errors']}")
+        for line in (_TRACE or []):
+            say(f"  trace: {line}")
+        _TRACE = None
     fp_after = _nat._fingerprint_native_files(target)
     payload = build_payload(records, target, fp_before, fp_after, docmgr_version(app))
     if only:
