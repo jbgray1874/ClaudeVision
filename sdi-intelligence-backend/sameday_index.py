@@ -223,8 +223,9 @@ def refresh(server: Path, k_dir: Path, get: Callable, service: Callable, sc: Cal
     return rep
 
 
-def compose(rep: dict, thumbs: Optional[int], thumbs_before: Optional[int], now: datetime) -> dict:
-    """The daily email."""
+def compose(rep: dict, thumbs: Optional[int], thumbs_before: Optional[int], now: datetime,
+            backup: str = "") -> dict:
+    """The daily email. `backup`: last night's backup of SameDay's chats, in one line (sameday_backup.summary)."""
     head = {"none": "no change", "copied": "new build copied to the server", "waiting": "new build still arriving",
             "skipped": "new build NOT copied", "failed": "new build NOT copied"}.get(rep["action"], rep["action"])
     lines = [f"Today: {head}" + (f" - {rep['detail']}" if rep["detail"] else ""), "",
@@ -238,6 +239,8 @@ def compose(rep: dict, thumbs: Optional[int], thumbs_before: Optional[int], now:
         lines.append(f"Thumbnails on K:: {thumbs:,}{change}")
     if rep.get("jobs") is not None:
         lines.append(f"SameDay now: {rep['jobs']} past jobs, picture matching {'on' if rep['pictures_on'] else 'off'}")
+    if backup:
+        lines += ["", backup]
     lines += ["", now.strftime("Checked %A %d %B %Y, %H:%M on the server (sameday_watch.py, daily).")]
     text = "\n".join(lines)
     import html as _h

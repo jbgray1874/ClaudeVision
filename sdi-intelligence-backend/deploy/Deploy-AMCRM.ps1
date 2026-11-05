@@ -91,6 +91,8 @@ $Files = @(
     "sameday_watch.cmd",
     # ... and keeps SameDay's picture index current from K:, once a day, 5 Nov.
     "sameday_index.py",
+    # ... and backs up SameDay's chats and work to D: every night, 5 Nov.
+    "sameday_backup.py",
     # The app portal's catalogue. Not Python, so it copies without a restart -
     # the service reads it from disk on each request.
     "services.json"

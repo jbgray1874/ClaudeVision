@@ -17,7 +17,9 @@ is checked again a minute later before it counts, so a restart during an update 
 working hours nothing is emailed; what is still wrong in the morning is.
 
 READ-ONLY: it changes nothing in SameDay. The keys are read from SameDay's .env to test them, and never printed,
-logged or emailed.
+logged or emailed. Two once-a-day jobs ride along: the picture index from K: (sameday_index.py, the one thing it
+does change, with its own checks), and from 1am the backup of SameDay's chats and work to D: (sameday_backup.py,
+which only reads SameDay and writes only to D:). A backup that fails or isn't made is emailed like any problem.
 
 Run by the scheduled task "SDI SameDay Watch" (deploy/Install-SameDay-Watch.ps1, from the laptop):
     sameday_watch.cmd                 -> python sameday_watch.py --send >> logs\\sameday_watch.log
@@ -35,6 +37,9 @@ Configuration (SDI Intelligence's .env):
     SAMEDAY_INDEX_HOUR      the hour of the daily index check and copy (default 6) - see sameday_index.py
     SAMEDAY_DAILY_TO        who gets the daily index email (default: SAMEDAY_ALERT_TO)
     SAMEDAY_INDEX_FROM      where Muhammad's weekly build is put (default K:'s index-for-server folder)
+    SAMEDAY_BACKUP_TO       where the nightly backup goes (default D:\\SameDayBackups)
+    SAMEDAY_BACKUP_HOUR     the hour it runs from (default 1 - 1am)
+    SAMEDAY_BACKUP_KEEP_FREE_GB  what must stay free on that drive (default 50)
 Sending: as the morning review - Microsoft Graph from SDI_REVIEW_FROM when that is set, otherwise SMTP.
 """
 from __future__ import annotations
@@ -386,12 +391,25 @@ def main(argv: Optional[list[str]] = None) -> int:
                      thumbs_before=daily.get("thumbs"), thumbs=thumbs if thumbs is not None else daily.get("thumbs"))
         save_state(state)                       # a long run cut short is not repeated today
         print(now.strftime("%Y-%m-%d %H:%M"), "index:", rep["action"], rep["detail"], flush=True)
+    # 5 Nov 2026 (James: "yes, definitely need a back up"): SameDay's chats, Craft Memory and what it made, copied to
+    # D: once a night from SAMEDAY_BACKUP_HOUR (sameday_backup.py). The first run after it is installed copies straight away.
+    import sameday_backup
+    if args.send and (state.get("backup") or {}).get("day") != today and now.hour >= int(_opt("SAMEDAY_BACKUP_HOUR", "1") or 1):
+        bk = sameday_backup.backup(Path(_opt("SAMEDAY_DIR", r"C:\SDI_Automation")),
+                                   Path(_opt("SAMEDAY_BACKUP_TO", r"D:\SameDayBackups")), now=now,
+                                   keep_free=float(_opt("SAMEDAY_BACKUP_KEEP_FREE_GB", "50") or 50))
+        state["backup"] = {"day": today, **bk}
+        save_state(state)
+        print(now.strftime("%Y-%m-%d %H:%M"), sameday_backup.summary(bk), flush=True)
     log = Path(_opt("SAMEDAY_DIR", r"C:\SDI_Automation")) / "logs" / "SDISameDay.log"
     log_text = new_log_text(log, state)
     problems, facts = check(log_text=log_text)
     if any(p["level"] == "down" for p in problems):
         time.sleep(60)                                  # a restart during an update: look again before it counts
         problems, facts = check(log_text=log_text)
+    bp = sameday_backup.problem(state.get("backup"), now)
+    if bp:
+        problems.append(bp)
     print(now.strftime("%Y-%m-%d %H:%M"), "OK" if not problems else
           " | ".join(f"{p['level'].upper()}: {p['title']}" for p in problems), "|", json.dumps(facts))
     if not args.send:
@@ -413,7 +431,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         import sameday_index
         daily_to = [a.strip() for a in (_opt("SAMEDAY_DAILY_TO") or _opt("SAMEDAY_ALERT_TO")).split(",") if "@" in a]
         mail = sameday_index.compose(daily["report"], daily.get("thumbs") if daily.get("counted") else None,
-                                     daily.get("thumbs_before"), now)
+                                     daily.get("thumbs_before"), now, backup=sameday_backup.summary(state.get("backup")))
         if daily_to:
             result = send(daily_to, mail)
             daily["sent"] = bool(result.get("sent"))
