@@ -1162,8 +1162,19 @@ def check_prices_are_reproducible(summary: Any) -> List[Dict[str, Any]]:
     # NAME THE CODES, NOT THE ARRAY INDICES. "part_estimates[11]" cannot be added to a
     # catalogue; the whole instruction this violation ends with depends on the reader knowing
     # which items to go and price.
-    _names = sorted({str(g["part"]) for g in guessed if g.get("part")}) \
-        or sorted({str(g["where"]) for g in guessed})
+    # ONE ITEM, HOWEVER IT IS SPELT (D-696). 12693-01-GA's ticket holder is one line on the
+    # sheet, but its records carry the code with and without its spaces, and the check said
+    # "2 item(s)" naming both. Spellings that differ only in spaces and punctuation are one
+    # item, shown in the fuller spelling.
+    _by_key: Dict[str, str] = {}
+    for g in guessed:
+        _p = str(g.get("part") or "").strip()
+        if not _p:
+            continue
+        _k = re.sub(r"[^A-Z0-9]", "", _p.upper()) or _p.upper()
+        if len(_p) > len(_by_key.get(_k, "")):
+            _by_key[_k] = _p
+    _names = sorted(_by_key.values()) or sorted({str(g["where"]) for g in guessed})
     # THIS JOB'S FACTS ONLY (D-603a). The sentence carried another job's history, "one cable
     # line moving from GBP 4.54 to GBP 8.54", into every book that tripped it, so the HPP
     # covering email described a cable this job does not have. And it counted price records,
