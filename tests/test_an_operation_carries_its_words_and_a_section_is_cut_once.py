@@ -71,10 +71,23 @@ class AnUnsourcedOperationIsNotANote(unittest.TestCase):
         return ds[0]
 
     def test_no_source_and_no_words_is_an_honest_unknown(self):
+        # Still not promoted to a note (D-586). And since D-715 a WELD on one piece that
+        # nothing evidences is held for a person, not charged: 12676-01-GA2's folded stand.
         d = self._weld_decision({"part_number": "J-06M", "description": "ANTI SCRATCH STRIP",
                                  "textual_operations": ["welding"]})
         self.assertEqual(d.get("source"), "unrecorded")
-        self.assertIn("priced, not promoted", str(d.get("reason")))
+        self.assertEqual(d.get("status"), "unverified")
+        self.assertTrue(str(d.get("reason")).startswith("UNSUPPORTED"))
+
+    def test_any_other_unsourced_operation_is_still_priced_not_promoted(self):
+        ds = [d for d in _compile_one({"part_number": "J-06M",
+                                       "description": "ANTI SCRATCH STRIP",
+                                       "textual_operations": ["deburring"]})
+              if d.get("operation") == "deburring" and d.get("target_id") == "J-06M"]
+        self.assertTrue(ds)
+        self.assertEqual(ds[0].get("source"), "unrecorded")
+        self.assertEqual(ds[0].get("status"), "required")
+        self.assertIn("priced, not promoted", str(ds[0].get("reason")))
 
     def test_the_parts_own_stated_finish_is_evidence_for_its_coat(self):
         ds = [d for d in _compile_one(
