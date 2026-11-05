@@ -28,7 +28,7 @@ Configuration (SDI Intelligence's .env):
     SAMEDAY_ALERT_HOURS     the hours emails go out, e.g. 7-19 (the default). "0-24" = any time.
     SAMEDAY_ALERT_REMIND    hours between reminders while a problem lasts (default 3)
     SAMEDAY_URL             SameDay itself (default http://127.0.0.1:5020)
-    SAMEDAY_VIA_URL         SameDay through SDI Intelligence (default http://127.0.0.1:8071/sameday)
+    SAMEDAY_VIA_URL         SameDay through SDI Intelligence (default http://<this server's name>:8071/sameday)
     SAMEDAY_PUBLIC_URL      the phone address (default https://sdiintelligence-sdidisplays.msappproxy.net/sameday/)
     SAMEDAY_DIR             SameDay's folder (default C:\\SDI_Automation): its .env and its log
     SAMEDAY_SPEND_WARN      the share of the day's cap that warns (default 0.8)
@@ -45,6 +45,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -143,7 +144,9 @@ def check(get: Callable = http_get, service: Callable = service_state, env: Opti
     problems: list[dict] = []
     facts: dict = {}
     base = _opt("SAMEDAY_URL", "http://127.0.0.1:5020").rstrip("/")
-    via = _opt("SAMEDAY_VIA_URL", "http://127.0.0.1:8071/sameday").rstrip("/")
+    # 5 Nov 2026: by the server's own network name, as the laptop's checks go - SDI Intelligence asks a request
+    # addressed to 127.0.0.1 to sign in, and with no service key set (SDI_API_KEY) the check stopped there.
+    via = _opt("SAMEDAY_VIA_URL", f"http://{socket.gethostname()}:8071/sameday").rstrip("/")
     public = _opt("SAMEDAY_PUBLIC_URL", "https://sdiintelligence-sdidisplays.msappproxy.net/sameday/")
     env = env if env is not None else read_env(Path(_opt("SAMEDAY_DIR", r"C:\SDI_Automation")) / ".env")
 
