@@ -517,6 +517,11 @@ as xAI/LLM estimates so estimators know to verify (see Pending #3 below).
 - **Distinguish IDENTIFICATION from PRICING** — finding an item and pricing it are different jobs.
 - **Bottom layer always "honest flag, don't guess"** — this is what makes the finite-combination
   approach robust against unseen combinations.
+- **WHAT THE ENGINE INFERRED STAYS IN (JG, 5 Nov 2026).** The engine drives the estimate; it is
+  not a tool that questions everything. A weld it inferred stays charged, and a row it inferred
+  stays a line, even with no recorded source. Do not turn inferred work into a question or drop
+  it from the price. "Honest flag" is for where there is nothing to infer from. (D-715 and D-716
+  did the opposite on 12676-01-GA2 and were reverted in ad86873f.)
 - **Confirm ALL related files deploy**, not just the obvious one (the section-detection pair gap).
 - **Solutions must EXTEND across all drawings**, not special-case 1282 (general recognisers, not
   enumerated lists).
