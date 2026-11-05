@@ -505,7 +505,7 @@ codes, descriptions, names, addresses, operation descriptions, comments.
 
 ### 6.3 Routes
 - Routes on RAWML or FGSL products are held back (71 lines, 36 products). X3 routes manufactured products only (Ethan, Run 2).
-- 5 Nov: 116 more lines on 15 products held back by this rule. Access now routes them, but X3 holds them as FGSL / RAWML from Run 2 (TES-12567-01-GA 48 lines, BOT-12631-08-00 19, TIE-12515 18, MS-0346603 16, and 11 others). If SDI makes them, they should be FGML in X3. That's a category change, so it goes with Marc's PHANT workaround.
+- 5 Nov: 116 lines are on 15 products Access now routes, but X3 holds them as FGSL / RAWML from Run 2. **James, 5 Nov: leave them in, X3 skips them**, so the file goes as built (TES-12567-01-GA 48 lines, BOT-12631-08-00 19, TIE-12515 18, MS-0346603 16, and 11 others). If SDI makes them, they should be FGML in X3. That's a category change, so it goes with Marc's PHANT workaround.
 - From live data since 5 Nov: `rebuild/routes.py`, with work centres from `rebuild/work_centres.csv`.
 - Work centres: section 8.
 
@@ -1426,7 +1426,7 @@ the comparison.
 | YA004BPSC supplier banks | – | `bank_private/` only, never in git or e-mail | 3 Nov |
 | YA004BPCDL delivery addresses | 6,169 | 27 Oct build | 27 Oct |
 | YA00408BOM | 32,941 lines, 7,189 BOMs | `extract_products.sql` BOM grid (ASC_BOM_TBL, every line), 4 Nov evening + `rebuild/boms.py` | 4 Nov evening |
-| ZSDIROU2 routes | 33,383 operations | `extract_routes.sql`, 5 Nov 09:55 (migration.vw_ROU, a live view over ASC_PLN_TBL) + `rebuild/routes.py` | 5 Nov: 116 lines on 15 products X3 holds as bought-in taken out (6.3). In `Ethan_fixes_2026-11-05`. The old file came from migration.LOAD_ROU, a one-off copy of vw_ROU (31,326 of 65,158 operations) |
+| ZSDIROU2 routes | 33,499 operations | `extract_routes.sql`, 5 Nov 09:55 (migration.vw_ROU, a live view over ASC_PLN_TBL) + `rebuild/routes.py` | 5 Nov, as built. 116 lines are on 15 products X3 holds as bought-in; X3 skips them (6.3). In `Ethan_fixes_2026-11-05`. The old file came from migration.LOAD_ROU, a one-off copy of vw_ROU (31,326 of 65,158 operations) |
 | Tesco customer pack | – | `build_customer_pack.py` → `out_packs/Tesco_customer_pack.xlsx` | 4 Nov |
 
 **Master data is built from 27 Oct and 4 Nov extracts, not a single one.** The customer,
@@ -1533,6 +1533,6 @@ Results: 33,499 operations on 7,094 products. Works orders now load 721 of 769.
 The date is `run_transactions.py --required-date` (default tomorrow). It must be after the load
 date, so rebuild on the day if Ethan loads later. Holding lines on PHANT products is
 `--hold-phant`, off by default: James wanted Ethan's fixes only.
-Sent with the four: the route file from 5 Nov 09:55, with 116 lines taken out (33,383). They're on 15 products X3 holds as bought-in (6.3). Ethan didn't raise this; it's his Run 2 rule, put ahead of the failure.
+Sent with the four: the route file from 5 Nov 09:55 as built (33,499). 116 lines are on 15 products X3 holds as bought-in; X3 skips them (James). Ethan didn't raise this.
 
 All five, with load files: `Ethan_fixes_2026-11-05` (scratchpad). E-mail: `Email_to_Ethan_fixes_2026-11-05.md`.
