@@ -5645,6 +5645,12 @@ LIVE_ENQUIRY_COLLECT_RETRY_HOURS = float(os.getenv("SDI_LIVE_ENQUIRY_COLLECT_RET
 # into that share is the earlier provisional search, and runs only when this is set to 1.
 LIVE_ENQUIRY_COLLECT_FROM_PRODUCTION = os.getenv(
     "SDI_LIVE_ENQUIRY_COLLECT_FROM_PRODUCTION", "0").strip().lower() in {"1", "true", "yes"}
+# THE DRAWING EXTRACT, FOR A ROW WITH NO PACK (D-702, SCRUM-185). Off until switched on: when
+# on, Self-Running asks the portal's Document Manager route for a row's pack, waits for it
+# across cycles, and stages it in the Live Enquiry folder the runner reads. A failed extract
+# is retried after LIVE_ENQUIRY_COLLECT_RETRY_HOURS, like a pack not found in Production.
+LIVE_ENQUIRY_EXTRACT_FROM_DM = os.getenv(
+    "SDI_LIVE_ENQUIRY_EXTRACT_FROM_DM", "0").strip().lower() in {"1", "true", "yes"}
 
 # The longest run of letters a title block's drawing number carries: GA, SA05, 01M, ASSY. A
 # code-shaped token with a longer run is words joined across spaces — the M&S border's

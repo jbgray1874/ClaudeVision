@@ -841,6 +841,15 @@ class Portal:
         got = self._call("GET", "/api/estimate/recipients") or {}
         return [str(a) for a in (got.get("recipients") or []) if str(a).strip()]
 
+    def dm_extract(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Ask the portal's Document Manager route for a drawing pack (D-702): the same
+        POST /api/estimate/dm/extract the page's Extract button makes. Returns its job id."""
+        return self._call("POST", "/api/estimate/dm/extract", body)
+
+    def dm_extract_status(self, job_id: str) -> Dict[str, Any]:
+        """Where that extract has got to, and whether its pack is readable from the portal."""
+        return self._call("GET", f"/api/estimate/dm/extract/{job_id}")
+
     def self_running(self, report: Dict[str, Any]) -> Dict[str, Any]:
         """Report to the portal's AI Estimate Self-Running switch and hear whether it is on
         (D-588). The answer is the only thing that lets the self-running watcher queue a job."""
