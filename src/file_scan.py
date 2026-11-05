@@ -3465,6 +3465,10 @@ def _finalize_scan_summary(
                     "reason": _sw_job.meta.get("native_unread_reason"),
                     "analyser_error": _sw_job.meta.get("analyser_error"),
                 }
+                # A backup that was tried and failed is part of why nothing was read.
+                for _dmk in ("docmgr_backup_reason", "docmgr_error"):
+                    if _sw_job.meta.get(_dmk):
+                        summary["solidworks_native"][_dmk] = _sw_job.meta.get(_dmk)
                 print(f"   [solidworks] {_sw_job.meta.get('native_files_present')} native model "
                       f"file(s) are in this job folder but were NOT read: "
                       f"{_sw_job.meta.get('native_unread_reason')}", flush=True)
@@ -3653,6 +3657,21 @@ def _finalize_scan_summary(
                               f"of the same number: {', '.join(_pc_asked)}", flush=True)
                 except Exception as _e_pc:                           # noqa: BLE001
                     print(f"   [dxf] piece/model check skipped ({_e_pc})", flush=True)
+                # WHICH READER, AND WHY (SCRUM-184). A COM extract reports solidworks_api
+                # exactly as before; a Document Manager backup read says so here, with the
+                # reason the worker could not run and what the files did not save.
+                from source_connectors.solidworks import extract_reader_summary as _sw_reader
+                summary["solidworks_native"].update(_sw_reader(_sw_job))
+                if summary["solidworks_native"].get("extract_reader") == "solidworks_docmgr":
+                    # The parts left with NO measured blank — a part whose DXF stands is not one.
+                    _dm_need = (_swc or {}).get("needs_solidworks_worker_parts") or []
+                    print(f"   [solidworks] read by the Document Manager BACKUP reader — "
+                          f"{summary['solidworks_native'].get('docmgr_backup_reason')}. Saved "
+                          f"values only: nothing was measured, and its values rank below a DXF "
+                          f"and below the SolidWorks worker."
+                          + (f" {len(_dm_need)} formed part(s) saved no flat pattern and need "
+                             f"the worker: {', '.join(_dm_need[:8])}" if _dm_need else ""),
+                          flush=True)
                 if _sw_job.meta.get("extract_stale"):
                     print("   [solidworks] EXTRACT IS STALE — the native models have changed "
                           "since it was taken. The estimate is built on older geometry and "

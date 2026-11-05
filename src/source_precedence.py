@@ -23,6 +23,7 @@ Ranking, and the reasoning:
   100  estimator_confirmed / knowledge_base   a person looked at it and said so
    90  solidworks_api                         the model itself; what the shop builds from
    80  dxf                                    measured geometry
+   76  solidworks_docmgr                      the model file's SAVED values, read without SolidWorks
    70  drawing_deterministic                  printed title-block fields, read exactly
    60  bom_tree                               PDF BOM structure — a reading of a table
    50  override_rule                          a pattern rule, not an observation
@@ -234,6 +235,16 @@ SOURCE_RANK: Dict[str, int] = {
     # convention holding as well as on the measurement. It must never displace a DXF or a
     # model of the mirror ITSELF, and it beats every inferred and generated source.
     "mirror_of_measured": 75,
+    # THE SAME MODEL, READ WITHOUT SOLIDWORKS (SCRUM-184). The Document Manager backup reader
+    # (tools/solidworks/sw_docmgr_analyse.py) reads what each .SLDPRT/.SLDASM saved — custom
+    # properties, the referenced components, the cut list as last written — with no seat and
+    # no rebuild. It is a reading of the model, so it stands above every reading of the
+    # drawing (70) exactly as the model does; and it is a reading of SAVED values, never
+    # refreshed and never measured, so it stands BELOW the SolidWorks worker's own
+    # measurement (90) and BELOW a DXF (80). It may fill what neither supplied and can never
+    # displace either. Above the mirrored measurement (75), because it is a reading of THIS
+    # part rather than of its other hand.
+    "solidworks_docmgr": 76,
     "drawing_deterministic": 70,
     "title_block": 70,
     # THE TWO READERS THAT PRODUCE EVERY BOM ROW, AND NEITHER WAS IN THIS TABLE.
@@ -289,6 +300,10 @@ SOURCE_RANK: Dict[str, int] = {
     # evidence in the pack. The analyser tags which kind it is; an extract that predates the
     # tag carries no applied-material observation and so behaves exactly as before.
     "solidworks_applied_material": 68,
+    # The same appearance default, read by the Document Manager backup reader from a Material
+    # property linked to SW-Material. One step below the COM reading of it, as every Document
+    # Manager value sits below its COM counterpart — and so still below the drawing's word.
+    "solidworks_docmgr_applied_material": 67,
     # THE SHEET THAT DRAWS A PART WITH NO SHEET OF ITS OWN (D-426). 8188-08's wave layers 014
     # and 015 are drawn on 013's sheet, whose title block states ACRYLIC; neither has a title
     # block of its own, so the model's library appearance (MILD_STEEL — the same default the
@@ -544,6 +559,9 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "solidworks_api":         "the SolidWorks model",
     "solidworks_flat_pattern": "the SolidWorks flat pattern",
     "solidworks_applied_material": "the SolidWorks library material (appearance, not a spec)",
+    "solidworks_docmgr":      "the SolidWorks file's saved properties (Document Manager — read, not measured)",
+    "solidworks_docmgr_applied_material":
+        "the SolidWorks file's saved library material (Document Manager — appearance, not a spec)",
     "drawn_on_sheet":         "the sheet that draws the part (it has no sheet of its own)",
     "dxf":                    "the DXF",
     "dxf_flat_pattern":       "the DXF flat pattern",
@@ -606,6 +624,10 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
 MEASURED_SOURCES = frozenset({
     "estimator_confirmed", "knowledge_base", "solidworks_api", "solidworks_flat_pattern",
     "solidworks_applied_material",
+    # Read off the model file rather than reasoned about — "measured" in this set's sense,
+    # which is also why drawing_deterministic and bom_tree are here. Its RANK is what keeps it
+    # below a real measurement.
+    "solidworks_docmgr", "solidworks_docmgr_applied_material",
     "dxf", "dxf_flat_pattern", "mirror_of_measured", "drawing_deterministic",
     "title_block", "pdf_overall_dims", "bom_tree",
 })
@@ -845,6 +867,10 @@ EVIDENCE_FAMILY: Dict[str, str] = {
     "solidworks_api": "the model",
     "solidworks_flat_pattern": "the model",
     "solidworks_applied_material": "the model",
+    # The same model file read by the Document Manager: a second reader of one artefact, never
+    # a second voice beside the COM reading of it.
+    "solidworks_docmgr": "the model",
+    "solidworks_docmgr_applied_material": "the model",
     # The file the laser runs, and the name on it.
     "dxf": "the cut file",
     "dxf_flat_pattern": "the cut file",
