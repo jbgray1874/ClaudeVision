@@ -173,8 +173,15 @@ def check(get: Callable = http_get, service: Callable = service_state, env: Opti
     if service("SDIIntelligence") not in ("RUNNING", "absent", ""):
         problems.append(_problem("intelligence", "down", "SDI Intelligence isn't running - the phone address is down",
                                  "On the server: Start-Service SDIIntelligence."))
-    code, body, _ = get(via + "/api/version")
-    if code != 200 or not isinstance(body, dict):
+    # 5 Nov 2026 (first run: a false alarm): SDI Intelligence asks a request addressed to the server itself
+    # (127.0.0.1) to sign in, so the watch shows its own service key - the one the scheduled tasks use - and so goes the
+    # way a phone's request goes. Without a key, a sign-in refusal still proves SDI Intelligence is up and carrying
+    # /sameday/; it is never reported as the phone address being down.
+    machine = {"X-SDI-Key": _opt("SDI_API_KEY")} if _opt("SDI_API_KEY") else {}
+    code, body, _ = get(via + "/api/version", headers=machine)
+    if code == 401 and not machine:
+        facts["phone"] = "SDI Intelligence answering at /sameday/ (SDI_API_KEY not set, so not followed through)"
+    elif code != 200 or not isinstance(body, dict):
         problems.append(_problem("phone", "down", "The phone address isn't reaching SameDay",
                                  f"SDI Intelligence at /sameday/ gave {code or 'no answer'}"
                                  + (f" ({str(body)[:100]})" if code else "") + ". Run Ship-It, then check SameDay."))
