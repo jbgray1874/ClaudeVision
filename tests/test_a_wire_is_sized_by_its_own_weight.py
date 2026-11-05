@@ -432,3 +432,51 @@ def test_the_mass_is_the_solid_round_the_gauge_table_was_built_from():
         assert 1000.0 / dpg.round_stock_mass_kg(gauge, 1000.0, 7850) == pytest.approx(
             config.WIRE_GAUGE_TABLE[gauge], rel=1e-3)
     assert math.isclose(dpg.round_stock_mass_kg(2, 1000, 1000), math.pi / 1000, rel_tol=1e-9)
+
+
+# ── 5. the printed weight is a rounded figure (D-707) ────────────────────────────────────
+#
+# 12693-03-05M: its sheet prints 575, 0.5, 4 and WEIGHT 0.06. Ø4 x 575 mm of mild steel weighs
+# 0.0567 kg, 5.8% under 0.06, so ±5% alone refused it and the wire went unpriced. 0.06 printed
+# to two decimals stands for 0.055 to 0.065 kg, and 0.0567 is inside it.
+
+def _small_wire(weight_line):
+    sheet = _sheet(5, f"{J}-05M", "575", "0.5", "4", "TABLE EDGE - WIRE A", f"{J}-05M",
+                   weight_line, "MATERIAL: MILD STEEL WIRE", "SHEET 1 OF 1")
+    return _wire(f"{J}-05M", "TABLE EDGE - WIRE A", 5), {"pages": [sheet]}
+
+
+def test_a_weight_printed_to_two_decimals_admits_what_rounds_to_it():
+    assert dpg.round_stock_mass_kg(4, 575, 7850) == pytest.approx(0.0567, abs=1e-4)
+    part, summary = _small_wire("WEIGHT: 0.06")
+    assert dpg.apply_round_stock_sizes_from_own_weight([part], summary) == [part["part_number"]]
+    assert (part["wire_gauge_mm"], part["wire_length_mm"]) == (4.0, 575.0)
+    fit = part["round_stock_size_from_own_weight"]["fits"][0]
+    assert fit["within"] == "rounding"
+    said = _flags(part)
+    assert "0.06 kg stands for 0.055 to 0.065 kg" in said and "-5.5%" in said
+
+
+def test_the_same_weight_printed_to_three_decimals_is_held_to_them():
+    part, summary = _small_wire("WEIGHT: 0.060")
+    assert dpg.apply_round_stock_sizes_from_own_weight([part], summary) == []
+    assert part.get("wire_gauge_mm") is None
+    assert "no pairing" in _flags(part)
+
+
+def test_a_title_block_weight_keeps_its_printed_decimals():
+    sheet = _sheet(5, f"{J}-05M", "575", "0.5", "4", "TABLE EDGE - WIRE A", "SHEET 1 OF 1")
+    sheet["page_analysis"]["title_block"]["weights"] = ["0.06KG"]
+    part = _wire(f"{J}-05M", "TABLE EDGE - WIRE A", 5)
+    assert dpg.apply_round_stock_sizes_from_own_weight([part], {"pages": [sheet]}) == [part["part_number"]]
+    assert "its own sheet's stated 0.06 kg" in _flags(part)
+
+
+def test_a_figure_printed_to_one_digit_cannot_fit_anything_by_its_rounding():
+    """0.01 to two decimals spans ±50%; the rounding allowance is capped at 25%."""
+    sheet = _sheet(5, f"{J}-05M", "292", "2", "TABLE EDGE - WIRE A", "WEIGHT: 0.01",
+                   "MATERIAL: MILD STEEL WIRE", "SHEET 1 OF 1")
+    part = _wire(f"{J}-05M", "TABLE EDGE - WIRE A", 5)
+    assert dpg.round_stock_mass_kg(2, 292, 7850) == pytest.approx(0.0072, abs=1e-4)
+    assert dpg.apply_round_stock_sizes_from_own_weight([part], {"pages": [sheet]}) == []
+    assert part.get("wire_gauge_mm") is None

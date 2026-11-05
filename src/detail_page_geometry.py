@@ -508,10 +508,21 @@ def sheet_envelope(sheets: Sequence[Mapping[str, Any]]) -> Optional[Dict[str, An
             "pages": [s.get("page_number") for s in sheets]}
 
 
-def _weight_on_sheets(sheets: Sequence[Mapping[str, Any]]) -> Optional[float]:
-    """The one weight the given sheets' own title blocks state, in kg; None when they state
-    none, or more than one (two weights on the sheets that size a part decide nothing)."""
-    seen: List[float] = []
+def _half_unit(figure: Any) -> float:
+    """Half a unit of the last decimal a figure is printed to: 0.06 stands for anything from
+    0.055 to 0.065, so 0.005. Read from the figure as printed where it is still text; a number
+    gives its shortest form, which is the printed one unless trailing zeros were dropped (then
+    the band is wider than printed, never narrower). 0 when it cannot be told."""
+    t = str(figure if not isinstance(figure, float) else repr(figure)).strip().replace(",", ".")
+    if not t or "e" in t.lower() or not re.fullmatch(r"\d+(?:\.\d+)?", t):
+        return 0.0
+    return 0.5 * 10.0 ** -(len(t.split(".")[1]) if "." in t else 0)
+
+
+def _sheet_weight_readings(sheets: Sequence[Mapping[str, Any]]) -> List[Tuple[float, float]]:
+    """[(kg, half a unit of its printed last decimal, in kg)] — every distinct weight the given
+    sheets' own title blocks state."""
+    seen: List[Tuple[float, float]] = []
     for sheet in sheets or []:
         tb = ((sheet.get("page_analysis") or {}).get("title_block") or {}) \
             if isinstance(sheet, Mapping) else {}
@@ -519,10 +530,18 @@ def _weight_on_sheets(sheets: Sequence[Mapping[str, Any]]) -> Optional[float]:
             m = _WEIGHT_TEXT.match(str(w).strip().upper().replace(",", "").replace(" ", ""))
             if not m:
                 continue
-            val = float(m.group(1)) / (1000.0 if m.group(2) == "G" else 1.0)
-            if 0.001 <= val <= 500.0 and not any(abs(val - s) < 1e-9 for s in seen):
-                seen.append(val)
-    return seen[0] if len(seen) == 1 else None
+            per = 1000.0 if m.group(2) == "G" else 1.0
+            val = float(m.group(1)) / per
+            if 0.001 <= val <= 500.0 and not any(abs(val - s) < 1e-9 for s, _h in seen):
+                seen.append((val, _half_unit(m.group(1)) / per))
+    return seen
+
+
+def _weight_on_sheets(sheets: Sequence[Mapping[str, Any]]) -> Optional[float]:
+    """The one weight the given sheets' own title blocks state, in kg; None when they state
+    none, or more than one (two weights on the sheets that size a part decide nothing)."""
+    seen = _sheet_weight_readings(sheets)
+    return seen[0][0] if len(seen) == 1 else None
 
 
 def _small_blank_agrees_with_its_weight(part: Mapping[str, Any],
@@ -1318,20 +1337,21 @@ def _round_stock_figures(lines: Sequence[str]) -> Tuple[List[float], List[float]
 
 
 def _round_stock_weights(part: Mapping[str, Any], sheets: Sequence[Mapping[str, Any]],
-                         texts: Sequence[str]) -> Tuple[List[Tuple[float, str]], str]:
-    """([(kg, how it was read)], whose) — the weight the part's own sheet states.
+                         texts: Sequence[str]) -> Tuple[List[Tuple[float, str, float]], str]:
+    """([(kg, how it was read, half a unit of its printed last decimal in kg)], whose) — the
+    weight the part's own sheet states.
 
     Its own title block's weight with a unit, then the record's stated weight, then the figure
     its own sheet prints after WEIGHT. A SolidWorks title block prints that figure with no unit
     ("WEIGHT: 0.11"), so the unit cannot choose itself: the figure is offered in kilograms AND
     in grams, and the rule's demand for exactly one fitting pairing decides between them. Two
     different printed weights decide nothing."""
-    on_sheet = _weight_on_sheets(sheets)
-    if on_sheet:
-        return [(on_sheet, "")], "its own sheet's stated"
+    on_sheet = _sheet_weight_readings(sheets)
+    if len(on_sheet) == 1:
+        return [(on_sheet[0][0], "", on_sheet[0][1])], "its own sheet's stated"
     stated = _stated_weight_kg(part)
     if stated:
-        return [(stated, "")], "the record's stated"
+        return [(stated, "", _half_unit(float(stated)))], "the record's stated"
     try:
         from extractor_patterns import strip_weights_not_the_parts as _strip
     except Exception:                                                # noqa: BLE001
@@ -1346,16 +1366,16 @@ def _round_stock_weights(part: Mapping[str, Any], sheets: Sequence[Mapping[str, 
                 unit = "KG"
             elif not unit and paren in ("G", "GRAMS"):
                 unit = "G"
-            printed.add((raw, unit))
-    if len(printed) != 1:
+            printed.add((raw, unit, _half_unit(m.group("num"))))
+    if len({(r, u) for r, u, _h in printed}) != 1:
         return [], ""
-    (raw, unit), = printed
+    raw, unit, half = max(printed, key=lambda t: t[2])
     if unit:
-        kg = raw / 1000.0 if unit == "G" else raw
-        out = [(kg, "")]
+        per = 1000.0 if unit == "G" else 1.0
+        out = [(raw / per, "", half / per)]
     else:
-        out = [(raw, "read in kilograms"), (raw / 1000.0, "read in grams")]
-    out = [(kg, how) for kg, how in out if 0.001 <= kg <= 500.0]
+        out = [(raw, "read in kilograms", half), (raw / 1000.0, "read in grams", half / 1000.0)]
+    out = [(kg, how, h) for kg, how, h in out if 0.001 <= kg <= 500.0]
     return out, ("its own sheet's printed" if out else "")
 
 
@@ -1425,6 +1445,13 @@ def round_stock_size_from_own_weight(part: Mapping[str, Any],
     min_ratio = float(cfg["min_length_to_diameter"])
     max_l = float(cfg["max_length_mm"])
     tol = float(cfg["weight_tolerance"])
+    # THE PRINTED FIGURE'S OWN ROUNDING (D-707). A title block prints the model's mass to a
+    # fixed number of decimals, so a printed 0.06 kg stands for anything from 0.055 to 0.065.
+    # Ø4 x 575 mm weighs 0.0567 kg, 5.8% under 0.06 and outside ±5%, yet it IS what prints as
+    # 0.06; holding the rounded figure to ±5% as if it were exact left 12693-03-05M unpriced.
+    # A pairing fits when it is within the tolerance OR within the rounding, the rounding
+    # capped so a figure printed to one significant digit cannot fit anything.
+    cap = float(cfg.get("weight_rounding_cap", 0.25))
     plain, marked = sorted(set(plain)), sorted(set(marked))
     # A figure marked Ø is a diameter and never a length; a bare figure may be either.
     diameters = [known_d] if known_d else sorted({v for v in plain + marked if lo_d <= v <= hi_d})
@@ -1437,18 +1464,23 @@ def round_stock_size_from_own_weight(part: Mapping[str, Any],
                 continue
             pairings += 1
             mass = round_stock_mass_kg(d, length, density)
-            for weight, how in weights:
+            for weight, how, half in weights:
                 deviation = (mass - weight) / weight
-                if abs(deviation) <= tol:
+                rounding = min(half, cap * weight)
+                in_tol = abs(deviation) <= tol
+                if in_tol or abs(mass - weight) <= rounding + 1e-12:
                     fits.append({"diameter_mm": d, "length_mm": length,
                                  "mass_kg": round(mass, 5), "weight_kg": weight,
-                                 "weight_read": how, "deviation": round(deviation, 4)})
+                                 "weight_read": how, "deviation": round(deviation, 4),
+                                 "within": "tolerance" if in_tol else "rounding",
+                                 "printed_from_kg": round(weight - half, 6),
+                                 "printed_to_kg": round(weight + half, 6)})
     status = ("settled" if len(fits) == 1 else "ambiguous" if fits
               else "no_fit" if pairings else "no_figures")
     return {"status": status, "fits": fits, "pairings": pairings,
             "figures": sorted(set(plain + marked)), "marked_diameters": marked,
             "pages": [s.get("page_number") for s in sheets], "read_from": sorted(set(read_from)),
-            "weight_whose": whose, "weights_kg": [w for w, _h in weights],
+            "weight_whose": whose, "weights_kg": [w for w, _h, _r in weights],
             "density_kg_m3": density, "density_for": density_for,
             "known_diameter_mm": known_d, "known_length_mm": known_l,
             "tolerance": tol, "source": ROUND_STOCK_FROM_OWN_WEIGHT}
@@ -1502,7 +1534,7 @@ def apply_round_stock_sizes_from_own_weight(parts: Any, summary: Mapping[str, An
         pages = ", ".join(str(p) for p in got["pages"])
         figs = ", ".join((f"Ø{v:g}" if v in got["marked_diameters"] else f"{v:g}")
                          for v in got["figures"]) or "none"
-        band = f"±{got['tolerance'] * 100:g}%"
+        band = f"±{got['tolerance'] * 100:g}% or the printed figure's rounding"
         weights = " or ".join(f"{w:g} kg" for w in got["weights_kg"])
         on_sheet = f"its own sheet (page {pages}, {' / '.join(got['read_from'])}: {figs})"
         if got["status"] == "settled":
@@ -1546,7 +1578,11 @@ def apply_round_stock_sizes_from_own_weight(parts: Any, summary: Mapping[str, An
                     f"measured. Ø{d:g} x {length:g} mm at {got['density_kg_m3']:g} kg/m3 = "
                     f"π/4 x {d:g}² x {length:g} mm³ = {fit['mass_kg']:.4f} kg, against "
                     f"{got['weight_whose']} {fit['weight_kg']:g} kg ({fit['deviation'] * 100:+.1f}%,"
-                    f" within {band}), the only one of the {got['pairings']} pairing"
+                    + (f" within ±{got['tolerance'] * 100:g}%)" if fit.get("within") != "rounding"
+                       else f" within the printed figure's rounding: {fit['weight_kg']:g} kg "
+                            f"stands for {fit['printed_from_kg']:g} to {fit['printed_to_kg']:g} "
+                            f"kg)")
+                    + f", the only one of the {got['pairings']} pairing"
                     f"{'s' if got['pairings'] != 1 else ''} tried that is.{unit} Confirm the "
                     f"stock.")
             if said not in (part.get("review_flags") or []):
