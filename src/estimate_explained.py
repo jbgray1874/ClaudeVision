@@ -3603,10 +3603,13 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                         for r in _counted], numeric={2, 4, 5, 6, 7}))
         _skipped = _basis.get("parts_without_a_blank")
         _phantom = _basis.get("parts_with_an_impossible_blank")
-        _size = _basis.get("largest_part_mm") or []
+        try:
+            from commercial_lines import packed_size_phrase as _packed_size
+            _size_words = _packed_size(_basis)
+        except Exception:                                            # noqa: BLE001
+            _size_words = ""
         add(f"<p>That is <b>{_fmt(_basis.get('order_weight_kg'))} kg</b> for the whole order"
-            + (f", largest panel {_fmt(_size[0])} × {_fmt(_size[1])} mm" if len(_size) == 2
-               else "")
+            + (f", {_size_words}" if _size_words else "")
             + f", from {_plural(_basis.get('parts_measured') or 0, 'part')} the engine could "
               f"measure"
             + (f"; {_plural(_skipped, 'part')} had no blank to weigh" if _skipped else "")
