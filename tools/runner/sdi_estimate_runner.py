@@ -826,6 +826,24 @@ _SERVICE_COMMIT: Dict[str, str] = {}
 # every claim. "sw_extract": the SolidWorks analyser on the pack, organised; "xai_extract": the
 # whole-document xAI read on the pack's PDFs, exactly as returned and laid out as tables.
 RUNNER_CAPABILITIES = ("sw_extract", "xai_extract")
+
+
+def runner_capabilities() -> List[str]:
+    """What this runner tells the service on every claim. "no_models" (D-703, SCRUM-183): it
+    will not drive SolidWorks (SDI_SW_RUN_ANALYSER=0) and has no Document Manager backup
+    (SDI_SW_DOCMGR unset), so the service keeps packs that need a model reader for a runner
+    that has one. A runner with either says nothing extra, as before.
+
+    The backup counts only with its licence key (SDI_SW_DOCMGR_KEY) present: the switch alone
+    reads nothing (SCRUM-184), and a runner that took a model job on the switch alone would
+    price it from the drawings. "On" means what the engine's docmgr_switch_on() means."""
+    caps = list(RUNNER_CAPABILITIES)
+    _off = str(os.getenv("SDI_SW_RUN_ANALYSER", "")).strip().lower() in {"0", "false", "no"}
+    _dm = (str(os.getenv("SDI_SW_DOCMGR", "")).strip().lower() in {"1", "true", "yes", "on"}
+           and bool(str(os.getenv("SDI_SW_DOCMGR_KEY", "")).strip()))
+    if _off and not _dm:
+        caps.append("no_models")
+    return caps
 PACK_EXTRACT_KIND = {"sw_extract": "sw", "xai_extract": "xai"}
 
 
@@ -854,7 +872,7 @@ def _ask_for_work(requests, server: str, headers: Dict[str, str], runner_id: str
             # WHAT THIS RUNNER CAN DO BESIDES AN ESTIMATE (D-640). The service hands a
             # pack-extract job only to a runner that says it can run one: an older runner
             # would build a full main.py estimate for it.
-            "capabilities": list(RUNNER_CAPABILITIES)},
+            "capabilities": runner_capabilities()},
             headers=headers, timeout=20)
     except Exception as exc:                       # noqa: BLE001 — keep polling
         # SAY IT ONCE. A runner that cannot reach the server prints a line a

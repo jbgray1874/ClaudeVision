@@ -254,6 +254,150 @@ def collect_missing_packs(decisions: Sequence[ler.Decision], root: Path,
     return results
 
 
+# ── THE DRAWING EXTRACT (D-702, SCRUM-185) ───────────────────────────────────────────
+# A row with no pack waited for a person to copy its drawings into the Live Enquiry folder.
+# The portal already asks the Document Manager for a pack from its Extract button; this asks
+# the same route the same way, for each waiting row, and stages what comes back where the
+# runner looks. Nothing here runs unless config.LIVE_ENQUIRY_EXTRACT_FROM_DM is on.
+#
+# THE RULES IT KEEPS:
+#   * The request is the page's: project = the drawing number's first part, customer = the
+#     row's customer, assembly folder = the drawing number.
+#   * One heavy extract at a time on the Document Manager host: while any row's extract is in
+#     flight, no other row is asked; they wait for a later cycle.
+#   * An extract is polled across cycles, never waited on in one held request.
+#   * A failed, empty or unreadable extract leaves the row waiting with the reason, and is
+#     asked again after LIVE_ENQUIRY_COLLECT_RETRY_HOURS. Nothing runs on a partial pack: the
+#     files are copied into a side folder and moved into place only when every file landed.
+_EXTRACT_IN_FLIGHT = {"queued", "running"}
+
+
+def extract_request(d: ler.Decision) -> Dict[str, str]:
+    """The extract the page's button would send for this row."""
+    drawing = str(d.row.drawing or "").strip()
+    return {"project_number": (drawing.split("-")[0] or "").strip(),
+            "customer": str(d.row.customer or "").strip(),
+            "assembly_folder": drawing}
+
+
+def _due_for_extract(entry: Dict[str, Any], now: datetime) -> bool:
+    if not entry or entry.get("status") in _EXTRACT_IN_FLIGHT:
+        return True
+    if entry.get("status") == "copied":
+        return False
+    try:
+        at = datetime.fromisoformat(str(entry.get("at")))
+    except ValueError:
+        return True
+    return now - at >= timedelta(hours=config.LIVE_ENQUIRY_COLLECT_RETRY_HOURS)
+
+
+def _stage_pack(out_dir: Path, dest: Path) -> List[str]:
+    """Copy every file the extract wrote into dest, all or nothing. Returns the files."""
+    import shutil
+    files = [f for f in sorted(Path(out_dir).rglob("*")) if f.is_file()]
+    if not files:
+        return []
+    side = dest.parent / f"{dest.name}.extract-partial"
+    if side.exists():
+        shutil.rmtree(side)
+    try:
+        for f in files:
+            target = side / f.relative_to(out_dir)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, target)
+        if dest.exists():
+            raise FileExistsError(f"{dest} appeared while the pack was being copied")
+        side.rename(dest)
+    except Exception:
+        shutil.rmtree(side, ignore_errors=True)
+        raise
+    return [str(dest / f.relative_to(out_dir)) for f in files]
+
+
+def extract_missing_packs(decisions: Sequence[ler.Decision], root: Path,
+                          ledger: Dict[str, Any], portal: Any, dry_run: bool = False,
+                          say: Callable[[str], None] = print,
+                          now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    """Ask for, follow and stage the drawing extract of every row waiting on its pack.
+    Returns one result per row acted on; the ledger keeps each under "extracted"."""
+    now = now or datetime.now()
+    book = ledger.setdefault("extracted", {})
+    results: List[Dict[str, Any]] = []
+    asked_now: List[str] = []
+
+    def _host_busy(but: str) -> bool:
+        return bool(asked_now) or any(
+            str(v.get("status")) in _EXTRACT_IN_FLIGHT for k, v in book.items()
+            if k != but and isinstance(v, dict))
+
+    for d in decisions:
+        if d.status != "waiting":
+            continue
+        key = ler.job_key(d.row)
+        entry = book.get(key) if isinstance(book.get(key), dict) else {}
+        if not _due_for_extract(entry, now):
+            continue
+        res: Dict[str, Any] = {"at": now.isoformat(timespec="seconds"),
+                               "customer": d.row.customer, "drawing": d.row.drawing}
+        try:
+            if entry.get("status") in _EXTRACT_IN_FLIGHT and entry.get("job_id"):
+                res["job_id"] = entry["job_id"]
+                res["requested"] = entry.get("requested")
+                info = portal.dm_extract_status(str(entry["job_id"])) or {}
+                if not info.get("finished"):
+                    res.update(status="running", progress=info.get("progress"))
+                elif not info.get("ok"):
+                    res.update(status="failed",
+                               note=str(info.get("error") or "the extract failed"))
+                elif not info.get("readable_here") or not info.get("output_dir"):
+                    res.update(status="unreadable",
+                               note=str(info.get("note") or "the pack is not readable here"))
+                else:
+                    dest = destination(root, d)
+                    if dry_run:
+                        res.update(status="would_copy", dest=str(dest))
+                    elif dest.exists():
+                        res.update(status="copied", dest=str(dest), copied=[],
+                                   note="the folder was already there; nothing copied over it")
+                    else:
+                        copied = _stage_pack(Path(str(info["output_dir"])), dest)
+                        if copied:
+                            res.update(status="copied", dest=str(dest), copied=copied,
+                                       file_count=info.get("file_count"),
+                                       source=str(info["output_dir"]))
+                        else:
+                            res.update(status="empty", note="the extract wrote no files")
+            elif _host_busy(key):
+                continue                  # one heavy extract at a time on the host
+            else:
+                body = extract_request(d)
+                res["requested"] = body
+                if not body["project_number"]:
+                    res.update(status="not_asked", note="the row has no drawing number")
+                elif dry_run:
+                    res.update(status="would_ask")
+                else:
+                    started = portal.dm_extract(body) or {}
+                    if started.get("job_id"):
+                        res.update(status="queued", job_id=str(started["job_id"]))
+                        asked_now.append(key)
+                    else:
+                        res.update(status="failed", note="the portal returned no job id")
+        except ler.PortalError as exc:
+            res.update(status="error", note=str(exc))
+        except Exception as exc:                                      # noqa: BLE001
+            res.update(status="error", note=f"{type(exc).__name__}: {exc}")
+        if not dry_run:
+            book[key] = res
+        say(f"   extract {d.row.drawing} ({d.row.customer}): {res['status']}"
+            + (f" - {len(res.get('copied') or [])} file(s) into {res.get('dest')}"
+               if res["status"] == "copied" else
+               f" - {res['note']}" if res.get("note") else ""))
+        results.append(res)
+    return results
+
+
 # ── AICompleted, WRITTEN BACK ────────────────────────────────────────────────────────
 def write_back(workbook: Path, row: ler.EnquiryRow, attempt: Dict[str, Any],
                say: Callable[[str], None] = print) -> bool:
@@ -307,14 +451,18 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
     collected = (collect_missing_packs(decisions, s["root"], ledger, dry_run=dry_run, say=say,
                                        collector=collector)
                  if config.LIVE_ENQUIRY_COLLECT_FROM_PRODUCTION else [])
+    # THE DRAWING EXTRACT (D-702, SCRUM-185): off unless switched on.
+    extracted = (extract_missing_packs(decisions, s["root"], ledger, portal, dry_run=dry_run,
+                                       say=say)
+                 if getattr(config, "LIVE_ENQUIRY_EXTRACT_FROM_DM", False) else [])
     if not dry_run:
         ler.save_ledger(s["ledger"], ledger)
-    if any(c.get("status") == "copied" for c in collected):
+    if any(c.get("status") == "copied" for c in list(collected) + list(extracted)):
         decisions = ler.plan(ler.read_sheet(s["workbook"]), sources, ledger)
     ler.write_status(decisions, s["ledger"])
     ler.print_plan(decisions, say=say)
     tally = counts(decisions)
-    out = {"counts": tally, "collected": collected, "ran": []}
+    out = {"counts": tally, "collected": collected, "extracted": extracted, "ran": []}
     if dry_run:
         return out
 

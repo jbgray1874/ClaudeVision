@@ -3415,8 +3415,11 @@ LABOUR_RULES = {
 
 # Department labour rates (£/hr). THE DEPARTMENT'S CARD, NOT ANY ONE ESTIMATOR'S.
 #
-# These defaults were ingested from a completed SDI estimate workbook (job 1282) and
-# cross-checked against its labour lines, dept code in the comment. They are the FALLBACK:
+# THE 2027 CARD (D-704): James Ryan's blank estimate sheet of 3 Nov 2026, Estimate!I115:I146,
+# "to start using with immediate effect". The same 32 departments, codes and set-up minutes as
+# 2026; only the rates moved (most +2 to +4.5%, Laser (Metal) +13.4%). Before that these were
+# ingested from a completed SDI estimate workbook (job 1282), dept code in the comment. They
+# are the FALLBACK:
 # since D-122 the controlling source is the estimating template's own Labour / Rate / Dept
 # block, read at import.
 #
@@ -3427,14 +3430,14 @@ LABOUR_RULES = {
 # about by anybody who knows it is not their sheet. Per-figure attribution belongs in
 # SHOP_STATED_PROVENANCE, where a name is attached to a ruling somebody actually made.
 HOURLY_RATES_GBP = {
-    "laser_cutting": 68.19,          # LASM
-    "laser_cutting_acrylic": 41.21,  # LASA
-    "hole_machining": 25.13,         # DRIL
-    "folding": 40.47,                # FOLD
-    "powder_coating": 355.43,        # P/C (applied with throughput divisor)
-    "handling": 31.18,               # MANM (manual metal handling)
-    "assembly": 28.56,               # PACM (Assemble/pack metal)
-    "plater_pack": 28.56,            # PACM — the pack OUT to the plater, its own row
+    "laser_cutting": 77.29,          # LASM
+    "laser_cutting_acrylic": 42.45,  # LASA
+    "hole_machining": 25.88,         # DRIL
+    "folding": 41.44,                # FOLD
+    "powder_coating": 362.52,        # P/C (applied with throughput divisor)
+    "handling": 32.22,               # MANM (manual metal handling)
+    "assembly": 29.59,               # PACM (Assemble/pack metal)
+    "plater_pack": 29.59,            # PACM — the pack OUT to the plater, its own row
                                      # ("Two separate Operations this job" — H. Thurley)
     # AND THE PACK BACK, WHICH HAD BEEN BORROWING `handling`.
     #
@@ -3445,16 +3448,16 @@ HOURLY_RATES_GBP = {
     # which is 2 minutes a unit, not the 7.5/hr the stated figure makes. A stated time
     # cannot survive being merged into a department aggregate, so it gets its own key and
     # its own row, exactly as the pack-out does.
-    "plater_final_pack": 28.56,      # PACM — the pack BACK after plating, its own row
+    "plater_final_pack": 29.59,      # PACM — the pack BACK after plating, its own row
     # (see STATED_TIME_OPERATIONS below — these three must never share a workbook row)
     # Same fault, same shape, on the brushing rule. `manual_labour_metal` is the DEPARTMENT,
     # shared with deburr, bench work and insert labour, so Howard's stated 40 minutes was
     # pooled with all of it and the row fell to the corpus default of 79/hr. Its own key,
     # its own row, at the same MANM rate — and now visible to him as a brushing line.
-    "brush_before_plate": 31.18,     # MANM — brushing before the part goes to the platers
-    "assembly_acrylic": 25.43,       # PACP
-    "welding": 41.77,                # WELD (CO2)
-    "tube": 31.98,                   # TUBE
+    "brush_before_plate": 32.22,     # MANM — brushing before the part goes to the platers
+    "assembly_acrylic": 26.19,       # PACP
+    "welding": 43.64,                # WELD (CO2)
+    "tube": 32.92,                   # TUBE
     # TWO SPELLINGS, ONE LETTER, AND THE TUBE-BENDER WORKED FOR NOTHING.
     #
     # The estimator emits the operation "tube_bending". This table held only "tube_bend", so
@@ -3469,35 +3472,35 @@ HOURLY_RATES_GBP = {
     # Both keys are kept: "tube_bend" is referenced elsewhere and removing it would be the
     # same defect in the other direction. test_every_operation_has_an_hourly_rate now fails
     # the suite if any op the estimator can time is missing from this table.
-    "tube_bending": 32.84,           # TBEN — the name the engine actually emits
-    "tube_bend": 32.84,              # TBEN — kept as an alias
+    "tube_bending": 33.79,           # TBEN — the name the engine actually emits
+    "tube_bend": 33.79,              # TBEN — kept as an alias
     "wire_forming": 39.84,           # engine default (no single Tim wire-labour dept)
-    "spot_welding": 32.90,           # SPOT
-    "resistance_welding": 32.90,     # SPOT (resistance = spot)
-    "deburring": 31.18,              # engine default
-    "guillotine": 31.29,             # GUIL
-    "diamond_polish": 31.60,         # DPOL
-    "dress_welds": 28.68,            # DRES
-    "glue": 25.43,                   # GLUE
-    "punch": 43.77,                  # PUNC
-    "roll": 30.84,                   # ROLL
-    "saw": 31.89,                    # SAW
+    "spot_welding": 33.85,           # SPOT
+    "resistance_welding": 33.85,     # SPOT (resistance = spot)
+    "deburring": 32.22,              # MANM - the sheet charges deburring on Manual labour (Metal)
+    "guillotine": 32.07,             # GUIL
+    "diamond_polish": 32.55,         # DPOL
+    "dress_welds": 29.54,            # DRES
+    "glue": 26.19,                   # GLUE
+    "punch": 45.09,                  # PUNC
+    "roll": 31.76,                   # ROLL
+    "saw": 32.96,                    # SAW
     "linisher": 25.43,               # engine default
-    "manual_labour_metal": 31.18,    # MANM
-    "manual_labour_acrylic": 25.43,  # MANA
-    "cnc": 43.36,                    # CNC
-    "cnc_routing": 64.07,            # CNCJ
-    "cnc_joinery": 64.07,            # CNCJ
-    "wet_spray": 33.54,              # SPRY
-    "bench_work": 28.74,             # BENC
-    "edge_banding": 39.03,           # EDGE
-    "linebend": 25.43,               # LINE
-    "pin_router": 25.43,             # PINR
-    "robomac": 31.45,                # ROBO
-    "salvagnini": 39.43,             # SALV
-    "oven": 25.43,                   # OVEN
-    "packing_joinery": 28.74,        # PACJ
-    "machines_joinery": 28.74,       # MC J
+    "manual_labour_metal": 32.22,    # MANM
+    "manual_labour_acrylic": 26.19,  # MANA
+    "cnc": 44.66,                    # CNC
+    "cnc_routing": 65.99,            # CNCJ
+    "cnc_joinery": 65.99,            # CNCJ
+    "wet_spray": 34.15,              # SPRY
+    "bench_work": 29.60,             # BENC
+    "edge_banding": 39.99,           # EDGE
+    "linebend": 26.19,               # LINE
+    "pin_router": 26.19,             # PINR
+    "robomac": 32.23,                # ROBO
+    "salvagnini": 40.62,             # SALV
+    "oven": 26.19,                   # OVEN
+    "packing_joinery": 29.60,        # PACJ
+    "machines_joinery": 29.60,       # MC J
 }
 
 # The ONE stable mapping between the estimate sheet's own labour labels and the engine's
@@ -3581,15 +3584,32 @@ def read_template_rate_card():
     a PARTIAL card: the block is parsed whole and applied whole, because a rate card missing
     three of its rows prices a job with a mixture of this year's numbers and last year's.
     """
+    # THE TEMPLATE THE BOOK IS BUILT FROM, FIRST (D-704). The labour rows on every book are
+    # charged at the rate block of the AI workbook template; the engine's own figures read a
+    # separate local copy of the estimators' blank, so a rate update reached one and not the
+    # other. James Ryan's 2027 rates (3 Nov 2026) go into the AI template; this reads them
+    # from there. The local copy is the fallback, and the defaults below it the last resort.
+    _tried = []
+    for _path_rc in (estimate_template_path(), AI_ESTIMATE_XLSX_TEMPLATE):
+        if not _path_rc or str(_path_rc) in _tried:
+            continue
+        _tried.append(str(_path_rc))
+        _card_rc, _why_rc = _read_rate_card_from(_path_rc)
+        if _card_rc:
+            return _card_rc, _why_rc
+    return {}, _why_rc
+
+
+def _read_rate_card_from(_template_rc):
+    """{op: £/hr} and its source from one template file, or ({}, reason)."""
     try:
         import openpyxl as _oxl_rc
     except Exception:                                                # noqa: BLE001
         return {}, "openpyxl unavailable"
     try:
-        _wb_rc = _oxl_rc.load_workbook(AI_ESTIMATE_XLSX_TEMPLATE, data_only=True,
-                                       read_only=True)
+        _wb_rc = _oxl_rc.load_workbook(_template_rc, data_only=True, read_only=True)
     except Exception:                                                # noqa: BLE001
-        return {}, f"the estimating template could not be opened ({AI_ESTIMATE_XLSX_TEMPLATE})"
+        return {}, f"the estimating template could not be opened ({_template_rc})"
     try:
         _ws_rc = _wb_rc["Estimate"] if "Estimate" in _wb_rc.sheetnames else _wb_rc.worksheets[0]
         # The header is located rather than assumed, exactly as the ingester does: H="Labour",
@@ -3618,7 +3638,8 @@ def read_template_rate_card():
                 _card[_op_rc] = round(float(_rate), 4)
         if not _card:
             return {}, "the template's labour block named no rate this engine costs with"
-        return _card, f"the estimating template's Estimate!H:K labour block"
+        return _card, (f"the estimating template's Estimate!H:K labour block "
+                       f"({_os_cfg.path.basename(str(_template_rc))})")
     except Exception:                                                # noqa: BLE001
         return {}, "the estimating template's labour block could not be read"
     finally:
@@ -4270,6 +4291,17 @@ FALLBACK_PRICING_POLICY = {
 
 # openpyxl cannot save .xls; use an .xlsx copy of the blank estimate for --generate-ai-spreadsheet / write-back.
 AI_ESTIMATE_XLSX_TEMPLATE = SPREADSHEETS_DIR / "EmptyEstimating" / "Blank Estimate Sheet 2026.xlsx"
+
+# THE AI WORKBOOK TEMPLATE, as wb_populate.template_path() resolves it: SDI_WB_TEMPLATE wins,
+# otherwise the copy on the share (the double space is real). Must stay identical to
+# wb_populate.CELL_MAP["template_path"] and the runner's WB_TEMPLATE_DEFAULT; a test pins all
+# three. Its labour block is the rate card (D-704).
+WB_TEMPLATE_DEFAULT = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed"
+                       r"\AI Estimating\AISheets\Blank Estimate Sheet  WB 2026.xlsx")
+
+
+def estimate_template_path() -> str:
+    return (os.environ.get("SDI_WB_TEMPLATE") or "").strip().strip('"') or WB_TEMPLATE_DEFAULT
 
 # Applied HERE and not where it is defined, because the rate card is read OUT of the template
 # named on the line above. Everything `_apply_rate_cards` touches is already in place.
@@ -5645,6 +5677,12 @@ LIVE_ENQUIRY_COLLECT_RETRY_HOURS = float(os.getenv("SDI_LIVE_ENQUIRY_COLLECT_RET
 # into that share is the earlier provisional search, and runs only when this is set to 1.
 LIVE_ENQUIRY_COLLECT_FROM_PRODUCTION = os.getenv(
     "SDI_LIVE_ENQUIRY_COLLECT_FROM_PRODUCTION", "0").strip().lower() in {"1", "true", "yes"}
+# THE DRAWING EXTRACT, FOR A ROW WITH NO PACK (D-702, SCRUM-185). Off until switched on: when
+# on, Self-Running asks the portal's Document Manager route for a row's pack, waits for it
+# across cycles, and stages it in the Live Enquiry folder the runner reads. A failed extract
+# is retried after LIVE_ENQUIRY_COLLECT_RETRY_HOURS, like a pack not found in Production.
+LIVE_ENQUIRY_EXTRACT_FROM_DM = os.getenv(
+    "SDI_LIVE_ENQUIRY_EXTRACT_FROM_DM", "0").strip().lower() in {"1", "true", "yes"}
 
 # The longest run of letters a title block's drawing number carries: GA, SA05, 01M, ASSY. A
 # code-shaped token with a longer run is words joined across spaces — the M&S border's

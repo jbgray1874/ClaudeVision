@@ -150,7 +150,10 @@ def test_the_runner_runs_the_extract_never_main_and_files_what_it_names(tmp_path
     assert runner.pack_extract_outputs(log) == [{"name": "a.xlsx", "path": str(f)}]
     assert set(runner.RUNNER_CAPABILITIES) == {"sw_extract", "xai_extract"}
     src = (ROOT / "tools" / "runner" / "sdi_estimate_runner.py").read_text(encoding="utf-8")
-    assert '"capabilities": list(RUNNER_CAPABILITIES)' in src
+    # Sent through runner_capabilities() since D-703, which adds "no_models" only to a
+    # runner that can read no models; the pack-extract types are always in it.
+    assert '"capabilities": runner_capabilities()' in src
+    assert {"sw_extract", "xai_extract"} <= set(runner.runner_capabilities())
 
 
 def test_the_page_has_both_buttons_on_the_drawings_list():

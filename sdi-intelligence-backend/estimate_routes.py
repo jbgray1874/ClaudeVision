@@ -560,6 +560,65 @@ def _busy_runner() -> Optional[Run]:
     return None
 
 
+# ── MORE THAN ONE RUN AT ONCE, WHERE IT IS SAFE (D-703, SCRUM-183 phase 1) ───────────
+#
+# _busy_runner() refused every claim while ANY run was running, so a second runner on another
+# machine sat idle beside a queue of work. The rule it protects is real but narrower: one
+# desktop drives one SolidWorks and one estimate. So a claim is refused when this runner, or
+# another runner on the same desktop, already has a run, or when the number running has reached
+# SDI_MAX_CONCURRENT_RUNS. That setting defaults to 1, which is exactly the old behaviour.
+def _max_concurrent_runs() -> int:
+    try:
+        return max(1, int(str(os.getenv("SDI_MAX_CONCURRENT_RUNS", "1")).strip() or "1"))
+    except ValueError:
+        return 1
+
+
+def _claim_refused_because(runner_id: str, hostname: str) -> str:
+    """Why this runner may not take another run now, or "" when it may."""
+    running = [r for r in _RUNS.values() if r.status == "running"]
+    if not running:
+        return ""
+    if len(running) >= _max_concurrent_runs():
+        return "another run is in progress"
+    host = str(hostname or "").strip().upper()
+    for r in running:
+        if str(r.runner or "") == str(runner_id or ""):
+            return "this runner already has a run in progress"
+        other = _RUNNERS.get(str(r.runner or ""))
+        if host and other is not None and str(other.hostname or "").strip().upper() == host:
+            return (f"another run is in progress on {hostname}: one desktop drives one "
+                    f"SolidWorks and one estimate")
+    return ""
+
+
+# A PACK THAT NEEDS A MODEL READER is not handed to a runner that says it cannot read models
+# (capability "no_models"): it would be priced from PDF and DXF alone and differ from the same
+# job on a runner with SolidWorks. Runners that say nothing are treated as able, as before.
+_MODEL_SUFFIXES = (".sldprt", ".sldasm")
+_EXTRACT_NAME = "_sw_native_extract.json"
+_MODEL_POINTER = "_sdi_model_sources.json"
+
+
+def _needs_model_reader(job_folder: Any) -> bool:
+    try:
+        folder = Path(str(job_folder or ""))
+        if not str(job_folder or "").strip() or not folder.is_dir():
+            return False
+        newest_model = 0.0
+        for path in list(folder.glob("*")) + list(folder.glob("*/*")):
+            if path.is_file() and path.suffix.lower() in _MODEL_SUFFIXES:
+                newest_model = max(newest_model, path.stat().st_mtime)
+        if not newest_model and not (folder / _MODEL_POINTER).is_file():
+            return False
+        extract = folder / _EXTRACT_NAME
+        if extract.is_file() and newest_model and extract.stat().st_mtime >= newest_model:
+            return False
+        return True
+    except OSError:
+        return False
+
+
 def _active_run_for(client: str, drawing: str) -> Optional[Run]:
     """A run of THIS job that has not finished — queued or running.
 
@@ -870,15 +929,24 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         runner.capabilities = list(req.capabilities or [])
         runner.busy_elsewhere = False
 
-        if _busy_runner() is not None:
-            return {"run": None, "reason": "another run is in progress"}
+        _refused = _claim_refused_because(req.runner_id, req.hostname)
+        if _refused:
+            return {"run": None, "reason": _refused}
 
         _can = set(req.capabilities or [])
+        _no_models = "no_models" in _can
         queued = sorted((r for r in _RUNS.values()
                          if r.status == "queued" and r.wants_engine
-                         and (not r.job_type or r.job_type in _can)),
+                         and (not r.job_type or r.job_type in _can)
+                         and not (_no_models and _needs_model_reader(r.job_folder))),
                         key=lambda r: r.queued_at)
         if not queued:
+            _for_models = [r for r in _RUNS.values() if r.status == "queued" and r.wants_engine
+                           and _no_models and _needs_model_reader(r.job_folder)]
+            if _for_models:
+                return {"run": None, "reason": (
+                    f"{len(_for_models)} queued job(s) need a model reader (SolidWorks or "
+                    f"the Document Manager) and this runner has neither")}
             _waiting = [r for r in _RUNS.values() if r.status == "queued" and r.job_type
                         and r.job_type not in _can]
             if _waiting:

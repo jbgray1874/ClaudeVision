@@ -1,10 +1,11 @@
 # SolidWorks tooling
 
-Two scripts live here:
+The scripts that matter here:
 
 | script | purpose |
 |--------|---------|
 | `sw_native_analyse.py` | **production extractor.** Reads a job's models and writes `_sw_native_extract.json` — the input the estimating pipeline consumes. |
+| `sw_docmgr_analyse.py` | **backup reader** (SCRUM-184). Reads the same files through the SOLIDWORKS Document Manager when the extractor above cannot run, and writes `_sw_docmgr_extract.json` in the same schema. Saved values only — see *The Document Manager backup reader* below. |
 | `sw_discovery_probe.py` | one-off coverage probe (below) — answers *which* CAD data is actually populated, before committing to build against it. |
 
 ## Running the extractor, then the estimate
@@ -34,6 +35,8 @@ on PDF + DXF exactly as before.
 | `SDI_SW_EXTRACT_JSON=<path>` | read the extract from an explicit path (models on a CAD share, job folder elsewhere) |
 | `SDI_SW_RUN_ANALYSER=0` | never invoke COM; consume an existing extract only |
 | `SDI_SW_FLATTEN=0` | do not flatten-and-measure a formed part with no cut-list blank (default **on**) |
+| `SDI_SW_DOCMGR=1` | when an extract is needed and the COM analyser cannot run (switched off, no SolidWorks on the machine, or its run failed), read the models with the Document Manager backup reader instead. Default **off** |
+| `SDI_SW_DOCMGR_KEY` | the SOLIDWORKS Document Manager licence key the backup reader needs. Set it in the machine's environment; it is never printed, logged, written to an extract or put on a command line |
 
 **You do not normally run this tool by hand.** When a job folder holds `.SLDPRT` / `.SLDASM`
 and there is no extract — or the extract is older than the models — the estimate invokes the
@@ -66,6 +69,54 @@ drawing convention, so every rule inherits to the next job:
   the part is flagged as *cost not derivable* — a £0 line must never read as "free".
 
 Every value written carries a `review_flags` entry naming SolidWorks as the source.
+
+## The Document Manager backup reader
+
+`sw_docmgr_analyse.py` reads `.SLDPRT`, `.SLDASM` and `.SLDDRW` through the SOLIDWORKS
+Document Manager API (`SwDocumentMgr.SwDMClassFactory`): Windows and the Document Manager
+library, no running SolidWorks and no seat, only a licence key in `SDI_SW_DOCMGR_KEY`.
+
+**When it runs.** Only with `SDI_SW_DOCMGR=1`, only when the job's model folder holds models
+and has no fresh extract, and only when the COM analyser cannot run — `SDI_SW_RUN_ANALYSER=0`,
+no SolidWorks registered on the machine, or the analyser run failed. With the switch off
+nothing about the SolidWorks layer changes. Its extract is written as `_sw_docmgr_extract.json`
+beside `_sw_native_extract.json`, never over it, so the next run still tries the worker first.
+
+**What it reads.** Custom properties (file and active configuration), the configurations,
+the assembly's components with their quantities (sub-assemblies walked, suppressed components
+skipped), external references, BOM tables saved in a drawing, and the sheet-metal and weldment
+cut lists *as last saved* — flat blank, thickness, bends, cut length, cut-outs, a weldment
+member's section.
+
+**What it cannot read, and what happens instead.** It never rebuilds a model, so it measures
+nothing: no bounding box, volume or surface area, and a mass or flat pattern only where the
+file saved one. Each is left empty and named on the part as *not saved in the file; needs the
+SolidWorks worker* — never inferred. A formed sheet-metal part whose file saved no flat
+pattern is flagged `needs_solidworks_worker` with a manufacturing question; no blank is taken
+from the model for it, and with no DXF the job carries a BLOCKING `native_extract_from_docmgr`
+violation until the worker or a DXF measures it.
+
+**Where its values rank.** They enter as `solidworks_docmgr` (rank 76), below `solidworks_api`
+(90) and below a DXF (80, and 95 for gauge), so they fill gaps and never displace either. A
+saved flat that disagrees with a part's DXF does not replace it: the DXF is kept and the part
+is marked unreconciled. A material linked to the library's SW-Material enters as
+`solidworks_docmgr_applied_material` (67), below the drawing's own callout.
+
+**What it records.** Every record carries `"reader": "solidworks_docmgr"`; the job meta
+carries `extract_reader`, `docmgr_backup_reason`, `docmgr_not_saved` and
+`docmgr_needs_worker`, and the estimate summary repeats them.
+
+**By hand, to diagnose** (the key must already be in the environment):
+
+```powershell
+.\.venv\Scripts\python.exe tools\solidworks\sw_docmgr_analyse.py "$pack" --out "C:\ClaudeVision\work\docmgr_extract.json"
+"exit=$LASTEXITCODE"
+```
+
+The exit codes mean what they mean for the production extractor (table below). Several
+Document Manager calls could not be exercised when the reader was written; each is isolated
+in one function in its *COM SEAM* section, marked UNVERIFIED, for a first check on a Windows
+machine.
 
 ---
 
