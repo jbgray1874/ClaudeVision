@@ -50,14 +50,14 @@ def test_every_operation_the_estimator_times_has_a_rate():
 def test_the_tube_bend_spelling_that_cost_the_money():
     """Both spellings resolve now. The engine emits the first; the second is referenced
     elsewhere and removing it would be the same defect in the other direction."""
-    assert config.HOURLY_RATES_GBP["tube_bending"] == 32.84
-    assert config.HOURLY_RATES_GBP["tube_bend"] == 32.84
+    assert config.HOURLY_RATES_GBP["tube_bending"] == 33.79
+    assert config.HOURLY_RATES_GBP["tube_bend"] == 33.79
 
 
 def test_the_rate_matches_what_the_template_charges():
-    """£32.84/hr, TBEN — the figure on the Estimate sheet's own rate list, which is where
-    this should have been read from all along."""
-    assert config.HOURLY_RATES_GBP["tube_bending"] == 32.84
+    """£33.79/hr, TBEN — the figure on the Estimate sheet's own rate list (the 2027 card,
+    D-704; £32.84 in 2026), which is where this should have been read from all along."""
+    assert config.HOURLY_RATES_GBP["tube_bending"] == 33.79
 
 
 def test_the_config_says_why_both_keys_exist():

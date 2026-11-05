@@ -175,6 +175,38 @@ python src\main.py --pdf "<pack>.pdf" --generate-ai-spreadsheet --deliverables `
   --order-qty 1 --customer "M&S"
 ```
 
+### New labour rates from estimating (D-704)
+
+Estimating issue new department rates on their own blank (`Blank Estimate Sheet 2027.xls`,
+I115:I146). The AI workbook template is a different file with a wider parts block, so the same
+table sits at rows 235-266. Do not copy the file across and do not retype the rates. Run:
+
+```powershell
+cd C:\ClaudeVision
+.\.venv\Scripts\python.exe tools\rates\apply_labour_rates.py `
+  --source   "\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\AISheets\<estimators' blank>.xls" `
+  --template "\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\AISheets\Blank Estimate Sheet  WB 2026.xlsx" `
+  --dry-run
+```
+
+It finds the Labour / Rate / Dept table in both sheets, matches each department by label and
+code, and prints old rate, new rate and change. Run it again without `--dry-run` to write.
+
+| It does | It refuses, changing nothing |
+|---|---|
+| Copies column I (rate) only | A template department missing from the source |
+| Reports a different set-up minute, and does not copy it | A department code that disagrees |
+| Saves `<template> (before labour rates <date time>).xlsx` beside the template first | A rate outside GBP 1-2000 an hour |
+| Writes in place, so every path naming the template still works | |
+| Reads the file back, and restores the backup if any rate did not land | |
+
+On Windows it drives Excel (`--engine excel`, the default), which opens the `.xls` and keeps
+every formula's cached value. Other cells, such as sheet steel in L5, are not touched.
+
+The engine reads its rate card from the same template (`SDI_WB_TEMPLATE`, else the share), so
+the next run prices at the new rates. If the template cannot be read, it falls back to the
+local blank, then to `config.HOURLY_RATES_GBP`, which carries the 2027 card.
+
 ### Useful environment flags
 
 | Flag | Effect |
@@ -197,6 +229,7 @@ python src\main.py --pdf "<pack>.pdf" --generate-ai-spreadsheet --deliverables `
 | `SDI_DUALPATH_BOM=0` | Read the BOM with the deterministic reader only, without the vision cross-check (default **on**) |
 | `SDI_ORDER_QTY` | Order quantity for the run, when it is not given on the command line |
 | `SDI_PRODUCT` | The product's drawing number (the portal's Drawing Number; set by `--product`). The only root the quantity roll-up starts from; everything off its BOM path is set aside, not charged |
+| `SDI_WB_TEMPLATE` | The AI workbook template a run populates, and since D-704 the sheet the engine reads its labour rate card from. Default the UNC `...\AI Estimating\AISheets\Blank Estimate Sheet  WB 2026.xlsx` (two spaces). Set it to a local copy only on a box with no share |
 | `SDI_ESTIMATE_COMPACT` | `0` writes the Estimate sheet full length. Default: unused line slots in the generated workbook are grouped and hidden (never deleted; the template is untouched) |
 | `SDI_OUTPUT_ROOT` | Where reports and estimates are written (default `C:\ClaudeVision\output`) |
 | `SDI_AISHEETS_DIR` | Where the estimator-override loop writes the regenerated client quote (default the AISheets share). Point at a local folder on a test box with no share mounted |
