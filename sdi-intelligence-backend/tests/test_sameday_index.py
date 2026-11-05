@@ -169,8 +169,14 @@ class DailyEmailTests(unittest.TestCase):
         d = Path(tempfile.mkdtemp(prefix="daily-"))
         keep = (W.STATE, W.check, W.send, W.datetime)
         env = {k: os.environ.get(k) for k in ("SAMEDAY_ALERT_TO", "SAMEDAY_DAILY_TO", "SAMEDAY_INDEX_FROM", "SAMEDAY_DIR")}
-        refreshed, sent = [], []
+        refreshed, sent, backed_up, mails = [], [], [], []
         keep_refresh, keep_count = SI.refresh, SI.count_thumbs
+        import sameday_backup as B
+        keep_backup, keep_compose = B.backup, SI.compose
+        B.backup = lambda *a, **k: backed_up.append(k.get("now")) or {
+            "status": "ok", "detail": "", "when": k["now"].isoformat(timespec="minutes"), "free_gb": 512.0,
+            "files_copied": 3, "files_mb": 1.0, "databases": {"lite.db": {"ok": True, "sessions": 5, "messages": 40}}}
+        SI.compose = lambda *a, **k: mails.append(k.get("backup")) or keep_compose(*a, **k)
         clock = [datetime(2026, 11, 12, 5, 30)]
 
         class Clock(datetime):
@@ -186,8 +192,9 @@ class DailyEmailTests(unittest.TestCase):
         os.environ.update(SAMEDAY_ALERT_TO="james@example.com,mo@example.com", SAMEDAY_DAILY_TO="james@example.com",
                           SAMEDAY_INDEX_FROM=str(d / "k"), SAMEDAY_DIR=str(d / "server"))
         try:
-            W.main(["--send"])                       # 05:30 - before the daily hour: nothing
+            W.main(["--send"])                       # 05:30 - before the daily hour: nothing (the backup ran from 1am)
             self.assertEqual((refreshed, sent), ([], []))
+            self.assertEqual(len(backed_up), 1)
             clock[0] = datetime(2026, 11, 12, 6, 0)
             W.main(["--send"])                       # 06:00 - checked and copied if new, but no email at 6am
             self.assertEqual((len(refreshed), sent), (1, []))
@@ -198,9 +205,12 @@ class DailyEmailTests(unittest.TestCase):
             W.main(["--send"])                       # and not again today
             self.assertEqual((len(refreshed), len(sent)), (1, 1))
             self.assertEqual(json.loads((d / "state.json").read_text())["daily"]["thumbs"], 417_787)
+            self.assertEqual(len(backed_up), 1)                         # once a night, not every 15 minutes
+            self.assertIn("5 chats, 40 lines", mails[-1])                # and last night's backup is in the email
         finally:
             W.STATE, W.check, W.send, W.datetime = keep
             SI.refresh, SI.count_thumbs = keep_refresh, keep_count
+            B.backup, SI.compose = keep_backup, keep_compose
             for k, v in env.items():
                 if v is None:
                     os.environ.pop(k, None)
