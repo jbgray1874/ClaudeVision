@@ -832,10 +832,15 @@ def runner_capabilities() -> List[str]:
     """What this runner tells the service on every claim. "no_models" (D-703, SCRUM-183): it
     will not drive SolidWorks (SDI_SW_RUN_ANALYSER=0) and has no Document Manager backup
     (SDI_SW_DOCMGR unset), so the service keeps packs that need a model reader for a runner
-    that has one. A runner with either says nothing extra, as before."""
+    that has one. A runner with either says nothing extra, as before.
+
+    The backup counts only with its licence key (SDI_SW_DOCMGR_KEY) present: the switch alone
+    reads nothing (SCRUM-184), and a runner that took a model job on the switch alone would
+    price it from the drawings. "On" means what the engine's docmgr_switch_on() means."""
     caps = list(RUNNER_CAPABILITIES)
     _off = str(os.getenv("SDI_SW_RUN_ANALYSER", "")).strip().lower() in {"0", "false", "no"}
-    _dm = str(os.getenv("SDI_SW_DOCMGR", "")).strip().lower() in {"1", "true", "yes"}
+    _dm = (str(os.getenv("SDI_SW_DOCMGR", "")).strip().lower() in {"1", "true", "yes", "on"}
+           and bool(str(os.getenv("SDI_SW_DOCMGR_KEY", "")).strip()))
     if _off and not _dm:
         caps.append("no_models")
     return caps

@@ -146,5 +146,19 @@ def test_the_runner_says_no_models_only_when_it_has_no_reader(monkeypatch):
     assert "no_models" not in runner.runner_capabilities()
     monkeypatch.setenv("SDI_SW_RUN_ANALYSER", "0")
     assert "no_models" in runner.runner_capabilities()
+    monkeypatch.setenv("SDI_SW_DOCMGR_KEY", "test-key-not-real")
     monkeypatch.setenv("SDI_SW_DOCMGR", "1")
     assert "no_models" not in runner.runner_capabilities()
+    monkeypatch.setenv("SDI_SW_DOCMGR", "on")
+    assert "no_models" not in runner.runner_capabilities(), "on means on, as the engine reads it"
+
+
+def test_the_backup_switch_without_its_key_is_no_reader(monkeypatch):
+    """SCRUM-184: the Document Manager reads nothing without its licence key, so a runner with
+    the switch on and no key must not take a job that needs models."""
+    sys.path.insert(0, str(ROOT / "tools" / "runner"))
+    import sdi_estimate_runner as runner
+    monkeypatch.setenv("SDI_SW_RUN_ANALYSER", "0")
+    monkeypatch.setenv("SDI_SW_DOCMGR", "1")
+    monkeypatch.delenv("SDI_SW_DOCMGR_KEY", raising=False)
+    assert "no_models" in runner.runner_capabilities()
