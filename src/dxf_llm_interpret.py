@@ -317,3 +317,36 @@ def apply_to_part(part: Dict[str, Any], interp: Dict[str, Any]) -> Dict[str, int
         counts["flags"] += 1
 
     return counts
+
+
+def settle_grain_flags(parts: Any, summary: Any) -> int:
+    """A grain direction the part's own drawing prints answers the DXF's silence (D-722).
+
+    11908-22's three panel sheets each print GRAIN DIRECTION with an arrow; their DXFs carry
+    none, and the DXF reviewer's "no face direction, grain arrow, or laminate orientation is
+    indicated" went out as a check on every panel. The cut file is not where grain is stated
+    on these packs; the sheet is. Where the part's own sheet says GRAIN, the direction is
+    recorded from it and the DXF warning is replaced by that statement. Returns parts settled."""
+    pages = {}
+    for pg in ((summary or {}).get("pages") or []) if isinstance(summary, dict) else []:
+        if isinstance(pg, dict):
+            pages[pg.get("page_number")] = " ".join(str(pg.get(k) or "") for k in (
+                "pdfplumber_text", "pypdf_text", "normalized_text", "text")).upper()
+    n = 0
+    for part in parts or []:
+        if not isinstance(part, dict):
+            continue
+        own = [p for p in (part.get("pages") or []) if isinstance(p, int)
+               and "GRAIN" in pages.get(p, "")]
+        if not own:
+            continue
+        part["grain_direction_stated"] = f"its own sheet (page {own[0]})"
+        flags = part.get("review_flags") or []
+        kept = [f for f in flags if not (str(f).startswith("DXF:")
+                                         and "GRAIN" in str(f).upper())]
+        if len(kept) != len(flags):
+            kept.append(f"grain direction: stated on its own sheet (page {own[0]}); the DXF "
+                        f"carries no grain arrow, and the sheet is where it is given")
+            part["review_flags"] = kept
+            n += 1
+    return n

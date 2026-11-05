@@ -4330,6 +4330,13 @@ def augment_summary_with_dxf(
     # suppresses their material + phantom fab labour. Must run before re-estimate.
     _stamp_assembly_parents(parts)
 
+    # A GRAIN THE SHEET PRINTS ANSWERS THE DXF'S SILENCE (D-722).
+    try:
+        from dxf_llm_interpret import settle_grain_flags
+        report["grain_flags_settled"] = settle_grain_flags(parts, summary)
+    except Exception:                                                # noqa: BLE001
+        pass
+
     if reestimate:
         summary["estimate_summary"] = estimate_document(parts, summary=summary)
 

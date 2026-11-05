@@ -2098,6 +2098,14 @@ def thickness_conflict(part: Mapping[str, Any],
         if _costed:
             kept, kept_src = _costed, "production_substitution"
         rivals = [(v, s) for v, s in rivals if abs(v - kept) > 0.05]
+    # A FACED BOARD'S FINISHED THICKNESS IS NOT A RIVAL TO ITS CORE (D-722): 9 mm MDF with a
+    # laminate each side is an 11 mm board, and a reader that measured the 11 has not
+    # disagreed with the one that read the 9.
+    try:
+        from construction_note import finished_over_core as _fin
+        rivals = [(v, s) for v, s in rivals if not _fin(dict(part), kept, v)]
+    except Exception:                                            # noqa: BLE001
+        pass
     if not rivals:
         return None
     # "NEITHER OUTRANKS A PERSON" — so when a person HAS ruled, the question is answered.
