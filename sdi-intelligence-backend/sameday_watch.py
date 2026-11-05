@@ -32,6 +32,9 @@ Configuration (SDI Intelligence's .env):
     SAMEDAY_PUBLIC_URL      the phone address (default https://sdiintelligence-sdidisplays.msappproxy.net/sameday/)
     SAMEDAY_DIR             SameDay's folder (default C:\\SDI_Automation): its .env and its log
     SAMEDAY_SPEND_WARN      the share of the day's cap that warns (default 0.8)
+    SAMEDAY_INDEX_HOUR      the hour of the daily index check and copy (default 6) - see sameday_index.py
+    SAMEDAY_DAILY_TO        who gets the daily index email (default: SAMEDAY_ALERT_TO)
+    SAMEDAY_INDEX_FROM      where Muhammad's weekly build is put (default K:'s index-for-server folder)
 Sending: as the morning review - Microsoft Graph from SDI_REVIEW_FROM when that is set, otherwise SMTP.
 """
 from __future__ import annotations
@@ -365,6 +368,21 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     now = datetime.now()
     state = load_state()
+    # 5 Nov 2026 (James: "e-mail me every day with any changes ... if it's updated we copy auto with the daily
+    # check"): once a day, from SAMEDAY_INDEX_HOUR, a new build of the picture index and its job list on K: is brought
+    # to the server (sameday_index.refresh); what was found and done goes in a daily email from 7am.
+    daily = state.setdefault("daily", {})
+    today = now.date().isoformat()
+    if args.send and daily.get("day") != today and now.hour >= int(_opt("SAMEDAY_INDEX_HOUR", "6") or 6):
+        import sameday_index
+        k_dir = Path(_opt("SAMEDAY_INDEX_FROM", sameday_index.K_INDEX))
+        rep = sameday_index.refresh(Path(_opt("SAMEDAY_DIR", r"C:\SDI_Automation")), k_dir, get=http_get,
+                                    service=service_state)
+        thumbs = sameday_index.count_thumbs(k_dir / "all_img_thumbs")
+        daily.update(day=today, report=rep, sent=False, counted=thumbs is not None,
+                     thumbs_before=daily.get("thumbs"), thumbs=thumbs if thumbs is not None else daily.get("thumbs"))
+        save_state(state)                       # a long run cut short is not repeated today
+        print(now.strftime("%Y-%m-%d %H:%M"), "index:", rep["action"], rep["detail"], flush=True)
     log = Path(_opt("SAMEDAY_DIR", r"C:\SDI_Automation")) / "logs" / "SDISameDay.log"
     log_text = new_log_text(log, state)
     problems, facts = check(log_text=log_text)
@@ -388,6 +406,15 @@ def main(argv: Optional[list[str]] = None) -> int:
             state.setdefault("recovered", []).extend(todo["recovered"])
     elif email:
         print("SAMEDAY_ALERT_TO is empty - not emailed:", email["subject"])
+    if daily.get("day") == today and not daily.get("sent") and in_hours(now, _opt("SAMEDAY_ALERT_HOURS", "7-19")):
+        import sameday_index
+        daily_to = [a.strip() for a in (_opt("SAMEDAY_DAILY_TO") or _opt("SAMEDAY_ALERT_TO")).split(",") if "@" in a]
+        mail = sameday_index.compose(daily["report"], daily.get("thumbs") if daily.get("counted") else None,
+                                     daily.get("thumbs_before"), now)
+        if daily_to:
+            result = send(daily_to, mail)
+            daily["sent"] = bool(result.get("sent"))
+            print("daily index email", "sent" if daily["sent"] else f"NOT sent: {result.get('reason')}", "-", mail["subject"])
     save_state(state)
     return 0
 

@@ -211,6 +211,7 @@ class WhenItEmailsTests(unittest.TestCase):
                 return datetime(2026, 11, 5, 10, 0)
         W.datetime = Clock
         os.environ["SAMEDAY_ALERT_TO"] = "james@example.com"
+        os.environ["SAMEDAY_INDEX_HOUR"] = "25"            # not the daily index check - that has its own tests
         try:
             W.send = lambda to, email: sent.append(email["subject"]) or {"sent": False, "reason": "Graph 503"}
             W.main(["--send"])
@@ -221,6 +222,7 @@ class WhenItEmailsTests(unittest.TestCase):
             self.assertTrue(json.loads(W.STATE.read_text())["open"]["answer"]["sent"])
         finally:
             W.STATE, W.check, W.send, W.datetime = keep[:4]
+            os.environ.pop("SAMEDAY_INDEX_HOUR", None)
             if keep[4] is None:
                 os.environ.pop("SAMEDAY_ALERT_TO", None)
             else:

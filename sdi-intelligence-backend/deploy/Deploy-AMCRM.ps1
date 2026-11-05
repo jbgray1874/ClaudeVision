@@ -89,6 +89,8 @@ $Files = @(
     # is wrong - a scheduled task, set up by Install-SameDay-Watch.ps1, 5 Nov.
     "sameday_watch.py",
     "sameday_watch.cmd",
+    # ... and keeps SameDay's picture index current from K:, once a day, 5 Nov.
+    "sameday_index.py",
     # The app portal's catalogue. Not Python, so it copies without a restart -
     # the service reads it from disk on each request.
     "services.json"
