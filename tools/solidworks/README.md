@@ -35,7 +35,7 @@ on PDF + DXF exactly as before.
 | `SDI_SW_EXTRACT_JSON=<path>` | read the extract from an explicit path (models on a CAD share, job folder elsewhere) |
 | `SDI_SW_RUN_ANALYSER=0` | never invoke COM; consume an existing extract only |
 | `SDI_SW_FLATTEN=0` | do not flatten-and-measure a formed part with no cut-list blank (default **on**) |
-| `SDI_SW_DOCMGR=1` | when an extract is needed and the COM analyser cannot run (switched off, no SolidWorks on the machine, or its run failed), read the models with the Document Manager backup reader instead. Default **off** |
+| `SDI_SW_DOCMGR=1` | when an extract is needed and the COM analyser cannot run (switched off, no SolidWorks on the machine, or its run failed), read the models with the Document Manager backup reader instead; and read the files SolidWorks failed on partway through a run (D-706). Default **off** |
 | `SDI_SW_DOCMGR_KEY` | the SOLIDWORKS Document Manager licence key the backup reader needs. Set it in the machine's environment; it is never printed, logged, written to an extract or put on a command line |
 
 **You do not normally run this tool by hand.** When a job folder holds `.SLDPRT` / `.SLDASM`
@@ -81,6 +81,20 @@ and has no fresh extract, and only when the COM analyser cannot run — `SDI_SW_
 no SolidWorks registered on the machine, or the analyser run failed. With the switch off
 nothing about the SolidWorks layer changes. Its extract is written as `_sw_docmgr_extract.json`
 beside `_sw_native_extract.json`, never over it, so the next run still tries the worker first.
+
+**Partway through a run (D-706).** SolidWorks can read some files and not others: a seat that
+drops out mid-batch, a model open in a designer's session, a file it will not open. The worker
+still exits zero with what it reached. With `SDI_SW_DOCMGR=1`, the files it opened and got
+nothing from (an error and no title) are read by the backup in the same run, with
+`--only-from <list>`, into `_sw_docmgr_topup.json`. Their records replace the failures; every
+file SolidWorks read keeps its values; the worker's extract is left as it wrote it, so a healthy
+seat reads those files next time. A file SolidWorks read in part keeps the worker's values. The
+summary names the files as `docmgr_topped_up`, and anything neither reader could open as
+`docmgr_still_unread`.
+
+**Is this machine ready?** `tools\start\check-runner-host.ps1` prints whether SolidWorks and the
+Document Manager are registered, whether Excel is installed, and the names (never the values) of
+the settings above. Read-only.
 
 **What it reads.** Custom properties (file and active configuration), the configurations,
 the assembly's components with their quantities (sub-assemblies walked, suppressed components

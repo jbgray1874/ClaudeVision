@@ -1163,6 +1163,33 @@ def write_extract(payload: Dict[str, Any], out_json: str, key: Optional[str] = N
         return fallback
 
 
+def _path_key(p: Any) -> str:
+    return os.path.normcase(os.path.normpath(os.path.abspath(str(p or "").strip())))
+
+
+def select_only(paths: Sequence[str], only: Sequence[str]) -> List[str]:
+    """The discovered model files the caller asked for. Matched by full path, then by file
+    name: the SolidWorks extract may name a file by a mapped drive where this run sees the
+    share. A name that matches more than one discovered file takes none of them, never a
+    guess."""
+    by_path = {_path_key(p): p for p in paths}
+    def _name(p: Any) -> str:
+        return re.split(r"[\\/]", str(p or "").strip())[-1].lower()
+
+    by_name: Dict[str, List[str]] = {}
+    for p in paths:
+        by_name.setdefault(_name(p), []).append(p)
+    out: List[str] = []
+    for want in only:
+        hit = by_path.get(_path_key(want))
+        if hit is None:
+            same = by_name.get(_name(want)) or []
+            hit = same[0] if len(same) == 1 else None
+        if hit is not None and hit not in out:
+            out.append(hit)
+    return out
+
+
 def main(argv: Optional[Sequence[str]] = None, *, class_factory=None) -> int:
     """Run the backup read. `class_factory` lets a test hand in a fake ISwDMClassFactory."""
     args = list(sys.argv[1:] if argv is None else argv)
@@ -1171,7 +1198,8 @@ def main(argv: Optional[Sequence[str]] = None, *, class_factory=None) -> int:
     def say(msg: str = "") -> None:
         print(redact(msg, key), flush=True)
 
-    usage = "Usage: python sw_docmgr_analyse.py <file_or_folder> [--out <json path>]"
+    usage = ("Usage: python sw_docmgr_analyse.py <file_or_folder> [--out <json path>] "
+             "[--only <model file> ...] [--only-from <text file, one path a line>]")
     # Accepted and ignored: the production extractor's flatten switches mean nothing to a
     # reader that never rebuilds a model, and a script that passes them must not break.
     for flag in ("--flatten", "--no-flatten"):
@@ -1185,6 +1213,27 @@ def main(argv: Optional[Sequence[str]] = None, *, class_factory=None) -> int:
             return 2
         out_override = args[i + 1]
         del args[i:i + 2]
+    # ONLY THESE FILES (D-706). The engine asks for the models SolidWorks opened and could not
+    # read in the same run; the folder is still the target, so the manifest fingerprints the
+    # whole folder exactly as the SolidWorks extract's does, and the read is held to the same
+    # discovery rule. A list file keeps a long list off the command line.
+    only: List[str] = []
+    for flag in ("--only", "--only-from"):
+        while flag in args:
+            i = args.index(flag)
+            if i + 1 >= len(args):
+                say(f"ERROR: {flag} needs a path")
+                return 2
+            if flag == "--only":
+                only.append(args[i + 1])
+            else:
+                try:
+                    only += [ln.strip() for ln in Path(args[i + 1]).read_text(
+                        encoding="utf-8").splitlines() if ln.strip()]
+                except OSError as exc:
+                    say(f"ERROR: could not read the --only-from list {args[i + 1]}: {exc}")
+                    return 2
+            del args[i:i + 2]
     if not args:
         say(usage)
         return 2
@@ -1202,6 +1251,12 @@ def main(argv: Optional[Sequence[str]] = None, *, class_factory=None) -> int:
             f"printed or written by this tool).")
         return 2
     paths = _nat.find_sw_files(target) if os.path.isdir(target) else [target]
+    if only:
+        paths = select_only(paths, only)
+        if not paths:
+            say(f"None of the {len(only)} file(s) asked for with --only is a model this tool "
+                f"would read under: {target}")
+            return 1
     if not paths:
         say(f"No SolidWorks files ANALYSED under: {target}")
         say(_nat.explain_no_files(target))
@@ -1251,6 +1306,10 @@ def main(argv: Optional[Sequence[str]] = None, *, class_factory=None) -> int:
             say(f"Errors: {r['errors']}")
     fp_after = _nat._fingerprint_native_files(target)
     payload = build_payload(records, target, fp_before, fp_after, docmgr_version(app))
+    if only:
+        # Which files this read was asked for, so a later run can tell a top-up of the same
+        # failures from one of a different set.
+        payload["_manifest"]["only"] = sorted(paths)
     out_json = out_override or os.path.join(
         target if os.path.isdir(target) else os.path.dirname(target), EXTRACT_FILENAME)
     out_json = write_extract(payload, out_json, key)
