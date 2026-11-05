@@ -12516,7 +12516,8 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     labour = estimate_labour_costs(process, job_quantity=order_qty, material=part.get("normalized_material"))
     if debug:
         print(f"[DEBUG] estimate_part labour done {part_number}")
-    system_cost = _resolve_part_system_cost(part)
+    system_cost = (_consumable_share_cost(part) if part.get("consumable_share")
+                   else _resolve_part_system_cost(part))
     if debug:
         print(f"[DEBUG] estimate_part system_cost done {part_number}")
     system_unit_cost = _safe_float(system_cost.get("applied_unit_cost"))
@@ -14228,6 +14229,39 @@ def _reconcile_bought_in(parts: List[Dict[str, Any]], *, all_text: str = "", deb
 
 
 # ── ALWAYS A NUMBER: a real line is never left reading as free ──────────────────────────────
+def _consumable_share_cost(part: Dict[str, Any]) -> Dict[str, Any]:
+    """A consumable allowance line priced as its SHARE of a pack (D-723): the reference
+    pack's own price from the ordinary chain, SDI's sources first, times the share. A pack
+    nobody can price leaves the line unpriced and asked — never a whole pack per unit."""
+    share = part.get("consumable_share") or {}
+    ref_item = str(share.get("reference_item") or "").strip()
+    count = _safe_float(share.get("count")) or 0.0
+    ref = {"part_number": "", "description": ref_item, "quantity": 1,
+           "page_roles": ["bought_in"], "is_bought_in": True}
+    try:
+        r = _resolve_part_system_cost(ref) if ref_item and count > 0 else {}
+    except Exception:                                                # noqa: BLE001
+        r = {}
+    each = _safe_float((r or {}).get("applied_unit_cost"))
+    if each and each > 0:
+        out = dict(r)
+        out["applied_unit_cost"] = round(each * count, 4)
+        part.setdefault("review_flags", []).append(
+            f"consumable share: {count:g} x '{ref_item}' at £{each:,.2f} a pack = "
+            f"£{each * count:,.4f} ({share.get('working')}; {share.get('basis')})")
+        return out
+    part.setdefault("risk_flags", []).append("consumable_share_unpriced")
+    try:
+        source_precedence.raise_manufacturing_question(
+            part, f"{part.get('description')}: no price for '{ref_item}'",
+            f"the allowance ({share.get('working')}) is not costed",
+            f"give the price of a pack of {ref_item}, and the share is costed from it",
+            "estimator.consumable_share")
+    except Exception:                                                # noqa: BLE001
+        pass
+    return {"applied_unit_cost": None, "result": (r or {}).get("result") or {}}
+
+
 def _last_resort_price_is_needed(pe: Dict[str, Any]) -> bool:
     """Is this a REAL line that ended with no money at all — 'reads as free' — and may take a
     last-resort market price? Refuses every line that is £0 for a reason.
@@ -14240,6 +14274,9 @@ def _last_resort_price_is_needed(pe: Dict[str, Any]) -> bool:
     figure like any other. Only a line that is £0 ON PURPOSE is left alone."""
     # Placeholders (packaging/delivery) and customer-supplied lines are £0 by design.
     if pe.get("_commercial_placeholder") or str(pe.get("source") or "") == "commercial_placeholder":
+        return False
+    # A consumable share with no pack price stays asked, never a whole pack (D-723).
+    if "consumable_share_unpriced" in (pe.get("risk_flags") or []):
         return False
     _rf = " ".join(str(f) for f in (pe.get("risk_flags") or []))
     if "customer_supplied_zero_cost" in _rf:
