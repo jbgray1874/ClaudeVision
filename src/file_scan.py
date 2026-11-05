@@ -5145,8 +5145,17 @@ def _finalize_scan_summary(
             summary["manufacturing_writeup"]["parts"],
             (summary.get("document_analysis") or {}).get("bom_rows") or [])
         if _minted_hands:
-            print(f"   [canonical-part-graph] {', '.join(_minted_hands)} minted as the other "
-                  f"hand of an existing part — a BOM row the pack never drew", flush=True)
+            _bill_rows = {str(_p.get("part_number") or "") for _p in
+                          summary["manufacturing_writeup"]["parts"]
+                          if isinstance(_p, dict) and _p.get("_minted_bill_row")}
+            _as_hands = [_m for _m in _minted_hands if _m not in _bill_rows]
+            _as_rows = [_m for _m in _minted_hands if _m in _bill_rows]
+            if _as_hands:
+                print(f"   [canonical-part-graph] {', '.join(_as_hands)} minted as the other "
+                      f"hand of an existing part — a BOM row the pack never drew", flush=True)
+            if _as_rows:
+                print(f"   [canonical-part-graph] {', '.join(_as_rows)} kept as line(s) from "
+                      f"the bill — no reader made them records; not handed parts", flush=True)
             _mirrored_late = mirror_provisional_blanks(
                 summary["manufacturing_writeup"]["parts"])
             if _mirrored_late:

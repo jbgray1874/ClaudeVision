@@ -190,3 +190,49 @@ def test_a_base_with_no_mirrorable_blank_still_mints_the_record():
     minted = mint_missing_hand_records(parts, [_hand_row()])
     assert minted == ["12665-03-01M-H"]
     assert parts[1]["normalized_material"] == "MILD STEEL"
+
+
+# ── a code that names no hand is kept as a line, not as a hand (D-719) ────────
+
+def _bill_rows():
+    return [{"parent": "12676-01-GA2", "part_number": "E2105", "quantity": 2,
+             "description": "CLEAR BUMPER"},
+            {"parent": "12676-01-GA2", "part_number": "UPC STICKER", "quantity": 1,
+             "description": "UPC STICKER"}]
+
+
+def test_bought_in_rows_stay_lines_without_a_false_hand():
+    """12676-01-GA2: the bumpers and the UPC sticker carry no hand marker, and a record with
+    no part number answered to that empty name. They are still made records, so their
+    purchase and fitting stay on the estimate, but nothing calls them anyone's other hand."""
+    parts = [_base_part(part_number="12676-01-04M"), _base_part(part_number="")]
+    minted = mint_missing_hand_records(parts, _bill_rows())
+    assert minted == ["E2105", "UPC STICKER"]
+    bumper, sticker = parts[-2], parts[-1]
+    assert bumper["quantity"] == 2.0 and sticker["quantity"] == 1.0
+    assert bumper["description"] == "CLEAR BUMPER"
+    for rec in (bumper, sticker):
+        assert rec["_minted_bill_row"] is True
+        assert not rec.get("mirror_of")
+        assert not rec.get("_minted_hand_record")
+        assert "normalized_material" not in rec, "no stock borrowed from a nameless record"
+        assert not rec.get("manufacturing_questions"), "no handed question"
+        assert not any("other hand of" in f for f in rec["review_flags"])
+        assert "not a handed part" in rec["review_flags"][0]
+
+
+def test_a_bill_row_takes_no_provisional_blank_from_the_mirror_pass():
+    parts = [_base_part(part_number="")]
+    mint_missing_hand_records(parts, _bill_rows())
+    mirror_provisional_blanks(parts)
+    assert all(not p.get("blank_length_mm") for p in parts if p.get("_minted_bill_row"))
+
+
+def test_a_real_hand_still_mints_beside_a_record_with_no_number():
+    """The D-509 mint keeps its case, with its hand, stock and question."""
+    parts = [_base_part(), _base_part(part_number="")]
+    assert mint_missing_hand_records(parts, [_hand_row()]) == ["12665-03-01M-H"]
+    hand = parts[-1]
+    assert hand["mirror_of"] == "12665-03-01M" and hand["_minted_hand_record"] is True
+    assert hand["normalized_material"] == "MILD STEEL"
+    assert hand["manufacturing_questions"]
