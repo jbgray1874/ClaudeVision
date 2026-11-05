@@ -1380,6 +1380,57 @@ def is_timber_board(mat: Any) -> bool:
     return any(k in m for k in TIMBER_BOARD_TOKENS)
 
 
+def _is_plastic_material(mat: Any) -> bool:
+    m = f" {str(mat or '').upper()} "
+    return any(k in m for k in _PLASTIC_SHEET_TOKENS)
+
+
+def _bond_family(source: Any, target: Any) -> str:
+    """What a bonded assembly is made of, for the words its joint is asked in (D-708):
+    "plastic", "board" (timber and wood-based board), or "" when its members are neither, are
+    both, or say nothing. Read from the assembly and every part under it."""
+    if not isinstance(source, Mapping):
+        return ""
+    recs: Dict[str, Mapping[str, Any]] = {}
+    kids: Dict[str, Set[str]] = {}
+    for p in list(job_parts(source)) + list(
+            (source.get("manufacturing_writeup") or {}).get("parts") or []):
+        if not isinstance(p, Mapping) or not p.get("part_number"):
+            continue
+        pn = str(p["part_number"]).upper()
+        recs.setdefault(pn, p)
+        for c in p.get("assembly_children") or []:
+            kids.setdefault(pn, set()).add(str(c).upper())
+        for a in p.get("parent_assemblies") or []:
+            kids.setdefault(str(a).upper(), set()).add(pn)
+    shadow = ((source.get("estimate_summary") or {}).get("canonical_route_shadow") or {}) \
+        if isinstance(source.get("estimate_summary"), Mapping) else {}
+    for n in shadow.get("nodes") or []:
+        if not isinstance(n, Mapping) or not n.get("part_number"):
+            continue
+        for c in n.get("children") or []:
+            cpn = c.get("part_number") if isinstance(c, Mapping) else c
+            if cpn:
+                kids.setdefault(str(n["part_number"]).upper(), set()).add(str(cpn).upper())
+    seen: Set[str] = set()
+    todo = [str(target or "").upper()]
+    while todo and len(seen) < 500:
+        pn = todo.pop()
+        if pn in seen:
+            continue
+        seen.add(pn)
+        todo.extend(kids.get(pn) or ())
+    words: List[str] = []
+    for pn in seen:
+        r = recs.get(pn) or {}
+        words += [str(r.get(k) or "") for k in ("normalized_material", "material_stated")]
+        words += [str(m) for m in (r.get("materials") or [])]
+    words = [w for w in words if w.strip()]
+    plastic = any(_is_plastic_material(w) for w in words)
+    board = any(is_timber_board(w) for w in words)
+    return "plastic" if plastic and not board else "board" if board and not plastic else ""
+
+
 def is_other_sheet_material(material) -> bool:
     """True when this material is costed in the workbook's Other Sheet Material block.
 
@@ -3544,16 +3595,53 @@ def costed_job(source: Any) -> Dict[str, Any]:
             _bonded = [_k for _k in _bonded if not _stated_bond(source, _k)]
     except Exception:                                                # noqa: BLE001
         pass
-    if _bonded:
+    # THE JOINT IS ASKED IN THE WORDS OF WHAT IS JOINED (D-708). This question was written
+    # for acrylic — "with the flame-polish that goes with it", "solvent cement" — and since
+    # joinery took glue rows it was asked of 12693-03-04J, an MDF insert, word for word. Each
+    # assembly is now asked in its own material's terms, with the money its glue rows carry,
+    # and a board assembly that also has bench work is asked whether the bench time already
+    # covers the bonding (the 12693-03 review: £19.73 bench beside £13.53 glue).
+    _rows_all = _workbook_rows(source) or []
+
+    def _rows_on(_op: str, _target: str) -> List[Dict[str, Any]]:
+        return [r for r in _rows_all
+                if _op in {str(o) for o in (r.get("engine_operations") or [])}
+                and _target.upper() in {str(x).upper() for x in (r.get("part_numbers") or [])}]
+
+    _by_family: Dict[str, List[str]] = {}
+    for _k in _bonded:
+        _by_family.setdefault(_bond_family(source, _k), []).append(_k)
+    for _family, _names in _by_family.items():
+        _glue = [r for _k in _names for r in _rows_on("glue", _k)]
+        _gbp = round(sum(_num(r.get("total_value_gbp")) for r in _glue), 2) or None
+        _nums = sorted({str(r.get("workbook_row")) for r in _glue if r.get("workbook_row")})
+        _money = ((f" (£{_gbp:,.2f} a unit" + (f", Estimate row{'s' if len(_nums) > 1 else ''} "
+                                               f"{', '.join(_nums)}" if _nums else "") + ")")
+                  if _gbp else "")
+        _each = "" if len(_names) == 1 else " each"
+        if _family == "plastic":
+            _assume = (f"one bonding event{_each} (Glue, with the flame-polish that goes with "
+                       f"it){_money} — no drawing states the joint")
+            _act = ("confirm per assembly: solvent cement, adhesive, or a push/tab fit with no "
+                    "glue; drop the glue rows where it is not bonded")
+        elif _family == "board":
+            _bench = [_k for _k in _names if _rows_on("bench_work", _k)]
+            _assume = (f"one gluing of its pieces{_each} (Glue){_money} — no drawing states "
+                       f"the joint")
+            _act = ("confirm per assembly: wood glue or contact adhesive, or dowels, biscuits "
+                    "or screws with no glue; drop the glue rows where it is not bonded"
+                    + (f"; and say whether the bench work on {', '.join(_bench)} already "
+                       f"includes the gluing, so it is not charged twice" if _bench else ""))
+        else:
+            _assume = (f"one bonding event{_each} (Glue){_money} — no drawing states the joint")
+            _act = ("confirm per assembly: adhesive, or a mechanical fixing with no glue; drop "
+                    "the glue rows where it is not bonded")
         decisions.append({
-            "part": ", ".join(_bonded), "kind": "manufacturing_decision",
-            "issue": (f"How {', '.join(_bonded)} {'is' if len(_bonded) == 1 else 'are'} "
+            "part": ", ".join(_names), "kind": "manufacturing_decision",
+            "issue": (f"How {', '.join(_names)} {'is' if len(_names) == 1 else 'are'} "
                       f"joined"),
-            "assumption": ("one bonding event each (Glue, with the flame-polish that goes with "
-                           "it) — no drawing states the joint"),
-            "action": ("confirm per assembly: solvent cement, adhesive, or a push/tab fit "
-                       "with no glue; drop the glue rows where it is not bonded"),
-            "owner": "estimator", "gbp_at_stake": None})
+            "assumption": _assume, "action": _act,
+            "owner": "estimator", "gbp_at_stake": _gbp})
 
     # ── A WELD THE ENGINE INFERRED IS PRICED, AND PUT TO A PERSON ────────────────
     # 12614-01-GA (26 Sep): the header case was welded and dressed on the extract's own
