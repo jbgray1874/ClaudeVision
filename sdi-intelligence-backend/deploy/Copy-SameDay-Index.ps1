@@ -260,8 +260,28 @@ Write-Host ""
 if ($thumbs -and $past -and $past.jobs -gt 0) {
     Head "6. Thumbnails (optional - safe to stop with Ctrl+C at any time and run this again later)"
     Say "SameDay is already using the index. These only make past-work pictures quicker to show."
-    Say ("Started " + (Get-Date -Format "HH:mm") + " - it shows nothing until it ends.")
-    & robocopy $thumbs "$Target\all_img_thumbs" /E /MT:16 /R:1 /W:1 /NP /NFL /NDL /NJH | Out-Host
-    if ($LASTEXITCODE -ge 8) { Warn "Some thumbnails didn't copy (robocopy $LASTEXITCODE) - run this again to carry on." }
-    else { Yes "Thumbnails copied (added to what was there - nothing deleted)" }
+    # 5 Nov 2026 (James: "do we have enough space on the server?"): measured, not guessed - only what is still to
+    # copy, against the server's free space now, keeping 10 GB spare on its system drive.
+    Say "Measuring what is still to copy (a minute or two)..."
+    $plan = & robocopy $thumbs "$Target\all_img_thumbs" /E /L /BYTES /NFL /NDL /NJH /R:0 /W:0 2>&1
+    $toCopy = -1
+    foreach ($l in $plan) { if ("$l" -match "^\s*Bytes\s*:\s*(\d+)\s+(\d+)") { $toCopy = [double]$Matches[2] } }
+    $freeNow = -1
+    try { $freeNow = (Get-WmiObject -Class Win32_LogicalDisk -ComputerName $Server -Filter "DeviceID='C:'" -ErrorAction Stop).FreeSpace } catch { $freeNow = -1 }
+    $go = $true
+    if ($toCopy -lt 0) { Warn "Couldn't measure the thumbnails - leaving them for now. Nothing else is affected."; $go = $false }
+    elseif ($freeNow -ge 0 -and $toCopy -gt ($freeNow - 10GB)) {
+        Warn ("Not enough room: " + [math]::Round($toCopy / 1GB, 1) + " GB to copy, " + [math]::Round($freeNow / 1GB, 1) +
+              " GB free on the server's C:, and 10 GB must stay spare. Thumbnails left out - SameDay doesn't need them.")
+        $go = $false
+    } else {
+        Say ([math]::Round($toCopy / 1GB, 1).ToString() + " GB to copy" +
+             $(if ($freeNow -ge 0) { "; the server's C: has " + [math]::Round($freeNow / 1GB, 1) + " GB free" } else { "" }))
+    }
+    if ($go -and $toCopy -gt 0) {
+        Say ("Started " + (Get-Date -Format "HH:mm") + " - it shows nothing until it ends.")
+        & robocopy $thumbs "$Target\all_img_thumbs" /E /MT:16 /R:1 /W:1 /NP /NFL /NDL /NJH | Out-Host
+        if ($LASTEXITCODE -ge 8) { Warn "Some thumbnails didn't copy (robocopy $LASTEXITCODE) - run this again to carry on." }
+        else { Yes "Thumbnails copied (added to what was there - nothing deleted)" }
+    } elseif ($go) { Yes "The thumbnails are all there already" }
 }

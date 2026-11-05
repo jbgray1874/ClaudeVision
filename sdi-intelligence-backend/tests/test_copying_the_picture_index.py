@@ -38,7 +38,14 @@ class OrderTests(unittest.TestCase):
         self.assertGreater(at("& robocopy $thumbs"), at("Move-Item -LiteralPath $newNpz"))
         self.assertGreater(at("& robocopy $thumbs"), at("Picture matching is ON"))
         self.assertIn("safe to stop with Ctrl+C", BODY)
-        self.assertEqual(len(re.findall(r"& robocopy", BODY)), 1)
+        self.assertEqual(len(re.findall(r"& robocopy", BODY)), 2)          # one to measure (/L), one to copy
+
+    def test_the_thumbnails_are_measured_against_the_free_space_first(self):
+        """5 Nov (James: "do we have enough space on the server?")."""
+        measure, copy = [m.start() for m in re.finditer(r"& robocopy", BODY)]
+        self.assertIn("/L /BYTES", BODY[measure:measure + 120])           # lists only - copies nothing
+        self.assertLess(at("$toCopy -gt ($freeNow - 10GB)"), copy)
+        self.assertIn("Thumbnails left out - SameDay doesn't need them", BODY)
 
     def test_the_watch_is_paused_for_the_swap_and_always_put_back(self):
         self.assertLess(at("/TN $Watch /DISABLE"), at("stop SDISameDay"))
