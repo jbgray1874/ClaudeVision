@@ -15,6 +15,7 @@ the mapped spreadsheet and its ; load file, in <run>/out, with RUN_SUMMARY.md (t
 and control totals, rows and held-back reasons per file) and the change report against --previous.
 """
 import argparse
+import datetime as dt
 import csv
 import os
 import shutil
@@ -54,6 +55,57 @@ def semi(path, rows):
 def data_rows(path, sheet, first):
     return [r for r in load_workbook(path, read_only=True)[sheet].iter_rows(min_row=first, values_only=True)
             if r and r[0] is not None]
+
+
+# per file: (product column, {date column: name} that X3 needs in the future), 0-based (Ethan, 5 Nov)
+RULES = {"YA004SMR": (7, {}), "YA004POH": (7, {12: "EXTRCPDAT"}),  # PHANT holds only with --hold-phant
+         "YA004SOHPJ": (16, {5: "DEMDLVDAT"}), "YA004MFG": (2, {})}
+PHANT_WHY = "product is PHANT in X3 (Ethan, 5 Nov: PHANT stays PHANT) - waiting on Marc's PHANT workaround"
+
+
+def x3_rules(path, sheet, first, cats, required):
+    """Ethan's Run 3 findings, applied to a built transaction file in place:
+    * a line on a PHANT product is held back - X3 holds no sales, purchase or stock data on PHANT
+    * a required date in the past (POH EXTRCPDAT; SOHPJ DEMDLVDAT - the fields Ethan named) becomes `required` -
+      X3 needs it in the future; each one is listed on 'Re-dated' with its old date, for SDI to
+      confirm the order is still open or close it in Access."""
+    stem = next((k for k in RULES if path.name.startswith(k + "_")), None)
+    if not stem:
+        return 0, 0
+    pcol, dates = RULES[stem]
+    wb = load_workbook(path)
+    ws = wb[sheet]
+    rows = [[c.value for c in r] for r in ws.iter_rows(min_row=first) if r[0].value is not None]
+    keep, held, redated = [], [], []
+    for r in rows:
+        if cats and cats.get(str(r[pcol] or "")) == "PHANT":
+            held.append(r + [PHANT_WHY])
+            continue
+        for col, name in dates.items():
+            v = r[col]
+            if v not in (None, "") and str(v).isdigit() and str(v) < required:
+                if stem == "YA004SOHPJ":     # customer, order date, customer ref, line, product, qty
+                    who = [r[3], r[4], r[6], r[15], r[16], r[19]]
+                else:                        # supplier, order date, -, line, product, qty
+                    who = [r[3], r[2], "", r[6], r[7], r[11]]
+                redated.append(who + [name, int(v), int(required)])
+                r[col] = int(required)
+        keep.append(r)
+    ws.delete_rows(first, ws.max_row - first + 1)
+    for r in keep:
+        ws.append(r)
+    if held:
+        hb = wb["Held back"] if "Held back" in wb.sheetnames else wb.create_sheet("Held back")
+        for r in held:
+            hb.append(r)
+    if redated:
+        ws2 = wb.create_sheet("Re-dated")
+        ws2.append(["Account", "Order date", "Customer order ref", "Line", "Product", "Quantity", "Field",
+                    "Date in Access", "Date loaded"])
+        for r in redated:
+            ws2.append(r)
+    wb.save(path)
+    return len(held), len(redated)
 
 
 def references(run, work, bom_file, route_file):
@@ -96,6 +148,10 @@ def main():
     ap.add_argument("--routes", default=str(SET / "ZSDIROU2_routes_MAPPED.xlsx"))
     ap.add_argument("--bins", default=str(BASE / "bins" / "out.txt"), help="bins_and_delivery.sql grid 1")
     ap.add_argument("--previous", default=str(SET), help="the set to compare with")
+    ap.add_argument("--hold-phant", action="store_true",
+                    help="hold back lines on PHANT products (off: James, 5 Nov - Ethan's fixes only)")
+    ap.add_argument("--required-date", default=(dt.date.today() + dt.timedelta(days=1)).strftime("%Y%m%d"),
+                    help="a past required date on POH / SOHPJ becomes this (X3 needs it in the future; default tomorrow)")
     ap.add_argument("--legacy-views", help="test only: an old views_v2 output (positional grids)")
     ap.add_argument("--legacy-wor", help="test only: an old works_orders_extract output")
     ap.add_argument("--extra", help="test only: the 27 Oct new-accounts export")
@@ -165,10 +221,16 @@ def main():
     summary.append(f"\n## Files (products from {run / 'out'}: {n_products:,} products, {n_codes:,} codes mapped)\n")
     summary.append("| File | Rows | Held back | Why held back |")
     summary.append("|---|---|---|---|")
+    cats = ({r[1]: r[0] for r in data_rows(run / "out" / "ZSDIITM_products_MAPPED.xlsx", "Data with Headings", 4)}
+            if a.hold_phant else {})
+    applied = []
     for rel, sheet, first in OUTPUTS:
         src = work / rel
         dst = out / src.name
         shutil.copy(src, dst)
+        h, d = x3_rules(dst, sheet, first, cats, a.required_date)
+        if h or d:
+            applied.append(f"- {dst.name}: {h:,} lines held back on PHANT products; {d:,} past dates set to {a.required_date}")
         txt, n, _ = write_load(dst, sheet, first)
         wb = load_workbook(dst, read_only=True)
         held = []
@@ -176,6 +238,9 @@ def main():
             held = [r for r in wb["Held back"].iter_rows(min_row=2, values_only=True) if r and any(r)]
         reasons = Counter(str([v for v in r if v not in (None, "")][-1])[:60] for r in held)
         summary.append(f"| {dst.name} | {n:,} | {len(held):,} | " + "; ".join(f"{k} {v}" for k, v in reasons.most_common(3)) + " |")
+    if applied:
+        summary.append("\n## Ethan's Run 3 rules (5 Nov)\n")
+        summary += applied
     (out / "RUN_SUMMARY.md").write_text("# Opening transactions - run summary\n\n" + "\n".join(summary) + "\n",
                                         encoding="utf-8")
     print("\n".join(summary))

@@ -4,9 +4,9 @@ Run 2 loaded the main supplier only (8,644), because the template has no priorit
 left 3,150 alternatives out. That is too many to lose (James, 4 Nov). This file carries every
 product-supplier pair Access has bought since September 2022, with a priority from Access's own
 purchase history: 1 = the supplier last bought from, then 2, 3 ... (grid 2 of the query). No
-value is invented. Column D, PIO (priority), is added to the template. If Acuity's import can't
-take it yet, the three template columns still load every pair; X3 then has no ranking, so the
-main supplier is also the first row of each product.
+value is invented. The load has the template's three columns only (Ethan, 5 Nov: an added PIO
+column made Run 3 reject the file), main supplier first per product; the priority is kept on the
+'Supplier priority' tab, not loaded.
 
 Usage: called by run.py after products.py, when <run>/extract/product_suppliers.txt exists.
 """
@@ -73,11 +73,13 @@ def build(run_dir, rows, code, suppliers_file):
     shutil.copy(TEMPLATE, out)
     wb = load_workbook(out)
     ws = wb["Template"]
-    ws.cell(1, 4, "PIO")
-    ws.cell(2, 4, "Priority (added)")
+    # The template's three columns only: Ethan (5 Nov) - the added PIO column made Run 3 reject the
+    # file. Main supplier first per product; the priority is kept on its own tab, not loaded.
     for r in data:
-        ws.append(r)
+        ws.append(r[:3])
     ws.freeze_panes = "A3"
+    add_sheet(wb, "Supplier priority", ["Product", "Supplier", "Supplier product", "Priority (not loaded)"], data,
+              [20, 10, 20, 12])
     add_sheet(wb, "Alternative suppliers", ["Product", "Description", "Supplier", "Priority", "Order lines",
                                             "Quantity ordered", "Last ordered"], alt, [20, 32, 10, 8, 10, 12, 10])
     add_sheet(wb, "Held back", ["Product", "Supplier", "Access priority", "Supplier name", "Order lines",
@@ -86,16 +88,16 @@ def build(run_dir, rows, code, suppliers_file):
     notes(wb, [["ZSDIITMSUP - product-suppliers, complete file"], [],
                ["Rows", f"{len(data):,}: {main:,} products with their main supplier (priority 1) and {len(alt):,} "
                         "alternative suppliers (priority 2, 3 ...). Run 2 loaded the main supplier only"],
-               ["Priority (column D, PIO)", "Added to the template: 1 = the supplier last bought from, then by last order "
-                                            "date and number of order lines - Access's own purchase history, nothing "
-                                            "invented. Ethan: map PIO in the import. Until then the three template "
-                                            "columns load every pair, with the main supplier first"],
+               ["Priority", "Not in the load (Ethan, 5 Nov: the extra PIO column made the import fail). The three "
+                            "template columns load every pair, main supplier first. The priority (1 = the supplier last "
+                            "bought from, then by last order date and order lines) is on the 'Supplier priority' tab"],
                ["Source", "Access purchase orders since September 2022 (product_suppliers_v4.sql, grid 2)"],
                ["Held back", f"{len(held):,} pairs: a product not in the product file, or a supplier not in the "
                              "supplier file - each with its reason"]], index=0)
     wb.save(out)
     got = [r for r in load_workbook(out, read_only=True)["Template"].iter_rows(min_row=3, values_only=True) if r[0]]
-    assert [list(g[:4]) for g in got] == data
+    assert [list(g[:3]) for g in got] == [r[:3] for r in data]
+    assert all(len([v for v in g if v is not None]) == 3 for g in got)
     assert len({(r[0], r[1]) for r in data}) == len(data)
     txt, n, _ = write_load(out, "Template", 3)
     assert n == len(data)

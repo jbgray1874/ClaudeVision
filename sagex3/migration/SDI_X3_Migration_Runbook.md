@@ -1508,3 +1508,17 @@ from LOAD_ROU, and reproduce all 31,253 matched lines:
 - operations are numbered 5, 10, 15 by route, operation and sub-operation.
 
 Results: 33,499 operations on 7,094 products. Works orders now load 721 of 769.
+
+### 19.7 Ethan's Run 3 findings (5 Nov 12:29) and the fixes
+
+| File | Ethan | Fix (only this; James, 5 Nov) |
+|---|---|---|
+| ZSDIITM | Products changed PHANT → FGML were rejected: PHANT stays PHANT. Marc to find another way | 551 categories put back: 534 FGML → PHANT, and 17 products already in X3 take X3's category. `products.py` now defaults to `--phant access`, and a product in `--loaded` (the Run 2 V1.3 file) keeps X3's category, listed on Check |
+| ZSDIITMSUP | The added PIO column caused the errors | Column D removed; the priority is kept on a "Supplier priority" tab. Pairs unchanged (14,746) |
+| YA004POH | Expected receipt dates in the past (2023) fail: the date must be in the future. Open, or remove? | 85 lines re-dated to 6 Nov 2026 (12 from 2023, 4 from 2024, 69 from 2026), listed on "Re-dated" for SDI to confirm or close in Access |
+| YA004SOHPJ | DEMDLVDAT in the past (2025) fails | 2,680 of 3,712 lines re-dated to 6 Nov 2026 (799 from 2025), listed on "Re-dated" |
+
+The date is `run_transactions.py --required-date` (default tomorrow). It must be after the load
+date, so rebuild on the day if Ethan loads later. Holding lines on PHANT products is
+`--hold-phant`, off by default: James wanted Ethan's fixes only.
+Sent with the four: the route file from 5 Nov 09:55 as built (33,499).

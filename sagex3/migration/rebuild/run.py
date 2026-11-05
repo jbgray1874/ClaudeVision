@@ -26,9 +26,10 @@ def main():
     ap.add_argument("run_dir")
     ap.add_argument("--previous", help="the previous run's out folder, for the what-changed write-up")
     ap.add_argument("--today", help="the run's date, yyyymmdd (default today)")
-    ap.add_argument("--phant", choices=("usage", "access"), default="usage")
+    ap.add_argument("--phant", choices=("usage", "access"), default="access",
+                    help="access (default since 5 Nov: Ethan, PHANT must stay PHANT) or usage (the 4 Nov test)")
     ap.add_argument("--recent-years", type=int, default=2)
-    ap.add_argument("--loaded", help="the product file loaded into X3 (default: ZSDIITM in --previous)")
+    ap.add_argument("--loaded", help="the product file loaded into X3 (xlsx or its ; .txt): its products stay and keep their category (default: ZSDIITM in --previous)")
     ap.add_argument("--previous-costs", help="the YITC spreadsheet loaded last: its costs are kept")
     ap.add_argument("--suppliers", help="the YA004BPS spreadsheet: product-suppliers keep these suppliers")
     a = ap.parse_args()

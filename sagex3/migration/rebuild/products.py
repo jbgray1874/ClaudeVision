@@ -94,17 +94,23 @@ def load(extract):
     return item, master, use, bom, rate
 
 
-def loaded_codes(path):
-    """{product code: description 1} from a product file already loaded into X3."""
+def loaded_file(path):
+    """{product code: (category, description 1)} from the product file loaded into X3: the mapped
+    spreadsheet, or its ; load file (V1.3 'cleansed': category; code; description 1; ...)."""
     if not path or not Path(path).exists():
         return {}
+    if str(path).lower().endswith(".txt"):
+        import csv
+        with open(path, newline="", encoding="cp850", errors="replace") as f:
+            return {r[1].strip(): (r[0].strip(), r[2].strip()) for r in csv.reader(f, delimiter=";") if len(r) > 2 and r[1].strip()}
     ws = load_workbook(path, read_only=True)["Data with Headings"]
-    return {r[1]: (r[2] or "") for r in ws.iter_rows(min_row=4, values_only=True) if r and r[1]}
+    return {r[1]: (r[0] or "", r[2] or "") for r in ws.iter_rows(min_row=4, values_only=True) if r and r[1]}
 
 
-def build(run_dir, today=None, phant="usage", recent_years=2, loaded=None):
+def build(run_dir, today=None, phant="access", recent_years=2, loaded=None):
     run_dir = Path(run_dir)
-    loaded = loaded_codes(loaded)
+    in_x3 = loaded_file(loaded)
+    loaded = {k: v[1] for k, v in in_x3.items()}
     today = today or dt.date.today().strftime("%Y%m%d")
     recent = f"{int(today[:4]) - recent_years}{today[4:]}"
     item, master, use, bom_raw, rate = load(run_dir / "extract" / "extract_products.txt")
@@ -251,6 +257,15 @@ def build(run_dir, today=None, phant="usage", recent_years=2, loaded=None):
         phant_rows.append([x, r[2], g, "PHANT", r[0], len(used_in), ", ".join(used_in[:4]), len(comps.get(x, ())),
                            a["so"], a["wo"], round(a["stock_value"], 2), a["last_purchase"]])
 
+    # ---- a product already in X3 keeps X3's category (Ethan, 5 Nov) -----------------------
+    # Run 3: every PHANT -> FGML change on a loaded product was rejected. X3 keeps the category it
+    # holds; any difference is listed on Check for Marc's PHANT workaround, not loaded.
+    kept_cat = []
+    for x, r in rows.items():
+        if x in in_x3 and in_x3[x][0] and r[0] != in_x3[x][0]:
+            kept_cat.append([x, r[2], in_x3[x][0], r[0]])
+            r[0] = in_x3[x][0]
+
     # ---- the checks: stop on anything that would be a silent drop ---------------------------
     live = [x for x, a in act.items() if a["stock_qty"] > 0 or a["so"] or a["po"] or a["wo"]]
     missing = [x for x in live if x not in rows]
@@ -289,6 +304,10 @@ def build(run_dir, today=None, phant="usage", recent_years=2, loaded=None):
     for x in loaded_lost:
         check.append([x, "", "", "", "already loaded in X3",
                       "LOADED PRODUCT NOT FOUND in Access under any code - check before the load"])
+    for x, d, was, new in kept_cat:
+        check.append([x, d, "", "", f"category kept as {was}, as in X3",
+                      f"{new} by today's rule: X3 rejects a category change on a loaded product (Ethan, 5 Nov). "
+                      "For Marc's PHANT workaround"])
     for p in phant_rows:
         if p[2] == "C":
             check.append([p[0], p[1], p[4], act[p[0]]["grade"], "; ".join(why[p[0]]),
@@ -381,7 +400,7 @@ def build(run_dir, today=None, phant="usage", recent_years=2, loaded=None):
     assert n == len(data), (n, len(data))
     summary = dict(loaded_not_found=len(loaded_lost), live_shared_codes=len(live_shared), load_file=f"{txt.name} ({n:,} lines" + (f", {lost} characters not in cp850)" if lost else ")"),
                    products=len(data), categories=dict(cats), held=len(held), check=len(check),
-                   not_migrated=len(not_migrated), phant=dict(groups), rates=rate, shared=len(shared))
+                   not_migrated=len(not_migrated), phant=dict(groups), category_kept_from_x3=len(kept_cat), rates=rate, shared=len(shared))
     return out, summary, rows, code
 
 
@@ -389,7 +408,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("run_dir")
     ap.add_argument("--today", help="the run's date, yyyymmdd (default today)")
-    ap.add_argument("--phant", choices=("usage", "access"), default="usage")
+    ap.add_argument("--phant", choices=("usage", "access"), default="access")
     ap.add_argument("--recent-years", type=int, default=2)
     ap.add_argument("--loaded", help="the product file already loaded into X3: every product in it stays")
     a = ap.parse_args()
