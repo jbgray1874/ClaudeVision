@@ -8,7 +8,7 @@ import time
 from datetime import date, datetime, timezone
 from math import floor, pi as _PI
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import engine_build
 import applied_finish
@@ -12680,10 +12680,7 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             and not _pcd.get("powder_scope_question")
             and not part.get("_powder_members_coated_m2")):
         risk_flags.append("powder_charged_zero_coated_area")
-        part.setdefault("review_flags", []).append(
-            "P.COAT CHARGED WITH NO COATED AREA: booth time is charged on this part at its "
-            "minimum, but nothing gave it a size, so its coated area is 0 and NO powder material "
-            "is charged for it. Give the part its blank and the coat and its powder both follow.")
+        part.setdefault("review_flags", []).append(_ZERO_COAT_PART_FLAG)
 
     # THE GAUGE CHARGED SAYS WHICH READING GAVE IT. The source spread below copies the raw
     # record's thickness_source, so a gauge this costing pass took from the part's
@@ -14651,6 +14648,89 @@ def _reword_folds_the_route_rules_off(route_graph: Any, *part_lists: Any) -> int
     return _n
 
 
+_ZERO_COAT_PART_FLAG = (
+    "P.COAT CHARGED WITH NO COATED AREA: booth time is charged on this part at its "
+    "minimum, but nothing gave it a size, so its coated area is 0 and NO powder material "
+    "is charged for it. Give the part its blank and the coat and its powder both follow.")
+_ZERO_COAT_JOB_PREFIX = "P.COAT CHARGED WITH NO COATED AREA on "
+
+
+def _zero_coat_job_flag(part_numbers: Sequence[Any]) -> str:
+    """The confirm-list line naming the parts charged a coat with no area (D-488)."""
+    _pns = [str(x) for x in part_numbers]
+    return (f"{_ZERO_COAT_JOB_PREFIX}{len(_pns)} part(s): "
+            f"{', '.join(_pns[:8])}{' …' if len(_pns) > 8 else ''} — booth time is "
+            f"charged at its minimum and no powder material is, because nothing gave these "
+            f"parts a size. Size them and the coat and its powder both follow.")
+
+
+def _withdraw_coats_the_route_rules_off(route_graph: Any, summary: Any,
+                                        powder_summary: Any, *part_lists: Any) -> List[str]:
+    """A coat the route rules off a part is not "charged" on it (D-698). Returns the parts.
+
+    12693-01, 4 Nov 22:06 book: the wires 05M and 06M were said to have "booth time charged
+    on this part at its minimum ... NO powder material", on the parts and on the confirm
+    list, while the route had ruled their powder coat not applicable (welded into the plated
+    weldment 104 and finished with it) and no P.Coat row on the sheet named either. The flag
+    is written per part before the route exists; the route decides after. Where its powder
+    decision on a part is a ruling (ruled out or not applicable), the flag and its risk code
+    are withdrawn from that part, and the job's line names only the parts still charged.
+    An unverified decision is not a ruling and withdraws nothing, as for folds (D-292)."""
+    try:
+        from route_compiler import NEGATIVE_STATUSES as _negative
+    except Exception:                                                # noqa: BLE001
+        _negative = frozenset({"ruled_out", "not_applicable"})
+    _off: Set[str] = set()
+    _on: Set[str] = set()
+    for _d in ((route_graph or {}).get("decisions") or []) if isinstance(route_graph, dict) else []:
+        _d = _d if isinstance(_d, dict) else dict(getattr(_d, "__dict__", {}) or {})
+        if str(_d.get("operation") or "").strip().lower() != "powder_coating":
+            continue
+        _tid = str(_d.get("target_id") or "").strip().upper()
+        if not _tid:
+            continue
+        if str(_d.get("status") or "").strip().lower() in _negative:
+            _off.add(_tid)
+        else:
+            _on.add(_tid)
+    _off -= _on                      # a coat still required on the part by any decision stands
+    if not _off:
+        return []
+    _withdrawn: List[str] = []
+    for _lst in part_lists:
+        for _p in (_lst or []):
+            if not isinstance(_p, dict):
+                continue
+            _pn = str(_p.get("part_number") or "").strip().upper()
+            if _pn not in _off:
+                continue
+            _had = False
+            if isinstance(_p.get("review_flags"), list) and _ZERO_COAT_PART_FLAG in _p["review_flags"]:
+                _p["review_flags"] = [f for f in _p["review_flags"] if f != _ZERO_COAT_PART_FLAG]
+                _had = True
+            if isinstance(_p.get("risk_flags"), list) \
+                    and "powder_charged_zero_coated_area" in _p["risk_flags"]:
+                _p["risk_flags"] = [f for f in _p["risk_flags"]
+                                    if f != "powder_charged_zero_coated_area"]
+                _had = True
+            if _had and _pn not in _withdrawn:
+                _withdrawn.append(_pn)
+    if not _withdrawn:
+        return []
+    if isinstance(powder_summary, dict) and isinstance(
+            powder_summary.get("charged_with_zero_coated_area"), list):
+        _left = [x for x in powder_summary["charged_with_zero_coated_area"]
+                 if str(x).strip().upper() not in _off]
+        powder_summary["charged_with_zero_coated_area"] = _left
+        if isinstance(summary, dict) and isinstance(summary.get("review_flags"), list):
+            _flags = [f for f in summary["review_flags"]
+                      if not str(f).startswith(_ZERO_COAT_JOB_PREFIX)]
+            if _left:
+                _flags.append(_zero_coat_job_flag(_left))
+            summary["review_flags"] = _flags
+    return _withdrawn
+
+
 def _member_carries_its_own_coat(member: Dict[str, Any]) -> bool:
     """Is this member coated on its own line, so its area must not be counted on the case?
 
@@ -16535,11 +16615,7 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
     _zero_coat = powder_coating_summary["charged_with_zero_coated_area"]
     if _zero_coat and summary is not None:
         # ON THE CONFIRM LIST, not only on the parts (D-488).
-        summary.setdefault("review_flags", []).append(
-            f"P.COAT CHARGED WITH NO COATED AREA on {len(_zero_coat)} part(s): "
-            f"{', '.join(_zero_coat[:8])}{' …' if len(_zero_coat) > 8 else ''} — booth time is "
-            f"charged at its minimum and no powder material is, because nothing gave these "
-            f"parts a size. Size them and the coat and its powder both follow.")
+        summary.setdefault("review_flags", []).append(_zero_coat_job_flag(_zero_coat))
 
     workbook_equivalent_pricing = _build_workbook_equivalent_pricing(
         part_estimates, material_total=material_total, labour_total=labour_total,
@@ -16600,6 +16676,9 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         canonical_route_shadow = project_priced_route(
             _route_graph, part_estimates)
         _reword_folds_the_route_rules_off(_route_graph, parts, part_estimates)
+        # A COAT THE ROUTE RULES OFF IS NOT SAID TO BE CHARGED (D-698).
+        _withdraw_coats_the_route_rules_off(_route_graph, summary, powder_coating_summary,
+                                            parts, part_estimates)
         # THE JOINT A COMPONENT ALLOWANCE LEAVES ON ITS HOSTS IS PROVEN THERE (D-503).
         prove_joint_on_hosts(parts, part_estimates, canonical_route_shadow)
     except Exception as route_error:

@@ -3323,6 +3323,30 @@ def costed_job(source: Any) -> Dict[str, Any]:
         elif "gbp_parts" in mq:           # empty: nothing is costed on the reading — no money
             _gbp = round(sum(_money_of(_by_pn[str(c).upper()]) for c in mq.get("gbp_parts") or []
                              if str(c).upper() in _by_pn), 2) or None
+        elif mq.get("operations") or mq.get("operation"):
+            # A QUESTION ABOUT AN OPERATION IS WORTH THAT OPERATION'S ROWS (D-698). The weld-rate
+            # question on 12693-01-01M took the part's line money, its £59.17 of tube, and the
+            # covering email said "£59.17 rides on it" of a TIG rate. The question is asked once
+            # for every part that carries it (its words name no part), so what rides on it is
+            # the rows charging that operation on any of those parts, each row once, or no
+            # figure; never a part's material line.
+            _q_ops = {str(o) for o in (mq.get("operations") or []) if o}
+            if mq.get("operation"):
+                _q_ops.add(str(mq["operation"]))
+            _q_pns = {_pn.upper()} | {
+                str(_p.get("part_number") or "").upper() for _p in job_parts(source)
+                if isinstance(_p, Mapping) and any(
+                    isinstance(_x, Mapping) and _x.get("issue") == mq.get("issue")
+                    for _x in (_p.get("manufacturing_questions") or []))}
+            _q_rows = [r for r in (_workbook_rows(source) or [])
+                       if {str(o) for o in (r.get("engine_operations") or [])} & _q_ops
+                       and _q_pns & {str(x).upper() for x in (r.get("part_numbers") or [])}]
+            _gbp = round(sum(_num(r.get("total_value_gbp")) for r in _q_rows), 2) or None
+            _nums = [str(r.get("workbook_row")) for r in _q_rows if r.get("workbook_row")]
+            if _gbp:
+                _assume += (f" (£{_gbp:,.2f} a unit"
+                            + (f", Estimate row{'s' if len(_nums) > 1 else ''} "
+                               f"{', '.join(_nums)}" if _nums else "") + ")")
         else:
             _line = _by_pn.get(_pn.upper())
             _gbp = (_money_of(_line) if _line is not None else None) or None
