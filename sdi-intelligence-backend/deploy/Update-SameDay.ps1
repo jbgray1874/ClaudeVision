@@ -155,8 +155,11 @@ Yes "Fetched $Branch at $commit"
 
 # -- 3. Keep the code it replaces -----------------------------------------------
 Head "3. Keeping a copy of the code being replaced (on the server)"
-$skipDirs = @(".git", "backups", ".venv", ".venv-gpu", "venv", "__pycache__", "out", "client_files", "studio_data", "logs")
-$skipFiles = @(".env", "*.db", "*.db-wal", "*.db-shm", "*.npz", "*.pyc", "*.log", "PHONE_LINK.txt", "client_profiles.json")
+# 5 Nov 2026: the picture thumbnails (all_img_thumbs, many small files) were copied into each backup - data, not code.
+$skipDirs = @(".git", "backups", ".venv", ".venv-gpu", "venv", "__pycache__", "out", "client_files", "studio_data", "logs",
+              "all_img_thumbs")
+$skipFiles = @(".env", "*.db", "*.db-wal", "*.db-shm", "*.npz", "*.pyc", "*.log", "PHONE_LINK.txt", "client_profiles.json",
+               "*.incoming")
 $keep = "$Target\backups\before-update-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 # Code only: anything over 5 MB is not code, and the update never replaces it.
 $robo = @($Target, $keep, "/E", "/MAX:5000000", "/R:1", "/W:1", "/NP", "/NFL", "/NDL", "/NJH", "/NJS") + @("/XD") + $skipDirs + @("/XF") + $skipFiles
