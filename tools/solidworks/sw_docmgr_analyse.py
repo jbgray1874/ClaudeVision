@@ -107,6 +107,27 @@ def _key_from_env() -> str:
     return (os.environ.get(KEY_ENV) or "").strip()
 
 
+def _load_engine_env() -> None:
+    """Run by hand, read the engine's own .env for the key, as an engine run does (D-710):
+    the checkout's .env, then src\\.env. A key already in this shell wins. The key is never
+    printed; only whether it was found is said."""
+    if _key_from_env():
+        return
+    try:
+        from dotenv import load_dotenv                               # noqa: PLC0415
+    except ImportError:
+        return
+    here = Path(__file__).resolve()
+    for candidate in (here.parents[2] / ".env", here.parents[2] / "src" / ".env"):
+        try:
+            if candidate.exists():
+                load_dotenv(candidate, override=False)
+                if _key_from_env():
+                    return
+        except OSError:
+            continue
+
+
 def redact(text: Any, key: Optional[str] = None) -> str:
     """`text` with the licence key removed. Applied to every printed line and the JSON.
 
@@ -1193,6 +1214,8 @@ def select_only(paths: Sequence[str], only: Sequence[str]) -> List[str]:
 def main(argv: Optional[Sequence[str]] = None, *, class_factory=None) -> int:
     """Run the backup read. `class_factory` lets a test hand in a fake ISwDMClassFactory."""
     args = list(sys.argv[1:] if argv is None else argv)
+    if argv is None:
+        _load_engine_env()
     key = _key_from_env()
 
     def say(msg: str = "") -> None:
