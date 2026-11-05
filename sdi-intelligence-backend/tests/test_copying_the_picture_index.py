@@ -33,19 +33,17 @@ class OrderTests(unittest.TestCase):
         self.assertLess(at("stop SDISameDay"), at("Move-Item -LiteralPath $newNpz"))  # a rename, SameDay down
         self.assertLess(at("Move-Item -LiteralPath $newDb"), BODY.rindex('" start SDISameDay | Out-Null'))
 
-    def test_the_thumbnails_come_last_and_never_hold_the_index_up(self):
-        """5 Nov: copied before the swap, 269,000 small files kept picture matching off for as long as they took."""
-        self.assertGreater(at("& robocopy $thumbs"), at("Move-Item -LiteralPath $newNpz"))
-        self.assertGreater(at("& robocopy $thumbs"), at("Picture matching is ON"))
-        self.assertIn("safe to stop with Ctrl+C", BODY)
-        self.assertEqual(len(re.findall(r"& robocopy", BODY)), 2)          # one to measure (/L), one to copy
+    def test_the_thumbnails_stay_on_k_and_are_never_copied(self):
+        """5 Nov (James: "use the index from the mounted K: ... this is a production server"): 14.7 GB of thumbnails
+        were being copied onto the server's C: on a guess at their size."""
+        self.assertNotIn("robocopy", BODY)
+        self.assertNotIn("$Target\\all_img_thumbs", BODY)
+        self.assertIn("The thumbnails stay on K:", BODY)
 
-    def test_the_thumbnails_are_measured_against_the_free_space_first(self):
-        """5 Nov (James: "do we have enough space on the server?")."""
-        measure, copy = [m.start() for m in re.finditer(r"& robocopy", BODY)]
-        self.assertIn("/L /BYTES", BODY[measure:measure + 120])           # lists only - copies nothing
-        self.assertLess(at("$freeNow -lt 0 -or $toCopy -gt ($freeNow - 20GB)"), copy)    # unknown free space: no copy
-        self.assertIn("Thumbnails left out - SameDay doesn't need them", BODY)
+    def test_free_space_is_a_hard_gate(self):
+        self.assertIn("nothing is copied onto a production server without that", BODY)
+        self.assertIn("+ 20, 1)", BODY)                                 # 20 GB stays free
+        self.assertLess(at("Win32_LogicalDisk"), at("New-Item -ItemType Directory -Force -Path $keep"))
 
     def test_the_watch_is_paused_for_the_swap_and_always_put_back(self):
         self.assertLess(at("/TN $Watch /DISABLE"), at("stop SDISameDay"))
