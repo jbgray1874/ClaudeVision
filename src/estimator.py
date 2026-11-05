@@ -3623,9 +3623,10 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                            if is_roll_goods_line(part) and not _in_roll_catalogue(part)
                            else (None, ""))
             if _roll_piece[0]:
-                _rung4_line["unit_of_measure"] = "m"
-                _rung4_line["quantity"] = round(_roll_piece[0] / 1000.0, 4)
-                _rung4_line["quantity_counted"] = None
+                # A NEW BRIEF, not a part record: one piece's length in metres.
+                _rung4_line = dict(_rung4_line, unit_of_measure="m",
+                                   quantity=round(_roll_piece[0] / 1000.0, 4),
+                                   quantity_counted=None)
             _ind = _rung4(
                 _rung4_line,
                 order_qty=_order_qty_of(part),
