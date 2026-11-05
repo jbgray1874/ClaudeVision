@@ -159,3 +159,33 @@ def test_the_whole_pack_reads_the_same_under_either_binding(tmp_path, capsys, mo
     assert [r["route_signals"] for r in rb] == [r["route_signals"] for r in ra]
     assert [r["custom_properties"] for r in rb] == [r["custom_properties"] for r in ra]
     assert [r["bom"] for r in rb] == [r["bom"] for r in ra]
+
+
+# ── --trace says what each call answered (D-713) ────────────────────────────────────────
+#
+# The laptop's first full read, 5 Nov 2026: all 12 files of 12678-01-GA opened, and the three
+# assemblies came back with no components and the bent parts with no cut list, with nothing on
+# screen to say which call answered nothing.
+
+def test_trace_names_the_call_that_answered_nothing(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv(dm.KEY_ENV, base.KEY)
+    folder, app = base._job(tmp_path)
+    ga = next(d for p, d in app._docs.items() if p.lower().endswith(".sldasm"))
+    cfg = ga.ConfigurationManager._configs["Default"]
+    cfg.GetComponents = lambda: None                        # the call that answers nothing
+    out = tmp_path / "t.json"
+    assert dm.main([str(folder), "--out", str(out), "--trace"],
+                   class_factory=base.FakeFactory(app)) == 0
+    printed = capsys.readouterr().out
+    assert "trace: GetComponents -> None" in printed
+    assert "trace: configurations ['Default'], active 'Default'" in printed
+    assert "trace: thickness 1.5 from the cut list" in printed
+    assert base.KEY not in printed
+
+
+def test_without_trace_nothing_extra_is_printed(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv(dm.KEY_ENV, base.KEY)
+    folder, app = base._job(tmp_path)
+    assert dm.main([str(folder), "--out", str(tmp_path / "t.json")],
+                   class_factory=base.FakeFactory(app)) == 0
+    assert "trace:" not in capsys.readouterr().out

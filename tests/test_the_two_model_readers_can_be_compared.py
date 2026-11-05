@@ -122,3 +122,16 @@ def test_a_file_one_reader_failed_on_is_listed_and_fails_the_check(tmp_path, cap
     out = capsys.readouterr().out
     assert "Document Manager could not read J-02M.SLDPRT: locked" in out
     assert "1 reader error(s)" in out
+
+
+def test_a_drawing_and_its_assembly_of_one_name_are_compared_apart(tmp_path, capsys):
+    """D-713: 12678-01-GA.SLDASM and 12678-01-GA.SLDDRW share a title; keyed by title the
+    drawing's BOM table was compared with the assembly's components."""
+    def rec(path, bom):
+        return dict(_rec(Path(path).stem, bom=bom), path=path)
+    sw = _write(tmp_path / "sw.json", [rec(r"K:\j\J-GA.SLDASM", [("J-01M", 2)]),
+                                       rec(r"K:\j\J-GA.SLDDRW", [("J-01M", 2), ("BOLT", 4)])])
+    dmx = _write(tmp_path / "dm.json", [rec(r"C:\j\J-GA.SLDASM", [("J-01M", 2)]),
+                                        rec(r"C:\j\J-GA.SLDDRW", [("J-01M", 2), ("BOLT", 4)])])
+    assert ce.main([str(sw), str(dmx)]) == 0
+    assert "2 file(s) read by both" in capsys.readouterr().out

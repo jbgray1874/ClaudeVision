@@ -61,7 +61,10 @@ def _read(path: Path) -> Tuple[Dict[str, Mapping[str, Any]], List[Tuple[str, str
             failed.append((_name(r.get("path") or r.get("title")) or "(unnamed)",
                            "; ".join(str(e) for e in errs)[:160]))
             continue
-        key = Path(_name(r["title"])).stem.strip().upper()
+        # BY FILE, NOT BY TITLE (D-713). 12678-01-GA.SLDASM and 12678-01-GA.SLDDRW share a
+        # title; keyed by title the drawing and the assembly were one entry, and the drawing's
+        # BOM table was compared with the assembly's components.
+        key = (_name(r.get("path")) or Path(_name(r["title"])).stem).strip().upper()
         out.setdefault(key, r)
     return out, failed
 
