@@ -129,3 +129,42 @@ def apply(note: Dict[str, Any], parts: Any) -> List[str]:
         if did:
             touched.append(str(part.get("part_number") or ""))
     return touched
+
+
+# ── A FACED BOARD HAS TWO THICKNESSES, AND BOTH ARE TRUE (D-722) ─────────────────────────
+#
+# 11908-22's panels are drawn "9mm MDF + LAM BOTH SIDES": the cut file and the drawing give
+# the 9 mm core, the model gives the 11 mm finished board. The gauge check read that as two
+# readers disagreeing and asked an estimator to choose. It is one board described twice: a
+# core, and the core with a face on each side. A faced board's reading that exceeds its
+# kept core by what two faces add is its finished thickness, held beside the core.
+FACED_BOARD_WORDS = ("LAMINAT", "MELAMINE", "MFMDF", "MFC", "VENEER", "FACED", "PRE LAM",
+                     "PRE-LAM", "PRELAM")
+# Two faces of decorative laminate, melamine or veneer: 0.2 to 1.5 mm each.
+FACES_ADD_MM = (0.4, 3.0)
+
+
+def is_faced_board(part: Any) -> bool:
+    """Does the part's own record say its board is faced (laminated, melamine, veneered)?"""
+    if not isinstance(part, dict):
+        return False
+    if part.get("_laminate_in_board") or part.get("_faced_board_family") \
+            or part.get("construction_note_laminate"):
+        return True
+    words = " ".join(str(part.get(k) or "") for k in (
+        "normalized_material", "material", "normalized_finish", "finish", "description",
+        "dxf_source_file")).upper()
+    ops = {str(o).lower() for o in (part.get("textual_operations") or [])}
+    return any(w in words for w in FACED_BOARD_WORDS) or "laminating" in ops
+
+
+def finished_over_core(part: Any, core_mm: Any, other_mm: Any) -> Optional[float]:
+    """`other_mm` when it is this faced board's finished thickness over `core_mm`, else None."""
+    try:
+        core, other = float(core_mm), float(other_mm)
+    except (TypeError, ValueError):
+        return None
+    lo, hi = FACES_ADD_MM
+    if is_faced_board(part) and lo <= other - core <= hi:
+        return other
+    return None

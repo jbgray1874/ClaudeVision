@@ -176,11 +176,15 @@ def stated_product_weight_kg(summary: Any) -> Optional[Dict[str, Any]]:
 
     pages = [pg for pg in (((summary or {}).get("pages") or [])
                            if isinstance(summary, dict) else []) if isinstance(pg, dict)]
-    declared = re.sub(r"\s+", "", str((summary or {}).get("declared_product") or ""
-                                      if isinstance(summary, dict) else "")).upper()
+    # ONE DRAWING NUMBER HOWEVER IT IS SPACED OR JOINED (D-721): 11908-22's sheet prints
+    # "11908-22 GA" and the job declares "11908-22-GA", and the GA's 1.419 kg was refused as
+    # "not matched to the declared product". Spaces, hyphens, underscores, dots and slashes
+    # are dropped on both sides before they are compared.
+    declared = re.sub(r"[\s\-_./]+", "", str((summary or {}).get("declared_product") or ""
+                                            if isinstance(summary, dict) else "")).upper()
     if declared:
         own = [pg for pg in pages
-               if declared in re.sub(r"\s+", "", " ".join(
+               if declared in re.sub(r"[\s\-_./]+", "", " ".join(
                    str(pg.get(k) or "") for k in
                    ("pypdf_text", "pdfplumber_text", "normalized_text"))).upper()]
         got = _heaviest(own)
@@ -193,7 +197,8 @@ def stated_product_weight_kg(summary: Any) -> Optional[Dict[str, Any]]:
             # declared product stays a provisional observation — the consumer must not
             # let it drive anything on the strength of a warning string alone.
             got["verified"] = False
-            got["where"] += (f" — not matched to the declared product {declared}; "
+            got["where"] += (f" — not matched to the declared product "
+                             f"{str((summary or {}).get('declared_product') or declared).strip()}; "
                              f"confirm it is the product's own figure")
         return got
     got = _heaviest(pages)

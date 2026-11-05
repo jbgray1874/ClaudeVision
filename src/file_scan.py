@@ -5144,6 +5144,16 @@ def _finalize_scan_summary(
         _minted_hands = mint_missing_hand_records(
             summary["manufacturing_writeup"]["parts"],
             (summary.get("document_analysis") or {}).get("bom_rows") or [])
+        # THE ADHESIVE AND WAX A GLUED BOARD ASSEMBLY USES (D-723).
+        try:
+            from joinery_consumables import mint as _mint_consumables
+            _cons = _mint_consumables(summary["manufacturing_writeup"]["parts"], summary)
+            if _cons:
+                print(f"   [consumables] {', '.join(_cons)} added as share-of-pack "
+                      f"allowance(s) for glued board assemblies", flush=True)
+        except Exception as _e_cons:                                 # noqa: BLE001
+            print(f"   [consumables] skipped: {type(_e_cons).__name__}: {_e_cons}",
+                  flush=True)
         if _minted_hands:
             _bill_rows = {str(_p.get("part_number") or "") for _p in
                           summary["manufacturing_writeup"]["parts"]

@@ -106,6 +106,12 @@ def _density_for(material: Any) -> float:
     return _DEFAULT_DENSITY_KG_M3
 
 
+def _identity_key(value: Any) -> str:
+    """One drawing number however it is spaced or joined (D-721): "11908-22 GA" on the
+    sheet and "11908-22-GA" as the declared product are one product."""
+    return _re.sub(r"[\s\-_./]+", "", str(value or "")).upper()
+
+
 def _product_root(parts: Any) -> Optional[str]:
     """The one record that owns members and is owned by nothing — the product — or None where
     the parts name no such record or more than one (D-562)."""
@@ -143,20 +149,20 @@ def product_envelope(summary: Any, parts: Any = None) -> Optional[Dict[str, Any]
         return {"length": d[0], "width": d[1], "height": d[2],
                 "source": "the SolidWorks top assembly's bounding box",
                 "of": str(sw.get("top_assembly") or s.get("declared_product") or "")}
-    declared = _re.sub(r"\s+", "", str(s.get("declared_product") or "")).upper()
+    declared = _identity_key(s.get("declared_product"))
     if not declared:
         # NO DECLARED PRODUCT, SO ONLY THE ONE ROOT WILL DO (D-562). The first version took
         # the first record carrying an overall size, which on a pack read without a product
         # name could be a component's — a box sized to a bracket. The product is the record
         # that owns members and is owned by nothing; with two such roots, or none, nothing
         # here can say which is the product, and the packer is left to the parts.
-        declared = _product_root(parts) or ""
+        declared = _identity_key(_product_root(parts) or "")
         if not declared:
             return None
     for p in parts or ():
         if not isinstance(p, dict):
             continue
-        pn = _re.sub(r"\s+", "", str(p.get("part_number") or "")).upper()
+        pn = _identity_key(p.get("part_number"))
         if declared and pn != declared:
             continue
         env = p.get("product_envelope_mm") if isinstance(p.get("product_envelope_mm"), dict) else {}
@@ -188,6 +194,10 @@ def product_stated_weight(summary: Any) -> Optional[Dict[str, Any]]:
         return stated_product_weight_kg(summary)
     except Exception:                                                # noqa: BLE001
         return None
+
+
+# Blank sources that are a guess, not a reading of the part (D-721).
+_GUESSED_BLANK_SOURCES = frozenset({"document_text_largest_numbers"})
 
 
 def describe_order(parts: List[Dict[str, Any]], order_qty: Any,
@@ -298,6 +308,26 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any,
             continue
         L, W = _num(part.get("blank_length_mm")), _num(part.get("blank_width_mm"))
         _blank_from = "the flat blank on the part's record"
+        # A GUESSED BLANK GIVES WAY TO A MEASURED OR COSTED ONE (D-721). The record's blank
+        # can be the last-resort reading, the largest numbers in the document text; on
+        # 11908-22 that was 400 x 350 for all five panels, 4.73 kg against the GA's 1.419,
+        # while the workbook costed each panel at its DXF size. The packer is told the same
+        # blank the material was charged on.
+        if str(part.get("blank_length_mm_source") or "") in _GUESSED_BLANK_SOURCES:
+            _me0 = (part.get("material_estimate")
+                    if isinstance(part.get("material_estimate"), dict) else {})
+            _better = (_num(_me0.get("blank_length_mm")), _num(_me0.get("blank_width_mm")))
+            _from0 = "the blank its material was costed on"
+            if not all(_better):
+                try:
+                    from document_builder import flat_blank_mm as _fb0    # noqa: PLC0415
+                    _better = tuple(_num(v) for v in _fb0(part))
+                    _from0 = "the flat blank measured from the drawing's geometry"
+                except Exception:                                    # noqa: BLE001
+                    _better = (None, None)
+            if len(_better) == 2 and all(_better) and (_better[0], _better[1]) != (L, W):
+                L, W = _better
+                _blank_from = _from0
         if not (L and W):
             _blank_from = "the flat blank measured from the drawing's geometry"
             # THROUGH THE SHARED RESOLVER. A DXF-measured flat is held under the geometry

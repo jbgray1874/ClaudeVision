@@ -4907,6 +4907,22 @@ FACED_BOARD_CONSTRUCTION = {
     "laminating_minutes_per_m2_per_face": 6.0,     # HOUSE ALLOWANCE — confirm
     "laminating_rate_key": "glue",                 # HOURLY_RATES_GBP: the Glue department
 }
+# ── THE ADHESIVE AND WAX A GLUED BOARD ASSEMBLY USES (D-723) ──────────────────────────────
+# 11908-22-GA's laminated MDF tray is glued at its mitres and rebates and its corner gaps are
+# filled with matching wax, and neither consumable was on the bill. Each line is a SHARE OF A
+# PACK, priced from the pack's own price in SDI's sources (never a whole pack per unit). The
+# shares are HOUSE ALLOWANCES, NOT CONFIRMED, and every line says so; the money is the pack's.
+BOARD_ASSEMBLY_CONSUMABLES = {
+    "enabled": True,
+    "adhesive": {"description": "Wood adhesive for the glued board joints",
+                 "reference_item": "PVA wood adhesive 1kg",
+                 "share_per_piece": 0.01,      # 10 g of a 1 kg pack per board piece glued
+                 "basis": "HOUSE ALLOWANCE: 10 g of adhesive per board piece glued — confirm"},
+    "wax": {"description": "Matching wax filler for open corner gaps",
+            "reference_item": "hard wax filler stick",
+            "share_per_assembly": 0.1,         # a tenth of a filler stick per assembly
+            "basis": "HOUSE ALLOWANCE: a tenth of a filler stick per assembly — confirm"},
+}
 # ── A BOARD'S GRADE AND ITS DÉCOR ARE PART OF WHAT IS BOUGHT (D-693) ─────────────────────────
 #
 # 12693-01-04J's own sheet prints MATERIAL: MRMDF and COLOUR: EGGER: U999 ST2, and the workbook

@@ -2746,6 +2746,20 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
         except Exception:                                        # noqa: BLE001
             _ref_probes = []
     _probes = _ref_probes + [p for p in _probes if p not in _ref_probes]
+    # A DÉCOR NAMED IN SEVERAL WORDS IS ONE NAME (D-720). 11908-22 prints ALPINE NORDIC OAK;
+    # its words were asked one at a time, longest first, so ALPINE answered and any 9 mm
+    # "Alpine White" board was taken for the product. Where the drawing names its décor in
+    # words and no code, a row found by one of those words is the product only when it
+    # carries them all; otherwise the class rows answer and the line says so.
+    _decor_words: List[str] = []
+    if _ref_probes and isinstance(part, dict):
+        try:
+            from product_reference import product_reference as _pref
+            _pr = _pref(part)
+            if not _pr.get("codes") and len(_pr.get("words") or []) >= 2:
+                _decor_words = [str(w).upper() for w in _pr["words"]]
+        except Exception:                                        # noqa: BLE001
+            _decor_words = []
     if not _probes or thickness_mm is None:
         return None
     _token = _probes[0][0]
@@ -2829,6 +2843,10 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
             if _require:
                 _rows = [r for r in _rows
                          if _require in str(r[1] if len(r) > 1 else "").upper()]
+            if _decor_words and (_try_token, _require) in _ref_probes:
+                _rows = [r for r in _rows
+                         if all(w in str(r[1] if len(r) > 1 else "").upper()
+                                for w in _decor_words)]
             if not _spec:
                 _kept = _plain_stock_rows(_rows, _try_token, _t_key)
                 _gap: List[Dict[str, str]] = []
@@ -7286,6 +7304,23 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             f"{material} + LAMINATED is bought pre-faced as {_faced_family} — evidence: "
             f"{_faced_why}. The laminating on the route is IN the sheet price, not a "
             f"shop operation.")
+        # THE CORE AND THE FINISHED BOARD, BOTH KEPT (D-722). A reading the gauge check
+        # refused that is the core plus two faces is the finished thickness, not a rival.
+        try:
+            from construction_note import finished_over_core as _fin_t
+            for _e in ((part.get("_displaced") or {}).get("normalized_thickness_mm") or []):
+                _f = _fin_t(part, thickness, (_e or {}).get("value")) \
+                    if isinstance(_e, dict) else None
+                if _f:
+                    part["core_thickness_mm"] = float(thickness)
+                    part["finished_thickness_mm"] = _f
+                    part["review_flags"].append(
+                        f"BOARD BUILD: {float(thickness):g} mm core, {_f:g} mm finished with "
+                        f"its faces ({_e.get('source') or 'a second reader'} measured the "
+                        f"finished board); nested and priced on the core's stock")
+                    break
+        except Exception:                                            # noqa: BLE001
+            pass
     elif part.get("construction_note_laminate"):
         # A LAMINATE THE PROMOTION CANNOT PLACE IS A QUESTION, NEVER RAW-BOARD MONEY IN
         # SILENCE (SCRUM-179): the pack's construction note states the facing, no faced
@@ -7305,6 +7340,55 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             pass
     _cost_family = _faced_family or material
     _live_sheet_rate = _resolve_board_sheet_rate_gbp_per_m2(_cost_family, thickness, part)
+    # A FACED BOARD PRICED BY ITS CLASS IS A SUBSTITUTE, AND SAYS SO (D-720). Where the
+    # drawing names the board's décor and no catalogue row carries it, the median of the
+    # family's rows is not the specified board: 11908-22's Alpine Nordic Oak laminate went
+    # out at a generic faced-MDF rate with "the laminating is IN the sheet price". The board
+    # is built from the drawn décor's laminate where SDI Live holds it (D-676); otherwise
+    # the class rate stands as a declared substitute, beside a question carrying its money.
+    _decor_named = False
+    try:
+        from product_reference import reference_probes as _rprobes_s
+        _decor_named = bool(_rprobes_s(part))
+    except Exception:                                                # noqa: BLE001
+        _decor_named = False
+    if (_faced_family and _live_sheet_rate and _decor_named
+            and not _live_sheet_rate.get("product_reference_match")):
+        try:
+            _build = _constructed_faced_board(
+                part, _faced_family, part.get("finished_thickness_mm") or thickness)
+        except Exception:                                            # noqa: BLE001
+            _build = None
+        if _build and _build.get("facing_is_the_drawn_decor"):
+            part["_build_from_drawn_decor"] = True
+            _live_sheet_rate = None
+        else:
+            try:
+                from product_reference import describe_product as _dprod
+                _decor_txt = _dprod(part) or "the drawn décor"
+            except Exception:                                        # noqa: BLE001
+                _decor_txt = "the drawn décor"
+            part["_faced_board_substitute"] = {
+                "decor": _decor_txt, "family": _faced_family,
+                "rate_gbp_per_m2": _live_sheet_rate.get("rate_gbp_per_m2"),
+                "rows": [str(r.get("description") or "")[:80]
+                         for r in (_live_sheet_rate.get("rows") or [])][:3]}
+            part.setdefault("review_flags", []).append(
+                f"SUBSTITUTE BOARD: {part.get('part_number')} is priced at the "
+                f"{_faced_family} class rate (£{_live_sheet_rate.get('rate_gbp_per_m2')}/m², "
+                f"{_live_sheet_rate.get('sample_count')} catalogue row(s)) because no row "
+                f"carries the drawn décor ({_decor_txt}) and SDI Live holds no laminate in it "
+                f"to build the board from. The faces are in that price; the drawn décor's "
+                f"premium over the class is not")
+            source_precedence.raise_manufacturing_question(
+                part,
+                f"Board décor on {part.get('part_number')}: priced as generic "
+                f"{_faced_family}, not {_decor_txt}",
+                f"a {_faced_family} class rate stands in for the specified board; its faces "
+                f"are priced, the décor's premium is not",
+                f"give the {_decor_txt} board's sheet price (or its laminate's), and it "
+                f"replaces the substitute",
+                "estimator.faced_board_substitute")
     if ((_mat_acr in config.PLASTIC_SHEET_PRICED_MATERIALS or _llm_rate_m2 or _live_sheet_rate)
             and blank_length and blank_width
             # A promoted board with no rate of its own does not borrow the core's.
@@ -8655,10 +8739,13 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     # answer down here. Asking again would double the evidence flag on every faced part.
     _board_rate, _board_note = _board_sheet_rate(_cost_family, thickness)
     _constructed = None
-    if _faced_family and not _board_rate:
+    if _faced_family and (not _board_rate or part.get("_build_from_drawn_decor")):
         # BUILT FROM THE CATALOGUE BEFORE ANY MARKET GUESS (D-676): see FACED_BOARD_CONSTRUCTION.
+        # Ahead of a class rate where the drawn décor's laminate is held (D-720), built on the
+        # finished board where the core and its faces are both known (D-722).
         try:
-            _constructed = _constructed_faced_board(part, _faced_family, thickness)
+            _constructed = _constructed_faced_board(
+                part, _faced_family, part.get("finished_thickness_mm") or thickness)
         except Exception:                                            # noqa: BLE001
             _constructed = None
         if _constructed:
@@ -9534,6 +9621,9 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     _CUT_BOARDS = {"ACRYLIC", "POLYCARBONATE", "PETG", "HIPS", "MDF", "VENEERED_MDF",
                    "OAK_VENEER_MDF", "PLYWOOD", "BIRCH_PLYWOOD", "HDPE_PLASTIC",
                    "FOAMEX", "DIBOND", "TIMBER"}
+    # Boards that are cut, never press-folded: an angle on one is a mitre or a chamfer (D-722).
+    _WOOD_BOARDS = {"MDF", "VENEERED_MDF", "OAK_VENEER_MDF", "PLYWOOD", "BIRCH_PLYWOOD",
+                    "TIMBER", "MFMDF", "MFC", "CHIPBOARD"}
     _CUTTING_OPS = ("laser_cutting", "cnc_routing", "cnc", "punch", "guillotine", "saw")
     # A PUNCH NOBODY STATED, ON HOLES NOBODY MEASURED, IS NOT KEPT (D-592a, review of D-592).
     # The punch switch below no longer fires on a page's circles, but a punch an earlier pass
@@ -10541,6 +10631,14 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         if _fold_evidence:
             ops = list(ops) + ["folding"]
             record_operation(part, "folding", "inference")
+        elif part.get("angles_deg") and not _shape and _mat_u in _WOOD_BOARDS:
+            # A WOOD BOARD IS NOT PRESS-FOLDED (D-722). An angle on an MDF, ply or timber
+            # sheet is a mitre, a bevel or a chamfer; 11908-22's laminated sides were asked
+            # whether they are folded off their 45-degree mitred ends. Said, not asked.
+            part.setdefault("review_flags", []).append(
+                f"angles on {part.get('part_number') or 'this part'} "
+                f"({', '.join(str(a) for a in (part.get('angles_deg') or [])[:4])}°) read as "
+                f"mitres or chamfers: {_mat_u.replace('_', ' ').lower()} is not press-folded")
         elif part.get("angles_deg") and not _shape:
             try:
                 from source_precedence import raise_manufacturing_question as _ask_fold
@@ -12418,7 +12516,8 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     labour = estimate_labour_costs(process, job_quantity=order_qty, material=part.get("normalized_material"))
     if debug:
         print(f"[DEBUG] estimate_part labour done {part_number}")
-    system_cost = _resolve_part_system_cost(part)
+    system_cost = (_consumable_share_cost(part) if part.get("consumable_share")
+                   else _resolve_part_system_cost(part))
     if debug:
         print(f"[DEBUG] estimate_part system_cost done {part_number}")
     system_unit_cost = _safe_float(system_cost.get("applied_unit_cost"))
@@ -14130,6 +14229,39 @@ def _reconcile_bought_in(parts: List[Dict[str, Any]], *, all_text: str = "", deb
 
 
 # ── ALWAYS A NUMBER: a real line is never left reading as free ──────────────────────────────
+def _consumable_share_cost(part: Dict[str, Any]) -> Dict[str, Any]:
+    """A consumable allowance line priced as its SHARE of a pack (D-723): the reference
+    pack's own price from the ordinary chain, SDI's sources first, times the share. A pack
+    nobody can price leaves the line unpriced and asked — never a whole pack per unit."""
+    share = part.get("consumable_share") or {}
+    ref_item = str(share.get("reference_item") or "").strip()
+    count = _safe_float(share.get("count")) or 0.0
+    ref = {"part_number": "", "description": ref_item, "quantity": 1,
+           "page_roles": ["bought_in"], "is_bought_in": True}
+    try:
+        r = _resolve_part_system_cost(ref) if ref_item and count > 0 else {}
+    except Exception:                                                # noqa: BLE001
+        r = {}
+    each = _safe_float((r or {}).get("applied_unit_cost"))
+    if each and each > 0:
+        out = dict(r)
+        out["applied_unit_cost"] = round(each * count, 4)
+        part.setdefault("review_flags", []).append(
+            f"consumable share: {count:g} x '{ref_item}' at £{each:,.2f} a pack = "
+            f"£{each * count:,.4f} ({share.get('working')}; {share.get('basis')})")
+        return out
+    part.setdefault("risk_flags", []).append("consumable_share_unpriced")
+    try:
+        source_precedence.raise_manufacturing_question(
+            part, f"{part.get('description')}: no price for '{ref_item}'",
+            f"the allowance ({share.get('working')}) is not costed",
+            f"give the price of a pack of {ref_item}, and the share is costed from it",
+            "estimator.consumable_share")
+    except Exception:                                                # noqa: BLE001
+        pass
+    return {"applied_unit_cost": None, "result": (r or {}).get("result") or {}}
+
+
 def _last_resort_price_is_needed(pe: Dict[str, Any]) -> bool:
     """Is this a REAL line that ended with no money at all — 'reads as free' — and may take a
     last-resort market price? Refuses every line that is £0 for a reason.
@@ -14142,6 +14274,9 @@ def _last_resort_price_is_needed(pe: Dict[str, Any]) -> bool:
     figure like any other. Only a line that is £0 ON PURPOSE is left alone."""
     # Placeholders (packaging/delivery) and customer-supplied lines are £0 by design.
     if pe.get("_commercial_placeholder") or str(pe.get("source") or "") == "commercial_placeholder":
+        return False
+    # A consumable share with no pack price stays asked, never a whole pack (D-723).
+    if "consumable_share_unpriced" in (pe.get("risk_flags") or []):
         return False
     _rf = " ".join(str(f) for f in (pe.get("risk_flags") or []))
     if "customer_supplied_zero_cost" in _rf:
