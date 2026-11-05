@@ -321,6 +321,13 @@ _DXF_MATERIAL_TOKENS: List[Tuple[str, str]] = [
     (r"\bACRYLIC\b|\bACR\b|\bPERSPEX\b|\bPMMA\b", "ACRYLIC"),
     (r"POLYCARB|\bPC\b", "POLYCARBONATE"),
     (r"\bCARD\b|GREYBOARD|GREY\s*BOARD", "CARD"),
+    # MFMDF IS A BOARD OF ITS OWN, AND IT COMES BEFORE MDF AND MFC (D-727). 12677-01-03J's flat
+    # is named "9mm Black MFMDF" and the GA's title block prints "PRE LAMINATED BOARD, MFMDF".
+    # Neither spelling was here, so the filename gave nothing, the title block gave only
+    # BOARD, and the 31 Oct book costed the panel as MFC on a market sheet price of GBP 6.50.
+    # Melamine-faced MDF is read before MELAMINE FACED below, which would call it chipboard.
+    (r"\bMFMDF\b|\bMF\s*-?\s*MDF\b|MELAMINE\s*FACED\s*MDF|PRE\s*-?\s*LAMINATED\s*MDF",
+     "MFMDF"),
     (r"\bMDF\b", "MDF"),
     # MFC is Melamine Faced Chipboard and is the commonest shop-fitting board there is —
     # 12422-24's panel is 28mm of it. The spelled-out name was recognised and the trade
