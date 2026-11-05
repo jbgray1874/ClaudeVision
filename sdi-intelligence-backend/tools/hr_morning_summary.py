@@ -132,9 +132,18 @@ def gather(update=False, now=None, sleep=time.sleep) -> dict:
     # With InVentry not answering there is nothing to compare: everyone would
     # look missing from it.
     compared = [] if on_site is None else people
+    # Who is clocked in, by name. A clocking open past the limit is a forgotten
+    # clock-out, listed on its own, not someone in the building.
+    clocked = []
+    for r in (snap or {}).get("on_site") or []:
+        t = _parse((r.get("clocking") or {}).get("start"))
+        if t and (now - t).total_seconds() / 3600 <= cfg.BLIP_MAX_CLOCKIN_AGE_HOURS:
+            clocked.append({"name": f"{r.get('first_name', '')} {r.get('surname', '')}".strip() or "?",
+                            "manager": r.get("manager") or "", "since": t.isoformat()})
+    clocked.sort(key=lambda p: p["name"].lower())
     return {
         "time": now.isoformat(), "checked": summary.get("timestamp"),
-        "status": summary.get("status"), "clocked_in": summary.get("on_site"),
+        "status": summary.get("status"), "clocked_in": len(clocked) if snap else None, "people_in": clocked,
         "staff_checked": summary.get("employees_checked"), "notes": notes, "push": push,
         "inventry_problem": inventry_problem,
         "on_inventry": None if on_site is None else len(on_site),
@@ -162,11 +171,13 @@ def attention(d: dict) -> list:
     if push and push.get("status") != "ok":
         out.append(("InVentry was not updated", (push.get("warnings") or ["A safety check stopped it."])[0], []))
     if d["not_on_inventry"]:
-        out.append((f"Clocked in, not on InVentry's fire list: {_people(len(d['not_on_inventry']))}",
-                    "Not matched to an InVentry record, so the update cannot sign them in. See Data issues "
-                    "in the app." if push and push.get("status") == "ok" else
-                    "InVentry's own list is missing them until it is updated; the app's Roll call includes "
-                    "them. Press Update InVentry in the app to sign them in.",
+        out.append((f"Missing from InVentry's fire list: {_people(len(d['not_on_inventry']))}",
+                    "Clocked in on BrightHR, but not matched to an InVentry record, so the update could not "
+                    "sign them in. The Roll call in the app includes them. See Data issues in the app."
+                    if push and push.get("status") == "ok" else
+                    "Clocked in on BrightHR, but not signed in on InVentry, so InVentry's own list (the one "
+                    "reception would use in a fire) does not include them. The Roll call in the app does. "
+                    "To fix it, press Update InVentry in the app: it signs them in.",
                     d["not_on_inventry"]))
     if d["not_clocked_in"]:
         out.append((f"On InVentry, no longer clocked in: {_people(len(d['not_clocked_in']))}",
@@ -196,7 +207,9 @@ def compose(d: dict, link: str) -> tuple:
     things = sum(1 for h, _, _ in todo if h != "Note")
     subject = (f"HR morning summary: {d['clocked_in'] if d['clocked_in'] is not None else '?'} clocked in, "
                + (f"{things} to check" if things else "nothing to check"))
-    figures = [("Clocked in on BrightHR", f"{d['clocked_in']} of {d['staff_checked']} staff checked"),
+    forgot = len(d.get("forgotten") or [])
+    figures = [("Clocked in on BrightHR", f"{d['clocked_in']} of {d['staff_checked']} staff checked"
+                + (f" (not counting {forgot} forgotten clock-out{'' if forgot == 1 else 's'})" if forgot else "")),
                ("On InVentry's fire list", "InVentry did not answer" if d["on_inventry"] is None else
                 f"{d['on_inventry']}" + (f" ({d['at_reception']} signed in at reception)" if d["at_reception"] else ""))]
     if push and push.get("status") == "ok":
@@ -234,6 +247,29 @@ def compose(d: dict, link: str) -> tuple:
         where = f"Each is in Saved roll calls in the app, and as a spreadsheet in {hr_rollcall.folder()}."
         text.append(where)
         page.append(f"<p>{html.escape(where)}</p>")
+
+    # Last, so what needs doing stays at the top: everyone clocked in, by
+    # manager where the HR managers list says who that is.
+    people_in = d.get("people_in") or []
+    text += ["", f"WHO IS CLOCKED IN ON BRIGHTHR ({len(people_in)})"]
+    page.append(f"<h3>Who is clocked in on BrightHR ({len(people_in)})</h3>")
+    if not people_in:
+        text.append("Nobody.")
+        page.append("<p>Nobody.</p>")
+    groups = {}
+    for p in people_in:
+        groups.setdefault(p["manager"].strip() or "No manager listed", []).append(p)
+    named = any(k != "No manager listed" for k in groups)
+    for mgr in sorted(groups, key=lambda k: (k == "No manager listed", k.lower())):
+        rows = groups[mgr]
+        entries = [f"{p['name']} {_local(p['since'], '%H:%M')}" for p in rows]
+        if named:
+            text.append(f"{mgr} ({len(rows)})")
+            page.append(f"<p><b>{html.escape(mgr)} ({len(rows)})</b><br>")
+        else:
+            page.append("<p>")
+        text += [f"  {e}" for e in entries]
+        page.append(html.escape(", ".join(entries)) + "</p>")
 
     if link:
         text += ["", f"Open HRInventry Anywhere: {link}", f"The roll call: {link}#roll"]

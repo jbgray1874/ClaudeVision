@@ -98,8 +98,8 @@ def test_with_update_inventry_is_updated_first_and_read_after(server):
 
 def test_the_email_has_the_figures_the_names_and_the_link(server):
     subject, page, text = ms.compose(ms.gather(now=NOW), ms.app_url())
-    assert subject == "HR morning summary: 3 clocked in, 4 to check"
-    for said in ("New Starter", "Old Leaver", "Sam Forgot (80 days)", "Press Update InVentry",
+    assert subject == "HR morning summary: 2 clocked in, 4 to check"
+    for said in ("New Starter", "Old Leaver", "Sam Forgot (80 days)", "press Update InVentry",
                  "https://sdi.example/app/hr-inventry.html#roll", "1 signed in at reception"):
         assert said in text, said
     assert "https://sdi.example/app/hr-inventry.html#roll" in page
@@ -177,7 +177,7 @@ def test_a_check_already_running_is_waited_for(server):
     server["blip"] = [BUSY, dict(server["blip"][0])]
     waited = []
     d = ms.gather(now=NOW, sleep=waited.append)
-    assert waited == [ms.BUSY_WAIT_SECONDS] and d["status"] == "ok" and d["clocked_in"] == 3
+    assert waited == [ms.BUSY_WAIT_SECONDS] and d["status"] == "ok" and d["clocked_in"] == 2
 
 
 def test_busy_throughout_reports_the_last_check_not_zero(server, tmp_path):
@@ -213,7 +213,8 @@ def test_a_long_list_gives_twenty_names_and_points_to_the_app(server):
     d["not_on_inventry"] = [f"Person {i:02d}" for i in range(89)]
     _, _, text = ms.compose(d, ms.app_url())
     assert "Person 19" in text and "Person 20" not in text and "and 69 more: see the app" in text
-    assert "the app's Roll call includes them" in text
+    assert "Missing from InVentry's fire list: 89 people" in text
+    assert "the one reception would use in a fire" in text and "The Roll call in the app does" in text
 
 
 def test_one_day_is_a_day():
@@ -247,3 +248,27 @@ def test_the_task_runs_at_0845_on_weekdays_as_the_service():
 def test_the_link_opens_the_roll_call_tab():
     page = (BACKEND / "appportal" / "hr-inventry.html").read_text(encoding="utf-8")
     assert "location.hash.slice(1)" in page and '.tab[data-v="' in page
+
+
+def test_the_email_ends_with_who_is_clocked_in_without_the_forgotten(server):
+    """James: "we don't actually show who's clocked in". The count leaves out
+    forgotten clock-outs, who are not in the building, and the names follow."""
+    d = ms.gather(now=NOW)
+    _, page, text = ms.compose(d, ms.app_url())
+    assert "Clocked in on BrightHR: 2 of 190 staff checked (not counting 1 forgotten clock-out)" in text
+    names = text.split("WHO IS CLOCKED IN ON BRIGHTHR (2)", 1)[1].split("Open HRInventry", 1)[0]
+    assert "New Starter" in names and "Zoe Test" in names and "Sam Forgot" not in names
+    assert names.index("New Starter") < names.index("Zoe Test")          # by name
+    assert "Who is clocked in on BrightHR (2)" in page
+
+
+def test_who_is_in_is_grouped_by_manager_when_the_list_has_them(server, tmp_path):
+    ms.gather(now=NOW)
+    snap = json.loads((tmp_path / "blip_latest.json").read_text(encoding="utf-8"))
+    snap["on_site"][0]["manager"] = "Jo Manager"
+    (tmp_path / "blip_latest.json").write_text(json.dumps(snap), encoding="utf-8")
+    server["blip"] = [dict(server["blip"][0])]
+    d = ms.gather(now=NOW)                         # the fresh check is used as it is
+    _, _, text = ms.compose(d, ms.app_url())
+    names = text.split("WHO IS CLOCKED IN ON BRIGHTHR", 1)[1]
+    assert names.index("Jo Manager (1)") < names.index("Zoe Test") < names.index("No manager listed (1)")
