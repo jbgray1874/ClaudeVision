@@ -162,11 +162,13 @@ def attention(d: dict) -> list:
     if push and push.get("status") != "ok":
         out.append(("InVentry was not updated", (push.get("warnings") or ["A safety check stopped it."])[0], []))
     if d["not_on_inventry"]:
-        out.append((f"Clocked in, not on InVentry's fire list: {_people(len(d['not_on_inventry']))}",
-                    "Not matched to an InVentry record, so the update cannot sign them in. See Data issues "
-                    "in the app." if push and push.get("status") == "ok" else
-                    "InVentry's own list is missing them until it is updated; the app's Roll call includes "
-                    "them. Press Update InVentry in the app to sign them in.",
+        out.append((f"Missing from InVentry's fire list: {_people(len(d['not_on_inventry']))}",
+                    "Clocked in on BrightHR, but not matched to an InVentry record, so the update could not "
+                    "sign them in. The Roll call in the app includes them. See Data issues in the app."
+                    if push and push.get("status") == "ok" else
+                    "Clocked in on BrightHR, but not signed in on InVentry, so InVentry's own list (the one "
+                    "reception would use in a fire) does not include them. The Roll call in the app does. "
+                    "To fix it, press Update InVentry in the app: it signs them in.",
                     d["not_on_inventry"]))
     if d["not_clocked_in"]:
         out.append((f"On InVentry, no longer clocked in: {_people(len(d['not_clocked_in']))}",
