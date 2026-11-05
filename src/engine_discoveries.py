@@ -191,6 +191,10 @@ _ENVIRONMENT = {
     # The read could not be held to a calculated sheet because none was read back (D-596): on
     # a machine with no Excel that is the only honest answer, for the same reason as above.
     "read_charge_unverified",
+    # The models were read by the Document Manager backup because no SolidWorks seat could
+    # run here (SCRUM-184): saved values only, a formed part's blank left to the worker. The
+    # engine did the honest thing with the machine it was given; the fix is a seat, not code.
+    "native_extract_from_docmgr",
 }
 
 _NOT_OURS = _NOT_OURS | _ENVIRONMENT

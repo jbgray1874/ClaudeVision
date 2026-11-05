@@ -966,6 +966,31 @@ def check_native_evidence_is_current(summary: Any) -> List[Dict[str, Any]]:
                 f"The SolidWorks analyser reported a problem: {sw.get('analyser_error')}. An "
                 f"existing extract was used if one was present.",
                 analyser_error=sw.get("analyser_error")))
+    if sw.get("extract_reader") == "solidworks_docmgr" and sw.get("found"):
+        # THE MODELS WERE READ, BUT NOT BY SOLIDWORKS (SCRUM-184). The Document Manager backup
+        # reader reads what each file SAVED and measures nothing, so this job's model evidence
+        # is thinner than a worker's read in ways the sheet does not otherwise show: no
+        # bounding box, volume or surface area anywhere, and a mass or flat pattern only where
+        # a file saved one. A WARNING by itself — the values it did read are real and ranked
+        # below every measurement. BLOCKING when a formed part saved no flat pattern and has
+        # no DXF: that part's blank is not measured by anything, and the price must not rest
+        # on a guess at it.
+        _need = list(((sw.get("applied") or {}) if isinstance(sw.get("applied"), dict)
+                      else {}).get("needs_solidworks_worker_parts") or [])
+        out.append(_violation(
+            "native_extract_from_docmgr", BLOCKING if _need else WARNING,
+            f"The SolidWorks models were read by the Document Manager BACKUP reader, not by "
+            f"SolidWorks ({sw.get('docmgr_backup_reason') or 'reason not recorded'}). It reads "
+            f"the values each file saved and measures nothing — "
+            f"{', '.join(sw.get('docmgr_not_saved') or ['bounding box', 'volume', 'surface area'])}"
+            f" were not supplied, and nothing was guessed in their place. Its values rank below "
+            f"a DXF and below the SolidWorks worker."
+            + (f" {len(_need)} formed part(s) saved no flat pattern and have no DXF, so their "
+               f"blanks are not measured by anything: {', '.join(str(p) for p in _need[:10])}. "
+               f"Run the SolidWorks worker or supply their DXFs before quoting."
+               if _need else ""),
+            backup_reason=sw.get("docmgr_backup_reason"),
+            needs_solidworks_worker=_need[:20]))
     return out
 
 
