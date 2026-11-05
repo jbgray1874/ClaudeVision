@@ -18,6 +18,7 @@ import changes
 import costs
 import product_suppliers
 import products
+import routes
 
 
 def main():
@@ -41,6 +42,11 @@ def main():
 
     path, summary = boms.build(run, rows, code)
     print(f"BOMs: {path.name}")
+    for k, v in summary.items():
+        print(f"  {k}: {v}")
+
+    path, summary = routes.build(run, rows, code)
+    print(f"Routes: {path.name if path else '-'}")
     for k, v in summary.items():
         print(f"  {k}: {v}")
 
