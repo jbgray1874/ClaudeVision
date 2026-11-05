@@ -1175,6 +1175,19 @@ def check_prices_are_reproducible(summary: Any) -> List[Dict[str, Any]]:
         if len(_p) > len(_by_key.get(_k, "")):
             _by_key[_k] = _p
     _names = sorted(_by_key.values()) or sorted({str(g["where"]) for g in guessed})
+    # ONE LINE PER ITEM, saying how many price records it has (D-700): the report prints a
+    # check's lines one by one, and six records of one ticket holder read as six items.
+    def _item_key(g: Dict[str, Any]) -> str:
+        _p = str(g.get("part") or "").strip()
+        return (re.sub(r"[^A-Z0-9]", "", _p.upper()) or _p.upper()) if _p else str(g["where"])
+    _item_lines: List[Dict[str, Any]] = []
+    for g in guessed:
+        _k = _item_key(g)
+        if any(_item_key(x) == _k for x in guessed[:guessed.index(g)]):
+            continue
+        _n = sum(1 for x in guessed if _item_key(x) == _k)
+        _item_lines.append(dict(g, part=_by_key.get(_k, g.get("part")),
+                                reason=f"{_n} price record{'s' if _n != 1 else ''}"))
     # THIS JOB'S FACTS ONLY (D-603a). The sentence carried another job's history, "one cable
     # line moving from GBP 4.54 to GBP 8.54", into every book that tripped it, so the HPP
     # covering email described a cable this job does not have. And it counted price records,
@@ -1193,7 +1206,7 @@ def check_prices_are_reproducible(summary: Any) -> List[Dict[str, Any]]:
         # spellings and "count=6": the price records, rendered as if they were items. The
         # records are kept for tracing, under a name the report does not print item by item,
         # and their number is said as what it is.
-        parts=_names, records=guessed[:10], count=len(_names),
+        parts=_names, lines=_item_lines[:10], records=guessed[:10], count=len(_names),
         price_records=len(guessed))]
 
 
