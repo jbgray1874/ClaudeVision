@@ -36,7 +36,7 @@ signal that carries knowledge the drawing does not.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 __all__ = [
     "rank", "may_overwrite", "apply_field", "source_of", "SOURCE_RANK", "MISSING",
@@ -1490,7 +1490,8 @@ def settle_companion_facts(part: Dict[str, Any]) -> List[str]:
 # ── WHAT A READER CANNOT SETTLE, IT ASKS ─────────────────────────────────────────────────
 
 def raise_manufacturing_question(part: Dict[str, Any], issue: str, assumption: str,
-                                 action: str, source: str) -> bool:
+                                 action: str, source: str,
+                                 operations: Optional[Sequence[str]] = None) -> bool:
     """Put a question a reader cannot settle on the part, once (D-382's channel, D-383).
 
     costed_facts counts every part's manufacturing_questions as manufacturing decisions, beside
@@ -1502,8 +1503,20 @@ def raise_manufacturing_question(part: Dict[str, Any], issue: str, assumption: s
     qs = part.setdefault("manufacturing_questions", [])
     if not isinstance(qs, list):
         return False
-    if any(isinstance(q, dict) and q.get("issue") == issue for q in qs):
-        return False
-    qs.append({"issue": str(issue), "assumption": str(assumption or ""),
-               "action": str(action or ""), "source": str(source or "")})
+    _ops = [str(o) for o in (operations or []) if o]
+    for _old in qs:
+        if isinstance(_old, dict) and _old.get("issue") == issue:
+            # Asked already, perhaps by a pass that did not name the operation: it gains it.
+            if _ops and not _old.get("operations"):
+                _old["operations"] = list(_ops)
+            return False
+    q: Dict[str, Any] = {"issue": str(issue), "assumption": str(assumption or ""),
+                         "action": str(action or ""), "source": str(source or "")}
+    # THE OPERATIONS IT ASKS ABOUT (D-701). A question about an operation is worth that
+    # operation's charged rows, not the part's whole line: 12693-02's "Welding of 01M:
+    # timed as one joint" carried £49.10, the tube's material, beside a weld row of £25.06.
+    # Named here, costed_facts prices it from those rows (D-698) or gives no figure.
+    if _ops:
+        q["operations"] = _ops
+    qs.append(q)
     return True

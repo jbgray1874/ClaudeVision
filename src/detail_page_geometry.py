@@ -1933,7 +1933,8 @@ def bound_cutting_to_blank(part: Dict[str, Any], length_mm: Any = None,
                      f"kept as read because {why} — the page's lines may include other views, "
                      f"notes and the title block, so the figure is a candidate, not a measurement",
                      "give the DXF, or confirm the blank, the hole count and the internal cutting",
-                     "detail_page_geometry.bound_cutting_to_blank")
+                     "detail_page_geometry.bound_cutting_to_blank",
+                     operations=["laser_cutting", "plasma_cutting", "waterjet_cutting", "cnc_routing"])
             except Exception:                                        # noqa: BLE001
                 pass
         return []
@@ -1990,7 +1991,8 @@ def bound_cutting_to_blank(part: Dict[str, Any], length_mm: Any = None,
                  + " — a provisional allowance; the holes and internal cutting on its drawing "
                    "were not measured, and the page's lines are not them",
                  "give the DXF, or the hole count and sizes, and the cutting is costed from it",
-                 "detail_page_geometry.bound_cutting_to_blank")
+                 "detail_page_geometry.bound_cutting_to_blank",
+                 operations=["laser_cutting", "plasma_cutting", "waterjet_cutting", "cnc_routing"])
         except Exception:                                            # noqa: BLE001
             pass
     return notes
@@ -2135,7 +2137,7 @@ def stamp_rolled_radii(parts: Any, summary: Mapping[str, Any]) -> List[str]:
             from source_precedence import raise_manufacturing_question as _ask
             _ask(part, f"Rolling of {pn}: R{r:g} from its own sheet",
                  why, "confirm it is rolled to this radius, and the rolling time",
-                 "detail_page_geometry.stamp_rolled_radii")
+                 "detail_page_geometry.stamp_rolled_radii", operations=["rolling"])
         except Exception:                                            # noqa: BLE001
             pass
         marked.append(pn)
