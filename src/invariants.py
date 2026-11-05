@@ -991,6 +991,29 @@ def check_native_evidence_is_current(summary: Any) -> List[Dict[str, Any]]:
                if _need else ""),
             backup_reason=sw.get("docmgr_backup_reason"),
             needs_solidworks_worker=_need[:20]))
+    elif sw.get("docmgr_topped_up") and sw.get("found"):
+        # SOLIDWORKS READ MOST OF THE MODELS AND THE BACKUP READ THE REST (D-706). The files
+        # the worker reached keep its measurements; the ones it opened and could not read were
+        # read by the Document Manager in the same run, from what each saved. Same rule as the
+        # whole-job case for those files: a WARNING, BLOCKING when one of them is a formed part
+        # with no saved flat and no DXF.
+        _need = list(((sw.get("applied") or {}) if isinstance(sw.get("applied"), dict)
+                      else {}).get("needs_solidworks_worker_parts") or [])
+        _top = [str(p) for p in (sw.get("docmgr_topped_up") or [])]
+        _names = [re.split(r"[\\/]", p)[-1] for p in _top]
+        out.append(_violation(
+            "native_extract_from_docmgr", BLOCKING if _need else WARNING,
+            f"SolidWorks could not read {len(_top)} model file(s) in this run, and the Document "
+            f"Manager BACKUP reader read them from what each file saved: "
+            f"{', '.join(_names[:10])}{' and more' if len(_names) > 10 else ''}. Every other "
+            f"file keeps the SolidWorks worker's values. For these, nothing was measured and "
+            f"their values rank below a DXF and below the worker."
+            + (f" {len(_need)} formed part(s) saved no flat pattern and have no DXF, so their "
+               f"blanks are not measured by anything: {', '.join(str(p) for p in _need[:10])}. "
+               f"Run the SolidWorks worker or supply their DXFs before quoting."
+               if _need else ""),
+            backup_reason=sw.get("docmgr_backup_reason"), topped_up=_top[:20],
+            needs_solidworks_worker=_need[:20]))
     return out
 
 

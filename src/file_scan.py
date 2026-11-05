@@ -3672,6 +3672,18 @@ def _finalize_scan_summary(
                           + (f" {len(_dm_need)} formed part(s) saved no flat pattern and need "
                              f"the worker: {', '.join(_dm_need[:8])}" if _dm_need else ""),
                           flush=True)
+                elif summary["solidworks_native"].get("docmgr_topped_up"):
+                    # D-706: SolidWorks read most files; the backup read the ones it could not.
+                    _dm_top = summary["solidworks_native"]["docmgr_topped_up"]
+                    print(f"   [solidworks] {len(_dm_top)} model file(s) SolidWorks could not "
+                          f"read were read by the Document Manager BACKUP reader in this run: "
+                          f"{', '.join(Path(str(p)).name for p in _dm_top[:8])}. Saved values "
+                          f"only for those; every other file keeps the worker's values.",
+                          flush=True)
+                if summary["solidworks_native"].get("docmgr_still_unread"):
+                    print(f"   [solidworks] still unread by either reader: "
+                          f"{', '.join(Path(str(p)).name for p in summary['solidworks_native']['docmgr_still_unread'][:8])}",
+                          flush=True)
                 if _sw_job.meta.get("extract_stale"):
                     print("   [solidworks] EXTRACT IS STALE — the native models have changed "
                           "since it was taken. The estimate is built on older geometry and "

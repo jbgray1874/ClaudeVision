@@ -39,7 +39,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from source_precedence import apply_field as _apply_field
 
@@ -72,6 +72,10 @@ DOCMGR_APPLIED_MATERIAL_SOURCE = "solidworks_docmgr_applied_material"
 # ever, so a job read once without a seat would never be read WITH one again. Under its own
 # name the next run still tries the worker first, and falls back to this only when it must.
 DOCMGR_EXTRACT_FILENAME = "_sw_docmgr_extract.json"
+# THE FILES SOLIDWORKS OPENED AND COULD NOT READ, read again by the Document Manager in the
+# same run (D-706). Its own name for the same reason as above: the SolidWorks extract is left
+# exactly as the worker wrote it, so the next run with a healthy seat reads those files again.
+DOCMGR_TOPUP_FILENAME = "_sw_docmgr_topup.json"
 # The licence key's NAME. The value is read only to check it is present and to scrub it out of
 # any error text; it reaches the reader through the inherited environment, never argv.
 DOCMGR_KEY_ENV = "SDI_SW_DOCMGR_KEY"
@@ -855,8 +859,19 @@ def native_extract_for_job(
                                           analyser=docmgr_analyser, python_exe=python_exe)
 
     records = load_native_extract(jp) if jp else []
+    # SOLIDWORKS READ SOME FILES AND NOT OTHERS (D-706). A seat that drops out partway through a
+    # batch, a model open in a designer's session, a file it will not open: the worker still
+    # exits zero with the files it reached, and the rest were left unread. With the backup on,
+    # the Document Manager reads exactly those files now, in this run, and their records take
+    # the place of the failures. Files SolidWorks did read keep the worker's values.
+    _topup_meta: Dict[str, Any] = {}
+    if (_docmgr_on and not _docmgr_meta and _analyse_from is not None and jp is not None
+            and records and native_files_state(_analyse_from)["count"]):
+        records, _topup_meta = _docmgr_topup(records, jp, _analyse_from,
+                                             analyser=docmgr_analyser, python_exe=python_exe)
     job = normalize_native_extract(records, job_codes=job_codes)
     job.meta.update(_docmgr_meta)
+    job.meta.update(_topup_meta)
     job.meta.setdefault("extract_path", str(jp) if jp else None)
     if (_analyse_from is not None and folder is not None
             and Path(_analyse_from) != Path(folder)):
@@ -957,6 +972,18 @@ def native_extract_for_job(
                  if _dm_err else None)) or (
                 f"native models are in {_where} but no extract has been generated. "
                 "Run tools/solidworks/sw_native_analyse.py on a machine with SolidWorks")
+    if _topup_meta.get("docmgr_topped_up"):
+        # THE COUNTS SAY WHAT THIS RUN HAS, not what the worker alone managed: a file the
+        # Document Manager read in place of a failure is read, and only what neither reader
+        # could open is still failed.
+        _done = {_path_key(p) for p in _topup_meta["docmgr_topped_up"]}
+        _n = len(_done)
+        job.meta["files_read"] = int(job.meta.get("files_read") or 0) + _n
+        job.meta["files_failed"] = max(0, int(job.meta.get("files_failed") or 0) - _n)
+        job.meta["extract_errors"] = [e for e in (job.meta.get("extract_errors") or [])
+                                      if not (isinstance(e, dict)
+                                              and _path_key(e.get("path")) in _done)]
+        job.meta["extract_incomplete"] = False
     if _run_error:
         job.meta["analyser_error"] = _run_error
     elif _docmgr_meta.get("docmgr_error"):
@@ -1283,8 +1310,10 @@ def _redact_docmgr_key(text: Any) -> str:
 def _run_docmgr_analyser(folder: str | Path, analyser: Optional[str | Path] = None,
                          python_exe: Optional[str] = None,
                          out_path: Optional[str | Path] = None,
-                         produced: Optional[List[str]] = None) -> Optional[str]:
+                         produced: Optional[List[str]] = None,
+                         extra_args: Optional[Sequence[str]] = None) -> Optional[str]:
     """Invoke sw_docmgr_analyse.py on a folder — the same subprocess pattern as _run_analyser.
+    `extra_args` passes the reader's own options, such as --only-from (D-706).
 
     Returns None on success or a description of the failure, with the licence key scrubbed
     out. The key is never put on the command line, where any process list would show it; the
@@ -1300,6 +1329,7 @@ def _run_docmgr_analyser(folder: str | Path, analyser: Optional[str | Path] = No
     cmd = [exe, str(analyser), str(folder)]
     if out_path:
         cmd += ["--out", str(out_path)]
+    cmd += [str(a) for a in (extra_args or ())]
     try:
         r = subprocess.run(cmd, check=False, timeout=1800,
                            capture_output=True, text=True)
@@ -1357,6 +1387,88 @@ def _docmgr_backup(jp: Optional[Path], analyse_from: str | Path, reason: str, *,
     return djp, meta
 
 
+def _path_key(p: Any) -> str:
+    return os.path.normcase(os.path.normpath(str(p or "").strip())) if str(p or "").strip() else ""
+
+
+def _unread_model_paths(records: Sequence[Any]) -> List[str]:
+    """The files the SolidWorks worker opened and got nothing from: an error and no title.
+    A record with a title and a partial error (say, its bounding box) keeps the worker's
+    values; the Document Manager has less to offer on that file, never more."""
+    out: List[str] = []
+    for r in records:
+        if (isinstance(r, dict) and r.get("errors") and not str(r.get("title") or "").strip()
+                and str(r.get("path") or "").strip()
+                and _record_reader(r) != DOCMGR_SOURCE_NAME):
+            out.append(str(r["path"]).strip())
+    return out
+
+
+def _docmgr_topup(records: List[Dict[str, Any]], jp: Path, analyse_from: str | Path, *,
+                  analyser: Optional[str | Path] = None,
+                  python_exe: Optional[str] = None
+                  ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Fill the files SolidWorks could not read with the Document Manager's read of them.
+
+    Returns the records to normalise and the meta that says what happened. A top-up already
+    taken for the same failures of the same files is reused; anything else is read now. The
+    worker's extract is never rewritten."""
+    unread = _unread_model_paths(records)
+    if not unread:
+        return records, {}
+    meta: Dict[str, Any] = {
+        "docmgr_backup_reason": (f"SolidWorks could not read {len(unread)} of "
+                                 f"{sum(1 for r in records if isinstance(r, dict))} model "
+                                 f"file(s) in this run"),
+    }
+    tp = Path(jp).parent / DOCMGR_TOPUP_FILENAME
+    want = sorted({_path_key(p) for p in unread})
+    have = (load_native_payload(tp) or {}).get("_manifest") if tp.exists() else None
+    fresh = bool(isinstance(have, dict) and not _should_run(tp, analyse_from)
+                 and sorted({_path_key(p) for p in (have.get("only") or [])}) == want
+                 and tp.stat().st_mtime >= Path(jp).stat().st_mtime)
+    if not fresh:
+        produced: List[str] = []
+        lst = Path(jp).parent / (DOCMGR_TOPUP_FILENAME + ".list")
+        err: Optional[str]
+        try:
+            lst.write_text("\n".join(unread) + "\n", encoding="utf-8")
+            err = _run_docmgr_analyser(analyse_from, analyser=analyser, python_exe=python_exe,
+                                       out_path=tp, produced=produced,
+                                       extra_args=["--only-from", str(lst)])
+        except OSError as exc:
+            err = f"could not write the list of files to read: {exc}"
+        finally:
+            try:
+                lst.unlink()
+            except OSError:
+                pass
+        if produced and Path(produced[0]) != tp:
+            tp = Path(produced[0])
+        meta["docmgr_ran"] = True
+        if err:
+            meta["docmgr_error"] = err
+    else:
+        meta["docmgr_ran"] = False
+    meta["docmgr_extract_path"] = str(tp)
+    got = {}
+    for r in (load_native_extract(tp) if tp.exists() else []):
+        if (isinstance(r, dict) and r.get("title") and not r.get("errors")
+                and _path_key(r.get("path")) in set(want)):
+            got[_path_key(r.get("path"))] = r
+    if not got:
+        return records, meta
+    merged = [r for r in records
+              if not (isinstance(r, dict) and _path_key(r.get("path")) in got
+                      and r.get("errors") and not str(r.get("title") or "").strip())]
+    merged += list(got.values())
+    meta["docmgr_topped_up"] = sorted(str(r.get("path")) for r in got.values())
+    left = [p for p in unread if _path_key(p) not in got]
+    if left:
+        meta["docmgr_still_unread"] = left
+    return merged, meta
+
+
 def extract_reader_summary(job: Any) -> Dict[str, Any]:
     """Which reader produced this job's extract, and why — for the estimate summary. The COM
     analyser's extract reports `solidworks_api` and nothing else, exactly as before."""
@@ -1364,7 +1476,8 @@ def extract_reader_summary(job: Any) -> Dict[str, Any]:
     out: Dict[str, Any] = {"source": m.get("extract_source") or SOURCE_NAME,
                            "extract_reader": m.get("extract_reader") or SOURCE_NAME}
     for k in ("docmgr_backup_reason", "docmgr_error", "docmgr_extract_path",
-              "docmgr_not_saved", "docmgr_needs_worker", "com_extract_set_aside"):
+              "docmgr_not_saved", "docmgr_needs_worker", "com_extract_set_aside",
+              "docmgr_topped_up", "docmgr_still_unread", "extract_readers"):
         if m.get(k) not in (None, "", [], {}):
             out[k] = m[k]
     return out

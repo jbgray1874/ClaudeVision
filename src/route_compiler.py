@@ -5582,6 +5582,29 @@ def compile_job_route(
         operation_quantities = part.get("operation_qty_per_unit") or {}
         sequences = part.get("operation_sequence") or {}
 
+        # A LEAF'S OWN OPERATION IS PART-SCOPED (D-707). The read's route line "cnc_routing,
+        # scope assembly, 12693-03-04J and its five panels" stamped "assembly" on every panel
+        # it named, and each panel's own cut then became an assembly event on the panel itself:
+        # a charge with no board thickness, outside the shared set-up of panels cut from one
+        # board (D-671), so two 12 mm strip types took a full set-up each where the medium's,
+        # read part-scoped, shared one. Assembly scope means once per assembly; on a part with
+        # no children, charged on itself, it can only mean once per part.
+        def _own_scope(_op: str, _pn: str = part_number) -> str:
+            _sc = str(scopes.get(_op) or "part").strip().lower()
+            if _sc not in VALID_SCOPES:
+                return "part"
+            if (_sc == "assembly" and kinds.get(_pn) != "assembly"
+                    and not ((graph.get("children") or {}).get(_pn))):
+                _issue = {"code": "leaf_operation_scoped_as_assembly",
+                          "part_number": _pn, "operation": _op,
+                          "detail": (f"the read scoped {_pn}'s {_op} to an assembly; "
+                                     f"{_pn} has no parts of its own, so it is charged "
+                                     f"once per {_pn}, part-scoped")}
+                if _issue not in issues:
+                    issues.append(_issue)
+                return "part"
+            return _sc
+
         # A PERSON'S RULING REACHES THE ROUTE DIRECTLY (D-388). estimator_decisions.operations_off
         # is stamped on the record by file_scan and was honoured only by the estimator, which
         # wrote it into operations_ruled_out as it costed; a route compiled from the saved
@@ -5818,9 +5841,7 @@ def compile_job_route(
                                 ).add(dress_event_id)
                         event_ids.append(dress_event_id)
                 if not event_ids:
-                    scope = str(scopes.get(operation) or "part").strip().lower()
-                    if scope not in VALID_SCOPES:
-                        scope = "part"
+                    scope = _own_scope(operation)
                     compatibility_target = part_number
                     finish_text = str(
                         part.get("normalized_finish")
@@ -5847,7 +5868,7 @@ def compile_job_route(
                     target_id = (
                         template.target_id if template else compatibility_target
                     )
-                    scope = template.scope if template else scopes.get(operation, "part")
+                    scope = template.scope if template else _own_scope(operation)
                     route_id = template.route_id if template else ""
                     claim_status = REQUIRED
                     if template is None and operation == "assembly":
