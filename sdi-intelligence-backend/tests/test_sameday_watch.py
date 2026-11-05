@@ -90,6 +90,23 @@ class WhatItChecksTests(unittest.TestCase):
         self.assertEqual(keys(run(Fake(**{"msappproxy.net/sameday/": (0, "x")}))[0]).get("public"), "warn")
         self.assertEqual(run(services={"WAPCSvc": "absent"})[0], [])       # a connector elsewhere is not a problem
 
+    def test_the_phone_check_goes_the_way_a_phone_does(self):
+        """5 Nov: the first run said the phone address was down - SDI Intelligence asks 127.0.0.1 to sign in."""
+        os.environ["SDI_API_KEY"] = "machine-key-not-real"
+        try:
+            fake = Fake()
+            self.assertEqual(run(fake)[0], [])
+            sent = [h for url, h in fake.asked if "8071/sameday" in url]
+            self.assertEqual(sent, [{"X-SDI-Key": "machine-key-not-real"}])
+            said = json.dumps(run(Fake(**{"8071/sameday/api/version": (401, {"error": "Signed out"})})))
+            self.assertIn('"phone"', said)                      # with the key, a refusal IS a problem
+            self.assertNotIn("machine-key-not-real", said)
+        finally:
+            os.environ.pop("SDI_API_KEY", None)
+        problems, facts = run(Fake(**{"8071/sameday/api/version": (401, {"error": "Signed out"})}))
+        self.assertEqual(problems, [])                         # no key: never a false "down"
+        self.assertIn("answering", facts["phone"])
+
     def test_the_keys(self):
         self.assertEqual(keys(run(Fake(**{"api.openai.com": (401, {"error": "bad key"})}))[0]).get("openai"), "down")
         self.assertEqual(keys(run(env={"ANTHROPIC_API_KEY": "sk-ant-" + "y" * 40})[0]).get("openai"), "down")
