@@ -1475,3 +1475,21 @@ of them from that morning's extract (rule 1; SCRUM-166, 164, 165).**
 - E-mail drafts to Ethan (assumptions and questions, the Run 2 fixes) were written on 4 Nov. Send
   them bcc, per Claire Newall's rule, with no supplier names on CC.
 - Reconcile the Run 3 load with Jim against the control totals in section 17.
+
+### 19.5 Ethan, 5 Nov 09:13: Run 3 product, SO and PO imports gave thousands of errors
+
+Ethan loaded the remaining product master data, then the sales and purchase orders, on 4 Nov.
+He's going through the logs, and will RTZ SDIMIG once the fixes are in. Likely causes, checked
+against the files (ask for the logs; don't wait):
+- **The product file is complete (rule 1b):** 19,883 products, 16,499 already in X3 from Run 2. A
+  create-only import fails every existing one. Ask whether the import can update. If not, send
+  the 3,384 new products as a second file next to the complete one.
+- **512 existing products change category** (495 PHANT → FGML, 14 FGSL → FGML, 3 others). X3 may
+  refuse a category change on an existing product.
+- **Knock-on:** 400 of 3,712 SO lines, 179 of 733 PO lines and 2,082 of 8,621 stock lots are on
+  the new products.
+- Find out which file versions he loaded. The evening set (`Current_mapped_set_2026-11-04-pm`)
+  replaces the earlier ones.
+
+Reply drafted 5 Nov (`Email_reply_to_Ethan_2026-11-05.md`, scratchpad). It asks for the logs,
+whether the import can update, how to change categories, and which files were loaded.
