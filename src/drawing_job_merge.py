@@ -578,6 +578,17 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
         part["flat_pattern_detected"] = True
         part["overall_length_mm"] = flat["blank_length_mm"]
         part["overall_width_mm"] = flat["blank_width_mm"]
+        # A MEASURED FLAT REPLACES A GUESSED BLANK (D-724). The page-text fallback writes the
+        # top-level blank from the two largest numbers on the sheet when nothing else has
+        # one yet; the DXF arrives later and wrote only normalized_geometry, so the guess
+        # stayed on the field several pricers read and the report named it as the blank's
+        # source. Submitted through the resolver, and only over a held blank weaker than the
+        # DXF, so a model's flat is never displaced and an empty field stays as it was.
+        for _bf in ("blank_length_mm", "blank_width_mm"):
+            if part.get(_bf) and source_precedence.field_rank(
+                    source_precedence.source_of(part, _bf), _bf) \
+                    < source_precedence.field_rank("dxf_flat_pattern", _bf):
+                _apply_field(part, _bf, flat[_bf], "dxf_flat_pattern")
         reliability = 1.0
         # DXF flat-pattern is what the press brake bends from — ground truth.
         # If it shows 0 bends, this part does NOT fold, even if a shared/document

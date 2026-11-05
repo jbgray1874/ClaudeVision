@@ -119,7 +119,11 @@ def mint(parts: Any, summary: Any) -> List[str]:
                 "bom_parent": apn, "owning_assembly": apn, "_consumable_share_line": True,
                 "consumable_share": {"reference_item": str(r.get("reference_item") or ""),
                                      "count": count, "working": working,
-                                     "basis": str(r.get("basis") or "house allowance")},
+                                     "basis": str(r.get("basis") or "house allowance"),
+                                     # The pack's mass and SDI's own rows to price it by
+                                     # (D-725); absent on a rule that is priced by the pack.
+                                     "pack_kg": r.get("pack_kg"),
+                                     "catalogue_specs": list(r.get("catalogue_specs") or [])},
                 "review_flags": [
                     f"CONSUMABLE ALLOWANCE, PROVISIONAL: {r.get('description')} for {apn} — "
                     f"{working} = {count:g} x '{r.get('reference_item')}'. "

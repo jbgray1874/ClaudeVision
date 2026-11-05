@@ -5294,8 +5294,20 @@ def _researched_board_rate_m2(material: Optional[str], thickness: Optional[float
     cannot return a figure without evidence — that refusal is the producer's, and is the
     whole reason this is allowed to contribute to a total at all.
     """
-    _l = _safe_float(part.get("blank_length_mm"))
-    _w = _safe_float(part.get("blank_width_mm"))
+    # THE BLANK THE SHEET NESTS, NOT A GUESSED ONE (D-724). 11908-22's three panels were
+    # priced on 340 x 400, 350 x 400 and 304 x 400: the top-level blank still held the two
+    # largest numbers in the page text while the measured DXF flat (340 x 290, 350 x 28,
+    # 300 x 28) sat in normalized_geometry, where the sheet read it. The sheet then turned
+    # the engine's money back into a sheet price on the true area, so a 350 x 28 strip
+    # printed GBP 966 a sheet. The shared resolver reads the measured flat first.
+    try:
+        from document_builder import flat_blank_mm as _flat_blank_mm
+        _l, _w = _flat_blank_mm(part)
+    except Exception:                                            # noqa: BLE001
+        _l = _w = None
+    if not (_l and _w):
+        _l = _safe_float(part.get("blank_length_mm"))
+        _w = _safe_float(part.get("blank_width_mm"))
     if not _l or not _w or not material:
         return None
     _area_m2 = round((_l * _w) / 1_000_000.0, 6)
@@ -14236,6 +14248,47 @@ def _consumable_share_cost(part: Dict[str, Any]) -> Dict[str, Any]:
     share = part.get("consumable_share") or {}
     ref_item = str(share.get("reference_item") or "").strip()
     count = _safe_float(share.get("count")) or 0.0
+    # SDI'S OWN TINS, BY THE KILO, BEFORE ANY MARKET LOOKUP (D-725). A share of a pack with a
+    # stated mass is a mass, so SDI Live's adhesive rows price it per kg exactly as the
+    # laminate's bond is priced (D-678): the row named, its pack read off its own
+    # description, nothing converted. The last spec may be a declared stand-in; the line
+    # then says which tin priced it and that the drawn adhesive is a different one.
+    _pack_kg = _safe_float(share.get("pack_kg"))
+    if count > 0 and _pack_kg and share.get("catalogue_specs"):
+        _kg = round(count * _pack_kg, 6)
+        for _spec in share.get("catalogue_specs") or []:
+            if not isinstance(_spec, dict):
+                continue
+            _found = _adhesive_by_its_pack(_spec, "kg")
+            _per = _safe_float(_found.get("gbp_per_unit"))
+            _row = _found.get("row") or {}
+            if not _per or _per <= 0 or not _row:
+                continue
+            _money = round(_kg * _per, 4)
+            _stand = (f" A STAND-IN: SDI holds no {ref_item} row, so the shop's own "
+                      f"{_spec.get('name')} prices it; confirm the joint adhesive."
+                      if _spec.get("stand_in") else "")
+            part.setdefault("review_flags", []).append(
+                f"consumable share: {_kg:g} kg of {_spec.get('name')} from SDI Live "
+                f"{_row.get('part_code')} '{_row.get('description')}' at "
+                f"£{_row.get('pack_gbp'):,.2f} a {_row.get('pack_size'):g} kg pack "
+                f"(£{_per:,.4f}/kg) = £{_money:,.4f} ({share.get('working')}; "
+                f"{share.get('basis')}).{_stand}")
+            part["consumable_share_priced_by"] = {
+                "spec": _spec.get("name"), "stand_in": bool(_spec.get("stand_in")),
+                "part_code": _row.get("part_code"), "description": _row.get("description"),
+                "pack_gbp": _row.get("pack_gbp"), "pack_kg": _row.get("pack_size"),
+                "gbp_per_kg": _per, "kg_used": _kg, "allowance_gbp": _money}
+            return {"applied_unit_cost": _money, "matched_part_code": _row.get("part_code"),
+                    "result": {"selected": {
+                        "source": "udef_parts_table_for_estimating",
+                        "price": _row.get("pack_gbp"), "unit": "each", "confidence": 0.9,
+                        "evidence": {"row": {"Part code": _row.get("part_code"),
+                                             "Description": _row.get("description"),
+                                             "System cost per": _row.get("pack_gbp")}},
+                        "metadata": {"consumable_share": True, "kg_used": _kg,
+                                     "gbp_per_kg": _per,
+                                     "stand_in": bool(_spec.get("stand_in"))}}}}
     ref = {"part_number": "", "description": ref_item, "quantity": 1,
            "page_roles": ["bought_in"], "is_bought_in": True}
     try:

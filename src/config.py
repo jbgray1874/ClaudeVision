@@ -4917,6 +4917,20 @@ BOARD_ASSEMBLY_CONSUMABLES = {
     "adhesive": {"description": "Wood adhesive for the glued board joints",
                  "reference_item": "PVA wood adhesive 1kg",
                  "share_per_piece": 0.01,      # 10 g of a 1 kg pack per board piece glued
+                 "pack_kg": 1.0,               # the reference pack, so the share is a mass
+                 # SDI'S OWN TINS FIRST, BY THE KILO (D-725). 11908-22's 50 g reached the
+                 # sheet unpriced: no catalogue row is called "PVA wood adhesive 1kg" and the
+                 # market lookup came back empty. SDI Live's adhesive rows are asked in this
+                 # order, each row carrying every word and stating its pack in kg; the last is
+                 # the laminate bond the shop already buys (D-678), used as a DECLARED
+                 # stand-in so the allowance is priced, never blank.
+                 "catalogue_specs": [
+                     {"name": "PVA wood adhesive", "all_words": ["PVA"]},
+                     {"name": "wood glue", "all_words": ["WOOD", "GLUE"]},
+                     {"name": "wood adhesive", "all_words": ["WOOD", "ADHESIVE"]},
+                     {"name": "contact adhesive, laminate to MDF", "all_words": ["CONTACT", "ADHESIVE"],
+                      "stand_in": True},
+                 ],
                  "basis": "HOUSE ALLOWANCE: 10 g of adhesive per board piece glued — confirm"},
     "wax": {"description": "Matching wax filler for open corner gaps",
             "reference_item": "hard wax filler stick",
