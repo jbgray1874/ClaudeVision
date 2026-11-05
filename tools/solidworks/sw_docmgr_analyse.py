@@ -161,10 +161,28 @@ def _str(v: Any) -> str:
 # (ISwDMDocument10 has the tables, ISwDMConfiguration16 the newer cut list). A member missing
 # from the declared wrapper may be one CastTo away. UNVERIFIED: which numbered interface first
 # carries each member; the candidates are tried newest first and a failed cast costs nothing.
-_DOC_IFACES = ("ISwDMDocument10", "ISwDMDocument8", "ISwDMDocument5")
-_CFG_IFACES = ("ISwDMConfiguration16", "ISwDMConfiguration5", "ISwDMConfiguration2")
-_COMP_IFACES = ("ISwDMComponent6", "ISwDMComponent2")
-_CUT_IFACES = ("ISwDMCutListItem2",)
+_DOC_IFACES = ("ISwDMDocument10", "ISwDMDocument8", "ISwDMDocument5", "ISwDMDocument")
+_CFG_IFACES = ("ISwDMConfiguration16", "ISwDMConfiguration5", "ISwDMConfiguration2",
+               "ISwDMConfiguration")
+_COMP_IFACES = ("ISwDMComponent6", "ISwDMComponent2", "ISwDMComponent")
+_CUT_IFACES = ("ISwDMCutListItem2", "ISwDMCutListItem")
+
+# HOW THIS RUN REACHED THE LIBRARY (D-711). pywin32 needs IDispatch; on JG's laptop (5 Nov 2026)
+# Dispatch("SwDocumentMgr.SwDMClassFactory") answered "No such interface supported", the class
+# factory having no IDispatch. comtypes binds to the interface itself, from the type library
+# the Document Manager registers, so it is the second route. `types` is that generated module.
+_BINDING: Dict[str, Any] = {"via": "", "types": None}
+
+
+def _is_com_object(v: Any) -> bool:
+    """A COM object, under either binding: never called, only used."""
+    if hasattr(v, "_oleobj_"):
+        return True
+    try:
+        import comtypes  # noqa: PLC0415 — Windows only
+        return isinstance(v, comtypes.IUnknown)
+    except Exception:                                                    # noqa: BLE001
+        return False
 
 
 def _member(obj, name: str, ifaces: Sequence[str] = ()):
@@ -177,6 +195,16 @@ def _member(obj, name: str, ifaces: Sequence[str] = ()):
         return found
     except Exception:                                                    # noqa: BLE001
         pass
+    if ifaces and _BINDING.get("via") == "comtypes" and _BINDING.get("types") is not None:
+        for iface in ifaces:
+            cls = getattr(_BINDING["types"], iface, None)
+            if cls is None:
+                continue
+            try:
+                return getattr(obj.QueryInterface(cls), name)
+            except Exception:                                            # noqa: BLE001
+                continue
+        return None
     if not ifaces or not getattr(_nat, "_COM_AVAILABLE", False):
         return None
     try:
@@ -200,7 +228,7 @@ def _get(obj, name: str, ifaces: Sequence[str] = ()):
     object's default member, which these interfaces do not have, so the read would raise and
     come back as nothing. A value carrying `_oleobj_` is a COM object and is returned as is."""
     attr = _member(obj, name, ifaces)
-    if attr is None or hasattr(attr, "_oleobj_"):
+    if attr is None or _is_com_object(attr):
         return attr
     try:
         return attr() if callable(attr) else attr
@@ -218,17 +246,82 @@ def com_available() -> Tuple[bool, str]:
     return True, ""
 
 
-def dispatch_class_factory():
-    """Dispatch("SwDocumentMgr.SwDMClassFactory") -> ISwDMClassFactory.
-
-    Early binding first: the generated wrappers return [out] parameters as tuples, which is
-    what GetDocument's open-error needs. Falls back to late binding, under which open_document
-    passes a by-reference VARIANT instead."""
-    import win32com.client  # noqa: PLC0415 — Windows only
+def _comtypes_class_factory():
+    """(ISwDMClassFactory, its generated type module), through comtypes: the type library is
+    found from the class's own registration, its DLL first, then its registered TypeLib
+    versions newest first."""
+    import comtypes.client as cc  # noqa: PLC0415 — Windows only
+    import winreg  # noqa: PLC0415 — Windows only
+    hkcr = winreg.HKEY_CLASSES_ROOT
+    clsid = winreg.QueryValue(hkcr, DM_PROGID + "\\CLSID")
+    sources: List[Any] = []
     try:
-        return win32com.client.gencache.EnsureDispatch(DM_PROGID)
-    except Exception:                                                    # noqa: BLE001
-        return win32com.client.Dispatch(DM_PROGID)
+        dll = winreg.QueryValue(hkcr, f"CLSID\\{clsid}\\InprocServer32")
+        if dll:
+            sources.append(os.path.expandvars(dll.strip().strip('"')))
+    except OSError:
+        pass
+    try:
+        tlb = winreg.QueryValue(hkcr, f"CLSID\\{clsid}\\TypeLib")
+        with winreg.OpenKey(hkcr, f"TypeLib\\{tlb}") as k:
+            versions, i = [], 0
+            while True:
+                try:
+                    versions.append(winreg.EnumKey(k, i))
+                    i += 1
+                except OSError:
+                    break
+
+        def _ver(v: str) -> Tuple[int, int]:
+            a, _, b = v.partition(".")
+            try:
+                return int(a, 16), int(b or "0", 16)
+            except ValueError:
+                return 0, 0
+        sources += [(tlb,) + _ver(v) for v in sorted(versions, key=_ver, reverse=True)]
+    except OSError:
+        pass
+    tried: List[str] = []
+    for src in sources:
+        try:
+            mod = cc.GetModule(src)
+            return cc.CreateObject(DM_PROGID, interface=mod.ISwDMClassFactory), mod
+        except Exception as exc:                                         # noqa: BLE001
+            tried.append(f"{src}: {exc}")
+    raise RuntimeError("comtypes could not load the Document Manager's type library ("
+                       + ("; ".join(tried) or "none is registered for " + DM_PROGID) + ")")
+
+
+def dispatch_class_factory():
+    """The ISwDMClassFactory, by pywin32 or else by comtypes (D-711).
+
+    pywin32 early binding first: the generated wrappers return [out] parameters as tuples,
+    which is what GetDocument's open-error needs; then late binding, under which open_document
+    passes a by-reference VARIANT. Where the class factory has no IDispatch, neither can reach
+    it, and comtypes binds to the interface from its type library. [out] parameters come back
+    as tuples there too. `_BINDING` records which route answered."""
+    first = ""
+    try:
+        import win32com.client  # noqa: PLC0415 — Windows only
+        for how in (win32com.client.gencache.EnsureDispatch, win32com.client.Dispatch):
+            try:
+                factory = how(DM_PROGID)
+                _BINDING.update(via="pywin32", types=None)
+                return factory
+            except Exception as exc:                                     # noqa: BLE001
+                first = first or f"{type(exc).__name__}: {exc}"
+    except ImportError as exc:
+        first = f"pywin32 is not available ({exc})"
+    try:
+        import comtypes.client  # noqa: F401,PLC0415 — Windows only
+    except ImportError:
+        raise RuntimeError(
+            f"pywin32 cannot reach it ({first}), and comtypes, the second route, is not "
+            f"installed in this Python. Install it once:  .venv\\Scripts\\python.exe -m pip "
+            f"install comtypes") from None
+    factory, mod = _comtypes_class_factory()
+    _BINDING.update(via="comtypes", types=mod)
+    return factory
 
 
 def open_application(factory, key: str):
@@ -1292,7 +1385,7 @@ def main(argv: Optional[Sequence[str]] = None, *, class_factory=None) -> int:
         try:
             class_factory = dispatch_class_factory()
         except Exception as exc:                                         # noqa: BLE001
-            say(f"ERROR: the SOLIDWORKS Document Manager is not installed or not registered "
+            say(f"ERROR: the SOLIDWORKS Document Manager could not be started from Python "
                 f"({DM_PROGID}): {exc}")
             return 2
     try:
@@ -1304,6 +1397,8 @@ def main(argv: Optional[Sequence[str]] = None, *, class_factory=None) -> int:
         say(f"ERROR: the Document Manager refused the licence key in {KEY_ENV}.")
         return 2
 
+    if _BINDING.get("via"):
+        say(f"[docmgr] reached through {_BINDING['via']}")
     say("[docmgr] BACKUP READER — values are read from what each file SAVED. Bounding boxes, "
         "volumes and surface areas are never supplied, and nothing is measured or inferred.")
     fp_before = _nat._fingerprint_native_files(target)

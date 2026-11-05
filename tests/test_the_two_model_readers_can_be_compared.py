@@ -89,3 +89,36 @@ def test_a_key_already_in_the_shell_is_not_replaced(monkeypatch):
         load_dotenv=lambda *a, **k: (_ for _ in ()).throw(AssertionError("not loaded"))))
     dm._load_engine_env()
     assert dm._key_from_env() == "FROM-THE-SHELL-0000"
+
+
+# ── an empty comparison is not a pass (D-710a) ──────────────────────────────────────────
+#
+# Review of D-710: two extracts with nothing in them "agree on everything both supplied",
+# which says nothing about either reader. And the first pack tried held PDFs and DXFs only.
+
+def test_two_empty_reads_are_refused_not_passed(tmp_path, capsys):
+    sw = _write(tmp_path / "sw.json", [])
+    dmx = _write(tmp_path / "dm.json", [])
+    assert ce.main([str(sw), str(dmx)]) == 2
+    out = capsys.readouterr().out
+    assert "STOP" in out and "agree" not in out
+
+
+def test_a_read_that_failed_on_every_file_is_refused(tmp_path, capsys):
+    sw = _write(tmp_path / "sw.json", [_rec("J-01M", material="MILD STEEL")])
+    dmx = _write(tmp_path / "dm.json", [{"path": r"K:\job\J-01M.SLDPRT",
+                                          "errors": ["GetDocument returned 2"]}])
+    assert ce.main([str(sw), str(dmx)]) == 2
+    out = capsys.readouterr().out
+    assert "Document Manager could not read J-01M.SLDPRT: GetDocument returned 2" in out
+    assert "the Document Manager extract has no file read successfully" in out
+
+
+def test_a_file_one_reader_failed_on_is_listed_and_fails_the_check(tmp_path, capsys):
+    recs = [_rec("J-01M", material="MILD STEEL"), _rec("J-GA", bom=[("J-01M", 2)])]
+    sw = _write(tmp_path / "sw.json", recs)
+    dmx = _write(tmp_path / "dm.json", recs + [{"path": "J-02M.SLDPRT", "errors": ["locked"]}])
+    assert ce.main([str(sw), str(dmx)]) == 1
+    out = capsys.readouterr().out
+    assert "Document Manager could not read J-02M.SLDPRT: locked" in out
+    assert "1 reader error(s)" in out

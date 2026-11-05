@@ -12,8 +12,14 @@ them, part by part:
   * values the Document Manager left empty because the file did not save them. Those are
     counted as NOT SAVED, never as a disagreement: that is what the backup is expected to do.
 
-Reads two JSON files and writes nothing. ASCII only in what it prints. Exit code 0 when the two
-reads agree on everything both supplied, 1 when anything disagrees, 2 when a file cannot be read.
+It also refuses to call an empty comparison a pass (D-710a). Both reads must have read at
+least one file successfully, every file either reader failed on is listed with its error, and
+every assembly child the SolidWorks read lists must be in the Document Manager read's BOM.
+
+Reads two JSON files and writes nothing. ASCII only in what it prints. Exit code 0 only when
+both reads succeeded on at least one file, cover the same files with no reader errors, and agree
+on everything both supplied; 1 when anything disagrees or is missing; 2 when a file cannot be
+read or either read has no successful file.
 """
 from __future__ import annotations
 
@@ -36,16 +42,32 @@ FIELDS: Tuple[Tuple[str, str], ...] = (
 REL_TOL, ABS_TOL = 0.005, 0.05
 
 
-def _records(path: Path) -> Dict[str, Mapping[str, Any]]:
+def _name(value: Any) -> str:
+    return str(value or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+
+
+def _read(path: Path) -> Tuple[Dict[str, Mapping[str, Any]], List[Tuple[str, str]]]:
+    """(the files read successfully, by part number; [(file, its error)] for every file the
+    reader opened and could not read)."""
     payload = json.loads(path.read_text(encoding="utf-8"))
     recs = payload.get("records") if isinstance(payload, dict) else payload
     out: Dict[str, Mapping[str, Any]] = {}
+    failed: List[Tuple[str, str]] = []
     for r in recs or []:
-        if not isinstance(r, dict) or r.get("errors") or not r.get("title"):
+        if not isinstance(r, dict):
             continue
-        key = Path(str(r["title"])).stem.strip().upper()
+        if r.get("errors") or not r.get("title"):
+            errs = r.get("errors") or ["no title read"]
+            failed.append((_name(r.get("path") or r.get("title")) or "(unnamed)",
+                           "; ".join(str(e) for e in errs)[:160]))
+            continue
+        key = Path(_name(r["title"])).stem.strip().upper()
         out.setdefault(key, r)
-    return out
+    return out, failed
+
+
+def _records(path: Path) -> Dict[str, Mapping[str, Any]]:
+    return _read(path)[0]
 
 
 def _num(v: Any) -> Optional[float]:
@@ -118,13 +140,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(__doc__.strip().splitlines()[2].strip())
         return 2
     try:
-        sw, dm = _records(Path(args[0])), _records(Path(args[1]))
+        (sw, sw_failed), (dm, dm_failed) = _read(Path(args[0])), _read(Path(args[1]))
     except (OSError, ValueError) as exc:
         print(f"STOP: could not read the extracts ({type(exc).__name__}: {exc})")
         return 2
+    print(f"SolidWorks read {len(sw)} file(s), failed {len(sw_failed)}; Document Manager read "
+          f"{len(dm)}, failed {len(dm_failed)}.")
+    for who, failed in (("SolidWorks", sw_failed), ("Document Manager", dm_failed)):
+        for name, err in failed:
+            print(f"  {who} could not read {name}: {err}")
+    # AN EMPTY COMPARISON IS NOT A PASS (D-710a): two extracts with nothing in them agree on
+    # everything, and that says nothing about either reader.
+    if not sw or not dm:
+        print(f"\nSTOP: {'the SolidWorks' if not sw else 'the Document Manager'} extract has no "
+              f"file read successfully, so there is nothing to compare. Use a folder that holds "
+              f".SLDPRT / .SLDASM files and read it with both readers.")
+        return 2
     r = compare(sw, dm)
-    print(f"SolidWorks read {len(sw)} file(s); Document Manager read {len(dm)}; "
-          f"{len(r['both'])} in both.")
+    print(f"{len(r['both'])} file(s) read by both.")
     for pn in r["only_sw"]:
         print(f"  only SolidWorks:       {pn}")
     for pn in r["only_dm"]:
@@ -138,11 +171,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         saved.setdefault(what, []).append(pn)
     for what, pns in sorted(saved.items()):
         print(f"  not saved in the file (expected): {what} on {len(pns)} part(s)")
-    agree = not r["differ"] and not r["only_sw"] and not r["only_dm"]
-    print("\nRESULT: " + ("the two reads agree on everything both supplied." if agree else
+    agree = (not r["differ"] and not r["only_sw"] and not r["only_dm"]
+             and not sw_failed and not dm_failed)
+    print("\nRESULT: " + (f"the two reads agree on everything both supplied, across "
+                          f"{len(r['both'])} file(s)." if agree else
                           f"{len(r['differ'])} difference(s), {len(r['only_sw'])} part(s) only "
                           f"SolidWorks read, {len(r['only_dm'])} only the Document Manager "
-                          f"read."))
+                          f"read, {len(sw_failed) + len(dm_failed)} reader error(s)."))
     return 0 if agree else 1
 
 
