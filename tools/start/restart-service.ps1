@@ -112,6 +112,21 @@ function Get-HeadCommit([string]$RepoRoot) {
     return ""
 }
 
+# WHAT HOLDS A PORT, NAMED: the listener, what started it, and what started that. From CIM,
+# because Get-Process cannot read the start time of a process another account owns, and the
+# script printed "started unknown" for the very process it then failed to end (5 Nov 2026).
+function Show-PortHolder([int]$OnPort) {
+    foreach ($conn in @(Get-NetTCPConnection -LocalPort $OnPort -State Listen -ErrorAction SilentlyContinue)) {
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($conn.OwningProcess)" -ErrorAction SilentlyContinue
+        $hop = 0
+        while ($proc -and $hop -lt 3) {
+            Write-Host ("    pid {0} started {1}: {2}" -f $proc.ProcessId, $proc.CreationDate, $proc.CommandLine) -ForegroundColor Yellow
+            $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.ParentProcessId)" -ErrorAction SilentlyContinue
+            $hop++
+        }
+    }
+}
+
 Write-Host "Restarting the SDI Intelligence service on port $Port" -ForegroundColor Cyan
 
 # -- 0. IS THIS THE MACHINE THAT SERVES THAT PORT? ------------------------------------
@@ -201,9 +216,19 @@ if ($taskPort -eq $Port -and $serving.Count -gt 0 -and ($serving -notcontains $P
 #
 # Two machines, two supervisors, and this script only knew one of them. Asked before
 # anything is stopped, so the restart at step 3 uses the same answer the stop did.
+#
+# BOTH CAN EXIST ON ONE MACHINE (5 Nov 2026). The laptop has the scheduled task AND an
+# NSSM service called SDIIntelligence, left by the backend's remediation script. This
+# stopped the task OR the service, never both, so a running service would bring the old
+# code straight back the moment step 2 ended it. Both are stopped; step 3 starts one.
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 $svc  = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+$svcWasRunning = $false
 
+if ($task -and $svc) {
+    Write-Host ("  note: this machine has the scheduled task '{0}' AND the Windows service '{1}'" -f $TaskName, $ServiceName) -ForegroundColor Yellow
+    Write-Host ("    (service {0}, start {1}). Both are stopped here; one is started again." -f $svc.Status, $svc.StartType) -ForegroundColor Yellow
+}
 if ($task) {
     if ($task.State -eq "Running") {
         Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -211,18 +236,23 @@ if ($task) {
     } else {
         Write-Host "  the scheduled task '$TaskName' was not running"
     }
-} elseif ($svc) {
+}
+if ($svc) {
     # NSSM RESTARTS WHAT YOU KILL, which is the whole point of it and is exactly why the
     # port must not be killed while the supervisor is still running: NSSM would bring the
     # OLD code straight back, the health check would pass, and the restart would report
     # success having changed nothing. The service is stopped first and properly.
-    Write-Host "  supervised by the Windows service '$ServiceName' (state: $($svc.Status))"
     if ($svc.Status -ne "Stopped") {
+        $svcWasRunning = $true
+        Write-Host "  supervised by the Windows service '$ServiceName' (state: $($svc.Status))"
         Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
         $svc.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(20))
         Write-Host "  stopped the service"
+    } elseif (-not $task) {
+        Write-Host "  supervised by the Windows service '$ServiceName' (state: Stopped)"
     }
-} else {
+}
+if (-not $task -and -not $svc) {
     Write-Host "  NOTHING SUPERVISES THIS SERVICE HERE." -ForegroundColor Yellow
     Write-Host "  No scheduled task '$TaskName' and no service '$ServiceName'." -ForegroundColor Yellow
     Write-Host "  It is a hand-started window, so this script can stop it but cannot start" -ForegroundColor Yellow
@@ -233,21 +263,83 @@ if ($task) {
 #
 # THE STEP THE OBVIOUS RESTART MISSES. Named before it is killed: a pid and a start time
 # is what tells you afterwards whether you ended the thing you meant to.
+#
+# A KILL IS CONFIRMED, NOT ASSUMED (5 Nov 2026). Stop-Process ran with SilentlyContinue, so
+# a refused kill printed "ending pid 4136", started the task beside it, and ended on
+# "STILL STALE ... Something took the port again". Nothing had taken it: pid 4136, started
+# at 08:33 that morning, had never been ended. The kill is now checked, a refusal is said
+# with Windows' own reason, and nothing is started beside a survivor -- a new service
+# cannot get the port, and the old one goes on answering with the old code.
+$isAdmin = $false
+try {
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+} catch { }
+
 Start-Sleep -Seconds 1
 $held = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
 if ($held.Count -eq 0) {
     Write-Host "  nothing was left listening on $Port"
 } else {
+    $ended = @()
     foreach ($procId in @($held | Select-Object -ExpandProperty OwningProcess -Unique)) {
-        $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
-        if ($p) {
-            $started = "unknown"
-            if ($p.StartTime) { $started = $p.StartTime.ToString("HH:mm:ss") }
-            Write-Host "  ending pid $procId ($($p.ProcessName), started $started)" -ForegroundColor Yellow
+        $info = Get-CimInstance Win32_Process -Filter "ProcessId=$procId" -ErrorAction SilentlyContinue
+        $started = "unknown"
+        if ($info -and $info.CreationDate) { $started = ([DateTime]$info.CreationDate).ToString("HH:mm:ss") }
+        $pname = "process"
+        if ($info) { $pname = $info.Name }
+        Write-Host "  ending pid $procId ($pname, started $started)" -ForegroundColor Yellow
+        $why = ""
+        try {
+            Stop-Process -Id $procId -Force -ErrorAction Stop
+        } catch {
+            $why = $_.Exception.Message
+            # A SECOND ROUTE, WITH ITS OWN WORDS. taskkill's stderr under "Stop" would throw
+            # before its exit code could be read, as git's did in Get-HeadCommit.
+            $prevEA = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $tk = (& taskkill.exe /PID $procId /F 2>&1 | Out-String).Trim()
+                if ($LASTEXITCODE -eq 0) { $why = "" } else { $why = "$why / taskkill: $tk" }
+            } catch { }
+            finally { $ErrorActionPreference = $prevEA }
         }
-        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+        $ended += [pscustomobject]@{ Id = $procId; Why = $why; Info = $info }
     }
     Start-Sleep -Milliseconds 800
+
+    $survivors = @($ended | Where-Object { Get-Process -Id $_.Id -ErrorAction SilentlyContinue })
+    if ($survivors.Count -gt 0) {
+        Write-Host ""
+        foreach ($sv in $survivors) {
+            Write-Host ("  COULD NOT END pid {0}. It is still running and still holds {1}." -f $sv.Id, $Port) -ForegroundColor Red
+            if ($sv.Why) { Write-Host ("    Windows said: {0}" -f $sv.Why) -ForegroundColor Red }
+            if ($sv.Info) { Write-Host ("    {0}" -f $sv.Info.CommandLine) -ForegroundColor Yellow }
+        }
+        if (-not $isAdmin) {
+            Write-Host "  This PowerShell is not an Administrator, and that process belongs to another" -ForegroundColor Yellow
+            Write-Host "  account or an elevated window. Open PowerShell with Run as administrator," -ForegroundColor Yellow
+            Write-Host "  cd C:\ClaudeVision, and run this script again." -ForegroundColor Yellow
+        } else {
+            Write-Host "  This PowerShell is an Administrator. End it by hand, then run this script again:" -ForegroundColor Yellow
+            Write-Host ("    taskkill /PID {0} /T /F" -f $survivors[0].Id) -ForegroundColor Yellow
+        }
+        Write-Host "  Nothing was started: a new service would not get the port, and the old one" -ForegroundColor Yellow
+        Write-Host "  would go on answering with the old code." -ForegroundColor Yellow
+        exit 5
+    }
+
+    # SOMETHING BROUGHT IT BACK. Ended, and the port is held again before anything here
+    # started: a supervisor this script does not know about. Named, and nothing started.
+    Start-Sleep -Seconds 2
+    if (@(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue).Count -gt 0) {
+        Write-Host ""
+        Write-Host "  SOMETHING STARTED IT AGAIN: $Port was held by a new process within seconds of the" -ForegroundColor Red
+        Write-Host "  old one ending, before this script started anything. What holds it now:" -ForegroundColor Red
+        Show-PortHolder $Port
+        Write-Host "  That is a second supervisor: another scheduled task, a service or a watchdog." -ForegroundColor Yellow
+        Write-Host "  Stop it, then run this script again. Nothing was started." -ForegroundColor Yellow
+        exit 6
+    }
 }
 
 # -- 3. START IT AGAIN ------------------------------------------------------------------
@@ -258,7 +350,9 @@ if ($StopOnly) {
     exit 0
 }
 
-if ($task) {
+# THE ONE THAT WAS SERVING IS THE ONE STARTED. Where both exist, a running service was the
+# live supervisor and the task a leftover; otherwise the task, as before.
+if ($task -and -not $svcWasRunning) {
     Start-ScheduledTask -TaskName $TaskName
     Write-Host "  started the scheduled task"
 } elseif ($svc) {
@@ -298,9 +392,9 @@ try {
     if ($head -and $serving -and $serving -ne "unknown" -and $serving -ne $head) {
         Write-Host ""
         Write-Host "  STILL STALE: serving $serving, this checkout is at $head." -ForegroundColor Red
-        Write-Host "  Something took the port again. Find it and run this script once more:" -ForegroundColor Yellow
-        Write-Host "    Get-NetTCPConnection -LocalPort $Port -State Listen |" -ForegroundColor Yellow
-        Write-Host "      ForEach-Object { Get-Process -Id `$_.OwningProcess }" -ForegroundColor Yellow
+        Write-Host "  What holds $Port now, and what started it:" -ForegroundColor Yellow
+        Show-PortHolder $Port
+        Write-Host "  A start time before this restart is the old process; end it and run this again." -ForegroundColor Yellow
         exit 1
     }
     Write-Host ""
