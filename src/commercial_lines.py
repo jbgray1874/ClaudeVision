@@ -29,7 +29,7 @@ estimator changing the quantity can see what the number was built from.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import config
 
@@ -1699,13 +1699,31 @@ def shipment_shape(order: Dict[str, Any]) -> str:
     return "pallet"
 
 
+def packed_size_phrase(order: Mapping[str, Any]) -> str:
+    """The size the packing was worked from, in words, or "" (D-717).
+
+    A UNIT THAT SHIPS ASSEMBLED IS PACKED AT ITS OWN SIZE, NOT ITS FLAT. 12676-01-GA2's stand
+    is one folded sheet: the carton was sized around the assembled unit, 304.2 x 254 x
+    240.5 mm, while the summary said "largest panel 665 x 254mm", the flat blank before
+    folding, so the packaging line read as if a flat sheet were boxed. The flat is named only
+    when the order is packed by its parts."""
+    au = order.get("assembled_unit") if isinstance(order, Mapping) else None
+    dims = [_num(d) for d in ((au or {}).get("envelope_mm") or [])]
+    if len(dims) == 3 and all(dims):
+        return f"packed as the assembled unit, {' x '.join(f'{round(d, 1):g}' for d in dims)}mm"
+    size = order.get("largest_part_mm") if isinstance(order, Mapping) else None
+    if size and len(size) == 2 and _num(size[0]) and _num(size[1]):
+        return f"largest panel {_num(size[0]):.0f} x {_num(size[1]):.0f}mm"
+    return ""
+
+
 def packaging_line(parts: List[Dict[str, Any]], order_qty: Any, customer: Any = None,
                    envelope: Optional[Dict[str, Any]] = None,
                    stated_weight: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     order = describe_order(parts, order_qty, envelope=envelope, stated_weight=stated_weight)
     order["customer"] = str(customer or "").strip()
-    size = order.get("largest_part_mm")
-    where = (f"largest panel {size[0]:.0f} x {size[1]:.0f}mm, " if size else "")
+    where = packed_size_phrase(order)
+    where = f"{where}, " if where else ""
     weight = (f"about {order['order_weight_kg']:.0f} kg total"
               + (" (the pack's stated weight)" if order.get("stated_unit_weight_kg") else "")
               + ", "

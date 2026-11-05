@@ -2292,7 +2292,8 @@ def mint_missing_hand_records(parts: Any, bom_rows: Any) -> List[str]:
             continue                           # a record already answers to this row
         if carries_assembly_role(pn):
             continue                           # a handed ASSEMBLY mirrors as a route, not a blank
-        base = by_key.get(_key(mirror_base(pn)))
+        _base_code = mirror_base(pn)
+        base = by_key.get(_key(_base_code))
         if base is None or not_cut_from_a_blank(base):
             continue                           # nothing to be the other hand OF
         base_pn = str(base.get("part_number") or "")
@@ -2300,6 +2301,31 @@ def mint_missing_hand_records(parts: Any, bom_rows: Any) -> List[str]:
             qty = float(row.get("quantity") or 1.0) or 1.0
         except (TypeError, ValueError):
             qty = 1.0
+        if not _key(_base_code) or not base_pn.strip():
+            # A ROW WHOSE CODE NAMES NO HAND IS NOT A HAND (D-719). mirror_base answers "" for
+            # a code with no hand marker, and "" found a record with no part number: 12676-01-
+            # GA2's two bought-in bumpers and its UPC sticker were minted as "the other hand
+            # of" a blank, given that record's stock, and asked about as mirrored fabrications.
+            # That is a software error, not an inference. The rows stay lines, so what they
+            # cost to buy and fit stays on the estimate; the false hand, the borrowed stock
+            # and the handed question go.
+            parts.append({
+                "part_number": pn,
+                "description": str(row.get("description") or "").strip() or pn,
+                "quantity": qty,
+                "is_assembly_parent": False,
+                "manufacturing_questions": [],
+                "normalized_geometry": {},
+                "_minted_bill_row": True,
+                "review_flags": [
+                    f"RECORD MADE FOR A BILL ROW — {pn} is on the bill ({qty:g} off) and no "
+                    f"reader made it a record, so it is kept as a line here. Its code names no "
+                    f"other part's hand, so it is not a handed part and takes no other part's "
+                    f"stock."],
+            })
+            by_key[_key(pn)] = parts[-1]
+            minted.append(pn)
+            continue
         rec: Dict[str, Any] = {
             "part_number": pn,
             "description": (str(row.get("description") or "").strip()

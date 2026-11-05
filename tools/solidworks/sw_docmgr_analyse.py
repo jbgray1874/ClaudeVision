@@ -15,7 +15,7 @@ WHAT IT CANNOT DO, AND THE RULE THAT FOLLOWS FROM IT. It reads what was SAVED in
 never rebuilds a model, so it measures nothing: no bounding box, no volume, no surface area, no
 flattening of a formed part. A mass or a flat pattern exists only if SolidWorks saved one into a
 property or a cut list. Every field it cannot supply is written null and named in the record's
-`not_saved` list with the sentence "not saved in the file; needs the SolidWorks worker" — never
+`not_saved` list with the sentence "not saved in the file; only the SolidWorks worker measures it" — never
 inferred from something nearby. A formed sheet-metal part with no saved flat pattern is marked
 `needs_solidworks_worker`, because its developed blank is the one number this reader cannot
 produce and the estimate must not be priced on a guess at it.
@@ -78,7 +78,7 @@ EXTRACT_FILENAME = "_sw_docmgr_extract.json"
 # The DATA schema is the production extractor's: the consumer's re-extract gate compares this
 # number, and a backup extract must answer it the same way.
 EXTRACT_SCHEMA_VERSION = _nat.EXTRACT_SCHEMA_VERSION
-NOT_SAVED = "not saved in the file; needs the SolidWorks worker"
+NOT_SAVED = "not saved in the file; only the SolidWorks worker measures it"
 
 SW_PART, SW_ASM, SW_DRW = _nat.SW_PART, _nat.SW_ASM, _nat.SW_DRW
 DOCTYPE = dict(_nat.DOCTYPE)
@@ -352,7 +352,26 @@ def dispatch_class_factory():
             f"install comtypes") from None
     factory, mod = _comtypes_class_factory()
     _BINDING.update(via="comtypes", types=mod)
+    _enable_interface_arrays()
     return factory
+
+
+def _enable_interface_arrays() -> None:
+    """Let comtypes unpack an array of interface pointers (D-714).
+
+    GetComponents and GetCutListItems return a SAFEARRAY of VT_UNKNOWN (13). comtypes maps each
+    element type it unpacks through a table that, here, had no entry for 13, so both calls
+    raised KeyError: 13 on the laptop (5 Nov 2026) and every assembly read as having no
+    components and every cut list as absent. The entries name the plain interface pointer;
+    each element is then reached through its own interface by QueryInterface, as before."""
+    try:
+        from ctypes import POINTER  # noqa: PLC0415
+        import comtypes  # noqa: PLC0415 — Windows only
+        import comtypes.automation as au  # noqa: PLC0415
+        au._vartype_to_ctype.setdefault(au.VT_UNKNOWN, POINTER(comtypes.IUnknown))
+        au._vartype_to_ctype.setdefault(au.VT_DISPATCH, POINTER(au.IDispatch))
+    except Exception:                                                    # noqa: BLE001
+        pass
 
 
 def open_application(factory, key: str):
@@ -538,7 +557,30 @@ def get_configuration(doc, name: str):
         return None
 
 
-def configuration_components(cfg) -> List[Any]:
+class Unreadable(RuntimeError):
+    """A part of the file the reader needs and could not read: an assembly's components. The
+    file is then a FAILED read, never an empty success (D-714)."""
+
+
+def _answer(obj, names: Sequence[str], ifaces: Sequence[str]) -> Tuple[bool, Any]:
+    """(answered, value) for the first of `names` the object answers. answered is False when
+    every one is missing or raised: the library could not be asked, which is not the same as
+    the library saying there is nothing."""
+    for meth in names:
+        fn = _member(obj, meth, ifaces)
+        if fn is None:
+            continue
+        try:
+            v = fn() if callable(fn) and not _is_com_object(fn) else fn
+        except Exception as exc:                                         # noqa: BLE001
+            _t(f"{meth}(): {type(exc).__name__}: {redact(exc)[:160]}")
+            continue
+        _t(f"{meth} -> {_shape(v)}")
+        return True, v
+    return False, None
+
+
+def configuration_components(cfg) -> Optional[List[Any]]:
     """ISwDMConfiguration2.GetComponents() -> ISwDMComponent[] for this configuration.
 
     UNVERIFIED: documented as the components of the configuration; this reader assumes TOP
@@ -546,9 +588,10 @@ def configuration_components(cfg) -> List[Any]:
     shows it returns every level, walk_assembly must stop recursing or counts double."""
     if cfg is None:
         _t("GetComponents: no configuration to ask")
-        return []
-    v = _get(cfg, "GetComponents", _CFG_IFACES)
-    _t(f"GetComponents -> {_shape(v)}")
+        return None
+    answered, v = _answer(cfg, ("GetComponents",), _CFG_IFACES)
+    if not answered:
+        return None
     if v is None or isinstance(v, (str, bytes)):
         return []
     try:
@@ -581,17 +624,20 @@ def component_info(comp) -> Dict[str, Any]:
     }
 
 
-def cut_list_items(cfg) -> List[Any]:
+def cut_list_items(cfg) -> Optional[List[Any]]:
     """The configuration's saved cut list: ISwDMConfiguration16.GetCutListItems2(), or
     ISwDMConfiguration2.GetCutListItems() on older interfaces. UNVERIFIED which name a given
     Document Manager release answers; both are tried. Empty when the file saved none — a part
     that is not sheet metal, a weldment or multi-body has no cut list."""
     if cfg is None:
         _t("cut list: no configuration to ask")
-        return []
+        return None
+    any_answered = False
     for meth in ("GetCutListItems2", "GetCutListItems"):
-        v = _get(cfg, meth, _CFG_IFACES)
-        _t(f"{meth} -> {_shape(v)}")
+        answered, v = _answer(cfg, (meth,), _CFG_IFACES)
+        if not answered:
+            continue
+        any_answered = True
         if v is None or isinstance(v, (str, bytes)):
             continue
         try:
@@ -600,7 +646,7 @@ def cut_list_items(cfg) -> List[Any]:
             continue
         if items:
             return items
-    return []
+    return [] if any_answered else None
 
 
 def cut_list_item_info(item) -> Dict[str, Any]:
@@ -876,6 +922,15 @@ def signals_from_saved(title: str, props: Dict[str, Dict[str, str]],
     if sm_count > 1:
         notes.append(f"{sm_count} sheet-metal bodies in the saved cut list; the first was read, "
                      f"as the SolidWorks worker reads one")
+    # UNKNOWN IS NOT NO (D-714). cut_lists is None when the library could not hand the cut list
+    # back at all. Whether the part is sheet metal, its bends and its blank are then unknown,
+    # and say so; False and 0 would read as "not formed, no folding", which nothing here knows.
+    cut_list_unread = cut_lists is None
+    if cut_list_unread:
+        sig.is_sheet_metal = None
+        sig.bend_count = None
+        sig.bend_count_cutlist = None
+        not_saved.append("cut list (it could not be read)")
     cp = parse_cut_list(sm_list.get("props") or {}) if sm_list else {}
     if sm_list:
         sig.is_sheet_metal = True
@@ -906,13 +961,27 @@ def signals_from_saved(title: str, props: Dict[str, Dict[str, str]],
         if cp.get("thickness"):
             sig.thickness_mm = float(cp["thickness"])
     if sig.thickness_mm is None:
-        sig.thickness_mm = _thickness_from_props(values)
-        if sig.thickness_mm is not None:
-            _tn, _te = _prop_entry(props, "Thickness", "Sheet Thickness", "Gauge",
-                                   "Material Thickness")
-            _t(f"thickness {sig.thickness_mm:g} from property {_tn!r} = "
-               f"{_str((_te or {}).get('value'))!r}, linked to "
-               f"{_str((_te or {}).get('linked_to'))!r}")
+        _tn, _te = _prop_entry(props, "Thickness", "Sheet Thickness", "Gauge",
+                               "Material Thickness")
+        _tval, _tlink = _str((_te or {}).get("value")), _str((_te or {}).get("linked_to"))
+        if _tval and _tlink and not sm_list:
+            # A LINKED PROPERTY'S SAVED VALUE IS NOT A THICKNESS (D-714). 12678-01-01J, an MDF
+            # panel, saved Thickness = 1.5mm, linked to "Thickness@Default@...". The Document
+            # Manager hands back the value as last saved and cannot re-evaluate the link;
+            # SolidWorks, which can, read no thickness for it. With no sheet-metal cut list to
+            # stand behind it, the value is said and not taken.
+            notes.append(f"property '{_tn}' holds {_tval}, the saved value of the linked "
+                         f"expression {_tlink}; the Document Manager cannot re-evaluate it and "
+                         f"the part has no sheet-metal cut list, so it is not read as the "
+                         f"part's thickness")
+            not_saved.append("thickness (only a linked property's saved value)")
+            _t(f"thickness NOT taken from property {_tn!r} = {_tval!r}: linked to {_tlink!r} "
+               f"and no sheet-metal cut list")
+        else:
+            sig.thickness_mm = _thickness_from_props(values)
+            if sig.thickness_mm is not None:
+                _t(f"thickness {sig.thickness_mm:g} from property {_tn!r} = {_tval!r}"
+                   + (f", linked to {_tlink!r}" if _tlink else ", typed"))
     else:
         _t(f"thickness {sig.thickness_mm:g} from the cut list")
 
@@ -986,13 +1055,17 @@ def signals_from_saved(title: str, props: Dict[str, Dict[str, str]],
         else:
             notes.append("flat sheet-metal part (0 bends saved) with no saved blank — its blank "
                          "comes from the DXF or the drawing")
+    if cut_list_unread and not worker_reason:
+        worker_reason = ("its cut list could not be read through the Document Manager, so "
+                         "whether it is sheet metal, its bends and its blank are unknown — the "
+                         "SolidWorks worker reads them")
 
     # ── operations: only what the saved data evidences ───────────────────────────────────
     # No hole_machining (that is a feature-tree count) and no powder_coating (a default
     # assumption even in the production extractor). This reader says what the file says.
     if sig.is_sheet_metal:
         sig.ops_hint.append("laser_cutting")
-    if sig.bend_count > 0:
+    if (sig.bend_count or 0) > 0:
         sig.ops_hint.append("folding")
     if sig.has_weldment:
         sig.ops_hint += ["welding", "dress_welds"]
@@ -1116,7 +1189,8 @@ def _merged_properties(doc, cfg_name: str) -> Tuple[Dict[str, Dict[str, str]],
     return file_props, cfg_props, cfg
 
 
-def _child_document(app, path: str, cfg_name: str, cache: Dict) -> Tuple[Dict[str, str], List[Dict[str, Any]], str]:
+def _child_document(app, path: str, cfg_name: str, cache: Dict
+                    ) -> Tuple[Dict[str, str], Optional[List[Dict[str, Any]]], str]:
     """(merged property values, component infos when it is an assembly, error) for one
     referenced file. Opened read-only, read, closed — and cached, because an assembly that uses
     a part forty times needs it opened once."""
@@ -1125,7 +1199,7 @@ def _child_document(app, path: str, cfg_name: str, cache: Dict) -> Tuple[Dict[st
         return cache[key]
     dt = _doc_type_of(path, None) or SW_PART
     props: Dict[str, str] = {}
-    comps: List[Dict[str, Any]] = []
+    comps: Optional[List[Dict[str, Any]]] = []
     err = ""
     try:
         doc, code = open_document(app, path, dt)
@@ -1139,7 +1213,12 @@ def _child_document(app, path: str, cfg_name: str, cache: Dict) -> Tuple[Dict[st
             fp, cp, cfg = _merged_properties(doc, use_cfg)
             props = _values({**fp, **cp})
             if dt == SW_ASM:
-                comps = [component_info(c) for c in configuration_components(cfg)]
+                _raw = configuration_components(cfg)
+                if _raw is None:
+                    comps = None
+                    err = "its components could not be read through the Document Manager"
+                else:
+                    comps = [component_info(c) for c in _raw]
         except Exception as exc:                                         # noqa: BLE001
             err = redact(exc)
         finally:
@@ -1165,7 +1244,14 @@ def walk_assembly(app, top_doc, top_path: str, cfg_name: str
     notes: List[str] = []
     cache: Dict = {}
     top_cfg = get_configuration(top_doc, cfg_name) if cfg_name else None
-    top_comps = [component_info(c) for c in configuration_components(top_cfg)]
+    _raw = configuration_components(top_cfg)
+    if _raw is None:
+        # OPENED IS NOT READ (D-714). An assembly whose components the library could not
+        # hand back has no quantities in this read; it is a failed read, not an empty one.
+        raise Unreadable(f"its components could not be read through the Document Manager "
+                         f"(configuration {cfg_name or 'none'}) — the assembly's quantities "
+                         f"are unknown; the SolidWorks worker reads them")
+    top_comps = [component_info(c) for c in _raw]
 
     def _norm(p: str) -> str:
         return os.path.normcase(os.path.abspath(p))
@@ -1184,9 +1270,16 @@ def walk_assembly(app, top_doc, top_path: str, cfg_name: str
             dt = _doc_type_of(stored or _str(info.get("name")), info.get("doc_type"))
             resolved = resolve_reference(stored, ref_dir)
             props: Dict[str, str] = {}
-            sub: List[Dict[str, Any]] = []
+            sub: Optional[List[Dict[str, Any]]] = []
             if resolved:
                 props, sub, err = _child_document(app, resolved, cfg, cache)
+                if dt == SW_ASM and (err or sub is None):
+                    # A SUB-ASSEMBLY NOT READ LOSES EVERYTHING UNDER IT (D-714): counting it
+                    # and moving on would report the assembly complete with its children
+                    # missing.
+                    _why = err or "its components could not be read"
+                    raise Unreadable(f"sub-assembly {title}: {_why} — the quantities below it "
+                                     f"are unknown")
                 if err:
                     notes.append(f"component {title}: {err} — counted, its properties not read")
             else:
@@ -1218,7 +1311,7 @@ def walk_assembly(app, top_doc, top_path: str, cfg_name: str
                 elif _norm(resolved) in stack:
                     notes.append(f"sub-assembly {title}: references itself — not walked again")
                 else:
-                    visit(sub, Path(resolved).parent, title, depth + 1,
+                    visit(sub or [], Path(resolved).parent, title, depth + 1,
                           stack | {_norm(resolved)})
 
     visit(top_comps, Path(top_path).parent, "", 0, frozenset({_norm(top_path)}))
@@ -1268,11 +1361,14 @@ def analyse_file(app, path: str) -> Dict[str, Any]:
             rec["configuration_properties"] = {cfg_name: _values(cfg_props)}
         rec["notes"].append(f"bounding box: {NOT_SAVED}")
         if doctype == SW_PART:
-            cut_lists = []
-            for item in cut_list_items(cfg):
-                info = cut_list_item_info(item)
-                info["props"] = read_properties(item)
-                cut_lists.append(info)
+            items = cut_list_items(cfg)
+            cut_lists: Optional[List[Dict[str, Any]]] = None
+            if items is not None:
+                cut_lists = []
+                for item in items:
+                    info = cut_list_item_info(item)
+                    info["props"] = read_properties(item)
+                    cut_lists.append(info)
             merged = {**file_props, **cfg_props}
             rs = signals_from_saved(title, merged, cut_lists)
             rec["route_signals"] = rs

@@ -8,7 +8,7 @@ import time
 from datetime import date, datetime, timezone
 from math import floor, pi as _PI
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 import engine_build
 import applied_finish
@@ -9388,6 +9388,48 @@ def _weld_time_is_an_allowance(part: Dict[str, Any], ops: Any) -> bool:
     return _mm <= 0 and _j <= 0
 
 
+def _explain_inferred_weld(part: Dict[str, Any], setup_min: Mapping[str, Any],
+                           run_min: Mapping[str, Any], timed_by: str) -> None:
+    """Say which joint a one-piece part is welded at, why, and what it is charged (D-718).
+
+    JG, 5 Nov 2026: work the engine reasonably infers is priced, with the manufacturing
+    reason stated and the assumption named; a question goes beside the charge for review and
+    never replaces it. 12676-01-GA2's folded stand carried welding and dressing that the
+    route called "an unrecorded source" and nothing explained. The flag and the question
+    name the joint (weld_reasoning), the reason, and the minutes behind each charged row."""
+    try:
+        from weld_reasoning import weld_joint_basis
+        from source_precedence import raise_manufacturing_question
+    except Exception:                                                # noqa: BLE001
+        return
+    basis = weld_joint_basis(part)
+    pn = str(part.get("part_number") or "this part")
+    w_run, w_set = _safe_float(run_min.get("welding")) or 0.0, \
+        _safe_float(setup_min.get("welding")) or 0.0
+    d_run, d_set = _safe_float(run_min.get("dress_welds")) or 0.0, \
+        _safe_float(setup_min.get("dress_welds")) or 0.0
+    allowance = (f"{w_run:g} min welding a part + {w_set:g} min set-up"
+                 + (f" ({timed_by})" if timed_by else "")
+                 + (f", and {d_run:g} min dressing + {d_set:g} min set-up" if d_run else ""))
+    part["weld_joint_basis"] = dict(basis, allowance=allowance)
+    flag = (f"WELD INFERRED ON {pn}: {basis['joint']}. Why: {basis['why']}. "
+            f"Allowance charged: {allowance}. Assumption: {basis['assumption']}")
+    flags = part.setdefault("review_flags", [])
+    if flag not in flags:
+        flags.append(flag)
+    issue = f"Welding of {pn}: {basis['joint']} (inferred)"
+    if raise_manufacturing_question(
+            part, issue,
+            f"charged as {basis['assumption']}: {allowance}",
+            (f"confirm the joint and its weld; if {pn} is not welded, strike its welding and "
+             f"dressing rows"),
+            "estimator.estimate_process_times", operations=["welding", "dress_welds"]):
+        for q in part.get("manufacturing_questions") or []:
+            if isinstance(q, dict) and q.get("issue") == issue:
+                q["subject"] = "welding"
+                q["charged_operations"] = ["welding", "dress_welds"]
+
+
 def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str, Any]:
     geom = part.get("geometry_rollup", {})
     ops = _part_ops(part)
@@ -11229,6 +11271,15 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         # minute of welding — the exact shape the predicate above exists to prevent, in the
         # other direction. One reader now, for both.
         _is_weldment = is_weldment_parent(part)
+        # A WELD ON ONE PIECE THAT NOTHING EXPLAINS IS EXPLAINED HERE (D-718): the joint the
+        # engine infers, why it is welded, and the minutes it is charged at. Timed exactly as
+        # before; this says what the time is for.
+        try:
+            from weld_reasoning import weld_has_its_own_reason as _weld_reasoned
+            _weld_to_explain = (not _is_weldment) and not _weld_reasoned(part)
+        except Exception:                                            # noqa: BLE001
+            _weld_to_explain = False
+        _weld_timed_by = ""
 
         if _weld_mm > 0:
             # The published model, the moment a pack states a weld LENGTH.
@@ -11237,6 +11288,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
             _arc = (_weld_mm / _speed) / _of
             _handle = _joints * float(_wm.get("handling_min_per_joint", 2.0))
             run_times_min["welding"] = round(max(1.0, _arc + _handle), 2)
+            _weld_timed_by = f"timed from {_weld_mm:g} mm of stated weld"
             part.setdefault("review_flags", []).append(
                 f"weld timed from geometry: {_weld_mm:g} mm of weld at "
                 f"{_speed:g} mm/min and {_of:.0%} operating factor"
@@ -11247,6 +11299,8 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
             run_times_min["welding"] = round(
                 max(1.0, _joints * float(_wm.get("weld_min_per_joint", 10.0))), 2)
             part["weld_time_is_per_joint"] = _joints
+            _weld_timed_by = (f"{_joints} joint(s) at "
+                              f"{_wm.get('weld_min_per_joint', 10.0):g} min")
             part.setdefault("review_flags", []).append(
                 f"weld timed per joint: {_joints} joint(s) at "
                 f"{_wm.get('weld_min_per_joint', 10.0):g} min — the pack states no weld "
@@ -11258,6 +11312,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
             run_times_min["welding"] = round(
                 float(_wm.get("allowance_min_per_weldment", 30.0)), 2)
             part["weld_time_is_an_allowance"] = True
+            _weld_timed_by = "the welding department's allowance per weldment"
             part.setdefault("review_flags", []).append(
                 f"WELD TIME IS AN ALLOWANCE, not a measurement: the pack states no weld "
                 f"length or joint count, so this carries "
@@ -11281,6 +11336,8 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
             run_times_min["welding"] = round(
                 max(1.0, float(_wm.get("weld_min_per_joint", 10.0))), 2)
             part["weld_time_is_per_joint"] = 1
+            _weld_timed_by = ("one joint at the welding department's "
+                              f"{_wm.get('weld_min_per_joint', 10.0):g} min per joint")
             _pn_w = str(part.get("part_number") or "this part")
             _seen_w = int(pierces or 0)
             _why_w = ("its holes are unread (its page's circles are not its own)"
@@ -11293,6 +11350,8 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 f"{run_times_min['welding']:g} min — {_wm.get('allowance_source', 'the shop')}. "
                 f"Give the weld length or the joint count and it is computed")
             try:
+                if _weld_to_explain:
+                    raise RuntimeError("asked once, below, with the joint it is")
                 from source_precedence import raise_manufacturing_question as _ask_weld
                 _ask_weld(part, f"Welding of {_pn_w}: timed as one joint",
                           f"{_why_w}, so the weld is not timed from them",
@@ -11303,6 +11362,10 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         else:
             run_times_min["welding"] = round(
                 max(1.0, (pierces * 90.0 + cut_length_mm * 0.01) / 60.0), 2)
+            _weld_timed_by = (f"the small-part weld timer: {int(pierces or 0)} pierce(s) at "
+                              f"90 s and {cut_length_mm:g} mm of cut edge, at least 1 min")
+        if _weld_to_explain:
+            _explain_inferred_weld(part, setup_times_min, run_times_min, _weld_timed_by)
 
     if "resistance_welding" in ops or "spot_welding" in ops:
         _weld_key = "resistance_welding" if "resistance_welding" in ops else "spot_welding"
