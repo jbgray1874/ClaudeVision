@@ -1188,7 +1188,13 @@ def check_prices_are_reproducible(summary: Any) -> List[Dict[str, Any]]:
         f"not a price anyone quoted, and a fresh read can return a different figure, so the "
         f"estimate cannot be reproduced or defended on it. Add these codes to the price "
         f"catalogue, or price the lines by hand.",
-        parts=_names, lines=guessed[:10], count=len(guessed))]
+        # THE COUNT IS THE ITEMS, AS THE HEADLINE SAYS (D-700). 12693-01's 10:44 report
+        # printed "1 item(s)" above a detail line listing the ticket holder six times in two
+        # spellings and "count=6": the price records, rendered as if they were items. The
+        # records are kept for tracing, under a name the report does not print item by item,
+        # and their number is said as what it is.
+        parts=_names, records=guessed[:10], count=len(_names),
+        price_records=len(guessed))]
 
 
 def check_an_unresolved_reading_blocks_the_quote(summary: Any) -> List[Dict[str, Any]]:
