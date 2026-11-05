@@ -107,6 +107,15 @@ class WhatItChecksTests(unittest.TestCase):
         self.assertEqual(problems, [])                         # no key: never a false "down"
         self.assertIn("answering", facts["phone"])
 
+    def test_the_phone_check_goes_by_the_server_s_name(self):
+        """5 Nov: through 127.0.0.1 SDI Intelligence asks for a sign-in, and SDI_API_KEY isn't set on the server -
+        by its network name (as the laptop's checks go) it is followed all the way to SameDay."""
+        import socket
+        fake = Fake()
+        run(fake)
+        via = [u for u, _ in fake.asked if "/sameday/api/version" in u]
+        self.assertEqual(via, [f"http://{socket.gethostname()}:8071/sameday/api/version"])
+
     def test_the_keys(self):
         self.assertEqual(keys(run(Fake(**{"api.openai.com": (401, {"error": "bad key"})}))[0]).get("openai"), "down")
         self.assertEqual(keys(run(env={"ANTHROPIC_API_KEY": "sk-ant-" + "y" * 40})[0]).get("openai"), "down")
