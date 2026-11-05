@@ -174,6 +174,10 @@ _CUT_IFACES = ("ISwDMCutListItem2", "ISwDMCutListItem")
 _BINDING: Dict[str, Any] = {"via": "", "types": None}
 
 
+def _is_int(v: Any) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
 def _is_com_object(v: Any) -> bool:
     """A COM object, under either binding: never called, only used."""
     if hasattr(v, "_oleobj_"):
@@ -337,6 +341,31 @@ def docmgr_version(app) -> str:
     return _str(v)
 
 
+def _retval_first(r: Any) -> Any:
+    """A method's outputs with its [out, retval] FIRST, whichever binding returned them (D-712).
+
+    pywin32's early binding returns (retval, out1, out2, ...); comtypes returns the [out]
+    parameters in order and the retval LAST: (out1, out2, ..., retval). On the laptop's first
+    comtypes run (5 Nov 2026) GetDocument came back (result, document), the reader took the
+    document pointer for the open-error number, and int() of the pointer's raw bytes failed on
+    all 12 files. Every unpacking below reads through this, so one rule serves both bindings."""
+    if _BINDING.get("via") == "comtypes" and isinstance(r, tuple) and len(r) > 1:
+        return (r[-1],) + tuple(r[:-1])
+    return r
+
+
+def _is_null(obj: Any) -> bool:
+    """A NULL interface pointer, as comtypes returns for "no document": not None, but empty."""
+    if obj is None:
+        return True
+    if _BINDING.get("via") != "comtypes":
+        return False
+    try:
+        return not bool(obj)
+    except Exception:                                                    # noqa: BLE001
+        return False
+
+
 def open_document(app, path: str, doctype: int) -> Tuple[Any, int]:
     """ISwDMApplication.GetDocument(FullPathName, docType, allowReadOnly, out Result)
     -> (ISwDMDocument or None, SwDmDocumentOpenError).
@@ -347,13 +376,22 @@ def open_document(app, path: str, doctype: int) -> Tuple[Any, int]:
     VARIANT is passed and read back. Both forms are tried; the first that answers wins."""
     first_exc: Optional[BaseException] = None
     try:
-        r = app.GetDocument(path, int(doctype), True)
+        r = _retval_first(app.GetDocument(path, int(doctype), True))
         if isinstance(r, (tuple, list)):
             doc = r[0] if r else None
-            err = r[1] if len(r) > 1 else (0 if doc is not None else 1)
+            err = r[1] if len(r) > 1 else None
+            # THE DOCUMENT IS THE OBJECT, THE RESULT IS THE NUMBER (D-712), told apart by what
+            # they are and not only by where they sit: a status is an int and a document
+            # never is. int() is never applied to anything that is not already a number.
+            if _is_int(doc) and not _is_int(err):
+                doc, err = err, doc
         else:
-            doc, err = r, (0 if r is not None else 1)
-        return doc, int(err or 0)
+            doc, err = r, None
+        if _is_null(doc):
+            doc = None
+        if not _is_int(err):
+            err = 0 if doc is not None else 1
+        return doc, int(err)
     except Exception as exc:                                             # noqa: BLE001
         first_exc = exc
     try:
@@ -404,6 +442,7 @@ def _unpack_property(r: Any) -> Tuple[Optional[str], str]:
         return None, ""
     if isinstance(r, str):
         return r.strip(), ""
+    r = _retval_first(r)
     if isinstance(r, (tuple, list)):
         if not r or not isinstance(r[0], str):
             return None, ""
@@ -552,7 +591,7 @@ def external_references(app, doc) -> List[str]:
         if fn is None or not callable(fn):
             continue
         try:
-            r = fn(opt)
+            r = _retval_first(fn(opt))
         except Exception:                                                # noqa: BLE001
             continue
         if isinstance(r, tuple) and r and not isinstance(r[0], str):

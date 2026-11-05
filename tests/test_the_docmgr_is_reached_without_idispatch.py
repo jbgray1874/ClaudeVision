@@ -58,3 +58,104 @@ def test_a_factory_that_cannot_start_is_said_plainly(monkeypatch, tmp_path, caps
     out = capsys.readouterr().out
     assert "could not be started from Python" in out and "type library" in out
     assert "not installed or not registered" not in out
+
+
+# ── comtypes hands back the retval LAST (D-712) ─────────────────────────────────────────
+#
+# The laptop's first comtypes run, 5 Nov 2026: the factory and the key worked, and all 12 files
+# of 12678-01-GA failed with "open: invalid literal for int() with base 10: b'\xe8\xce\x9dr\xe9
+# \x01\x00\x00'". comtypes returns GetDocument's outputs as (result, document); the reader took
+# the document pointer for the error number and int() read its raw bytes.
+
+import ctypes  # noqa: E402
+
+import test_a_docmgr_extract_backs_up_solidworks as base  # noqa: E402
+
+_OUT_METHODS = {"GetDocument", "GetCustomPropertyValues", "GetCustomPropertyValue2",
+                "GetCustomPropertyValue", "GetCustomProperty", "GetAllExternalReferences4"}
+_PRIMS = (str, bytes, int, float, bool, type(None))
+
+
+class ComtypesOrder:
+    """A stand-in COM object returning results the way comtypes does: a method's [out]
+    parameters in order and its retval last; every object it hands back wrapped the same way."""
+
+    def __init__(self, inner):
+        object.__setattr__(self, "_inner", inner)
+
+    def __getattr__(self, name):
+        attr = getattr(self._inner, name)
+        if not callable(attr):
+            return _wrap(attr)
+
+        def call(*a, **k):
+            r = attr(*a, **k)
+            if name in _OUT_METHODS and isinstance(r, tuple) and len(r) > 1:
+                r = tuple(r[1:]) + (r[0],)                 # retval moves to the end
+            return _wrap(r)
+        return call
+
+
+def _wrap(v):
+    if isinstance(v, _PRIMS):
+        return v
+    if isinstance(v, tuple):
+        return tuple(_wrap(x) for x in v)
+    return ComtypesOrder(v)
+
+
+@pytest.fixture()
+def as_comtypes(monkeypatch):
+    monkeypatch.setitem(dm._BINDING, "via", "comtypes")
+    monkeypatch.setitem(dm._BINDING, "types", None)
+
+
+def test_a_document_comes_back_last_and_is_still_the_document(as_comtypes):
+    doc = object()
+
+    class App:
+        def GetDocument(self, path, doctype, ro):
+            return (0, doc)                                 # comtypes: (result, document)
+    assert dm.open_document(App(), "J-01M.SLDPRT", 1) == (doc, 0)
+
+
+def test_a_pointer_is_never_read_as_the_error_number(as_comtypes):
+    ptr = ctypes.c_void_p(0x1E9729DCEE8)                    # what the laptop's error printed
+
+    class App:
+        def GetDocument(self, path, doctype, ro):
+            return (ptr, 0)                                 # either order: told apart by type
+    doc, err = dm.open_document(App(), "J-01M.SLDPRT", 1)
+    assert doc is ptr and err == 0
+
+
+def test_a_null_document_is_no_document_with_its_error(as_comtypes):
+    class App:
+        def GetDocument(self, path, doctype, ro):
+            return (3, ctypes.c_void_p())                   # NULL pointer, open error 3
+    assert dm.open_document(App(), "J-01M.SLDPRT", 1) == (None, 3)
+
+
+def test_a_property_comes_back_value_last_and_is_read(as_comtypes):
+    assert dm._unpack_property((30, '"SW-Material@x"', "Plain Carbon Steel")) == (
+        "Plain Carbon Steel", '"SW-Material@x"')
+
+
+def test_the_whole_pack_reads_the_same_under_either_binding(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv(dm.KEY_ENV, base.KEY)
+    folder, app = base._job(tmp_path)
+    a = tmp_path / "pywin32.json"
+    assert dm.main([str(folder), "--out", str(a)], class_factory=base.FakeFactory(app)) == 0
+    monkeypatch.setitem(dm._BINDING, "via", "comtypes")
+    monkeypatch.setitem(dm._BINDING, "types", None)
+    b = tmp_path / "comtypes.json"
+    code = dm.main([str(folder), "--out", str(b)],
+                   class_factory=base.FakeFactory(ComtypesOrder(app)))
+    out = capsys.readouterr().out
+    assert code == 0, out
+    import json
+    ra, rb = (json.loads(p.read_text(encoding="utf-8"))["records"] for p in (a, b))
+    assert len(rb) == len(ra) == 4 and not any(r.get("errors") for r in rb)
+    assert [r["route_signals"] for r in rb] == [r["route_signals"] for r in ra]
+    assert [r["custom_properties"] for r in rb] == [r["custom_properties"] for r in ra]
+    assert [r["bom"] for r in rb] == [r["bom"] for r in ra]
