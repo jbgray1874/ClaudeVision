@@ -94,4 +94,6 @@ def test_the_count_is_the_items_and_the_records_are_said_as_records():
     assert d["parts"] == ["0327590-A-LINE 78X78MM TICKET HOLDER_2274"]
     assert d["count"] == 1, "the detail's count contradicts the headline's one item"
     assert d["price_records"] == 6
-    assert "lines" not in d, "raw records under 'lines' print every spelling as an item"
+    assert [ln["part"] for ln in d["lines"]] == ["0327590-A-LINE 78X78MM TICKET HOLDER_2274"], \
+        "the report prints a check's lines one by one: six records read as six items"
+    assert d["lines"][0]["reason"] == "6 price records"
