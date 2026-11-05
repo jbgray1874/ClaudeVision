@@ -101,9 +101,20 @@ needs setting:
 .\.venv\Scripts\python.exe tools\solidworks\compare_extracts.py "<model folder>\_sw_native_extract.json" "$env:TEMP\docmgr_check.json"
 ```
 
-`compare_extracts.py` lists parts only one reader found, and any material, thickness, flat
-blank, bends, cut length, mass or assembly quantity that disagrees. A value the file never
-saved is counted as *not saved*, not as a difference. It writes nothing.
+Use a folder that holds the `.SLDPRT` / `.SLDASM` files themselves, and read the SAME folder
+with both readers, so the two extracts describe the same files. A staged pack of PDFs and DXFs
+has nothing for either reader. With SolidWorks on the machine, the worker's read of that folder
+is:
+
+```powershell
+.\.venv\Scripts\python.exe tools\solidworks\sw_native_analyse.py "<model folder>" --out "$env:TEMP\sw_check.json"
+```
+
+`compare_extracts.py` lists parts only one reader found, every file either reader failed on with
+its error, and any material, thickness, flat blank, bends, cut length, mass or assembly
+quantity that disagrees. A value the file never saved is counted as *not saved*, not as a
+difference. It refuses (exit 2) when either read has no file read successfully: two empty
+extracts agree on everything and prove nothing (D-710a). It writes nothing.
 
 **Is this machine ready?** `tools\start\check-runner-host.ps1` prints whether SolidWorks and the
 Document Manager are registered, whether Excel is installed, and the names (never the values) of
