@@ -23,7 +23,7 @@ class OrderTests(unittest.TestCase):
     def test_every_check_before_anything_changes(self):
         first_change = at("New-Item -ItemType Directory -Force -Path $keep")
         for check in ("[IO.Compression.ZipFile]::OpenRead($npz)", 'StartsWith("SQLite format 3")',
-                      "is still growing", 'There "$Target\\brief_lite\\lite_app.py"', "Win32_LogicalDisk"):
+                      "is still being copied", 'There "$Target\\brief_lite\\lite_app.py"', "Win32_LogicalDisk"):
             with self.subTest(check=check):
                 self.assertLess(at(check), first_change)
 
@@ -33,12 +33,36 @@ class OrderTests(unittest.TestCase):
         self.assertLess(at("stop SDISameDay"), at("Move-Item -LiteralPath $newNpz"))  # a rename, SameDay down
         self.assertLess(at("Move-Item -LiteralPath $newDb"), BODY.rindex('" start SDISameDay | Out-Null'))
 
+    def test_the_thumbnails_come_last_and_never_hold_the_index_up(self):
+        """5 Nov: copied before the swap, 269,000 small files kept picture matching off for as long as they took."""
+        self.assertGreater(at("& robocopy $thumbs"), at("Move-Item -LiteralPath $newNpz"))
+        self.assertGreater(at("& robocopy $thumbs"), at("Picture matching is ON"))
+        self.assertIn("safe to stop with Ctrl+C", BODY)
+        self.assertEqual(len(re.findall(r"& robocopy", BODY)), 1)
+
     def test_the_watch_is_paused_for_the_swap_and_always_put_back(self):
         self.assertLess(at("/TN $Watch /DISABLE"), at("stop SDISameDay"))
         enables = [m.start() for m in re.finditer(r"/TN \$Watch /ENABLE", BODY)]
-        self.assertEqual(len(enables), 2)                       # after the swap, and when SameDay wouldn't stop
+        self.assertEqual(len(enables), 3)      # when SameDay wouldn't stop, after the swap, after a put-back
         self.assertLess(at("didn't stop within a minute") - 300, enables[0])
-        self.assertGreater(enables[1], BODY.rindex('" start SDISameDay | Out-Null'))
+        self.assertGreater(enables[1], at("Swapped in; SameDay is starting") - 200)
+
+
+class HalfCopiedTests(unittest.TestCase):
+    """5 Nov: it was run while Muhammad's copy was still going. A half-copied job list still looks like a database at
+    its start, so both files must have stopped changing; and a job list SameDay can't read is put straight back."""
+
+    def test_both_files_must_have_stopped_changing(self):
+        self.assertIn("foreach ($p in @($npz, $db))", BODY)
+        self.assertIn("$it.LastWriteTime -gt (Get-Date).AddMinutes(-2)", BODY)
+        self.assertIn("is still being copied", BODY)
+
+    def test_a_job_list_sameday_cant_read_is_put_back_by_itself(self):
+        self.assertIn("[int]$past.jobs -le 0", BODY)
+        back = BODY[at("[int]$past.jobs -le 0"):]
+        self.assertIn('Copy-Item -LiteralPath "$keep\\projects.db" -Destination "$Target\\brief_lite\\projects.db"', back)
+        self.assertLess(back.index("/DISABLE"), back.index("stop SDISameDay"))
+        self.assertLess(back.index("start SDISameDay"), back.index("/ENABLE"))
 
 
 class SafetyTests(unittest.TestCase):
@@ -53,8 +77,8 @@ class SafetyTests(unittest.TestCase):
         self.assertNotIn("/PURGE", BODY)
         for line in BODY.splitlines():
             if "Remove-Item" in line:
-                with self.subTest(line=line.strip()):
-                    self.assertIn("$newNpz, $newDb", line)       # only its own half-copied temporary files
+                with self.subTest(line=line.strip()):    # its own temporary files, or the index it put in itself
+                    self.assertTrue("$newNpz, $newDb" in line or '"$Target\\all_img_index.npz"' in line, line)
 
     def test_from_the_folder_muhammad_was_asked_to_use(self):
         self.assertIn("SDI Same Day Intelligence\\index-for-server", BODY)
