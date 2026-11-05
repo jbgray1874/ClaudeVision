@@ -44,7 +44,7 @@ class OrderTests(unittest.TestCase):
         """5 Nov (James: "do we have enough space on the server?")."""
         measure, copy = [m.start() for m in re.finditer(r"& robocopy", BODY)]
         self.assertIn("/L /BYTES", BODY[measure:measure + 120])           # lists only - copies nothing
-        self.assertLess(at("$toCopy -gt ($freeNow - 10GB)"), copy)
+        self.assertLess(at("$freeNow -lt 0 -or $toCopy -gt ($freeNow - 20GB)"), copy)    # unknown free space: no copy
         self.assertIn("Thumbnails left out - SameDay doesn't need them", BODY)
 
     def test_the_watch_is_paused_for_the_swap_and_always_put_back(self):

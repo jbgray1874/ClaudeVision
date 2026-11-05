@@ -261,7 +261,8 @@ if ($thumbs -and $past -and $past.jobs -gt 0) {
     Head "6. Thumbnails (optional - safe to stop with Ctrl+C at any time and run this again later)"
     Say "SameDay is already using the index. These only make past-work pictures quicker to show."
     # 5 Nov 2026 (James: "do we have enough space on the server?"): measured, not guessed - only what is still to
-    # copy, against the server's free space now, keeping 10 GB spare on its system drive.
+    # copy, against the server's free space now. A production server's system drive keeps 20 GB free afterwards
+    # (14.7 GB of thumbnails would have left it 13 GB) - the thumbnails are optional.
     Say "Measuring what is still to copy (a minute or two)..."
     $plan = & robocopy $thumbs "$Target\all_img_thumbs" /E /L /BYTES /NFL /NDL /NJH /R:0 /W:0 2>&1
     $toCopy = -1
@@ -270,9 +271,9 @@ if ($thumbs -and $past -and $past.jobs -gt 0) {
     try { $freeNow = (Get-WmiObject -Class Win32_LogicalDisk -ComputerName $Server -Filter "DeviceID='C:'" -ErrorAction Stop).FreeSpace } catch { $freeNow = -1 }
     $go = $true
     if ($toCopy -lt 0) { Warn "Couldn't measure the thumbnails - leaving them for now. Nothing else is affected."; $go = $false }
-    elseif ($freeNow -ge 0 -and $toCopy -gt ($freeNow - 10GB)) {
+    elseif ($freeNow -lt 0 -or $toCopy -gt ($freeNow - 20GB)) {
         Warn ("Not enough room: " + [math]::Round($toCopy / 1GB, 1) + " GB to copy, " + [math]::Round($freeNow / 1GB, 1) +
-              " GB free on the server's C:, and 10 GB must stay spare. Thumbnails left out - SameDay doesn't need them.")
+              " GB free on the server's C: (or it couldn't be read), and 20 GB must stay free. Thumbnails left out - SameDay doesn't need them.")
         $go = $false
     } else {
         Say ([math]::Round($toCopy / 1GB, 1).ToString() + " GB to copy" +
