@@ -14,6 +14,7 @@ is a mistake anybody made — each is two people being right in two files, years
     powder   0.20 kg/m2            0.166667 in the policy beside it — both in config
     powder   £4.00/kg              £12.50 in sheet_steel_costing
     wire     £1500/tonne default   £1600 in wire_costing, and 1600 on the sheet that shipped
+             (ruled 5 Nov 2026: the workbook figure, £1600; the default now matches, D-697)
     steel    £950/tonne default    £900 on the sheet that shipped
 
 THE FIRST COUNT WAS WRONG, AND WRONG IN THE PLACE THAT MATTERED MOST. It said 35 tables and

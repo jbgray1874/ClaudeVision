@@ -823,13 +823,21 @@ def weld_rate_gap_question(part: Dict[str, Any]) -> bool:
         from source_precedence import raise_manufacturing_question as _ask
     except Exception:                                                # noqa: BLE001
         return False
-    return bool(_ask(
-        part, f"Weld rate: {proc} welding is stated, and the rate card has no {proc} rate",
+    _issue = f"Weld rate: {proc} welding is stated, and the rate card has no {proc} rate"
+    added = bool(_ask(
+        part, _issue,
         f"charged at the {row} rate, the card's one arc-weld row, as a placeholder — {proc} "
         f"is slower work at a different rate, so the weld minutes and the rate both need "
         f"confirming",
         f"give the {proc} rate, or the minutes at the {row} rate, and the weld is charged on it",
         "weld_symbols.weld_rate_gap_question"))
+    # THE QUESTION NAMES WHAT IT ASKS ABOUT (D-698), so the money beside it is the weld's and
+    # not the part's material. Only the operation: a rate question does not answer whether the
+    # part is welded at all, so it must not stand in for those questions (subject "welding").
+    for _q in part.get("manufacturing_questions") or []:
+        if isinstance(_q, dict) and _q.get("issue") == _issue:
+            _q.setdefault("operations", ["welding"])
+    return added
 
 
 def sheet_weld_note(notes: Any) -> Dict[str, Any]:
