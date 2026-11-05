@@ -5707,6 +5707,7 @@ def compile_job_route(
                 _op_evidence_where = ("the sheet's own note text, legend removed"
                                       if _op_evidence else "")
                 _demoted = False
+                _weld_basis: Optional[Dict[str, Any]] = None
                 if (field_name == "textual_operations"
                         and operation not in operation_sources and not _op_evidence):
                     # THE RECORD'S OWN STATED FINISH IS EVIDENCE TOO. A weldment whose title
@@ -5744,6 +5745,26 @@ def compile_job_route(
                         elif part.get("weld_stated_by_finish"):
                             _op_evidence = "the part's own finish field states the weld"
                             _op_evidence_where = "the part's own stated finish"
+                    # A WELD ON ONE PIECE SAYS WHICH JOINT IT IS (D-718). Where nothing recorded
+                    # why a single made part is welded, its own folds are asked: a section the
+                    # folds close has a closing seam, a part folded up on four sides has four
+                    # corner seams. That is the engine's manufacturing reason and the claim
+                    # carries it; the charge is never removed for want of a printed symbol.
+                    if (not _op_evidence and operation in ("welding", "dress_welds")
+                            and kinds.get(part_number) != "assembly"
+                            and not ((graph.get("children") or {}).get(part_number))):
+                        try:
+                            from weld_reasoning import weld_joint_basis as _wjb
+                            _weld_basis = _wjb(part)
+                        except Exception:                            # noqa: BLE001
+                            _weld_basis = None
+                        if _weld_basis and _weld_basis.get("kind") != "provisional":
+                            _op_evidence = str(_weld_basis.get("statement") or "")
+                            _op_evidence_where = "the part's own folded geometry"
+                            # Its own name, not "inference": the joint is read off this
+                            # part's folds, so it is the part's own evidence and the
+                            # evidenceless-leaf withhold (D-385) does not send it upstairs.
+                            source = "fold_geometry"
                     if not _op_evidence:
                         # "unrecorded", not "unknown": the same rank (0) and the same English
                         # ("an unrecorded source"), but the stranded-assembly status rule
@@ -5933,7 +5954,13 @@ def compile_job_route(
                         ),
                         sequence=sequences.get(operation),
                         reason=(f"{field_name} on existing part record"
-                                + (" — no reader recorded a source or the drawing's words "
+                                + (f" — the engine infers {_weld_basis['joint']}: "
+                                   f"{_weld_basis['why']}; priced"
+                                   if _weld_basis and not _demoted else
+                                   f" — no reader recorded a source; {_weld_basis['why']}; "
+                                   f"priced as {_weld_basis['assumption']}"
+                                   if _weld_basis and _demoted else
+                                   " — no reader recorded a source or the drawing's words "
                                    "for it; priced, not promoted to a note" if _demoted
                                    else "")),
                         route_id=route_id,

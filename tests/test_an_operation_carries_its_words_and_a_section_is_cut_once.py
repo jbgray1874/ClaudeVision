@@ -74,7 +74,10 @@ class AnUnsourcedOperationIsNotANote(unittest.TestCase):
         d = self._weld_decision({"part_number": "J-06M", "description": "ANTI SCRATCH STRIP",
                                  "textual_operations": ["welding"]})
         self.assertEqual(d.get("source"), "unrecorded")
-        self.assertIn("priced, not promoted", str(d.get("reason")))
+        # Still priced and still not dressed as a note; since D-718 a weld on one piece says
+        # it is carried as one provisional joint rather than only that nobody recorded it.
+        self.assertEqual(d.get("status"), "required")
+        self.assertIn("priced as a provisional allowance", str(d.get("reason")))
 
     def test_the_parts_own_stated_finish_is_evidence_for_its_coat(self):
         ds = [d for d in _compile_one(

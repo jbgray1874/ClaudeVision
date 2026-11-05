@@ -331,6 +331,7 @@ SOURCE_RANK: Dict[str, int] = {
     "llm_full_extract": 40,
     "inference": 20,
     "geometry_inference": 20,
+    "fold_geometry": 20,
     # THE SHEET'S OWN LARGEST PRINTED DIMENSIONS, DEVELOPED FOR ITS FOLDS (D-505). Read off the
     # part's own detail sheet when it prints no usable overall pair — above a category default
     # (which knows nothing about this part) and below the printed overall (which names the
@@ -407,6 +408,7 @@ SOURCE_TIEBREAK: Dict[str, int] = {
     "llm_extract": 1,
     # Inference FROM measured geometry rests on something; inference in general does not.
     "geometry_inference": 2,
+    "fold_geometry": 2,
     "inference": 1,
 }
 
@@ -583,6 +585,8 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "llm_full_job":           "Grok (xAI)",
     "inference":              "engine inference",
     "geometry_inference":     "engine inference from geometry",
+    # A WELD JOINT READ FROM THE PART'S OWN FOLDS (D-718): a closing seam or corner seams.
+    "fold_geometry":          "the part's own folds",
     "printed_extents_provisional": "the largest dimensions printed on its own sheet (provisional)",
     "own_figures_confirmed_by_stated_weight":
         "figures on its own sheet that its stated weight singles out (not measured)",
@@ -899,6 +903,7 @@ EVIDENCE_FAMILY: Dict[str, str] = {
     "override_rule": "a derivation",
     "inference": "a derivation",
     "geometry_inference": "a derivation",
+    "fold_geometry": "a derivation",
     # A MIRROR IS THE OTHER HAND'S READING WEARING A NEW NAME. Kept in its own family here; the
     # rule that stops it voting for its own base lives in drawing_job_merge and is untouched.
     "mirror_of_measured": "a mirrored measurement",
