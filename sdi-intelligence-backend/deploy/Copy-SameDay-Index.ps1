@@ -17,15 +17,17 @@
       1. Checks K:'s copy is complete: the index opens (a half-copied one
          doesn't), the job list is a real database, both from the same build.
       2. Keeps the server's current job list (and index, if any) in backups.
-      3. Copies everything while SameDay keeps running: the thumbnails (added,
-         never deleted) and the index and job list under temporary names.
+      3. Copies the index and job list under temporary names while SameDay
+         keeps running.
       4. Pauses the watch, stops SameDay for the few seconds it takes to swap
          the index and job list in (a running SameDay holds the job list
          open), starts it again, and turns the watch back on.
       5. Waits until SameDay says picture matching is on - or says why not.
-    Best run in the office: over the VPN, everything travels through the
-    laptop, and the thumbnails are many small files (-NoThumbs leaves them for
-    another time; running it again carries on where a copy stopped).
+      6. Last, and optional: the thumbnails - 269,000 small files, added, never
+         deleted. SameDay already uses the index by then, so this can be
+         stopped (Ctrl+C) at any time and run again later; it carries on where
+         it stopped. Over the VPN everything travels through the laptop, so
+         this part is best done in the office (-NoThumbs skips it).
     It never touches the keys (.env), the chats (lite.db), or anything else.
 #>
 [CmdletBinding()]
@@ -162,7 +164,7 @@ if (-not (There "$keep\projects.db") -and (There "$Target\brief_lite\projects.db
 Yes "Kept in $keep"
 
 # -- 3. Copying, while SameDay keeps running ------------------------------------------------
-Head "3. Copying (SameDay keeps running - this is the long part)"
+Head "3. Copying the index and the job list (SameDay keeps running)"
 $newNpz = "$Target\all_img_index.npz.incoming"
 $newDb = "$Target\brief_lite\projects.db.incoming"
 try {
@@ -177,12 +179,6 @@ if ((Get-Item -LiteralPath $newNpz).Length -ne (Get-Item -LiteralPath $npz).Leng
     Stop-Here "The index arrived a different size from K:'s copy."
 }
 Yes "Index and job list copied, ready to swap in"
-if ($thumbs) {
-    # many small files: several at once; a stopped copy carries on where it was when this is run again
-    & robocopy $thumbs "$Target\all_img_thumbs" /E /MT:16 /R:1 /W:1 /NP /NFL /NDL /NJH /NJS | Out-Null
-    if ($LASTEXITCODE -ge 8) { Warn "Copying the thumbnails failed (robocopy $LASTEXITCODE) - run this again to carry on. The index goes in regardless." }
-    else { Yes "Thumbnails copied (added to what was there - nothing deleted)" }
-}
 
 # -- 4. The index and the job list, with SameDay stopped ----------------------------
 Head "4. Swapping them in (SameDay stopped for a few seconds, the watch paused)"
@@ -258,3 +254,14 @@ if ($past -and $past.pictures) {
 Say "To put the old job list back: copy $keep\projects.db to $Target\brief_lite\, then restart SDISameDay."
 Write-Host ("=" * 72) -ForegroundColor DarkGray
 Write-Host ""
+
+# -- 6. The thumbnails: last, optional, safe to stop ---------------------------------------
+# 5 Nov 2026: copied before the swap, 269,000 small files held picture matching up for as long as they took.
+if ($thumbs -and $past -and $past.jobs -gt 0) {
+    Head "6. Thumbnails (optional - safe to stop with Ctrl+C at any time and run this again later)"
+    Say "SameDay is already using the index. These only make past-work pictures quicker to show."
+    Say ("Started " + (Get-Date -Format "HH:mm") + " - it shows nothing until it ends.")
+    & robocopy $thumbs "$Target\all_img_thumbs" /E /MT:16 /R:1 /W:1 /NP /NFL /NDL /NJH | Out-Host
+    if ($LASTEXITCODE -ge 8) { Warn "Some thumbnails didn't copy (robocopy $LASTEXITCODE) - run this again to carry on." }
+    else { Yes "Thumbnails copied (added to what was there - nothing deleted)" }
+}

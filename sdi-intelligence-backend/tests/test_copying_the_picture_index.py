@@ -33,6 +33,13 @@ class OrderTests(unittest.TestCase):
         self.assertLess(at("stop SDISameDay"), at("Move-Item -LiteralPath $newNpz"))  # a rename, SameDay down
         self.assertLess(at("Move-Item -LiteralPath $newDb"), BODY.rindex('" start SDISameDay | Out-Null'))
 
+    def test_the_thumbnails_come_last_and_never_hold_the_index_up(self):
+        """5 Nov: copied before the swap, 269,000 small files kept picture matching off for as long as they took."""
+        self.assertGreater(at("& robocopy $thumbs"), at("Move-Item -LiteralPath $newNpz"))
+        self.assertGreater(at("& robocopy $thumbs"), at("Picture matching is ON"))
+        self.assertIn("safe to stop with Ctrl+C", BODY)
+        self.assertEqual(len(re.findall(r"& robocopy", BODY)), 1)
+
     def test_the_watch_is_paused_for_the_swap_and_always_put_back(self):
         self.assertLess(at("/TN $Watch /DISABLE"), at("stop SDISameDay"))
         enables = [m.start() for m in re.finditer(r"/TN \$Watch /ENABLE", BODY)]
