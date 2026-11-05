@@ -45,12 +45,12 @@ class Fake:
         return 0, "no answer", ""
 
 
-def run(fake=None, services=None, env=None, log=""):
+def run(fake=None, services=None, env=None, log="", free=28.4):
     fake = fake or Fake()
     states = {"SDISameDay": "RUNNING", "SDIIntelligence": "RUNNING", "WAPCSvc": "absent"} | (services or {})
     return W.check(get=fake.get, service=lambda n: states.get(n, ""),
                    env={"OPENAI_API_KEY": KEY, "ANTHROPIC_API_KEY": "sk-ant-" + "y" * 40} if env is None else env,
-                   log_text=log)
+                   log_text=log, disk=lambda path: free)
 
 
 def keys(problems):
@@ -118,6 +118,17 @@ class WhatItChecksTests(unittest.TestCase):
         p = run(Fake(**{"5020/api/status": (200, {"spent_today": 10.02, "cap": 10})}))[0]
         self.assertEqual(keys(p).get("spend"), "down")
         self.assertIn("brief_lite_daily_cap_usd", p[0]["fix"])
+
+    def test_the_server_s_disk(self):
+        """5 Nov (James: "this is a production server"): a copy was started on a guess at its size."""
+        p = run(free=4.2)[0]
+        self.assertEqual(keys(p).get("disk"), "down")
+        self.assertIn("all_img_thumbs", p[0]["fix"])
+        self.assertEqual(keys(run(free=8.0)[0]).get("disk"), "warn")
+        self.assertEqual(run(free=28.4)[0], [])
+        self.assertIn("28.4 GB", run(free=28.4)[1]["server C: free"])
+        self.assertEqual(run(free=None)[0], [])                 # can't be read here: never a false alarm
+        self.assertIsNone(W.disk_free_gb("Q:\\no-such-drive\\"))
 
     def test_no_credit_in_sameday_s_log(self):
         p = run(log="rt done abc make_concepts: NOTHING drawn - Renders are paused ... needs topping up")[0]

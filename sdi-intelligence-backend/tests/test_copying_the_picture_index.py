@@ -33,12 +33,17 @@ class OrderTests(unittest.TestCase):
         self.assertLess(at("stop SDISameDay"), at("Move-Item -LiteralPath $newNpz"))  # a rename, SameDay down
         self.assertLess(at("Move-Item -LiteralPath $newDb"), BODY.rindex('" start SDISameDay | Out-Null'))
 
-    def test_the_thumbnails_come_last_and_never_hold_the_index_up(self):
-        """5 Nov: copied before the swap, 269,000 small files kept picture matching off for as long as they took."""
-        self.assertGreater(at("& robocopy $thumbs"), at("Move-Item -LiteralPath $newNpz"))
-        self.assertGreater(at("& robocopy $thumbs"), at("Picture matching is ON"))
-        self.assertIn("safe to stop with Ctrl+C", BODY)
-        self.assertEqual(len(re.findall(r"& robocopy", BODY)), 1)
+    def test_the_thumbnails_stay_on_k_and_are_never_copied(self):
+        """5 Nov (James: "use the index from the mounted K: ... this is a production server"): 14.7 GB of thumbnails
+        were being copied onto the server's C: on a guess at their size."""
+        self.assertNotIn("robocopy", BODY)
+        self.assertNotIn("$Target\\all_img_thumbs", BODY)
+        self.assertIn("The thumbnails stay on K:", BODY)
+
+    def test_free_space_is_a_hard_gate(self):
+        self.assertIn("nothing is copied onto a production server without that", BODY)
+        self.assertIn("+ 20, 1)", BODY)                                 # 20 GB stays free
+        self.assertLess(at("Win32_LogicalDisk"), at("New-Item -ItemType Directory -Force -Path $keep"))
 
     def test_the_watch_is_paused_for_the_swap_and_always_put_back(self):
         self.assertLess(at("/TN $Watch /DISABLE"), at("stop SDISameDay"))
@@ -63,6 +68,22 @@ class HalfCopiedTests(unittest.TestCase):
         self.assertIn('Copy-Item -LiteralPath "$keep\\projects.db" -Destination "$Target\\brief_lite\\projects.db"', back)
         self.assertLess(back.index("/DISABLE"), back.index("stop SDISameDay"))
         self.assertLess(back.index("start SDISameDay"), back.index("/ENABLE"))
+
+
+class WeeklyRefreshTests(unittest.TestCase):
+    """5 Nov (Muhammad): "It refreshes automatically every week ... BUILD.txt: which build it is". The server keeps
+    its own copy, so this is run again for a new build - and does nothing when the server already has it."""
+
+    def test_the_server_remembers_its_build_only_after_a_good_swap(self):
+        keep_build = at('Copy-Item -LiteralPath "$From\\BUILD.txt" -Destination "$Target\\all_img_index.BUILD.txt"')
+        self.assertGreater(keep_build, at("Move-Item -LiteralPath $newDb"))
+        self.assertIn("if ($ok) {", BODY[keep_build - 200:keep_build])
+
+    def test_the_same_build_again_changes_nothing(self):
+        same = at("$build -eq $serverBuild")
+        self.assertLess(same, at("New-Item -ItemType Directory -Force -Path $keep"))   # before any change
+        self.assertIn("$before.pictures", BODY[same:same + 120])                     # and only if it is working
+        self.assertIn("-not $Force", BODY[same:same + 120])
 
 
 class SafetyTests(unittest.TestCase):

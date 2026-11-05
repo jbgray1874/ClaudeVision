@@ -140,6 +140,15 @@ class ItProvesItRunsTheNewCodeTests(unittest.TestCase):
             with self.subTest(part=part):
                 self.assertIn(part, BODY)
 
+    def test_the_picture_data_is_never_in_a_backup_or_copied_over(self):
+        """5 Nov: the partial thumbnails (1.5 GB of small files) went into an update's backup on a production server."""
+        skip_dirs = BODY.split("$skipDirs = @(", 1)[1].split(")", 1)[0]
+        skip_files = BODY.split("$skipFiles = @(", 1)[1].split(")", 1)[0]
+        self.assertIn('"all_img_thumbs"', skip_dirs)
+        for f in ('"*.npz"', '"*.db"', '"*.incoming"'):
+            with self.subTest(f=f):
+                self.assertIn(f, skip_files)
+
     def test_a_log_pasted_into_chat_has_no_keys(self):
         self.assertIn("[key removed]", BODY)
 

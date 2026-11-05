@@ -41,6 +41,7 @@ import html
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -121,12 +122,20 @@ def new_log_text(log: Path, state: dict) -> str:
         return ""
 
 
+def disk_free_gb(path: str) -> Optional[float]:
+    """Free space on the server's drive, in GB - None when it can't be read (not this server)."""
+    try:
+        return shutil.disk_usage(path).free / 1e9
+    except OSError:
+        return None
+
+
 def _problem(key: str, level: str, title: str, fix: str) -> dict:
     return {"key": key, "level": level, "title": title, "fix": fix}
 
 
 def check(get: Callable = http_get, service: Callable = service_state, env: Optional[dict] = None,
-          log_text: str = "") -> tuple[list[dict], dict]:
+          log_text: str = "", disk: Callable = disk_free_gb) -> tuple[list[dict], dict]:
     """Every check, each on its own: (problems, facts). A check that can't run is a problem, never a pass."""
     problems: list[dict] = []
     facts: dict = {}
@@ -221,6 +230,18 @@ def check(get: Callable = http_get, service: Callable = service_state, env: Opti
         problems.append(_problem("credit", "down", "OpenAI says the account has no credit",
                                  "Renders and live voice stop until it is topped up: platform.openai.com > Billing.")
                         | {"sticky": True})
+
+    # the server's own disk - 5 Nov 2026 (James: "this is a production server"): copying 269,000 thumbnails was
+    # started on a guess at their size. Whatever fills C:, this says so before it is full.
+    free = disk(_opt("SAMEDAY_DISK", "C:\\"))
+    if free is not None:
+        facts["server C: free"] = f"{free:.1f} GB"
+        fix = (r"Clear space on the server's C:. SameDay's own big folders are C:\SDI_Automation\all_img_thumbs "
+               r"(optional thumbnails - SameDay works without them) and C:\SDI_Automation\backups (old copies).")
+        if free < 5:
+            problems.append(_problem("disk", "down", f"The server's C: is almost full ({free:.1f} GB free)", fix))
+        elif free < 10:
+            problems.append(_problem("disk", "warn", f"The server's C: is getting full ({free:.1f} GB free)", fix))
 
     # today's spend
     code, status, _ = get(base + "/api/status")

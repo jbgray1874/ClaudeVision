@@ -23,11 +23,10 @@
          the index and job list in (a running SameDay holds the job list
          open), starts it again, and turns the watch back on.
       5. Waits until SameDay says picture matching is on - or says why not.
-      6. Last, and optional: the thumbnails - 269,000 small files, added, never
-         deleted. SameDay already uses the index by then, so this can be
-         stopped (Ctrl+C) at any time and run again later; it carries on where
-         it stopped. Over the VPN everything travels through the laptop, so
-         this part is best done in the office (-NoThumbs skips it).
+    The thumbnails (269,000 small pictures, 14.7 GB) are NOT copied: they
+    stay on K:, and SameDay reads them from there (5 Nov 2026 - James: "use
+    the index from the mounted K: - we can see it from the server anyway";
+    copying them filled a production server's C: on a guess at their size).
     It never touches the keys (.env), the chats (lite.db), or anything else.
 #>
 [CmdletBinding()]
@@ -35,7 +34,9 @@ param(
     [string]$Server = "10.0.0.5",
     # Where Muhammad puts it - K: by its full name (works without K: mapped, and as administrator).
     [string]$From = "\\sdi-dc01\shareddata$\Shared\IT\AI & Automation\Design\SDI Same Day Intelligence\index-for-server",
-    [switch]$NoThumbs,
+    [switch]$NoThumbs,          # kept so older instructions still run: the thumbnails are never copied now
+    # Copy even when the server already has the build that is on K:.
+    [switch]$Force,
     [string]$Watch = "SDI SameDay Watch"
 )
 
@@ -83,7 +84,7 @@ Head "1. Is Muhammad's copy on K: complete?"
 if (-not (There $From)) { Stop-Here "Nothing at $From yet. When Muhammad has copied it there, run this again." }
 $npz = "$From\all_img_index.npz"
 $db = if (There "$From\projects.db") { "$From\projects.db" } else { "$From\brief_lite\projects.db" }
-$thumbs = if (-not $NoThumbs -and (There "$From\all_img_thumbs")) { "$From\all_img_thumbs" } else { "" }
+$thumbs = There "$From\all_img_thumbs"
 if (-not (There $npz)) { Stop-Here "all_img_index.npz is not in $From." }
 if (-not (There $db)) { Stop-Here "projects.db is not in $From (or its brief_lite folder) - it must come with the index." }
 
@@ -137,21 +138,34 @@ if ($gap -gt 3) {
     Warn ("The index and the job list were made " + [math]::Round($gap) + " days apart. SameDay will refuse them if they")
     Say "don't match - ask Muhammad whether they come from the same build."
 } else { Yes "The index and the job list were made at the same time" }
-if ($thumbs) { Yes "The thumbnails folder is there" }
-elseif ($NoThumbs) { Say "Thumbnails left for another time (-NoThumbs)." }
-else { Warn "No all_img_thumbs folder - matching still works; past-work pictures load from W: instead." }
+if ($thumbs) { Yes "The thumbnails stay on K: - SameDay reads them from there (nothing copied)" }
+else { Warn "No all_img_thumbs folder on K: - matching still works; past-work pictures load from W: instead." }
 
 if (-not (There "$Target\brief_lite\lite_app.py")) { Stop-Here "Can't reach SameDay on the server ($Target). VPN on?" }
 # Room on the server's C: for the index, the job list and the thumbnails, with plenty to spare.
 try {
     $disk = Get-WmiObject -Class Win32_LogicalDisk -ComputerName $Server -Filter "DeviceID='C:'" -ErrorAction Stop
     $freeGB = [math]::Round($disk.FreeSpace / 1GB, 1)
-    $needGB = [math]::Round(((Get-Item -LiteralPath $npz).Length + (Get-Item -LiteralPath $db).Length) / 1GB + $(if ($thumbs) { 8 } else { 0 }) + 10, 1)
-    if ($freeGB -lt $needGB) { Stop-Here "The server's C: has $freeGB GB free; this needs about $needGB GB (thumbnails included, 10 GB spare)." }
+    # the index and job list, twice over while they are swapped in, and 20 GB left free on a production server
+    $needGB = [math]::Round(2 * ((Get-Item -LiteralPath $npz).Length + (Get-Item -LiteralPath $db).Length) / 1GB + 20, 1)
+    if ($freeGB -lt $needGB) { Stop-Here "The server's C: has $freeGB GB free; this needs $needGB GB (20 GB of it kept free)." }
     Yes "The server's C: has $freeGB GB free"
-} catch { Warn "Couldn't read the server's free space - carrying on (a full disk stops the copy, with nothing half-swapped)." }
+} catch { Stop-Here "Couldn't read the server's free space - nothing is copied onto a production server without that." }
 $before = Past-Work
 if ($before) { Say ("SameDay now: " + $before.jobs + " past jobs, pictures " + $(if ($before.pictures) { "on" } else { "off (" + $before.why + ")" })) }
+# 5 Nov 2026 (Muhammad: "it refreshes automatically every week"): BUILD.txt says which build is on K:, and the server
+# keeps a copy beside its index - so running this weekly copies only a newer build, and says when there is none.
+$build = if (There "$From\BUILD.txt") { ((Get-Content -LiteralPath "$From\BUILD.txt" -TotalCount 6) -join " | ").Trim() } else { "" }
+$serverBuild = if (There "$Target\all_img_index.BUILD.txt") { ((Get-Content -LiteralPath "$Target\all_img_index.BUILD.txt" -TotalCount 6) -join " | ").Trim() } else { "" }
+if ($build) { Yes "On K: $build" } else { Warn "No BUILD.txt on K: - which build this is can't be told." }
+if ($serverBuild) { Say "On the server: $serverBuild" }
+if ($build -and $build -eq $serverBuild -and $before -and $before.pictures -and -not $Force) {
+    Write-Host ""
+    Write-Host "  The server already has this build, and picture matching is on. Nothing to do." -ForegroundColor Green
+    Write-Host "  (-Force copies it again anyway.)" -ForegroundColor Gray
+    Write-Host ""
+    exit 0
+}
 
 # -- 2. Keep what is replaced --------------------------------------------------------------
 Head "2. Keeping the server's current job list"
@@ -206,7 +220,10 @@ try {     # a rename on the server's own disk - seconds, not a copy
 }
 & sc.exe "\\$Server" start SDISameDay | Out-Null
 & schtasks.exe /Change /S $Server /TN $Watch /ENABLE 2>&1 | Out-Null
-if ($ok) { Yes "Swapped in; SameDay is starting, the watch is back on" }
+if ($ok) {
+    Yes "Swapped in; SameDay is starting, the watch is back on"
+    if (There "$From\BUILD.txt") { Copy-Item -LiteralPath "$From\BUILD.txt" -Destination "$Target\all_img_index.BUILD.txt" -Force }
+}
 
 # -- 5. Does SameDay use it? ------------------------------------------------------------
 Head "5. Waiting for SameDay to load it (the first time can take a few minutes)"
@@ -254,14 +271,3 @@ if ($past -and $past.pictures) {
 Say "To put the old job list back: copy $keep\projects.db to $Target\brief_lite\, then restart SDISameDay."
 Write-Host ("=" * 72) -ForegroundColor DarkGray
 Write-Host ""
-
-# -- 6. The thumbnails: last, optional, safe to stop ---------------------------------------
-# 5 Nov 2026: copied before the swap, 269,000 small files held picture matching up for as long as they took.
-if ($thumbs -and $past -and $past.jobs -gt 0) {
-    Head "6. Thumbnails (optional - safe to stop with Ctrl+C at any time and run this again later)"
-    Say "SameDay is already using the index. These only make past-work pictures quicker to show."
-    Say ("Started " + (Get-Date -Format "HH:mm") + " - it shows nothing until it ends.")
-    & robocopy $thumbs "$Target\all_img_thumbs" /E /MT:16 /R:1 /W:1 /NP /NFL /NDL /NJH | Out-Host
-    if ($LASTEXITCODE -ge 8) { Warn "Some thumbnails didn't copy (robocopy $LASTEXITCODE) - run this again to carry on." }
-    else { Yes "Thumbnails copied (added to what was there - nothing deleted)" }
-}
