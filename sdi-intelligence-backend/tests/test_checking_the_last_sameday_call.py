@@ -89,7 +89,7 @@ class ItShowsATurnThatHeldTheCallUpTests(unittest.TestCase):
 
     def test_slow_and_waiting_turns_are_shown(self):
         line = BODY.split("$pattern = ", 1)[1].split("\n", 1)[0]
-        for word in ("took [0-9]+s", "waited [0-9]+s", "live files"):
+        for word in ("took [0-9]+s", "waited [0-9]+s", "live files", "look-alike", "quick failure"):
             with self.subTest(word=word):
                 self.assertIn(word, line)
 
