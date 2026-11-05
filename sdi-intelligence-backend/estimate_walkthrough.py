@@ -163,19 +163,20 @@ def public_view(record: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def email_button(note: Dict[str, str], url: str) -> Dict[str, str]:
-    """The note with its two buttons at the top, in the HTML and the plain text: ask about
-    the estimate, which opens the page at its question box, and listen to the walkthrough.
+# Marks a note that already carries the two buttons, so neither the filed note nor the e-mail
+# made from it ever shows them twice (D-709).
+BUTTON_MARK = "<!-- sdi-ask-buttons -->"
+_ASK_TEXT = "Ask a question about this estimate:"
 
-    JG, 1 Nov 2026: "when you select the button on the e-mail to prompt / question the
-    estimate, it takes you to the app with the prompt part". The link is the portal's public
-    address when there is one, so it opens on a phone, through Microsoft sign-in, with no VPN.
-    """
+
+def _buttons(url: str) -> Dict[str, str]:
+    """The two buttons, as HTML and as plain text: ask about the estimate, which opens the page
+    at its question box, and listen to the walkthrough."""
     ask = ask_url(url)
     listen = url.split("#", 1)[0] + "#listen"
     _btn = ("display:inline-block;padding:11px 18px;border-radius:4px;text-decoration:none;"
             "font-weight:bold;margin:0 8px 8px 0")
-    button = (
+    html = (
         '<p style="margin:14px 0 4px">'
         '<a href="' + ask + '" style="' + _btn + 'background:#B8860B;color:#ffffff">'
         '&#10067; Ask a question about this estimate</a>'
@@ -184,11 +185,77 @@ def email_button(note: Dict[str, str], url: str) -> Dict[str, str]:
         '<p style="margin:0 0 14px;color:#5b6b7d;font-size:12px">Opens the SDI Intelligence '
         'app: type a question and it is answered from this estimate\'s own figures. The price '
         'at every quantity, the spoken walkthrough and its words are on the same page. Works '
-        'on a phone; you sign in with your SDI Microsoft account.</p>')
-    html = str(note.get("html") or "")
-    m = re.match(r"\s*<div[^>]*>", html)
-    html = (html[:m.end()] + button + html[m.end():]) if m else button + html
-    text = (f"Ask a question about this estimate: {ask}\n"
-            f"Listen to the walkthrough: {listen}\n\n"
-            + str(note.get("text") or ""))
+        'on a phone; you sign in with your SDI Microsoft account.</p>' + BUTTON_MARK)
+    text = f"{_ASK_TEXT} {ask}\nListen to the walkthrough: {listen}\n\n"
+    return {"html": html, "text": text}
+
+
+def _with_buttons_html(html: str, block: str) -> str:
+    """The HTML with the buttons just inside its first <div>, after any leading comment (the
+    engine's "<!-- subject: ... -->" stays first, where the mail service reads it)."""
+    if BUTTON_MARK in html:
+        return html
+    m = re.search(r"<div[^>]*>", html)
+    if m:
+        return html[:m.end()] + block + html[m.end():]
+    lead = re.match(r"\s*(?:<!--.*?-->\s*)*", html, flags=re.S)
+    at = lead.end() if lead else 0
+    return html[:at] + block + html[at:]
+
+
+def email_button(note: Dict[str, str], url: str) -> Dict[str, str]:
+    """The note with its two buttons at the top, in the HTML and the plain text: ask about
+    the estimate, which opens the page at its question box, and listen to the walkthrough.
+
+    JG, 1 Nov 2026: "when you select the button on the e-mail to prompt / question the
+    estimate, it takes you to the app with the prompt part". The link is the portal's public
+    address when there is one, so it opens on a phone, through Microsoft sign-in, with no VPN.
+    A note whose filed copy already carries them (D-709) is left as it is.
+    """
+    b = _buttons(url)
+    html = _with_buttons_html(str(note.get("html") or ""), b["html"])
+    text = str(note.get("text") or "")
+    if _ASK_TEXT not in text:
+        text = b["text"] + text
     return dict(note, html=html, text=text)
+
+
+_NOTE_SUFFIXES = ("_covering_email.html", "_covering_note.html")
+
+
+def stamp_note_files(paths: List[str], url: str) -> List[str]:
+    """Write the two buttons into the filed covering note, so the file in AISheets and in the
+    completed AI briefs area reads like the e-mail (D-709).
+
+    JG, 5 Nov 2026: "can we add the voice ai part ... to the covering_email html file". The
+    engine writes the note while it runs; the walkthrough page, and so its link, exists only
+    once the run has finished and this service has recorded it. So the buttons are added here,
+    to each copy of the note, and to its plain-text sibling. A copy that already carries them
+    is left alone. Returns the files written; one that cannot be written is skipped, never
+    raised: the estimate is filed whatever happens here."""
+    if not url:
+        return []
+    b = _buttons(url)
+    done: List[str] = []
+    for raw in paths or []:
+        path = Path(str(raw or ""))
+        if not path.name.lower().endswith(_NOTE_SUFFIXES):
+            continue
+        try:
+            html = path.read_text(encoding="utf-8")
+            new = _with_buttons_html(html, b["html"])
+            if new != html:
+                tmp = path.with_name(path.name + ".tmp")
+                tmp.write_text(new, encoding="utf-8")
+                os.replace(tmp, path)
+                done.append(str(path))
+            txt = path.with_suffix(".txt")
+            if txt.exists():
+                text = txt.read_text(encoding="utf-8")
+                if _ASK_TEXT not in text:
+                    tmp = txt.with_name(txt.name + ".tmp")
+                    tmp.write_text(b["text"] + text, encoding="utf-8")
+                    os.replace(tmp, txt)
+        except OSError:
+            continue
+    return done

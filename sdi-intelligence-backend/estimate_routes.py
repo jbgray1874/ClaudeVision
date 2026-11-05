@@ -1265,7 +1265,25 @@ def complete(run_id: str, req: CompleteRequest,
         _quote = run.email_quote
         _provisional = run.status != "done" or _looks_provisional(run)
         _deliverables = list(run.deliverables)
+        _archived = [m.group(1).strip() for m in
+                     (_ARCHIVED_TO.search(str(line)) for line in run.log) if m]
         _keep(run)
+
+    # THE ASK AND LISTEN BUTTONS IN THE FILED NOTE (D-709), outside the lock like the e-mail:
+    # writing to the share can take seconds. The engine wrote the covering note before this
+    # service made the walkthrough page, so the filed copies, in AISheets and in the completed
+    # AI briefs area, gain the same two buttons the e-mail carries.
+    if _snapshot.get("walkthrough_url"):
+        _note_files = _filed_note_copies(_deliverables, _archived)
+        _stamped = estimate_walkthrough.stamp_note_files(_note_files,
+                                                         _snapshot["walkthrough_url"])
+        if _stamped:
+            with _LOCK:
+                _live = _RUNS.get(run_id)
+                if _live is not None:
+                    _live.line(f"Ask and Listen buttons written into {len(_stamped)} filed "
+                               f"covering note(s).")
+                    _keep(_live)
 
     # OUTSIDE THE LOCK. Talking to a mail server takes seconds and can hang; holding the
     # registry lock while it does would stall every other run, the page's polling and the
@@ -1285,6 +1303,28 @@ def complete(run_id: str, req: CompleteRequest,
                        f" — NOT SENT: {_result.get('reason')}"))
                 _keep(_live)
     return {"ok": True}
+
+
+# The runner's own line naming the completed AI briefs folder it copied the files to (D-617).
+_ARCHIVED_TO = re.compile(r"\[archive\] \d+ of \d+ file\(s\) also filed to (.+)$")
+
+
+def _filed_note_copies(deliverables: List[Dict[str, Any]], archived: List[str]) -> List[str]:
+    """Every filed copy of the run's covering note this service may write: the deliverable
+    itself and its copy in each completed AI briefs folder the runner named, inside the shares
+    this service serves (D-709)."""
+    out: List[str] = []
+    for d in deliverables or []:
+        if not isinstance(d, dict) or not d.get("path"):
+            continue
+        path = str(d["path"])
+        name = str(d.get("name") or Path(path).name)
+        if not name.lower().endswith(("_covering_email.html", "_covering_note.html")):
+            continue
+        for cand in [path] + [str(Path(f) / name) for f in archived or []]:
+            if cand not in out and _within_a_root(cand) is not None:
+                out.append(cand)
+    return out
 
 
 def _looks_provisional(run: "Run") -> bool:
