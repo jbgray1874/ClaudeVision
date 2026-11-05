@@ -223,6 +223,86 @@ def test_the_button_goes_inside_the_notes_own_frame():
     assert note["html"].index("Ask a question") < note["html"].index("Here is")
 
 
+# ── the filed covering note carries the same buttons (D-709) ──────────────────────────
+#
+# JG, 5 Nov 2026: "can we add the voice ai part ... to the covering_email html file". The
+# engine writes the note while it runs; the walkthrough link exists only once the service has
+# recorded the finished run. So the service writes the buttons into each filed copy: AISheets
+# and the completed AI briefs folder the runner names.
+
+_SUBJECT = "12678-01-GA — SDI Intelligence estimate, PROVISIONAL. £538.06/unit at 1 off."
+
+
+def _with_a_note(files, tmp_path):
+    out = Path(next(iter(files.values()))).parent
+    note = out / "12678-01-GA_20261031_covering_email.html"
+    note.write_text(f"<!-- subject: {_SUBJECT} -->\n"
+                    f'<div style="font-family:Arial"><p>Here is the estimate.</p></div>',
+                    encoding="utf-8")
+    note.with_suffix(".txt").write_text("Here is the estimate.\n", encoding="utf-8")
+    briefs = tmp_path / "briefs" / "2026-10-31 v1 (1 off)"
+    briefs.mkdir(parents=True)
+    (briefs / note.name).write_text(note.read_text(encoding="utf-8"), encoding="utf-8")
+    return dict(files, **{note.name: str(note)}), note, briefs / note.name
+
+
+def _finish_filed(er, root, files, briefs_dir):
+    _check_in(er)
+    run_id = er.start(_request(er, root))["run_id"]
+    _check_in(er)
+    er.complete(run_id, er.CompleteRequest(
+        runner_id="rnr-1", status="done", unit_cost_gbp=538.06,
+        lines=[f"[archive] 8 of 8 file(s) also filed to {briefs_dir}"],
+        deliverables=[{"name": n, "path": p} for n, p in files.items()]))
+    return er._RUNS[run_id]
+
+
+def test_the_filed_covering_note_gets_the_ask_and_listen_buttons(service, tmp_path):
+    er, root, files = service
+    files, note, archived = _with_a_note(files, tmp_path)
+    run = _finish_filed(er, root, files, archived.parent)
+    url = run.as_json()["walkthrough_url"]
+    for copy in (note, archived):
+        html = copy.read_text(encoding="utf-8")
+        assert f'href="{url}#ask"' in html and f'href="{url}#listen"' in html, copy
+        assert html.startswith(f"<!-- subject: {_SUBJECT} -->"), "the subject stays first"
+        assert html.index("Ask a question") < html.index("Here is the estimate")
+    assert note.with_suffix(".txt").read_text(encoding="utf-8").startswith(
+        f"Ask a question about this estimate: {url}#ask\n")
+    assert any("Ask and Listen buttons written into 2 filed" in line for line in run.log)
+
+
+def test_the_email_made_from_a_stamped_note_carries_one_set_of_buttons(service, tmp_path,
+                                                                     monkeypatch):
+    er, root, files = service
+    files, note, archived = _with_a_note(files, tmp_path)
+    run = _finish_filed(er, root, files, archived.parent)
+    sent = {}
+    monkeypatch.setattr(er.estimate_email, "send", lambda to, subject, html, text, paths: (
+        sent.update(subject=subject, html=html, text=text), {"sent": True})[1])
+    er._email_finished_run(run.as_json(), run.deliverables, ["james.gray@wearesdi.com"],
+                           False, True)
+    assert sent["subject"] == _SUBJECT, "the mail service still finds the engine's subject"
+    assert sent["html"].count("Ask a question about this estimate") == 1
+    assert sent["text"].count("Ask a question about this estimate") == 1
+
+
+def test_stamping_twice_changes_nothing_and_a_file_outside_the_shares_is_not_written(
+        service, tmp_path):
+    er, root, files = service
+    files, note, archived = _with_a_note(files, tmp_path)
+    import importlib
+    sys.path.insert(0, str(BACKEND))
+    ew = importlib.import_module("estimate_walkthrough")
+    url = "http://PC:8071/estimating/walkthrough/t"
+    assert ew.stamp_note_files([str(note)], url) == [str(note)]
+    once = note.read_text(encoding="utf-8")
+    assert ew.stamp_note_files([str(note)], url) == []
+    assert note.read_text(encoding="utf-8") == once
+    assert er._filed_note_copies([{"name": note.name, "path": str(note)}],
+                                 ["/somewhere/else"]) == [str(note)]
+
+
 # ── the question box ───────────────────────────────────────────────────────────────────
 
 def test_a_question_is_answered_from_the_runs_own_record(service, monkeypatch):
