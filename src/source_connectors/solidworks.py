@@ -852,11 +852,33 @@ def native_extract_for_job(
             # It wrote somewhere else — a read-only share, most often. Read what exists,
             # not what was requested.
             jp = Path(_produced[0])
-        # A TURN THAT NEVER CAME IS NOT A FAILED SEAT (D-731). Another run had the desktop's
-        # SolidWorks; reading this job with the backup instead would give it different model
-        # evidence depending on what else was running. The read fails, said, and is rerun.
-        if (_run_error and _has_models
-                and _turn.get("state") != _sw_turn.TIMED_OUT):
+        if _turn.get("state") == _sw_turn.TIMED_OUT:
+            # A WAIT THAT REACHED ITS LIMIT IS NOT A FAILED RUN (D-732). JG, 6 Nov 2026: "we
+            # should not fail.. we should report in the portal that [we] are switching to
+            # document manager." The normal wait never changes the reader; only this
+            # exceptional one does, said on the console the portal shows and on the book
+            # (extract_reader, docmgr_backup_reason). SDI_SW_TURN_TIMEOUT=none leaves the
+            # models unread instead, and the run is priced from its drawings and flagged.
+            _turn_models = bool(_analyse_from is not None
+                                and native_files_state(_analyse_from)["count"])
+            _dm_key = bool((os.environ.get(DOCMGR_KEY_ENV) or "").strip())
+            if _turn_models and _sw_turn.timeout_reader() == "docmgr" and _dm_key:
+                _turn["switched_to"] = "docmgr"
+                _backup_reason = f"{_run_error}; switched to the Document Manager"
+                print(f"  SolidWorks is still busy after "
+                      f"{float(_turn.get('waited_s') or 0) / 60:.0f} min: SWITCHING TO THE "
+                      f"DOCUMENT MANAGER for this run's models. It reads what each file saved "
+                      f"and measures nothing, and the book says so.", flush=True)
+            elif _turn_models:
+                _turn["switched_to"] = "none"
+                print(f"  SolidWorks is still busy after "
+                      f"{float(_turn.get('waited_s') or 0) / 60:.0f} min and "
+                      + ("no Document Manager key is set"
+                         if _sw_turn.timeout_reader() == "docmgr"
+                         else f"{_sw_turn.TIMEOUT_ENV}=none")
+                      + ": this run goes on without its models, priced from its drawings "
+                        "and DXFs, and its book says it is not a firm price.", flush=True)
+        elif _run_error and _has_models:
             _backup_reason = f"the SolidWorks COM analyser failed — {_run_error}"
 
     _docmgr_meta: Dict[str, Any] = {}
@@ -1257,8 +1279,9 @@ def _run_analyser(folder: str | Path, analyser: Optional[str | Path] = None,
         # the one that had just been produced.
         cmd += ["--out", str(out_path)]
     # ONE SOLIDWORKS PER DESKTOP, TAKEN IN TURN (D-731). Held for the read only, so a second
-    # run waits for one model read, never for a whole estimate. A turn that never comes fails
-    # this read in its own words; nothing reads the models another way instead.
+    # run waits for one model read, never for a whole estimate, and says so every few minutes.
+    # A turn that never comes returns its reason; the caller decides what reads the models
+    # then (native_extract_for_job: the Document Manager, said, D-732).
     _handle, _turn = _sw_turn.take_turn(say=lambda m: print(f"  {m}", flush=True))
     if turn is not None:
         turn.update(_turn)
