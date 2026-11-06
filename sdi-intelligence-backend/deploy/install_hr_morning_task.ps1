@@ -3,7 +3,7 @@
     Register the weekday HR morning summary email (HRInventry Anywhere).
 
 .DESCRIPTION
-    Runs tools\hr_morning_summary.py --send at 08:45 Monday to Friday. It asks
+    Runs tools\hr_morning_summary.py --send at 09:00 Monday to Friday. It asks
     BrightHR who is clocked in, compares that with InVentry's fire list, and
     emails SDI_HR_MORNING_TO a summary: who is in, what needs attention
     (people missing from InVentry, forgotten clock-outs), the roll calls since
@@ -21,12 +21,12 @@
     .\install_hr_morning_task.ps1
     Start-ScheduledTask -TaskName 'SDI HR Morning Summary'   # send one now
 .EXAMPLE
-    .\install_hr_morning_task.ps1 -Update      # also update InVentry at 08:45
+    .\install_hr_morning_task.ps1 -Update      # also update InVentry at 09:00
 #>
 [CmdletBinding()]
 param(
     [string]$TaskName = "SDI HR Morning Summary",
-    [string]$At = "08:45",
+    [string]$At = "09:00",
     [switch]$Update,
     [switch]$EveryDay,
     [string]$BackendDir = (Resolve-Path "$PSScriptRoot\..").Path
