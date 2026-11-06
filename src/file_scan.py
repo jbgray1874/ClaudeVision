@@ -3614,6 +3614,10 @@ def _finalize_scan_summary(
                     "extract_path": _sw_job.meta.get("extract_path"),
                     "top_assembly": _sw_job.meta.get("top_assembly"),
                     "top_assembly_bbox_mm": _sw_job.meta.get("top_assembly_bbox_mm"),
+                    # EVERY ASSEMBLY'S OWN BOX AND WHICH ARE SUB-ASSEMBLIES (D-735): the
+                    # product's envelope is the declared product's own box.
+                    "assembly_bbox_mm": _sw_job.meta.get("assembly_bbox_mm"),
+                    "sub_assemblies": _sw_job.meta.get("sub_assemblies"),
                     # CHOSEN, WHEN IT COULD NOT BE READ. The top assembly's full-depth BOM
                     # becomes the job's component list at rank 90; on a folder of fifteen
                     # assemblies the extract can rule out anything that is somebody's child

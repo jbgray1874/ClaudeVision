@@ -1401,6 +1401,21 @@ def _round_stock_density(part: Mapping[str, Any]) -> Tuple[Optional[float], str]
     return None, ""
 
 
+_STATED_ROUND_DIAMETER = re.compile(
+    r"(?:[ØØ⌀]\s*|DIA\.?\s*)?(\d+(?:\.\d+)?)\s*MM\b[^,;/]*?\b(?:WIRE|ROD|ROUND)\b")
+
+
+def _stated_round_diameter(part: Mapping[str, Any]) -> Optional[float]:
+    """The diameter the part's own material words state — "8mm STEEL WIRE" is Ø8, "5mm STEEL
+    WIRE" Ø5 (12002-02-M04, -M05, D-735) — or None."""
+    mats = " ".join(str(part.get(k) or "") for k in ("material_stated",
+                                                     "material_text_as_printed", "material"))
+    mats = (mats + " " + " ".join(str(m) for m in (part.get("materials") or []) if m)).upper()
+    m = _STATED_ROUND_DIAMETER.search(mats)
+    d = _num(m.group(1)) if m else None
+    return d if d and d > 0 else None
+
+
 def _known_round(part: Mapping[str, Any], key: str) -> Optional[float]:
     for holder in (part, part.get("manufacturing_interpretation"), part.get("material_estimate")):
         if isinstance(holder, Mapping) and _num(holder.get(key)):
@@ -1423,6 +1438,10 @@ def round_stock_size_from_own_weight(part: Mapping[str, Any],
     known_l = _known_round(part, "wire_length_mm")
     if known_d and known_l:
         return None
+    # THE DIAMETER ITS OWN MATERIAL STATES (D-735): "8mm STEEL WIRE" on 12002-02-M04's sheet
+    # is Ø8, not a figure to pair. Taken as the diameter to try; set on the record as a reading
+    # once a length settles, so the record says where it came from.
+    stated_d = None if known_d else _stated_round_diameter(part)
     texts = []
     plain: List[float] = []
     marked: List[float] = []
@@ -1454,13 +1473,18 @@ def round_stock_size_from_own_weight(part: Mapping[str, Any],
     cap = float(cfg.get("weight_rounding_cap", 0.25))
     plain, marked = sorted(set(plain)), sorted(set(marked))
     # A figure marked Ø is a diameter and never a length; a bare figure may be either.
-    diameters = [known_d] if known_d else sorted({v for v in plain + marked if lo_d <= v <= hi_d})
+    _try_d = known_d or stated_d
+    diameters = [_try_d] if _try_d else sorted({v for v in plain + marked if lo_d <= v <= hi_d})
     pairings = 0
     fits: List[Dict[str, Any]] = []
     for d in diameters:
-        lengths = [known_l] if known_l else [v for v in plain if min_ratio * d <= v <= max_l]
+        # A STATED DIAMETER HAS NOTHING TO BE CONFUSED WITH, so a short pin is a length too:
+        # 12002-02-M05 is Ø5 x 14, a stop, and the ten-diameters floor that keeps two bare
+        # figures from pairing with each other never tried it (D-735).
+        _floor = (d * 1.0001) if _try_d else (min_ratio * d)
+        lengths = [known_l] if known_l else [v for v in plain if _floor <= v <= max_l]
         for length in lengths:
-            if length < min_ratio * d:
+            if length < _floor:
                 continue
             pairings += 1
             mass = round_stock_mass_kg(d, length, density)
@@ -1475,9 +1499,18 @@ def round_stock_size_from_own_weight(part: Mapping[str, Any],
                                  "within": "tolerance" if in_tol else "rounding",
                                  "printed_from_kg": round(weight - half, 6),
                                  "printed_to_kg": round(weight + half, 6)})
+    # ONE DIAMETER, SEVERAL LENGTHS: THE OVERALL IS THE LONGEST (D-735). 12002-02-M04 is Ø8 and
+    # both 441 and 447 weigh its stated 0.174 kg; 447 is the overall and 441 a dimension inside
+    # it. The bar bought must cover the overall, so where every fit shares one diameter the
+    # longest is the cut length, and the shorter readings are named as lying inside it.
+    overall_of: List[float] = []
+    if len(fits) > 1 and len({f["diameter_mm"] for f in fits}) == 1:
+        overall_of = sorted({f["length_mm"] for f in fits})
+        fits = [max(fits, key=lambda f: (f["length_mm"], -abs(f["deviation"])))]
     status = ("settled" if len(fits) == 1 else "ambiguous" if fits
               else "no_fit" if pairings else "no_figures")
     return {"status": status, "fits": fits, "pairings": pairings,
+            "overall_of": overall_of, "stated_diameter_mm": stated_d,
             "figures": sorted(set(plain + marked)), "marked_diameters": marked,
             "pages": [s.get("page_number") for s in sheets], "read_from": sorted(set(read_from)),
             "weight_whose": whose, "weights_kg": [w for w, _h, _r in weights],
@@ -1582,9 +1615,15 @@ def apply_round_stock_sizes_from_own_weight(parts: Any, summary: Mapping[str, An
                        else f" within the printed figure's rounding: {fit['weight_kg']:g} kg "
                             f"stands for {fit['printed_from_kg']:g} to {fit['printed_to_kg']:g} "
                             f"kg)")
-                    + f", the only one of the {got['pairings']} pairing"
-                    f"{'s' if got['pairings'] != 1 else ''} tried that is.{unit} Confirm the "
-                    f"stock.")
+                    + (f"; the readings {', '.join(f'{v:g}' for v in got['overall_of'])} mm "
+                       f"all fit at Ø{d:g}, and the longest, {length:g} mm, is the overall: "
+                       f"the shorter lies inside it and the bar bought covers the overall."
+                       if got.get("overall_of") else
+                       f", the only one of the {got['pairings']} pairing"
+                       f"{'s' if got['pairings'] != 1 else ''} tried that is.")
+                    + (f" The diameter Ø{d:g} is the one its own material states."
+                       if got.get("stated_diameter_mm") else "")
+                    + f"{unit} Confirm the stock.")
             if said not in (part.get("review_flags") or []):
                 part.setdefault("review_flags", []).append(said)
             done.append(pn)
