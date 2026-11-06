@@ -3447,6 +3447,19 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                                                                                _rejected):
                 _passed.append(float(ps_price))
                 ps_price = None
+            # A ROLL IS NOT ANSWERED PER PIECE BY THE MARKET (D-728). The pricing service's own
+            # market fallback answers "per each" before the per-metre rung below is reached, so
+            # 12677-01's gel tape kept GBP 9.50 a strip (a roll) x 4 after the per-metre rule
+            # was in. A roll line with a known piece length passes that answer over and is
+            # asked by the metre; SDI's own catalogue and history still answer as they did.
+            if (ps_price is not None and ps_price > 0
+                    and str((anchor or {}).get("source_type") or "") == "web_ai_fallback"
+                    and is_roll_goods_line(part) and not _in_roll_catalogue(part)
+                    and roll_piece_length_mm(part)[0]):
+                part.setdefault("review_flags", []).append(
+                    f"ROLL GOODS: the market's per-piece figure £{ps_price:,.2f} is not used — "
+                    f"a strip cut off a roll is asked its price by the metre")
+                ps_price = None
             if ps_price is not None and ps_price > 0:
                 if (anchor or {}).get("item_priced"):
                     part.setdefault("review_flags", []).append(
@@ -6803,6 +6816,19 @@ def roll_piece_length_mm(part: Dict[str, Any]) -> Tuple[Optional[float], str]:
     _ol = _safe_float(part.get("overall_length_mm"))
     if _ol:
         return _ol, "the part's own overall length"
+    # THE PART'S OWN EXTENTS, WHERE THE SHEET ALREADY READS THEM (D-728). 12677-01's gel tape
+    # is a modelled strip: its record carries the model's 233 x 20 in its blank or bounding
+    # box, the BOM line printed it, and this reader looked only at the description, which
+    # says "VHB GEL TAPE". The longest extent of a strip is its length.
+    _ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"), dict) else {}
+    for _pair, _said in (((part.get("blank_length_mm"), part.get("blank_width_mm")),
+                          "the part's own blank"),
+                         ((_ng.get("blank_length_mm"), _ng.get("blank_width_mm")),
+                          "the part's measured blank"),
+                         (tuple((_ng.get("bbox_mm") or [])[:3]), "the model's extents")):
+        _vals = [v for v in (_safe_float(x) for x in _pair) if v and 5.0 <= v <= 3000.0]
+        if len(_vals) >= 2 and max(_vals) > min(_vals):
+            return max(_vals), f"{_said} ({' x '.join(f'{v:g}' for v in _vals)})"
     _s = _ROLL_SIZE_RE.search(str(part.get("description") or ""))
     if _s:
         _dims = [_safe_float(g) for g in _s.groups() if g]
