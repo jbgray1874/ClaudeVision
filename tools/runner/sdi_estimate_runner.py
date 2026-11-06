@@ -787,39 +787,30 @@ def main() -> int:
       # alive to the service and does no work, which is worse than being restarted.
       try:
         worked = False
-        # ANOTHER RUN ON THIS DESKTOP (D-731): its SolidWorks is busy, so this run would read
-        # models with the Document Manager or none, and it is claimed only while the machine
-        # has the room for it. A lone runner never sees the token busy and behaves as before.
-        _busy = desktop_token_busy()
-        if _busy:
-            _ok, _measured = compute_headroom()
-            if not _ok:
-                complained["__compute__"] = _say_once(
-                    complained.get("__compute__"), "compute",
-                    f"another run is using this desktop and there is not the room for a second "
-                    f"one: {_measured}", "   waiting for memory or CPU to free up.")
-                time.sleep(a.poll_seconds)
-                continue
-            complained["__compute__"] = None
+        # A SECOND OR THIRD RUN ON THIS DESKTOP (D-731) is claimed only while the machine has
+        # the room for it. Slot 1, the machine's own runner, is never held back.
+        _ok, _measured = slot_may_claim(a.slot)
+        if not _ok:
+            complained["__compute__"] = _say_once(
+                complained.get("__compute__"), "compute",
+                f"slot {a.slot}: not the room for one more run on this desktop: {_measured}",
+                "   waiting for memory or CPU to free up.")
+            time.sleep(a.poll_seconds)
+            continue
+        complained["__compute__"] = None
         for server in servers:
             job, complained[server] = _ask_for_work(
                 requests, server, headers, runner_id, _process, _build,
-                complained.get(server), token_busy=_busy)
+                complained.get(server))
             if not job:
                 continue
             base = server + "/api/estimate"
             others = [o for o in servers if o != server]
-            _token, _state = take_desktop_token()
-            _env, _reader = model_reader_for(_state)
-            try:
-                with _heartbeat_while_busy(requests, others, headers, runner_id, _process,
-                                           _build):
-                    _execute(requests, base, headers, job, engine_root, engine_python,
-                             runner_id, claimed_from={"service": server,
-                                                  "commit": _SERVICE_COMMIT.get(server, "")},
-                             model_env=_env, model_reader=_reader)
-            finally:
-                release_desktop_token(_token)
+            with _heartbeat_while_busy(requests, others, headers, runner_id, _process,
+                                       _build):
+                _execute(requests, base, headers, job, engine_root, engine_python,
+                         runner_id, claimed_from={"service": server,
+                                              "commit": _SERVICE_COMMIT.get(server, "")})
             worked = True
             consecutive = 0
             break           # back to the top of the list: no service waits behind another
@@ -855,98 +846,14 @@ RUNNER_CAPABILITIES = ("sw_extract", "xai_extract")
 
 # ── SEVERAL RUNS ON ONE DESKTOP (SCRUM-183 phase 2, D-731) ────────────────────────────
 #
-# JG, 6 Nov 2026: "we need to see the multi run on this laptop ... for any second or third runs,
-# we shouldn't stop unless the machine has insufficient compute available and we should use
-# document manager for all other runs. if we can't we run without solid works and document
-# manager and use what we have otherwise."
+# JG, 6 Nov 2026: two estimating workers share one SolidWorks reader, waiting briefly for their
+# turn, and the same job always gets the same model evidence whatever else is running. The turn
+# is taken by the ENGINE around its model read (src/solidworks_turn.py), not by this runner
+# around the whole run: a second run waits for one model read, never for a whole estimate, and
+# reads its models exactly as it would alone. Nothing here changes how a run reads models.
 #
-# SolidWorks is one application per desktop, so it is a TOKEN: one file lock per machine,
-# outside any checkout, taken by a run at its start and released at its end. The run that holds
-# it reads models with SolidWorks as configured. Every other run on the desktop reads them with
-# the Document Manager when its licence key is present, and otherwise runs on the drawings, the
-# DXFs and any saved extract. Nobody waits for the token. A second or third run is claimed only
-# while the machine has the memory and CPU to carry it.
-TOKEN_ENV = "SDI_SOLIDWORKS_TOKEN"
-
-
-def desktop_token_path() -> Path:
-    """The desktop's one SolidWorks token: a lock file shared by every runner on the machine."""
-    explicit = str(os.getenv(TOKEN_ENV, "")).strip()
-    if explicit:
-        return Path(explicit)
-    base = os.getenv("PROGRAMDATA") or os.getenv("TEMP") or "/tmp"
-    return Path(base) / "SDI" / "solidworks.token"
-
-
-def take_desktop_token(path: Optional[Path] = None) -> Tuple[Any, str]:
-    """(handle, state). state "held": this run holds the token; "busy": another run on this
-    desktop holds it; "unavailable": the token could not be used at all, so the run behaves
-    as a lone runner always has (fail open, said on the run). Never waits."""
-    path = Path(path) if path else desktop_token_path()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
-        handle = os.fdopen(fd, "r+b")
-    except Exception:                                              # noqa: BLE001
-        return None, "unavailable"
-    try:
-        if _take_lock(handle):
-            return handle, "held"
-    except Exception:                                              # noqa: BLE001
-        handle.close()
-        return None, "unavailable"
-    handle.close()
-    return None, "busy"
-
-
-def release_desktop_token(handle: Any) -> None:
-    try:
-        if handle is not None:
-            handle.close()                     # closing the descriptor releases the lock
-    except Exception:                                              # noqa: BLE001
-        pass
-
-
-def desktop_token_busy(path: Optional[Path] = None) -> bool:
-    """Is another run on this desktop holding the token right now? A probe: taken and given
-    straight back."""
-    handle, state = take_desktop_token(path)
-    release_desktop_token(handle)
-    return state == "busy"
-
-
-def _docmgr_available(env: Optional[Dict[str, str]] = None) -> bool:
-    env = os.environ if env is None else env
-    return bool(str(env.get("SDI_SW_DOCMGR_KEY", "")).strip())
-
-
-def model_reader_for(state: str, env: Optional[Dict[str, str]] = None
-                     ) -> Tuple[Dict[str, str], str]:
-    """(environment overrides for the engine, the sentence the run says) for one run.
-
-    held/unavailable: SolidWorks as configured (and the Document Manager backup if switched
-    on). busy: SolidWorks is another run's, so this run reads models with the Document Manager
-    when its key is present, otherwise with nothing, and says which."""
-    env = os.environ if env is None else env
-    sw_off = str(env.get("SDI_SW_RUN_ANALYSER", "")).strip().lower() in {"0", "false", "no"}
-    dm_on = str(env.get("SDI_SW_DOCMGR", "")).strip().lower() in {"1", "true", "yes", "on"}
-    if state == "busy":
-        if _docmgr_available(env):
-            return ({"SDI_SW_RUN_ANALYSER": "0", "SDI_SW_DOCMGR": "1"},
-                    "Document Manager: SolidWorks is in use by another run on this desktop")
-        return ({"SDI_SW_RUN_ANALYSER": "0"},
-                "no model reader: SolidWorks is in use by another run on this desktop and no "
-                "Document Manager key is set, so this run prices from the drawings, the DXFs "
-                "and any saved extract")
-    lead = ("SolidWorks: this run holds the desktop's SolidWorks token" if state == "held"
-            else "SolidWorks as configured: the desktop token could not be used, so this run "
-                 "behaves as a lone runner")
-    if sw_off:
-        if dm_on and _docmgr_available(env):
-            return {}, "Document Manager: the SolidWorks analyser is switched off on this runner"
-        return {}, ("no model reader: the SolidWorks analyser is switched off on this runner and "
-                    "no Document Manager key is set")
-    return {}, lead
+# What a slot adds here is the compute gate: a second or third run is claimed only while the
+# machine has the memory and CPU to carry it.
 
 
 def compute_headroom(min_free_gb: Optional[float] = None,
@@ -997,7 +904,14 @@ def compute_headroom(min_free_gb: Optional[float] = None,
     return ok, ("; ".join(said) or "compute not measurable here, not held against the run")
 
 
-def runner_capabilities(token_busy: bool = False) -> List[str]:
+def slot_may_claim(slot: int) -> Tuple[bool, str]:
+    """(may claim, what was measured). Slot 1 always may; slot 2 or more only with the room."""
+    if int(slot or 1) <= 1:
+        return True, "slot 1, the machine's own runner"
+    return compute_headroom()
+
+
+def runner_capabilities() -> List[str]:
     """What this runner tells the service on every claim. "no_models" (D-703, SCRUM-183): it
     will not drive SolidWorks (SDI_SW_RUN_ANALYSER=0) and has no Document Manager backup
     (SDI_SW_DOCMGR unset), so the service keeps packs that need a model reader for a runner
@@ -1006,16 +920,12 @@ def runner_capabilities(token_busy: bool = False) -> List[str]:
     The backup counts only with its licence key (SDI_SW_DOCMGR_KEY) present: the switch alone
     reads nothing (SCRUM-184), and a runner that took a model job on the switch alone would
     price it from the drawings. "On" means what the engine's docmgr_switch_on() means."""
+    # "desktop_token" (D-731): this runner's engine takes the desktop's one SolidWorks in turn,
+    # so the service may give it a run while another runner on this desktop has one.
     caps = list(RUNNER_CAPABILITIES) + ["desktop_token"]
     _off = str(os.getenv("SDI_SW_RUN_ANALYSER", "")).strip().lower() in {"0", "false", "no"}
     _dm = (str(os.getenv("SDI_SW_DOCMGR", "")).strip().lower() in {"1", "true", "yes", "on"}
            and bool(str(os.getenv("SDI_SW_DOCMGR_KEY", "")).strip()))
-    # A RUN WHOSE DESKTOP'S SOLIDWORKS IS IN USE (D-731) reads models with the Document
-    # Manager when its key is present, so it is able; without the key it is not.
-    if token_busy:
-        _off, _dm = True, _docmgr_available()
-        # A SolidWorks pack extract IS a SolidWorks read: not offered without the token.
-        caps = [c for c in caps if c != "sw_extract"]
     if _off and not _dm:
         caps.append("no_models")
     return caps
@@ -1034,8 +944,7 @@ def pack_extract_command(engine_root: Path, engine_python: Path, job: Dict[str, 
 
 def _ask_for_work(requests, server: str, headers: Dict[str, str], runner_id: str,
                   process: str, build: str,
-                  complained: Optional[str], token_busy: bool = False
-                  ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+                  complained: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """Ask ONE service for work. Returns (the run or None, the complaint now standing).
 
     The claim is also this runner's heartbeat to that service — which is why every service
@@ -1048,7 +957,7 @@ def _ask_for_work(requests, server: str, headers: Dict[str, str], runner_id: str
             # WHAT THIS RUNNER CAN DO BESIDES AN ESTIMATE (D-640). The service hands a
             # pack-extract job only to a runner that says it can run one: an older runner
             # would build a full main.py estimate for it.
-            "capabilities": runner_capabilities(token_busy=token_busy)},
+            "capabilities": runner_capabilities()},
             headers=headers, timeout=20)
     except Exception as exc:                       # noqa: BLE001 — keep polling
         # SAY IT ONCE. A runner that cannot reach the server prints a line a
@@ -1147,8 +1056,7 @@ def _say_once(current: Optional[str], kind: str, *lines: str) -> Optional[str]:
 
 def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
              engine_root: Path, engine_python: Path, runner_id: str,
-             claimed_from: Optional[Dict[str, str]] = None,
-             model_env: Optional[Dict[str, str]] = None, model_reader: str = "") -> None:
+             claimed_from: Optional[Dict[str, str]] = None) -> None:
     run_id = job["run_id"]
     dest = Path(job["output_path"])
     folder = Path(job["job_folder"])
@@ -1372,10 +1280,6 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
                          product=str(job.get("drawing_number") or ""))
     if extract_job:
         cmd = pack_extract_command(engine_root, engine_python, job)
-    # WHICH MODEL READER THIS RUN HAS (D-731), on the run's own console and in the engine's
-    # environment, so the book's provenance can say it too.
-    if model_reader:
-        say(f"model reader: {model_reader}")
     say("$ " + " ".join(f'"{c}"' if " " in c else c for c in cmd))
     flush(force=True)
 
@@ -1394,10 +1298,7 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
                                      "SDI_SUBMITTED_SCOPE": json.dumps(
                                          job.get("submitted_scope")),
                                      # AND WHICH SERVICE, ON WHICH BUILD (D-607).
-                                     "SDI_CLAIMED_FROM": json.dumps(claimed_from or {}),
-                                     # AND WHICH MODEL READER THIS RUN HAS (D-731).
-                                     **(model_env or {}),
-                                     "SDI_MODEL_READER": str(model_reader or "")})
+                                     "SDI_CLAIMED_FROM": json.dumps(claimed_from or {})})
     except OSError as exc:
         _finish(requests, base, headers, run_id, runner_id, "error",
                 f"Could not start the engine: {exc}", log)

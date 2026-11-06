@@ -18,12 +18,15 @@
       - the price cache (cache\), as a junction, so one part keeps one researched price
         whichever slot priced it.
 
-    HOW THE SLOTS SHARE SOLIDWORKS. One lock file per machine (the desktop token). The run that
-    holds it reads models with SolidWorks; every other run reads them with the Document Manager
-    when SDI_SW_DOCMGR_KEY is set, otherwise from the drawings, DXFs and any saved extract. A
-    second or third run is claimed only while the machine has the memory and CPU for it
+    HOW THE SLOTS SHARE SOLIDWORKS. In turn. One lock file per machine; the engine takes it
+    around each model read and a run that finds SolidWorks in use waits for it
+    (SDI_SW_TURN_WAIT_MINUTES, default 35). Every run reads its models exactly as it would
+    alone: nothing switches to the Document Manager or the drawings because another run is
+    busy. A second run is claimed only while the machine has the memory and CPU for it
     (SDI_SLOT_MIN_FREE_GB, SDI_SLOT_MAX_CPU_PCT). The service must allow the runs at once:
     SDI_MAX_CONCURRENT_RUNS in .env, then restart the services.
+
+    NOT YET. JG, 6 Nov 2026: slot 2 stays off until this design is accepted.
 
     RUN AGAIN AFTER EVERY SYNC. It moves the slot's checkout to C:\ClaudeVision's HEAD and
     restarts the slot, so every slot runs the build the service runs.

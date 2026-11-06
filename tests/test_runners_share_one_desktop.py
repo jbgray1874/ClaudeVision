@@ -1,20 +1,22 @@
-"""Several runs on one desktop, sharing its one SolidWorks (SCRUM-183 phase 2, D-731).
+"""Two runs on one desktop share its one SolidWorks reader, each waiting its turn (SCRUM-183
+phase 2, D-731).
 
-JG, 6 Nov 2026: "we need to see the multi run on this laptop ... for any second or third runs,
-we shouldn't stop unless the machine has insufficient compute available and we should use
-document manager for all other runs. if we can't we run without solid works and document
-manager and use what we have otherwise."
+JG, 6 Nov 2026: "We agreed that two estimating workers would share one SolidWorks reader,
+waiting briefly for their turn ... the same job could receive different model evidence
+depending on what else is running. Document Manager has not yet passed the outstanding
+acceptance checks."
 
-SolidWorks is a token, one lock per desktop: the run holding it reads models with SolidWorks,
-every other run with the Document Manager when its key is present, otherwise with nothing, and
-nobody waits. The service lets runners that declare the token share a desktop, a runner with no
-model reader takes a model job when no runner that can read it is idle, and a second or third
-run is claimed only while the machine has the room. Synthetic runs and a temporary token file.
+So the engine takes the desktop's SolidWorks in turn around its model read and a second run
+waits; no run reads its models another way because another run is busy; a turn that never comes
+fails the read in its own words and is not handed to the backup reader; the service lets two
+runners that declare the turn share a desktop and keeps the strict model-reader rule; and a
+second or third run is claimed only while the machine has the room. Synthetic runs, a stand-in
+analyser and a temporary token file.
 """
 from __future__ import annotations
 
 import sys
-import time
+import threading
 import types
 from pathlib import Path
 
@@ -22,12 +24,142 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "sdi-intelligence-backend"
+sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tools" / "runner"))
 
 import sdi_estimate_runner as runner                                     # noqa: E402
+import solidworks_turn as turn_mod                                       # noqa: E402
+from source_connectors import solidworks as sw                           # noqa: E402
 
-KEY = "test-key-not-real"
 
+@pytest.fixture()
+def token(tmp_path, monkeypatch):
+    path = tmp_path / "SDI" / "solidworks.token"
+    monkeypatch.setenv(turn_mod.TOKEN_ENV, str(path))
+    return path
+
+
+# ── the turn ─────────────────────────────────────────────────────────────────────────
+
+def test_one_desktop_has_one_solidworks_turn(token):
+    first, state = turn_mod.try_take()
+    assert state == "held"
+    second, state2 = turn_mod.try_take()
+    assert state2 == "busy" and second is None
+    assert turn_mod.busy()
+    turn_mod.release(first)
+    third, state3 = turn_mod.try_take()
+    assert state3 == "held"
+    turn_mod.release(third)
+    assert not turn_mod.busy()
+
+
+def test_a_second_run_waits_for_its_turn_and_then_takes_it(token):
+    held, _ = turn_mod.try_take()
+    threading.Timer(0.4, turn_mod.release, args=(held,)).start()
+    said = []
+    handle, turn = turn_mod.take_turn(wait_s=10, poll_s=0.05, say=said.append)
+    try:
+        assert turn["state"] == "held" and turn["waited_s"] > 0
+        assert any("Waiting for the desktop's SolidWorks" in s for s in said)
+        assert any("reads its models the same way it would alone" in s for s in said)
+    finally:
+        turn_mod.release(handle)
+
+
+def test_a_lone_run_never_waits(token):
+    said = []
+    handle, turn = turn_mod.take_turn(wait_s=10, say=said.append)
+    turn_mod.release(handle)
+    assert turn["state"] == "held" and not said
+
+
+def test_a_turn_that_never_comes_times_out_in_its_own_words(token):
+    held, _ = turn_mod.try_take()
+    try:
+        handle, turn = turn_mod.take_turn(wait_s=0.2, poll_s=0.05, say=lambda m: None)
+        assert handle is None and turn["state"] == "timed_out"
+        why = turn_mod.timed_out_reason(turn)
+        assert "another run on this machine" in why and "not read any other way" in why
+    finally:
+        turn_mod.release(held)
+
+
+def test_an_unusable_token_fails_open_as_a_lone_run(tmp_path, monkeypatch):
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    monkeypatch.setenv(turn_mod.TOKEN_ENV, str(blocker / "solidworks.token"))
+    handle, turn = turn_mod.take_turn(wait_s=0, say=lambda m: None)
+    assert handle is None and turn["state"] == "unavailable"
+
+
+def test_the_token_is_one_per_machine_not_per_checkout(monkeypatch):
+    monkeypatch.delenv(turn_mod.TOKEN_ENV, raising=False)
+    path = turn_mod.token_path()
+    assert "ClaudeVision" not in str(path) and path.name == "solidworks.token"
+
+
+# ── the engine's model read takes the turn ───────────────────────────────────────────
+
+class _Done:
+    returncode, stdout, stderr = 0, "", ""
+
+
+def test_the_analyser_runs_only_while_the_run_holds_the_turn(token, monkeypatch):
+    seen = {}
+
+    def _analyser(*a, **k):
+        seen["busy_meanwhile"] = turn_mod.busy()
+        return _Done()
+    monkeypatch.setattr(sw.subprocess, "run", _analyser)
+    turn = {}
+    assert sw._run_analyser("/tmp/models", turn=turn) is None
+    assert seen["busy_meanwhile"], "another run must find SolidWorks taken during the read"
+    assert turn["state"] == "held"
+    assert not turn_mod.busy(), "the turn is given back when the read ends"
+
+
+def test_the_turn_is_given_back_when_the_analyser_fails(token, monkeypatch):
+    def _boom(*a, **k):
+        raise OSError("com error")
+    monkeypatch.setattr(sw.subprocess, "run", _boom)
+    assert "could not be run" in sw._run_analyser("/tmp/models")
+    assert not turn_mod.busy()
+
+
+def test_a_timed_out_turn_never_starts_the_analyser(token, monkeypatch):
+    monkeypatch.setenv(turn_mod.WAIT_ENV, "0")
+    monkeypatch.setattr(sw.subprocess, "run",
+                        lambda *a, **k: pytest.fail("the analyser ran without the turn"))
+    held, _ = turn_mod.try_take()
+    try:
+        turn = {}
+        err = sw._run_analyser("/tmp/models", turn=turn)
+    finally:
+        turn_mod.release(held)
+    assert turn["state"] == "timed_out" and "another run on this machine" in err
+
+
+def test_a_timed_out_turn_is_not_handed_to_the_document_manager(token, monkeypatch, tmp_path):
+    """The same job must not get different model evidence because another run was busy: even
+    with the backup switched on, a turn that never came is not read by the Document Manager."""
+    models = tmp_path / "job"
+    models.mkdir()
+    (models / "x.SLDPRT").write_bytes(b"model")
+    monkeypatch.setenv(turn_mod.WAIT_ENV, "0")
+    monkeypatch.setattr(sw, "solidworks_com_available", lambda: (True, ""))
+    monkeypatch.setattr(sw, "_docmgr_backup", lambda *a, **k: pytest.fail(
+        "the backup read a job whose SolidWorks turn never came"))
+    held, _ = turn_mod.try_take()
+    try:
+        job = sw.native_extract_for_job(folder=models, run=True, docmgr=True)
+    finally:
+        turn_mod.release(held)
+    assert job.meta["solidworks_turn"]["state"] == "timed_out"
+    assert "another run on this machine" in job.meta["analyser_error"]
+
+
+# ── the service ──────────────────────────────────────────────────────────────────────
 
 @pytest.fixture()
 def api(tmp_path, monkeypatch):
@@ -47,7 +179,6 @@ def api(tmp_path, monkeypatch):
         (tmp_path / job).mkdir(exist_ok=True)
         (tmp_path / job / "ga.pdf").write_bytes(b"%PDF-1.4 a drawing")
     monkeypatch.setenv("SDI_MAX_CONCURRENT_RUNS", "3")
-    monkeypatch.delenv("SDI_RUN_WITHOUT_MODEL_READER", raising=False)
     return er, tmp_path
 
 
@@ -70,8 +201,6 @@ def _with_models(er, run_id):
 
 SLOT = ["sw_extract", "xai_extract", "desktop_token"]
 
-
-# ── the service ──────────────────────────────────────────────────────────────────────
 
 def test_two_slots_on_one_desktop_each_take_a_run(api):
     er, tmp_path = api
@@ -101,101 +230,50 @@ def test_the_cap_still_holds(api, monkeypatch):
     assert _claim(er, "laptop-s3", "LAPTOP", SLOT)["run"] is None
 
 
-def test_a_slot_with_no_model_reader_runs_a_model_job_when_none_is_free(api):
-    """Slot 1 holds SolidWorks on a run; slot 2 has no Document Manager key. The model job is
-    not left waiting: slot 2 runs it on what it has, and the run says so."""
+def test_a_model_job_is_never_given_to_a_runner_without_a_model_reader(api):
+    """Even with every runner that can read models busy, a model job waits for one: it is not
+    priced from the drawings because of what else is running."""
     er, tmp_path = api
     _claim(er, "laptop", "LAPTOP", SLOT)
     a = _queue(er, tmp_path, "a", "AAA")
     assert _claim(er, "laptop", "LAPTOP", SLOT)["run"]["run_id"] == a       # slot 1 busy
     b = _queue(er, tmp_path, "b", "BBB")
     _with_models(er, b)
-    got = _claim(er, "laptop-s2", "LAPTOP", ["xai_extract", "desktop_token", "no_models"])
-    assert got["run"]["run_id"] == b
-    assert any("no model reader free" in line for line in er._RUNS[b].log)
-
-
-def test_a_model_job_waits_for_an_idle_runner_that_can_read_it(api):
-    er, tmp_path = api
-    _claim(er, "laptop", "LAPTOP", SLOT)                                     # idle, able
-    a = _queue(er, tmp_path, "a", "AAA")
-    _with_models(er, a)
-    refused = _claim(er, "laptop-s2", "LAPTOP", ["desktop_token", "no_models"])
+    refused = _claim(er, "laptop-s2", "LAPTOP", ["xai_extract", "desktop_token", "no_models"])
     assert refused["run"] is None and "need a model reader" in refused["reason"]
-    assert _claim(er, "laptop", "LAPTOP", SLOT)["run"]["run_id"] == a
+    assert _claim(er, "laptop-s2", "LAPTOP", SLOT)["run"]["run_id"] == b
 
 
-def test_a_runner_long_unseen_is_not_counted_as_idle(api):
-    er, tmp_path = api
-    _claim(er, "laptop", "LAPTOP", SLOT)
-    a = _queue(er, tmp_path, "a", "AAA")
-    _with_models(er, a)
-    er._RUNNERS["laptop"].last_seen = time.time() - 600
-    assert _claim(er, "laptop-s2", "LAPTOP", ["desktop_token", "no_models"])["run"]
-
-
-def test_the_strict_rule_can_be_restored(api, monkeypatch):
-    er, tmp_path = api
-    monkeypatch.setenv("SDI_RUN_WITHOUT_MODEL_READER", "0")
-    _claim(er, "server", "SDI-APP01", ["no_models"])
-    a = _queue(er, tmp_path, "a", "AAA")
-    _with_models(er, a)
-    assert _claim(er, "server", "SDI-APP01", ["no_models"])["run"] is None
+def test_the_service_has_no_switch_to_run_without_a_model_reader():
+    src = (BACKEND / "estimate_routes.py").read_text(encoding="utf-8")
+    assert "SDI_RUN_WITHOUT_MODEL_READER" not in src
 
 
 # ── the runner ───────────────────────────────────────────────────────────────────────
 
-def test_one_desktop_has_one_solidworks_token(tmp_path):
-    token = tmp_path / "solidworks.token"
-    first, state = runner.take_desktop_token(token)
-    assert state == "held"
-    second, state2 = runner.take_desktop_token(token)
-    assert state2 == "busy" and second is None
-    assert runner.desktop_token_busy(token)
-    runner.release_desktop_token(first)
-    third, state3 = runner.take_desktop_token(token)
-    assert state3 == "held"
-    runner.release_desktop_token(third)
-    assert not runner.desktop_token_busy(token)
-
-
-def test_an_unusable_token_fails_open_as_a_lone_runner(tmp_path):
-    blocker = tmp_path / "file"
-    blocker.write_text("x")
-    handle, state = runner.take_desktop_token(blocker / "solidworks.token")
-    assert handle is None and state == "unavailable"
-    env, said = runner.model_reader_for(state, {})
-    assert env == {} and said.startswith("SolidWorks as configured")
-
-
-def test_the_run_without_the_token_reads_models_with_the_document_manager():
-    env, said = runner.model_reader_for("busy", {"SDI_SW_DOCMGR_KEY": KEY})
-    assert env == {"SDI_SW_RUN_ANALYSER": "0", "SDI_SW_DOCMGR": "1"}
-    assert said.startswith("Document Manager")
-
-
-def test_with_no_key_it_runs_on_what_it_has_and_says_so():
-    env, said = runner.model_reader_for("busy", {})
-    assert env == {"SDI_SW_RUN_ANALYSER": "0"}
-    assert "no model reader" in said and "drawings" in said
-
-
-def test_the_run_holding_the_token_uses_solidworks_as_configured():
-    env, said = runner.model_reader_for("held", {})
-    assert env == {} and said.startswith("SolidWorks: this run holds")
-
-
-def test_a_slot_without_the_token_declares_itself_honestly(monkeypatch):
+def test_every_slot_declares_the_same_reader_whatever_else_is_running(monkeypatch):
     monkeypatch.delenv("SDI_SW_RUN_ANALYSER", raising=False)
     monkeypatch.delenv("SDI_SW_DOCMGR", raising=False)
     monkeypatch.delenv("SDI_SW_DOCMGR_KEY", raising=False)
-    caps = runner.runner_capabilities(token_busy=True)
-    assert "desktop_token" in caps and "no_models" in caps
-    assert "sw_extract" not in caps, "a SolidWorks extract needs the SolidWorks token"
-    monkeypatch.setenv("SDI_SW_DOCMGR_KEY", KEY)
-    assert "no_models" not in runner.runner_capabilities(token_busy=True)
-    alone = runner.runner_capabilities()
-    assert "desktop_token" in alone and "sw_extract" in alone and "no_models" not in alone
+    caps = runner.runner_capabilities()
+    assert "desktop_token" in caps and "sw_extract" in caps and "no_models" not in caps
+
+
+def test_the_runner_does_not_change_how_a_run_reads_models():
+    src = (ROOT / "tools" / "runner" / "sdi_estimate_runner.py").read_text(encoding="utf-8")
+    for gone in ("model_reader_for", "take_desktop_token", "SDI_MODEL_READER", "token_busy"):
+        assert gone not in src, f"{gone}: the runner must not pick a model reader per run"
+
+
+def test_slot_one_is_never_held_back():
+    ok, said = runner.slot_may_claim(1)
+    assert ok and "slot 1" in said
+
+
+def test_a_second_slot_claims_only_with_the_room(monkeypatch):
+    monkeypatch.setattr(runner, "compute_headroom", lambda: (False, "1.0 GB free (needs 3)"))
+    ok, said = runner.slot_may_claim(2)
+    assert not ok and "GB free" in said
 
 
 def test_compute_headroom_is_measured_against_the_settings():

@@ -48,21 +48,30 @@ What the server needs before it can run one: the engine checkout on the same bui
 service (`push-to-server.ps1`, the server has no git), the virtualenv, a licensed Excel, a
 logged-in session for COM (`install-runner-task.ps1`), the shares, and the `.env` keys.
 
-## Phase 2, built 6 Nov 2026 (D-731): several runners on one desktop
+## Phase 2, built 6 Nov 2026 (D-731): two runners on one desktop, one SolidWorks in turn
 
-JG, 6 Nov 2026: "we need to see the multi run on this laptop ... for any second or third runs,
-we shouldn't stop unless the machine has insufficient compute available and we should use
-document manager for all other runs. if we can't we run without solid works and document
-manager and use what we have otherwise."
+The agreed design, restated by JG on 6 Nov 2026 after a first build that switched readers:
+"two estimating workers would share one SolidWorks reader, waiting briefly for their turn."
+The same job always gets the same model evidence, whatever else is running. The Document
+Manager stays off (`SDI_SW_DOCMGR` unset) until its acceptance checks pass.
 
 | Piece | What it does |
 |---|---|
 | Slot checkout | `install-runner-slot.ps1 -Slot N` makes `C:\ClaudeVision-sN`, a git worktree of the main checkout's HEAD, with its own `output\` and lock, the shared venv, the shared `cache\` (junction) and its own task `SDI Estimating Runner sN`. The runner id ends `-sN`. Run it again after every sync. |
-| Desktop token | One lock file per machine (`%PROGRAMDATA%\SDI\solidworks.token`, or `SDI_SOLIDWORKS_TOKEN`). The run holding it reads models with SolidWorks as configured. |
-| Other runs | Read models with the Document Manager when `SDI_SW_DOCMGR_KEY` is set, otherwise from the drawings, DXFs and any saved extract. Nobody waits. The run's console and the engine (`SDI_MODEL_READER`) say which. |
-| Compute gate | While another run uses the desktop, a slot claims only when free memory is at least `SDI_SLOT_MIN_FREE_GB` (3) and CPU at most `SDI_SLOT_MAX_CPU_PCT` (85%). |
-| Service | Runners that both declare `desktop_token` may run on one desktop at once, up to `SDI_MAX_CONCURRENT_RUNS`. A runner with no model reader takes a model job when no able runner is idle (`SDI_RUN_WITHOUT_MODEL_READER`, default on), and the run says so. A SolidWorks pack extract is offered only by a run that can take the token. |
+| SolidWorks turn | One lock file per machine (`%PROGRAMDATA%\SDI\solidworks.token`, or `SDI_SOLIDWORKS_TOKEN`), taken by the ENGINE around each model read (`src/solidworks_turn.py`: the engine's analyser call and the pack extract). Held for the read only, so a second run waits for one model read, never a whole estimate. The run's console says it is waiting and when its turn comes, and the job's meta records `solidworks_turn` (held, waited seconds). |
+| Same evidence | Every run reads its models exactly as it would alone. Nothing switches reader because SolidWorks is busy. |
+| A turn that never comes | After `SDI_SW_TURN_WAIT_MINUTES` (35, just beyond the analyser's own 30-minute limit) the read fails in its own words and is not handed to the Document Manager backup. The invariant layer stops a run whose models were left unread; the job is run again. |
+| Compute gate | Slot 2 or more claims only when free memory is at least `SDI_SLOT_MIN_FREE_GB` (3) and CPU at most `SDI_SLOT_MAX_CPU_PCT` (85%). Slot 1 is never held back. |
+| Service | Runners that both declare `desktop_token` may run on one desktop at once, up to `SDI_MAX_CONCURRENT_RUNS`. The strict model-reader rule stands: a job with models is never given to a runner that declares `no_models`. |
 | Checks | `restart-runner.ps1 -Slot N -Root C:\ClaudeVision-sN -TaskName "SDI Estimating Runner sN"` checks that slot, and lists every other runner on the desktop with its build. |
+
+### Later: the Document Manager and a third run
+
+The Document Manager acceptance work goes on alongside. A third run is where it becomes
+valuable: a run that would otherwise wait for SolidWorks could read with it instead. That is
+safe only once the acceptance checks show the Document Manager gives the same priced evidence
+as SolidWorks on the same models (`compare_extracts.py`), so a job's book does not depend on
+which reader it got. Until then it is not wired into the slots.
 
 ## Phase 2 as first designed: several runners on one machine (the new server)
 

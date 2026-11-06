@@ -491,7 +491,7 @@ def runners(monkeypatch):
     behaviour = {"com_error": None, "com_writes": False, "docmgr_error": None,
                  "docmgr_writes": True, "com_available": (True, "")}
 
-    def _com(folder, analyser=None, python_exe=None, out_path=None, produced=None):
+    def _com(folder, analyser=None, python_exe=None, out_path=None, produced=None, turn=None):
         calls["com"].append(str(folder))
         if behaviour["com_writes"] and out_path:
             _write_extract(out_path, _com_records(), folder)
