@@ -79,13 +79,17 @@ whole before any of it runs, so a failed check really does stop the push and the
       if (-not $?) { "STOP: send  git log --oneline HEAD..FETCH_HEAD" } else {
         git push origin HEAD:main-2026
         .\tools\start\restart-service.ps1
+        .\tools\start\restart-service.ps1 -Port 8071 -TaskName "SDI Intelligence Service 8071"
         .\tools\start\restart-runner.ps1
-        .\tools\start\check-services.ps1
+        .\tools\start\check-services.ps1 -Ports 8071,8072
       }
     }
 
 Do not start a job unless check-services.ps1 shows EVERY service that answers on HEAD
-(8071 included).
+(8071 included), and the job's report reads that commit on its "Engine build" line before a single
+number is read. 6 Nov 2026 lost a morning to this: the block restarted 8072 and the runner but not
+the laptop's 8071 task, which restart-service.ps1 does not touch without its own -Port and
+-TaskName, and the 09:38 11908-22-GA run reported "Engine build 194d2c0", the night before's code.
 
 The first block merges `jbgray1874`'s `main-2026` straight into the portal branch, with the commit
 the session named as the proof. `git push origin HEAD` publishes the portal branch to
