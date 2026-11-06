@@ -92,7 +92,7 @@ def partial_run(monkeypatch):
     calls = {"com": 0, "docmgr": []}
     behaviour = {"docmgr_error": None, "docmgr_writes": True, "com_records": None}
 
-    def _com(folder, analyser=None, python_exe=None, out_path=None, produced=None):
+    def _com(folder, analyser=None, python_exe=None, out_path=None, produced=None, turn=None):
         calls["com"] += 1
         recs = behaviour["com_records"] or [_ok(A), _failed(B)]
         base._write_extract(out_path, recs, folder)

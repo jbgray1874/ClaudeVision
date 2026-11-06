@@ -152,9 +152,7 @@ def test_the_runner_runs_the_extract_never_main_and_files_what_it_names(tmp_path
     src = (ROOT / "tools" / "runner" / "sdi_estimate_runner.py").read_text(encoding="utf-8")
     # Sent through runner_capabilities() since D-703, which adds "no_models" only to a
     # runner that can read no models; the pack-extract types are always in it.
-    # The claim carries the capabilities, token-aware since D-731 (a run without the desktop's
-    # SolidWorks token does not offer a SolidWorks extract).
-    assert '"capabilities": runner_capabilities(' in src
+    assert '"capabilities": runner_capabilities()' in src
     assert {"sw_extract", "xai_extract"} <= set(runner.runner_capabilities())
 
 

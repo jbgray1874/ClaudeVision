@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from source_precedence import apply_field as _apply_field
+import solidworks_turn as _sw_turn
 
 # What a bounding box means about a part — one definition, shared with the estimator's
 # blank sizing. Soft, because this connector must still run on a machine where an optional
@@ -842,15 +843,20 @@ def native_extract_for_job(
             _rt_sw.reuse("solidworks_extract", not _must_run)
     except Exception:                                        # noqa: BLE001
         pass
+    _turn: Dict[str, Any] = {}
     if _must_run:
         _produced: List[str] = []
         _run_error = _run_analyser(_analyse_from, analyser=analyser, python_exe=python_exe,
-                                   out_path=jp, produced=_produced)
+                                   out_path=jp, produced=_produced, turn=_turn)
         if _produced and Path(_produced[0]) != jp:
             # It wrote somewhere else — a read-only share, most often. Read what exists,
             # not what was requested.
             jp = Path(_produced[0])
-        if _run_error and _has_models:
+        # A TURN THAT NEVER CAME IS NOT A FAILED SEAT (D-731). Another run had the desktop's
+        # SolidWorks; reading this job with the backup instead would give it different model
+        # evidence depending on what else was running. The read fails, said, and is rerun.
+        if (_run_error and _has_models
+                and _turn.get("state") != _sw_turn.TIMED_OUT):
             _backup_reason = f"the SolidWorks COM analyser failed — {_run_error}"
 
     _docmgr_meta: Dict[str, Any] = {}
@@ -872,6 +878,9 @@ def native_extract_for_job(
     job = normalize_native_extract(records, job_codes=job_codes)
     job.meta.update(_docmgr_meta)
     job.meta.update(_topup_meta)
+    if _turn:
+        # WHETHER THIS RUN WAITED FOR ANOTHER RUN'S SOLIDWORKS READ, and for how long (D-731).
+        job.meta["solidworks_turn"] = dict(_turn)
     job.meta.setdefault("extract_path", str(jp) if jp else None)
     if (_analyse_from is not None and folder is not None
             and Path(_analyse_from) != Path(folder)):
@@ -1194,13 +1203,19 @@ _ELEVATED_HINT = (
 def _run_analyser(folder: str | Path, analyser: Optional[str | Path] = None,
                   python_exe: Optional[str] = None,
                   out_path: Optional[str | Path] = None,
-                  produced: Optional[List[str]] = None) -> Optional[str]:
+                  produced: Optional[List[str]] = None,
+                  turn: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """Invoke sw_native_analyse.py on a folder (Windows + SolidWorks only).
 
     Returns None on success, or a description of the failure. It used to swallow every
     exception and return nothing, so an analyser that could not start — no SolidWorks, no
     licence, a bad path — was indistinguishable from a job with no models: the run simply
-    continued on PDF+DXF and said nothing. The caller records the reason."""
+    continued on PDF+DXF and said nothing. The caller records the reason.
+
+    IN TURN WITH EVERY OTHER RUN ON THIS DESKTOP (SCRUM-183 phase 2, D-731). The analyser runs
+    only while this run holds the desktop's SolidWorks turn (solidworks_turn); a run that finds
+    it in use waits, and reads its models exactly as it would alone. `turn`, when given, is
+    filled with what happened: held, waited, timed out or unavailable."""
     if analyser is None:
         analyser = Path(__file__).resolve().parents[2] / "tools" / "solidworks" / "sw_native_analyse.py"
     # THE INTERPRETER THAT IS ALREADY RUNNING, not whatever `python` means on PATH.
@@ -1241,6 +1256,14 @@ def _run_analyser(folder: str | Path, analyser: Optional[str | Path] = None,
         # caller cannot assume the path it asked for — it used to read a different file from
         # the one that had just been produced.
         cmd += ["--out", str(out_path)]
+    # ONE SOLIDWORKS PER DESKTOP, TAKEN IN TURN (D-731). Held for the read only, so a second
+    # run waits for one model read, never for a whole estimate. A turn that never comes fails
+    # this read in its own words; nothing reads the models another way instead.
+    _handle, _turn = _sw_turn.take_turn(say=lambda m: print(f"  {m}", flush=True))
+    if turn is not None:
+        turn.update(_turn)
+    if _turn["state"] == _sw_turn.TIMED_OUT:
+        return _sw_turn.timed_out_reason(_turn)
     try:
         r = subprocess.run(cmd, check=False, timeout=1800,
                            capture_output=True, text=True)
@@ -1261,6 +1284,8 @@ def _run_analyser(folder: str | Path, analyser: Optional[str | Path] = None,
     except Exception as exc:
         return (f"the SolidWorks analyser could not be run: {exc}"
                 + (f" — {_ELEVATED_HINT}" if running_elevated() else ""))
+    finally:
+        _sw_turn.release(_handle)
 
 
 # ── the Document Manager backup (SCRUM-184) ──────────────────────────────────────────

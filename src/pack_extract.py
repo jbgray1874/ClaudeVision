@@ -236,12 +236,19 @@ def organise_sw(extract: Dict[str, Any]) -> Dict[str, Table]:
 
 
 def run_analyser(folder: Path, out_json: Path, python_exe: str = sys.executable) -> Path:
-    """Run the analyser on `folder`, writing its extract to `out_json`. Streams its console."""
+    """Run the analyser on `folder`, writing its extract to `out_json`. Streams its console.
+
+    In turn with every other run on this desktop (D-731): it waits for the desktop's one
+    SolidWorks, as the engine's own read does, and a turn that never comes stops the extract."""
+    import solidworks_turn                                         # noqa: PLC0415
     cmd = [python_exe, "-u", str(ANALYSER), str(folder), "--out", str(out_json)]
-    print("$ " + " ".join(cmd), flush=True)
-    proc = subprocess.run(cmd, cwd=str(ROOT), text=True, encoding="utf-8",
-                          errors="replace", stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                          timeout=3600)
+    with solidworks_turn.solidworks_turn() as turn:
+        if turn["state"] == solidworks_turn.TIMED_OUT:
+            raise SystemExit(solidworks_turn.timed_out_reason(turn))
+        print("$ " + " ".join(cmd), flush=True)
+        proc = subprocess.run(cmd, cwd=str(ROOT), text=True, encoding="utf-8",
+                              errors="replace", stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, timeout=3600)
     path = None
     for line in (proc.stdout or "").splitlines():
         print(line, flush=True)

@@ -51,7 +51,7 @@ def analyser_calls(monkeypatch):
     """Record what the analyser would have been pointed at, and write nothing."""
     calls = []
 
-    def _fake(folder, analyser=None, python_exe=None, out_path=None, produced=None):
+    def _fake(folder, analyser=None, python_exe=None, out_path=None, produced=None, turn=None):
         calls.append({"folder": str(folder), "out": str(out_path) if out_path else None})
         return None
 

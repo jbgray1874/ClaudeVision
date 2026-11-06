@@ -566,9 +566,10 @@ def _claim_refused_because(runner_id: str, hostname: str,
     """Why this runner may not take another run now, or "" when it may.
 
     SEVERAL RUNS ON ONE DESKTOP (SCRUM-183 phase 2, D-731). Runners that declare
-    "desktop_token" share the desktop's one SolidWorks through a lock of their own: the run
-    holding it reads models with SolidWorks, the others with the Document Manager or none. So
-    the one-run-per-desktop rule stands only between runners that do not both declare it."""
+    "desktop_token" run an engine that takes the desktop's one SolidWorks in turn: a run whose
+    model read finds it in use waits for it, and every run reads its models the same way it
+    would alone. So the one-run-per-desktop rule stands only between runners that do not both
+    declare it."""
     running = [r for r in _RUNS.values() if r.status == "running"]
     if not running:
         return ""
@@ -586,32 +587,6 @@ def _claim_refused_because(runner_id: str, hostname: str,
             return (f"another run is in progress on {hostname}: one desktop drives one "
                     f"SolidWorks and one estimate")
     return ""
-
-
-# A RUNNER WITH NO MODEL READER STILL RUNS A MODEL JOB WHEN NOTHING BETTER IS FREE (D-731).
-# JG, 6 Nov 2026: "if we can't we run without solid works and document manager and use what we
-# have otherwise." A job is kept for a runner that can read its models only while one is idle
-# right now; otherwise it goes to the runner that asked, and the run says it read no models.
-# SDI_RUN_WITHOUT_MODEL_READER=0 restores the strict rule.
-_IDLE_WITHIN_SECONDS = 30.0
-
-
-def _run_without_model_reader_allowed() -> bool:
-    return str(os.getenv("SDI_RUN_WITHOUT_MODEL_READER", "1")).strip().lower() not in {
-        "0", "false", "no", "off"}
-
-
-def _capable_runner_idle(asking: str, now: Optional[float] = None) -> bool:
-    now = time.time() if now is None else now
-    running = {str(r.runner or "") for r in _RUNS.values() if r.status == "running"}
-    for rid, runner in _RUNNERS.items():
-        if rid == asking or rid in running:
-            continue
-        if now - float(runner.last_seen or 0.0) > _IDLE_WITHIN_SECONDS:
-            continue
-        if "no_models" not in set(runner.capabilities or []):
-            return True
-    return False
 
 
 # A PACK THAT NEEDS A MODEL READER is not handed to a runner that says it cannot read models
@@ -957,18 +932,14 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
 
         _can = set(req.capabilities or [])
         _no_models = "no_models" in _can
-        # Kept for a model reader only while one is idle (D-731); otherwise this runner takes it.
-        _keep_for_models = _no_models and not (
-            _run_without_model_reader_allowed()
-            and not _capable_runner_idle(req.runner_id, now))
         queued = sorted((r for r in _RUNS.values()
                          if r.status == "queued" and r.wants_engine
                          and (not r.job_type or r.job_type in _can)
-                         and not (_keep_for_models and _needs_model_reader(r.job_folder))),
+                         and not (_no_models and _needs_model_reader(r.job_folder))),
                         key=lambda r: r.queued_at)
         if not queued:
             _for_models = [r for r in _RUNS.values() if r.status == "queued" and r.wants_engine
-                           and _keep_for_models and _needs_model_reader(r.job_folder)]
+                           and _no_models and _needs_model_reader(r.job_folder)]
             if _for_models:
                 return {"run": None, "reason": (
                     f"{len(_for_models)} queued job(s) need a model reader (SolidWorks or "
@@ -989,10 +960,6 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         run.claimed_by_process = req.process or ""
         runner.run_id = run.run_id
         run.line(f"Claimed by runner {req.hostname or req.runner_id}")
-        if _no_models and _needs_model_reader(run.job_folder):
-            run.line("This runner has no model reader free (SolidWorks busy or off, no Document "
-                     "Manager key): the job is priced from its drawings, DXFs and any saved "
-                     "extract, and its book says so")
         _keep(run)
 
     return {"run": {
