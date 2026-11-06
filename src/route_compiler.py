@@ -5254,6 +5254,19 @@ def weldment_finish_for_gate(record: Mapping[str, Any], target_id: str,
     return own
 
 
+def _record_for_model_assembly_name(item: str, raw: Mapping[str, Any]) -> str:
+    """`item`, or the job record its model-assembly name stands for: "12002-02-101 SA" is
+    12002-02-101 where the job has that record and none of the longer name (D-734)."""
+    if raw.get(item):
+        return item
+    try:
+        from source_connectors.solidworks import model_assembly_stem as _stem
+    except Exception:                                                # noqa: BLE001
+        return item
+    stem = _stem(item)
+    return stem if stem and raw.get(stem) else item
+
+
 def compile_job_route(
     parts: Sequence[Mapping[str, Any]],
     llm_extract: Optional[Mapping[str, Any]] = None,
@@ -5299,6 +5312,12 @@ def compile_job_route(
             for item in (route.get("part_numbers") or [])
             if clean_part_number(item)
         ]
+        # A SUB-ASSEMBLY NAMED AS ITS MODEL FILE IS THE DRAWING'S RECORD (D-734). 12002-02's
+        # read keyed its weld callout to "12002-02-101 SA", the model file's name; the job's
+        # record is 12002-02-101. Resolved, so the stated work lands on the record and is not
+        # dropped as a part the graph does not carry.
+        participants = list(dict.fromkeys(
+            _record_for_model_assembly_name(item, raw) for item in participants))
         _dropped = [item for item in participants if item in _outside]
         if _dropped:
             participants = [item for item in participants if item not in _outside]
