@@ -10,7 +10,7 @@ Runs a fresh BrightHR check. Without --update it changes nothing in BrightHR
 or InVentry. With it, InVentry is updated exactly as the app's Update InVentry
 button does, with the same safety checks, and the summary says what changed.
 
-Meant to run from Task Scheduler on SDI-App01 at 08:45, Monday to Friday:
+Meant to run from Task Scheduler on SDI-App01 at 09:00, Monday to Friday:
 deploy/install_hr_morning_task.ps1. Every run is in the app's History tab.
 """
 import datetime
