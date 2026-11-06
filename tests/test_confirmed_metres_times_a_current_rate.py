@@ -242,8 +242,11 @@ def test_a_per_unit_confirmation_replaces_the_sum_rather_than_joining_it():
     src = (pathlib.Path(__file__).resolve().parent.parent / "src" / "estimator.py"
            ).read_text(encoding="utf-8")
     start = src.index("# ── ABS EDGING: A MATERIAL LINE, NOT A QUESTION ─")
-    block = src[start:start + 5200]
-    assert '_edge_m = round(float(_bm_unit), 3)' in block
+    block = src[start:start + 9000]
+    # Since D-733 the metres are grouped by decor; a per-unit confirmation is the ONE group,
+    # replacing every measured group rather than joining them.
+    assert '_groups[""] = {"mm": float(_bm_unit) * 1000.0' in block
+    assert block.index("if _bm_unit is not None:") < block.index("for _pn_g, _mm_g, _basis_g")
     assert '_p["_confirmed_banded_mm"] = float(_bm_per_part[_pn_e]) * 1000.0' in block
     for banned in ("unit_cost_gbp", "unit_material_cost_gbp", "price_gbp"):
         assert banned not in block, (

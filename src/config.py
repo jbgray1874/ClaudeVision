@@ -743,6 +743,34 @@ ROLL_GOODS_CATALOGUE = {
     },
 }
 
+# --- Roll goods sold by the metre: a RESEARCHED market rate, dated and sourced (D-733) ---
+#
+# 12677-01-GA, 6 Nov 2026: four 233 mm strips of 20 mm VHB tape (0.932 m a unit) were left at
+# £0 because the run-time research found no price per metre. The review: "Price 0.932 m of 20
+# mm VHB tape ... from a suitable catalogue source or an explicitly justified provisional
+# allowance." This is the research done once, by hand, with everything a researched price must
+# carry: the listings it came from, the date, the unit and the quantity it was found at. It is
+# NOT a figure off an estimator's sheet (that rule stands below): it is the market, named, and
+# re-checkable by anybody against the same listings. Used only after SDI Live, the supplier
+# catalogue and the run-time research have all failed to answer, labelled INDICATIVE on the
+# line, and refused once older than `valid_days` so a stale market figure cannot price a job.
+ROLL_GOODS_RESEARCHED_METRE_RATES = (
+    {
+        "name": "3M VHB double-sided acrylic foam tape, 19-20 mm wide",
+        "all_words": ("VHB",),
+        "max_width_mm": 25.0,
+        "gbp_per_m": 2.06,
+        "unit": "m",
+        "quantity_basis": "one 19 mm x 33 m roll; median roll price £68.12 / 33 m",
+        "as_of": "2026-11-06",
+        "valid_days": 120,
+        "source": ("median of five UK ex-VAT listings for a 3M VHB 19 mm x 33 m roll: Rapid "
+                   "Online 3M LSE-060WF £48.15; RS Components 3M 7100395430 £65.21; RS "
+                   "Components 3M 4905F £68.12; Rapid Online 3M 5925F £79.69; RS Components "
+                   "3M 5925F £91.00"),
+    },
+)
+
 # --- What an estimator told us a thing costs: NOTHING, by rule --------------------
 #
 # THIS TABLE IS EMPTY AND STAYS EMPTY. James Gray, 16 Sep 2026: "A number copied from an

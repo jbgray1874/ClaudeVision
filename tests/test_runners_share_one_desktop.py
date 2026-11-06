@@ -6,12 +6,17 @@ waiting briefly for their turn ... the same job could receive different model ev
 depending on what else is running. Document Manager has not yet passed the outstanding
 acceptance checks."
 
+JG, later the same day (D-732): "we should not fail.. we should report in the portal that [we]
+are switching to document manager and provide a 5 minute update every delay due to waiting for
+solid works com api."
+
 So the engine takes the desktop's SolidWorks in turn around its model read and a second run
-waits; no run reads its models another way because another run is busy; a turn that never comes
-fails the read in its own words and is not handed to the backup reader; the service lets two
-runners that declare the turn share a desktop and keeps the strict model-reader rule; and a
-second or third run is claimed only while the machine has the room. Synthetic runs, a stand-in
-analyser and a temporary token file.
+waits, saying so at the start and every five minutes; a normal wait never changes the reader;
+a wait that reaches its limit switches that run to the Document Manager, said, or goes on
+without its models when there is no key; the service lets two runners that declare the turn
+share a desktop and keeps the strict model-reader rule; and a second or third run is claimed
+only while the machine has the room. Synthetic runs, a stand-in analyser and a temporary token
+file.
 """
 from __future__ import annotations
 
@@ -80,9 +85,33 @@ def test_a_turn_that_never_comes_times_out_in_its_own_words(token):
         handle, turn = turn_mod.take_turn(wait_s=0.2, poll_s=0.05, say=lambda m: None)
         assert handle is None and turn["state"] == "timed_out"
         why = turn_mod.timed_out_reason(turn)
-        assert "another run on this machine" in why and "not read any other way" in why
+        assert "another run on this machine" in why and "SolidWorks did not read" in why
     finally:
         turn_mod.release(held)
+
+
+def test_a_waiting_run_says_so_every_five_minutes(token):
+    """JG: "provide a 5 minute update every delay due to waiting for solid works com api"."""
+    held, _ = turn_mod.try_take()
+    now = [0.0]
+    said = []
+    try:
+        turn_mod.take_turn(wait_s=12 * 60, update_s=5 * 60, poll_s=60, say=said.append,
+                           sleep=lambda s: now.__setitem__(0, now[0] + s),
+                           clock=lambda: now[0])
+    finally:
+        turn_mod.release(held)
+    assert sum("Waiting for the desktop's SolidWorks" in m for m in said) == 1
+    updates = [m for m in said if m.startswith("Still waiting")]
+    assert len(updates) == 2 and "5 min so far" in updates[0] and "10 min so far" in updates[1]
+
+
+def test_the_update_interval_and_the_timeout_reader_are_settings(monkeypatch):
+    monkeypatch.delenv(turn_mod.UPDATE_ENV, raising=False)
+    monkeypatch.delenv(turn_mod.TIMEOUT_ENV, raising=False)
+    assert turn_mod.update_minutes() == 5.0 and turn_mod.timeout_reader() == "docmgr"
+    monkeypatch.setenv(turn_mod.TIMEOUT_ENV, "none")
+    assert turn_mod.timeout_reader() == "none"
 
 
 def test_an_unusable_token_fails_open_as_a_lone_run(tmp_path, monkeypatch):
@@ -140,23 +169,72 @@ def test_a_timed_out_turn_never_starts_the_analyser(token, monkeypatch):
     assert turn["state"] == "timed_out" and "another run on this machine" in err
 
 
-def test_a_timed_out_turn_is_not_handed_to_the_document_manager(token, monkeypatch, tmp_path):
-    """The same job must not get different model evidence because another run was busy: even
-    with the backup switched on, a turn that never came is not read by the Document Manager."""
+def _timed_out_job(tmp_path, monkeypatch, **env):
+    """One job whose SolidWorks turn never comes: another run holds the token throughout."""
     models = tmp_path / "job"
     models.mkdir()
     (models / "x.SLDPRT").write_bytes(b"model")
     monkeypatch.setenv(turn_mod.WAIT_ENV, "0")
+    for k, v in env.items():
+        if v is None:
+            monkeypatch.delenv(k, raising=False)
+        else:
+            monkeypatch.setenv(k, v)
     monkeypatch.setattr(sw, "solidworks_com_available", lambda: (True, ""))
-    monkeypatch.setattr(sw, "_docmgr_backup", lambda *a, **k: pytest.fail(
-        "the backup read a job whose SolidWorks turn never came"))
+    asked = []
+
+    def _backup(jp, analyse_from, reason, **k):
+        asked.append(reason)
+        return jp, {"docmgr_backup_reason": reason}
+    monkeypatch.setattr(sw, "_docmgr_backup", _backup)
     held, _ = turn_mod.try_take()
     try:
-        job = sw.native_extract_for_job(folder=models, run=True, docmgr=True)
+        job = sw.native_extract_for_job(folder=models, run=True, docmgr=False)
     finally:
         turn_mod.release(held)
-    assert job.meta["solidworks_turn"]["state"] == "timed_out"
+    return job, asked
+
+
+def test_a_timed_out_turn_switches_to_the_document_manager_and_says_so(token, monkeypatch,
+                                                                        tmp_path, capsys):
+    """The run does not fail: the portal is told it is switching, and the Document Manager
+    reads the models, even with the general backup switch off."""
+    job, asked = _timed_out_job(tmp_path, monkeypatch,
+                                SDI_SW_DOCMGR_KEY="test-key-not-real", SDI_SW_TURN_TIMEOUT=None)
+    assert len(asked) == 1 and "switched to the Document Manager" in asked[0]
+    assert job.meta["solidworks_turn"]["switched_to"] == "docmgr"
+    assert "SWITCHING TO THE DOCUMENT MANAGER" in capsys.readouterr().out
+
+
+def test_with_no_key_the_run_goes_on_without_its_models_and_says_so(token, monkeypatch,
+                                                                    tmp_path, capsys):
+    job, asked = _timed_out_job(tmp_path, monkeypatch, SDI_SW_DOCMGR_KEY=None,
+                                SDI_SW_TURN_TIMEOUT=None)
+    assert not asked
+    assert job.meta["solidworks_turn"]["switched_to"] == "none"
     assert "another run on this machine" in job.meta["analyser_error"]
+    out = capsys.readouterr().out
+    assert "no Document Manager key" in out and "goes on without its models" in out
+
+
+def test_the_timeout_can_leave_the_models_unread(token, monkeypatch, tmp_path):
+    job, asked = _timed_out_job(tmp_path, monkeypatch, SDI_SW_DOCMGR_KEY="test-key-not-real",
+                                SDI_SW_TURN_TIMEOUT="none")
+    assert not asked and job.meta["solidworks_turn"]["switched_to"] == "none"
+
+
+def test_a_normal_wait_never_changes_the_reader(token, monkeypatch, tmp_path):
+    """A run that gets its turn reads with SolidWorks; the backup is not asked."""
+    models = tmp_path / "job"
+    models.mkdir()
+    (models / "x.SLDPRT").write_bytes(b"model")
+    monkeypatch.setenv("SDI_SW_DOCMGR_KEY", "test-key-not-real")
+    monkeypatch.setattr(sw, "solidworks_com_available", lambda: (True, ""))
+    monkeypatch.setattr(sw.subprocess, "run", lambda *a, **k: _Done())
+    monkeypatch.setattr(sw, "_docmgr_backup", lambda *a, **k: pytest.fail(
+        "the backup was asked although SolidWorks read the models"))
+    job = sw.native_extract_for_job(folder=models, run=True, docmgr=False)
+    assert job.meta["solidworks_turn"]["state"] == "held"
 
 
 # ── the service ──────────────────────────────────────────────────────────────────────

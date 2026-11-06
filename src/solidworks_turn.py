@@ -6,15 +6,23 @@ briefly for their turn ... the same job could receive different model evidence d
 else is running." So no run changes reader because another run is busy: every run reads its
 models exactly as it would alone, and a run that finds SolidWorks in use WAITS for it.
 
+JG, later the same day: "we should not fail.. we should report in the portal that [we] are
+switching to document manager and provide a 5 minute update every delay due to waiting for solid
+works com api." So the wait is said on the run's console, which the portal shows, when it starts
+and every SDI_SW_TURN_UPDATE_MINUTES (5) after; and a wait that reaches the limit is not a
+failure: the engine switches that run to the Document Manager and says so (D-732).
+
 THE TURN IS A LOCK ON ONE FILE PER MACHINE, outside any checkout, so every slot's checkout
 (C:\\ClaudeVision, C:\\ClaudeVision-s2, ...) finds the same file. It is held only while the
 analyser reads models, not for the whole run, so a second run waits at most for one other run's
 model read, and the rest of both runs (drawing reads, pricing, the books) go on side by side.
 
-A WAIT LONGER THAN SDI_SW_TURN_WAIT_MINUTES (default 35, just beyond the analyser's own 30-minute
-limit, so one other read always finishes inside it) fails this run's model read, said in the
-run's own words. It is never read another way instead: the invariant layer stops a run whose
-models were left unread, and the run is simply run again.
+A WAIT THAT REACHES SDI_SW_TURN_WAIT_MINUTES (default 35, just beyond the analyser's own 30-minute
+limit, so one other read normally finishes inside it) ends the wait. What the run does next is
+SDI_SW_TURN_TIMEOUT: "docmgr" (the default) reads its models with the Document Manager when its
+licence key is set, said on the console and on the book; "none" leaves them unread. Either way the
+run goes on, and a run whose models were left unread is priced from its drawings and DXFs and
+flagged not firm. Only this exceptional wait changes the reader; a normal wait never does.
 
 A TOKEN THAT CANNOT BE USED AT ALL (no folder can be made, a filesystem with no locks) fails
 open: the run reads as a lone run always has, and says so. A lone run never waits.
@@ -30,7 +38,10 @@ from typing import Any, Callable, Dict, Iterator, Optional, Tuple
 
 TOKEN_ENV = "SDI_SOLIDWORKS_TOKEN"
 WAIT_ENV = "SDI_SW_TURN_WAIT_MINUTES"
+UPDATE_ENV = "SDI_SW_TURN_UPDATE_MINUTES"
+TIMEOUT_ENV = "SDI_SW_TURN_TIMEOUT"
 TURN_WAIT_LIMIT = 35.0                     # in minutes; the analyser itself stops at 30
+TURN_UPDATE_EVERY = 5.0                    # in minutes: how often a waiting run says so
 POLL_SECONDS = 2.0
 
 HELD, BUSY, UNAVAILABLE, TIMED_OUT = "held", "busy", "unavailable", "timed_out"
@@ -46,11 +57,25 @@ def token_path() -> Path:
     return Path(base) / "SDI" / "solidworks.token"
 
 
-def wait_minutes() -> float:
+def _minutes(name: str, default: float) -> float:
     try:
-        return max(0.0, float(str(os.getenv(WAIT_ENV, "")).strip() or TURN_WAIT_LIMIT))
+        return max(0.0, float(str(os.getenv(name, "")).strip() or default))
     except ValueError:
-        return TURN_WAIT_LIMIT
+        return default
+
+
+def wait_minutes() -> float:
+    return _minutes(WAIT_ENV, TURN_WAIT_LIMIT)
+
+
+def update_minutes() -> float:
+    return _minutes(UPDATE_ENV, TURN_UPDATE_EVERY) or TURN_UPDATE_EVERY
+
+
+def timeout_reader() -> str:
+    """What a run does when its wait reaches the limit: "docmgr" (default) or "none"."""
+    v = str(os.getenv(TIMEOUT_ENV, "")).strip().lower()
+    return "none" if v in {"none", "0", "off", "no", "false", "drawings"} else "docmgr"
 
 
 def _take_lock(handle) -> bool:
@@ -114,14 +139,18 @@ def busy(path: Optional[Path] = None) -> bool:
 def take_turn(path: Optional[Path] = None, wait_s: Optional[float] = None,
               poll_s: float = POLL_SECONDS, say: Callable[[str], Any] = print,
               sleep: Callable[[float], Any] = time.sleep,
-              clock: Callable[[], float] = time.monotonic) -> Tuple[Any, Dict[str, Any]]:
+              clock: Callable[[], float] = time.monotonic,
+              update_s: Optional[float] = None) -> Tuple[Any, Dict[str, Any]]:
     """Wait for the desktop's SolidWorks. Returns (handle, turn) where turn says what happened:
     {"state": held | unavailable | timed_out, "waited_s": seconds, "token": path}. The caller
-    reads models only on held or unavailable, and releases the handle when the read ends."""
+    reads models with SolidWorks only on held or unavailable, and releases the handle when the
+    read ends. While it waits it says so at the start and every `update_s` seconds (D-732)."""
     path = Path(path) if path else token_path()
     wait_s = wait_minutes() * 60.0 if wait_s is None else float(wait_s)
+    update_s = update_minutes() * 60.0 if update_s is None else max(0.001, float(update_s))
     started = clock()
     said_waiting = False
+    next_update = update_s
     while True:
         handle, state = try_take(path)
         waited = round(clock() - started, 1)
@@ -142,15 +171,20 @@ def take_turn(path: Optional[Path] = None, wait_s: Optional[float] = None,
                 f"its models. This run waits its turn, up to {wait_s / 60:.0f} minutes, and "
                 f"reads its models the same way it would alone.")
             said_waiting = True
+        elif waited >= next_update:
+            say(f"Still waiting for the desktop's SolidWorks: {waited / 60:.0f} min so far, up "
+                f"to {wait_s / 60:.0f}. Another run on this machine is still reading its "
+                f"models.")
+            next_update += update_s
         sleep(poll_s)
 
 
 def timed_out_reason(turn: Dict[str, Any]) -> str:
-    """The run's own words for a turn that never came."""
+    """The run's own words for a turn that never came. What happened next is said by the
+    caller, which knows whether the Document Manager read the models."""
     return (f"the desktop's SolidWorks stayed in use by another run on this machine for "
             f"{float(turn.get('waited_s') or 0) / 60:.0f} minutes ({WAIT_ENV} allows "
-            f"{wait_minutes():g}), so this run's models were not read. They are not read any "
-            f"other way instead: run the job again when the other run has finished")
+            f"{wait_minutes():g}), so SolidWorks did not read this run's models")
 
 
 @contextmanager

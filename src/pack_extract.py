@@ -239,7 +239,9 @@ def run_analyser(folder: Path, out_json: Path, python_exe: str = sys.executable)
     """Run the analyser on `folder`, writing its extract to `out_json`. Streams its console.
 
     In turn with every other run on this desktop (D-731): it waits for the desktop's one
-    SolidWorks, as the engine's own read does, and a turn that never comes stops the extract."""
+    SolidWorks, as the engine's own read does, saying so every few minutes. A SolidWorks pack
+    extract asked for by name is a SolidWorks read, so a turn that never comes stops it, said;
+    the Document Manager has its own extract button."""
     import solidworks_turn                                         # noqa: PLC0415
     cmd = [python_exe, "-u", str(ANALYSER), str(folder), "--out", str(out_json)]
     with solidworks_turn.solidworks_turn() as turn:

@@ -3184,6 +3184,18 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     _classified_ids = {id(r) for r in _indicative}
     _unpriced = [r for r in _unpriced if id(r) not in _classified_ids]
     needs_a_person = _unpriced + _indicative
+    # THE RECORD'S MISSING PRICES, NOT THE BILL'S ALONE (D-733). The bill block is all this
+    # read, so a sheet row with no price was never counted: 12677-01-GA, 6 Nov 11:33, said "1
+    # line carries no price" with GEL TAPE named, while the 9 mm locator panel on the Other
+    # Sheet Material block was £0 too and the report beside it said two. The record's
+    # missing-price decisions are the tally the report and the Explanation tab already print;
+    # each one the bill block did not hold is listed here as well.
+    _bill_codes = {str(r.get("code") or "").strip().upper() for r in _unpriced}
+    _sheet_missing = [
+        d for d in ((record or {}).get("decisions_required") or [])
+        if isinstance(d, dict) and d.get("kind") == "missing_price"
+        and str(d.get("part") or "").strip()
+        and str(d.get("part") or "").strip().upper() not in _bill_codes]
     labour = _setup_and_run(labour_rows, order_qty)
     untraced = _tracing_failures(scan, pack, steel_calc, material, page_index)
 
@@ -3721,8 +3733,9 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                 f"as most of the detail behind it.</p>")
 
     # 5 ─ what needs a person
-    if needs_a_person:
-        add(f"<h3>5. {_plural(len(needs_a_person), 'line')} that need you</h3>")
+    if needs_a_person or _sheet_missing:
+        add(f"<h3>5. {_plural(len(needs_a_person) + len(_sheet_missing), 'line')} "
+            f"that need you</h3>")
         _nrows = []
         for row in sorted(needs_a_person,
                           key=lambda r: -((_money(r.get("price")) or 0)
@@ -3742,6 +3755,13 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                  "The line is costing nothing — nothing we can query holds a rate for this."),
                 _where(scan.get(str(row.get("code") or "").upper()) or {}, pack, page_index),
             ])
+        for _d in _sheet_missing:
+            _pn = str(_d.get("part") or "").strip()
+            _nrows.append([
+                _pn, str(_d.get("issue") or ""), "£0.00",
+                str(_d.get("action") or "supply a rate or a supplier quote"),
+                _where(scan.get(_pn.upper()) or {}, pack, page_index),
+            ])
         add(_table(["Line", "What it is", "On the sheet now", "What's needed",
                     "Which drawing files and pages"], _nrows, numeric={2}))
         if _market:
@@ -3760,7 +3780,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         # THE DECISIONS, NOT JUST THE PRICES. The report leads with these and the quote
         # counts them in its draft strip; a note that listed only the unpriced lines told
         # Tim there was nothing else to decide. From the record, in the report's words.
-        if not needs_a_person:
+        if not (needs_a_person or _sheet_missing):
             add(f"<h3>5. {_plural(len(_mfg), 'decision')} that need you</h3>")
         else:
             add(f"<h4>And {_plural(len(_mfg), 'decision')} still open</h4>")
@@ -4006,7 +4026,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     except Exception:                                                # noqa: BLE001
         pass
 
-    _unpriced_n = len(_unpriced)
+    _unpriced_n = len(_unpriced) + len(_sheet_missing)
     if _unpriced_n:
         _focus.append((10_000_000.0, (                       # no price is the top of any list
             f"<b>{_plural(_unpriced_n, 'line')} "

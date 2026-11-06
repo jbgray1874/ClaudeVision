@@ -52,26 +52,36 @@ logged-in session for COM (`install-runner-task.ps1`), the shares, and the `.env
 
 The agreed design, restated by JG on 6 Nov 2026 after a first build that switched readers:
 "two estimating workers would share one SolidWorks reader, waiting briefly for their turn."
-The same job always gets the same model evidence, whatever else is running. The Document
-Manager stays off (`SDI_SW_DOCMGR` unset) until its acceptance checks pass.
+A normal wait never changes the reader, so the same job gets the same model evidence whatever
+else is running. JG, later that day (D-732): "we should not fail.. we should report in the
+portal that [we] are switching to document manager and provide a 5 minute update every delay."
+So the one exception is a wait that reaches its limit, and it is said where people look. The
+general Document Manager backup (`SDI_SW_DOCMGR`) stays off; its acceptance is SCRUM-184.
 
 | Piece | What it does |
 |---|---|
 | Slot checkout | `install-runner-slot.ps1 -Slot N` makes `C:\ClaudeVision-sN`, a git worktree of the main checkout's HEAD, with its own `output\` and lock, the shared venv, the shared `cache\` (junction) and its own task `SDI Estimating Runner sN`. The runner id ends `-sN`. Run it again after every sync. |
 | SolidWorks turn | One lock file per machine (`%PROGRAMDATA%\SDI\solidworks.token`, or `SDI_SOLIDWORKS_TOKEN`), taken by the ENGINE around each model read (`src/solidworks_turn.py`: the engine's analyser call and the pack extract). Held for the read only, so a second run waits for one model read, never a whole estimate. The run's console says it is waiting and when its turn comes, and the job's meta records `solidworks_turn` (held, waited seconds). |
-| Same evidence | Every run reads its models exactly as it would alone. Nothing switches reader because SolidWorks is busy. |
-| A turn that never comes | After `SDI_SW_TURN_WAIT_MINUTES` (35, just beyond the analyser's own 30-minute limit) the read fails in its own words and is not handed to the Document Manager backup. The invariant layer stops a run whose models were left unread; the job is run again. |
+| Waiting | The run says it is waiting when it starts to wait and every `SDI_SW_TURN_UPDATE_MINUTES` (5) after, on its console, which the portal shows in that run's pane. A normal wait never changes the reader. |
+| A wait that reaches its limit | After `SDI_SW_TURN_WAIT_MINUTES` (35, just beyond the analyser's own 30-minute limit) the run does not fail. With `SDI_SW_TURN_TIMEOUT=docmgr` (the default) and the Document Manager key set it says "SWITCHING TO THE DOCUMENT MANAGER" and that reader reads its models; the book names the reader and why (`extract_reader`, `docmgr_backup_reason`), and the Document Manager's own checks flag what it cannot measure. With no key, or `SDI_SW_TURN_TIMEOUT=none`, the run goes on without its models, priced from its drawings and DXFs and flagged not firm. A SolidWorks pack extract asked for by name stops instead, said: it is a SolidWorks read by definition. |
+| Portal | The runner box shows three panes, one per run the service may hold: what each is on, its runner, how long, its last lines and its own Stop. A pane beyond `SDI_MAX_CONCURRENT_RUNS` says it is off. |
 | Compute gate | Slot 2 or more claims only when free memory is at least `SDI_SLOT_MIN_FREE_GB` (3) and CPU at most `SDI_SLOT_MAX_CPU_PCT` (85%). Slot 1 is never held back. |
 | Service | Runners that both declare `desktop_token` may run on one desktop at once, up to `SDI_MAX_CONCURRENT_RUNS`. The strict model-reader rule stands: a job with models is never given to a runner that declares `no_models`. |
 | Checks | `restart-runner.ps1 -Slot N -Root C:\ClaudeVision-sN -TaskName "SDI Estimating Runner sN"` checks that slot, and lists every other runner on the desktop with its build. |
 
+### Still to prove before slot 2 is switched on (SCRUM-183)
+
+Concurrent against serial results on the same jobs; Excel, cache and output isolation between
+slots; recovery when a run or runner dies mid-job; exactly-once filing and e-mail.
+
 ### Later: the Document Manager and a third run
 
-The Document Manager acceptance work goes on alongside. A third run is where it becomes
-valuable: a run that would otherwise wait for SolidWorks could read with it instead. That is
-safe only once the acceptance checks show the Document Manager gives the same priced evidence
-as SolidWorks on the same models (`compare_extracts.py`), so a job's book does not depend on
-which reader it got. Until then it is not wired into the slots.
+The Document Manager acceptance work (SCRUM-184) goes on alongside. A third run is where it
+becomes valuable: a run that would otherwise wait for SolidWorks could read with it instead.
+That needs more than one pack compared: the Document Manager reads what each file saved and
+measures nothing, so where a price rests on rebuilt or measured geometry (a flat blank, a
+bounding box) its read is not equivalent. Until that is shown across packs it is used only for
+the declared exception above.
 
 ## Phase 2 as first designed: several runners on one machine (the new server)
 

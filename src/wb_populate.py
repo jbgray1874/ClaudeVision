@@ -9358,6 +9358,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 from edge_banding import banded_length_mm as _banded_of
             except Exception:                                    # noqa: BLE001
                 _banded_of = None
+            # THE DRAWING'S OWN EDGING WORDS (D-733): "300 EDGED" sat in the drawing read's
+            # edging route, so this said "no edging layer, note or callout" of a part whose
+            # view prints one.
+            try:
+                from edge_banding import stamp_edging_route_words as _stamp_words
+                _stamp_words(_lam_parts, summary)
+            except Exception:                                    # noqa: BLE001
+                pass
             for _p in _lam_parts:
                 _q = float(_safe(_p.get("quantity")) or 1)
                 _v = _banded_of(_p) if _banded_of else {}

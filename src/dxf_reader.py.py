@@ -1397,6 +1397,40 @@ def _exact_perimeter_and_area(
         except Exception:
             _disc_r = 0.0
 
+    # A CIRCLE ROUND EVERY STRAIGHT EDGE IS THE OUTLINE (D-734). 12002-02-M01, the BASE
+    # PLATE, is a 300 mm disc with a 15.2 mm square cut out of its middle and a 5 mm hole:
+    # the lines were read as the outline and the circle as a hole, so the plate nested as a
+    # 15.2 x 15.2 square at GBP 0.03 while its 1,019 mm cut path (the circle's 942 plus the
+    # square and the hole) could never fit inside it. Where the largest cut circle contains
+    # every line and arc, it is the outline, and they are a cut-out inside it.
+    _encl_inner_mm2 = 0.0
+    if _pts_x and _disc_r == 0 and (cut_circs or []):
+        try:
+            _big = max(cut_circs, key=lambda e: float(getattr(e.dxf, "radius", 0.0) or 0.0))
+            _R = float(getattr(_big.dxf, "radius", 0.0) or 0.0) * scale
+            _cx, _cy = _big.dxf.center.x * scale, _big.dxf.center.y * scale
+            _span = max(max(_pts_x) - min(_pts_x), max(_pts_y) - min(_pts_y))
+            if (2.0 * _R >= _DISC_MIN_DIAMETER_MM and 2.0 * _R > 1.5 * _span
+                    and all(math.hypot(x - _cx, y - _cy) <= _R * 1.001
+                            for x, y in zip(_pts_x, _pts_y))):
+                _ix0, _ix1 = min(_pts_x), max(_pts_x)
+                _iy0, _iy1 = min(_pts_y), max(_pts_y)
+                _inner_bbox = max((_ix1 - _ix0) * (_iy1 - _iy0), 1e-9)
+                _encl_inner_mm2, _m, _f = _shapely_net_area_mm2(
+                    cut_lines, cut_arcs, [], scale, _inner_bbox)
+                if _m != "shapely_polygonize":
+                    _encl_inner_mm2 = _inner_bbox
+                _disc_r = _R
+                _disc_holes_mm2 = float(_encl_inner_mm2) + sum(
+                    math.pi * (float(getattr(e.dxf, "radius", 0.0) or 0.0) * scale) ** 2
+                    for e in cut_circs if e is not _big
+                    and float(getattr(e.dxf, "radius", 0.0) or 0.0) * scale < _R)
+                perimeter += 2.0 * math.pi * _R
+                _pts_x = [_cx - _R, _cx + _R]
+                _pts_y = [_cy - _R, _cy + _R]
+        except Exception:
+            _encl_inner_mm2 = 0.0
+
     xs, ys = _pts_x, _pts_y
     if not xs:
         return {"perimeter_mm": round(perimeter, 3), "area_mm2": 0.0,

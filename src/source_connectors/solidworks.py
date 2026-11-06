@@ -852,11 +852,33 @@ def native_extract_for_job(
             # It wrote somewhere else — a read-only share, most often. Read what exists,
             # not what was requested.
             jp = Path(_produced[0])
-        # A TURN THAT NEVER CAME IS NOT A FAILED SEAT (D-731). Another run had the desktop's
-        # SolidWorks; reading this job with the backup instead would give it different model
-        # evidence depending on what else was running. The read fails, said, and is rerun.
-        if (_run_error and _has_models
-                and _turn.get("state") != _sw_turn.TIMED_OUT):
+        if _turn.get("state") == _sw_turn.TIMED_OUT:
+            # A WAIT THAT REACHED ITS LIMIT IS NOT A FAILED RUN (D-732). JG, 6 Nov 2026: "we
+            # should not fail.. we should report in the portal that [we] are switching to
+            # document manager." The normal wait never changes the reader; only this
+            # exceptional one does, said on the console the portal shows and on the book
+            # (extract_reader, docmgr_backup_reason). SDI_SW_TURN_TIMEOUT=none leaves the
+            # models unread instead, and the run is priced from its drawings and flagged.
+            _turn_models = bool(_analyse_from is not None
+                                and native_files_state(_analyse_from)["count"])
+            _dm_key = bool((os.environ.get(DOCMGR_KEY_ENV) or "").strip())
+            if _turn_models and _sw_turn.timeout_reader() == "docmgr" and _dm_key:
+                _turn["switched_to"] = "docmgr"
+                _backup_reason = f"{_run_error}; switched to the Document Manager"
+                print(f"  SolidWorks is still busy after "
+                      f"{float(_turn.get('waited_s') or 0) / 60:.0f} min: SWITCHING TO THE "
+                      f"DOCUMENT MANAGER for this run's models. It reads what each file saved "
+                      f"and measures nothing, and the book says so.", flush=True)
+            elif _turn_models:
+                _turn["switched_to"] = "none"
+                print(f"  SolidWorks is still busy after "
+                      f"{float(_turn.get('waited_s') or 0) / 60:.0f} min and "
+                      + ("no Document Manager key is set"
+                         if _sw_turn.timeout_reader() == "docmgr"
+                         else f"{_sw_turn.TIMEOUT_ENV}=none")
+                      + ": this run goes on without its models, priced from its drawings "
+                        "and DXFs, and its book says it is not a firm price.", flush=True)
+        elif _run_error and _has_models:
             _backup_reason = f"the SolidWorks COM analyser failed — {_run_error}"
 
     _docmgr_meta: Dict[str, Any] = {}
@@ -1257,8 +1279,9 @@ def _run_analyser(folder: str | Path, analyser: Optional[str | Path] = None,
         # the one that had just been produced.
         cmd += ["--out", str(out_path)]
     # ONE SOLIDWORKS PER DESKTOP, TAKEN IN TURN (D-731). Held for the read only, so a second
-    # run waits for one model read, never for a whole estimate. A turn that never comes fails
-    # this read in its own words; nothing reads the models another way instead.
+    # run waits for one model read, never for a whole estimate, and says so every few minutes.
+    # A turn that never comes returns its reason; the caller decides what reads the models
+    # then (native_extract_for_job: the Document Manager, said, D-732).
     _handle, _turn = _sw_turn.take_turn(say=lambda m: print(f"  {m}", flush=True))
     if turn is not None:
         turn.update(_turn)
@@ -2064,6 +2087,18 @@ def extract_is_for_this_job(parts: List[Dict[str, Any]], job: NativeJob,
     }
 
 
+_MODEL_ASSEMBLY_WORDS = re.compile(
+    r"^(.*?[A-Z0-9])[\s_\-]+(?:SA|S/A|SUB[\s_\-]?ASSY|SUB[\s_\-]?ASSEMBLY|ASSY|ASSEMBLY|ASM)$",
+    re.IGNORECASE)
+
+
+def model_assembly_stem(name: Any) -> str:
+    """The drawing number inside a model assembly's name — "12002-02-101 SA" gives
+    "12002-02-101" — or '' when the name carries no sub-assembly word (D-734)."""
+    m = _MODEL_ASSEMBLY_WORDS.match(str(name or "").strip())
+    return m.group(1).strip().upper() if m else ""
+
+
 def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
                                     job: NativeJob) -> List[Dict[str, Any]]:
     """Stamp the model's parent->child edges onto the parts, as assembly_children.
@@ -2086,15 +2121,38 @@ def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
         return stamped
     by_code = {_clean_pn(str(p.get("part_number") or "")).upper(): p
                for p in parts if isinstance(p, dict) and p.get("part_number")}
+
+    # A MODEL ASSEMBLY NAMED "<drawing number> SA" IS THAT DRAWING'S ASSEMBLY (D-734).
+    # 12002-02-GA, 6 Nov 2026: the drawing's sub-assemblies are 12002-02-101 and -102; the
+    # model's files are "12002-02-101 SA" and "12002-02-102 SA". With no record of that name,
+    # each model assembly was minted beside the drawing's own, so the job carried both: the
+    # drawing record as a steel part with no size (unpriced, or a market material allowance),
+    # the minted one holding the members, a second weld and dress group, and a GA whose
+    # members looked like uncoated steel, so the GA was coated again over two coated
+    # sub-assemblies. A name that is a job record's code plus a sub-assembly word is that
+    # record.
+    def _resolve(name: Any) -> str:
+        code = _clean_pn(str(name or "")).upper()
+        if code in by_code:
+            return code
+        stem = model_assembly_stem(code)
+        return stem if stem and stem in by_code else code
+
     # TWO PHASES: STAMP THE PARENTS THAT EXIST, THEN JUDGE THE ONES THAT DON'T. The
     # minting decision below needs to know which children the job's REAL assemblies
     # already claim — and within one call, an existing parent (7332's 101) may be
     # stamped by a later dict entry than a mint candidate (102). All existing-record
     # edges land first, so the claim census the mint consults is complete.
     _items = list((job.hierarchy or {}).items())
-    _items.sort(key=lambda kv: by_code.get(_clean_pn(str(kv[0])).upper()) is None)
+    _items.sort(key=lambda kv: by_code.get(_resolve(kv[0])) is None)
     for parent, kids in _items:
-        target = by_code.get(_clean_pn(str(parent)).upper())
+        target = by_code.get(_resolve(parent))
+        if target is not None and _resolve(parent) != _clean_pn(str(parent)).upper():
+            _said = (f"the SolidWorks model names this assembly '{_clean_pn(str(parent))}': "
+                     f"it is this drawing's record, not a second assembly")
+            if _said not in (target.get("review_flags") or []):
+                target.setdefault("review_flags", []).append(_said)
+            target["model_assembly_name"] = _clean_pn(str(parent))
         if target is None:
             # THE PARENT THE MODEL NAMES MAY HAVE NO RECORD OF ITS OWN. On 10975-02 the
             # GA is an assembly page — a drawing number the pack detects but never a part
@@ -2107,8 +2165,8 @@ def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
             # record claims stays out, which is a different, named problem.
             _known_kids = [
                 _clean_pn(str(c)) for c, _q in kids
-                if _clean_pn(str(c)) and _clean_pn(str(c)).upper() in by_code
-                and _clean_pn(str(c)).upper() != _clean_pn(str(parent)).upper()
+                if _clean_pn(str(c)) and _resolve(c) in by_code
+                and _resolve(c) != _clean_pn(str(parent)).upper()
             ]
             if not _known_kids:
                 continue
@@ -2175,7 +2233,12 @@ def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
         added = []
         for child, _qty in kids:
             code = _clean_pn(str(child))
-            if not code or code.upper() in seen or code.upper() == _clean_pn(str(parent)).upper():
+            # A CHILD NAMED BY ITS MODEL FILE IS THE JOB'S RECORD OF IT (D-734).
+            if _resolve(code) in by_code:
+                code = str(by_code[_resolve(code)].get("part_number") or code)
+            if (not code or code.upper() in seen
+                    or code.upper() == str(target.get("part_number") or "").upper()
+                    or code.upper() == _clean_pn(str(parent)).upper()):
                 continue
             existing.append(code)
             seen.add(code.upper())

@@ -896,6 +896,9 @@ def runners(request: Request = None, x_sdi_key: Optional[str] = Header(default=N
     return {"other_local_services": _other_local_services(_own),
             "runners": listed, "online": len(online), "queued": queued,
             "busy": sum(1 for r in online if r.get("running")),
+            # HOW MANY THE SERVICE MAY RUN AT ONCE (D-732), so the page can say a second or
+            # third window is off, not merely empty.
+            "max_runs": _max_concurrent_runs(),
             "conflicts": [r["runner_id"] for r in online if r.get("conflict")]}
 
 
