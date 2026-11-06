@@ -91,6 +91,14 @@ if ($Remove) {
             $ended++
         }
     if ($ended) { Start-Sleep -Seconds 2 }
+    # THE SHARED PRICE CACHE IS A JUNCTION TO THE MAIN CHECKOUT'S. Unlink it first, with rmdir,
+    # which removes the link and never the files behind it, so deleting the slot's checkout
+    # cannot reach the cache every slot shares.
+    $cacheLink = Join-Path $SlotRoot "cache"
+    if ((Test-Path $cacheLink) -and ((Get-Item $cacheLink -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        cmd /c rmdir "$cacheLink" | Out-Null
+        Write-Host "  unlinked the shared price cache from $SlotRoot"
+    }
     if (Test-Path $SlotRoot) {
         git -C "$Root" worktree remove --force "$SlotRoot"
         Write-Host "  removed the slot checkout $SlotRoot" -ForegroundColor Yellow
