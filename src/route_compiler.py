@@ -1720,6 +1720,49 @@ def build_part_graph(
             aliases[_k] = _target
         print(f"   [graph] {_v} is {_target} with its version mark — one drawing, "
               f"one node", flush=True)
+    # "NNN SA" IS NNN, WHICHEVER READER SPELLED IT (D-736). D-734 made the model's
+    # "12002-02-101 SA" the drawing's record 12002-02-101, but only in the model's stamp: the
+    # vision read names the same sub-assembly "12002-02-101 SA" (STAND BASE) with its own
+    # members, and the parts list on its sheet groups its rows under that name. The graph held
+    # both, each under the GA and each owning M01 and M02, so the 12:47 book costed every
+    # member twice (M01-M04 at 2, M05 at 4) and booked a second assembly event on each. A
+    # code that is a job record's drawing number plus a sub-assembly word is that record —
+    # joined only where the record exists, so it never invents an identity.
+    try:
+        from source_connectors.solidworks import model_assembly_stem as _sa_stem
+    except Exception:                                                # noqa: BLE001
+        _sa_stem = None
+    if _sa_stem is not None:
+        _sa_pool: Set[str] = (set(raw_original) | set(extracted) | _hierarchy_codes
+                              | _bom_listed)
+        for _p in (parts or ()):
+            if not isinstance(_p, Mapping):
+                continue
+            _sa_pool.update(clean_part_number(_p.get(_k)) for _k in (
+                "bom_parent", "owning_assembly", "parent_assembly") if _p.get(_k))
+            _sa_pool.update(clean_part_number(_e.get("parent")) for _e in (
+                _p.get("bom_parents") or []) if isinstance(_e, Mapping) and _e.get("parent"))
+            _sa_pool.update(clean_part_number(_c) for _c in (
+                list(_p.get("assembly_children") or [])) if str(_c or "").strip())
+        for _r in (bom_rows or ()):
+            if isinstance(_r, Mapping):
+                _sa_pool.update(clean_part_number(_r.get(_k)) for _k in (
+                    "bom_parent", "parent", "parent_code") if _r.get(_k))
+        _sa_pool.update(clean_part_number(_d) for _d in (known_assemblies or ()) if _d)
+        _sa_pool.update(clean_part_number(_d) for _d in (page_owner or {}).values() if _d)
+        _sa_pool.discard("")
+        for _ident in sorted(_sa_pool):
+            _canon = aliases.get(_ident, _ident)
+            _stem = clean_part_number(_sa_stem(_canon) or "")
+            if not _stem:
+                continue
+            _target = aliases.get(_stem, _stem)
+            if _target == _canon or _target not in raw_original:
+                continue
+            for _k in [k for k, t in aliases.items() if t == _canon] + [_canon]:
+                aliases[_k] = _target
+            print(f"   [graph] {_canon} is {_target} with a sub-assembly word — one "
+                  f"drawing, one node", flush=True)
     # A VAGUE CODE IS THE RECORD THE SHARED RULE MADE OF IT. The drawing prints "FIXING" for
     # an uncoded stud; file_scan mints the record from the row's words through
     # part_identity.synthesise_bought_in_code ("M4x12mm THREADED PEM STUD" -> BI-PEMSTUD),
@@ -5290,6 +5333,9 @@ def compile_job_route(
     claims_by_event: Dict[str, List[OperationClaim]] = {}
     explicit_memberships: Dict[Tuple[str, str], Set[str]] = {}
     explicit_assembly_events: Dict[str, List[Tuple[str, str]]] = {}
+    # Events from a read route that named several things and was split, one per target
+    # (D-736): each target is a member of the work that route describes, never its owner.
+    _split_route_events: Set[str] = set()
     issues: List[Dict[str, Any]] = list(graph.get("issues") or [])
     # ONE SCOPE FOR MATERIAL AND LABOUR (D-505). The graph sets a line aside when the declared
     # product does not reach it, and its RECORD leaves the costed population — but a stated
@@ -5534,6 +5580,8 @@ def compile_job_route(
                 "scope": scope,
                 "target_id": target_id,
             })
+            if len(targets) > 1:
+                _split_route_events.add(event_id)
             # AT LEAST ONCE PER INSTANCE OF THE TARGET (D-558): a stated per-product count
             # below the target's multiplicity is the model counting one frame of two.
             _floored_qty, _floored = at_least_once_per_instance(
@@ -5826,7 +5874,26 @@ def compile_job_route(
                 # — arrives with none, and the check sat before the lookup, so it was never
                 # asked; the lookup then folded the frame's own joints into the parent's
                 # event and neither frame was welded on the book.
-                if (event_ids and operation == "welding"
+                # ONLY A MEMBER OF ANOTHER ASSEMBLY'S WELD (D-736). 12002-02-GA 12:47: the
+                # read's weld on "12002-02-101 SA" lands on 101 (D-734), so 101 is that event's
+                # own TARGET — its weld is the event, not a weldment inside it — and this rule
+                # charged the same joints again as a part weld on 101: row 159, £39.27 over
+                # rows 152 and 169, and a second dress event beside each. An event is this
+                # record's own when it targets the record, every participant is the record or
+                # one of its own pieces, and its route named the record alone: a route naming
+                # the frame beside its cap (D-566's 401918 case) is split one event per part,
+                # each the parent's weld, and the frame's own joints still stand beside it.
+                def _own_piece(_x: str) -> bool:
+                    return _x == part_number or _is_descendant(
+                        _x, part_number, graph["parents"])
+                _owns_the_weld = any(
+                    _e not in _split_route_events
+                    and (claims_by_event.get(_e) or [None])[0] is not None
+                    and claims_by_event[_e][0].target_id == part_number
+                    and all(_own_piece(_x) for _x in (
+                        claims_by_event[_e][0].participants or [part_number]))
+                    for _e in event_ids)
+                if (event_ids and operation == "welding" and not _owns_the_weld
                         and _weldment_has_its_own_joints(part, part_number, graph)):
                     _own_event = stable_id("decision", {
                         "origin": "compatibility", "operation": operation,

@@ -480,3 +480,42 @@ def test_a_figure_printed_to_one_digit_cannot_fit_anything_by_its_rounding():
     assert dpg.round_stock_mass_kg(2, 292, 7850) == pytest.approx(0.0072, abs=1e-4)
     assert dpg.apply_round_stock_sizes_from_own_weight([part], {"pages": [sheet]}) == []
     assert part.get("wire_gauge_mm") is None
+
+
+# ── D-735: 12002-02-GA, 6 Nov 2026 — the overall, and a stated diameter ────────────────────
+
+def _arm(code, page, material, *figures, weight):
+    sheet = _sheet(page, code, *figures, f"WEIGHT: {weight}", f"MATERIAL: {material}",
+                   "SCALE 1:2", "SHEET 1 OF 1")
+    part = _wire(code, "TOP ARM", page, materials=[material], material_stated=material,
+                 normalized_material="MILD_STEEL")
+    return part, {"pages": [sheet]}
+
+
+def test_one_diameter_and_two_lengths_take_the_overall():
+    """12002-02-M04: Ø8, and both 441 and 447 weigh the stated 0.174 kg. 447 is the overall;
+    441 is a dimension inside it, and the bar bought covers the overall."""
+    part, summary = _arm(f"{J}-M04", 7, "8mm STEEL WIRE", "5.2", "6", "8", "441", "447",
+                         weight="0.174")
+    assert dpg.apply_round_stock_sizes_from_own_weight([part], summary) == [part["part_number"]]
+    assert (part["wire_gauge_mm"], part["wire_length_mm"]) == (8.0, 447.0)
+    said = _flags(part)
+    assert "441, 447" in said and "the longest, 447 mm, is the overall" in said
+    assert "Ø8 is the one its own material states" in said
+    assert not any("diameter and cut length" in q["issue"]
+                   for q in part.get("manufacturing_questions") or [])
+
+
+def test_a_stated_diameter_sizes_a_short_stop():
+    """12002-02-M05: "5mm STEEL WIRE", figures 5 and 14, 0.002 kg. Ø5 x 14 is a stop; the
+    ten-diameters floor kept it from ever being tried."""
+    part, summary = _arm(f"{J}-M05", 8, "5mm STEEL WIRE", "5", "14", weight="0.002")
+    assert dpg.apply_round_stock_sizes_from_own_weight([part], summary) == [part["part_number"]]
+    assert (part["wire_gauge_mm"], part["wire_length_mm"]) == (5.0, 14.0)
+
+
+def test_two_diameters_that_both_fit_are_still_asked():
+    """The overall rule is for one diameter only: Ø4 x 1100 against Ø8 x 275 stays a question."""
+    sheet = _sheet(5, f"{J}-05M", "1100", "275", "4", "8", "WEIGHT: 0.11", "MILD STEEL WIRE")
+    part = _wire(f"{J}-05M", "TABLE EDGE - WIRE A", 5)
+    assert dpg.apply_round_stock_sizes_from_own_weight([part], {"pages": [sheet]}) == []

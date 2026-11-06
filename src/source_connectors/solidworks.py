@@ -699,6 +699,23 @@ def normalize_native_extract(records: List[Dict[str, Any]],
     job.meta["hierarchy_assembly_records"] = sum(
         1 for r in records if int(r.get("doctype") or SW_PART) == SW_ASM)
 
+    # EVERY ASSEMBLY'S OWN BOX, AND WHICH ARE SOMEBODY'S CHILD (D-735). The product's
+    # envelope is its own model's box: 12002-02-GA's carton was sized 447 x 386 x 10 mm, the
+    # arm sub-assembly's box, because the top-assembly pick (which exists to choose a BOM)
+    # answered with the arm. Packing now reads the declared product's own box.
+    _abb: Dict[str, List[float]] = {}
+    for r in records:
+        if int(r.get("doctype") or SW_PART) != SW_ASM or not r.get("title"):
+            continue
+        _b = [v for v in (_num(x) for x in (r.get("bbox_mm") or [])) if v]
+        if len(_b) == 3:
+            _abb[_clean_pn(str(r.get("title")))] = [round(v, 1) for v in _b]
+    if _abb:
+        job.meta["assembly_bbox_mm"] = _abb
+    _kids_of_any = sorted({_clean_pn(str(c)) for _p, _kids in (job.hierarchy or {}).items()
+                           for c, _q in _kids if _clean_pn(str(c))})
+    job.meta["sub_assemblies"] = [k for k in _kids_of_any if k in _abb]
+
     # BOM = the top assembly's full-depth component list, quantities already rolled up.
     _amb: Dict[str, Any] = {}
     top = _pick_top_assembly(records, _amb, job_codes=job_codes)

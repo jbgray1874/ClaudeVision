@@ -143,13 +143,37 @@ def product_envelope(summary: Any, parts: Any = None) -> Optional[Dict[str, Any]
     "1644mm" on 401918-01-GA, and a box sized to that is a box for the person."""
     s = summary if isinstance(summary, dict) else {}
     sw = s.get("solidworks_native") if isinstance(s.get("solidworks_native"), dict) else {}
+    # THE DECLARED PRODUCT'S OWN MODEL FIRST (D-735). 12002-02-GA's carton was sized 447 x 386
+    # x 10 mm, the arm sub-assembly's box: the "top assembly" is the one whose BOM the job
+    # takes, and here it was the arm. The product's own model record answers the product's
+    # size; a top assembly the model shows is another assembly's child never does.
+    _declared_key = _identity_key(s.get("declared_product"))
+    _abb = sw.get("assembly_bbox_mm") if isinstance(sw.get("assembly_bbox_mm"), dict) else {}
+    if _declared_key and _abb:
+        try:
+            from source_connectors.solidworks import model_assembly_stem as _mstem
+        except Exception:                                            # noqa: BLE001
+            def _mstem(_n: Any) -> str:                              # type: ignore[misc]
+                return ""
+        for _title, _box in sorted(_abb.items()):
+            if _declared_key not in {_identity_key(_title), _identity_key(_mstem(_title))}:
+                continue
+            _bb = [v for v in (_num(x) for x in (_box or [])) if v]
+            if len(_bb) == 3:
+                d = sorted(_bb, reverse=True)
+                return {"length": d[0], "width": d[1], "height": d[2],
+                        "source": f"the SolidWorks model of {_title}: its bounding box",
+                        "of": str(_title)}
+    _top = str(sw.get("top_assembly") or "")
+    _subs = {_identity_key(x) for x in (sw.get("sub_assemblies") or [])}
+    _top_is_a_child = bool(_top) and _identity_key(_top) in _subs
     bb = [v for v in (_num(x) for x in (sw.get("top_assembly_bbox_mm") or [])) if v]
-    if len(bb) == 3:
+    if len(bb) == 3 and not _top_is_a_child:
         d = sorted(bb, reverse=True)
         return {"length": d[0], "width": d[1], "height": d[2],
                 "source": "the SolidWorks top assembly's bounding box",
                 "of": str(sw.get("top_assembly") or s.get("declared_product") or "")}
-    declared = _identity_key(s.get("declared_product"))
+    declared = _declared_key
     if not declared:
         # NO DECLARED PRODUCT, SO ONLY THE ONE ROOT WILL DO (D-562). The first version took
         # the first record carrying an overall size, which on a pack read without a product

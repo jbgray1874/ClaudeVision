@@ -171,3 +171,94 @@ def test_a_drawing_route_naming_the_model_file_lands_on_the_record():
     ds = [d if isinstance(d, dict) else d.__dict__ for d in out["decisions"]]
     welds = [d for d in ds if d["operation"] == "welding"]
     assert [(d["target_id"], d["status"]) for d in welds] == [("A-101", rc.REQUIRED)]
+
+
+# ── D-736: 12002-02-GA 12:47 — the read's "NNN SA" is the record too, and one weld ────────
+
+def _read_and_tables():
+    """The 12:47 inputs: the vision read names the sub-assemblies "12002-02-101 SA" and
+    "-102 SA" with their members; the deterministic GA table reads the same lines as
+    12002-02-101 / "SA STAND BASE"; each sub-assembly sheet's parts list groups its rows under
+    the "SA" name; the model's tree lands on 101 and 102 (D-734)."""
+    J = "12002-02"
+    parts = _job_parts()
+    parts.append({"part_number": "BI-HANKBUSH", "quantity": 1, "is_bought_in": True,
+                  "description": "M6 HANKBUSH"})
+    by = {p["part_number"]: p for p in parts}
+    by[f"{J}-M05"]["quantity"] = 2
+    sw.apply_native_hierarchy_to_parts(parts, _model_job())
+    llm = {"assemblies": [
+        {"part_number": f"{J}-GA", "children": [{"part_number": f"{J}-101 SA", "qty": 1},
+                                                {"part_number": f"{J}-102 SA", "qty": 1},
+                                                {"part_number": "BI-THUMBSCREW", "qty": 1}]},
+        {"part_number": f"{J}-101 SA", "children": [{"part_number": f"{J}-M01", "qty": 1},
+                                                    {"part_number": f"{J}-M02", "qty": 1},
+                                                    {"part_number": "BI-HANKBUSH", "qty": 1}]},
+        {"part_number": f"{J}-102 SA", "children": [{"part_number": f"{J}-M03", "qty": 1},
+                                                    {"part_number": f"{J}-M04", "qty": 1},
+                                                    {"part_number": f"{J}-M05", "qty": 2}]}]}
+    rows = [{"part_number": f"{J}-101", "description": "SA STAND BASE", "quantity": 1,
+             "bom_parent": f"{J}-GA"},
+            {"part_number": f"{J}-102", "description": "SA STAND ARM", "quantity": 1,
+             "bom_parent": f"{J}-GA"},
+            *[{"part_number": f"{J}-M0{i}", "quantity": 1, "bom_parent": f"{J}-101 SA"}
+              for i in (1, 2)],
+            {"part_number": "BI-HANKBUSH", "quantity": 1, "bom_parent": f"{J}-101 SA"},
+            *[{"part_number": f"{J}-M0{i}", "quantity": 1, "bom_parent": f"{J}-102 SA"}
+              for i in (3, 4)],
+            {"part_number": f"{J}-M05", "quantity": 2, "bom_parent": f"{J}-102 SA"}]
+    return parts, llm, rows
+
+
+def test_the_reads_sa_name_is_the_drawings_record_and_nothing_is_counted_twice():
+    parts, llm, rows = _read_and_tables()
+    g = rc.build_part_graph(parts, llm, rows, ["12002-02-GA", "12002-02-101", "12002-02-102"],
+                            declared_product="12002-02-GA")
+    q = g["quantities"]
+    assert [q[f"12002-02-M0{i}"] for i in range(1, 6)] == [1.0, 1.0, 1.0, 1.0, 2.0]
+    assert q["BI-HANKBUSH"] == 1.0
+    assert not any(k.endswith(" SA") for k in q), sorted(q)
+    assert g["children"]["12002-02-GA"] >= {"12002-02-101", "12002-02-102"}
+    assert set(g["children"]["12002-02-101"]) == {"12002-02-M01", "12002-02-M02",
+                                                  "BI-HANKBUSH"}
+
+
+def test_no_second_assembly_event_is_booked_on_the_sa_name():
+    parts, llm, rows = _read_and_tables()
+    out = rc.compile_job_route(parts, llm, rows, known_assemblies=[
+        "12002-02-GA", "12002-02-101", "12002-02-102"], declared_product="12002-02-GA")
+    ds = [d if isinstance(d, dict) else d.__dict__ for d in out["decisions"]]
+    assert not [d for d in ds if str(d["target_id"]).endswith(" SA")
+                and d["status"] == rc.REQUIRED]
+
+
+def test_an_sa_name_with_no_record_of_its_drawing_number_stays_itself():
+    """Joined only where the record exists: the rule never invents an identity."""
+    parts = [{"part_number": "B-GA", "quantity": 1, "is_assembly_parent": True},
+             {"part_number": "B-M01", "quantity": 1, "normalized_material": "MILD STEEL"}]
+    llm = {"assemblies": [
+        {"part_number": "B-GA", "children": [{"part_number": "B-201 SA", "qty": 1}]},
+        {"part_number": "B-201 SA", "children": [{"part_number": "B-M01", "qty": 1}]}]}
+    g = rc.build_part_graph(parts, llm, None, ["B-GA"], declared_product="B-GA")
+    assert "B-201 SA" in g["children"]
+    assert g["quantities"]["B-M01"] == 1.0
+
+
+def test_an_assembly_that_owns_its_weld_is_not_welded_again_as_a_part():
+    """12:47 row 159: the read's weld on "101 SA" lands on 101 as its assembly weld, and the
+    weldment-inside-a-welded-assembly rule (D-566) charged 101's own sheet's weld again as a
+    part weld, with a second dress event. 101 is that weld's target, not a member of it."""
+    parts = [{"part_number": "A-101", "quantity": 1, "assembly_children": ["A-M01", "A-M02"],
+              "is_sub_assembly": True, "description": "SA STAND BASE",
+              "weld_stated_by_note": True, "textual_operations": ["welding", "dress_welds"],
+              "operation_sources": {"welding": "drawing_deterministic",
+                                    "dress_welds": "drawing_deterministic"}},
+             {"part_number": "A-M01", "quantity": 1, "normalized_material": "MILD STEEL"},
+             {"part_number": "A-M02", "quantity": 1, "normalized_material": "MILD STEEL"}]
+    out = rc.compile_job_route(
+        parts, {"routes": [{"operation": "welding", "part_numbers": ["A-101 SA"],
+                            "scope": "assembly"}]}, known_assemblies=["A-101"])
+    ds = [d if isinstance(d, dict) else d.__dict__ for d in out["decisions"]]
+    for op in ("welding", "dress_welds"):
+        hits = [d for d in ds if d["operation"] == op and d["status"] == rc.REQUIRED]
+        assert [(d["target_id"], d["scope"]) for d in hits] == [("A-101", "assembly")], (op, hits)
