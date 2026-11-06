@@ -1,0 +1,651 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0d0d0f">
+<title>TTI Despatch · SDI Intelligence</title>
+<style>
+:root{--bg:#0d0d0f;--panel:#17171b;--line:#303037;--text:#f3f2ee;--muted:#a3a3aa;
+      --yellow:#ffd400;--green:#62d694;--amber:#ffd77a;--red:#ff7777;
+      font-family:Arial,Helvetica,sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);line-height:1.5}
+button,input,select,textarea{font:inherit}a{color:var(--yellow)}button{cursor:pointer}
+button:disabled{cursor:wait;opacity:.55}
+.top{border-bottom:1px solid var(--line);background:#101013;
+     padding:15px max(22px,calc((100vw - 1100px)/2));display:flex;align-items:center;
+     gap:14px;flex-wrap:wrap}
+.logo{background:var(--yellow);color:#080808;font-weight:900;width:38px;height:38px;
+      display:grid;place-items:center;border-radius:4px;font-size:22px}
+.brand{font-size:13px;font-weight:800;letter-spacing:.14em}
+.subbrand{font-size:10px;letter-spacing:.25em;color:var(--muted)}
+.topnav{margin-left:auto;display:flex;gap:10px}
+.topnav a{border:1px solid var(--line);color:var(--text);border-radius:4px;
+          padding:9px 12px;text-decoration:none;font-size:13px}
+.topnav a:hover{border-color:var(--yellow)}
+main{max-width:1100px;margin:0 auto;padding:22px 22px 70px}
+.eyebrow{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--yellow);
+         font-weight:700}
+h1{font-size:clamp(24px,4vw,38px);line-height:1.1;letter-spacing:-.04em;margin:8px 0 6px}
+p{margin:0}.hint{color:var(--muted);font-size:14px;margin-top:6px}
+.tabs{display:flex;gap:6px;margin:20px 0 14px;flex-wrap:wrap;
+      border-bottom:1px solid var(--line);padding-bottom:0}
+.tab{background:transparent;border:1px solid transparent;border-bottom:none;color:var(--muted);
+     padding:10px 13px;border-radius:4px 4px 0 0;font-size:14px;margin-bottom:-1px}
+.tab:hover{color:var(--text)}
+.tab[aria-selected=true]{color:var(--text);background:var(--panel);
+     border-color:var(--line);font-weight:700;box-shadow:inset 0 2px 0 var(--yellow)}
+.tools{display:flex;gap:10px;align-items:center;margin:0 0 16px;flex-wrap:wrap}
+input[type=date],input[type=search],input[type=number],select{background:#101013;
+     border:1px solid var(--line);color:var(--text);border-radius:4px;padding:11px 12px}
+input:focus{outline:none;border-color:var(--yellow)}
+input[type=search]{flex:1 1 220px;min-width:0}
+.primary{background:var(--yellow);color:#111;border:1px solid var(--yellow);font-weight:800;
+         padding:11px 16px;border-radius:4px}
+.primary:hover{background:#ffe659}
+.dayhead{font-size:16px;margin:22px 0 10px;border-bottom:1px solid var(--line);padding-bottom:6px}
+a.primary{display:inline-block;text-decoration:none;margin-right:8px}
+.secondary{background:#202026;color:var(--text);border:1px solid var(--line);
+           padding:11px 16px;border-radius:4px}
+.status{min-height:48px;padding:13px 16px;border:1px solid var(--line);background:var(--panel);
+        border-radius:4px;color:var(--muted);margin-bottom:16px}
+.status.ok{border-color:#315f43;color:#b5edc9}.status.error{border-color:#8d4545;color:#ffd1d1}
+.card{border:1px solid var(--line);background:var(--panel);border-radius:5px;padding:14px 16px;
+      margin-bottom:10px}
+.card h3{margin:0 0 4px;font-size:16px}
+.meta{color:var(--muted);font-size:13px;font-family:ui-monospace,Consolas,monospace;
+      word-break:break-word}
+.because{color:var(--amber);font-size:14px;margin-top:4px}
+.flag{display:inline-block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+      border:1px solid var(--amber);color:var(--amber);border-radius:3px;padding:1px 6px;
+      margin-left:8px}
+.flag.bad{border-color:var(--red);color:var(--red)}
+.flag.good{border-color:var(--green);color:var(--green)}
+.caveat{border-left:3px solid var(--amber);background:#1c1c22;padding:12px 14px;
+        margin:16px 0;border-radius:0 4px 4px 0}
+.unresolved{border-left:3px solid var(--red)}
+h2{font-size:15px;letter-spacing:.04em;margin:22px 0 8px}
+h2 .n{color:var(--muted);font-weight:400}
+details{margin-top:12px}summary{cursor:pointer;color:var(--amber);padding:4px 0}
+pre{background:#0a0a0c;border:1px solid var(--line);border-radius:4px;padding:14px;
+    overflow:auto;font-size:13px;line-height:1.5;white-space:pre-wrap;margin:0}
+.foot{color:var(--muted);font-size:12px;margin-top:24px;border-top:1px solid var(--line);
+      padding-top:14px}
+@media(max-width:700px){.top{padding:14px 16px}main{padding:16px 14px 60px}
+  .topnav{margin-left:0;width:100%}.tabs{gap:4px}.tab{padding:9px 10px;font-size:13px}}
+</style></head>
+<body>
+<header class="top">
+  <div class="logo" aria-hidden="true">S</div>
+  <div><div class="brand">SDI INTELLIGENCE</div><div class="subbrand">TTI DESPATCH</div></div>
+  <nav class="topnav" aria-label="Workspace"><a href="/app/guide-tti.html">User guide</a>
+    <a href="/app/">← App portal</a></nav>
+</header>
+<main>
+  <div class="eyebrow">Customer services · TTI</div>
+  <h1>The TTI Despatch Plan, asked questions</h1>
+  <p class="hint">Every answer says which sheet and row it came from, so you can check it in
+    the workbook. Nothing here changes either tracker, and nothing here sends email.</p>
+
+  <div class="tabs" role="tablist" id="tabs"></div>
+  <div class="tools" id="tools"></div>
+  <div id="status" class="status" role="status" aria-live="polite">Loading…</div>
+  <div id="out"></div>
+  <p class="foot" id="foot"></p>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const el = (tag, text, parent, cls) => { const n = document.createElement(tag);
+  if(text != null) n.textContent = text; if(cls) n.className = cls;
+  if(parent) parent.append(n); return n; };
+const some = n => n + (n === 1 ? " line" : " lines");
+const have = n => n === 1 ? " has" : " have";
+const iso = d => new Date(d.getTime() - d.getTimezoneOffset()*60000)
+                 .toISOString().slice(0,10);
+const pretty = s => { const d = new Date(s + "T00:00:00");
+  return isNaN(d) ? s : d.toLocaleDateString("en-GB",
+    {weekday:"long", day:"numeric", month:"long", year:"numeric"}); };
+
+const short = s => { const d = new Date(s + "T00:00:00");
+  return isNaN(d) ? s : d.toLocaleDateString("en-GB", {weekday:"short", day:"numeric", month:"short"}); };
+// "Oct 26 WK 40!row 5" is how the answer cites a row; on screen it reads as words.
+const cite = s => String(s || "").replace("!row ", ", row ");
+const nextWorkingDay = d => { const n = new Date(d);
+  do { n.setDate(n.getDate() + 1); } while(n.getDay() === 0 || n.getDay() === 6); return n; };
+const mondayOf = d => { const m = new Date(d); m.setDate(m.getDate() - (m.getDay() + 6) % 7); return m; };
+
+function setStatus(text, kind=""){ const box = $("status");
+  box.className = "status " + kind; box.textContent = text; }
+
+async function get(path){
+  const r = await fetch(path, {cache:"no-store", credentials:"same-origin"});
+  let j = {}; try{ j = await r.json(); }catch(e){}
+  if(!r.ok){
+    const e = new Error(typeof j.detail === "string" ? j.detail
+                        : "Could not read the plan (" + r.status + ").");
+    e.reason = r.headers.get("X-TTI-Reason") || "";
+    throw e;
+  }
+  return j;
+}
+
+// ── One order line, drawn the same way in every view ────────────────────────
+// Including the citation, always. A despatch answer somebody cannot check at
+// source is an answer they have to take on trust, and they should not have to.
+function card(line, parent, cls){
+  // "Leaving on a day" names its date fields dispatch_cell / date_basis /
+  // tentative; every other answer says departs_*. Read either, so that tab's
+  // cards show the departure, why a date could not be read, and the flag.
+  const departsCell = line.departs_cell || line.dispatch_cell;
+  const departsBasis = line.departs_basis || line.date_basis;
+  const tentative = line.departs_tentative || line.tentative;
+  const c = el("div", null, parent, "card" + (cls ? " " + cls : ""));
+  const h = el("h3", (line.order ? "Order " + line.order : "(no order number)")
+                   + (line.customer_po ? "  ·  PO " + line.customer_po : ""), c);
+  if(tentative) el("span", "tentative", h, "flag");
+  if(line.loaded) el("span", "loaded", h, "flag good");
+  if(line.overdue_by_days) el("span", line.overdue_by_days + " days overdue", h, "flag bad");
+  if(line.slipped_by_days) el("span", line.slipped_by_days + " days ago", h, "flag bad");
+  if(line.part || line.description)
+    el("p", [line.part, line.description].filter(Boolean).join(" — "), c);
+  if(line.because) el("p", line.because, c, "because");
+  if(line.missing && line.missing.length)
+    el("p", "Missing: " + line.missing.join("; "), c, "because");
+
+  const bits = [];
+  if(departsCell || departsBasis)
+    bits.push("Lorry from SDI: " + (departsCell || "(blank)")
+              + (departsBasis ? " — " + departsBasis : ""));
+  if(line.due_cell) bits.push("Customer due: " + line.due_cell);
+  if(line.qty) bits.push("qty " + line.qty);
+  if(line.pallets_as_recorded != null && line.pallets_as_recorded !== "")
+    bits.push("pallets as recorded: " + line.pallets_as_recorded);
+  if(line.tti_account) bits.push("TTI " + line.tti_account);
+  if(line.trailer) bits.push("Trailer: " + line.trailer);
+  if(bits.length) el("p", bits.join("  ·  "), c, "meta");
+
+  const paper = [];
+  if(line.pick_note) paper.push("pick note " + line.pick_note);
+  if(line.delivery_note) paper.push("delivery note " + line.delivery_note);
+  if(line.invoice_number) paper.push("invoice " + line.invoice_number);
+  if(line.booked_in_with_tti) paper.push("booked in: " + line.booked_in_with_tti);
+  if(line.label_and_batch_done) paper.push("labels: " + line.label_and_batch_done);
+  if(line.proof_of_export) paper.push("proof of export: " + line.proof_of_export);
+  if(paper.length) el("p", paper.join("  ·  "), c, "meta");
+
+  if(line.comments) el("p", "Comments: " + line.comments, c, "meta");
+  el("p", cite(line.source), c, "meta");
+  return c;
+}
+
+function lines(list, parent, cls){ for(const l of list || []) card(l, parent, cls); }
+
+function foldaway(parent, label, list, truncated, cls, open){
+  if(!list || !list.length) return;
+  const d = el("details", null, parent); d.open = !!open;
+  el("summary", label, d);
+  lines(list, d, cls);
+  if(truncated) el("p", "Only the first few are shown.", d, "hint");
+}
+
+function provenance(j){
+  $("foot").textContent = "Plan last saved "
+    + new Date(j.plan_saved).toLocaleString("en-GB")
+    + "  ·  " + j.rows_read + " rows read"
+    + (j.plan_reused_from_cache ? " (reusing this save's reading)" : "")
+    + ".  This answer is only as current as that save.";
+}
+
+// ── The views: six questions about the plan, and the TTi folder search ──────
+const VIEWS = {
+
+day: {
+  label: "Leaving on a day",
+  tools: `<input id="day" type="date" aria-label="Day to look at">
+          <button class="primary" data-run>What is leaving that day?</button>
+          <button class="secondary" id="today">Today</button>
+          <button class="secondary" id="tomorrow">Tomorrow</button>
+          <button class="secondary" id="week">This week</button>`,
+  week: false,
+  ready(){
+    // "Tomorrow" is the next working day: on a Friday it is Monday, and says so.
+    // "This week" is Monday to Friday; at the weekend it is the week ahead.
+    const today = new Date(), next = nextWorkingDay(today);
+    const weekend = today.getDay() === 0 || today.getDay() === 6;
+    const monday = weekend ? next : mondayOf(today);
+    const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
+    $("tomorrow").textContent = iso(next) === iso(tomorrow) ? "Tomorrow"
+      : next.toLocaleDateString("en-GB", {weekday:"long"});
+    $("week").textContent = weekend ? "Next week" : "This week";
+    const pick = (d, week) => { VIEWS.day.week = week; $("day").value = iso(d); run(); };
+    VIEWS.day.week = false;
+    $("day").value = iso(today);
+    $("tools").querySelector("[data-run]").onclick = () => { VIEWS.day.week = false; run(); };
+    $("today").onclick = () => pick(today, false);
+    $("tomorrow").onclick = () => pick(next, false);
+    $("week").onclick = () => pick(monday, true);
+    return true; },
+  url(){ return "/api/tti/despatch/" + (this.week ? "week" : "day")
+         + "?day=" + encodeURIComponent($("day").value); },
+  guard(){ return $("day").value ? "" : "Pick a day first."; },
+  draw(j){
+    // ── "NOTHING IS LEAVING" IS ONLY SAFE WHEN NOTHING IS UNREADABLE ───────
+    // A line whose date could not be interpreted cannot be ruled OUT of the
+    // day being asked about. Saying "nothing is set to leave" over the top of
+    // six such lines is an unqualified claim resting on the ones it could not
+    // read - and that is the sentence somebody would act on.
+    const unread = j.unresolved_date_count || 0;
+    const when = j.days ? "between " + short(j.week_start) + " and " + short(j.week_end)
+                        : "on " + pretty($("day").value);
+    const pal = n => n + (n === 1 ? " pallet" : " pallets");
+    setStatus(
+      j.line_count
+        ? some(j.line_count) + (j.pallet_total ? ", " + pal(j.pallet_total) + "," : "")
+          + (j.line_count === 1 ? " is" : " are")
+          + " planned to leave " + when + "."
+          + (unread ? "  " + some(unread) + " could not be read, so this may not"
+                      + " be all of them." : "")
+        : unread
+          ? "No confirmed matches " + when + ". " + some(unread)
+            + " could not be read and cannot be ruled out — check those below"
+            + " before relying on this."
+          : "Nothing in the plan is set to leave " + when + ".",
+      j.line_count && !unread ? "ok" : unread ? "error" : "");
+    if(j.days){
+      for(const d of j.days){
+        el("h2", pretty(d.day) + " — " + (d.line_count ? some(d.line_count)
+           + (d.pallet_total ? " · " + pal(d.pallet_total) : "") : "nothing planned"),
+           $("out"), "dayhead");
+        lines(d.lines, $("out"));
+      }
+    } else {
+      lines(j.lines, $("out"));
+    }
+    const note = el("div", null, $("out"), "caveat");
+    el("p", j.caveat, note);
+    if(j.line_count){
+      // "0 pallets" over a line whose PALLETS cell is empty reads as "nothing
+      // to send". When nothing could be counted, say that, not a total of 0.
+      const asText = (j.pallet_lines_as_text || []).map(t =>
+        "“" + t.pallets_as_recorded + "”, " + cite(t.source)).join("; ");
+      if(j.pallet_lines_counted){
+        const left = [];
+        if(asText) left.push(some(j.pallet_lines_as_text.length)
+          + " with pallets written as text (" + asText + ")");
+        if(j.pallet_lines_blank) left.push(some(j.pallet_lines_blank) + " with no pallet count");
+        el("p", "Pallets: " + pal(j.pallet_total || 0) + ". " + j.pallet_total_reason
+           + (left.length ? "  Not counted: " + left.join(", and ") + "." : ""), note, "hint");
+      } else {
+        el("p", "Pallets: no total. The PALLETS column has no number for "
+           + (j.line_count === 1 ? "this line" : "these lines")
+           + (asText ? " (written as text: " + asText + ")" : "") + ".", note, "hint");
+      }
+    }
+    foldaway($("out"), some(unread) + have(unread)
+      + " a date this cannot read — check these in the workbook",
+      j.unresolved_date_lines, j.unresolved_date_truncated, "unresolved", !j.line_count);
+    foldaway($("out"), some(j.no_date_count) + have(j.no_date_count)
+      + " no departure date set yet (N/A, TBC, blank) — normal for work not yet planned",
+      j.no_date_lines, j.no_date_truncated);
+  }},
+
+search: {
+  label: "Search all weeks",
+  tools: `<input id="q" type="search" maxlength="80"
+            placeholder="Order number, customer PO, part code or TTI account"
+            aria-label="Search the plan">
+          <button class="primary" data-run>Search</button>`,
+  ready(){ $("q").addEventListener("keydown", e => { if(e.key === "Enter") run(); });
+    $("q").focus(); return false; },
+  url(){ return "/api/tti/despatch/search?q=" + encodeURIComponent($("q").value.trim()); },
+  guard(){ return $("q").value.trim() ? "" : "Type something to search for."; },
+  draw(j){
+    setStatus(j.match_count
+      ? some(j.match_count) + " across the weekly sheets match “" + j.searched_for + "”."
+        + (j.mention_count ? "  " + j.mention_count + " more mention it." : "")
+      : j.mention_count
+        ? "No line's order number, PO, part code or account is “" + j.searched_for
+          + "”, but " + some(j.mention_count) + " mention it — usually in the comments."
+        : "Nothing in any of the weekly sheets matches “" + j.searched_for + "”.",
+      j.match_count ? "ok" : "");
+    lines(j.matches, $("out"));
+    if(j.matches_truncated) el("p", "Only the first 60 are shown.", $("out"), "hint");
+    foldaway($("out"), some(j.mention_count) + " mention it elsewhere on the line"
+      + " (usually the comments)", j.mentions, j.mentions_truncated, null, !j.match_count);
+    el("p", j.note, $("out"), "hint");
+  }},
+
+chase: {
+  label: "Chase list",
+  tools: `<button class="primary" data-run>What is blocked?</button>
+          <label class="hint" for="horizon">Chase paperwork for departures within</label>
+          <input id="horizon" type="number" min="0" max="90" value="7" style="width:76px">
+          <span class="hint">days</span>`,
+  ready(){ $("horizon").addEventListener("change", run); return true; },
+  url(){ return "/api/tti/despatch/chase?horizon="
+                + encodeURIComponent($("horizon").value || 7); },
+  draw(j){
+    setStatus(j.line_count
+      ? j.line_count + " item(s) to chase, under " + j.group_count + " heading(s)."
+      : "Nothing is blocked on the measures this checks.",
+      j.line_count ? "error" : "ok");
+    for(const g of j.groups || []){
+      el("h2", g.heading, $("out")).append(
+        Object.assign(document.createElement("span"),
+                      {className:"n", textContent:"  ·  " + g.count}));
+      lines(g.lines, $("out"), "unresolved");
+    }
+    el("p", j.note, $("out"), "hint");
+  }},
+
+overdue: {
+  label: "Overdue, no departure",
+  tools: `<button class="primary" data-run>Which were never updated?</button>`,
+  url(){ return "/api/tti/despatch/overdue"; },
+  draw(j){
+    setStatus(j.line_count
+      ? some(j.line_count) + " have a customer due date in the past and no planned"
+        + " departure — these are the ones nobody updated."
+      : "No line has a customer due date in the past with the departure cell empty.",
+      j.line_count ? "error" : "ok");
+    lines(j.lines, $("out"), "unresolved");
+    if(j.truncated) el("p", "Only the first 100 are shown.", $("out"), "hint");
+    const note = el("div", null, $("out"), "caveat");
+    el("p", j.note, note);
+    if(j.unreadable_due_date_count)
+      el("p", j.unreadable_due_date_count + " further line(s) have no planned departure"
+        + " AND a due date this cannot read, so they are neither included nor ruled"
+        + " out here. They are in Data quality.", note, "hint");
+  }},
+
+morning: {
+  label: "Morning summary",
+  tools: `<input id="mday" type="date" aria-label="Day to summarise">
+          <button class="primary" data-run>Build the summary</button>
+          <button class="secondary" id="copy" type="button">Copy as text</button>`,
+  ready(){ $("mday").value = iso(new Date());
+    $("copy").onclick = async () => {
+      const text = window._summaryText || "";
+      if(!text){ setStatus("Build the summary first."); return; }
+      try{ await navigator.clipboard.writeText(text);
+           setStatus("Copied. Paste it into an email.", "ok"); }
+      catch(e){ setStatus("This browser would not let the page copy. Select the text"
+                          + " below and copy it by hand."); }
+    };
+    return true; },
+  url(){ return "/api/tti/despatch/morning?day=" + encodeURIComponent($("mday").value); },
+  guard(){ return $("mday").value ? "" : "Pick a day first."; },
+  draw(j){
+    window._summaryText = j.as_text || "";
+    setStatus(j.due_out_count
+      ? some(j.due_out_count) + " due out on " + pretty(j.day)
+        + (j.incomplete_count ? ", " + j.incomplete_count + " of them with something"
+                                + " missing" : "")
+        + (j.slipped_count ? ", and " + some(j.slipped_count) + " planned to have"
+                             + " left earlier and not invoiced." : ".")
+      : "Nothing is due out on " + pretty(j.day) + "."
+        + (j.slipped_count ? "  " + some(j.slipped_count) + " planned to have left"
+                             + " earlier and not invoiced." : ""),
+      j.slipped_count || j.incomplete_count ? "error" : j.due_out_count ? "ok" : "");
+
+    // ── THE TEXT IS THE PRODUCT, NOT A FOOTNOTE ──────────────────────────
+    // Sue asked for an email. Nothing here sends it, so the words have to be
+    // right in front of her, ready to paste, rather than reassembled by eye
+    // out of three lists further down the page.
+    el("h2", "As it would be emailed", $("out"));
+    el("pre", j.as_text, $("out"));
+    el("p", "Nothing here sends email. Which mailbox a daily despatch summary leaves"
+       + " from, and who is on it, is yours to decide — this gives you the words.",
+       $("out"), "hint");
+
+    if(j.due_out_count){ el("h2", "Due out", $("out")); lines(j.due_out, $("out")); }
+    if(j.slipped_count){
+      el("h2", "Planned to have left, not invoiced", $("out"));
+      lines(j.slipped, $("out"), "unresolved"); }
+    foldaway($("out"), some(j.unreadable_date_count) + have(j.unreadable_date_count)
+      + " a departure date this cannot read", j.unreadable_date_lines, false, "unresolved");
+    el("p", j.note, $("out"), "hint");
+  }},
+
+quality: {
+  label: "Data quality",
+  tools: `<button class="primary" data-run>Check the workbook</button>`,
+  url(){ return "/api/tti/despatch/quality"; },
+  draw(j){
+    setStatus(j.problem_count
+      ? j.problem_count + " cell(s) cannot be read or disagree with each other."
+      : "Nothing in the workbook is unreadable on the checks this makes.",
+      j.problem_count ? "error" : "ok");
+    for(const g of j.groups || []){
+      el("h2", g.heading, $("out")).append(
+        Object.assign(document.createElement("span"),
+                      {className:"n", textContent:"  ·  " + g.count}));
+      for(const item of g.lines){
+        const c = el("div", null, $("out"), "card unresolved");
+        el("h3", (item.order ? "Order " + item.order : "(no order number)")
+               + (item.part ? "  ·  " + item.part : ""), c);
+        el("p", item.what, c, "because");
+        el("p", cite(item.source), c, "meta");
+      }
+      if(g.truncated) el("p", "Only the first 40 are shown.", $("out"), "hint");
+    }
+    if(j.duplicate_count){
+      el("h2", "The same order and part on more than one row", $("out")).append(
+        Object.assign(document.createElement("span"),
+                      {className:"n", textContent:"  ·  " + j.duplicate_count}));
+      for(const d of j.duplicate_order_lines){
+        const c = el("div", null, $("out"), "card");
+        el("h3", "Order " + d.order + "  ·  part " + d.part, c);
+        el("p", d.count + " rows: " + d.sources.map(cite).join("; "), c, "meta");
+      }
+    }
+    if(j.spelling_correction_count){
+      el("h2", "Month spellings this corrected and used", $("out")).append(
+        Object.assign(document.createElement("span"),
+                      {className:"n", textContent:"  ·  "
+                       + j.spelling_correction_count}));
+      for(const s of j.spelling_corrections){
+        const c = el("div", null, $("out"), "card");
+        el("h3", (s.order ? "Order " + s.order : "(no order number)"), c);
+        el("p", s.column + " reads “" + s.cell + "” and was read as " + s.read_as
+              + " — " + s.basis + ". Fix the cell rather than relying on this.",
+           c, "because");
+        el("p", cite(s.source), c, "meta");
+      }
+    }
+    el("p", j.note, $("out"), "hint");
+  }},
+
+// ── Liam's project tracker, from his SharePoint, read as you ────────────────
+projects: {
+  label: "Project tracker",
+  busy: "Reading the project tracker from SharePoint…",
+  tools: `<input id="pq" type="search" maxlength="80"
+            placeholder="Filter: any words in a row (a name, a part, a status)"
+            aria-label="Filter the project tracker">
+          <button class="secondary" data-run>Refresh</button>`,
+  data: null,
+  ready(){ $("pq").addEventListener("input", () => {
+      if(VIEWS.projects.data){ $("out").replaceChildren(); VIEWS.projects.draw(VIEWS.projects.data); } });
+    return true; },
+  url(){ return "/api/tti/despatch/projects"; },
+  draw(j){
+    VIEWS.projects.data = j;
+    const words = $("pq").value.toLowerCase().split(/\s+/).filter(Boolean);
+    let total = 0, shown = 0;
+    for(const t of j.trackers || []) for(const f of t.files || []){
+      el("h2", t.label + " — " + f.name, $("out"), "dayhead");
+      const about = el("p", "Last saved " + (f.saved ? new Date(f.saved).toLocaleString("en-GB") : "?") + ".  ",
+                       $("out"), "hint");
+      if(f.web_url){ const a = el("a", "Open it in SharePoint", about); a.href = f.web_url; a.target = "_blank"; a.rel = "noopener"; }
+      for(const sh of f.sheets || []){
+        const rows = sh.rows.filter(r => words.every(w =>
+          (sh.sheet + " " + Object.values(r.cells).join(" ")).toLowerCase().includes(w)));
+        total += sh.rows.length; shown += rows.length;
+        if(!rows.length && words.length) continue;
+        el("h3", sh.sheet + "  ·  " + rows.length + (rows.length === 1 ? " row" : " rows"), $("out"));
+        for(const r of rows){
+          const c = el("div", null, $("out"), "card");
+          const vals = Object.values(r.cells);
+          el("h3", vals.slice(0, 2).join("  ·  ") || "(row " + r.row + ")", c);
+          for(const [k, v] of Object.entries(r.cells).slice(2))
+            el("p", k + ": " + v, c, "meta");
+          for(const p of r.paths || []){
+            const line = el("p", null, c);
+            if(p.is_file){
+              const open = el("a", "Open", line, "primary");
+              open.href = "/api/tti/despatch/files/open?path=" + encodeURIComponent(p.path);
+              open.target = "_blank"; open.rel = "noopener";
+            } else {
+              const find = el("button", "Find in TTi files", line, "secondary");
+              find.type = "button";
+              find.onclick = () => { show("files"); $("fq").value = p.path.split(/[\\/]/).filter(Boolean).pop() || p.path; run(); };
+            }
+            // The path beside the button only when the cell does not already show it
+            // (a hyperlink labelled "see drawing", say).
+            if(!vals.some(v => v.replace(/\//g, "\\").includes(p.path)))
+              el("span", "  " + p.path, line, "meta");
+          }
+          el("p", f.name + " › " + sh.sheet + " › row " + r.row, c, "meta");
+        }
+      }
+    }
+    setStatus(words.length
+      ? shown + " of " + total + " rows have “" + words.join(" ") + "”."
+      : total + (total === 1 ? " row" : " rows") + " in the project tracker.", shown ? "ok" : "");
+  },
+  foot(){ $("foot").textContent = "Read from SharePoint as you, just now. Nothing here changes the tracker."; }},
+
+// ── Liam's TTi folders: names only, from an index built on a schedule ──────
+files: {
+  label: "Find TTi files",
+  busy: "Searching the TTi folders…",
+  tools: `<input id="fq" type="search" maxlength="80"
+            placeholder="Job, drawing or part number, or a product name"
+            aria-label="Search the TTi folders">
+          <select id="ffolder" aria-label="Which folder"><option value="">All folders</option>
+            <option>Design</option><option>Production</option><option>Prototype</option></select>
+          <select id="fkind" aria-label="Which kind of file"><option value="">Any kind</option>
+            <option value="drawings">Drawings (PDF, DXF, DWG)</option>
+            <option value="models">3D models (SolidWorks, STEP)</option>
+            <option value="images">Images</option><option value="documents">Documents</option>
+            <option value="folders">Folders only</option></select>
+          <button class="primary" data-run>Find files</button>`,
+  ready(){ $("fq").addEventListener("keydown", e => { if(e.key === "Enter") run(); });
+    $("fq").focus();
+    get("/api/tti/despatch/files/status").then(st => {
+      const sel = $("ffolder");
+      if(sel && st.folders && st.folders.length){
+        sel.replaceChildren(el("option", "All folders"));
+        sel.firstChild.value = "";
+        for(const f of st.folders) el("option", f.label, sel).value = f.label;
+      }
+      setStatus("Ready. Searches " + (st.entries || 0).toLocaleString("en-GB")
+                + " files and folders by name.");
+      VIEWS.files.foot(st);
+    }).catch(e => setStatus(e.message, "error"));
+    return false; },
+  url(){ return "/api/tti/despatch/files?q=" + encodeURIComponent($("fq").value.trim())
+         + "&folder=" + encodeURIComponent($("ffolder").value)
+         + "&kind=" + encodeURIComponent($("fkind").value); },
+  guard(){ return $("fq").value.trim() ? "" : "Type part of a file or folder name."; },
+  draw(j){
+    const n = j.match_count, shown = j.matches.length;
+    setStatus(n ? n.toLocaleString("en-GB") + (n === 1 ? " file or folder matches" : " files and folders match")
+                  + " “" + j.searched_for + "”." + (n > shown ? "  Showing the best " + shown + "." : "")
+                : "Nothing in the TTi folders has “" + j.searched_for + "” in its name or path.",
+              n ? "ok" : "");
+    for(const m of j.matches){
+      const c = el("div", null, $("out"), "card");
+      const h = el("h3", m.name, c);
+      if(m.is_folder) el("span", "folder", h, "flag");
+      const path = el("p", m.path, c, "meta");
+      path.style.wordBreak = "break-all";
+      if(!m.is_folder){
+        const open = el("a", "Open", c, "primary");
+        open.href = "/api/tti/despatch/files/open?path=" + encodeURIComponent(m.path);
+        open.target = "_blank"; open.rel = "noopener";
+      }
+      const copy = el("button", "Copy path", c, "secondary");
+      copy.type = "button";
+      copy.onclick = () => navigator.clipboard.writeText(m.path)
+        .then(() => { copy.textContent = "Copied"; }, () => { copy.textContent = "Select and copy the path above"; });
+      const bits = [m.folder, m.kind];
+      if(m.size != null) bits.push(m.size >= 1048576 ? (m.size / 1048576).toFixed(1) + " MB"
+                                   : Math.max(1, Math.round(m.size / 1024)) + " KB");
+      bits.push("modified " + new Date(m.modified).toLocaleDateString("en-GB",
+                {day:"numeric", month:"short", year:"numeric"}));
+      el("p", bits.join("  ·  "), c, "meta");
+    }
+    el("p", j.note + "  Open shows a PDF or picture in a new tab and downloads anything else; "
+       + "nothing here changes, moves or deletes a file.", $("out"), "hint");
+  },
+  foot(j){
+    const built = j.index_built || j.built;
+    $("foot").textContent = built
+      ? "Index of the TTi folders built " + new Date(built).toLocaleString("en-GB")
+        + ".  Files added since are not in it yet.  Names only, not file contents."
+      : "";
+  }}
+};
+
+let current = "day";
+
+async function run(){
+  const view = VIEWS[current];
+  const stop = view.guard ? view.guard() : "";
+  if(stop){ setStatus(stop); return; }
+  for(const b of document.querySelectorAll("[data-run]")) b.disabled = true;
+  $("out").replaceChildren(); $("foot").textContent = "";
+  setStatus(view.busy || "Reading the Despatch Plan…");
+  try{
+    const j = await get(view.url());
+    view.draw(j);
+    (view.foot || provenance)(j);
+  }catch(e){
+    setStatus(e.message, "error");
+    // ── NOT ON SUE'S SITE IS NOT A BROKEN APP ──────────────────────────────
+    // Liam and Callum are on the TTI list for the drawings and cannot open the
+    // Despatch Plan. Every despatch tab said only "error"; this says what still
+    // works and what would open the rest.
+    if(e.reason === "access" && current !== "files"){
+      const tracker = current === "projects";
+      const note = el("div", null, $("out"), "caveat");
+      el("p", (tracker ? "This tab reads the project tracker in the TTi Projects SharePoint site"
+                       : "This tab reads Sue's TTI Despatch Plan in SharePoint")
+         + " as you, and your account cannot open it, so there is nothing to show here. That is "
+         + "about access to the file, not a fault in the app.", note);
+      el("p", "Find TTi files does not need it: drawings and files in the TTi folders on W: work "
+         + "for you now. " + (tracker ? "For the tracker, ask Liam to share it with you."
+                                      : "For the despatch tabs, ask Sue to share the plan with you."),
+         note, "hint");
+      const go = el("button", "Go to Find TTi files", note, "primary");
+      go.type = "button"; go.style.marginTop = "10px"; go.onclick = () => show("files");
+    }
+  }finally{
+    for(const b of document.querySelectorAll("[data-run]")) b.disabled = false;
+  }
+}
+
+function show(name){
+  current = name;
+  // The tab is in the address (…/despatch#files), so a link can open straight on it.
+  try{ history.replaceState(null, "", "#" + name); }catch(e){}
+  for(const b of $("tabs").children)
+    b.setAttribute("aria-selected", String(b.dataset.view === name));
+  $("tools").innerHTML = VIEWS[name].tools;
+  for(const b of document.querySelectorAll("[data-run]")) b.onclick = run;
+  $("out").replaceChildren(); $("foot").textContent = "";
+  const auto = VIEWS[name].ready ? VIEWS[name].ready() : true;
+  if(auto) run(); else setStatus("Ready.");
+}
+
+for(const [name, view] of Object.entries(VIEWS)){
+  const b = el("button", view.label, $("tabs"), "tab");
+  b.type = "button"; b.dataset.view = name;
+  b.setAttribute("role", "tab"); b.setAttribute("aria-selected", "false");
+  b.onclick = () => show(name);
+}
+show(VIEWS[location.hash.slice(1)] ? location.hash.slice(1) : "day");
+</script>
+</body>
+</html>

@@ -1,15 +1,6 @@
-import pyodbc
 import pandas as pd
 
-conn_str = (
-    "DRIVER={ODBC Driver 18 for SQL Server};"
-    "SERVER=10.0.0.200;"
-    "DATABASE=SDILive;"
-    "UID=AIBot;"
-    "PWD=AIAgentPW2026;"
-    "TrustServerCertificate=yes;"
-    "Encrypt=yes;"
-)
+import config
 
 target_tables = ['CUS_TBL', 'PMA_TBL', 'SUP_TBL', 'WOR_TBL', 'COR_TBL']
 
@@ -22,7 +13,7 @@ def query_to_df(cursor, sql):
 
 def extract_db_knowledge_base(tables):
     try:
-        conn = pyodbc.connect(conn_str, timeout=10)
+        conn = config.get_connection(timeout=10)
         cursor = conn.cursor()
         print("Connected Successfully. Commencing Extraction...\n")
 

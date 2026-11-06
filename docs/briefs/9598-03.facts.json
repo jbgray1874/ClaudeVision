@@ -1,0 +1,99 @@
+{
+  "_reviewed": "James Gray, 6 Oct 2026 \u2014 9598-03 Half A4 Landscape Ticket Holder RAL 9010 (M&S Editions POS, enquiry 0359963) rev A brief, docs/briefs/9598-03.md. Structure, not money. The same construction as 9598-02 in white.",
+  "_note": "Codes compare on letters and digits only. 20 off is the M&S order quantity; add 50 and 100 to quantity_breaks if the run is given them. The frame's stated 398.43 g is REAL on this pack (the model carried a density): the material mass bounds below are the part's, not a blank's.",
+  "product_root": "9598-03-GA",
+  "not_set_aside": [
+    "9598-03-01M",
+    "9598-03-02G",
+    "FIXING1270"
+  ],
+  "quantity_breaks": [
+    20
+  ],
+  "quantities": {
+    "9598-03-01M": 1,
+    "9598-03-02G": 1,
+    "FIXING1270": 4
+  },
+  "exactly_one_line": {
+    "METAL FRAME": 1,
+    "GRAPHIC": 1,
+    "BUMPER": 1
+  },
+  "required_operations": {
+    "9598-03-01M": [
+      "laser_cutting",
+      "folding",
+      "welding",
+      "powder_coating"
+    ]
+  },
+  "forbidden_operations": {
+    "9598-03-GA": [
+      "welding",
+      "dress_welds",
+      "powder_coating",
+      "wet_spray",
+      "laser_cutting",
+      "folding",
+      "wire_forming",
+      "robomac",
+      "linebend"
+    ],
+    "9598-03-01M": [
+      "wire_forming",
+      "robomac",
+      "wet_spray",
+      "anodising",
+      "plating",
+      "spot_welding",
+      "linebend",
+      "diamond_polish"
+    ],
+    "9598-03-02G": [
+      "laser_cutting",
+      "folding",
+      "welding",
+      "dress_welds",
+      "powder_coating",
+      "wet_spray",
+      "wire_forming",
+      "robomac",
+      "linebend",
+      "diamond_polish"
+    ],
+    "FIXING1270": [
+      "laser_cutting",
+      "folding",
+      "welding",
+      "dress_welds",
+      "powder_coating",
+      "wet_spray",
+      "wire_forming",
+      "robomac"
+    ]
+  },
+  "forbidden_operations_anywhere": [
+    "wire_forming",
+    "robomac",
+    "anodising",
+    "plating",
+    "linebend",
+    "diamond_polish",
+    "edge_banding"
+  ],
+  "material_charged": [
+    "9598-03-01M",
+    "9598-03-02G",
+    "FIXING1270"
+  ],
+  "no_cut_assemblies": [
+    "9598-03-GA"
+  ],
+  "max_unit_material_mass_kg": {
+    "9598-03-01M": 0.45
+  },
+  "min_unit_material_mass_kg": {
+    "9598-03-01M": 0.35
+  }
+}

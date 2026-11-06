@@ -17,9 +17,21 @@ Called from estimator.py:
 """
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 from geometry_inference import _has_geometry as _has_real_dxf_geometry
+
+# WHERE A DECISION WAS TAKEN, named by the module that owns the ranks. This report exists
+# to explain the costing; a source it cannot name is a decision it cannot explain.
+try:
+    from source_precedence import display_name as _display_source, was_measured as _was_measured
+except Exception:                                                   # pragma: no cover
+    def _display_source(s):                                         # type: ignore[misc]
+        return str(s or "").replace("_", " ")
+
+    def _was_measured(s):                                           # type: ignore[misc]
+        return bool(s) and str(s) not in ("llm_extract", "llm_full_extract",
+                                          "inference", "geometry_inference")
 
 try:
     import openpyxl
@@ -55,6 +67,19 @@ def _is_bought_in(part: Dict) -> bool:
     Detected by: normalized_material BOUGHT_IN, a 'bought_in' page role, the layer-2
     recogniser source, or the BI-/FIXING/VINYL code families.
     """
+    # THE CANONICAL GRAPH ALREADY DECIDED THIS, and asking it beats re-deriving it. The
+    # compiler classifies every node as assembly / bought_in / leaf and writes that back
+    # onto the part as canonical_kind; this function was inferring the same fact from
+    # materials, roles and code families, and disagreeing. 12422-24's 79814P is a wood screw
+    # the graph calls bought_in, and this report gave it MFC and a 16mm fabrication
+    # thickness because none of the heuristics below recognise a supplier's own part number.
+    _kind = str(part.get("canonical_kind") or "").lower()
+    if _kind == "bought_in":
+        return True
+    if _kind in ("assembly", "leaf"):
+        return False
+    if part.get("is_bought_in") is True:
+        return True
     mat = str(part.get("normalized_material") or part.get("material") or "").upper()
     if mat == "BOUGHT_IN":
         return True
@@ -73,7 +98,10 @@ def _is_bought_in(part: Dict) -> bool:
 def _c(ws, row, col, value="", bold=False, bg=None, fg="000000",
        align="left", wrap=False, size=10, italic=False,
        num_fmt=None, border=False):
-    cell = ws.cell(row=row, column=col, value=value)
+    cell = _writable(ws, row, col)
+    if cell is None:
+        return None
+    cell.value = value
     cell.font = Font(name="Arial", bold=bold, color=fg,
                      size=size, italic=italic)
     if bg:
@@ -86,6 +114,50 @@ def _c(ws, row, col, value="", bold=False, bg=None, fg="000000",
         s = Side(style="thin", color="CCCCCC")
         cell.border = Border(left=s, right=s, top=s, bottom=s)
     return cell
+
+
+
+def _writable(ws, row: int, col: int):
+    """The cell at (row, col), or its merged-range ANCHOR.
+
+    openpyxl exposes every cell of a merged range but only the top-left one accepts a
+    value; the rest raise "'MergedCell' object attribute 'value' is read-only". wb_populate
+    learned this on 11350, where it killed an entire estimator-input block after the
+    heading. This tab appends below a totals row whose footer the template merges, so the
+    same trap sits directly under the new block. Returns None when the range cannot be
+    resolved, so the caller skips rather than raising: a report that dies explains nothing.
+    """
+    try:
+        cell = ws.cell(row=row, column=col)
+        if cell.__class__.__name__ != "MergedCell":
+            return cell
+        for rng in getattr(ws, "merged_cells", []).ranges:
+            if (rng.min_row <= row <= rng.max_row and rng.min_col <= col <= rng.max_col):
+                return ws.cell(row=rng.min_row, column=rng.min_col)
+        return None
+    except Exception:
+        return None
+
+
+def replace_generated_sheet(wb, title: str):
+    """Create `title`, replacing any existing sheet of that name.
+
+    openpyxl's create_sheet does NOT overwrite — asked for a name already in the book it
+    silently returns "AI Provenance1". The estimators' template can already contain these
+    tabs, and re-running a job against a workbook that has them produced BOTH: the stale
+    sheet keeping the name an estimator looks for, and the fresh one hidden behind a
+    suffix. 2085 shipped with both.
+
+    These sheets are generated wholesale from the summary every run, so replacing is the
+    correct semantic — there is nothing in the old one worth merging, and leaving it is
+    worse than deleting it because it still reads as this job's provenance."""
+    if title in wb.sheetnames:
+        del wb[title]
+    # Anything openpyxl previously suffixed is also a stale copy of this sheet.
+    for _name in [n for n in wb.sheetnames
+                  if n.startswith(title) and n[len(title):].isdigit()]:
+        del wb[_name]
+    return wb.create_sheet(title)
 
 
 def _find_wb_sell_price_ref(wb) -> Optional[str]:
@@ -124,13 +196,27 @@ def _find_wb_sell_price_ref(wb) -> Optional[str]:
                     row_idx = cell.row
                     # Look rightward up to 8 columns for the value cell; take the furthest
                     # populated/known money column. Template value column is M (13).
+                    # A VALUE IS A NUMBER OR A FORMULA — NEVER PROSE.
+                    #
+                    # This took the first non-empty cell to the right. An Excel formula reads
+                    # as None through openpyxl, so the real value cell looks empty and the
+                    # walk continues — and once the estimator-input banner was added to the
+                    # right of the totals, it became the first populated cell on that row.
+                    # The report then pointed its SELL PRICE at a sentence, and the audit
+                    # tabs displayed a malformed number instead of the price.
+                    #
+                    # Text on this row is a caption, not a figure, so it is skipped and the
+                    # column-M fallback below does its job as intended.
                     target_col = None
                     for c in range(label_col + 1, label_col + 9):
                         cc = ws.cell(row=row_idx, column=c)
-                        # A formula or a number here = the value cell.
-                        if cc.value not in (None, ""):
-                            target_col = c
-                            break
+                        _v = cc.value
+                        if _v is None or _v == "":
+                            continue
+                        if isinstance(_v, str) and not _v.lstrip().startswith("="):
+                            continue          # a caption, not the value
+                        target_col = c
+                        break
                     # If nothing populated found (value is a not-yet-calculated formula that
                     # openpyxl read as 0/None), fall back to column M on the label's row.
                     if target_col is None:
@@ -142,39 +228,28 @@ def _find_wb_sell_price_ref(wb) -> Optional[str]:
         return None
 
 
-def _conf_info(part: Dict, unit_cost: float = 0.0) -> tuple:
-    """Return (confidence_float, label, bg_colour, fg_colour, explanation)"""
-    mat    = str(part.get("normalized_material") or part.get("material") or "").upper()
-    geo    = str(part.get("geometry_source") or "")
-    src    = str(part.get("material_source") or "")
-    unit   = float(unit_cost or 0)
-    thks   = part.get("thicknesses_mm") or []
-    tol    = {0.5, 1.0, 1.5, 2.0, 3.0}
-    has_thk = any(t and round(float(t), 1) not in tol for t in thks)
-    if _is_bought_in(part):
-        return 1.0, "BOUGHT-IN", C_BOUGHT, "555555", "Hardware/bought-in component — not fabricated"
-    if "knowledge_base" in src:
-        return 0.99, "HIGH ✓", C_HIGH, C_HIGH_TXT, \
-               "Previously confirmed by estimator — from SDI knowledge base"
-    if "dxf_flat_pattern" in geo and has_thk and mat in ("MILD_STEEL","MDF","ACRYLIC","TIMBER"):
-        return 0.92, "HIGH ✓", C_HIGH, C_HIGH_TXT, \
-               "DXF flat pattern matched — exact geometry, material from DXF filename"
-    if "dxf_flat_pattern" in geo and mat in ("MILD_STEEL","MDF","ACRYLIC","TIMBER"):
-        return 0.80, "HIGH ✓", C_HIGH, C_HIGH_TXT, \
-               "DXF flat pattern matched — exact geometry, thickness needs confirming"
-    if "dxf" in geo and unit > 0:
-        return 0.75, "MEDIUM", C_MED, C_MED_TXT, \
-               "DXF geometry used — material or thickness inferred from context"
-    if unit == 0 and mat not in ("BOUGHT_IN",):
-        return 0.25, "REVIEW ⚠", C_LOW, C_LOW_TXT, \
-               "Zero cost — thickness or geometry not extracted. Manual review needed"
-    if not mat or mat in ("UNKNOWN","LED","CARD"):
-        return 0.20, "REVIEW ⚠", C_LOW, C_LOW_TXT, \
-               f"Material unresolved ({mat!r}). Check drawing and resubmit"
-    if "pdf" in geo and unit > 0:
-        return 0.60, "MEDIUM", C_MED, C_MED_TXT, \
-               "PDF geometry extraction — accuracy depends on drawing detail level"
-    return 0.50, "MEDIUM", C_MED, C_MED_TXT, "AI inference — no DXF available"
+def _conf_info(part: Dict, unit_cost: float = 0.0, summary: Any = None) -> tuple:
+    """(score, label, bg, fg, explanation) — from the ONE shared confidence authority.
+
+    This function used to carry its own ladder, and estimation_report carried a different
+    one, and calibration.py a third. The two report tabs disagreed about the same part in
+    the same file: 2085-01 came out 0.92 HIGH here and 0.70 MEDIUM there. Its ladder also
+    claimed "material from DXF filename" without ever reading material_source, so the
+    confidence REASON contradicted the Material Source column on its own row.
+
+    The score survives only because callers threshold on it. It is derived FROM the status
+    the shared assessment returned — never averaged, because averaging is how a part with
+    no material price at all lands in the sixties and reads as partial knowledge.
+    """
+    from confidence import (assess_part, STATUS_FILL, UNKNOWN, ASSUMED,
+                            REPORTED, MEASURED, CONFIRMED)
+    _a = assess_part(part, summary)
+    _status = _a["overall"]
+    _bg, _fg = STATUS_FILL.get(_status, ("EDEDED", "555555"))
+    _score = {UNKNOWN: 0.20, ASSUMED: 0.45, REPORTED: 0.70,
+              MEASURED: 0.90, CONFIRMED: 0.99}.get(_status, 0.20)
+    _why = _a.get("reason") or "; ".join(_a.get("decided_by") or [])
+    return _score, _a["overall_label"], _bg, _fg, _why
 
 
 def _mat_source_explanation(part: Dict) -> str:
@@ -183,9 +258,44 @@ def _mat_source_explanation(part: Dict) -> str:
     # DXF-token / part-number-suffix material heuristics (BI-...T would misread as
     # "-T → MDF/Timber", BI-...M as "-M → Mild Steel"). Return an honest bought-in note.
     if _is_bought_in(part):
+        # "Priced from catalogue/history" states a provenance that does not exist on a
+        # line carrying no price. PACKAGING and DELIVERY are per-unit shares an estimator
+        # fills in, and they are the two lines most likely to be forgotten — so they say so.
+        from costed_facts import is_placeholder_price as _placeholder
+        if _placeholder(part):
+            return ("Bought-in / no fabrication material — NOT YET PRICED, estimator to "
+                    "enter a per-unit figure")
         return "Bought-in / catalogue component — no fabrication material (priced from catalogue/history)"
+    # THE RECORDED SOURCE, NOT A RE-GUESS OF IT. This function used to ignore what the
+    # waterfall had written down and re-derive an explanation from the DXF filename, the
+    # part-number suffix and the material string — and on 10575-02 it told an estimator
+    # every mild steel part was "AI inference from drawing context" when the AI Provenance
+    # tab, reading `material_source`, correctly said the drawing was read deterministically.
+    # Two tabs of one workbook, opposite answers, about the most common material in the pack.
+    #
+    # THE MECHANISM IS WORTH RECORDING because it is not a typo. The steel branch below is
+    # guarded by `"pdf" in geo`; estimation_report.py defaults a missing geometry_source to
+    # "pdf" and this file defaulted it to "", so on a PDF-only part the guard was false here
+    # and true there, and this function fell through every branch to the AI catch-all. A
+    # provenance document that infers provenance will disagree with the one that reads it.
+    #
+    # So the recorded source answers first, named by the module that owns the ranks — the
+    # same treatment the thickness explanation already gave. ✅ for a source that MEASURED
+    # the part, ⚡ for one that reasoned about it, which is the distinction the waterfall
+    # exists to make. The heuristics below are kept for a part with nothing recorded, where a
+    # guess stated as a guess beats a blank.
     mat = str(part.get("normalized_material") or part.get("material") or "").upper()
     src = str(part.get("material_source") or "")
+    if not src:
+        try:
+            from source_precedence import source_of
+            src = str(source_of(part, "normalized_material") or "")
+        except Exception:
+            src = ""
+    if src and str(src).strip().lower() != "unknown":
+        _pretty = _display_source(src)
+        if _pretty:
+            return ("✅ " if _was_measured(src) else "⚡ ") + f"Read from {_pretty}"
     geo = str(part.get("geometry_source") or "")
     dxf = str(part.get("dxf_source_file") or "")
     pn  = str(part.get("part_number") or "")
@@ -221,6 +331,40 @@ def _thk_source_explanation(part: Dict) -> str:
     # Bought-in components have no fabrication thickness — don't imply one.
     if _is_bought_in(part):
         return "— bought-in component (no fabrication thickness)"
+
+    # THE THICKNESS THE JOB WAS COSTED AT, BEFORE ANY RE-DERIVATION.
+    #
+    # This function read `thicknesses_mm` — every thickness-looking number found on the
+    # drawing — and took the first. On 12422-24 that reported 01J as 16mm while the sheet
+    # costed a 28mm MFC panel, and 02M as 16mm against 1.5mm steel. The report was not
+    # describing the estimate; it was performing its own extraction and publishing the
+    # result beside the estimate's numbers as though they agreed.
+    #
+    # normalized_thickness_mm is the arbitrated datum, written through the resolver with a
+    # recorded source. Asking it is what makes this a REPORT of the costing rather than a
+    # second opinion about the drawing. The derivation below is kept for records that have
+    # no arbitrated value — it is a fallback now, not the first answer.
+    _costed = part.get("normalized_thickness_mm")
+    try:
+        _costed = float(_costed) if _costed not in (None, "") else None
+    except (TypeError, ValueError):
+        _costed = None
+    if _costed and _costed > 0:
+        _src = ""
+        try:
+            from source_precedence import source_of
+            _src = str(source_of(part, "normalized_thickness_mm") or "")
+        except Exception:
+            _src = ""
+        # NAMED BY THE MODULE THAT OWNS THE RANKS, not by a copy kept here. This was a
+        # private eight-entry table, so a source the waterfall knows about but the table
+        # did not — mirror_of_measured, pdf_overall_dims, override_rule — rendered as a
+        # bare internal key in the one document written to explain the decision.
+        _pretty = _display_source(_src)
+        _mark = "✅" if _was_measured(_src) else "⚡"
+        return (f"{_mark} {_costed:g}mm — the thickness this job was COSTED at"
+                + (f", from {_pretty}" if _pretty else " (source not recorded)"))
+
     import re
     dxf  = str(part.get("dxf_source_file") or "")
     geo  = str(part.get("geometry_source") or "")
@@ -249,70 +393,508 @@ def _thk_source_explanation(part: Dict) -> str:
     return "⚠ No thickness found — assembly-only page or missing dimension"
 
 
-def _ops_explanation(part: Dict) -> str:
-    """Explain how operations were determined."""
-    # Merge textual + inferred ops so auto-assigned laser/handling/powder show.
-    ops = list(part.get("textual_operations") or []) + list(part.get("inferred_operations") or [])
+def _ops_explanation(part: Dict, est: Optional[Dict] = None,
+                     summary: Optional[Dict] = None) -> str:
+    """Explain how operations were determined.
+
+    Driven by what we actually COSTED where the part estimate is available, not by the raw
+    textual/inferred op lists. Those lists are the drawing's interpretation, and on these
+    packs the shared specification legend puts processes on parts that never carry them —
+    which is how "laser cutting" and "powder coating" ended up described against timber
+    panels that the Estimate sheet charges only saw, glue, CNC and spray for. A provenance
+    sheet that describes operations the estimate does not contain is worse than no
+    provenance: it reads as evidence for a route we did not price. Same rule already
+    applied to the client quote.
+    """
+    # Canonical where the workbook has run (the route the Estimate sheet two tabs away
+    # actually charges); the part's own PRE-FILTER costed fields only as a fallback.
+    from costed_facts import operations_for_part, priced_route_known
+    ops: List[str] = operations_for_part(summary, part.get("part_number"), est)
+    if not ops and priced_route_known(summary):
+        # THE PRICED ROUTE IS KNOWN AND THIS PART IS IN NONE OF IT.
+        #
+        # That is an answer, not a gap, and the honest one is to say so. The old fallback
+        # reached for the drawing's textual + inferred lists here, which is where the
+        # suppressed route came back: every part a gate removed — powder on a timber panel,
+        # weld/dress on an artefact record — lost its costed evidence and was then described
+        # from the specification legend instead. The report ended up narrating exactly the
+        # operations the workbook had just decided against.
+        return ("No operation charged on this job — the priced route contains this part "
+                "in no labour row")
+    _priced = True
+    if not ops:
+        # No workbook yet (a report generated from a JSON alone). Nothing has been priced,
+        # so the drawing's own reading is the best available evidence — and it is labelled
+        # as such below rather than presented as what we charged.
+        ops = list(part.get("textual_operations") or []) + list(part.get("inferred_operations") or [])
+        _priced = False
     mat = str(part.get("normalized_material") or part.get("material") or "").upper()
     geo = str(part.get("geometry_source") or "")
     if not ops:
         return "No operations detected — assembly-only record"
-    sources = []
-    if "laser_cutting" in ops:
-        sources.append("laser cutting (flat DXF detected)" if "dxf" in geo
+    # EVERY OPERATION GETS NAMED.
+    #
+    # This was a whitelist of eight phrases, and any operation outside it vanished from the
+    # sentence. On 2085 the tubes read "powder coating, welding" here while AI Provenance —
+    # two tabs away in the same file, from the same source — listed tube_cut, welding,
+    # dress_welds, powder_coating and assembly. Same job, two different routes on the page,
+    # because a renderer that can only describe what it recognises silently under-reports
+    # everything else, and the tube cut is exactly the operation this engine has already
+    # lost once.
+    #
+    # An operation with no written explanation is still an operation. Naming it plainly
+    # beats omitting it — the sheet charges it either way.
+    _PHRASES = {
+        "cnc_routing":        "CNC routing (timber/MDF material)",
+        "folding":            "folding (bend lines in DXF)",
+        "powder_coating":     "powder coating (finish specified in drawing)",
+        "wet_spray":          "wet spray (finish specified in drawing)",
+        "edge_banding":       "edge banding (MDF/timber with 'EDGED' finish)",
+        "welding":            "welding (assembly drawing indicates welds)",
+        "handling":           "handling / assembly (bench time)",
+        "assembly":           "handling / assembly (bench time)",
+        "dress_welds":        "weld dressing (linishing the welded joint)",
+        "tube_cut":           "tube cutting (sawn to length — section stock has no flat blank)",
+        "tube_bending":       "tube bending (tube bender, not the press brake)",
+        "linebend":           "line bending (acrylic heat-bent, not press-braked)",
+        "line_bending":       "line bending (acrylic heat-bent, not press-braked)",
+        "diamond_polish":     "diamond polishing (acrylic edge finish)",
+        "hardware_insertion": "hardware insertion (PEM / clinch studs pressed in)",
+        "saw":                "sawing to length",
+        "guillotine":         "guillotine shearing",
+        "punch":              "punching",
+        "hole_machining":     "hole machining / drilling",
+        "drilling":           "hole machining / drilling",
+        "tapping":            "tapping",
+        "deburring":          "deburring",
+        "linishing":          "linishing",
+        "robomac":            "Robomac cutting (wire / bar stock)",
+    }
+    sources: List[str] = []
+    _seen = set()
+    for _op in ops:
+        _key = str(_op).strip().lower()
+        if not _key or _key in _seen:
+            continue
+        _seen.add(_key)
+        if _key == "laser_cutting":
+            _phrase = ("laser cutting (flat DXF detected)" if "dxf" in geo
                        else "laser cutting (inferred from material/geometry)")
-    if "cnc_routing" in ops:
-        sources.append("CNC routing (timber/MDF material)")
-    if "folding" in ops:
-        sources.append("folding (bend lines in DXF)")
-    if "powder_coating" in ops:
-        sources.append("powder coating (finish specified in drawing)")
-    if "wet_spray" in ops:
-        sources.append("wet spray (finish specified in drawing)")
-    if "edge_banding" in ops:
-        sources.append("edge banding (MDF/timber with 'EDGED' finish)")
-    if "welding" in ops:
-        sources.append("welding (assembly drawing indicates welds)")
-    if "handling" in ops:
-        sources.append("handling / assembly (bench time)")
-    return "Operations: " + ", ".join(sources) if sources else \
-           f"Detected: {', '.join(ops)}"
+        else:
+            _phrase = _PHRASES.get(_key, _key.replace("_", " "))
+        if _phrase not in sources:
+            sources.append(_phrase)
+    # "Read from the drawing" is not "charged". Saying which one this is costs a word and
+    # stops an unpriced reading being mistaken for the route the sheet contains.
+    _lead = "Operations" if _priced else "Read from drawing — NOT YET PRICED"
+    return f"{_lead}: " + ", ".join(sources) if sources else \
+           f"{_lead}: {', '.join(ops)}"
+
+
+
+def decisions_that_required_resolution(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The operations where two equally-ranked sources disagreed and the arbiter chose.
+
+    THE FIRST THING AN ESTIMATOR SHOULD READ, and the reason it gets its own block at the
+    top of the sheet rather than a column halfway down a hundred rows. Every other line on
+    this tab describes a decision that made itself: one strongest source, nothing at that
+    rank contradicting it. These are the lines where the engine had to pick, and they are
+    where fine-tuning feedback is worth most.
+
+    Ordered weakest-resolution first: a contest settled by the claim-id backstop had no
+    distinguishing evidence at all and is a coin flip made reproducible, which deserves a
+    person's attention before one settled by the drawing's own words.
+    """
+    payload = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+               or summary.get("canonical_route_shadow") or {})
+    out = []
+    for d in (payload.get("decisions") or []):
+        if isinstance(d, dict) and d.get("contested"):
+            out.append(d)
+    def _worst_first(d):
+        key = str(d.get("settled_by_key") or "")
+        # later in RESOLUTION_KEYS == weaker ground for the choice
+        try:
+            from route_compiler import RESOLUTION_KEYS
+            return (-RESOLUTION_KEYS.index(key) if key in RESOLUTION_KEYS else 1,
+                    str(d.get("target_id") or ""))
+        except Exception:
+            return (0, str(d.get("target_id") or ""))
+    out.sort(key=_worst_first)
+    return out
+
+
+# The DATA contests, by the invariant code that already finds them. Read rather than
+# recomputed: the comparison rules are fiddly and earned (a material spelling variant is not a
+# disagreement; a gauge must differ by enough to move the money), and a second copy here would
+# be the two-copies-of-one-rule defect this codebase keeps digging out — with the tab and the
+# review block quietly disagreeing about the same part.
+_DATUM_CONTEST_CODES = {
+    "two_sources_disagree_about_the_material": "material",
+    "two_sources_disagree_about_the_gauge": "gauge",
+}
+
+
+def datum_decisions_that_required_resolution(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Contests about the DATA the price is computed from — what the part is made of, and how
+    thick — alongside the operation contests already listed.
+
+    THE OPERATION CONTESTS WERE THE ONLY ONES SHOWN, AND THEY ARE NOT THE EXPENSIVE ONES. On
+    8352 this block held two lines, both 'powder coating: not_applicable', while the same run
+    reported a back panel costed as PLYWOOD that inference read as TIMBER, and three parts whose
+    gauge two sources put 4x apart — 12mm against 3mm on the panel that sets the sheet rate.
+    Material decides the rate and whether the part has a rate at all; gauge decides the rate and
+    steps the cut time, so a part costed on the wrong one is wrong twice. Those are the decisions
+    worth a person's minute, and the tab that exists to show decisions did not show them.
+
+    Ordered worst-first by how far the two readings are apart, so the 4x argument is read before
+    the 1.1x one.
+    """
+    if not isinstance(summary, dict):
+        return []
+    out: List[Dict[str, Any]] = []
+    for violation in ((summary.get("invariants") or {}).get("violations") or []):
+        if not isinstance(violation, dict):
+            continue
+        datum = _DATUM_CONTEST_CODES.get(str(violation.get("code") or ""))
+        if not datum:
+            continue
+        for d in ((violation.get("detail") or {}).get("parts") or []):
+            if not isinstance(d, dict):
+                continue
+            out.append({
+                "part_number": d.get("part_number"),
+                "datum": datum,
+                "costed_as": d.get("costed_as"),
+                "costed_from": d.get("costed_from"),
+                "other": d.get("other"),
+                "other_from": d.get("other_from"),
+                # Only the gauge check measures how far apart the readings are; a material
+                # disagreement is categorical, so it sorts after the measured ones.
+                "ratio": d.get("ratio"),
+            })
+    out.sort(key=lambda d: (-(float(d.get("ratio") or 0)), str(d.get("part_number") or "")))
+    return out
+
+
+def powder_authority(summary: Dict[str, Any]) -> str:
+    """Who decided powder on this job, in one sentence, naming source and rank.
+
+    Never a silent zero and never a competing gate. Powder has twice this month produced a
+    figure on a sheet that no reader could trace to a decision -- once as phantom mass from
+    a misclassified plastic, once from a geometry sum that had never consulted the route.
+    A cell that says who decided makes both failures visible the moment they recur.
+    """
+    payload = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+               or summary.get("canonical_route_shadow") or {})
+    decisions = [d for d in (payload.get("decisions") or []) if isinstance(d, dict)]
+    powder = [d for d in decisions
+              if str(d.get("operation") or "").strip().lower() in
+              ("powder_coating", "powder_coat", "powder", "p_coat", "pcoat")]
+    if not decisions:
+        return ("Powder: decided by the LEGACY FINISH GATE - no compiled route on this job. "
+                "Not arbitrated, and not traceable to a ranked source.")
+    if not powder:
+        return ("Powder: NO DECISION on this route. Any powder mass came from geometry, "
+                "not from an arbitrated decision - treat it as unverified.")
+    required = [d for d in powder if str(d.get("status") or "").lower() == "required"]
+    if not required:
+        return ("Powder: decided by the route compiler - NOTHING COATED on this job. "
+                "A powder figure on this sheet would contradict the route.")
+    best = max(required, key=lambda d: int(d.get("source_rank") or 0))
+    return ("Powder: decided by the route compiler ({} part(s) coated; strongest source "
+            "{}, rank {}).".format(len(required),
+                                   best.get("decided_by") or best.get("source") or "unrecorded",
+                                   best.get("source_rank") or "?"))
+
+
+# The one spelling of the residual row, so the breakdown and AI Provenance's reconciliation
+# sentence cannot drift into two vocabularies for one number.
+POWDER_SCRAP_LABEL = "Powder / scrap / other workbook material"
+
+
+def material_breakdown(summary: Dict[str, Any]) -> List[Tuple[str, float]]:
+    """Per-part material by type, plus the row that makes it add back to the sheet.
+
+    THE RESIDUAL IS THE POINT OF THIS BLOCK, not the breakdown. A list of materials summing to
+    less than the workbook's material total is short and silently so — on 10575-02 the per-part
+    column was £70.27 against the sheet's £144.40, and an estimator reading a breakdown that
+    accounts for half the money concludes the engine has lost the other half.
+
+    What is actually there is the powder consumable and the per-line scrap uplift the workbook
+    adds, neither of which belongs to any single part. Named as its own row, from the
+    difference, so the section adds back to the authoritative figure instead of being near it.
+
+    THE LABEL IS LOAD-BEARING. AI Provenance's reconciliation sentence names this same residual
+    in these same words, and the two must match exactly — a reader who cannot join the sentence
+    to the row has two unexplained figures instead of one explained one.
+    """
+    from costed_facts import job_parts, part_material_cost, priced_route_known, job_totals
+    parts = job_parts(summary) or (
+        (summary.get("manufacturing_writeup") or {}).get("parts") or [])
+    if not parts:
+        return []
+    canonical = priced_route_known(summary)
+    # FROM THE CHARGED ROWS ONCE THE SHEET HAS BEEN READ BACK. Built from the engine's
+    # net-part figures this block fell £5.13 short of the sheet on 7332-01 and named the
+    # shortfall "Powder / scrap" under a heading that said NOTHING COATED. The difference
+    # was the nest-versus-net-part BASIS, not a consumable. From the charged lines the
+    # breakdown IS the sheet's money, and any residual is a penny of rounding — labelled
+    # powder only when powder is actually charged on the job.
+    try:
+        from costed_facts import (charged_material_rows_present, charged_breakdown_by_material,
+                                  RESIDUAL_LABEL, has_operation)
+        if canonical and charged_material_rows_present(summary):
+            _powder = has_operation(summary, "powder_coating", "powder")
+            return charged_breakdown_by_material(
+                summary, residual_label=POWDER_SCRAP_LABEL if _powder else RESIDUAL_LABEL)
+    except Exception:                                            # noqa: BLE001
+        pass
+    est = {p.get("part_number"): p
+           for p in (summary.get("estimate_summary") or {}).get("part_estimates", [])
+           if p.get("part_number")}
+    totals: Dict[str, float] = {}
+    for part in parts:
+        # Group bought-ins together rather than under a mis-inferred "MILD_STEEL".
+        mat = ("Bought-in" if _is_bought_in(part)
+               else str(part.get("normalized_material") or part.get("material") or "Unknown"))
+        cost = (part_material_cost(part)[1] if canonical else
+                float(est.get(part.get("part_number"), {})
+                      .get("extended_total_cost_gbp") or 0))
+        totals[mat] = totals.get(mat, 0.0) + cost
+    mat_total = job_totals(summary).get("material_gbp")
+    if mat_total is not None:
+        residual = round(float(mat_total) - sum(totals.values()), 4)
+        if abs(residual) >= 0.005:
+            totals[POWDER_SCRAP_LABEL] = residual
+    return sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
+
+
+def append_decision_blocks(ws, row: int, summary: Dict[str, Any]) -> int:
+    """The four blocks that were the Decision Report's own, written onto whatever sheet asks.
+
+    WHY THEY MOVED. James, after reading both tabs side by side: "we don't want overlapping
+    data between the two sheets decision and ai governance. they need to have their own
+    identities." Then, having looked again: "let's get rid of one and just keep the other one
+    then. we don't want clutter."
+
+    He is right about the overlap and right about the remedy. The two tabs shared their PER-PART
+    TABLE — one row per part, material, gauge, source, on both — and that table is what a reader
+    sees first and most of. Twenty-five rows duplicated is not two perspectives on a job; it is
+    the same list twice, and it was actively harmful, because where the two derived a fact
+    independently they disagreed (geometry source read `pdf` on one and `DXF flat pattern
+    (exact)` on the other for the same part) and an estimator had no way to tell which tab to
+    believe.
+
+    TRIMMING THE DUPLICATE TABLE WAS TRIED FIRST AND IS NOT AVAILABLE.
+    test_every_deliverable_describes_the_same_part_list requires every deliverable to cover the
+    same parts, so a tab cannot be narrowed to a subset — which leaves deletion as the only way
+    to remove the duplication, and makes James's instruction the correct one rather than merely
+    the one he gave.
+
+    WHAT WAS UNIQUE HAD TO COME WITH IT. Four blocks existed nowhere else:
+
+        who decided powder, and at what rank
+        the material breakdown that adds back to the sheet's own total
+        the operations where two equally-ranked sources disagreed
+        the DATA contests — what the part is made of, and how thick
+
+    The last is the expensive one. Material decides the rate and whether the part has a rate at
+    all; gauge decides the rate AND steps the cut time, so a part costed on the wrong gauge is
+    wrong twice. Deleting the tab without these would have removed the only place they appear.
+
+    Returns the next free row.
+    """
+    _contested = decisions_that_required_resolution(summary)
+    _datum = datum_decisions_that_required_resolution(summary)
+
+    # ── Who decided powder ──────────────────────────────────────────────────
+    row += 2
+    _c(ws, row, 1, powder_authority(summary), bg=C_LIGHT, size=9, wrap=True, italic=True)
+    ws.row_dimensions[row].height = 24
+
+    # ── Material breakdown, adding back to the sheet's total ────────────────
+    breakdown = material_breakdown(summary)
+    if breakdown:
+        from costed_facts import job_totals
+        _mat_total = job_totals(summary).get("material_gbp")
+        row += 2
+        _c(ws, row, 1,
+           "MATERIAL COST BREAKDOWN BY TYPE"
+           + (f"  —  per-part material; the Estimate sheet calculated "
+              f"£{float(_mat_total):,.2f} of material in total"
+              if _mat_total is not None else
+              "  —  per-part material only; labour is charged per department row"),
+           bold=True, bg=C_BLUE, fg=C_WHITE, size=11)
+        ws.row_dimensions[row].height = 20
+        row += 1
+        _total = sum(v for _k, v in breakdown) or 1.0
+        for mat, cost in breakdown:
+            _c(ws, row, 1, mat, size=9, border=True)
+            _c(ws, row, 2, cost, size=9, border=True, num_fmt="£#,##0.00", align="right")
+            _c(ws, row, 3, f"{cost / _total * 100:.0f}%", size=9, border=True, align="right")
+            row += 1
+
+    # ── Operations two equally-ranked sources disagreed about ───────────────
+    if _contested:
+        row += 2
+        _c(ws, row, 1, "DECISIONS THAT REQUIRED RESOLUTION", bold=True,
+           bg=C_NAVY, fg=C_WHITE, size=10)
+        row += 1
+        _c(ws, row, 1,
+           "Every other line on this tab describes a decision that made itself: one strongest "
+           "source, nothing at that rank contradicting it. These are the ones the engine had "
+           "to choose, weakest ground first.",
+           size=8, italic=True, fg="666666")
+        row += 1
+        for _ci, _h in enumerate(("Part", "Operation", "Settled as", "Decided by",
+                                  "Rank", "Other source claimed", "Settled by"), 1):
+            _c(ws, row, _ci, _h, bold=True, bg=C_SECTION, size=9, border=True)
+        row += 1
+        for _d in _contested:
+            _c(ws, row, 1, str(_d.get("target_id") or ""), size=9, border=True)
+            _c(ws, row, 2, str(_d.get("operation") or "").replace("_", " "), size=9, border=True)
+            _c(ws, row, 3, str(_d.get("status") or ""), size=9, border=True)
+            _c(ws, row, 4, str(_d.get("decided_by") or _d.get("source") or "unrecorded"),
+               size=9, border=True)
+            _c(ws, row, 5, _d.get("source_rank") or "", align="center", size=9, border=True)
+            _c(ws, row, 6, ", ".join(str(x) for x in (_d.get("losing_statuses") or [])),
+               size=9, border=True)
+            _c(ws, row, 7, str(_d.get("settled_by_key") or "rank"), size=9, border=True,
+               wrap=True)
+            row += 1
+
+    # ── What the part IS, where two sources disagreed ───────────────────────
+    if _datum:
+        row += 2
+        _c(ws, row, 1, "WHAT THE PART IS — WHERE TWO SOURCES DISAGREED", bold=True,
+           bg=C_NAVY, fg=C_WHITE, size=10)
+        row += 1
+        _c(ws, row, 1,
+           "The higher-ranked source was used and the figure stands. Confirm these before "
+           "quoting firm — material and gauge both move the money.",
+           size=8, italic=True, fg="666666")
+        row += 1
+        for _ci, _h in enumerate(("Part", "Datum", "Costed as", "Read from",
+                                  "Other source said", "Which source", "Apart by"), 1):
+            _c(ws, row, _ci, _h, bold=True, bg=C_SECTION, size=9, border=True)
+        row += 1
+        for _d in _datum:
+            _ratio = _d.get("ratio")
+            _c(ws, row, 1, str(_d.get("part_number") or ""), size=9, border=True)
+            _c(ws, row, 2, str(_d.get("datum") or ""), size=9, border=True)
+            _c(ws, row, 3, str(_d.get("costed_as") or ""), size=9, border=True)
+            _c(ws, row, 4, str(_d.get("costed_from") or ""), size=9, border=True, wrap=True)
+            _c(ws, row, 5, str(_d.get("other") or ""), size=9, border=True)
+            _c(ws, row, 6, str(_d.get("other_from") or ""), size=9, border=True, wrap=True)
+            # Only the gauge contest measures a distance; a material argument is categorical.
+            _c(ws, row, 7, (f"{float(_ratio):g}x" if _ratio else "—"),
+               align="center", size=9, border=True)
+            row += 1
+    elif not _contested:
+        row += 2
+        # "NOTHING WAS CONTESTED" is a claim about SAME-RANK fights only — and printed
+        # flat, it read as an all-clear on a job whose e-mail was carrying two open
+        # manufacturing decisions. When decisions are open, this panel says so first.
+        try:
+            from costed_facts import outstanding_summary as _osum
+            _open_n = int((_osum(summary) or {}).get("manufacturing") or 0)
+        except Exception:                                        # noqa: BLE001
+            _open_n = 0
+        if _open_n:
+            _c(ws, row, 1,
+               f"{_open_n} MANUFACTURING DECISION{'S ARE' if _open_n != 1 else ' IS'} "
+               f"OPEN FOR A PERSON — see the decisions list on the e-mail and report "
+               f"(gauge and stated-twice figures are settled by source rank meanwhile, "
+               f"never silently). No two sources disagreed at the SAME rank, so every "
+               f"value above came from a single strongest source — which is not the same "
+               f"as corroborated: where only one reader looked, there was nothing to "
+               f"disagree with it.",
+               bg=C_LIGHT, size=9, wrap=True, italic=True)
+        else:
+            _c(ws, row, 1,
+               "NOTHING WAS CONTESTED ON THIS JOB — no operation and no datum had two "
+               "sources disagreeing at the same rank. Every value above came from a "
+               "single strongest source. That is not the same as corroborated: where "
+               "only one reader looked, there was nothing to disagree with it.",
+               bg=C_LIGHT, size=9, wrap=True, italic=True)
+        ws.row_dimensions[row].height = 28
+    return row
 
 
 def add_decision_report_sheet(wb, summary: Dict[str, Any],
                                scan_meta: Dict[str, Any] = None) -> None:
-    """Add a 'Decision Report' sheet to an existing workbook."""
+    """Add a 'Decision Report' sheet to an existing workbook.
+
+    NO LONGER WRITTEN INTO THE DELIVERED WORKBOOK. James removed the tab — see
+    append_decision_blocks for why, and for the four blocks that moved to AI Provenance rather
+    than going with it. main.py does not call this; the estimator opening a job gets eight
+    sheets, not nine, and no part list appears twice.
+
+    Kept, deliberately and not by neglect. The blocks above are the sheet's content and their
+    tests exercise it here; and the tab can be restored in one line if the estimators miss it
+    when this is walked through with them. A test asserts the delivered workbook has no such
+    sheet, so it cannot come back unnoticed.
+    """
     if not _OK:
         return
 
-    parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
+    # THE SAME ROWS THE ESTIMATE SHEET HAS. job_parts is the canonical list the sheet was
+    # built from, each record overlaid on its manufacturing_writeup entry so the provenance
+    # columns below still have the geometry, thickness and material-source fields they read.
+    # Iterating manufacturing_writeup directly put this tab on a different set of rows from
+    # the sheet two tabs away: a bought-in the sheet charges appearing nowhere here, a
+    # recogniser-minted duplicate appearing here and not there.
+    from costed_facts import job_parts
+    parts = job_parts(summary) or (
+        (summary.get("manufacturing_writeup") or {}).get("parts") or [])
     if not parts:
         return
 
     # SDI Intelligence — cost lives in estimate_summary.part_estimates,
     # keyed by part_number. Build a lookup so the report shows real costs.
+    #
+    # PRE-FILTER, and the columns fed from it say so. These are the engine's own per-part
+    # numbers; the Estimate sheet's totals are calculated by Excel from the accepted labour
+    # and material rows, and the two are different calculators. Per-part cost is not
+    # recoverable from the sheet — a labour row is a department's batch value across every
+    # part in the group — so the honest presentation is the engine figure, labelled as the
+    # engine figure, reconciled against the workbook below.
     _est_lookup = {}
     for _pe in (summary.get("estimate_summary") or {}).get("part_estimates", []):
         _pn = _pe.get("part_number")
         if _pn:
             _est_lookup[_pn] = _pe
 
+    from costed_facts import (canonical_quantity, decision_ids_for_part,
+                              is_placeholder_price, job_totals, part_material_cost,
+                              priced_route_known, priced_rows_for_part)
+    _totals = job_totals(summary)
+    _canonical = priced_route_known(summary)
+
     scan_meta = scan_meta or {}
-    ws = wb.create_sheet("Decision Report")
+    ws = replace_generated_sheet(wb, "Decision Report")
     ws.sheet_view.showGridLines = False
     ws.sheet_properties.tabColor = C_BLUE
     # ── Column widths ──────────────────────────────────────────────────────────
-    col_widths = [16, 30, 6, 14, 10, 34, 34, 34, 10, 10, 14]
+    col_widths = [16, 30, 6, 14, 10, 34, 34, 34, 10, 10, 14, 26]
     for ci, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     # ── Title ──────────────────────────────────────────────────────────────────
-    ws.merge_cells("A1:K1")
+    ws.merge_cells("A1:L1")
     _c(ws, 1, 1, "SDI Intelligence — Estimate Decision Report",
        bold=True, bg=C_NAVY, fg=C_WHITE, align="center", size=14)
     ws.row_dimensions[1].height = 30
     pdf_name = scan_meta.get("pdf_name") or summary.get("source_file") or "—"
     job_no   = scan_meta.get("job_number") or "—"
-    total    = sum(float(_est_lookup.get(p.get("part_number"), {}).get("extended_total_cost_gbp") or 0) for p in parts)
+    # THE HEADLINE FIGURE IS THE WORKBOOK'S. Summing the engine's labour-inclusive per-part
+    # totals put "Total Estimate: £44.75" at the top of a 2085 sheet the workbook priced at
+    # £6.33 — and repeated it in the total row whenever the Sell Price cell could not be
+    # located. The engine sum is only a fallback for a job that never reached Excel.
+    _wb_unit = _totals.get("unit_gbp")
+    total = float(_wb_unit) if _wb_unit is not None else sum(
+        float(_est_lookup.get(p.get("part_number"), {}).get("extended_total_cost_gbp") or 0)
+        for p in parts)
 
     # The AUTHORITATIVE total is the WB's Sell Price (computed by the WB's own formulas).
     # Find its cell by label so the report can reference it live; falls back to the engine
@@ -321,20 +903,26 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
 
     ds = (summary.get("estimate_summary") or {}).get("data_sufficiency") or {}
     if ds.get("status") == "insufficient_data":
-        prov = float(ds.get("document_total_provisional_gbp") or total or 0)
+        # Do NOT print the engine part-sum (ds.document_total_provisional_gbp) as "the
+        # provisional total" — it is a different calculator from the workbook Sell Price and
+        # can differ materially (Horti Crate: engine £102.07 vs workbook £46.53), which made
+        # this header contradict the SELL PRICE total row below and the report/quote HTML.
+        # Warn here; the authoritative provisional figure is the Sell Price shown below.
         total_line = (
-            f"⚠ INSUFFICIENT DATA — provisional £{prov:,.2f} NOT for quoting "
+            f"⚠ INSUFFICIENT DATA — PROVISIONAL, NOT for quoting "
             f"(credible {float(ds.get('credible_cost_ratio') or 0) * 100:.0f}% · "
-            f"DXF {float(ds.get('dxf_part_ratio') or 0) * 100:.0f}% of parts)"
+            f"DXF {float(ds.get('dxf_part_ratio') or 0) * 100:.0f}% of parts) — see total below"
         )
     else:
         # Prefer the WB Sell Price; the header text still shows the engine sum as a
         # reference, but the authoritative figure is the WB's (see the TOTAL row below).
         if _sell_ref:
             total_line = "Total (Sell Price): see Estimate sheet — mirrored below"
+        elif _wb_unit is not None:
+            total_line = f"Unit cost (calculated by the Estimate sheet): £{total:,.2f}"
         else:
-            total_line = f"Total Estimate: £{total:,.2f}"
-    ws.merge_cells("A2:K2")
+            total_line = f"Total Estimate (engine part-sum — no workbook): £{total:,.2f}"
+    ws.merge_cells("A2:L2")
     _c(ws, 2, 1,
        f"Drawing: {pdf_name}   |   Job: {job_no}   |   "
        f"{total_line}   |   "
@@ -343,7 +931,7 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
        bg=C_BLUE, fg=C_WHITE, align="center", size=10)
     ws.row_dimensions[2].height = 16
     # ── Key ────────────────────────────────────────────────────────────────────
-    ws.merge_cells("A3:K3")
+    ws.merge_cells("A3:L3")
     _c(ws, 3, 1,
        "CONFIDENCE:   ✅ HIGH — DXF matched or knowledge base confirmed   "
        "⚡ MEDIUM — PDF extraction or AI inference   "
@@ -352,33 +940,119 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
     ws.row_dimensions[3].height = 14
     ws.row_dimensions[4].height = 6  # spacer
     # ── Column headers ─────────────────────────────────────────────────────────
+    # The money columns are the ENGINE's per-part figures, and once a workbook exists they
+    # are not what the sheet charges. Naming the basis in the header is the difference
+    # between a working figure and a price the reader will quote from.
+    # Material, not "cost". See the per-part note below: labour has no per-part figure.
+    _money_basis = " material" if _canonical else ""
     headers = [
         "Part Number", "Description", "Qty",
         "Material", "Thickness",
         "Material Source — WHY",
         "Thickness Source — WHY",
         "Operations — HOW DETECTED",
-        "Unit £", "Ext £", "Confidence"
+        f"Unit £{_money_basis}", f"Ext £{_money_basis}", "Confidence",
+        "Priced by — sheet row / decision",
     ]
+    # ── ROW 4: WHAT AN ESTIMATOR SHOULD READ BEFORE THE TABLE ──────────────────
+    # Two facts that decide how much of the rest to trust, on the sheet itself rather than
+    # in a log nobody opens: who owns powder, and how many decisions the engine had to
+    # settle rather than simply read. Powder is here because it has twice this month put a
+    # figure on a sheet that no reader could trace to a decision.
+    _contested = decisions_that_required_resolution(summary)
+    _datum_contested = datum_decisions_that_required_resolution(summary)
+    _banner = powder_authority(summary)
+    # BOTH KINDS COUNTED. The operation contests were the only ones named here, and on a job
+    # whose real arguments were about material and gauge the banner read "2 decisions" while
+    # four costlier ones sat unmentioned two tabs away in the review list.
+    _n = len(_contested) + len(_datum_contested)
+    if _n:
+        _bits = []
+        if _contested:
+            _bits.append(f"{len(_contested)} operation")
+        if _datum_contested:
+            _bits.append(f"{len(_datum_contested)} material/gauge")
+        _banner += (f"   |   {_n} decision(s) required resolution "
+                    f"({', '.join(_bits)}) — see the blocks below the table.")
+    else:
+        _banner += "   |   No decision required resolution: no two equal sources disagreed."
+    _c(ws, 4, 1, _banner, bold=True, size=9,
+       bg=(C_LOW if _contested else C_LIGHT),
+       fg=(C_LOW_TXT if _contested else "000000"), wrap=False)
+
     for ci, hdr in enumerate(headers, 1):
         _c(ws, 5, ci, hdr, bold=True, bg=C_NAVY, fg=C_WHITE,
            align="center", size=9, border=True)
     ws.row_dimensions[5].height = 20
     # ── Part rows ──────────────────────────────────────────────────────────────
     row = 6
+    # ── WHOSE QUESTION THIS TAB ANSWERS ───────────────────────────────────────────
+    #
+    # ELEVEN OF THIS TABLE'S TWELVE COLUMNS ARE ON AI PROVENANCE, and the twelfth is the same
+    # column under a different name. Listing every part here made the two tabs a strict subset
+    # of one another: an estimator reading both read the same rows twice and had no way to know
+    # which to believe when they differed — which they did, on 001's thickness, until 9a6b11d.
+    #
+    # They answer different questions and only one of them needs a row per part:
+    #
+    #   AI Provenance    WHERE DID THIS NUMBER COME FROM — every part, every field, its source,
+    #                    its confidence, the rate behind it. The audit.
+    #   Decision Report  WHAT HAD TO BE DECIDED, AND ON WHAT GROUNDS — the places two sources
+    #                    disagreed and something arbitrated, what owns the powder, how the
+    #                    material breakdown adds back to the sheet, and what needs a person.
+    #
+    # So this table now carries the parts a DECISION was made about, and says where the rest
+    # are. A tab that repeats the audit is a tab nobody opens twice.
+    # EVERY PART, because every deliverable describes the same part list — an invariant this
+    # tab does not get to opt out of. The two tabs are told apart by their COLUMNS, not by
+    # which parts they carry.
+    ws.merge_cells(f"A{row}:L{row}")
+    _c(ws, row, 1,
+       "THIS TAB: what had to be DECIDED, and on what grounds — the material and gauge each "
+       "part was costed at, WHY that reading won, how the route was detected, and which sheet "
+       "row charges it. For where a number came from in detail — the exact source key, "
+       "confidence, cut length, geometry and the rate behind the price — use the AI PROVENANCE "
+       "tab. Same parts, different question.",
+       bg=C_LIGHT, size=9, wrap=True, italic=True)
+    ws.row_dimensions[row].height = 26
+    row += 1
+
     review_parts = []
     for i, part in enumerate(parts):
         pn   = str(part.get("part_number") or "—")
         desc = str(part.get("description") or "—")
-        qty  = int(part.get("quantity") or 1)
+        # QUANTITY PER TOP-LEVEL UNIT, not per parent.
+        #
+        # A BOM row states how many the PARENT takes. For anything reached through a
+        # sub-assembly that is not the quantity the job needs: a knob at qty 2 inside a
+        # sub-assembly used twice is 4 per unit. The compiled hierarchy rolls the
+        # multiplicity through, and the workbook already charges on the rolled figure —
+        # so the raw row quantity here made the report disagree with its own Estimate sheet
+        # for every part below the first level. Falls back to the row when the graph does
+        # not know the part.
+        _cq = canonical_quantity(summary, pn)
+        qty  = int(_cq) if _cq is not None and float(_cq).is_integer() else (
+            _cq if _cq is not None else int(part.get("quantity") or 1))
         # Bought-in components carry no fabrication material — show a clean label
         # instead of a defaulted/mis-inferred one (e.g. "MILD_STEEL" on a foam tape).
         if _is_bought_in(part):
             mat = "Bought-in"
         else:
             mat = str(part.get("normalized_material") or part.get("material") or "—")
-        unit = float(_est_lookup.get(pn, {}).get("unit_total_cost_gbp") or 0)
-        ext  = float(_est_lookup.get(pn, {}).get("extended_total_cost_gbp") or 0)
+        # PER-PART MONEY IS MATERIAL ONLY.
+        #
+        # unit_total_cost_gbp is an engine-era, LABOUR-INCLUSIVE apportionment. On 2085 it
+        # put GBP 19.25 against each tube on a sheet whose entire unit price is GBP 6.33 —
+        # a number in a column headed like a cost that reconciles to nothing, on the two
+        # parts whose material could not be read at all. Labour is charged per DEPARTMENT
+        # ROW as a batch value across every part in that setup, so there is no per-part
+        # labour figure to show; material is costed per part and sums to the workbook's own
+        # material total, so that is what this column is and what it now says.
+        if _canonical:
+            unit, ext = part_material_cost(part)
+        else:
+            unit = float(_est_lookup.get(pn, {}).get("unit_total_cost_gbp") or 0)
+            ext  = float(_est_lookup.get(pn, {}).get("extended_total_cost_gbp") or 0)
         # Thickness — real value only
         # Thickness column — DXF filename first, then non-tolerance values
         import re as _re_t
@@ -397,10 +1071,10 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
                                  if t and round(float(t), 1) not in tol), "—")
             else:
                 real_thk = next((f"{float(t):.1f}mm" for t in thks if t), "—")
-        conf, conf_label, conf_bg, conf_fg, conf_expl = _conf_info(part, unit)
+        conf, conf_label, conf_bg, conf_fg, conf_expl = _conf_info(part, unit, summary)
         mat_why  = _mat_source_explanation(part)
         thk_why  = _thk_source_explanation(part)
-        ops_why  = _ops_explanation(part)
+        ops_why  = _ops_explanation(part, _est_lookup.get(pn), summary)
         bg = C_ALT if i % 2 == 0 else C_WHITE
         if _is_bought_in(part):
             bg = C_BOUGHT
@@ -421,6 +1095,23 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
            num_fmt="£#,##0.00", border=True)
         _c(ws, row, 11, conf_label, bg=conf_bg, fg=conf_fg,
            align="center", bold=True, size=8, border=True)
+        # ── Traceability: part -> the sheet rows charging it -> the decisions behind them.
+        # Without this the Decision Report asserts a route and offers nothing to check it
+        # against; with it every line on the page can be walked back to the Estimate tab and
+        # forward to the compiler decision that put it there.
+        _prows = priced_rows_for_part(summary, pn) if _canonical else []
+        if _prows:
+            _wbrows = sorted({int(float(r["workbook_row"])) for r in _prows
+                              if r.get("workbook_row")})
+            _dids = decision_ids_for_part(summary, pn)
+            _trace = ("Estimate row " + ", ".join(str(r) for r in _wbrows)) if _wbrows else ""
+            if _dids:
+                _trace = (_trace + "\n" if _trace else "") + " · ".join(_dids)
+        elif _canonical:
+            _trace = "not priced on any labour row"
+        else:
+            _trace = "— no workbook built"
+        _c(ws, row, 12, _trace, bg=bg, size=8, border=True, wrap=True)
         ws.row_dimensions[row].height = 36
         row += 1
         if (conf < 0.5 or unit == 0) and not _is_bought_in(part):
@@ -430,7 +1121,10 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
     ws.merge_cells(f"A{row}:H{row}")
     # Label reflects which number is shown: WB Sell Price (authoritative) if we found it,
     # otherwise the engine part-sum.
-    _total_label = "SELL PRICE (from Estimate sheet)" if _sell_ref else "TOTAL ESTIMATE (engine part-sum)"
+    _total_label = ("SELL PRICE (from Estimate sheet)" if _sell_ref
+                    else "UNIT COST (calculated by the Estimate sheet)" if _wb_unit is not None
+                    else "TOTAL ESTIMATE (engine part-sum — no workbook)")
+    _resolution_row = row + 2                  # written after the total, see below
     _c(ws, row, 1, _total_label, bold=True, bg=C_NAVY, fg=C_WHITE,
        align="right", size=12)
     _c(ws, row, 9, "", bg=C_NAVY)
@@ -443,17 +1137,46 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
         _c(ws, row, 10, total, bold=True, bg=C_NAVY, fg=C_WHITE,
            align="right", size=13, num_fmt="£#,##0.00")
     _c(ws, row, 11, "", bg=C_NAVY)
+    _c(ws, row, 12, "", bg=C_NAVY)
     ws.row_dimensions[row].height = 24
+    # ── Reconciliation: the engine part-sum against what Excel calculated ───────
+    # Two calculators, both on this page: the Ext £ column sums the engine's per-part
+    # figures, the total row shows the workbook's. They are not the same arithmetic and on
+    # real jobs they differ materially. Leaving the reader to notice — and to guess which to
+    # believe — is what made this sheet read as the engine contradicting itself.
+    if _totals["source"] == "excel_calculated":
+        row += 1
+        ws.merge_cells(f"A{row}:L{row}")
+        # RECONCILE WHAT IS ON THE PAGE. This used to quote the engine part-sum — GBP 44.75
+        # on 2085 — as the figure to reconcile against. Now that the per-part columns are
+        # material, that number is not on this sheet and does not belong in its arithmetic
+        # either: it is an obsolete labour-inclusive total, and repeating it in the
+        # explanation put it back on the page the fix had just removed it from.
+        _unit = float(_totals.get("unit_gbp") or 0.0)
+        _mat = _totals.get("material_gbp")
+        _lab = _totals.get("labour_gbp")
+        _col_mat = sum(part_material_cost(p)[1] for p in parts) if _canonical else 0.0
+        _mat_txt = (f"The material column above sums to £{_col_mat:,.2f} against the "
+                    f"sheet's £{float(_mat):,.2f}. " if _mat is not None else "")
+        _lab_txt = (f"Labour is £{float(_lab):,.2f} and is charged per department row — a "
+                    f"batch value across every part in that setup, with no per-part figure "
+                    f"to show. The 'Priced by' column names the rows and the decisions "
+                    f"behind each part's share. " if _lab is not None else "")
+        _c(ws, row, 1,
+           f"RECONCILIATION — the Estimate sheet calculated £{_unit:,.2f} per unit. "
+           f"{_mat_txt}{_lab_txt}The workbook is authoritative.",
+           bg=C_LIGHT, size=9, wrap=True, italic=True)
+        ws.row_dimensions[row].height = 34
     # ── Parts requiring review ─────────────────────────────────────────────────
     if review_parts:
         row += 2
-        ws.merge_cells(f"A{row}:K{row}")
+        ws.merge_cells(f"A{row}:L{row}")
         _c(ws, row, 1, f"⚠  PARTS REQUIRING REVIEW ({len(review_parts)} items)",
            bold=True, bg="FFC7CE", fg="9C0006", size=11)
         ws.row_dimensions[row].height = 20
         row += 1
         for pn, desc, reason in review_parts:
-            ws.merge_cells(f"B{row}:K{row}")
+            ws.merge_cells(f"B{row}:L{row}")
             _c(ws, row, 1, "⚠", bg="FFC7CE", align="center", size=9)
             _c(ws, row, 2, f"{pn}  —  {desc}  |  {reason}",
                bg="FFC7CE", fg="9C0006", size=9, wrap=True)
@@ -462,16 +1185,22 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
     # ── Insufficient data / unreliable-cost section ────────────────────────────
     if ds.get("status") == "insufficient_data":
         row += 2
-        ws.merge_cells(f"A{row}:K{row}")
+        ws.merge_cells(f"A{row}:L{row}")
         _c(ws, row, 1, "⚠  INSUFFICIENT DATA — DO NOT QUOTE FROM THIS TOTAL",
            bold=True, bg="FFC7CE", fg="9C0006", size=11)
         ws.row_dimensions[row].height = 20
         row += 1
-        ws.merge_cells(f"A{row}:K{row}")
+        ws.merge_cells(f"A{row}:L{row}")
+        # Do NOT cite a second, static "provisional total" here. The authoritative total is
+        # the workbook Sell Price shown in the SELL PRICE row directly above (a live cross-
+        # sheet formula). The engine part-sum (ds.document_total_provisional_gbp) is a
+        # different calculator and can differ materially — e.g. on the Horti Crate the engine
+        # part-sum was £102.07 while the workbook Sell Price was £46.53. Printing that figure
+        # here made the Decision Report contradict its own total row (and the report/quote
+        # HTML). The banner's job is to WARN; the number is already above it.
         _c(ws, row, 1,
-           f"Most of this estimate is not DXF-backed. Provisional total "
-           f"£{float(ds.get('document_total_provisional_gbp') or 0):,.2f} suppressed — "
-           f"request part DXFs before quoting. "
+           f"Most of this estimate is not DXF-backed. The total shown above is "
+           f"PROVISIONAL and must not be quoted — request part DXFs first. "
            f"Credible share: {float(ds.get('credible_cost_ratio') or 0) * 100:.0f}% · "
            f"Part DXFs: {int(ds.get('parts_with_dxf') or 0)}/"
            f"{int(ds.get('fabricated_part_count') or 0)} fabricated parts.",
@@ -479,7 +1208,7 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
         ws.row_dimensions[row].height = 28
         row += 1
         for up in (ds.get("unreliable_parts") or [])[:12]:
-            ws.merge_cells(f"B{row}:K{row}")
+            ws.merge_cells(f"B{row}:L{row}")
             _c(ws, row, 1, "✗", bg="FFC7CE", align="center", size=9)
             _c(ws, row, 2,
                f"{up.get('part_number')}  —  {up.get('description')}  |  "
@@ -497,12 +1226,12 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
                      and not _has_real_dxf_geometry(p))]
     if _inferred or _no_dxf:
         row += 2
-        ws.merge_cells(f"A{row}:K{row}")
+        ws.merge_cells(f"A{row}:L{row}")
         _c(ws, row, 1, "⚠  DRAWINGS OUTSTANDING — PROVISIONAL / MISSING COSTS",
            bold=True, bg="FFE699", fg="7F6000", size=11)
         ws.row_dimensions[row].height = 20
         row += 1
-        ws.merge_cells(f"A{row}:K{row}")
+        ws.merge_cells(f"A{row}:L{row}")
         _c(ws, row, 1, "These parts have no flat DXF. Request the DXF from the "
            "drawing office; figures below are AI-inferred and provisional.",
            bg="FFF2CC", fg="7F6000", size=9, wrap=True)
@@ -514,7 +1243,7 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
             _bn = {"historical_sdilive": "from SDILive history",
                    "sibling_borrow": "borrowed from similar part",
                    "category_default": "typical size for type"}.get(basis, basis)
-            ws.merge_cells(f"B{row}:K{row}")
+            ws.merge_cells(f"B{row}:L{row}")
             _c(ws, row, 1, "✎", bg="FFF2CC", align="center", size=9)
             _c(ws, row, 2, f"{p.get('part_number')}  —  {p.get('description')}  |  "
                f"INFERRED ({_bn}): {gi.get('blank_length_mm')}×{gi.get('blank_width_mm')}mm "
@@ -522,7 +1251,7 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
             ws.row_dimensions[row].height = 18
             row += 1
         for p in _no_dxf:
-            ws.merge_cells(f"B{row}:K{row}")
+            ws.merge_cells(f"B{row}:L{row}")
             _c(ws, row, 1, "✗", bg="FFC7CE", align="center", size=9)
             _c(ws, row, 2, f"{p.get('part_number')}  —  {p.get('description')}  |  "
                f"NO DXF + could not infer — PRICE MANUALLY (currently £0)",
@@ -531,8 +1260,19 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
             row += 1
     # ── Cost breakdown by material ─────────────────────────────────────────────
     row += 2
-    ws.merge_cells(f"A{row}:K{row}")
-    _c(ws, row, 1, "COST BREAKDOWN BY MATERIAL TYPE",
+    ws.merge_cells(f"A{row}:L{row}")
+    # Named base. These are engine per-part figures and the percentages are shares of their
+    # own sum — not of the Sell Price in the total row above, which is a different number.
+    # An unlabelled "%" next to an unlabelled "£" invited exactly that reading.
+    # Named base AND named total. An unlabelled "%" beside an unlabelled "£" invited the
+    # reading that these were shares of the Sell Price, which they never were.
+    _mat_total = _totals.get("material_gbp")
+    _c(ws, row, 1,
+       "MATERIAL COST BREAKDOWN BY TYPE"
+       + (f"  —  per-part material; the Estimate sheet calculated "
+          f"£{float(_mat_total):,.2f} of material in total"
+          if _mat_total is not None else
+          "  —  per-part material only; labour is charged per department row"),
        bold=True, bg=C_BLUE, fg=C_WHITE, size=11)
     ws.row_dimensions[row].height = 20
     row += 1
@@ -543,12 +1283,29 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
             mat = "Bought-in"
         else:
             mat = str(part.get("normalized_material") or part.get("material") or "Unknown")
-        ext  = float(_est_lookup.get(part.get("part_number"), {}).get("extended_total_cost_gbp") or 0)
-        mat_totals[mat] = mat_totals.get(mat, 0) + ext
+        # Same basis as the per-part columns. Built from the engine's labour-inclusive
+        # totals this section reported GBP 44.75 of "material" on a job whose sheet
+        # calculated GBP 0.13 of it — a breakdown by material type that was not a breakdown
+        # of material.
+        _e = part_material_cost(part)[1] if _canonical else float(
+            _est_lookup.get(part.get("part_number"), {}).get("extended_total_cost_gbp") or 0)
+        mat_totals[mat] = mat_totals.get(mat, 0) + _e
+    # WHAT THE PARTS DO NOT ACCOUNT FOR.
+    #
+    # The sheet's material total also carries lines that belong to no single part — the
+    # powder consumable, and the per-line scrap the workbook adds. On 2085 the part column
+    # is about £0.09 against a workbook material total of £0.1334, so a breakdown of only
+    # the parts is short and silently so. Named as its own row, from the difference, so the
+    # section adds back to the authoritative figure instead of merely being near it.
+    if _mat_total is not None:
+        _residual = round(float(_mat_total) - sum(mat_totals.values()), 4)
+        if abs(_residual) >= 0.005:
+            mat_totals["Powder / scrap / other workbook material"] = _residual
     for mi, (mat, cost) in enumerate(sorted(
             mat_totals.items(), key=lambda x: x[1], reverse=True)):
         bg = C_ALT if mi % 2 == 0 else C_WHITE
-        pct = (cost / total * 100) if total > 0 else 0
+        _base = sum(mat_totals.values())
+        pct = (cost / _base * 100) if _base > 0 else 0
         ws.merge_cells(f"A{row}:H{row}")
         _c(ws, row, 1, mat, bg=bg, bold=True, size=10, border=True)
         _c(ws, row, 9, cost, bg=bg, align="right", bold=True,
@@ -556,17 +1313,125 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
         _c(ws, row, 10, "", bg=bg, border=True)
         _c(ws, row, 11, f"{pct:.1f}%", bg=bg, align="center",
            size=10, border=True)
+        _c(ws, row, 12, "", bg=bg, border=True)
+        ws.row_dimensions[row].height = 18
+        row += 1
+    # The section must be checkable against the sheet, not just internally consistent.
+    if _mat_total is not None:
+        ws.merge_cells(f"A{row}:H{row}")
+        _c(ws, row, 1, "TOTAL MATERIAL (agrees with the Estimate sheet)",
+           bold=True, bg=C_SECTION, size=10, border=True)
+        _c(ws, row, 9, sum(mat_totals.values()), bg=C_SECTION, align="right", bold=True,
+           num_fmt="£#,##0.00", size=10, border=True)
+        _c(ws, row, 10, "", bg=C_SECTION, border=True)
+        _c(ws, row, 11, "100.0%", bg=C_SECTION, align="center", size=10, border=True)
+        _c(ws, row, 12, "", bg=C_SECTION, border=True)
         ws.row_dimensions[row].height = 18
         row += 1
     # ── Footer ─────────────────────────────────────────────────────────────────
     row += 2
-    ws.merge_cells(f"A{row}:K{row}")
+    ws.merge_cells(f"A{row}:L{row}")
     _c(ws, row, 1,
        f"Generated by SDI Intelligence  |  wearesdi.com  |  "
        f"{datetime.now().strftime('%d/%m/%Y %H:%M')}  |  "
        f"Estimates based on SolidWorks drawings + SDILive knowledge base  |  "
        f"Subject to estimator review before quoting",
        size=8, italic=True, fg="888888", align="center")
+    # ── DECISIONS THAT REQUIRED RESOLUTION ─────────────────────────────────────
+    # Every other line on this tab describes a decision that made itself: one strongest
+    # source, nothing at that rank contradicting it. These are the lines where the engine
+    # had to choose between sources the waterfall calls equal, and they are where an
+    # estimator's feedback is worth most. Weakest resolution first -- a contest settled by
+    # the claim-id backstop had no distinguishing evidence at all.
+    if _contested:
+        # BELOW EVERYTHING ALREADY ON THE SHEET. A fixed offset from the
+        # totals row lands inside the template's merged footer.
+        _r = max(_resolution_row, ws.max_row + 2)
+        _c(ws, _r, 1, "DECISIONS THAT REQUIRED RESOLUTION", bold=True,
+           bg=C_NAVY, fg=C_WHITE, size=10)
+        _r += 1
+        for _ci, _h in enumerate(("Part", "Operation", "Settled as", "Decided by",
+                                  "Rank", "Other source claimed", "Settled by"), 1):
+            _c(ws, _r, _ci, _h, bold=True, bg=C_SECTION, size=9, border=True)
+        _r += 1
+        for _d in _contested:
+            _c(ws, _r, 1, str(_d.get("target_id") or ""), size=9, border=True)
+            _c(ws, _r, 2, str(_d.get("operation") or "").replace("_", " "),
+               size=9, border=True)
+            _c(ws, _r, 3, str(_d.get("status") or ""), size=9, border=True)
+            _c(ws, _r, 4, str(_d.get("decided_by") or _d.get("source") or "unrecorded"),
+               size=9, border=True)
+            _c(ws, _r, 5, _d.get("source_rank") or "", align="center", size=9, border=True)
+            _c(ws, _r, 6, ", ".join(str(x) for x in (_d.get("losing_statuses") or [])),
+               size=9, border=True)
+            _c(ws, _r, 7, str(_d.get("settled_by_key") or "rank"), size=9, border=True,
+               wrap=True)
+            _r += 1
+
+    # ── WHAT THE PART IS, WHERE TWO SOURCES DISAGREED ──────────────────────────
+    # The block above covers OPERATIONS, and those are not the expensive arguments. On 8352
+    # it held two lines, both "powder coating: not_applicable", while the same run had a back
+    # panel costed as PLYWOOD that inference read as TIMBER and three parts whose gauge two
+    # sources put 4x apart. Material decides the rate and whether the part has a rate at all;
+    # gauge decides the rate AND steps the cut time, so a part costed on the wrong one is
+    # wrong twice. A decisions tab that omits them is not describing the decisions that matter.
+    if _datum_contested:
+        _r = ws.max_row + 2
+        _c(ws, _r, 1, "WHAT THE PART IS — WHERE TWO SOURCES DISAGREED", bold=True,
+           bg=C_NAVY, fg=C_WHITE, size=10)
+        _r += 1
+        _c(ws, _r, 1,
+           "The higher-ranked source was used and the figure stands. Confirm these before "
+           "quoting firm — material and gauge both move the money.",
+           size=8, italic=True, fg="666666")
+        _r += 1
+        for _ci, _h in enumerate(("Part", "Datum", "Costed as", "Read from",
+                                  "Other source said", "Which source", "Apart by"), 1):
+            _c(ws, _r, _ci, _h, bold=True, bg=C_SECTION, size=9, border=True)
+        _r += 1
+        for _d in _datum_contested:
+            _ratio = _d.get("ratio")
+            _c(ws, _r, 1, str(_d.get("part_number") or ""), size=9, border=True)
+            _c(ws, _r, 2, str(_d.get("datum") or ""), size=9, border=True)
+            _c(ws, _r, 3, str(_d.get("costed_as") or ""), size=9, border=True)
+            _c(ws, _r, 4, str(_d.get("costed_from") or ""), size=9, border=True, wrap=True)
+            _c(ws, _r, 5, str(_d.get("other") or ""), size=9, border=True)
+            _c(ws, _r, 6, str(_d.get("other_from") or ""), size=9, border=True, wrap=True)
+            # Only the gauge contest measures a distance; a material argument is categorical.
+            _c(ws, _r, 7, (f"{float(_ratio):g}x" if _ratio else "—"),
+               align="center", size=9, border=True)
+            _r += 1
+
+    # ── THE DECISIONS NOBODY COULD MAKE, BECAUSE THE DRAWING NEVER ARRIVED ─────
+    # Every other block on this tab describes a decision made from evidence. These parts had
+    # none: no drawing, so nothing read them, nothing costed them and no decision about them
+    # exists to report. Naming them keeps this tab an account of the whole BOM rather than of
+    # the parts that happened to have drawings.
+    try:
+        from costed_facts import undrawn_bom_lines as _undrawn
+        _missing = _undrawn(summary)
+    except Exception:                                            # noqa: BLE001
+        _missing = []
+    if _missing:
+        _r = ws.max_row + 2
+        _c(ws, _r, 1, "DRAWINGS MISSING FROM THIS PACK — NOTHING DECIDED, NOTHING COSTED",
+           bold=True, bg=C_LOW, fg=C_LOW_TXT, size=10)
+        _r += 1
+        _c(ws, _r, 1,
+           "No detail drawing was supplied for these BOM lines, so the engine never read them. "
+           "They carry no material, no route and no cost — the total is real for what was "
+           "supplied and is not a price for the whole product.",
+           size=8, italic=True, fg="666666")
+        _r += 1
+        for _ci, _h in enumerate(("Part", "Description", "Status"), 1):
+            _c(ws, _r, _ci, _h, bold=True, bg=C_SECTION, size=9, border=True)
+        _r += 1
+        for _m in _missing:
+            _c(ws, _r, 1, str(_m.get("part_number") or ""), size=9, border=True)
+            _c(ws, _r, 2, str(_m.get("description") or ""), size=9, border=True, wrap=True)
+            _c(ws, _r, 3, "no drawing supplied", size=9, border=True)
+            _r += 1
+
     ws.freeze_panes = "A6"
 
 

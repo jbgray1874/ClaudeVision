@@ -1,0 +1,42 @@
+{
+  "_comment": "Written from the tech brief and the enquiry brief INDEPENDENTLY of any generated book (the reviewer's rule: the bill never defines its own expected answer). Lines are matched by description words, never by the run's minted CPT codes, which can shift between reads. NOT covered here, by design: consumable prices, assembly-time realism and the shelf-edge route \u2014 those are the estimator's review, not mechanical gates.",
+  "job": "KWellnessFSDU",
+  "exactly_one_line": {
+    "Slotted corner post": 6,
+    "Central spine": 1,
+    "plinth": 1,
+    "Top cap": 1,
+    "Front shelf tray": 5,
+    "shelf-edge strip": 15,
+    "Rear graphic": 1,
+    "Replaceable card": 1,
+    "fixings": 1,
+    "Graphic holder": null
+  },
+  "commercial_basis": [
+    "PACKAGING",
+    "DELIVERY"
+  ],
+  "commercial_breaks": [
+    1,
+    10,
+    200
+  ],
+  "forbidden_names_everywhere": [
+    "SOTF",
+    "PODIUM",
+    "MDF",
+    "ILLUMIN",
+    "SCREEN",
+    "DIGITAL LOCK"
+  ],
+  "required_operations_by_words": {
+    "KWELLNESSFSDU": [
+      "welding"
+    ]
+  },
+  "total_quantity_by_words": {
+    "Side shelf tray": 10,
+    "Front shelf tray": 5
+  }
+}

@@ -27,7 +27,7 @@ Design principles carried from the per-part engine:
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import config
 
@@ -45,12 +45,10 @@ _CATALOGUE_RE = re.compile("|".join(_CATALOGUE_PATTERNS), re.IGNORECASE)
 
 _CONSUMABLE_RE = re.compile(r"\bPOWDER", re.IGNORECASE)
 _ASSEMBLY_SUFFIX_RE = re.compile(r"-(GA|SA\d*)$", re.IGNORECASE)
-_WELDMENT_PARENT_RE = re.compile(r"-101$", re.IGNORECASE)
 _CATALOGUE_BOM_ROW_RE = re.compile(
     r"\b(\d+)\s+(ELECTRICS(?:[-\s][A-Z0-9]+)?|FIXING\s*\d+|SLOTTEDTUBE\s*\d+|VINYL\s*\d+|SUBPLAS\s*\d+|POWDER\s*\d+)\s+(.+?)\s+(\d+)\b",
     re.IGNORECASE,
 )
-_JUNK_ESTIMATE_CODES = frozenset({"C-001"})
 
 
 def _norm_code(raw: Any) -> str:
@@ -109,6 +107,55 @@ def _row_qty(row: Dict[str, Any]) -> float:
             except (TypeError, ValueError):
                 continue
     return 1.0
+
+
+def _row_parent(row: Dict[str, Any]) -> str:
+    """WHICH ASSEMBLY THIS LINE BELONGS TO, as the reader recorded it — "" when unrecorded.
+
+    A BOM line is not a part. It is the statement "this assembly uses N of that part", and
+    the same part under two assemblies is two lines with two quantities and two owners.
+    bom_pipeline knows this and says so in its own docstring: it deliberately does not
+    deduplicate, "the same code legitimately recurs across parent BOMs", and it stamps every
+    row with the parent page it came from.
+
+    Nothing downstream ever read that field. Job 12392 is one enquiry with two GAs — 02 with
+    16 M4x8 fixings, 04 with 4 more — and a dedupe keyed on the part number alone kept one
+    FIXING line and dropped the other, along with its parent edge and its quantity. The
+    reader had the tree; the merge threw it away.
+
+    source_pdf is accepted as the fallback because the folder merge stamps it on every row,
+    so even a reader that records no page label still distinguishes two drawings.
+    """
+    for key in ("bom_parent", "parent", "parent_code", "source_pdf"):
+        v = str(row.get(key) or "").strip()
+        if v:
+            return v.upper()
+    return ""
+
+
+def _same_thing(a: str, b: str) -> bool:
+    """Could these two descriptions be the same BOM line read twice?
+
+    ONE PARENT CAN LIST A CODE TWICE. 12392-04-GA carries FIXING M4x8 and FIXING M4x10 —
+    generic code, two different bolts, two quantities. Keyed on (parent, code) the second
+    line vanished, which is the same loss the part-number key used to cause, one level in.
+
+    But description cannot simply join the key either: the readers spell one line several
+    ways. A deterministic table reads "SCREW" where vision reads "BUTTON HEAD SCREW M4x8",
+    and keying on the text would split a single line into two and count the fastener twice.
+
+    So the test is CONTAINMENT, not equality. One description that contains the other is one
+    line described at two lengths; two that name different things — M4x8 and M4x10 — are two
+    lines. An empty description tells us nothing and cannot be used to split, so it merges.
+    """
+    x, y = _norm_desc(a), _norm_desc(b)
+    if not x or not y:
+        return True
+    return x in y or y in x
+
+
+def _norm_desc(value: Any) -> str:
+    return re.sub(r"[^A-Z0-9]+", " ", str(value or "").upper()).strip()
 
 
 def _est_code(est: Dict[str, Any]) -> str:
@@ -221,6 +268,58 @@ _TUBE_SECTION_RE = re.compile(
 )
 
 
+# ── reaching UDEF ───────────────────────────────────────────────────────────────────
+# BOTH LOOKUPS BELOW HAVE NEVER RETURNED A PRICE. They opened with
+#     cs = _cfg.SQL_CONNECTION_STRING
+# and config has never defined that name on any branch, so the first statement inside each
+# try raised AttributeError, `except Exception: pass` swallowed it, and both returned None.
+# From the caller that is indistinguishable from "UDEF holds no match for this line" — so
+# every bought-in and every tube that came through bay_rollup went unpriced, on every job,
+# for as long as the code has existed, and the console said nothing.
+#
+# Two changes, and the second matters more than the first: the connection now comes from
+# config.get_connection(), the one place that knows how to reach SDILive; and a failure SAYS
+# SO instead of passing. A pricing source that is switched off must never be indistinguishable
+# from a pricing source that was asked and had no answer.
+_UDEF_SAID = set()
+
+
+def _udef_unreachable(what: str, exc: BaseException) -> None:
+    """Say it once per kind of lookup. Per-part would print thousands of times on one job."""
+    key = (what, type(exc).__name__)
+    if key in _UDEF_SAID:
+        return
+    _UDEF_SAID.add(key)
+    print(f"   [bay-rollup] UDEF {what} unavailable ({type(exc).__name__}: {exc}) — "
+          f"lines it would have priced are left for the estimator, not priced at zero.",
+          flush=True)
+
+
+class _udef_connection:
+    """config.get_connection() as a context manager that CLOSES.
+
+    pyodbc's own `with` manages the transaction and leaves the connection open, which is what
+    the previous code used; on a folder job with many bought-in lines that is one live SQL
+    connection per line held until garbage collection.
+    """
+
+    def __init__(self, cfg):
+        self._cfg = cfg
+        self._cn = None
+
+    def __enter__(self):
+        timeout = int(getattr(self._cfg, "SQL_TIMEOUT_UDEF_SEC", 6))
+        self._cn = self._cfg.get_connection(timeout=timeout)
+        return self._cn
+
+    def __exit__(self, *_exc):
+        try:
+            self._cn.close()
+        except Exception:
+            pass
+        return False
+
+
 def _udef_fuzzy_lookup(full_line: str, code_hint: str) -> Optional[Dict[str, Any]]:
     """Find a UDEF row for a loosely-identified bought-in line.
 
@@ -234,13 +333,11 @@ def _udef_fuzzy_lookup(full_line: str, code_hint: str) -> Optional[Dict[str, Any
     decide a line is PROBABLY bought-in. Returns {code, description,
     unit_cost_gbp, supplier_name} or None."""
     try:
-        import pyodbc, config as _cfg
-        cs = _cfg.SQL_CONNECTION_STRING
-        timeout = int(getattr(_cfg, "SQL_TIMEOUT_UDEF_SEC", 6))
+        import config as _cfg
         line_u = str(full_line or "").upper()
         code_u = str(code_hint or "").upper().strip()
 
-        with pyodbc.connect(cs, timeout=timeout) as cn:
+        with _udef_connection(_cfg) as cn:
             cur = cn.cursor()
 
             # 1. Exact code match
@@ -295,8 +392,8 @@ def _udef_fuzzy_lookup(full_line: str, code_hint: str) -> Optional[Dict[str, Any
                 if row:
                     return {"code": (row[0] or "").strip(), "description": (row[1] or "").strip(),
                             "unit_cost_gbp": float(row[2] or 0.0), "supplier_name": (row[3] or "").strip()}
-    except Exception:
-        pass
+    except Exception as exc:
+        _udef_unreachable("bought-in lookup", exc)
     return None
 
 
@@ -304,9 +401,8 @@ def _lookup_tube_udef(w_mm: float, h_mm: float, t_mm: float, length_mm: int) -> 
     """Query UDEF for a slotted tube matching section (w×h×t) and length.
     Returns {code, description, unit_cost_gbp, supplier_name} or None."""
     try:
-        import pyodbc, config as _cfg
-        cs = _cfg.SQL_CONNECTION_STRING
-        with pyodbc.connect(cs, timeout=int(getattr(__import__('config'), 'SQL_TIMEOUT_UDEF_SEC', 6))) as cn:
+        import config as _cfg
+        with _udef_connection(_cfg) as cn:
             cur = cn.cursor()
             # Tube stock in UDEF is keyed by SECTION (e.g. 60x30x1.5), not cut length —
             # length is a cut spec, so do NOT require it in the description. Match on the
@@ -343,8 +439,8 @@ def _lookup_tube_udef(w_mm: float, h_mm: float, t_mm: float, length_mm: int) -> 
                     "unit_cost_gbp": float(row[2] or 0.0),
                     "supplier_name": (row[3] or "").strip(),
                 }
-    except Exception:
-        pass
+    except Exception as exc:
+        _udef_unreachable("tube lookup", exc)
     return None
 
 
@@ -531,38 +627,85 @@ def dedupe_bom_rows_for_bay_rollup(
     bom_rows: List[Dict[str, Any]],
     part_estimates: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """One BOM row per part code; drop synthesized detail rows already on a GA line."""
+    """One BOM row per LINE — (parent, code) — dropping synthesized rows already on a GA line.
+
+    This was one row per part CODE, which is the same thing only while a job has a single
+    assembly. Give it two GAs from one enquiry and it silently keeps whichever fixing line
+    it met first; give it one GA whose sub-assemblies each use the same fastener and it does
+    the same thing inside a single drawing. Both are ordinary, and both lost a real line, a
+    real quantity and a real parent edge with nothing said.
+
+    SPLITTING REQUIRES POSITIVE EVIDENCE, which is what makes this safe to turn on
+    everywhere. Two rows become two lines only where the readers RECORDED two different
+    parents. A row whose parent is unrecorded cannot be shown to be a separate line, so it
+    collapses onto the code exactly as before — which means a job carrying no parent
+    evidence at all behaves identically to the old code, by construction rather than by a
+    flag. The change can add a line only where the drawing said there was one.
+    """
     est_codes = {_est_code(e) for e in part_estimates if _est_code(e)}
     shadowed = codes_shadowed_by_parent_bom(bom_rows, est_codes)
-    by_code: Dict[str, Dict[str, Any]] = {}
+
+    # Which codes were seen under a NAMED parent, and which parents. Collected first because
+    # the floating rows below need to know whether a code has any parented line at all.
+    parents_by_code: Dict[str, set] = {}
+    for row in bom_rows:
+        code, parent = _row_code(row), _row_parent(row)
+        if code and parent:
+            parents_by_code.setdefault(code, set()).add(parent)
+
+    by_line: Dict[tuple, Dict[str, Any]] = {}
     for row in bom_rows:
         code = _row_code(row)
         if not code:
             continue
         if row.get("source") == "folder_job_synthesized" and code in shadowed:
             continue
+        parent = _row_parent(row)
+        # AN UNPARENTED ROW IS NOT A SECOND LINE. Where the code already has parented lines,
+        # this row is the same part read by something that did not record an owner — a
+        # catalogue scan, a synthesized fallback. Keying it on "" would emit it alongside
+        # the real lines and count the part twice, so it joins the first parent instead and
+        # is settled by source priority like any other duplicate.
+        if not parent:
+            known = parents_by_code.get(code)
+            parent = sorted(known)[0] if known else ""
+        # ONE PARENT CAN LIST A CODE TWICE — see _same_thing. The key is (code, parent) plus
+        # an occurrence number, assigned by walking the lines already kept under that pair
+        # and joining the first one this could BE. Where it could be none of them it is a new
+        # line, so FIXING M4x8 and FIXING M4x10 under one GA stay two orders of two bolts.
         pri = _BOM_SOURCE_PRIORITY.get(str(row.get("source") or ""), 5)
-        prev = by_code.get(code)
+        desc = _row_description(row)
+        key = None
+        for seen, kept in by_line.items():
+            if seen[0] == code and seen[1] == parent and _same_thing(desc, _row_description(kept)):
+                key = seen
+                break
+        if key is None:
+            key = (code, parent, sum(1 for k in by_line if k[0] == code and k[1] == parent))
+        prev = by_line.get(key)
         if prev is None or pri < _BOM_SOURCE_PRIORITY.get(str(prev.get("source") or ""), 5):
-            by_code[code] = row
-    return list(by_code.values())
+            by_line[key] = row
+
+    # SAY WHEN A CODE IS OWNED TWICE. Downstream readers key on the part number in several
+    # places, so a code with two lines is a shape they have not had to handle before; if one
+    # of them collapses them again this is the sentence that makes the difference visible.
+    _multi = {c: sorted(p) for c, p in parents_by_code.items() if len(p) > 1}
+    if _multi:
+        for _code, _parents in sorted(_multi.items()):
+            print(f"   [bom] '{_code}' is used by {len(_parents)} assemblies "
+                  f"({', '.join(_parents)}) — kept as separate lines", flush=True)
+
+    return list(by_line.values())
 
 
 def dedupe_weldment_parent_rows(bom_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Drop weldment parent (-101) when its detail children are also BOM lines."""
+    """Drop a parent row when the rows it is the parent of are lines too (D-454: read from the
+    hierarchy the rows carry — their bom_parent — not from a "-101" code shape one job used)."""
     codes = {_row_code(r) for r in bom_rows if _row_code(r)}
-    drop: set = set()
-    for code in codes:
-        if not _WELDMENT_PARENT_RE.search(code):
-            continue
-        prefix = _WELDMENT_PARENT_RE.sub("", code)
-        children = [
-            c
-            for c in codes
-            if c.startswith(prefix + "-") and c != code and not _WELDMENT_PARENT_RE.search(c)
-        ]
-        if children:
-            drop.add(code)
+    parents = {_norm_code(r.get("bom_parent")) for r in bom_rows
+               if r.get("bom_parent") and _row_code(r)}
+    drop = {c for c in codes if c in parents
+            and any(_norm_code(r.get("bom_parent")) == c and _row_code(r) != c for r in bom_rows)}
     return [r for r in bom_rows if _row_code(r) not in drop]
 
 
@@ -570,7 +713,7 @@ def synthesize_folder_job_bom_rows(
     summary: Dict[str, Any],
     part_estimates: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Build a job-level bay BOM when the folder has no top-level 1282-GA PDF."""
+    """Build a job-level BOM when the folder has no top-level GA drawing."""
     rows = [dict(r) for r in (summary.get("document_analysis") or {}).get("bom_rows") or []]
     try:
         from part_identity import inject_missing_bay_rows
@@ -582,7 +725,11 @@ def synthesize_folder_job_bom_rows(
 
     for est in part_estimates:
         code = _est_code(est)
-        if not code or code in existing or code in _JUNK_ESTIMATE_CODES:
+        if not code or code in existing:
+            continue
+        # A FRAGMENT OF A CODE ALREADY HERE IS NOT A PART (D-454): "C-001" read off the tail of
+        # "1455-C-001" — said by shape, not listed by name.
+        if any(e.endswith("-" + code) for e in existing if e):
             continue
         try:
             from part_identity import dxf_alias_target
@@ -618,12 +765,20 @@ def synthesize_folder_job_bom_rows(
 
 
 def job_has_costing_root(bom_rows: List[Dict[str, Any]], summary: Dict[str, Any]) -> bool:
-    for row in bom_rows:
-        pn = str(row.get("part_number") or "").upper()
-        if re.search(r"\b1282\b", pn) and "-GA" in pn:
+    """True when the job declares a product to cost from (D-454): the canonical route names a
+    product root, or a BOM row is an assembly drawing that no other row lists as its child.
+    Read from the hierarchy, not from one job's codes."""
+    for holder in ((summary or {}).get("estimate_summary") or {}, summary or {}):
+        payload = holder.get("canonical_route_shadow") if isinstance(holder, dict) else None
+        if isinstance(payload, dict) and payload.get("product_root"):
             return True
-    codes = {_row_code(r) for r in bom_rows}
-    return "1449-01C" in codes and "1450-01C" in codes
+    try:
+        from part_code_conventions import carries_assembly_role as _is_asm
+    except Exception:                                            # noqa: BLE001
+        return False
+    children = {_norm_code(r.get("part_number")) for r in bom_rows if r.get("bom_parent")}
+    return any(_is_asm(_row_code(r)) and _row_code(r) not in children for r in bom_rows
+               if _row_code(r))
 
 
 # ── Rollup ───────────────────────────────────────────────────────────────────

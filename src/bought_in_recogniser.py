@@ -29,6 +29,8 @@ This module reads the DB read-only. It never writes. It never sends DXF geometry
 from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+from supplier_reference import synthesise_key
 # ---------------------------------------------------------------------------
 # HEAD-WORDS: the generic nouns that name a physical PURCHASED component. A prose
 # phrase only counts as a bought-in item if it is multi-word AND anchored on one of
@@ -52,6 +54,31 @@ _HEADWORDS_AMBIGUOUS = set("""
 plate channel rail bar panel frame foot bracket cover profile
 """.split())
 _HEADWORDS = _HEADWORDS_SAFE | _HEADWORDS_AMBIGUOUS
+
+# A historical match at or above this Jaccard score is "confident"; below it, "indicative".
+# One constant so the label an estimator reads and the price-or-query decision cannot drift.
+_CONFIDENT_MATCH_SCORE = 0.8
+
+
+def _should_withhold_ambiguous_price(ambiguous: bool, match_score) -> bool:
+    """Whether an ambiguous fabrication head-word must be queried instead of priced.
+
+    foot / plate / bracket / panel / frame / channel / rail / bar / cover / profile are the
+    words for things SDI MAKES. When such a phrase is priced from a WEAK (indicative) historical
+    match, it is far more likely a fabricated part under another name than a real purchase — and
+    the token double-count guard cannot always see the collision, because the fabricated part is
+    named differently: 8352-01-08 is 'M10 HANK BUSH' on the BOM and 'Foot Plate' in the notes,
+    sharing no token, so a £14 bought-in was invented on top of a plate already in Sheet Steel.
+
+    So an ambiguous head-word is PRICED only on a CONFIDENT match; a weak one is surfaced as a
+    query (no money), never invented into the total. A missing/garbled score is treated as weak.
+    SAFE head-words (screw/bolt/castor/…) are unaffected — they name things SDI buys."""
+    if not ambiguous:
+        return False
+    try:
+        return float(match_score or 0) < _CONFIDENT_MATCH_SCORE
+    except (TypeError, ValueError):
+        return True
 # ---------------------------------------------------------------------------
 # CURATED ELECTRICAL VOCABULARY (deterministic, always-scanned).
 # The lighting electricals (loom / junction box / mains cable / earth strap / LED link /
@@ -111,14 +138,223 @@ new old approx tbc na n/a unless otherwise stated qty quantity price each
 """.split())
 # Minimum token length to be considered a meaningful type-word.
 _MIN_TOKEN = 3
+
+# A SMALL, CURATED abbreviation map: shop shorthand -> the word the historical descriptions
+# actually spell out. Applied identically to BOTH the phrase and the priced line, so it only
+# ever RAISES overlap between equivalent descriptions and never invents a match between
+# genuinely different words. Curated and small on purpose — a guessed abbreviation is a false
+# match waiting to happen. Slash forms (s/s, m/c) are not here: punctuation is flattened to
+# spaces before the word split, so they never reach this map as one token.
+_ABBREV = {
+    "assy": "assembly",
+    "brkt": "bracket",
+    "bkt": "bracket",
+    "galv": "galvanised",
+    "galvd": "galvanised",
+    "sst": "stainless",
+    "washr": "washer",
+}
+
+
+def _singularize(tok: str) -> str:
+    """Strip a single trailing plural 's' so 'castors' == 'castor', 'plates' == 'plate'.
+
+    Guards the words that merely END in s but are not plurals — stainless, brass, glass, boss,
+    class — by refusing to strip a double 's', and never applies below 4 characters, so 'gas',
+    'bus' and the like are untouched. Deterministic and applied to both sides, so it can only
+    unify a plural with its singular, never collapse two genuinely different words."""
+    if len(tok) >= 4 and tok.endswith("s") and not tok.endswith("ss"):
+        return tok[:-1]
+    return tok
+
+
+def _normalize_token(w: str) -> str:
+    """One token, made comparable: singularise first, then expand the abbreviation, so a plural
+    shorthand resolves to the spelled-out word ('brkts' -> 'brkt' -> 'bracket')."""
+    base = _singularize(w)
+    return _ABBREV.get(base, base)
+
+
 def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip().lower())
 def _tokens(s: str) -> List[str]:
     s = _norm(s)
     s = re.sub(r"[^a-z0-9 ]", " ", s)
-    return [w for w in s.split() if len(w) >= _MIN_TOKEN and w not in _STOP and not w.isdigit()]
+    # Normalise each raw word (singularise + expand) BEFORE the stop/length/digit filter, so a
+    # plural of a boilerplate word ('materials' -> 'material') is caught by the stop list and a
+    # short plural ('bolts' -> 'bolt') still clears the minimum length.
+    out: List[str] = []
+    for w in s.split():
+        w = _normalize_token(w)
+        if len(w) >= _MIN_TOKEN and w not in _STOP and not w.isdigit():
+            out.append(w)
+    return out
 def _sig_token_set(s: str) -> Set[str]:
     return set(_tokens(s))
+
+
+def _collides_with_a_made_part(phrase: str, ambiguous: bool, fab_token_sets) -> bool:
+    """Whether a recognised prose item is really a fabricated part under another name.
+
+    Two ways to collide with a made part:
+      * a strong WHOLE-PHRASE overlap (>= 2 shared significant tokens, or 60% of the phrase) —
+        a genuine second copy of the same description, tested for ANY item; or
+      * for an AMBIGUOUS fabrication-word item (foot / plate / bracket / panel / frame / ...), a
+        SINGLE shared fabrication word — because the job demonstrably MAKES that kind of part and
+        a dual-named part shares only that one word: 'Foot Plate' and the fabricated 'SCREW
+        PLATE' share 'plate' and nothing else. That single-word collision is exactly what the
+        >= 2-token test cannot see, and it is why BI-FOOTPLATE was invented at ~£14 on top of a
+        plate already costed in Sheet Steel.
+
+    Keyed on the fabrication word, not on any part number or filename, so every prose-heavy GA
+    inherits it. SAFE-headed items (screw / castor / …) never reach the single-word branch, so a
+    genuine bought fastener that merely mentions a fabrication word is not suppressed."""
+    pts = _sig_token_set(phrase)
+    if not pts:
+        return False
+    fab_words = pts & _HEADWORDS_AMBIGUOUS
+    for fts in fab_token_sets:
+        if not fts:
+            continue
+        if len(pts & fts) >= max(2, int(0.6 * len(pts))):
+            return True
+        if ambiguous and (fab_words & fts):
+            return True
+    return False
+
+
+def _phrase_already_in_bom(desc: str, identity_texts) -> bool:
+    """True when a recognised phrase already identifies a part the BOM carries.
+
+    A BOUGHT-IN'S IDENTITY LIVES IN ITS PART NUMBER AS OFTEN AS ITS DESCRIPTION. 8352's castor
+    is in the BOM as part number 'TENTE LINEA CASTOR 5925UAP050L51_10' with the description just
+    'Black'. The recogniser reads 'Tente Linea Castor' from the drawing prose and mints
+    BI-TENTELINEACASTOR — a TWIN of a part already on the sheet — because the old dedup only
+    overlapped DESCRIPTIONS (here 'Black', no overlap) and matched part numbers EXACTLY
+    (BI-TENTELINEACASTOR is not the castor's number). The phrase's tokens {tente, linea, castor}
+    match the castor's PART NUMBER, and nothing looked there.
+
+    So the phrase is checked against the whole identity of each existing part — its description
+    AND its part number — by the same significant-token overlap the description dedup already
+    used. A numeric code like '8352-01-08' tokenises to nothing descriptive, so it never
+    false-matches a worded phrase; the guard only fires when the identity genuinely names the
+    same thing.
+    """
+    dts = _sig_token_set(desc)
+    if not dts:
+        return False
+    need = max(2, int(0.6 * len(dts)))
+    return any(len(dts & _sig_token_set(x)) >= need for x in identity_texts if x)
+
+
+# ---------------------------------------------------------------------------
+# SCOPE OF SUPPLY: what the drawing DEPICTS is not what SDI SUPPLIES.
+#
+# A drawing routinely shows things it is not quoting for -- the customer's screen, an
+# existing wall, a monitor arm bought by someone else -- and says so in a standard phrase
+# next to them. 12120's GA carries "SCREEN & CABLE SHOWN FOR REFERENCE"; the recogniser saw
+# the SAFE electrical head-word "cable", minted BI-SCREENCABLE, priced it and booked
+# handling labour against it. Nothing in the engine read the half of the sentence that says
+# it is not ours.
+#
+# These are drawing conventions, not one customer's wording, so the rule inherits to every
+# job. Deliberately excluded: a bare "existing", which is too common a word to carry the
+# meaning on its own, and "typical"/"similar", which qualify how MANY are supplied rather
+# than whether any are.
+# ---------------------------------------------------------------------------
+_SUPPLY_EXCLUSION_MARKERS = (
+    "for reference", "reference only", "ref only", "for ref", "shown for ref",
+    "not supplied", "not included", "not in scope", "excluded from supply", "no supply",
+    "not part of this", "not to be supplied",
+    "by others", "supplied by others", "installed by others", "fitted by others",
+    "by client", "client supplied", "supplied by client",
+    "by customer", "customer supplied", "supplied by customer",
+    "free issue", "customer free issue",
+    "shown dotted", "dotted for clarity", "for clarity only",
+    "for illustration", "illustration only", "indicative only",
+)
+
+
+def _supply_segments(note_text: str) -> List[str]:
+    """The drawing's prose split into the clauses a scope note actually applies to.
+
+    A marker governs its own sentence or line, not the whole page. Splitting on line breaks
+    and sentence punctuation keeps "SCREEN & CABLE SHOWN FOR REFERENCE" from excusing a
+    genuine bought-in listed three notes further down.
+    """
+    # A BARE NEWLINE IS A LINE WRAP, NOT A CLAUSE BOUNDARY.
+    #
+    # This split on every newline, and 12120's real PDF text wraps the disclaimer:
+    #
+    #     SCREEN & CABLE SHOWN
+    #     FOR REFERENCE
+    #
+    # which became two clauses -- one naming the cable with no marker, one carrying the
+    # marker with nothing to attach it to -- so the cable was supplied and priced. The
+    # synthetic fixture wrote it on one line and passed.
+    #
+    # What IS a boundary: sentence punctuation, and a newline that starts a new numbered or
+    # bulleted note. Those keep note 2's hardware safe from note 1's disclaimer. A newline
+    # in the middle of a note is layout, and the PDF reader's line breaks are not the
+    # draughtsman's sentences.
+    _parts = re.split(r"[;.]+|\n(?=\s*(?:\d+[.)]|[-*\u2022])\s)|(?<=\))\s+",
+                      str(note_text or ""))
+    _out = []
+    for _p in _parts:
+        _n = re.sub(r"[^a-z0-9 ]", " ", (_p or "").lower())
+        _n = re.sub(r"\s+", " ", _n).strip()
+        if _n:
+            _out.append(" " + _n + " ")
+    return _out
+
+
+def bom_row_is_reference_only(description: Any, comments: Any = "",
+                              note_text: Any = "") -> bool:
+    """A BOM row the drawing DEPICTS but does not supply.
+
+    The prose recogniser was guarded first, and 12120 then shipped BI-SCREENCABLE anyway
+    with no recogniser message at all -- because the row reached the estimate through the
+    whole-document extract's own `bom` list, which is a different door into the same
+    mistake. One predicate, two doors: the marker vocabulary is shared with
+    is_reference_only rather than restated, so a phrase added for one path covers both.
+
+    Two ways a row qualifies. Its OWN text can carry the disclaimer, which is the common
+    case when the model transcribes "SCREEN & CABLE - SHOWN FOR REFERENCE" into a row's
+    description or comments. Or the drawing's notes can disclaim every mention of it, which
+    is the same test the prose path uses.
+
+    Deliberately NOT keyed on the word cable, or on any part name. A rule that knows about
+    cables would have to be extended for the next screen, monitor arm or customer bracket
+    somebody shows for reference.
+    """
+    _own = " ".join(str(x or "") for x in (description, comments)).strip()
+    if _own:
+        for _seg in _supply_segments(_own):
+            if any(_m in _seg for _m in _SUPPLY_EXCLUSION_MARKERS):
+                return True
+    return is_reference_only(description, note_text)
+
+
+def is_reference_only(phrase: str, note_text: str) -> bool:
+    """True when every mention of `phrase` sits in a clause that disclaims supplying it.
+
+    EVERY mention, not any: a drawing that shows a bracket for reference on one view and
+    schedules it as a supplied item elsewhere is supplying it. Erring the other way would
+    turn a scope note into a silent deletion of a real BOM line, which is the more expensive
+    mistake and the harder one to notice.
+    """
+    _ph = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", str(phrase or "").lower())).strip()
+    if not _ph:
+        return False
+    _needle = " " + _ph + " "
+    _seen = _excluded = 0
+    for _seg in _supply_segments(note_text):
+        if _needle not in _seg:
+            continue
+        _seen += 1
+        if any(_m in _seg for _m in _SUPPLY_EXCLUSION_MARKERS):
+            _excluded += 1
+    return _seen > 0 and _seen == _excluded
 # ---------------------------------------------------------------------------
 # Vocabulary + priced reference, loaded ONCE from SDI history.
 # ---------------------------------------------------------------------------
@@ -288,6 +524,80 @@ def get_reference(get_connection) -> BoughtInReference:
 # ---------------------------------------------------------------------------
 # The layer-2 prose recogniser.
 # ---------------------------------------------------------------------------
+def _phrase_tokens(text: Any) -> List[str]:
+    """The alphanumeric runs in a piece of text, upper-cased.
+
+    "M6 BOLT, BZP" and "BOLT(BZP)" and "BOLT - BZP" all reduce to the same words, which is
+    what makes a phrase findable on a sheet that punctuates it differently from the way the
+    recogniser read it.
+    """
+    return re.findall(r"[A-Z0-9]+", str(text or "").upper())
+
+
+def _tokens_run_in(needle: List[str], haystack: List[str]) -> bool:
+    """True when `needle` appears in `haystack` as a consecutive run, in order.
+
+    Consecutive and in order on purpose. A page that merely contains both words somewhere
+    is not a page that names the part, and matching that loosely would hand an owner to a
+    sheet that never mentioned it — which is worse than leaving it unowned.
+    """
+    if not needle or len(needle) > len(haystack):
+        return False
+    first = needle[0]
+    for i in range(len(haystack) - len(needle) + 1):
+        if haystack[i] == first and haystack[i:i + len(needle)] == needle:
+            return True
+    return False
+
+
+def _page_that_says(phrase: Any, pages: Optional[List[Dict[str, Any]]]) -> Optional[int]:
+    """The page number whose own text contains this phrase, or None.
+
+    First match wins, in page order. Where a phrase appears on several sheets the first is
+    as defensible as any — and the compiler only ever uses this to offer an owner, which it
+    then refuses unless the page is an assembly page of a drawing the job already knows.
+
+    BOTH SIDES ARE NORMALISED, and originally only one was. The needle had its whitespace
+    collapsed and the page text did not, so "BOLT BZP" failed to match a note reading
+    "BOLT\\nBZP" — and drawing notes wrap constantly, which makes a line break the normal
+    case rather than an edge one. BI-BOLTBZP is a real GBP 0.83 bolt that blocked job 12392
+    as a disconnected node for exactly this: the sheet that named it was found, compared
+    against an un-normalised copy of itself, and reported as not saying so.
+    """
+    if not phrase or not pages:
+        return None
+    # WORDS, NOT CHARACTERS. Collapsing whitespace fixed the line-wrap case and left every
+    # punctuated one failing: a note reads "M6 BOLT, BZP" or "BOLT (BZP)" or "BOLT - BZP"
+    # as readily as "BOLT BZP", and a drawing note is full of punctuation. On 12392 the
+    # button-head screw found its page and the bolt did not, which is the same phrase
+    # matcher succeeding and failing on the same sheet for want of a comma.
+    #
+    # Alphanumeric runs, matched CONSECUTIVELY AND IN ORDER. That is deliberately tight:
+    # it accepts any separator between the words and still refuses "BZP BOLT", which is a
+    # different phrase, and refuses a page that merely contains both words apart.
+    _needle = _phrase_tokens(phrase)
+    if not _needle:
+        return None
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        blob = []
+        region = page.get("region_text")
+        if isinstance(region, dict):
+            blob.append(str(region.get("notes") or ""))
+        for key in ("pdfplumber_text", "normalized_text", "pypdf_text", "text_preview", "text"):
+            value = page.get(key)
+            if value:
+                blob.append(str(value))
+        if _tokens_run_in(_needle, _phrase_tokens(" ".join(blob))):
+            number = page.get("page_number")
+            try:
+                return int(number)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 def recognise_bought_in_in_prose(
     note_text: str,
     *,
@@ -296,6 +606,7 @@ def recognise_bought_in_in_prose(
     existing_descriptions: Optional[Set[str]] = None,
     fabricated_descriptions: Optional[Set[str]] = None,
     stub_builder=None,
+    pages: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Deterministically recognise bought-in items described in THIS drawing's prose.
     Scans the prose for head-word-anchored vocabulary phrases (mined from SDI history) PLUS
@@ -321,17 +632,11 @@ def recognise_bought_in_in_prose(
     up = re.sub(r"\s+", " ", up)
     # Pre-compute fabricated-part token sets once (for the double-count guard).
     fab_token_sets = [_sig_token_set(f) for f in fabricated_descriptions if f]
-    def _is_already_fabricated(phrase: str) -> bool:
-        pts = _sig_token_set(phrase)
-        if not pts:
-            return False
-        for fts in fab_token_sets:
-            if not fts:
-                continue
-            shared = pts & fts
-            if len(shared) >= max(2, int(0.6 * len(pts))):
-                return True
-        return False
+    def _is_already_fabricated(phrase: str, ambiguous: bool = False) -> bool:
+        # Delegates to the shared, tested collision rule. Whole-phrase overlap catches a genuine
+        # second copy of any item; an ambiguous fabrication word catches a made part under
+        # another name (the FOOTPLATE class) on a single shared word.
+        return _collides_with_a_made_part(phrase, ambiguous, fab_token_sets)
     # Curated electrical phrases are ALWAYS scanned (not subject to frequency mining), then
     # the mined vocab. Electrical head-words are registered as SAFE (see _HEADWORDS_SAFE). A
     # phrase only produces an item if it actually appears in THIS drawing's prose.
@@ -359,36 +664,94 @@ def recognise_bought_in_in_prose(
             continue
         claimed_spans.append((s, e))
         head = _scan_vocab[phrase]
+        # THE DRAWING SHOWS IT; THE DRAWING ALSO SAYS IT IS NOT OURS.
+        # Checked against the ORIGINAL note_text, not the flattened blob, because the
+        # clause boundaries are what scope the marker -- see _supply_segments.
+        if is_reference_only(phrase, note_text):
+            print(f"   [bought-in] '{phrase}' NOT recognised: every mention is in a clause "
+                  f"that disclaims supply (reference only / by others / customer supplied). "
+                  f"No part, no price, no handling labour.", flush=True)
+            continue
         ambiguous = head in _HEADWORDS_AMBIGUOUS
         desc = phrase.strip().title()
         key = _norm(desc)
         if not key or key in emitted:
             continue
-        # Dedup against layer-1 bought-in descriptions already found.
-        dts = _sig_token_set(desc)
-        if any(len(dts & _sig_token_set(x)) >= max(2, int(0.6 * len(dts)))
-               for x in existing_descriptions if x):
+        # Dedup against what the BOM already carries — by DESCRIPTION and by PART NUMBER, since a
+        # bought-in's identity often lives in its code ('TENTE LINEA CASTOR 5925UAP050L51_10')
+        # while its description is just 'Black'. Overlapping only descriptions minted a BI- twin
+        # of every such part, which then had no owner in the hierarchy.
+        if _phrase_already_in_bom(desc, list(existing_descriptions) + list(existing_pns)):
             continue
-        code_guess = "BI-" + re.sub(r"[^A-Z0-9]", "", phrase.upper())[:18]
+        # A PHRASE INSIDE AN ALREADY-CAPTURED ROW IS THAT ROW, NOT A NEW ITEM. 10975-02's
+        # wrapped tape row reads "10975 EPDM Closed Cell Tape^10975-02-GA EPDM TAPE …";
+        # the row was captured (and folded to one line), and this loop then re-read the
+        # wrap fragments "cell tape" and "closed cell tape" out of the SAME text and
+        # minted two priced twins beside it — on every run, whatever removed them before.
+        # PROXIMITY ALONE IS NOT PROOF. "Fit closed cell tape to the underside of
+        # 10975-02-A01" puts the acrylic HOST's code within 90 characters of a genuine
+        # purchase, and the first version suppressed it. The nearby known entry must
+        # itself SPEAK OF this item: its own code or description has to carry at least
+        # one of the phrase's words. The tape fragments sit beside 10975EPDMCLOSEDCELL,
+        # whose code carries CLOSED and CELL; A01's code carries no tape word at all.
+        _ctx_sq = re.sub(r"[^a-z0-9]", "", up[max(0, idx - 90):idx + len(needle) + 90])
+        _phrase_words = [w for w in re.findall(r"[a-z0-9]+", phrase.lower())
+                         if len(w) >= 4]
+        _covered = ""
+        for _known in list(existing_pns) + list(existing_descriptions):
+            _ks = re.sub(r"[^a-z0-9]", "", str(_known or "").lower())
+            if len(_ks) < 10 or _ks not in _ctx_sq:
+                continue
+            if any(w in _ks for w in _phrase_words):
+                _covered = str(_known)
+                break
+        if _covered:
+            print(f"   [bought-in] '{phrase}' NOT minted: the words sit inside the BOM "
+                  f"row already captured as '{_covered}' — one row, one line.", flush=True)
+            continue
+        # MINTED HERE, AND SAID SO. The prefix used to be written inline, which made it a
+        # spelling rather than a fact: nothing downstream could ask whether a part number had
+        # been read off a drawing or invented in this loop, so BI-BINDINGSCREW went to every
+        # catalogue lookup looking exactly like a code a supplier might recognise. It is now
+        # minted by the module that also answers the question.
+        code_guess = synthesise_key(phrase)
         if code_guess in existing_pns:
             continue
         # DOUBLE-COUNT GUARD: if this phrase matches something already counted as a
         # fabricated (DXF/grid) part, do NOT add a priced line. For ambiguous head-words
         # this is the common case (e.g. "base plate"); surface as a flagged query instead.
-        already_fab = _is_already_fabricated(desc)
+        already_fab = _is_already_fabricated(desc, ambiguous)
         stub = stub_builder(code_guess, desc, 1)
         stub["source"] = "prose_recogniser_layer2"
         stub["_layer2_recognised"] = True
         stub["_headword"] = head
+        # WHICH SHEET SAID SO. The caller reads the notes page by page and joins them one
+        # line before calling this, so the page was known and thrown away — and a recognised
+        # purchase with no page can never be given an owner. BI-BOLTBZP is a real GBP 0.83
+        # bolt that blocked job 12392 as a "disconnected node" for exactly that reason:
+        # nothing could say which drawing listed it.
+        #
+        # Attributed AFTER the match rather than by scanning per page, so which phrases are
+        # recognised does not change at all — the same defect was fixed the same way for BOM
+        # rows. A phrase spanning a page break still matches; it simply lands on no page,
+        # which is the honest answer.
+        _found_on = _page_that_says(phrase, pages)
+        if _found_on is not None:
+            stub["pages"] = [_found_on]
+            stub["source_page"] = _found_on
         stub["page_roles"] = ["bought_in"]
         stub["review_flag"] = True
         flags = [f"Deterministically recognised in drawing notes (head-word: '{head}')"]
         if already_fab:
-            # Recognise but DON'T price - it's likely the fabricated part counted elsewhere.
+            # Possible duplicate of a fabricated part already on the sheet. It is still PRICED
+            # downstream (the mandate is a number on every line, and this judgement is only a
+            # heuristic), but carries the marker so costing adds a loud possible-double-count
+            # flag the estimator confirms or strikes.
             stub["cost_source"] = "layer2_possible_fabricated_query"
             stub["_no_price_reason"] = "matches a fabricated part - possible double-count"
-            flags.append("QUERY: also appears as a fabricated part - estimator confirm "
-                         "bought-in vs made-in (NOT priced, to avoid double-counting)")
+            flags.append("QUERY: also appears as a fabricated part - PRICED (market/non-firm) so "
+                         "it is not read as free, but CONFIRM bought-in vs made-in and STRIKE if "
+                         "it duplicates a made part")
         else:
             match = ref.best_priced_match(desc)
             # Electrical items: their short phrase under-scores on Jaccard vs a longer
@@ -410,6 +773,16 @@ def recognise_bought_in_in_prose(
                 match = None  # implausible for a loose consumable - do not apply
                 flags.append("A possible historical price match was rejected as implausibly "
                              "high for a loose consumable - estimator to price")
+            # An ambiguous fabrication word on a WEAK history match is not priced FROM THAT
+            # MATCH — a loose Jaccard hit on a generic word is confidently wrong. The line is
+            # still priced downstream (market/last-resort) so it is not read as free, and flagged
+            # as a possible made-in duplicate for the estimator to confirm or strike.
+            if match and _should_withhold_ambiguous_price(ambiguous, match.get("match_score")):
+                match = None
+                flags.append("QUERY: an ambiguous fabrication word (plate/bracket/foot/...) "
+                             "matched SDI history only weakly - not priced from that weak match; "
+                             "a market/non-firm figure is shown instead. CONFIRM bought-in vs "
+                             "made-in and STRIKE if it duplicates a made part")
             if match:
                 stub["unit_cost_gbp"] = match["price"]
                 stub["unit_material_cost_gbp"] = match["price"]
@@ -419,7 +792,7 @@ def recognise_bought_in_in_prose(
                 stub["_matched_historical_desc"] = match["matched_desc"]
                 stub["_matched_code"] = match["code"]
                 stub["_match_score"] = match["match_score"]
-                conf = "confident" if match["match_score"] >= 0.8 else "indicative"
+                conf = "confident" if match["match_score"] >= _CONFIDENT_MATCH_SCORE else "indicative"
                 flags.append(
                     f"Priced from SDI history ({conf}, score {match['match_score']}): "
                     f"\u00a3{match['price']:.2f} \u2190 \u201c{match['matched_desc']}\u201d"

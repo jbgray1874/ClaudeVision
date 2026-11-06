@@ -1,0 +1,99 @@
+{
+  "_reviewed": "James Gray, 6 Oct 2026 — 9598-02 Half A4 Landscape Ticket Holder RAL 7021 (M&S Editions POS) rev A brief, docs/briefs/9598-02.md. Structure, not money.",
+  "_note": "Codes compare on letters and digits only. 20 off is the M&S order quantity; add 50 and 100 to quantity_breaks if the run is given them.",
+  "product_root": "9598-02-GA",
+  "not_set_aside": [
+    "9598-02-01M",
+    "9598-02-02G",
+    "FIXING1270"
+  ],
+  "quantity_breaks": [
+    20
+  ],
+  "quantities": {
+    "9598-02-01M": 1,
+    "9598-02-02G": 1,
+    "FIXING1270": 4
+  },
+  "exactly_one_line": {
+    "METAL FRAME": 1,
+    "GRAPHIC": 1,
+    "BUMPER": 1
+  },
+  "required_operations": {
+    "9598-02-01M": [
+      "laser_cutting",
+      "folding",
+      "welding",
+      "powder_coating"
+    ]
+  },
+  "forbidden_operations": {
+    "9598-02-GA": [
+      "welding",
+      "dress_welds",
+      "powder_coating",
+      "wet_spray",
+      "laser_cutting",
+      "folding",
+      "wire_forming",
+      "robomac",
+      "linebend"
+    ],
+    "9598-02-01M": [
+      "wire_forming",
+      "robomac",
+      "wet_spray",
+      "anodising",
+      "plating",
+      "spot_welding",
+      "linebend",
+      "diamond_polish"
+    ],
+    "9598-02-02G": [
+      "laser_cutting",
+      "folding",
+      "welding",
+      "dress_welds",
+      "powder_coating",
+      "wet_spray",
+      "wire_forming",
+      "robomac",
+      "linebend",
+      "diamond_polish"
+    ],
+    "FIXING1270": [
+      "laser_cutting",
+      "folding",
+      "welding",
+      "dress_welds",
+      "powder_coating",
+      "wet_spray",
+      "wire_forming",
+      "robomac"
+    ]
+  },
+  "forbidden_operations_anywhere": [
+    "wire_forming",
+    "robomac",
+    "anodising",
+    "plating",
+    "linebend",
+    "diamond_polish",
+    "edge_banding"
+  ],
+  "material_charged": [
+    "9598-02-01M",
+    "9598-02-02G",
+    "FIXING1270"
+  ],
+  "no_cut_assemblies": [
+    "9598-02-GA"
+  ],
+  "max_unit_material_mass_kg": {
+    "9598-02-01M": 0.6
+  },
+  "min_unit_material_mass_kg": {
+    "9598-02-01M": 0.2
+  }
+}

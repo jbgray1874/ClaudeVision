@@ -62,7 +62,7 @@ _PRICE_RE = re.compile(r'£\s*\d+\.\d+\s*', re.IGNORECASE)
 
 # Remove drawing PN prefix: "11087-17-09M /..." or "11087-17-05M - "
 _DRG_PREFIX_RE = re.compile(
-    r'^\d{4,5}-\d{2}-\d{2,3}[A-Z]?\s*[/\-]\s*', re.IGNORECASE
+    r'^\d{4,6}-\d{2}-\d{2,3}[A-Z]?\s*[/\-]\s*', re.IGNORECASE
 )
 
 # Remove trailing junk: "(UKPOS:SHFP28)" where SKU is already the key

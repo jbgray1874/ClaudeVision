@@ -317,7 +317,7 @@ def parse_drawing_tokens(raw: str) -> List[str]:
             continue
         # Keep GA/detail style tokens and bare job numbers (e.g. 1282, 12473)
         for match in re.finditer(
-            r"\b\d{4,5}(?:-[0-9]{2}(?:-[0-9A-Z]{1,4})?|-[A-Z]{2,4})?\b|\b\d{6,7}\b",
+            r"\b\d{4,6}(?:-[0-9]{2}(?:-[0-9A-Z]{1,4})?|-[A-Z]{2,4})?\b|\b\d{6,7}\b",
             part,
             flags=re.IGNORECASE,
         ):
@@ -364,7 +364,7 @@ def _token_matches_name(token: str, name: str) -> bool:
     if token_u in name_u:
         return True
     # 12464-01-GA also matches filenames containing 12464
-    lead = re.match(r"^(\d{4,5})", token_u)
+    lead = re.match(r"^(\d{4,6})", token_u)
     if lead and lead.group(1) in name_u:
         # Require word boundary style: avoid 128 matching 1282
         if re.search(rf"\b{re.escape(lead.group(1))}\b", name_u):

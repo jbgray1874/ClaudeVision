@@ -24,21 +24,32 @@ Wiring into main.py (two lines):
     le.batch_complete()
 """
 
+import os
 import re
 import json
 import logging
 from typing import Dict, Any, List, Optional
 
+from source_precedence import apply_field
+
 log = logging.getLogger("learning_engine")
 
-try:
-    import corrections_db as db
-    # Only verify connection — do NOT re-create schema on every scan.
-    # Run `python src/corrections_db.py` once for initial setup.
-    _DB_AVAILABLE = db.test_connection()
-except Exception as e:
-    log.warning(f"corrections_db not available: {e}")
+# SDI_OFFLINE keeps this module importable without touching the database. The rules suite
+# imports it for its pure functions and was opening a live connection to SDILive to do so —
+# a test suite that needs the production server is neither isolated nor runnable in CI, and
+# it makes every fixture depend on a machine being reachable.
+if os.environ.get("SDI_OFFLINE"):
+    db = None
     _DB_AVAILABLE = False
+else:
+    try:
+        import corrections_db as db
+        # Only verify connection — do NOT re-create schema on every scan.
+        # Run `python src/corrections_db.py` once for initial setup.
+        _DB_AVAILABLE = db.test_connection()
+    except Exception as e:
+        log.warning(f"corrections_db not available: {e}")
+        _DB_AVAILABLE = False
 
 
 class LearningEngine:
@@ -89,15 +100,27 @@ class LearningEngine:
             if pn:
                 known = db.lookup_part(pn)
                 if known and known["confidence"] >= 0.8:
-                    if known.get("material") and not _is_reliable_material(part):
+                    if known.get("material"):
                         old = part.get("normalized_material")
-                        part["normalized_material"] = known["material"]
-                        part["material_source"] = f"knowledge_base ({known['confidence']:.0%})"
-                        if old != known["material"]:
-                            overrides_applied += 1
-                            log.info(f"[KB] {pn}: material {old!r} → {known['material']!r}")
-                    if known.get("thickness_mm") and not _is_reliable_thickness(part):
-                        part["kb_thickness_mm"] = known["thickness_mm"]
+                        # NO LOCAL GATE BEFORE THE RESOLVER. This used to be guarded by
+                        # `not _is_reliable_material(part)`, which refuses whenever the part
+                        # already carries anything ranked at or above an override rule — so a
+                        # rank-100 knowledge-base correction, the one signal that carries
+                        # knowledge the drawing does not, was never even offered against a
+                        # rank-50, 70 or 90 value. That inverts the ranking table it is meant
+                        # to serve. Every observation is submitted; apply_field is the only
+                        # gate, and it is the one that knows the ranks.
+                        if apply_field(part, "normalized_material", known["material"],
+                                       f"knowledge_base ({known['confidence']:.0%})",
+                                       confidence=float(known["confidence"])):
+                            if old != known["material"]:
+                                overrides_applied += 1
+                                log.info(f"[KB] {pn}: material {old!r} → {known['material']!r}")
+                    if known.get("thickness_mm"):
+                        part["kb_thickness_mm"] = known["thickness_mm"]   # precedence: direct-write ok — a side record, not the costed field
+                        apply_field(part, "normalized_thickness_mm", known["thickness_mm"],
+                                    f"knowledge_base ({known['confidence']:.0%})",
+                                    confidence=float(known["confidence"]))
 
             # ── 2. DXF filename override rules ─────────────────────────────────
             dxf_fn = str(part.get("dxf_source_file") or "").upper()
@@ -105,15 +128,20 @@ class LearningEngine:
                 for rule in (self._overrides_cache or []):
                     if rule["pattern_type"] == "dxf_filename":
                         if rule["trigger_value"].upper() in dxf_fn:
-                            if not _is_reliable_material(part):
-                                part[rule["correction_field"]] = rule["correction_value"]
-                                part["material_source"] = f"override_rule:{rule['rule_name']}"
+                            # A pattern rule is rank 50 — it is not an observation of this
+                            # part, it is a generalisation about its name. It must not
+                            # displace a measured DXF or the model, and the resolver is what
+                            # enforces that. The local reliability gate that used to sit here
+                            # answered the same question with a different, cruder rule.
+                            if apply_field(part, rule["correction_field"],
+                                           rule["correction_value"],
+                                           f"override_rule:{rule['rule_name']}"):
                                 overrides_applied += 1
                                 db.fire_override(rule["id"])
                                 log.info(f"[RULE:{rule['rule_name']}] {pn}: "
                                          f"DXF filename contains '{rule['trigger_value']}' "
                                          f"→ {rule['correction_value']}")
-                                break
+                            break
 
             # ── 3. Material value override rules ───────────────────────────────
             mat = str(part.get("normalized_material") or "").upper()
@@ -125,12 +153,16 @@ class LearningEngine:
                             ctx = json.loads(rule.get("trigger_context") or "{}")
                             if _check_context(part, ctx):
                                 old = part.get("normalized_material")
-                                part[rule["correction_field"]] = rule["correction_value"]
-                                part["material_source"] = f"override_rule:{rule['rule_name']}"
-                                overrides_applied += 1
-                                db.fire_override(rule["id"])
-                                log.info(f"[RULE:{rule['rule_name']}] {pn}: "
-                                         f"material {old!r} → {rule['correction_value']!r}")
+                                # Rank 50: a pattern rule generalises about a value, it does
+                                # not observe this part. It must not displace the model or a
+                                # measured DXF.
+                                if apply_field(part, rule["correction_field"],
+                                               rule["correction_value"],
+                                               f"override_rule:{rule['rule_name']}"):
+                                    overrides_applied += 1
+                                    db.fire_override(rule["id"])
+                                    log.info(f"[RULE:{rule['rule_name']}] {pn}: "
+                                             f"material {old!r} → {rule['correction_value']!r}")
                                 break
 
         if overrides_applied:
@@ -330,10 +362,17 @@ def _is_reliable_material(part: Dict) -> bool:
     src = str(part.get("material_source") or "").lower()
     if not mat or mat in ("UNKNOWN", "NONE", "?", "LED", "CARD"):
         return False
-    # Already overridden by knowledge base or rule — don't override again
-    if "knowledge_base" in src or "override_rule" in src:
-        return True
-    return False
+    # Ranked, not enumerated. This listed only knowledge_base and override_rule, so it had
+    # never heard of the model: a material read from the SolidWorks applied-material
+    # property — the strongest source we have short of a person — counted as unreliable and
+    # was silently replaced by a pattern rule. Anything ranking at or above an override rule
+    # is reliable, so a new strong source is protected the moment it is ranked rather than
+    # needing to be remembered here.
+    try:
+        from source_precedence import rank as _rank
+        return _rank(src) >= _rank("override_rule")
+    except Exception:
+        return "knowledge_base" in src or "override_rule" in src
 
 
 def _is_reliable_thickness(part: Dict) -> bool:

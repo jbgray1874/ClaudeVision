@@ -183,7 +183,19 @@ def add_quality_summary_sheet(wb, summary: Dict[str, Any]):
     if Font is None:
         return None
     es = (summary.get("estimate_summary") or {})
-    parts: List[Dict[str, Any]] = es.get("part_estimates") or []
+    # THE ONE PART LIST, not the raw one. This tab read estimate_summary.part_estimates
+    # directly and on 7332-01 printed the drawing reader's refused 1.2 mm on every sheet
+    # row while the nest table — the priced one — carried the real gauges: two tables in
+    # one workbook telling Tim different thicknesses. job_parts resolves the canonical
+    # population first (kept gauges, rolled-up quantities, folded duplicates gone) and
+    # falls back to part_estimates itself when no workbook has been built.
+    try:
+        from costed_facts import job_parts
+        parts: List[Dict[str, Any]] = [p for p in job_parts(summary) if isinstance(p, dict)]
+    except Exception:  # pragma: no cover - costed_facts always importable in the engine
+        parts = []
+    if not parts:
+        parts = es.get("part_estimates") or []
     if not parts:
         return None
 
@@ -343,7 +355,11 @@ def add_quality_summary_sheet(wb, summary: Dict[str, Any]):
     put(r, 1, "2.  PRICING QUALITY", H, SECTIONFILL)
     for col in range(2, 10): put(r, col, "", fill=SECTIONFILL)
     r += 1
-    kv("Parts cost (sum of lines, ex packaging & margin)", f"\u00a3{parts_cost:,.2f}")
+    # This sum is the ENGINE's own per-part figures, mixed extended-and-unit, plus bay
+    # lines \u2014 it will not reconcile with the Estimate sheet and never should have read
+    # as if it did. Named for what it is; the sheet is the charged money.
+    kv("Engine parts figure (diagnostic \u2014 the Estimate sheet is the charged money)",
+       f"\u00a3{parts_cost:,.2f}")
     kv("Data sufficiency", str(ds.get("status", "\u2014")))
     bi_total = counts.get("Bought-in", 0)
     kv("Bought-in pricing",

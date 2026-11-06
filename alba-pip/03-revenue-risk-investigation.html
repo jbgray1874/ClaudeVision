@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Revenue Risk Investigation — Alba PIP</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Spectral:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/alba.css">
+</head>
+<!-- Demo script: SCREEN 3.  Source design: Alba screen 5.png -->
+<body data-section="portfolio" data-rail="1" data-screen="3">
+
+  <div class="crumb"><b>Portfolio</b> <span>/</span> <b>NovaTech Solutions</b> <span>/</span> Revenue Risk Investigation</div>
+
+  <div class="pagehead">
+    <div class="ttl">
+      <h1>Revenue Risk Investigation
+        <span class="pill bad">High Priority</span>
+        <span class="pill warn">92% Confidence</span>
+      </h1>
+      <div class="sub">Q4 forecast gap decomposed into observable drivers</div>
+      <div class="meta">Updated 2 min ago &nbsp;•&nbsp; HubSpot + Xero + Stripe</div>
+    </div>
+    <div class="acts">
+      <a class="btn primary" href="04-revenue-protection-plan.html">Create Action Plan</a>
+      <a class="btn" href="#evidence">View Raw Evidence</a>
+    </div>
+  </div>
+
+  <div class="kpis k4">
+    <div class="kpi"><div class="lab">Plan</div><div class="val">$12.0M</div></div>
+    <div class="kpi"><div class="lab">Current Forecast</div><div class="val">$10.8M</div></div>
+    <div class="kpi"><div class="lab">Forecast Gap</div><div class="val bad">−$1.2M</div></div>
+    <div class="kpi"><div class="lab">Lead Time</div><div class="val">7 <span style="font-size:14px;font-weight:400;color:var(--ink-dim)">weeks</span></div></div>
+  </div>
+
+  <div class="grid g-11">
+
+    <!-- ---------- revenue bridge ---------- -->
+    <div class="panel">
+      <div class="ph">Revenue Bridge</div>
+      <svg class="chart" viewBox="0 0 520 260" preserveAspectRatio="xMidYMid meet" style="height:250px">
+        <!-- scale: $0M at y=215, $14M at y=15 => 1M = 14.29px -->
+        <g class="axlab">
+          <text x="0" y="19">$14M</text><text x="0" y="47">$12M</text><text x="0" y="76">$10M</text>
+          <text x="4" y="104">$8M</text><text x="4" y="133">$6M</text><text x="4" y="161">$4M</text>
+          <text x="4" y="190">$2M</text><text x="4" y="218">$0M</text>
+        </g>
+        <g class="ax">
+          <line x1="42" y1="215" x2="515" y2="215"/>
+        </g>
+
+        <!-- Q4 PLAN 12.0M : top y = 215-171.4 = 43.6 -->
+        <rect x="62"  y="43.6"  width="66" height="171.4" fill="#e8a33d"/>
+        <!-- lower conversion -0.45M : from 12.0 to 11.55  => y 43.6 .. 50.0 -->
+        <rect x="166" y="43.6"  width="66" height="6.4"  fill="#e8544f"/>
+        <!-- deals slipped -0.40M : 11.55 -> 11.15 => y 50.0 .. 55.7 -->
+        <rect x="270" y="50.0"  width="66" height="5.7"  fill="#e8544f"/>
+        <!-- higher churn -0.25M : 11.15 -> 10.9 => y 55.7 .. 59.3  (chart rounds to 10.8) -->
+        <rect x="374" y="55.7"  width="66" height="5.9"  fill="#e8544f"/>
+        <!-- Q4 FORECAST 10.8M : top y = 215-154.3 = 60.7 -->
+        <rect x="446" y="60.7"  width="66" height="154.3" fill="#e8a33d"/>
+
+        <!-- connectors -->
+        <g stroke="#6a6a72" stroke-width="1" stroke-dasharray="3 3">
+          <line x1="128" y1="43.6" x2="166" y2="43.6"/>
+          <line x1="232" y1="50.0" x2="270" y2="50.0"/>
+          <line x1="336" y1="55.7" x2="374" y2="55.7"/>
+          <line x1="440" y1="60.7" x2="446" y2="60.7"/>
+        </g>
+
+        <!-- value labels -->
+        <g class="axlab" text-anchor="middle" style="font-size:9.5px">
+          <text x="95"  y="38" fill="#f0efec">$12.0M</text>
+          <text x="199" y="38" fill="#e8544f">−$0.45M</text>
+          <text x="303" y="44" fill="#e8544f">−$0.40M</text>
+          <text x="407" y="50" fill="#e8544f">−$0.25M</text>
+          <text x="479" y="55" fill="#f0efec">$10.8M</text>
+        </g>
+        <g class="axlab" text-anchor="middle">
+          <text x="95"  y="232">Q4 PLAN</text>
+          <text x="199" y="232">LOWER</text><text x="199" y="243">CONVERSION</text>
+          <text x="303" y="232">DEALS</text><text x="303" y="243">SLIPPED</text>
+          <text x="407" y="232">HIGHER</text><text x="407" y="243">CHURN</text>
+          <text x="479" y="232">Q4 FORECAST</text>
+        </g>
+      </svg>
+    </div>
+
+    <!-- ---------- root cause evidence ---------- -->
+    <div class="panel" id="evidence">
+      <div class="ph">Root Cause Evidence</div>
+
+      <div class="sig">
+        <i class="ico bad">↓</i>
+        <div class="body">
+          <div class="t">Lower Conversion</div>
+          <div class="d">Win rate 31% → 22%</div>
+        </div>
+        <div class="r">
+          <div class="l">Impact</div>
+          <div class="v bad">−$0.45M</div>
+        </div>
+        <span class="pill mute" style="align-self:center;margin-left:12px">HubSpot</span>
+      </div>
+
+      <div class="sig">
+        <i class="ico bad">↓</i>
+        <div class="body">
+          <div class="t">Deals Slipped</div>
+          <div class="d">Atlas Bank + Northstar Retail moved to Q1</div>
+        </div>
+        <div class="r">
+          <div class="l">Impact</div>
+          <div class="v bad">−$0.40M</div>
+        </div>
+        <span class="pill mute" style="align-self:center;margin-left:12px">HubSpot</span>
+      </div>
+
+      <div class="sig">
+        <i class="ico bad">↑</i>
+        <div class="body">
+          <div class="t">Higher Churn</div>
+          <div class="d">Renewal loss increased to 8.4%</div>
+        </div>
+        <div class="r">
+          <div class="l">Impact</div>
+          <div class="v bad">−$0.25M</div>
+        </div>
+        <span class="pill mute" style="align-self:center;margin-left:12px">Stripe</span>
+      </div>
+
+      <div class="sig">
+        <i class="ico mute">—</i>
+        <div class="body">
+          <div class="t">Sales Capacity</div>
+          <div class="d">3 open roles &nbsp;•&nbsp; 46 days behind plan</div>
+        </div>
+        <div class="r">
+          <div class="l">Contributing</div>
+          <div class="v" style="color:var(--ink-faint)">factor</div>
+        </div>
+        <span class="pill mute" style="align-self:center;margin-left:12px">Workday</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ---------- signal development ---------- -->
+  <div class="panel">
+    <div class="ph">Signal Development</div>
+    <div class="timeline">
+      <div class="tl-track">
+        <div class="tl-node on">
+          <div class="tl-cap ok" style="left:0">Early Indicator</div>
+          <div class="pt"></div><div class="wk">Week −7</div>
+          <div class="tx">Conversion trend declines</div>
+        </div>
+        <div class="tl-node on"><div class="pt"></div><div class="wk">Week −6</div>
+          <div class="tx">Win rate drops below target</div></div>
+        <div class="tl-node on"><div class="pt"></div><div class="wk">Week −5</div>
+          <div class="tx">Pipeline quality deteriorates</div></div>
+        <div class="tl-node on"><div class="pt"></div><div class="wk">Week −4</div>
+          <div class="tx">Enterprise deals slip</div></div>
+        <div class="tl-node on"><div class="pt"></div><div class="wk">Week −3</div>
+          <div class="tx">Churn metrics worsen</div></div>
+        <div class="tl-node on"><div class="pt"></div><div class="wk">Week −2</div>
+          <div class="tx">Forecast gap identified</div></div>
+        <div class="tl-node on">
+          <div class="tl-cap bad" style="left:-6px">Alba Alert</div>
+          <div class="pt"></div><div class="wk">Week −1</div>
+          <div class="tx" style="color:var(--bad)">Revenue risk flagged</div>
+        </div>
+        <div class="tl-node end">
+          <div class="tl-cap acc" style="right:0">Board Meeting</div>
+          <div class="pt"></div><div class="wk">Week 0</div>
+          <div class="tx">Board review scheduled</div>
+        </div>
+      </div>
+      <div style="text-align:center;margin-top:6px;font-size:9.5px;letter-spacing:.11em;
+                  text-transform:uppercase;color:var(--bad)">
+        ← &nbsp;7 weeks early&nbsp; →
+      </div>
+    </div>
+
+    <div class="provenance">
+      <div class="p"><span class="ic">⛉</span>Calculation: transparent driver bridge</div>
+      <div class="p"><span class="ic">▥</span>Evidence: 6 metrics</div>
+      <div class="p"><span class="ic">▤</span>Sources: 4 systems</div>
+      <div class="p"><span class="ic">◍</span>Human review: pending</div>
+    </div>
+  </div>
+
+<script src="assets/alba.js"></script>
+</body>
+</html>

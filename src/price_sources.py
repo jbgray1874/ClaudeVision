@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
+import os
 import config
 from source_connectors import AccessPriceConnector, SpreadsheetPriceConnector, SqlServerPriceConnector, WebPriceConnector
 
@@ -98,14 +99,82 @@ def _freshness_bucket(candidate: PriceCandidate, rules: Dict[str, Any]) -> str:
 
 
 def _candidate_rank_tuple(candidate: PriceCandidate, rules: Dict[str, Any]) -> tuple:
+    """Rank a price candidate. Lower is better, and the order must be TOTAL.
+
+    THE BUG THIS CLOSES. The tuple was (-priority, penalty, -confidence), and
+    `sorted(usable, ...)[0]` took the winner. Two catalogue rows for the same part code tie
+    on all three, so the choice fell through to Python's stable sort — which preserves the
+    order the connector returned, and a SQL query with no ORDER BY does not promise one.
+
+    Job 12120 priced three times on identical inputs: GBP 27.67, GBP 29.39, GBP 32.86. The
+    knurled knob went 1.45 -> 1.90 -> 1.45, coming BACK — not a catalogue being updated, the
+    same two rows being chosen between. Labour was identical to the penny every run.
+
+    A deterministic tail makes the same candidate set always yield the same answer: cheapest
+    first (an estimator can defend the lower of two catalogue rows far more easily than a
+    number that moves), then source name, then a stable digest of the row's own fields. None
+    of it is meaningful ordering — it exists so the result cannot depend on row order.
+    """
     pri = (rules.get("source_priority") or {}).get(candidate.source, 10)
     bucket = _freshness_bucket(candidate, rules)
     penalty = float((rules.get("freshness_penalty") or {}).get(bucket, 20.0))
-    # Lower rank tuple is better.
-    return (-pri, penalty, -float(candidate.confidence or 0.0))
+    return (-pri, penalty, -float(candidate.confidence or 0.0),
+            float(candidate.price if candidate.price is not None else float("inf")),
+            str(candidate.source or ""), _candidate_digest(candidate))
+
+
+def _candidate_digest(candidate: PriceCandidate) -> str:
+    """A stable fingerprint of one candidate row, so two rows that are otherwise identical
+    in rank still order deterministically between runs."""
+    import hashlib
+    try:
+        basis = repr(sorted((str(k), str(v)) for k, v in
+                            (candidate.metadata or {}).items()))
+    except Exception:
+        basis = ""
+    return hashlib.sha1((f"{candidate.source}|{candidate.kind}|{candidate.price}|"
+                         f"{candidate.unit}|{basis}").encode("utf-8")).hexdigest()[:12]
+
+
+def _price_disagreement(usable: List[PriceCandidate]) -> Optional[Dict[str, Any]]:
+    """Do the usable candidates agree on what this part costs?
+
+    Determinism alone is not correctness. If the catalogue holds THUM620 at both GBP 1.16 and
+    GBP 1.32, picking the same one every time is repeatable and still hides a data problem
+    that belongs in front of a person. Reported so an estimator sees the spread rather than
+    only the survivor.
+    """
+    prices = [c.price for c in usable if c.price is not None]
+    if len(prices) < 2:
+        return None
+    lo, hi = min(prices), max(prices)
+    if hi <= 0 or (hi - lo) <= max(0.005, 0.005 * hi):
+        return None
+    return {
+        "low_gbp": round(lo, 4), "high_gbp": round(hi, 4),
+        "spread_pct": round((hi - lo) / hi * 100.0, 2),
+        "candidate_count": len(prices),
+        "sources": sorted({str(c.source) for c in usable if c.price is not None}),
+    }
 
 
 def build_price_connectors(config_map: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # SDI_OFFLINE: BUILD NOTHING THAT CAN DIAL OUT.
+    #
+    # This is the third and widest outbound path from costing, after the PricingService
+    # singleton and the xAI lookup. It constructs a SQL Server connector, an MS Access
+    # connector that opens a file on \\sdi-dc01\shareddata$, and a web connector -- and
+    # estimate_part reaches it through _resolve_part_system_cost on every part it prices.
+    # A share that is mounted but slow blocks with no timeout, which is what stopped the
+    # rules suite dead on the estimating machine while finishing in seconds anywhere the
+    # network was absent.
+    #
+    # Returning no connectors rather than a stub price: get_best_price then records
+    # "connector_not_configured" against every source in its audit trail and returns its own
+    # no-result. Nothing is invented, and the reason an offline run found no price is
+    # written down instead of looking like a price that does not exist.
+    if os.environ.get("SDI_OFFLINE"):
+        return {}
     cfg = config_map or config.PRICE_SOURCE_CONFIG
     connectors: Dict[str, Any] = {}
 
@@ -119,6 +188,7 @@ def build_price_connectors(config_map: Optional[Dict[str, Any]] = None) -> Dict[
             material_price_query=udef_cfg.get("material_price_query", ""),
             labour_rate_query=udef_cfg.get("labour_rate_query", ""),
             part_system_cost_query=udef_cfg.get("part_system_cost_query", ""),
+            part_system_cost_query_by_code=udef_cfg.get("part_system_cost_query_by_code", ""),
             driver=udef_cfg.get("driver", "ODBC Driver 18 for SQL Server"),
             encrypt=bool(udef_cfg.get("encrypt", True)),
             trust_server_certificate=bool(udef_cfg.get("trust_server_certificate", True)),
@@ -139,6 +209,7 @@ def build_price_connectors(config_map: Optional[Dict[str, Any]] = None) -> Dict[
             material_price_query=sqlserver_cfg.get("material_price_query", ""),
             labour_rate_query=sqlserver_cfg.get("labour_rate_query", ""),
             part_system_cost_query=sqlserver_cfg.get("part_system_cost_query", ""),
+            part_system_cost_query_by_code=sqlserver_cfg.get("part_system_cost_query_by_code", ""),
             driver=sqlserver_cfg.get("driver", "ODBC Driver 18 for SQL Server"),
             encrypt=bool(sqlserver_cfg.get("encrypt", True)),
             trust_server_certificate=bool(sqlserver_cfg.get("trust_server_certificate", True)),
@@ -253,12 +324,34 @@ def get_best_price(request: PriceRequest, connectors: Optional[Dict[str, Any]] =
             audit_trail.append({"source": source_name, "status": "skipped", "reason": "connector_unavailable"})
             continue
 
-        source_candidates = _fetch_candidates_from_connector(connector, request)
+        # ONE PRICE SOURCE FAILING MUST NOT END THE ESTIMATE.
+        #
+        # A connector that cannot answer is a source with no candidates -- the waterfall
+        # exists precisely so the next one is asked. It was not written that way: an
+        # exception here propagated out of estimate_material, out of estimate_part, out of
+        # estimate_document and killed main.py. Job 11650's side panels died mid-run
+        # because Excel returned RPC_E_CALL_REJECTED ("call was rejected by callee") when
+        # the spreadsheet connector tried to open the price template -- Excel was busy, or
+        # the shell was elevated and Excel was not. No estimate, no workbook, no partial
+        # answer, over a price lookup that has three fallbacks behind it.
+        #
+        # Recorded as a FAILED source rather than a quiet skip: a source that errored and
+        # one that had nothing to say are different facts, and the audit trail is where an
+        # estimator finds out which prices were never even asked for.
+        try:
+            source_candidates = _fetch_candidates_from_connector(connector, request)
+            _status, _reason = "queried", None
+        except Exception as _e_conn:                                # noqa: BLE001
+            source_candidates = []
+            _status, _reason = "failed", f"{type(_e_conn).__name__}: {_e_conn}"
+            print(f"   [price] {source_name} could not be queried ({_reason}) -- "
+                  f"falling through to the next source", flush=True)
         audit_trail.append(
             {
                 "source": source_name,
-                "status": "queried",
+                "status": _status,
                 "candidate_count": len(source_candidates),
+                **({"reason": _reason} if _reason else {}),
             }
         )
         candidates.extend(source_candidates)
@@ -267,11 +360,21 @@ def get_best_price(request: PriceRequest, connectors: Optional[Dict[str, Any]] =
         if usable:
             rules = config.PRICE_FRESHNESS_RULES or {}
             best_usable = sorted(usable, key=lambda c: _candidate_rank_tuple(c, rules))[0]
+            _dis = _price_disagreement(usable)
             return {
                 "request": request.__dict__,
                 "selected": best_usable.__dict__,
                 "candidates": [candidate.__dict__ for candidate in candidates],
                 "audit_trail": audit_trail,
+                # PROVENANCE. Which source answered, and whether the answers agreed. Without
+                # this a price that moves between runs is invisible: every run is internally
+                # consistent and the number is simply different.
+                "provenance": {
+                    "source": best_usable.source,
+                    "price_gbp": best_usable.price,
+                    "considered": len(usable),
+                    "disagreement": _dis,
+                },
             }
 
     best_fallback = max(candidates, key=lambda candidate: candidate.confidence).__dict__ if candidates else None
