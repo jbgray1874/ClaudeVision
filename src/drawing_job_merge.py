@@ -321,6 +321,13 @@ _DXF_MATERIAL_TOKENS: List[Tuple[str, str]] = [
     (r"\bACRYLIC\b|\bACR\b|\bPERSPEX\b|\bPMMA\b", "ACRYLIC"),
     (r"POLYCARB|\bPC\b", "POLYCARBONATE"),
     (r"\bCARD\b|GREYBOARD|GREY\s*BOARD", "CARD"),
+    # MFMDF IS A BOARD OF ITS OWN, AND IT COMES BEFORE MDF AND MFC (D-727). 12677-01-03J's flat
+    # is named "9mm Black MFMDF" and the GA's title block prints "PRE LAMINATED BOARD, MFMDF".
+    # Neither spelling was here, so the filename gave nothing, the title block gave only
+    # BOARD, and the 31 Oct book costed the panel as MFC on a market sheet price of GBP 6.50.
+    # Melamine-faced MDF is read before MELAMINE FACED below, which would call it chipboard.
+    (r"\bMFMDF\b|\bMF\s*-?\s*MDF\b|MELAMINE\s*FACED\s*MDF|PRE\s*-?\s*LAMINATED\s*MDF",
+     "MFMDF"),
     (r"\bMDF\b", "MDF"),
     # MFC is Melamine Faced Chipboard and is the commonest shop-fitting board there is —
     # 12422-24's panel is 28mm of it. The spelled-out name was recognised and the trade
@@ -578,6 +585,17 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
         part["flat_pattern_detected"] = True
         part["overall_length_mm"] = flat["blank_length_mm"]
         part["overall_width_mm"] = flat["blank_width_mm"]
+        # A MEASURED FLAT REPLACES A GUESSED BLANK (D-724). The page-text fallback writes the
+        # top-level blank from the two largest numbers on the sheet when nothing else has
+        # one yet; the DXF arrives later and wrote only normalized_geometry, so the guess
+        # stayed on the field several pricers read and the report named it as the blank's
+        # source. Submitted through the resolver, and only over a held blank weaker than the
+        # DXF, so a model's flat is never displaced and an empty field stays as it was.
+        for _bf in ("blank_length_mm", "blank_width_mm"):
+            if part.get(_bf) and source_precedence.field_rank(
+                    source_precedence.source_of(part, _bf), _bf) \
+                    < source_precedence.field_rank("dxf_flat_pattern", _bf):
+                _apply_field(part, _bf, flat[_bf], "dxf_flat_pattern")
         reliability = 1.0
         # DXF flat-pattern is what the press brake bends from — ground truth.
         # If it shows 0 bends, this part does NOT fold, even if a shared/document

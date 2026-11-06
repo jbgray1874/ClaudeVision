@@ -225,3 +225,30 @@ def test_a_part_count_already_at_the_trees_figure_stands():
     out = rc.compile_job_route(parts, job, known_assemblies=["H-GA", "H-101SA"])
     folds = _folds(out)
     assert folds and all(float(d["qty_per_unit"]) == 33.0 for d in folds), folds
+
+
+# ── D-726: a memberless frame whose own record is welded is a weldment ─────────────────
+
+def test_a_welded_frame_drawn_as_an_assembly_takes_its_own_cut_list():
+    """12677-01-01M RISER FRAME: an assembly sheet, uncoded tube pieces only, its own route
+    welded. The tube and the saw were missing from the bill; now the frame is costed from them."""
+    frame = {"part_number": "R-01M", "description": "RISER FRAME",
+             "is_assembly_parent": True, "page_roles": ["assembly"],
+             "textual_operations": ["welding", "dress_welds", "powder_coating"],
+             "normalized_material": "MILD STEEL", "quantity": 1}
+    rows = [_row("50.00 x 20.00 x 2.00mm TUBE 703", 1, "R-01M"),
+            _row("50.00 x 20.00 x 2.00mm TUBE 451", 2, "R-01M")]
+    mint_uncoded_row_identities(rows)
+    assert bp.apply_stated_cut_list_to_parts([frame], rows) == 1
+    assert sorted(frame["section_stock"]["cut_lengths_mm"]) == [451.0, 451.0, 703.0]
+    assert frame.get("weldment_from_own_cut_list") is True
+    assert not frame.get("manufacturing_questions")
+
+
+def test_an_unwelded_assembly_drawn_the_same_way_is_still_asked():
+    asm = {"part_number": "R-02A", "description": "RISER", "is_assembly_parent": True,
+           "page_roles": ["assembly"], "textual_operations": ["assembly"]}
+    rows = [_row("50.00 x 20.00 x 2.00mm TUBE 703", 1, "R-02A")]
+    mint_uncoded_row_identities(rows)
+    assert bp.apply_stated_cut_list_to_parts([asm], rows) == 0
+    assert "section_stock" not in asm

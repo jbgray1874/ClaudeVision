@@ -518,10 +518,21 @@ def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
                 _welded_sheet = states_only_a_process(stated_finish(p))
             except Exception:                                        # noqa: BLE001
                 _welded_sheet = False
+            # A RECORD THAT IS WELDED SAYS SO TOO (D-726). 12677-01-01M RISER FRAME is drawn
+            # on a sheet the readers call an assembly, its own table lists only uncoded
+            # 10 x 10 x 1.2 tube pieces (8 + 4), and its own operations carry the weld. With
+            # none of the three signs above it fell to the question, and the frame went on the
+            # bill with no tube and no saw. A memberless parent whose own record is welded is
+            # a weldment cut from its pieces; a bare record with no weld is still asked.
+            _own_ops = {str(o).strip().lower()
+                        for k in ("textual_operations", "operations", "inferred_operations")
+                        for o in (p.get(k) or []) if str(o).strip()}
+            _welded_record = bool(_own_ops & {"welding", "weld", "tig_welding", "mig_welding",
+                                              "spot_welding"})
             _weldment_sheet = (("detail" in _roles and "assembly" not in _roles)
                                or bool(re.search(r"\bWELDMENT\b",
                                                  str(p.get("description") or ""), re.I))
-                               or _welded_sheet)
+                               or _welded_sheet or _welded_record)
             if not _coded_kids and _weldment_sheet:
                 _asm = False
                 # AND THE RECORD SAYS SO. The decision was local to this function, so the

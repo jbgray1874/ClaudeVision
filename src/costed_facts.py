@@ -2544,6 +2544,22 @@ def _operations_from_decisions(source: Any, part_number: Any) -> List[str]:
     return out
 
 
+def operation_charge_counts(source: Any, part_number: Any) -> Dict[str, int]:
+    """{operation: how many priced workbook rows charge it to this part} (SCRUM-134).
+
+    `operations` names each operation once, by design, so it cannot show the same operation
+    charged twice: laser cutting on two rows for one part reads exactly like laser cutting on
+    one. This counts the rows, so a duplicate charge is visible on the record and the replay
+    gate can catch it. A count above one is not always wrong (two folding set-ups on two tools
+    can be right), which is why the gate takes reviewed exceptions rather than forbidding it.
+    """
+    counts: Dict[str, int] = {}
+    for r in priced_rows_for_part(source, part_number):
+        for op in dict.fromkeys(_row_engine_ops(r)):
+            counts[op] = counts.get(op, 0) + 1
+    return counts
+
+
 def route_operations_for_part(source: Any, part_number: Any) -> List[str]:
     """The operations the canonical route REQUIRES of this part, read from the route itself.
 
@@ -3019,6 +3035,9 @@ def costed_job(source: Any) -> Dict[str, Any]:
             # the route records tubebend on 7332-01-002 while `operations` is empty, because
             # those rows carry no decision ids.
             "route_operations": route_operations_for_part(source, pn),
+            # How many priced rows charge each operation to this part, so the same operation
+            # charged twice is visible on the record (SCRUM-134).
+            "operation_charges": operation_charge_counts(source, pn),
             "length": length,
             "section_profile": profile,
             "review_flags": flags,

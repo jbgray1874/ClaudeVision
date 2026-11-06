@@ -3612,6 +3612,21 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                  "input_origins": dict(part.get("input_origins") or {},
                                        **({"description": "vision_concept_sighted"}
                                           if _sighted_desc else {}))})
+            # A ROLL IS ASKED BY THE METRE, AND EACH PIECE PAYS FOR ITS OWN LENGTH (D-728).
+            # 12677-01's four 233 x 20 mm strips of VHB gel tape were researched "per each",
+            # came back at GBP 9.50 (a roll) and were charged four times: GBP 39.52 for
+            # 0.93 m of tape. A line sold off a roll with a known piece length, and not in
+            # the roll catalogue, asks the price per metre for ONE piece's length, so the
+            # figure returned is one piece's price; a reel or roll price is refused by the
+            # producer's own unit check rather than divided by a length nobody stated.
+            _roll_piece = (roll_piece_length_mm(part)
+                           if is_roll_goods_line(part) and not _in_roll_catalogue(part)
+                           else (None, ""))
+            if _roll_piece[0]:
+                # A NEW BRIEF, not a part record: one piece's length in metres.
+                _rung4_line = dict(_rung4_line, unit_of_measure="m",
+                                   quantity=round(_roll_piece[0] / 1000.0, 4),
+                                   quantity_counted=None)
             _ind = _rung4(
                 _rung4_line,
                 order_qty=_order_qty_of(part),
@@ -3619,14 +3634,47 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                 ask=_researcher,
             )
         except Exception:                                        # noqa: BLE001
-            _ind, _rung4_line = {}, {}
+            _ind, _rung4_line, _roll_piece = {}, {}, (None, "")
         _ind_price = _safe_float((_ind or {}).get("price_gbp"))
         # THE ITEM'S PRICE, NOT THE LINE'S TOTAL (D-501). A bought-in line is charged as its
         # item price × its quantity downstream; the researched `price_gbp` already carries
         # the quantity, so a line of 48 QR labels was charged 48 × (48 × 12p). Take the item
         # price, and keep the line total as the working it is.
-        if (_ind or {}).get("applies_per_item") and _safe_float(_ind.get("unit_price_gbp")):
+        if (_ind or {}).get("applies_per_item") and _safe_float(_ind.get("unit_price_gbp")) \
+                and not _roll_piece[0]:
             _ind_price = _safe_float(_ind.get("unit_price_gbp"))
+        if _roll_piece[0]:
+            _per_m = _safe_float((_ind or {}).get("unit_price_gbp"))
+            if _ind_price and _per_m:
+                _qty_pcs = _safe_float(part.get("quantity")) or 1.0
+                part["review_flags"] = [
+                    f for f in (part.get("review_flags") or [])
+                    if not str(f).startswith("ROLL GOODS: NOT PRICED")]
+                part.setdefault("review_flags", []).append(
+                    f"ROLL GOODS priced by length: {_roll_piece[0]:g} mm a piece (from "
+                    f"{_roll_piece[1]}) at £{_per_m:,.2f} a metre = £{_ind_price:,.4f} a "
+                    f"piece; {_qty_pcs:g} piece(s) = {_qty_pcs * _roll_piece[0] / 1000.0:g} m "
+                    f"a unit. The metre rate is researched, not a quotation — verify")
+                part["roll_goods_by_length"] = {
+                    "piece_mm": _roll_piece[0], "piece_from": _roll_piece[1],
+                    "gbp_per_metre": _per_m, "gbp_per_piece": _ind_price,
+                    "metres_per_unit": round(_qty_pcs * _roll_piece[0] / 1000.0, 4)}
+            else:
+                # NO METRE RATE IS NOT LICENCE FOR A PER-PIECE ONE. Asked, never rescued by a
+                # last-resort market figure that would multiply a roll price by the pieces.
+                _ind_price = None
+                part.setdefault("risk_flags", []).append("roll_goods_per_metre_unpriced")
+                try:
+                    source_precedence.raise_manufacturing_question(
+                        part,
+                        (f"{part.get('description') or part.get('part_number')}: no price "
+                         f"per metre was found"),
+                        (f"{_roll_piece[0]:g} mm a piece ({_roll_piece[1]}); the line is not "
+                         f"costed, because a per-piece figure would charge a roll per strip"),
+                        "give the price per metre, or the roll length and roll price",
+                        "estimator.roll_goods_by_length")
+                except Exception:                                    # noqa: BLE001
+                    pass
         # A SET PRICED AS ONE PIECE OF IT DOES NOT RECONCILE, AND IS NOT USED (D-501). The 20:49
         # K-Wellness "REPLACEABLE CARD / MAGNETIC GRAPHIC SET" took £18 for one panel as the
         # price of the set. The answer must say it priced the set; one that says it priced a
@@ -5294,8 +5342,20 @@ def _researched_board_rate_m2(material: Optional[str], thickness: Optional[float
     cannot return a figure without evidence — that refusal is the producer's, and is the
     whole reason this is allowed to contribute to a total at all.
     """
-    _l = _safe_float(part.get("blank_length_mm"))
-    _w = _safe_float(part.get("blank_width_mm"))
+    # THE BLANK THE SHEET NESTS, NOT A GUESSED ONE (D-724). 11908-22's three panels were
+    # priced on 340 x 400, 350 x 400 and 304 x 400: the top-level blank still held the two
+    # largest numbers in the page text while the measured DXF flat (340 x 290, 350 x 28,
+    # 300 x 28) sat in normalized_geometry, where the sheet read it. The sheet then turned
+    # the engine's money back into a sheet price on the true area, so a 350 x 28 strip
+    # printed GBP 966 a sheet. The shared resolver reads the measured flat first.
+    try:
+        from document_builder import flat_blank_mm as _flat_blank_mm
+        _l, _w = _flat_blank_mm(part)
+    except Exception:                                            # noqa: BLE001
+        _l = _w = None
+    if not (_l and _w):
+        _l = _safe_float(part.get("blank_length_mm"))
+        _w = _safe_float(part.get("blank_width_mm"))
     if not _l or not _w or not material:
         return None
     _area_m2 = round((_l * _w) / 1_000_000.0, 6)
@@ -6707,6 +6767,49 @@ def _price_declared_material_layers(part: Dict[str, Any],
 
 _ROLL_GOODS_WORDS = ("TAPE", "VINYL", "FOAM STRIP", "FELT STRIP", "REEL", "WEBBING")
 _ROLL_LENGTH_RE = re.compile(r"LENGTH\s*[:=]\s*([\d.]+)", re.IGNORECASE)
+# A STRIP'S OWN SIZE, "233 x 20" or "890x10x1.5mm": the longest figure is the piece's length.
+_ROLL_SIZE_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(?:MM)?\s*[xX×]\s*(\d+(?:\.\d+)?)(?:\s*(?:MM)?\s*[xX×]\s*(\d+(?:\.\d+)?))?")
+
+
+def _in_roll_catalogue(part: Dict[str, Any]) -> bool:
+    """Is this line's code in config.ROLL_GOODS_CATALOGUE (matched without separators)?"""
+    _blob = " ".join(str(part.get(k) or "") for k in ("part_number", "description")).upper()
+    _squashed = re.sub(r"[^A-Z0-9]", "", _blob)
+    return any(re.sub(r"[^A-Z0-9]", "", str(c).upper()) in _squashed
+               for c in (getattr(config, "ROLL_GOODS_CATALOGUE", {}) or {}))
+
+
+def is_roll_goods_line(part: Dict[str, Any]) -> bool:
+    """A thing sold off a roll: tape, vinyl, foam or felt strip, reel goods, webbing."""
+    _blob = " ".join(str(part.get(k) or "") for k in ("part_number", "description")).upper()
+    return any(w in _blob for w in _ROLL_GOODS_WORDS)
+
+
+def roll_piece_length_mm(part: Dict[str, Any]) -> Tuple[Optional[float], str]:
+    """(length of ONE piece cut off the roll, where it was read) — or (None, "").
+
+    A person's confirmed length first, then "LENGTH: n" in the description, then the part's
+    own overall length, then the strip's own printed size (D-728): 12677-01's "VHB GEL TAPE
+    233 x 20" is a 233 mm strip of 20 mm tape, and no other field said so, so the line was
+    priced as four of whatever the market sold."""
+    _conf = _safe_float(part.get("confirmed_piece_length_mm"))
+    if _conf:
+        return _conf, "confirmed by an estimator"
+    _blob = " ".join(str(part.get(k) or "") for k in ("part_number", "description"))
+    _m = _ROLL_LENGTH_RE.search(_blob)
+    if _m and _safe_float(_m.group(1)):
+        return _safe_float(_m.group(1)), "the description's stated length"
+    _ol = _safe_float(part.get("overall_length_mm"))
+    if _ol:
+        return _ol, "the part's own overall length"
+    _s = _ROLL_SIZE_RE.search(str(part.get("description") or ""))
+    if _s:
+        _dims = [_safe_float(g) for g in _s.groups() if g]
+        _dims = [d for d in _dims if d]
+        if len(_dims) >= 2 and max(_dims) > min(_dims):
+            return max(_dims), f"the strip's printed size ({_s.group(0).strip()})"
+    return None, ""
 
 
 def roll_goods_material(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -6739,6 +6842,8 @@ def roll_goods_material(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     _qty = _safe_int(part.get("quantity")) or 1
     _m = _ROLL_LENGTH_RE.search(_blob)
     _piece_mm = _safe_float(_m.group(1)) if _m else _safe_float(part.get("overall_length_mm"))
+    if not _piece_mm:
+        _piece_mm = roll_piece_length_mm(part)[0]
     # A PERSON'S CONFIRMED LENGTH OUTRANKS THE DESCRIPTION PARSE — the pack can state the
     # length twice with different figures (10975: 200 against 220), and the estimator's
     # pick is the answer, stamped once, not re-litigated per run.
@@ -14236,6 +14341,47 @@ def _consumable_share_cost(part: Dict[str, Any]) -> Dict[str, Any]:
     share = part.get("consumable_share") or {}
     ref_item = str(share.get("reference_item") or "").strip()
     count = _safe_float(share.get("count")) or 0.0
+    # SDI'S OWN TINS, BY THE KILO, BEFORE ANY MARKET LOOKUP (D-725). A share of a pack with a
+    # stated mass is a mass, so SDI Live's adhesive rows price it per kg exactly as the
+    # laminate's bond is priced (D-678): the row named, its pack read off its own
+    # description, nothing converted. The last spec may be a declared stand-in; the line
+    # then says which tin priced it and that the drawn adhesive is a different one.
+    _pack_kg = _safe_float(share.get("pack_kg"))
+    if count > 0 and _pack_kg and share.get("catalogue_specs"):
+        _kg = round(count * _pack_kg, 6)
+        for _spec in share.get("catalogue_specs") or []:
+            if not isinstance(_spec, dict):
+                continue
+            _found = _adhesive_by_its_pack(_spec, "kg")
+            _per = _safe_float(_found.get("gbp_per_unit"))
+            _row = _found.get("row") or {}
+            if not _per or _per <= 0 or not _row:
+                continue
+            _money = round(_kg * _per, 4)
+            _stand = (f" A STAND-IN: SDI holds no {ref_item} row, so the shop's own "
+                      f"{_spec.get('name')} prices it; confirm the joint adhesive."
+                      if _spec.get("stand_in") else "")
+            part.setdefault("review_flags", []).append(
+                f"consumable share: {_kg:g} kg of {_spec.get('name')} from SDI Live "
+                f"{_row.get('part_code')} '{_row.get('description')}' at "
+                f"£{_row.get('pack_gbp'):,.2f} a {_row.get('pack_size'):g} kg pack "
+                f"(£{_per:,.4f}/kg) = £{_money:,.4f} ({share.get('working')}; "
+                f"{share.get('basis')}).{_stand}")
+            part["consumable_share_priced_by"] = {
+                "spec": _spec.get("name"), "stand_in": bool(_spec.get("stand_in")),
+                "part_code": _row.get("part_code"), "description": _row.get("description"),
+                "pack_gbp": _row.get("pack_gbp"), "pack_kg": _row.get("pack_size"),
+                "gbp_per_kg": _per, "kg_used": _kg, "allowance_gbp": _money}
+            return {"applied_unit_cost": _money, "matched_part_code": _row.get("part_code"),
+                    "result": {"selected": {
+                        "source": "udef_parts_table_for_estimating",
+                        "price": _row.get("pack_gbp"), "unit": "each", "confidence": 0.9,
+                        "evidence": {"row": {"Part code": _row.get("part_code"),
+                                             "Description": _row.get("description"),
+                                             "System cost per": _row.get("pack_gbp")}},
+                        "metadata": {"consumable_share": True, "kg_used": _kg,
+                                     "gbp_per_kg": _per,
+                                     "stand_in": bool(_spec.get("stand_in"))}}}}
     ref = {"part_number": "", "description": ref_item, "quantity": 1,
            "page_roles": ["bought_in"], "is_bought_in": True}
     try:
@@ -14277,6 +14423,9 @@ def _last_resort_price_is_needed(pe: Dict[str, Any]) -> bool:
         return False
     # A consumable share with no pack price stays asked, never a whole pack (D-723).
     if "consumable_share_unpriced" in (pe.get("risk_flags") or []):
+        return False
+    # A roll line with no metre rate stays asked, never a per-strip market figure (D-728).
+    if "roll_goods_per_metre_unpriced" in (pe.get("risk_flags") or []):
         return False
     _rf = " ".join(str(f) for f in (pe.get("risk_flags") or []))
     if "customer_supplied_zero_cost" in _rf:
