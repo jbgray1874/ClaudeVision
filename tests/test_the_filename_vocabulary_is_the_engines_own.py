@@ -242,3 +242,18 @@ def test_the_engine_normalises_what_the_reader_says():
     """The reader's word must be one the normaliser keeps, or it is a private spelling."""
     import json_normaliser
     assert json_normaliser.normalise_material("MFMDF") == "MFMDF"
+
+
+# ── D-727, the DXF reader's own filename rule ─────────────────────────────────────────
+
+@pytest.mark.parametrize("stem, want", [("R-03J_9mm Black MFMDF_revB", "MFMDF"),
+                                        ("R-03J_18mm MF MDF", "MFMDF"),
+                                        ("R-03J_18mm MFC", "MFC"),
+                                        ("R-03J_9mm PRE LAM", "MFC")])
+def test_the_flat_pattern_reader_keeps_faced_mdf_apart_from_faced_chipboard(stem, want):
+    """12677-01, 6 Nov 10:38: the flat-pattern reader's own rule turned "9mm Black MFMDF" into
+    MFC, and its answer is used before the shared vocabulary, so the panel was costed as
+    faced chipboard after the shared vocabulary had learned the word."""
+    import dxf_reader
+    assert dxf_reader._parse_material_from_stem(stem) == want
+    assert dxf_reader._parse_filename(Path(stem + ".DXF"))["material"] == want

@@ -109,3 +109,60 @@ def test_a_counted_item_that_is_not_a_roll_is_still_asked_per_each(monkeypatch):
     r = estimator._resolve_part_system_cost(part)
     assert seen["brief"]["wanted_unit"] == "each"
     assert r["applied_unit_cost"] == pytest.approx(0.35)
+
+
+@pytest.mark.parametrize("extra, said", [
+    ({"normalized_geometry": {"bbox_mm": [233.0, 20.0, 1.0]}}, "the model's extents"),
+    ({"blank_length_mm": 233.0, "blank_width_mm": 20.0}, "the part's own blank"),
+    ({"normalized_geometry": {"blank_length_mm": 20.0, "blank_width_mm": 233.0}},
+     "the part's measured blank")])
+def test_a_modelled_strip_gives_its_length_from_its_own_extents(extra, said):
+    """12677-01, 6 Nov 10:38: the description said only "VHB GEL TAPE"; the 233 x 20 the BOM
+    line printed came from the record's own extents, which this reader did not look at."""
+    part = dict({"part_number": "GEL TAPE", "description": "VHB GEL TAPE"}, **extra)
+    length, where = estimator.roll_piece_length_mm(part)
+    assert length == 233.0 and where.startswith(said)
+
+
+def test_a_modelled_strip_is_asked_by_the_metre(monkeypatch):
+    ask, seen = _answers(**PER_METRE)
+    monkeypatch.setattr(estimator, "_rung4_researcher", ask)
+    part = {"part_number": "GEL TAPE", "description": "VHB GEL TAPE", "quantity": 4,
+            "page_roles": ["bought_in"], "is_bought_in": True,
+            "normalized_geometry": {"bbox_mm": [233.0, 20.0, 1.0]}}
+    r = estimator._resolve_part_system_cost(part)
+    assert seen["brief"]["wanted_unit"] == "metre"
+    assert r["applied_unit_cost"] == pytest.approx(0.233 * 2.40, abs=1e-4)
+
+
+class _Service:
+    """A stand-in pricing service: its anchor answer is the one given."""
+    def __init__(self, anchor):
+        self._anchor = anchor
+
+    def _select_anchor_price_source(self, part):
+        return dict(self._anchor)
+
+
+def test_the_pricing_services_per_piece_market_answer_is_passed_over_for_a_roll(monkeypatch):
+    """12677-01, 6 Nov 10:38: the service's own market fallback answered GBP 9.50 "each"
+    before the per-metre rung was reached. A roll line with a piece length now passes it over
+    and is asked by the metre."""
+    monkeypatch.setattr(estimator, "_get_pricing_service", lambda: _Service(
+        {"unit_price_gbp": 9.50, "source": "llm_estimate", "source_type": "web_ai_fallback"}))
+    ask, seen = _answers(**PER_METRE)
+    monkeypatch.setattr(estimator, "_rung4_researcher", ask)
+    part = _gel_tape()
+    r = estimator._resolve_part_system_cost(part)
+    assert r["applied_unit_cost"] == pytest.approx(0.233 * 2.40, abs=1e-4)
+    assert any("per-piece figure £9.50 is not used" in f for f in part["review_flags"])
+
+
+def test_an_sdi_catalogue_answer_for_a_roll_line_still_stands(monkeypatch):
+    monkeypatch.setattr(estimator, "_get_pricing_service", lambda: _Service(
+        {"unit_price_gbp": 0.40, "source": "udef_parts_table_for_estimating",
+         "source_type": "catalogue"}))
+    monkeypatch.setattr(estimator, "_rung4_researcher",
+                        lambda b: pytest.fail("SDI's own price answered; no research"))
+    r = estimator._resolve_part_system_cost(_gel_tape())
+    assert r["applied_unit_cost"] == pytest.approx(0.40)

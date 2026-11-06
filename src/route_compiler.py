@@ -6635,6 +6635,40 @@ def compile_job_route(
         and not any(_x.status in NEGATIVE_STATUSES for _x in _cl)
         for _c in _cl
         if _c.status == REQUIRED and str(_c.scope or "part") == "part"}
+    # ONE LENGTH IS CUT ONCE, BY ONE PROCESS (D-730). 12677-01-01M, 6 Nov 2026 10:38 book: its
+    # own record sawed the 12 tube pieces (12 cuts at the saw's per-cut allowance) and the
+    # extract inferred a tube cut from the same cut list, so the frame carried a Saw row and
+    # a Tube row for one set of cuts. Where two different cut-to-length operations are both
+    # required on one part, the better-evidenced one stands (the saw on a tie, since it is
+    # timed cut by cut) and the other is ruled not applicable, its reading kept as evidence.
+    _length_cuts: Dict[str, List[str]] = {}
+    for _eid, _cl in claims_by_event.items():
+        if not _cl or clean_operation(_cl[0].operation) not in _CUT_TO_LENGTH_OPERATIONS:
+            continue
+        if any(_x.status in NEGATIVE_STATUSES for _x in _cl):
+            continue
+        if any(_c.status == REQUIRED and str(_c.scope or "part") == "part" for _c in _cl):
+            _length_cuts.setdefault(_cl[0].target_id, []).append(_eid)
+    for _tid, _eids in _length_cuts.items():
+        if len({clean_operation(claims_by_event[e][0].operation) for e in _eids}) < 2:
+            continue
+        _keep = max(_eids, key=lambda e: (
+            max((_c.source_rank or 0) for _c in claims_by_event[e]),
+            clean_operation(claims_by_event[e][0].operation) == "saw"))
+        _kept_op = clean_operation(claims_by_event[_keep][0].operation).replace("_", " ")
+        for _e in _eids:
+            if _e == _keep:
+                continue
+            _t = claims_by_event[_e][0]
+            add_claim(_e, make_claim(
+                _t.operation, NOT_APPLICABLE, "drawing_deterministic",
+                subject_id=_t.target_id, target_id=_t.target_id, scope="part",
+                participants=[_t.target_id], sequence=_t.sequence,
+                reason=(f"{_tid} is already cut to length by its {_kept_op}; a "
+                        f"{_t.operation.replace('_', ' ')} would cut the same pieces a second "
+                        f"time"),
+                route_id=_t.route_id))
+
     for event_id, event_claims in list(claims_by_event.items()):
         template = event_claims[0]
         raw_part = raw.get(template.target_id) or {}
@@ -7085,6 +7119,14 @@ _TAKES_IT_OFF_THE_BENCH = frozenset({
 }) | (_JOINING_OPS - {"dress_welds"})
 
 
+# OPERATIONS THAT HAPPEN ONCE TO AN ASSEMBLY AT ONE VISIT, HOWEVER MANY READERS NAME THEM
+# (D-685 for the assemble; D-729 for the gluing). 12677-01-101SA, 6 Nov 2026 10:38 book: the
+# vision extract read the glue (participants 02J, 03J, gel tape) and the engine inferred it
+# from the same note; each reading was an event and the sheet charged two identical Glue rows,
+# GBP 13.53 each, for one bond of two panels.
+_ONE_EVENT_PER_ASSEMBLY_VISIT = frozenset({"assembly", "glue", "gluing", "bonding"})
+
+
 def _one_assembly_event_per_visit(claims_by_event: Dict[str, List[OperationClaim]],
                                   issues: Optional[List[Dict[str, Any]]] = None
                                   ) -> List[Dict[str, Any]]:
@@ -7121,23 +7163,25 @@ def _one_assembly_event_per_visit(claims_by_event: Dict[str, List[OperationClaim
         return _s
 
     off_bench: Dict[str, List[Optional[float]]] = {}
-    readings: Dict[str, List[Tuple[float, int, str]]] = {}
+    readings: Dict[Tuple[str, str], List[Tuple[float, int, str]]] = {}
     for eid, d in decided.items():
         if d.status != REQUIRED:
             continue
         tid = str(d.target_id or "")
         if d.operation in _TAKES_IT_OFF_THE_BENCH:
             off_bench.setdefault(tid, []).append(_place(d))
-        elif (d.operation == "assembly" and tid
+        elif (d.operation in _ONE_EVENT_PER_ASSEMBLY_VISIT and tid
               and all(str(c.scope or "").lower() == "assembly"
                       for c in claims_by_event[eid])):
             _p = _place(d)
-            readings.setdefault(tid, []).append(
-                (_p if _p is not None else float(DEFAULT_OPERATION_SEQUENCE["assembly"]),
-                 order[eid], eid))
+            _default = number(DEFAULT_OPERATION_SEQUENCE.get(d.operation))
+            if _default is None:
+                _default = float(DEFAULT_OPERATION_SEQUENCE["assembly"])
+            readings.setdefault((tid, d.operation), []).append(
+                (_p if _p is not None else _default, order[eid], eid))
 
     pools: List[Dict[str, Any]] = []
-    for tid, rs in readings.items():
+    for (tid, op), rs in readings.items():
         if len(rs) < 2:
             continue
         rs.sort()
@@ -7167,11 +7211,12 @@ def _one_assembly_event_per_visit(claims_by_event: Dict[str, List[OperationClaim
             claims_by_event[keep] = merged
             for e in others:
                 del claims_by_event[e]
+            _what = "assemble" if op == "assembly" else op
             pool = {
                 "code": "assembly_readings_pooled_on_target",
-                "operation": "assembly", "assembly": tid,
+                "operation": op, "assembly": tid,
                 "into": keep, "merged_events": others,
-                "note": (f"the assemble of {tid} was described by {len(visit)} readings at one "
+                "note": (f"the {_what} of {tid} was described by {len(visit)} readings at one "
                          f"visit to the bench; they are one event, charged once, with every "
                          f"reading kept as evidence"),
             }

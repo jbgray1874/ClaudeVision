@@ -392,3 +392,37 @@ def test_a_charged_line_with_no_row_still_says_the_join_is_missing():
     line["charged"] = "no"
     assert wb_populate.route_line_on_the_sheet(line, {})[2] == \
         "not charged, so no sheet row is expected"
+
+
+# ── D-729: two readings of one assembly's gluing are one event ───────────────────────────────
+
+GLUE_READ = {"operation": "glue", "part_numbers": [INSERT, SKIN_WELD], "scope": "assembly",
+             "target_id": WORKTOP, "sequence": 80, "notes": "insert bonded into the worktop"}
+GLUE_INFERRED = {"operation": "glue", "part_numbers": [INSERT], "scope": "assembly",
+                 "target_id": WORKTOP, "sequence": 80, "inferred": True,
+                 "notes": "the bond method is printed on the worktop"}
+
+
+def test_two_readings_of_one_gluing_are_one_event():
+    """12677-01-101SA: the extract read the glue and the engine inferred it from the same
+    note; the sheet charged two identical Glue rows for one bond."""
+    out = _compile(WELDS + [GLUE_READ, GLUE_INFERRED])
+    glue = _required(out, "glue", WORKTOP)
+    assert len(glue) == 1, [(d["decision_id"], d["reason"]) for d in glue]
+    assert {INSERT, SKIN_WELD} <= set(glue[0]["participants"])
+    pools = [p for p in _codes(out, "assembly_readings_pooled_on_target")
+             if p["operation"] == "glue"]
+    assert pools and pools[0]["assembly"] == WORKTOP
+
+
+def test_a_gluing_and_an_assemble_on_one_assembly_are_not_pooled_together():
+    out = _compile(WELDS + [GLUE_READ, THE_FIT])
+    assert len(_required(out, "glue", WORKTOP)) == 1
+    assert len(_required(out, "assembly", WORKTOP)) == 1
+
+
+def test_one_reading_of_a_gluing_is_left_as_it_is():
+    out = _compile(WELDS + [GLUE_READ])
+    assert len(_required(out, "glue", WORKTOP)) == 1
+    assert not [p for p in _codes(out, "assembly_readings_pooled_on_target")
+                if p["operation"] == "glue"]

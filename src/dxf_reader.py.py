@@ -564,8 +564,17 @@ _FILENAME_MATERIAL_CODES: Dict[str, str] = {
 
 
 
+_FACED_MDF_RE = re.compile(
+    r"MFMDF|\bMF[\s_-]*MDF\b|MELAMINE[\s_]*FACED[\s_]*MDF|PRE[\s_-]*LAM(?:INATED?)?[\s_]*MDF")
+
+
 def _parse_material_from_stem(stem: str) -> Optional[str]:
     """Extract material code from stem tokens (e.g. _MS_, _AL_)."""
+    # MELAMINE-FACED MDF IS NOT CHIPBOARD (D-727). 12677-01-03J's flat is "9mm Black MFMDF" and
+    # this read it as MFC, so the panel was priced as faced chipboard; the substrate named is
+    # kept. The faced chipboard spellings, and the facing words with no substrate, stay MFC.
+    if _FACED_MDF_RE.search(stem.upper()):
+        return "MFMDF"
     if re.search(r"MFMDF|MELAMINE\s*FACED|PRE\s*LAM(?:INATE)?|PRELAM|\bMFC\b", stem.upper()):
         return "MFC"
     for t in re.split(r'[_\s]+', stem.upper()):
@@ -734,7 +743,9 @@ def _parse_filename(path: Path) -> Dict[str, Any]:
         # match above needs revA, so the stem's own revision was dropped.
         revision = _parse_revision_from_stem(stem)
 
-    if re.search(r"MFMDF|MELAMINE\s*FACED|PRE\s*LAM(?:INATE)?|PRELAM|\bMFC\b", stem.upper()):
+    if _FACED_MDF_RE.search(stem.upper()):
+        material = "MFMDF"
+    elif re.search(r"MFMDF|MELAMINE\s*FACED|PRE\s*LAM(?:INATE)?|PRELAM|\bMFC\b", stem.upper()):
         material = "MFC"
     return {
         "part_number":    part_number,

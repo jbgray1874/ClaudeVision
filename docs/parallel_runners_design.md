@@ -48,7 +48,23 @@ What the server needs before it can run one: the engine checkout on the same bui
 service (`push-to-server.ps1`, the server has no git), the virtualenv, a licensed Excel, a
 logged-in session for COM (`install-runner-task.ps1`), the shares, and the `.env` keys.
 
-## Phase 2: several runners on one machine (the new server)
+## Phase 2, built 6 Nov 2026 (D-731): several runners on one desktop
+
+JG, 6 Nov 2026: "we need to see the multi run on this laptop ... for any second or third runs,
+we shouldn't stop unless the machine has insufficient compute available and we should use
+document manager for all other runs. if we can't we run without solid works and document
+manager and use what we have otherwise."
+
+| Piece | What it does |
+|---|---|
+| Slot checkout | `install-runner-slot.ps1 -Slot N` makes `C:\ClaudeVision-sN`, a git worktree of the main checkout's HEAD, with its own `output\` and lock, the shared venv, the shared `cache\` (junction) and its own task `SDI Estimating Runner sN`. The runner id ends `-sN`. Run it again after every sync. |
+| Desktop token | One lock file per machine (`%PROGRAMDATA%\SDI\solidworks.token`, or `SDI_SOLIDWORKS_TOKEN`). The run holding it reads models with SolidWorks as configured. |
+| Other runs | Read models with the Document Manager when `SDI_SW_DOCMGR_KEY` is set, otherwise from the drawings, DXFs and any saved extract. Nobody waits. The run's console and the engine (`SDI_MODEL_READER`) say which. |
+| Compute gate | While another run uses the desktop, a slot claims only when free memory is at least `SDI_SLOT_MIN_FREE_GB` (3) and CPU at most `SDI_SLOT_MAX_CPU_PCT` (85%). |
+| Service | Runners that both declare `desktop_token` may run on one desktop at once, up to `SDI_MAX_CONCURRENT_RUNS`. A runner with no model reader takes a model job when no able runner is idle (`SDI_RUN_WITHOUT_MODEL_READER`, default on), and the run says so. A SolidWorks pack extract is offered only by a run that can take the token. |
+| Checks | `restart-runner.ps1 -Slot N -Root C:\ClaudeVision-sN -TaskName "SDI Estimating Runner sN"` checks that slot, and lists every other runner on the desktop with its build. |
+
+## Phase 2 as first designed: several runners on one machine (the new server)
 
 - Runner slots in one checkout: `--slot N` gives each process its own lock
   (`output/.runner.<N>.lock`), its own runner id (`<host>-<mac>-s<N>`) and its own work folders.
