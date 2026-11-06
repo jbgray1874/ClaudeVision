@@ -210,13 +210,16 @@ def test_its_quantity_is_metres_from_the_marked_edges():
     block = _mint_block()
     assert 'from edge_banding import banded_length_mm as _banded_of' in block
     assert '_stub["unit_of_measure"] = "m"' in block
-    assert "_edge_m = round(_edge_mm / 1000.0, 3)" in block
+    # One line per decor since D-733, each from its own parts' banded millimetres.
+    assert '_edge_m = round(_g["mm"] / 1000.0, 3)' in block
 
 
 def test_no_marked_edges_means_no_line_at_all():
     """An edging line on a part nobody bands is the perimeter mistake with a price on it."""
     block = _mint_block()
-    assert "if _edge_code and _edge_m > 0 and not _already:" in block
+    assert "if not (_edge_code and _edge_m > 0):" in block
+    # and never twice: a list already carrying the line's code keeps it (D-733)
+    assert "ONCE PER LINE CODE" in block
 
 
 def test_it_carries_the_spec_and_the_supplier_identity():

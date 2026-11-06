@@ -78,8 +78,11 @@ def test_the_line_charges_four_strips_not_four_rolls(monkeypatch):
 
 
 def test_a_roll_price_is_refused_and_the_line_is_asked_not_rescued(monkeypatch):
+    """With no SDI row, no roll length stated and no dated market rate held (D-733), the line
+    is asked, never charged a roll per strip."""
     ask, _ = _answers(**PER_ROLL)
     monkeypatch.setattr(estimator, "_rung4_researcher", ask)
+    monkeypatch.setattr(estimator.config, "ROLL_GOODS_RESEARCHED_METRE_RATES", ())
     part = _gel_tape()
     r = estimator._resolve_part_system_cost(part)
     assert r["applied_unit_cost"] is None
