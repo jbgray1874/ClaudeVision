@@ -322,6 +322,9 @@ class Run:
     # with ONE reader and file that reader's organised output; no workbook is built. Handed
     # only to a runner that says on its claim it can run one (RUNNER_CAPABILITIES there).
     job_type: str = ""
+    # WHEN THE ENGINE LAST SAID ANYTHING (D-737), so the wall monitor can tell a long run from
+    # a stalled one. Set on every progress post that carries lines; 0 until the first.
+    last_line_at: float = 0.0
     log: List[str] = field(default_factory=list)
     deliverables: List[Dict[str, str]] = field(default_factory=list)
 
@@ -889,6 +892,32 @@ def runners(request: Request = None, x_sdi_key: Optional[str] = Header(default=N
             "conflicts": [r["runner_id"] for r in online if r.get("conflict")]}
 
 
+# ── THE WALL MONITOR (D-737) ─────────────────────────────────────────────────────────────
+# JG, 7 Nov 2026: a full-screen page for the wall, live runs with red / amber / green, the
+# fleet of machines, and KPIs on run times and activity. One read of everything the service
+# holds, worked out by estimate_wall (pure, tested); the page only draws it.
+@router.get("/wall")
+def wall(x_sdi_key: Optional[str] = Header(default=None)):
+    _check_key(x_sdi_key)
+    import sys as _sys
+    import estimate_wall
+    with _LOCK:
+        _expire_dead_claims()
+        runs = []
+        for r in _RUNS.values():
+            d = r.as_json()
+            d["last_line_at"] = r.last_line_at
+            if r.status != "running":
+                d["log"] = []
+            runs.append(d)
+        runners_now = [r.as_json() for r in _RUNNERS.values()]
+        for rn, obj in zip(runners_now, _RUNNERS.values()):
+            rn["capabilities"] = list(obj.capabilities or [])
+    commit = str(getattr(_sys.modules.get("app"), "SDI_COMMIT", "") or "")
+    return estimate_wall.snapshot(runs, runners_now, max_runs=_max_concurrent_runs(),
+                                  service_commit=commit)
+
+
 @router.post("/runner/heartbeat")
 def heartbeat(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
     """A runner saying it is alive while it works a job for ANOTHER service.
@@ -1190,6 +1219,8 @@ def progress(run_id: str, req: ProgressRequest,
         for text in req.lines:
             run.line(text)
             _check_the_engine_was_told(run, text)
+        if req.lines:
+            run.last_line_at = now
         run.lease_until = now + LEASE_SECONDS
         # A RUNNER MID-JOB IS A CONNECTED RUNNER (D-618). After a restart of this service the
         # runner is not in the registry until it next asks for work, and it does not ask while
@@ -4139,12 +4170,16 @@ def recent(x_sdi_key: Optional[str] = Header(default=None), limit: int = 25):
 # runner runs src/pack_extract.py instead of main.py: the SolidWorks analyser needs the seat on
 # the runner's machine, and the xAI read needs the engine's key. The organised workbook and
 # the JSON come back as the run's deliverables.
-_PACK_EXTRACT_JOB = {"sw": "sw_extract", "xai": "xai_extract"}
-_PACK_EXTRACT_LABEL = {"sw": "SolidWorks pack extract", "xai": "xAI extract"}
+_PACK_EXTRACT_JOB = {"sw": "sw_extract", "xai": "xai_extract", "dm": "dm_extract"}
+_PACK_EXTRACT_LABEL = {"sw": "SolidWorks pack extract", "xai": "xAI extract",
+                       "dm": "SolidWorks Document Manager extract"}
+# THE THIRD BUTTON (D-737, JG 7 Nov 2026): the Document Manager's read of the same models, in
+# the SolidWorks extract's tables, so the two can be compared pack by pack (SCRUM-184). It needs
+# no SolidWorks seat, only the licence key on the runner, which says so with "dm_extract".
 
 
 class PackExtractRequest(BaseModel):
-    kind: str                                   # "sw" | "xai"
+    kind: str                                   # "sw" | "xai" | "dm"
     client: str
     drawing_number: str
     job_folder: str = ""
@@ -4157,7 +4192,7 @@ def start_pack_extract(req: PackExtractRequest,
     _caller = _check_key(x_sdi_key)
     kind = str(req.kind or "").strip().lower()
     if kind not in _PACK_EXTRACT_JOB:
-        raise HTTPException(400, f"Unknown extract {req.kind!r}: use 'sw' or 'xai'.")
+        raise HTTPException(400, f"Unknown extract {req.kind!r}: use 'sw', 'xai' or 'dm'.")
     job_type, label = _PACK_EXTRACT_JOB[kind], _PACK_EXTRACT_LABEL[kind]
     client = safe_segment(req.client)
     drawing = safe_segment(req.drawing_number)
@@ -4174,10 +4209,11 @@ def start_pack_extract(req: PackExtractRequest,
         if _within_a_root(_src) is None:
             raise HTTPException(
                 403, f"That drawing is outside the shares this service may read: {_src}")
-    if kind == "sw" and not any(Path(x).suffix.lower() in (".sldprt", ".sldasm", ".slddrw")
-                                for x in _sources if Path(x).suffix):
+    if kind in ("sw", "dm") and not any(
+            Path(x).suffix.lower() in (".sldprt", ".sldasm", ".slddrw")
+            for x in _sources if Path(x).suffix):
         if not req.job_folder:
-            raise HTTPException(400, "The SolidWorks extract reads models: add the pack's "
+            raise HTTPException(400, f"The {label} reads models: add the pack's "
                                      ".SLDPRT / .SLDASM / .SLDDRW files, or its folder.")
     if kind == "xai" and not req.job_folder and not any(
             Path(x).suffix.lower() == ".pdf" for x in _sources):
@@ -4196,6 +4232,10 @@ def start_pack_extract(req: PackExtractRequest,
     if not online:
         raise HTTPException(503, "No estimating runner is connected. Start the runner on the "
                                  "machine with SOLIDWORKS, then try again.")
+    if not able and kind == "dm":
+        raise HTTPException(503, "No connected runner holds the Document Manager licence key. "
+                                 "Add SDI_SW_DOCMGR_KEY to the runner machine's .env, then "
+                                 "restart the runner (.\\tools\\start\\restart-runner.ps1).")
     if not able:
         raise HTTPException(503, f"The connected runner cannot run a {label} yet: restart it "
                                  f"on the current build (.\\tools\\start\\restart-runner.ps1).")

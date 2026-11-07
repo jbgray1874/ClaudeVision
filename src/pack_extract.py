@@ -5,6 +5,7 @@ estimate.
 
     python src/pack_extract.py sw  <folder>          --out <dir> --name <drawing>
     python src/pack_extract.py xai <folder|pdf ...>  --out <dir> --name <drawing>
+    python src/pack_extract.py dm  <folder>          --out <dir> --name <drawing>
     python src/pack_extract.py sw  --from-extract <_sw_native_extract.json> --out <dir>
 
 JG, 2 Nov 2026: "can we build a SolidWorks drawing pack extract as a new button ... and
@@ -24,6 +25,12 @@ show one reader's evidence on its own:
        properties; and everything the analyser rejected or could not read.
   xai  the whole-document xAI read (llm_full_extract.extract_full_pack) on the pack's PDFs,
        written EXACTLY as returned (JSON), plus the same content laid out as tables.
+  dm   the SolidWorks Document Manager reader (tools/solidworks/sw_docmgr_analyse.py) on the
+       pack's models, organised into the same tables as sw (D-737). It reads what each file
+       SAVED, needs no SolidWorks seat and so never waits for the desktop's SolidWorks, and
+       measures nothing: a field the file did not save stays blank and is named. Its licence
+       key comes from SDI_SW_DOCMGR_KEY in the inherited environment, never the command line.
+       Side by side with the sw extract of the same pack, it is the SCRUM-184 comparison.
 
 Outputs, in --out: <name>_solidworks_pack.xlsx / .json, or <name>_xai_extract.xlsx / .json.
 The last line printed is PACK_EXTRACT_OUTPUTS=<json list of paths> for the runner.
@@ -45,6 +52,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 ROOT = Path(__file__).resolve().parents[1]
 ANALYSER = ROOT / "tools" / "solidworks" / "sw_native_analyse.py"
+DOCMGR_ANALYSER = ROOT / "tools" / "solidworks" / "sw_docmgr_analyse.py"
+DOCMGR_KEY_ENV = "SDI_SW_DOCMGR_KEY"
 OUTPUTS_MARKER = "PACK_EXTRACT_OUTPUTS="
 
 Table = Tuple[List[str], List[List[Any]]]           # (header, rows)
@@ -262,6 +271,30 @@ def run_analyser(folder: Path, out_json: Path, python_exe: str = sys.executable)
     return path
 
 
+def run_docmgr(folder: Path, out_json: Path, python_exe: str = sys.executable) -> Path:
+    """Run the Document Manager reader on `folder` (D-737). No SolidWorks turn: it opens no
+    SolidWorks and takes no seat, so it never waits for another run on this desktop. The key
+    reaches it through the environment it inherits; it is never put on the command line, and
+    only its NAME is ever said."""
+    if not str(os.getenv(DOCMGR_KEY_ENV, "")).strip():
+        raise SystemExit(f"the Document Manager needs its licence key, and {DOCMGR_KEY_ENV} is "
+                         f"not set on this runner: add it to the runner machine's .env and "
+                         f"restart the runner")
+    cmd = [python_exe, "-u", str(DOCMGR_ANALYSER), str(folder), "--out", str(out_json)]
+    print("$ " + " ".join(cmd), flush=True)
+    proc = subprocess.run(cmd, cwd=str(ROOT), text=True, encoding="utf-8", errors="replace",
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=3600)
+    path = None
+    for line in (proc.stdout or "").splitlines():
+        print(line, flush=True)
+        if line.startswith("EXTRACT_PATH="):
+            path = Path(line.split("=", 1)[1].strip())
+    path = path or out_json
+    if not path.is_file():
+        raise SystemExit(f"the Document Manager reader wrote no extract (exit {proc.returncode})")
+    return path
+
+
 # ── xAI: THE WHOLE-DOCUMENT READ, EXACTLY, AND LAID OUT ──────────────────────────────
 def _rows_of(items: Iterable[Any]) -> Table:
     """A list of records as one table: the union of their keys, in first-seen order."""
@@ -353,7 +386,7 @@ def _stem(name: str) -> str:
     return re.sub(r'[<>:"/\\|?*\x00-\x1f]+', " ", name or "pack").strip(" .") or "pack"
 
 
-# ── THE TWO JOBS ─────────────────────────────────────────────────────────────────────
+# ── THE THREE JOBS ─────────────────────────────────────────────────────────────────────
 def sw_pack(folder: Optional[Path], out: Path, name: str,
             from_extract: Optional[Path] = None, python_exe: str = sys.executable) -> List[Path]:
     stem = _stem(name)
@@ -368,6 +401,26 @@ def sw_pack(folder: Optional[Path], out: Path, name: str,
                        f"{name} — SolidWorks pack extract"),
             _write_json({"pack": name, "tables": organised, "extract": extract},
                         out / f"{stem}_solidworks_pack.json")]
+
+
+def dm_pack(folder: Optional[Path], out: Path, name: str,
+            from_extract: Optional[Path] = None, python_exe: str = sys.executable) -> List[Path]:
+    """The Document Manager's read of the pack, in the SolidWorks extract's own tables (D-737):
+    one schema, so the two workbooks of one pack can be laid side by side."""
+    stem = _stem(name)
+    if from_extract is None:
+        if folder is None or not folder.is_dir():
+            raise SystemExit(f"no pack folder to read: {folder}")
+        from_extract = run_docmgr(folder, out / f"{stem}_docmgr_extract.json", python_exe)
+    extract = json.loads(Path(from_extract).read_text(encoding="utf-8"))
+    tables = organise_sw(extract)
+    organised = {name_: {"columns": h, "rows": rows} for name_, (h, rows) in tables.items()}
+    return [write_xlsx(tables, out / f"{stem}_docmgr_pack.xlsx",
+                       f"{name} — SolidWorks Document Manager extract (saved data only; "
+                       f"it measures nothing)"),
+            _write_json({"pack": name, "reader": "solidworks_docmgr", "tables": organised,
+                         "extract": extract},
+                        out / f"{stem}_docmgr_pack.json")]
 
 
 def xai_pack(paths: Sequence[str], out: Path, name: str) -> List[Path]:
@@ -389,17 +442,21 @@ def xai_pack(paths: Sequence[str], out: Path, name: str) -> List[Path]:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Read a drawing pack with one reader and "
                                              "organise what it found (no estimate).")
-    ap.add_argument("kind", choices=("sw", "xai"))
-    ap.add_argument("paths", nargs="*", help="the pack folder (sw), or folders/PDFs (xai)")
+    ap.add_argument("kind", choices=("sw", "xai", "dm"))
+    ap.add_argument("paths", nargs="*",
+                    help="the pack folder (sw, dm), or folders/PDFs (xai)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--name", default="")
     ap.add_argument("--from-extract", default="",
-                    help="sw only: organise an existing _sw_native_extract.json")
+                    help="sw or dm: organise an existing extract JSON")
     args = ap.parse_args(argv)
     out = Path(args.out)
     name = args.name or (Path(args.paths[0]).name if args.paths else "pack")
     if args.kind == "sw":
         written = sw_pack(Path(args.paths[0]) if args.paths else None, out, name,
+                          Path(args.from_extract) if args.from_extract else None)
+    elif args.kind == "dm":
+        written = dm_pack(Path(args.paths[0]) if args.paths else None, out, name,
                           Path(args.from_extract) if args.from_extract else None)
     else:
         written = xai_pack(args.paths, out, name)

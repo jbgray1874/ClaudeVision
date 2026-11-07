@@ -535,6 +535,21 @@ def estimating_page(request: Request):
                                            "is not next to app.py"})
 
 
+# THE WALL MONITOR (D-737): a full-screen page of live runs, the fleet and the KPIs, for a
+# screen on the wall. Signed in like the estimating page; it reads /api/estimate/wall.
+_WALL_PAGE = Path(__file__).with_name("sdi-estimating-wall.html")
+
+
+@app.get("/estimating/wall")
+def estimating_wall_page(request: Request):
+    if auth.current_user(request) is None:
+        return auth.login_redirect(request)
+    if _WALL_PAGE.exists():
+        return FileResponse(str(_WALL_PAGE), headers=_PAGE_HEADERS)
+    return JSONResponse(status_code=404,
+                        content={"detail": "sdi-estimating-wall.html is not next to app.py"})
+
+
 # THE WALKTHROUGH PAGE (D-610), behind the e-mail's button: the spoken walkthrough, its words,
 # the price at every quantity, the run's files and a box to ask about the estimate. Signed in
 # like the estimating page; the token in the URL is checked by the API the page calls, and this

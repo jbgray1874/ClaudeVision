@@ -841,6 +841,7 @@ _SERVICE_COMMIT: Dict[str, str] = {}
 # THE JOB TYPES THIS RUNNER EXECUTES BESIDES A FULL ESTIMATE (D-640), told to the service on
 # every claim. "sw_extract": the SolidWorks analyser on the pack, organised; "xai_extract": the
 # whole-document xAI read on the pack's PDFs, exactly as returned and laid out as tables.
+# "dm_extract" (D-737) is added by runner_capabilities() only where the Document Manager key is.
 RUNNER_CAPABILITIES = ("sw_extract", "xai_extract")
 
 
@@ -923,13 +924,19 @@ def runner_capabilities() -> List[str]:
     # "desktop_token" (D-731): this runner's engine takes the desktop's one SolidWorks in turn,
     # so the service may give it a run while another runner on this desktop has one.
     caps = list(RUNNER_CAPABILITIES) + ["desktop_token"]
+    _key = bool(str(os.getenv("SDI_SW_DOCMGR_KEY", "")).strip())
+    # THE DOCUMENT MANAGER EXTRACT NEEDS THE KEY, NOT THE SWITCH (D-737). The button asks for
+    # that reader by name, for the SCRUM-184 comparison, so it is offered wherever the key is;
+    # SDI_SW_DOCMGR still governs only whether an ESTIMATE may fall back to it.
+    if _key:
+        caps.append("dm_extract")
     _off = str(os.getenv("SDI_SW_RUN_ANALYSER", "")).strip().lower() in {"0", "false", "no"}
     _dm = (str(os.getenv("SDI_SW_DOCMGR", "")).strip().lower() in {"1", "true", "yes", "on"}
-           and bool(str(os.getenv("SDI_SW_DOCMGR_KEY", "")).strip()))
+           and _key)
     if _off and not _dm:
         caps.append("no_models")
     return caps
-PACK_EXTRACT_KIND = {"sw_extract": "sw", "xai_extract": "xai"}
+PACK_EXTRACT_KIND = {"sw_extract": "sw", "xai_extract": "xai", "dm_extract": "dm"}
 
 
 def pack_extract_command(engine_root: Path, engine_python: Path, job: Dict[str, Any]
