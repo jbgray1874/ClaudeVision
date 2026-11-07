@@ -189,17 +189,22 @@ def test_the_wall_names_the_holder_and_each_waiter_against_the_limit(monkeypatch
     live = {r["run_id"]: r for r in snap["live"]}
     assert live["b"]["rag"] == "amber"
     assert "7 of 30 min" in live["b"]["rag_reason"] and "12677-01-GA" in live["b"]["rag_reason"]
-    assert live["b"]["accuracy"]["tier"] == "pending"
+    assert live["b"]["evidence"]["label"] == "Waiting for SolidWorks"
     assert live["b"]["last_result"]["engine_price_gbp"] == 408.74
 
 
-def test_the_eta_adds_the_solidworks_wait_and_the_queue_starts_when_a_slot_frees():
+def test_the_eta_is_a_window_plus_this_runs_waits_and_the_queue_starts_when_a_slot_frees():
     w = _wall()
     run = {"run_id": "r", "job_type": "", "status": "running", "started_at": NOW - 600,
-           "sw_wait_since": NOW - 300}
-    e = w.eta(run, NOW, 1200.0, 1500.0)
-    assert e["eta_at"] == NOW - 600 + 1200 + 300 and e["late_at"] == NOW - 600 + 1500 + 300
-    assert e["overdue_s"] == 0
+           "sw_waited_s": 120.0, "sw_wait_since": NOW - 300}
+    win = {"lo_s": 1000.0, "mid_s": 1200.0, "hi_s": 1500.0}
+    e = w.eta(run, NOW, win)
+    assert (e["eta_lo_at"], e["eta_at"], e["eta_hi_at"]) == (
+        NOW - 600 + 1000 + 420, NOW - 600 + 1200 + 420, NOW - 600 + 1500 + 420)
+    assert e["overdue_s"] == 0 and e["waited_s"] == 420
+    # The window the run was given when it started wins over today's.
+    given = w.eta({**run, "predicted": {"lo_s": 10.0, "mid_s": 20.0, "hi_s": 30.0}}, NOW, win)
+    assert given["eta_at"] == NOW - 600 + 20 + 420
     q = [{"run_id": "q1", "job_type": ""}, {"run_id": "q2", "job_type": ""},
          {"run_id": "q3", "job_type": "sw_extract"}]
     live = [{"eta_at": NOW + 300}]
@@ -211,18 +216,63 @@ def test_the_eta_adds_the_solidworks_wait_and_the_queue_starts_when_a_slot_frees
     assert two[0]["start_at"] == NOW, "a free slot starts it now"
 
 
-@pytest.mark.parametrize("line, tier", [
-    ("   [solidworks] model extract APPLIED (flat+4)", "high"),
-    ("   [solidworks] read by the Document Manager BACKUP reader — SolidWorks timed out", "medium"),
-    ("  SWITCHING TO THE DOCUMENT MANAGER for this run's models", "medium"),
-    ("  the desktop's SolidWorks stayed in use ...: this run goes on without its models", "low"),
-    ("   [solidworks] NOT APPLIED — no _sw_native_extract.json for this job", "low"),
-    ("engine started", "pending"),
+@pytest.mark.parametrize("line, kind, label", [
+    ("   [solidworks] model extract APPLIED (flat+4)", "sw", "SolidWorks measured model"),
+    ("   [solidworks] read by the Document Manager BACKUP reader — SolidWorks timed out",
+     "dm_fallback", "Document Manager fallback · not yet validated"),
+    ("  SWITCHING TO THE DOCUMENT MANAGER for this run's models", "dm_fallback",
+     "Document Manager fallback · not yet validated"),
+    ("  the desktop's SolidWorks stayed in use ...: this run goes on without its models",
+     "drawings", "Drawing/DXF evidence"),
+    ("   [solidworks] NOT APPLIED — no _sw_native_extract.json for this job", "drawings",
+     "Drawing/DXF evidence"),
+    ("engine started", "pending", "Model read not reached yet"),
 ])
-def test_the_accuracy_to_expect_is_how_the_models_were_read(line, tier):
+def test_the_wall_states_what_read_the_models_never_an_accuracy(line, kind, label):
+    """The 7 Nov review: "Reader type is not estimate accuracy". Only the unvalidated
+    Document Manager fallback carries a caution."""
     w = _wall()
-    got = w.accuracy({"job_type": "", "log": ["engine started", line]})
-    assert got["tier"] == tier and got["why"]
+    got = w.evidence({"job_type": "", "log": ["engine started", line]})
+    assert (got["kind"], got["label"]) == (kind, label)
+    assert got["caution"] is (kind == "dm_fallback")
+    assert not hasattr(w, "accuracy")
+
+
+def test_history_is_read_net_of_its_own_waits_so_a_delay_is_not_counted_twice():
+    w = _wall()
+    runs = [{**_done(i, 20), "sw_waited_s": 600.0 if i == 0 else 0.0} for i in range(4)]
+    runs[0]["started_at"] -= 600                              # 30 min, 10 of them waiting
+    assert w.net_duration(runs[0]) == 1200.0
+    win = w.predict_window(runs, NOW, 30)
+    assert win["mid_s"] == 1200.0 and win["n"] == 4 and "net of" in win["basis"]
+    assert w.predict_window(runs[:2], NOW, 30) is None
+
+
+def test_the_eta_error_is_measured_against_the_runs_that_finish():
+    w = _wall()
+    assert w.eta_error([], NOW) == {"n": 0, "median_abs_error_s": None, "inside_pct": None}
+    win = {"lo_s": 1000.0, "mid_s": 1200.0, "hi_s": 1400.0}
+    runs = [{**_done(1, 20), "predicted": win},               # 1200 s: inside, error 0
+            {**_done(2, 25), "predicted": win},               # 1500 s: outside, error 300
+            {**_done(3, 21), "predicted": win}]               # 1260 s: inside, error 60
+    e = w.eta_error(runs, NOW)
+    assert (e["n"], e["median_abs_error_s"], e["inside_pct"]) == (3, 60.0, 67.0)
+
+
+def test_a_finished_run_shows_what_still_needs_a_person_from_the_engines_tally():
+    w = _wall()
+    run = {**_done(5, 20), "review": {"total": 14, "missing": 0, "decisions": 3,
+                                      "quantity_checks": 5, "provisional": 6, "phrase": "x"}}
+    snap = w.snapshot([run], [{"runner_id": "lap", "hostname": "L", "online": True}], now=NOW)
+    oi = snap["recent"][0]["open_items"]
+    assert (oi["total"], oi["decisions"], oi["quantity_checks"], oi["provisional"]) == (14, 3, 5, 6)
+
+
+def test_the_engine_says_its_open_items_as_one_line():
+    src = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    assert 'print("REVIEW_TALLY=" + json.dumps({' in src
+    for key in ('"missing"', '"decisions"', '"provisional"', '"quantity_checks"'):
+        assert key in src
 
 
 def test_a_second_runner_on_a_desktop_is_its_slot(monkeypatch):
@@ -243,5 +293,42 @@ def test_the_service_keeps_each_runs_solidworks_state_from_its_own_words():
     assert "_note_solidworks_turn(run, text, now)" in src
     assert "sw_turn_at: float = 0.0" in src and "sw_wait_since: float = 0.0" in src
     page = (BACKEND / "sdi-estimating-wall.html").read_text(encoding="utf-8")
-    for needle in ("renderSolidWorks", "eta_at", "Accuracy", "last run", "starts ~"):
+    for needle in ("renderSolidWorks", "eta_lo_at", "Models:", "last run", "starts ~",
+                   "ETA error", "openItems"):
         assert needle in page
+    assert "Accuracy" not in page
+
+
+@pytest.fixture
+def svc(tmp_path, monkeypatch):
+    pytest.importorskip("fastapi", reason="fastapi not installed")
+    monkeypatch.setenv("SDI_STATE_DIR", str(tmp_path / "state"))
+    clash = ("config", "estimate_routes", "log_filters", "hr_routes", "docmgr",
+             "self_running_switch", "estimate_email", "staging", "estimate_history",
+             "estimate_wall")
+    saved = {n: sys.modules.pop(n) for n in clash if n in sys.modules}
+    sys.path.insert(0, str(BACKEND))
+    try:
+        import estimate_routes as er
+        yield er
+    except Exception as exc:                                            # noqa: BLE001
+        pytest.skip(f"backend not importable here: {exc}")
+    finally:
+        sys.path.remove(str(BACKEND))
+        for n in clash:
+            sys.modules.pop(n, None)
+        sys.modules.update(saved)
+
+
+def test_the_service_totals_each_wait_and_keeps_the_tally(svc):
+    er = svc
+    run = er.Run(run_id="r1", client="M&S", drawing_number=f"{J}-GA", units=1,
+                 job_folder="/x", output_path="/y")
+    er._note_solidworks_turn(run, "  Waiting for the desktop's SolidWorks: X has had it", 100.0)
+    assert run.sw_wait_since == 100.0
+    er._note_solidworks_turn(run, "  SolidWorks is free after 300 s: this run reads", 400.0)
+    assert (run.sw_waited_s, run.sw_wait_since, run.sw_turn_at) == (300.0, 0.0, 400.0)
+    er._note_solidworks_turn(run, "  SolidWorks turn given back: the next run may read", 700.0)
+    assert run.sw_turn_at == 0.0 and run.sw_waited_s == 300.0
+    er._note_solidworks_turn(run, 'REVIEW_TALLY={"total": 14, "provisional": 6}', 900.0)
+    assert run.review == {"total": 14, "provisional": 6}

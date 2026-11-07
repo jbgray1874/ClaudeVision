@@ -24,12 +24,20 @@ wall names the run holding it and since when, and every run waiting for it with 
 waited of its limit (SDI_SW_TURN_WAIT_MINUTES, 30): at the limit that run reads its models with
 the Document Manager and goes on; nothing is stopped.
 
-THE ETA is the run's start plus the usual time, plus any time it has spent waiting for SolidWorks;
-the late mark uses the 90th percentile. A queued job starts when the soonest slot frees, slot by
-slot. THE EXPECTED ACCURACY is what the run's own log shows about how its models were read:
-measured by SolidWorks (high), read by the Document Manager from saved data (medium), or not read
-at all, so priced from its drawings and not firm (low). The drawing's last result is shown beside
-it, so a new price can be read against the one before.
+THE ETA IS A WINDOW (D-739). History's run times are taken NET of each run's own SolidWorks
+waits, so adding this run's wait does not count a delay twice; the window is the 25th to 75th
+percentile of those net times from the start, plus this run's waits so far. The window each run
+was given when it started is kept, and the wall measures it against the runs that finish: the
+median error and how many finished inside their window. Until enough have finished it says so
+instead of claiming an accuracy. A queued job starts when the soonest slot frees.
+
+THE EVIDENCE, NOT AN ACCURACY (D-739, the 7 Nov review: "Reader type is not estimate accuracy").
+The wall states what read the models, as a fact: SolidWorks measured model; Document Manager
+fallback, not yet validated; or Drawing/DXF evidence. It never grades the price by it: a run with
+SolidWorks evidence can still carry wrong quantities, and a dimensioned drawing can be good
+evidence. What still needs a person is shown apart, once the run has finished, from the engine's
+own tally: missing costing items, decisions to confirm, and provisional assumptions. The
+drawing's last result is shown beside a run, so a new price can be read against the one before.
 
 THE EXPECTED TIME is the median of this service's own finished estimates, not a figure typed
 into config: the wall compares a run with the runs before it. With fewer than three to go on
@@ -90,23 +98,43 @@ def holder_from_log(log: Sequence[str]) -> str:
     return ""
 
 
-def accuracy(run: Mapping[str, Any]) -> Dict[str, str]:
-    """What the run's log shows about how its models were read: {tier, label, why}."""
+def evidence(run: Mapping[str, Any]) -> Dict[str, Any]:
+    """What read the run's models, as its own log says: {kind, label, why, caution}. A fact
+    about the evidence, never a grade of the price."""
     if not is_estimate(run):
-        return {"tier": "na", "label": "Extract", "why": "a pack extract prices nothing"}
-    log = [str(x) for x in (run.get("log") or [])]
-    text = "\n".join(log)
+        return {"kind": "extract", "label": "Pack extract", "why": "prices nothing",
+                "caution": False}
+    text = "\n".join(str(x) for x in (run.get("log") or []))
     if _ACC_LOW.search(text):
-        return {"tier": "low", "label": "Low",
-                "why": "models not read: priced from its drawings, not a firm price"}
-    if _ACC_MED.search(text):
-        return {"tier": "medium", "label": "Medium",
-                "why": "models read by the Document Manager: saved data only, nothing measured"}
+        return {"kind": "drawings", "label": "Drawing/DXF evidence",
+                "why": "the models were not read; the drawings and DXFs are the evidence",
+                "caution": False}
+    if re.search(r"Document Manager BACKUP reader|SWITCHING TO THE DOCUMENT MANAGER", text, re.I):
+        return {"kind": "dm_fallback", "label": "Document Manager fallback · not yet validated",
+                "why": "saved model data only, nothing measured; the Document Manager is not "
+                       "yet accepted", "caution": True}
     if _ACC_HIGH.search(text):
-        return {"tier": "high", "label": "High", "why": "models measured by SolidWorks"}
+        if re.search(r"SolidWorks could not", text, re.I):
+            return {"kind": "sw_partial", "label": "SolidWorks measured model · some files by "
+                    "Document Manager (not yet validated)",
+                    "why": "the files SolidWorks could not open were read from saved data",
+                    "caution": True}
+        return {"kind": "sw", "label": "SolidWorks measured model",
+                "why": "the models were opened and measured by SolidWorks", "caution": False}
     if run.get("sw_wait_since"):
-        return {"tier": "pending", "label": "Pending", "why": "waiting for SolidWorks to read its models"}
-    return {"tier": "pending", "label": "Pending", "why": "the model read has not been reached yet"}
+        return {"kind": "pending", "label": "Waiting for SolidWorks",
+                "why": "the models are read when the licence is free", "caution": False}
+    return {"kind": "pending", "label": "Model read not reached yet", "why": "",
+            "caution": False}
+
+
+def open_items(run: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """The engine's own tally of what still needs a person, for a finished run, or None."""
+    t = run.get("review") if isinstance(run.get("review"), Mapping) else None
+    if not t:
+        return None
+    return {k: t.get(k) for k in ("total", "missing", "decisions", "quantity_checks",
+                                  "provisional", "phrase")}
 
 
 def _env_float(name: str, default: float) -> float:
@@ -338,17 +366,62 @@ def series(runs: Sequence[Mapping[str, Any]], now: float) -> Dict[str, Any]:
 
 
 # ── ETA, THE QUEUE, THE LICENCE ──────────────────────────────────────────────────────────
-def eta(run: Mapping[str, Any], now: float, expected_s: Optional[float],
-        p90_s: Optional[float]) -> Dict[str, Any]:
-    """{eta_at, late_at, overdue_s} for a running estimate; {} with no usual time."""
-    if not expected_s or not is_estimate(run):
+def net_duration(run: Mapping[str, Any]) -> Optional[float]:
+    """A finished run's time less its own SolidWorks waits (D-739)."""
+    d = _duration(run)
+    if d is None:
+        return None
+    return max(0.0, d - float(run.get("sw_waited_s") or 0.0))
+
+
+def predict_window(runs: Iterable[Mapping[str, Any]], now: float,
+                   days: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """{lo_s, mid_s, hi_s, n, basis}: the 25th, 50th and 75th percentile of the finished
+    estimates' net run times in the history window, or None with fewer than three."""
+    days = thresholds()["history_days"] if days is None else days
+    since = now - days * 86400.0
+    nets = sorted(n for r in runs if is_estimate(r) and outcome(r) == "done"
+                  and (r.get("finished_at") or 0) >= since
+                  for n in [net_duration(r)] if n is not None)
+    if len(nets) < 3:
+        return None
+    return {"lo_s": round(_pct(nets, 0.25), 1), "mid_s": round(_pct(nets, 0.5), 1),
+            "hi_s": round(_pct(nets, 0.75), 1), "n": len(nets),
+            "basis": f"25th-75th percentile of {len(nets)} finished estimates, net of "
+                     f"SolidWorks waits"}
+
+
+def eta(run: Mapping[str, Any], now: float, window: Optional[Mapping[str, Any]]
+        ) -> Dict[str, Any]:
+    """{eta_lo_at, eta_at, eta_hi_at, overdue_s, waited_s} for a running estimate: its start,
+    plus the window it was given (or today's), plus its SolidWorks waits so far."""
+    win = run.get("predicted") if isinstance(run.get("predicted"), Mapping) and \
+        run.get("predicted") else window
+    if not win or not is_estimate(run):
         return {}
     started = float(run.get("started_at") or now)
-    waited = max(0.0, now - float(run.get("sw_wait_since"))) if run.get("sw_wait_since") else 0.0
-    at = started + expected_s + waited
-    late = started + max(expected_s, p90_s or expected_s) + waited
-    return {"eta_at": round(at, 1), "late_at": round(late, 1),
-            "overdue_s": round(max(0.0, now - at), 1)}
+    waited = float(run.get("sw_waited_s") or 0.0) + (
+        max(0.0, now - float(run["sw_wait_since"])) if run.get("sw_wait_since") else 0.0)
+    lo, mid, hi = (started + float(win[k]) + waited for k in ("lo_s", "mid_s", "hi_s"))
+    return {"eta_lo_at": round(lo, 1), "eta_at": round(mid, 1), "eta_hi_at": round(hi, 1),
+            "overdue_s": round(max(0.0, now - hi), 1), "waited_s": round(waited, 1)}
+
+
+def eta_error(runs: Sequence[Mapping[str, Any]], now: float) -> Dict[str, Any]:
+    """How good the ETAs have been: each finished estimate's net time against the window it
+    was given when it started."""
+    errs, inside = [], 0
+    for r in runs:
+        win = r.get("predicted") if isinstance(r.get("predicted"), Mapping) else None
+        net = net_duration(r)
+        if not win or net is None or not is_estimate(r) or outcome(r) != "done":
+            continue
+        errs.append(abs(net - float(win.get("mid_s") or 0.0)))
+        inside += 1 if float(win.get("lo_s") or 0) <= net <= float(win.get("hi_s") or 0) else 0
+    if not errs:
+        return {"n": 0, "median_abs_error_s": None, "inside_pct": None}
+    return {"n": len(errs), "median_abs_error_s": round(statistics.median(errs), 1),
+            "inside_pct": round(100.0 * inside / len(errs), 0)}
 
 
 def queue_etas(queue: Sequence[Mapping[str, Any]], live: Sequence[Mapping[str, Any]],
@@ -439,7 +512,8 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
     th = thresholds()
     exp = expected_seconds(runs, now, th["history_days"])
     k = kpis(runs, now, max_runs)
-    p90 = k.get("p90_s_7d")
+    k["eta"] = eta_error(runs, now)
+    window = predict_window(runs, now, th["history_days"])
     ext_durs = [d for r in runs if not is_estimate(r) and outcome(r) == "done"
                 for d in [_duration(r)] if d is not None]
     extract_s = statistics.median(ext_durs) if len(ext_durs) >= 3 else None
@@ -454,8 +528,8 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
         live.append({**_summary(r), "rag": rag, "rag_reason": why,
                      "elapsed_s": round(now - started, 1),
                      "expected_s": (round(exp, 1) if exp and is_estimate(r) else None),
-                     **eta(r, now, exp, p90),
-                     "accuracy": accuracy(r),
+                     **eta(r, now, window),
+                     "evidence": evidence(r),
                      "last_result": last_result(runs, r.get("drawing_number"), r.get("client")),
                      "sw_turn_at": r.get("sw_turn_at") or 0.0,
                      "sw_wait_since": r.get("sw_wait_since") or 0.0,
@@ -496,10 +570,11 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
 
     queued = sorted((r for r in runs if outcome(r) == "queued"),
                     key=lambda r: r.get("queued_at") or now)
-    when = {q["run_id"]: q for q in queue_etas(queued, live, now, max_runs, exp, extract_s)}
+    when = {q["run_id"]: q for q in queue_etas(queued, live, now, max_runs,
+                                               (window or {}).get("mid_s") or exp, extract_s)}
     queue = [{**_summary(r), "start_at": (when.get(r.get("run_id")) or {}).get("start_at"),
               "finish_at": (when.get(r.get("run_id")) or {}).get("finish_at")} for r in queued]
-    recent = [_summary(r) for r in sorted(
+    recent = [{**_summary(r), "open_items": open_items(r)} for r in sorted(
         (r for r in runs if outcome(r) in ("done", "failed", "stopped")),
         key=lambda r: r.get("finished_at") or 0, reverse=True)[:12]]
 
@@ -514,6 +589,7 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
                  if x["rag"] in (AMBER, RED)])
     return {"now": now, "service_commit": service_commit, "banner": banner,
             "banner_rag": banner_rag, "expected_s": (round(exp, 1) if exp else None),
+            "window": window,
             "thresholds": th, "stages": [s for s, _ in STAGES],
             "kpis": k, "series": series(runs, now),
             "live": live, "fleet": fleet, "queue": queue, "recent": recent,

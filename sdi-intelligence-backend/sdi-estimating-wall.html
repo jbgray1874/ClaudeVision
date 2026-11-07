@@ -91,11 +91,11 @@
   .ptitle .r{letter-spacing:.08em;text-transform:none}
 
   /* ── KPI STRIP ──────────────────────────────────────────── */
-  .kpis{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:12px}
+  .kpis{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:12px}
   .kpi{padding:12px 14px 12px}
   .kpi .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;color:var(--ink-3);
           text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .kpi .v{font-family:var(--mono);font-size:38px;font-weight:600;line-height:1.05;margin-top:6px;
+  .kpi .v{font-family:var(--mono);font-size:34px;font-weight:600;line-height:1.05;margin-top:6px;
           white-space:nowrap;letter-spacing:-.01em}
   .kpi .v small{font-size:17px;color:var(--ink-2);font-weight:500;margin-left:3px}
   .kpi .s{font-size:12px;color:var(--ink-2);margin-top:5px;white-space:nowrap;overflow:hidden;
@@ -229,6 +229,10 @@
   .feed td.c{color:var(--ink-2)}
   .feed td.s{font-family:var(--mono);text-align:right;color:var(--ink-2)}
   .o-done{color:var(--good)} .o-failed{color:var(--bad)} .o-stopped{color:var(--warn)}
+  .feed td .oi{display:block;font-size:10.5px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis}
+  .ev{display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 8px;border-radius:6px;
+      border:1px solid var(--line-hi);color:var(--ink);font-family:var(--mono);letter-spacing:.02em;white-space:nowrap}
+  .ev.caution{border-color:rgba(250,178,25,.6)} .ev.caution .ico{color:var(--warn)}
   .feed .lbl{color:var(--ink-2)}
 
   /* ── TICKER ─────────────────────────────────────────────── */
@@ -337,8 +341,12 @@ const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const ICON = {green:"✓", amber:"▲", red:"✕", grey:"○"};
 const WORD = {green:"On pace", amber:"Attention", red:"Action", grey:"Planned"};
-/* EXPECTED ACCURACY, from how the run's models were read (D-738). */
-const ACC = {high:"green", medium:"amber", low:"red", pending:"grey", na:"grey"};
+/* WHAT READ THE MODELS, AS A FACT (D-739): never a grade of the price. Only the Document
+   Manager fallback, not yet validated, carries a caution. */
+function evidenceChip(ev){
+  if(!ev) return "";
+  return `<span class="ev${ev.caution ? " caution" : ""}" title="${esc(ev.why || "")}">${ev.caution ? '<span class="ico">▲</span>' : ""}${esc(ev.label)}</span>`;
+}
 
 let snap = null, offset = 0, lastOk = 0, commit = "";
 
@@ -418,6 +426,9 @@ function renderKpis(k, exp){
     ["Queue", `${k.queued}`, `average wait ${fmtDur(k.mean_wait_s_7d)}, last 7 days`],
     ["Capacity", `${k.running}<small>/ ${k.max_runs}</small>`,
      `${k.utilisation_pct}% of slots busy<div class="slots">${slots}</div>`],
+    ["ETA error", k.eta && k.eta.n ? "±" + fmtDur(k.eta.median_abs_error_s) : "—",
+     k.eta && k.eta.n ? `${k.eta.inside_pct}% inside their window · ${k.eta.n} runs`
+                      : "measuring: needs finished runs given a window"],
   ];
   $("kpis").innerHTML = tiles.map(([key, v, sub]) =>
     `<div class="panel kpi"><div class="k">${esc(key)}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`).join("");
@@ -457,11 +468,10 @@ function renderLanes(s){
         </div>
         <div class="why">${esc(r.rag_reason || "")}${r.silent_s > 60 ? " · last log line " + fmtDur(r.silent_s) + " ago" : ""}</div>
         ${extract ? "" : `<div class="facts">
-          <span>ETA <b>${r.eta_at ? fmtClock(r.eta_at) : "—"}</b>${r.overdue_s > 0 ? ` <span style="color:var(--ink-2)">· due ${fmtDur(r.overdue_s)} ago</span>` : r.late_at ? ` <span style="color:var(--ink-3)">· late after ${fmtClock(r.late_at)}</span>` : ""}</span>
-          <span title="${esc(r.accuracy && r.accuracy.why)}">Accuracy ${badge(ACC[(r.accuracy || {}).tier] || "grey", (r.accuracy || {}).label || "—")}</span>
+          <span>Finish <b>${r.eta_lo_at ? fmtClock(r.eta_lo_at) + "–" + fmtClock(r.eta_hi_at) : "—"}</b>${r.overdue_s > 0 ? ` <span style="color:var(--ink-2)">· past its window by ${fmtDur(r.overdue_s)}</span>` : r.eta_at ? ` <span style="color:var(--ink-3)">· likely ${fmtClock(r.eta_at)}</span>` : ` <span style="color:var(--ink-3)">· no history yet</span>`}</span>
           ${r.last_result ? `<span>last run <b>£${Number(r.last_result.engine_price_gbp).toFixed(2)}</b> at ${fmtClock(r.last_result.finished_at)}</span>` : ""}
         </div>
-        <div class="why" style="color:var(--ink-3)">${esc((r.accuracy || {}).why || "")}</div>`}
+        <div class="facts"><span>Models: ${evidenceChip(r.evidence)}</span></div>`}
         ${extract ? "" : `<div class="pipe">${stages}</div>`}
         <div class="term">${tail.map((t, j) =>
           `<div class="${lineClass(t)}${j === tail.length - 1 ? " cur" : ""}">${esc(t)}</div>`).join("")}</div>
@@ -598,16 +608,30 @@ function renderActivity(hours){
   el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Jobs finished per hour over the last 24 hours">${g}</svg>`;
 }
 
+/* WHAT STILL NEEDS A PERSON on a finished run, from the engine's own tally (D-739): missing
+   costing items apart from decisions and from provisional assumptions. */
+function openItems(o){
+  if(!o) return "";
+  if(!o.total) return '<span class="oi">nothing open</span>';
+  const bits = [];
+  if(o.missing) bits.push(`${o.missing} missing`);
+  if(o.decisions) bits.push(`${o.decisions} to decide`);
+  if(o.quantity_checks) bits.push(`${o.quantity_checks} qty check${o.quantity_checks > 1 ? "s" : ""}`);
+  if(o.provisional) bits.push(`${o.provisional} provisional`);
+  return `<span class="oi" title="${esc(o.phrase || "")}">${esc(bits.join(" · ") || o.total + " open")}</span>`;
+}
+
 function renderRecent(rows){
   $("recentCount").textContent = rows.length ? `last ${rows.length}` : "";
   if(!rows.length){ $("recent").innerHTML = '<tr><td class="c">Nothing has finished yet.</td></tr>'; return; }
   const word = {done:"Completed", failed:"Failed", stopped:"Stopped"};
   const icon = {done:"✓", failed:"✕", stopped:"■"};
-  $("recent").innerHTML = '<colgroup><col style="width:58px"><col style="width:34%"><col>'
-    + '<col style="width:108px"><col style="width:68px"></colgroup>' + rows.map(r => `<tr>
+  rows = rows.slice(0, 9);                       // two lines each now: the open items under the client
+  $("recent").innerHTML = '<colgroup><col style="width:50px"><col style="width:26%"><col>'
+    + '<col style="width:98px"><col style="width:62px"></colgroup>' + rows.map(r => `<tr>
       <td class="t">${r.finished_at ? fmtClock(r.finished_at) : ""}</td>
       <td class="d">${esc(r.drawing_number)}</td>
-      <td class="c">${esc(r.client || "")}${r.job_type ? " · extract" : ""}</td>
+      <td class="c">${esc(r.client || "")}${r.job_type ? " · extract" : ""}${openItems(r.open_items)}</td>
       <td class="o"><span class="o-${r.outcome}">${icon[r.outcome] || "·"}</span> <span class="lbl">${word[r.outcome] || esc(r.outcome)}</span></td>
       <td class="s">${fmtDur(r.seconds)}</td></tr>`).join("");
 }

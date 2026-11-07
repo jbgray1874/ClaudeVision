@@ -331,6 +331,15 @@ class Run:
     # long each waiting run has waited of its 30 minutes.
     sw_turn_at: float = 0.0
     sw_wait_since: float = 0.0
+    # AND HOW LONG IT WAITED IN ALL (D-739), so a finished run's time can be read net of its
+    # SolidWorks waits: an ETA that adds today's wait to a history that already holds waits
+    # counts the delay twice.
+    sw_waited_s: float = 0.0
+    # WHAT STILL NEEDS A PERSON (D-739): the engine's REVIEW_TALLY line, kept as said.
+    review: Dict[str, Any] = field(default_factory=dict)
+    # THE FINISH WINDOW PREDICTED WHEN IT STARTED (D-739): {lo_s, mid_s, hi_s, basis}, the
+    # run's own duration net of waits as history predicted it, so the error can be measured.
+    predicted: Dict[str, Any] = field(default_factory=dict)
     log: List[str] = field(default_factory=list)
     deliverables: List[Dict[str, str]] = field(default_factory=list)
 
@@ -915,6 +924,9 @@ def wall(x_sdi_key: Optional[str] = Header(default=None)):
             d["last_line_at"] = r.last_line_at
             d["sw_turn_at"] = r.sw_turn_at
             d["sw_wait_since"] = r.sw_wait_since
+            d["sw_waited_s"] = r.sw_waited_s
+            d["review"] = dict(r.review or {})
+            d["predicted"] = dict(r.predicted or {})
             if r.status != "running":
                 d["log"] = []
             runs.append(d)
@@ -996,6 +1008,16 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         run.status = "running"
         run.runner = req.runner_id
         run.started_at = now
+        # THE FINISH WINDOW, AS HISTORY PREDICTS IT AT THE START (D-739), kept so the wall can
+        # measure how good its ETAs are against the runs that finish.
+        if not run.job_type:
+            try:
+                import estimate_wall as _ew
+                run.predicted = _ew.predict_window(
+                    [{**r.as_json(), "sw_waited_s": r.sw_waited_s} for r in _RUNS.values()
+                     if r.run_id != run.run_id], now) or {}
+            except Exception:                                        # noqa: BLE001
+                run.predicted = {}
         run.lease_until = now + LEASE_SECONDS
         run.claimed_by_process = req.process or ""
         runner.run_id = run.run_id
@@ -1217,7 +1239,20 @@ _SW_WAITING = re.compile(r"Waiting for the desktop's SolidWorks|Still waiting fo
 
 
 def _note_solidworks_turn(run: "Run", text: str, now: float) -> None:
-    """Keep the run's SolidWorks state from its own words (D-738)."""
+    """Keep the run's SolidWorks state, and its open-item tally, from its own words (D-738,
+    D-739). A wait that ends, by the turn coming or by the Document Manager switch, is added
+    to the run's total wait."""
+    if text.lstrip().startswith("REVIEW_TALLY="):
+        try:
+            tally = json.loads(text.split("=", 1)[1])
+            if isinstance(tally, dict):
+                run.review = tally
+        except ValueError:
+            pass
+        return
+    ended = _SW_TAKEN.search(text) or _SW_GIVEN.search(text)
+    if ended and run.sw_wait_since:
+        run.sw_waited_s = round(run.sw_waited_s + max(0.0, now - run.sw_wait_since), 1)
     if _SW_TAKEN.search(text):
         run.sw_turn_at, run.sw_wait_since = now, 0.0
     elif _SW_GIVEN.search(text):
@@ -1286,6 +1321,8 @@ def complete(run_id: str, req: CompleteRequest,
         for text in req.lines:
             run.line(text)
             _check_the_engine_was_told(run, text)
+            if text.lstrip().startswith("REVIEW_TALLY="):
+                _note_solidworks_turn(run, text, time.time())
         run.status = "done" if req.status == "done" else "error"
         run.error = req.error
         # A RUN THAT PRODUCED THE WRONG KIND OF WORKBOOK DID NOT SUCCEED, whatever the runner
