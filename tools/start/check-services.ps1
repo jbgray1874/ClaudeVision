@@ -6,7 +6,8 @@
     For 8071, 8072 and 8073 it prints one of:
 
         down                                 nothing answered
-        answering, commit X                  /api/health replied
+        answering, commit X                  /api/health replied, or the service did and
+                                             its health check did not (said under it)
         refused (HTTP 401), commit X         the service is up and turned the request away
 
     and whether X is this checkout's HEAD.
@@ -49,20 +50,58 @@ function Get-CommitHeader($headers) {
     return $value
 }
 
+# WHAT HEALTH SAID BEYOND "UP" (D-745): slow to reply, or a part it could not reach. Names
+# only, never a value. Empty when it replied promptly and every part was reachable.
+function Get-HealthNote($content, $seconds) {
+    $parts = @()
+    try {
+        $h = $content | ConvertFrom-Json
+        if ($h.status -and $h.status -ne "ok") {
+            if ($h.database -and $h.database.status -and $h.database.status -ne "ok" -and $h.database.status -ne "not_configured") {
+                $parts += "database $($h.database.status)"
+            }
+            if ($h.file_roots) {
+                $unreached = @($h.file_roots | Where-Object { -not $_.reachable }).Count
+                if ($unreached -gt 0) { $parts += "$unreached share(s) not reachable" }
+            }
+            if ($h.staging -and -not $h.staging.reachable) { $parts += "staging folder not reachable" }
+            if ($h.workbook_template -and -not $h.workbook_template.reachable) { $parts += "workbook template not reachable" }
+            if ($parts.Count -eq 0) { $parts += "status $($h.status)" }
+        }
+    } catch { }
+    if ($seconds -gt 4) { $parts = @(("slow, {0:N0} s to reply" -f $seconds)) + $parts }
+    return ($parts -join "; ")
+}
+
 $up = 0
 $bad = 0
 foreach ($p in $Ports) {
     $state = "down"
     $commit = ""
+    $note = ""
+    # HEALTH ALSO ASKS THE DATABASE AND THE SHARES (D-745), and the database alone may wait 5 s
+    # to connect. With 4 s allowed, two services that were up and serving pages were reported
+    # "down - nothing answered" on 7 Nov 2026, which sends the reader looking for a dead process.
+    $clock = [Diagnostics.Stopwatch]::StartNew()
     try {
-        $reply = Invoke-WebRequest "http://localhost:$p/api/health" -UseBasicParsing -TimeoutSec 4
+        $reply = Invoke-WebRequest "http://localhost:$p/api/health" -UseBasicParsing -TimeoutSec 20
         $state = "answering"
         $commit = Get-CommitHeader $reply.Headers
+        $note = Get-HealthNote $reply.Content $clock.Elapsed.TotalSeconds
     } catch {
         $refusal = $_.Exception.Response
         if ($refusal) {
             $state = "refused (HTTP $([int]$refusal.StatusCode))"
             $commit = Get-CommitHeader $refusal.Headers
+        } else {
+            # NO HEALTH REPLY IS NOT PROOF OF A DEAD SERVICE: a route that asks nothing else
+            # says whether the process itself is up, and carries its commit the same way.
+            try {
+                $alive = Invoke-WebRequest "http://localhost:$p/api/estimate/speech" -UseBasicParsing -TimeoutSec 5
+                $state = "answering"
+                $commit = Get-CommitHeader $alive.Headers
+                $note = "no reply in 20 s: the database or a share is not answering; do not start a run until it does"
+            } catch { }
         }
     }
     if ($state -eq "down") {
@@ -92,6 +131,7 @@ foreach ($p in $Ports) {
     }
     if ($verdict -ne "matches HEAD") { $bad++ }
     Write-Host ("  {0}  {1}, commit {2} - {3}" -f $p, $state, $(if ($commit) { $commit } else { "?" }), $verdict) -ForegroundColor $colour
+    if ($note) { Write-Host ("        health: {0}" -f $note) -ForegroundColor Yellow }
     # THE VOICE THIS SERVICE GIVES THE PAGES (D-744). A service started another way can lose
     # the speech settings, and every page then speaks in the device's old voice without a word.
     # Setting names only, never a value. It does not change the exit code.
