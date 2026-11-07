@@ -632,6 +632,109 @@ def compute_view(runners: Sequence[Mapping[str, Any]], live: Sequence[Mapping[st
     return {"machines": machines, "runs": runs}
 
 
+# ── HISTORY (D-744) ─────────────────────────────────────────────────────────────────────
+# JG, 7 Nov 2026: "the control panel should have the entire stats / history of runs and parity
+# runs, etc. and we can build vizuals around that and details." This is the service's own
+# record of the runs it holds (thirty days, restart-safe: estimate_history): how each ended,
+# how long it took and waited, which machine ran it, what read its models and what was left
+# open. Every estimate ever filed is counted separately, from AISheets (src/run_history.py).
+def _p90(values: List[float]) -> Optional[float]:
+    if len(values) < 2:
+        return values[0] if values else None
+    s = sorted(values)
+    return s[min(len(s) - 1, int(round(0.9 * (len(s) - 1))))]
+
+
+def history_view(runs: Sequence[Mapping[str, Any]], now: Optional[float] = None,
+                 days: int = 30, table: int = 400) -> Dict[str, Any]:
+    now = time.time() if now is None else now
+    since = _midnight(now) - (days - 1) * 86400
+    kept = [r for r in runs if outcome(r) in ("done", "failed", "stopped")
+            and float(r.get("finished_at") or 0) >= since]
+    est = [r for r in kept if is_estimate(r)]
+    done = [r for r in est if outcome(r) == "done"]
+    durs = [d for r in done for d in [_duration(r)] if d is not None]
+    waits = [w for r in est for w in [_wait(r)] if w is not None]
+    judged = [r for r in est if outcome(r) in ("done", "failed")]
+    daily = []
+    for i in range(days):
+        start = since + i * 86400
+        inside = [r for r in kept if start <= float(r.get("finished_at") or 0) < start + 86400]
+        d_est = [r for r in inside if is_estimate(r)]
+        d_durs = [d for r in d_est if outcome(r) == "done" for d in [_duration(r)] if d is not None]
+        daily.append({"day_start": start,
+                      "done": sum(1 for r in d_est if outcome(r) == "done"),
+                      "failed": sum(1 for r in d_est if outcome(r) == "failed"),
+                      "stopped": sum(1 for r in d_est if outcome(r) == "stopped"),
+                      "extracts": sum(1 for r in inside if not is_estimate(r)),
+                      "median_s": round(statistics.median(d_durs), 1) if d_durs else None})
+    clients: Dict[str, Dict[str, Any]] = {}
+    machines: Dict[str, Dict[str, Any]] = {}
+    evidence_mix: Dict[str, Dict[str, Any]] = {}
+    for r in est:
+        c = clients.setdefault(str(r.get("client") or "Unknown"), {
+            "client": str(r.get("client") or "Unknown"), "estimates": 0, "done": 0, "failed": 0,
+            "durations": [], "last_at": 0.0, "drawings": set()})
+        c["estimates"] += 1
+        c["done"] += outcome(r) == "done"
+        c["failed"] += outcome(r) == "failed"
+        c["drawings"].add(str(r.get("drawing_number") or "").lower())
+        c["last_at"] = max(c["last_at"], float(r.get("finished_at") or 0))
+        if outcome(r) == "done" and _duration(r) is not None:
+            c["durations"].append(_duration(r))
+        if outcome(r) == "done":
+            ev = evidence(r)
+            e = evidence_mix.setdefault(ev["kind"], {"kind": ev["kind"], "label": ev["label"],
+                                                     "count": 0, "caution": ev["caution"]})
+            e["count"] += 1
+    for r in kept:
+        host = re.sub(r"-[0-9a-f]{6,}(-s\d+)?$", "", str(r.get("runner") or "unknown"))
+        m = machines.setdefault(host, {"machine": host, "runs": 0, "busy_s": 0.0, "failed": 0})
+        m["runs"] += 1
+        m["busy_s"] += _duration(r) or 0.0
+        m["failed"] += outcome(r) == "failed"
+    # Only a run that carries the engine's tally counts; one without says nothing, not "none".
+    reviews = [r.get("review") for r in done
+               if isinstance(r.get("review"), Mapping) and r["review"].get("total") is not None]
+    rows = []
+    for r in sorted(kept, key=lambda r: float(r.get("finished_at") or 0), reverse=True)[:table]:
+        ev = evidence(r)
+        rows.append({**_summary(r), "units": r.get("units"),
+                     "quantity_prices": list(r.get("quantity_prices") or [])[:8],
+                     "evidence": ev["label"], "evidence_caution": ev["caution"],
+                     "open_items": open_items(r),
+                     "sw_waited_s": r.get("sw_waited_s") or 0.0,
+                     "walkthrough_url": r.get("walkthrough_url") or "",
+                     "requested_by": r.get("requested_by") or ""})
+    return {
+        "days": days, "since": since,
+        "totals": {"estimates": len(est), "extracts": len(kept) - len(est),
+                   "done": len(done), "failed": sum(1 for r in est if outcome(r) == "failed"),
+                   "stopped": sum(1 for r in est if outcome(r) == "stopped"),
+                   "success_pct": (round(100.0 * len(done) / len(judged), 1) if judged else None),
+                   "median_s": round(statistics.median(durs), 1) if durs else None,
+                   "p90_s": round(_p90(durs), 1) if durs else None,
+                   "fastest_s": round(min(durs), 1) if durs else None,
+                   "engine_hours": round(sum(durs) / 3600.0, 1),
+                   "mean_wait_s": round(statistics.mean(waits), 1) if waits else None,
+                   "drawings": len({str(r.get('drawing_number') or '').lower() for r in est}),
+                   "clients": len(clients),
+                   "open_items_median": (statistics.median([float(t.get("total") or 0) for t in reviews])
+                                         if reviews else None),
+                   "with_review": len(reviews)},
+        "daily": daily,
+        "clients": sorted(({"client": c["client"], "estimates": c["estimates"], "done": c["done"],
+                            "failed": c["failed"], "drawings": len(c["drawings"]),
+                            "median_s": (round(statistics.median(c["durations"]), 1)
+                                         if c["durations"] else None),
+                            "last_at": c["last_at"]} for c in clients.values()),
+                          key=lambda c: (-c["estimates"], c["client"])),
+        "machines": sorted(({**m, "busy_s": round(m["busy_s"], 1)} for m in machines.values()),
+                           key=lambda m: -m["runs"]),
+        "evidence": sorted(evidence_mix.values(), key=lambda e: -e["count"]),
+        "runs": rows, "runs_left_out": max(0, len(kept) - table)}
+
+
 def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, Any]],
              now: Optional[float] = None, max_runs: int = 1, service_commit: str = "",
              tail_lines: int = 80) -> Dict[str, Any]:
