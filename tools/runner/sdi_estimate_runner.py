@@ -769,7 +769,12 @@ def main() -> int:
     print(f"  process  {_process}")
     print(f"  build    {_build}")
     print(f"  polling every {a.poll_seconds:g}s — Ctrl+C to stop")
-    print(f"  log      {log_path}\n")
+    print(f"  log      {log_path}")
+    start_compute_sampler()
+    _by = (compute_now() or {}).get("by")
+    print(f"  compute  measured every {_COMPUTE_EVERY:g}s for the wall: "
+          + ("the machine, SolidWorks, Excel and each job" if _by == "psutil"
+             else "the machine's totals only (install psutil for each job's own use)") + "\n")
 
     complained: Dict[str, Optional[str]] = {}
     consecutive = 0
@@ -905,6 +910,173 @@ def compute_headroom(min_free_gb: Optional[float] = None,
     return ok, ("; ".join(said) or "compute not measurable here, not held against the run")
 
 
+# ── WHAT THIS MACHINE IS USING, FOR THE WALL (D-743) ─────────────────────────────────────
+# JG, 7 Nov 2026: "a graphical representation of the compute resources available on the
+# laptop ... what compute resource each job is taking and it updates dynamically and the
+# remaining compute is also available." A thread measures every SDI_RUNNER_COMPUTE_SECONDS
+# (5): the machine's CPU, memory and disk; SolidWorks and Excel, which Windows starts for the
+# engine rather than the engine starting them; and this runner's own engine and its children.
+# The newest reading rides on the calls the runner already makes (claim, heartbeat, console),
+# so measuring never waits on the network and the network never waits on measuring. Where
+# psutil is missing only the machine's totals can be read, and the reading says so.
+_COMPUTE_EVERY = max(2.0, float(os.getenv("SDI_RUNNER_COMPUTE_SECONDS", "5") or 5))
+_COMPUTE_APPS = {"SolidWorks": ("sldworks.exe", "sldworks"), "Excel": ("excel.exe", "excel")}
+_JOB_PIDS: Dict[str, int] = {}                 # run id -> the engine process this runner started
+_COMPUTE: Dict[str, Any] = {"sample": None, "procs": {}, "sys": None, "thread": None}
+_GIB = float(1024 ** 3)
+
+
+def _disk_root() -> str:
+    try:
+        return Path(__file__).resolve().anchor or os.sep
+    except Exception:                                              # noqa: BLE001
+        return os.sep
+
+
+def _sample_with_psutil(psutil) -> Dict[str, Any]:
+    threads = psutil.cpu_count(logical=True) or os.cpu_count() or 1
+    vm = psutil.virtual_memory()
+    out: Dict[str, Any] = {"by": "psutil", "cpu_pct": round(psutil.cpu_percent(interval=None), 1),
+                           "threads": threads, "cores": psutil.cpu_count(logical=False),
+                           "mem_total_gb": round(vm.total / _GIB, 2),
+                           "mem_used_gb": round((vm.total - vm.available) / _GIB, 2),
+                           "mem_free_gb": round(vm.available / _GIB, 2)}
+    try:
+        du = psutil.disk_usage(_disk_root())
+        out.update(disk=_disk_root(), disk_free_gb=round(du.free / _GIB, 1),
+                   disk_total_gb=round(du.total / _GIB, 1))
+    except Exception:                                              # noqa: BLE001
+        pass
+    cache: Dict[int, Any] = _COMPUTE["procs"]
+    seen: set = set()
+
+    def use(p) -> Tuple[float, int]:
+        """Share of the whole machine's CPU since the last reading, and resident memory. A
+        process seen for the first time reads 0 CPU: there is nothing yet to compare with."""
+        try:
+            q = cache.get(p.pid)
+            if q is None or q != p:
+                cache[p.pid] = q = p
+            seen.add(p.pid)
+            return q.cpu_percent(None) / threads, q.memory_info().rss
+        except Exception:                                          # noqa: BLE001
+            return 0.0, 0
+    app_names = {n for names in _COMPUTE_APPS.values() for n in names}
+    apps: Dict[str, Dict[str, float]] = {}
+    for p in psutil.process_iter(["name"]):
+        name = str((p.info or {}).get("name") or "").lower()
+        for label, names in _COMPUTE_APPS.items():
+            if name in names:
+                c, m = use(p)
+                a = apps.setdefault(label, {"cpu_pct": 0.0, "mem_gb": 0.0, "count": 0})
+                a["cpu_pct"] += c
+                a["mem_gb"] += m / _GIB
+                a["count"] += 1
+    jobs: Dict[str, Dict[str, float]] = {}
+    for run_id, pid in list(_JOB_PIDS.items()):
+        try:
+            root = psutil.Process(pid)
+            tree = [root] + root.children(recursive=True)
+        except Exception:                                          # noqa: BLE001
+            continue
+        cpu, mem, n = 0.0, 0, 0
+        for p in tree:
+            try:
+                if str(p.name() or "").lower() in app_names:      # counted as itself, above
+                    continue
+            except Exception:                                      # noqa: BLE001
+                continue
+            c, m = use(p)
+            cpu, mem, n = cpu + c, mem + m, n + 1
+        jobs[run_id] = {"cpu_pct": round(cpu, 1), "mem_gb": round(mem / _GIB, 2), "procs": n}
+    for pid in [pid for pid in cache if pid not in seen]:
+        cache.pop(pid, None)
+    out["apps"] = {k: {"cpu_pct": round(v["cpu_pct"], 1), "mem_gb": round(v["mem_gb"], 2),
+                       "count": v["count"]} for k, v in apps.items()}
+    out["jobs"] = jobs
+    return out
+
+
+def _sample_windows_totals() -> Dict[str, Any]:
+    """The machine's totals from Windows itself, where psutil is not installed."""
+    import ctypes                                                  # noqa: PLC0415
+
+    class _MEM(ctypes.Structure):
+        _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+    class _FT(ctypes.Structure):
+        _fields_ = [("lo", ctypes.c_ulong), ("hi", ctypes.c_ulong)]
+    out: Dict[str, Any] = {"by": "windows", "threads": os.cpu_count()}
+    k32 = ctypes.windll.kernel32                                   # type: ignore[attr-defined]
+    m = _MEM()
+    m.dwLength = ctypes.sizeof(_MEM)
+    if k32.GlobalMemoryStatusEx(ctypes.byref(m)):
+        out.update(mem_total_gb=round(m.ullTotalPhys / _GIB, 2),
+                   mem_used_gb=round((m.ullTotalPhys - m.ullAvailPhys) / _GIB, 2),
+                   mem_free_gb=round(m.ullAvailPhys / _GIB, 2))
+    idle, kernel, user = _FT(), _FT(), _FT()
+    if k32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)):
+        now = tuple((t.hi << 32) | t.lo for t in (idle, kernel, user))
+        before = _COMPUTE["sys"]
+        _COMPUTE["sys"] = now
+        if before:
+            d_idle, d_kernel, d_user = (a - b for a, b in zip(now, before))
+            busy_total = d_kernel + d_user                         # kernel time includes idle
+            if busy_total > 0:
+                out["cpu_pct"] = round(100.0 * (busy_total - d_idle) / busy_total, 1)
+    du = shutil.disk_usage(_disk_root())
+    out.update(disk=_disk_root(), disk_free_gb=round(du.free / _GIB, 1),
+               disk_total_gb=round(du.total / _GIB, 1), apps={}, jobs={})
+    return out
+
+
+def sample_compute() -> Dict[str, Any]:
+    """One reading of this machine. Never raises: a failure is reported as the reading."""
+    try:
+        try:
+            import psutil                                          # noqa: PLC0415
+        except ImportError:
+            psutil = None
+        if psutil is not None:
+            out = _sample_with_psutil(psutil)
+        elif os.name == "nt":
+            out = _sample_windows_totals()
+        else:
+            du = shutil.disk_usage(_disk_root())
+            out = {"by": "none", "threads": os.cpu_count(), "disk": _disk_root(),
+                   "disk_free_gb": round(du.free / _GIB, 1),
+                   "disk_total_gb": round(du.total / _GIB, 1), "apps": {}, "jobs": {}}
+    except Exception as exc:                                       # noqa: BLE001
+        out = {"by": "none", "error": f"{type(exc).__name__}: {exc}"[:200]}
+    out.update(at=round(time.time(), 1), host=platform.node())
+    return out
+
+
+def start_compute_sampler() -> None:
+    """Measure in the background from now on; once per process."""
+    if _COMPUTE["thread"] is not None:
+        return
+
+    def loop() -> None:
+        while True:
+            _COMPUTE["sample"] = sample_compute()
+            time.sleep(_COMPUTE_EVERY)
+    _COMPUTE["sample"] = sample_compute()        # primes the CPU counters; the next is real
+    _COMPUTE["thread"] = threading.Thread(target=loop, name="compute-sampler", daemon=True)
+    _COMPUTE["thread"].start()
+
+
+def compute_now() -> Optional[Dict[str, Any]]:
+    """The newest reading, or None before the sampler has started."""
+    return _COMPUTE["sample"]
+
+
 def slot_may_claim(slot: int) -> Tuple[bool, str]:
     """(may claim, what was measured). Slot 1 always may; slot 2 or more only with the room."""
     if int(slot or 1) <= 1:
@@ -964,7 +1136,9 @@ def _ask_for_work(requests, server: str, headers: Dict[str, str], runner_id: str
             # WHAT THIS RUNNER CAN DO BESIDES AN ESTIMATE (D-640). The service hands a
             # pack-extract job only to a runner that says it can run one: an older runner
             # would build a full main.py estimate for it.
-            "capabilities": runner_capabilities()},
+            "capabilities": runner_capabilities(),
+            # WHAT THIS MACHINE IS USING (D-743), for the wall.
+            "compute": compute_now()},
             headers=headers, timeout=20)
     except Exception as exc:                       # noqa: BLE001 — keep polling
         # SAY IT ONCE. A runner that cannot reach the server prints a line a
@@ -1028,7 +1202,7 @@ class _heartbeat_while_busy:
                 try:
                     requests.post(f"{server}/api/estimate/runner/heartbeat", json={
                         "runner_id": runner_id, "hostname": platform.node(),
-                        "process": process, "build": build},
+                        "process": process, "build": build, "compute": compute_now()},
                         headers=headers, timeout=10)
                 except Exception:                    # noqa: BLE001 — a beat, not a job
                     pass
@@ -1112,7 +1286,8 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
         with _send_lock:
             try:
                 resp = requests.post(f"{base}/runner/{run_id}/progress",
-                                     json={"runner_id": runner_id, "lines": batch},
+                                     json={"runner_id": runner_id, "lines": batch,
+                                           "compute": compute_now()},
                                      headers=headers, timeout=20)
                 last_sent = time.time()
                 # STOP ARRIVES ON THE HEARTBEAT, because nothing else reaches this process.
@@ -1312,12 +1487,17 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
         return
 
     assert proc.stdout is not None
+    if isinstance(getattr(proc, "pid", None), int):
+        _JOB_PIDS[str(run_id)] = proc.pid       # measured as this job's own use (D-743)
     threading.Thread(target=beat, name="lease-heartbeat", daemon=True).start()
     threading.Thread(target=poster, name="progress-poster", daemon=True).start()
-    for text in proc.stdout:
-        say(text)
-        flush()
-    code = proc.wait()
+    try:
+        for text in proc.stdout:
+            say(text)
+            flush()
+        code = proc.wait()
+    finally:
+        _JOB_PIDS.pop(str(run_id), None)
 
     # A STOPPED RUN FILES NOTHING, WHATEVER THE ENGINE'S EXIT CODE (D-588c). The beat ends the
     # engine when a stop arrives, but a stop that lands as the engine finishes cleanly found

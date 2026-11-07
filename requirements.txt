@@ -31,6 +31,9 @@ comtypes; sys_platform == "win32"
 
 # ── Optional / feature-specific ──────────────────────────────────────────
 # Uncomment as needed; these are heavier and not on the core estimate path.
+# psutil                   # the runner's compute reading for the wall (D-743): each job's
+#                          # own CPU and memory, SolidWorks' and Excel's. Not the engine's:
+#                          # without it the runner reads the machine's totals only.
 # numpy                    # numerics (usually pulled in transitively)
 # opencv-python            # vision helpers (imported as `cv2`)
 # pytesseract              # OCR fallback (requires system Tesseract)

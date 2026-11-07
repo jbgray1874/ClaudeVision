@@ -505,9 +505,136 @@ def _summary(r: Mapping[str, Any]) -> Dict[str, Any]:
             "error": str(r.get("error") or "")[:200]}
 
 
+# ── COMPUTE (D-743) ─────────────────────────────────────────────────────────────────────
+# JG, 7 Nov 2026: "a graphical representation of the compute resources available on the
+# laptop ... what compute resource each job is taking and it updates dynamically and the
+# remaining compute is also available. we can then add the server downstairs and the new
+# machine." Every runner measures its machine, and its own engine's processes, every few
+# seconds and sends it with the calls it already makes. Per machine the newest sample of any
+# of its runners gives the totals. A job's share is its engine's own processes. SolidWorks and
+# Excel are not the engine's children (Windows starts them for it), so they are shown as
+# themselves, and given to a run only where it is certain: SolidWorks to the run holding the
+# licence, Excel to the only run on the machine. The rest of the machine is "other".
+COMPUTE_FRESH_S = 30.0
+COMPUTE_STALE_S = 120.0
+_PER_PROCESS_NOTE = ("Only the machine's totals are measured here: what each job and "
+                     "SolidWorks use needs psutil in the runner's Python.")
+
+
+def _n(v: Any) -> Optional[float]:
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _share(segments: List[Dict[str, Any]], total: Optional[float]) -> float:
+    """What is left of `total` once the named segments are taken, never below nothing. Samples
+    from two runners are seconds apart, so named shares can add up past the total: they are
+    scaled back to fit rather than shown as more than the machine has."""
+    named = sum(x["value"] for x in segments)
+    if total is None:
+        return 0.0
+    if named > total > 0:
+        for x in segments:
+            x["value"] = round(x["value"] * total / named, 2)
+        return 0.0
+    return round(max(0.0, total - named), 2)
+
+
+def compute_view(runners: Sequence[Mapping[str, Any]], live: Sequence[Mapping[str, Any]],
+                 now: float) -> Dict[str, Any]:
+    """The machines (connected and planned) with what each is using and what is free; and each
+    live run's own use, by run id."""
+    lane = {str(r.get("run_id")): (i + 1, r) for i, r in enumerate(live)}
+    host_of_runner = {str(rn.get("runner_id")): str(rn.get("hostname") or "").upper()
+                      for rn in runners}
+    hosts: Dict[str, Dict[str, Any]] = {}
+    for rn in runners:
+        c = rn.get("compute") or {}
+        if not isinstance(c, dict) or not c:
+            continue
+        name = str(c.get("host") or rn.get("hostname") or rn.get("runner_id") or "").strip()
+        key = name.upper()
+        got = _n(c.get("received_at")) or _n(c.get("at")) or 0.0
+        h = hosts.setdefault(key, {"host": name, "sample": {}, "got": 0.0, "jobs": {},
+                                   "history": []})
+        if got > h["got"]:
+            h.update(sample=c, got=got, history=list(rn.get("compute_history") or []))
+        if now - got <= COMPUTE_STALE_S:
+            for run_id, use in (c.get("jobs") or {}).items():
+                if str(run_id) in lane and isinstance(use, dict):
+                    h["jobs"][str(run_id)] = use
+    labels = {p["hostname"].upper(): p["label"] for p in fleet_plan()}
+    machines: List[Dict[str, Any]] = []
+    runs: Dict[str, Dict[str, Any]] = {}
+    for key, h in hosts.items():
+        c, age = h["sample"], round(now - h["got"])
+        cpu, total = _n(c.get("cpu_pct")), _n(c.get("mem_total_gb"))
+        used = _n(c.get("mem_used_gb"))
+        apps = c.get("apps") or {}
+        per_process = c.get("by") == "psutil"
+        cpu_seg: List[Dict[str, Any]] = []
+        mem_seg: List[Dict[str, Any]] = []
+        for run_id, use in sorted(h["jobs"].items(), key=lambda kv: lane[kv[0]][0]):
+            n, r = lane[run_id]
+            label = f"Run {n} · {r.get('drawing_number') or run_id}"
+            cpu_seg.append({"kind": "estimate", "key": run_id, "label": label,
+                            "value": round(_n(use.get("cpu_pct")) or 0.0, 2)})
+            mem_seg.append({"kind": "estimate", "key": run_id, "label": label,
+                            "value": round(_n(use.get("mem_gb")) or 0.0, 2)})
+        for app, kind in (("SolidWorks", "solidworks"), ("Excel", "excel")):
+            a = apps.get(app)
+            if isinstance(a, dict) and (a.get("count") or 0) > 0:
+                cpu_seg.append({"kind": kind, "key": kind, "label": app,
+                                "value": round(_n(a.get("cpu_pct")) or 0.0, 2)})
+                mem_seg.append({"kind": kind, "key": kind, "label": app,
+                                "value": round(_n(a.get("mem_gb")) or 0.0, 2)})
+        cpu_other = _share(cpu_seg, cpu)
+        mem_other = _share(mem_seg, used)
+        machine_runs = [rid for rid, (n, r) in lane.items()
+                        if host_of_runner.get(str(r.get("runner") or "")) == key]
+        machines.append({
+            "host": h["host"], "label": labels.get(key, h["host"]), "connected": True,
+            "fresh": age <= COMPUTE_FRESH_S, "age_s": age, "measured_by": c.get("by") or "",
+            "cpu_pct": cpu, "threads": _n(c.get("threads")), "cores": _n(c.get("cores")),
+            "mem_total_gb": total, "mem_used_gb": used, "mem_free_gb": _n(c.get("mem_free_gb")),
+            "disk": c.get("disk") or "", "disk_free_gb": _n(c.get("disk_free_gb")),
+            "disk_total_gb": _n(c.get("disk_total_gb")),
+            "cpu": {"segments": cpu_seg, "other": cpu_other,
+                    "free": round(max(0.0, 100.0 - (cpu or 0.0)), 2) if cpu is not None else None},
+            "mem": {"segments": mem_seg, "other": mem_other,
+                    "free": (round(max(0.0, total - used), 2)
+                             if total is not None and used is not None else None)},
+            "history": [x for x in h["history"] if now - (x[0] or 0) <= 900][-180:],
+            "runs_here": len(machine_runs),
+            "note": "" if per_process else _PER_PROCESS_NOTE})
+        for run_id in machine_runs:
+            n, r = lane[run_id]
+            use = h["jobs"].get(run_id)
+            holds_sw = bool(r.get("sw_turn_at")) and not r.get("sw_wait_since")
+            sw, xl = apps.get("SolidWorks"), apps.get("Excel")
+            runs[run_id] = {
+                "host": h["host"], "fresh": age <= COMPUTE_FRESH_S, "per_process": per_process,
+                "cpu_pct": _n((use or {}).get("cpu_pct")), "mem_gb": _n((use or {}).get("mem_gb")),
+                "procs": _n((use or {}).get("procs")),
+                "solidworks": ({"cpu_pct": _n(sw.get("cpu_pct")), "mem_gb": _n(sw.get("mem_gb"))}
+                               if holds_sw and isinstance(sw, dict) and sw.get("count") else None),
+                "excel": ({"cpu_pct": _n(xl.get("cpu_pct")), "mem_gb": _n(xl.get("mem_gb"))}
+                          if len(machine_runs) == 1 and isinstance(xl, dict) and xl.get("count")
+                          else None),
+                "machine_cpu_pct": cpu, "machine_mem_free_gb": _n(c.get("mem_free_gb"))}
+    for plan in fleet_plan():
+        if plan["hostname"].upper() not in hosts:
+            machines.append({"host": plan["hostname"], "label": plan["label"],
+                             "connected": False, "planned": True})
+    # Connected machines first, then in the order SDI_WALL_FLEET names them.
+    order = {p["hostname"].upper(): i for i, p in enumerate(fleet_plan())}
+    machines.sort(key=lambda m: (not m.get("connected"), order.get(str(m["host"]).upper(), 99),
+                                 str(m.get("label"))))
+    return {"machines": machines, "runs": runs}
+
+
 def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, Any]],
              now: Optional[float] = None, max_runs: int = 1, service_commit: str = "",
-             tail_lines: int = 14) -> Dict[str, Any]:
+             tail_lines: int = 80) -> Dict[str, Any]:
     now = time.time() if now is None else now
     th = thresholds()
     exp = expected_seconds(runs, now, th["history_days"])
@@ -568,6 +695,10 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
                           "job": None, "build": "", "capabilities": [],
                           "seconds_since_seen": None})
 
+    compute = compute_view(runners, live, now)
+    for x in live:
+        x["compute"] = compute["runs"].get(str(x.get("run_id")))
+
     queued = sorted((r for r in runs if outcome(r) == "queued"),
                     key=lambda r: r.get("queued_at") or now)
     when = {q["run_id"]: q for q in queue_etas(queued, live, now, max_runs,
@@ -593,6 +724,7 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
             "thresholds": th, "stages": [s for s, _ in STAGES],
             "kpis": k, "series": series(runs, now),
             "live": live, "fleet": fleet, "queue": queue, "recent": recent,
+            "compute": compute["machines"],
             "solidworks": solidworks_panel([r for r in runs if outcome(r) == "running"],
                                            runners, now),
             "sw_wait_limit_s": sw_wait_limit_s(),

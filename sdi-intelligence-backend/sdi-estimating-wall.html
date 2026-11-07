@@ -57,7 +57,7 @@
   .wall{position:relative;z-index:1;display:flex;flex-direction:column;gap:12px;padding:14px 18px 10px}
   /* The operations view: the screen's height, less the header and the ticker, but never less
      than the height its panels need. Shorter than that, the page scrolls. */
-  .ops{display:grid;gap:12px;height:max(calc(100vh - 106px), 800px);
+  .ops{display:grid;gap:12px;height:max(calc(100vh - 106px), 940px);
        grid-template-rows:auto minmax(0,1.9fr) minmax(0,1fr);scroll-margin-top:12px}
 
   /* ── HEADER ─────────────────────────────────────────────── */
@@ -180,10 +180,27 @@
   .pipe div.now{color:var(--ink)}
   .pipe div.now::before{background:var(--accent);box-shadow:0 0 10px var(--accent);
                         animation:blink 1.4s ease-in-out infinite}
+  /* THE RUN'S LOG (D-743): every line whole, wrapped, scrollable. A line that overflowed used
+     to be squeezed onto the next until none could be read. It follows the newest line unless
+     you have scrolled up to read; ⤢ opens it large. */
+  .termwrap{flex:1;min-height:150px;display:flex;position:relative}
   .term{flex:1;min-height:0;background:#05080c;border:1px solid var(--line);border-radius:8px;
-        padding:8px 10px;font-family:var(--mono);font-size:11px;line-height:1.5;color:#9fb4c3;
-        overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end}
-  .term div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        padding:8px 10px;font-family:var(--mono);font-size:11.5px;line-height:1.45;color:#9fb4c3;
+        overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;
+        scrollbar-width:thin;scrollbar-color:var(--line-hi) transparent}
+  .term div{flex:none;white-space:pre-wrap;overflow-wrap:anywhere;padding:1px 0}
+  .term div:first-child{margin-top:auto}
+  .tx{position:absolute;top:6px;right:8px;font-family:var(--mono);font-size:11px;color:var(--ink-2);
+      background:rgba(5,8,12,.85);border:1px solid var(--line-hi);border-radius:5px;padding:2px 7px;cursor:pointer}
+  .tx:hover{color:var(--ink);border-color:var(--accent)}
+  .modal{position:fixed;inset:0;z-index:20;background:rgba(2,4,7,.78);display:flex;align-items:center;
+         justify-content:center;padding:28px}
+  .modal[hidden]{display:none}
+  .mbox{width:min(1200px,100%);height:min(86vh,100%);background:var(--surface);border:1px solid var(--line-hi);
+        border-radius:12px;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  .mhead{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 16px;
+         border-bottom:1px solid var(--line);font-family:var(--mono);font-size:13px;letter-spacing:.06em}
+  .mterm{flex:1;min-height:0;margin:12px 16px 16px;font-size:13px}
   .term .w{color:var(--warn)} .term .e{color:#ff7a7a} .term .g{color:#5fd35f}
   .term .cur::after{content:"▌";color:var(--accent);animation:blink 1s steps(1) infinite;margin-left:2px}
   .idle{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
@@ -198,7 +215,7 @@
   @keyframes sweep{to{transform:rotate(360deg)}}
   .idle b{font-family:var(--mono);letter-spacing:.2em;color:var(--ink-2);font-size:12px}
 
-  .side{display:grid;grid-template-rows:minmax(0,1.6fr) minmax(0,1fr) minmax(0,.5fr);gap:12px;min-height:0}
+  .side{display:grid;grid-template-rows:minmax(0,2.1fr) minmax(0,1fr) minmax(0,.55fr);gap:12px;min-height:0}
   .fleet{display:flex;flex-direction:column;gap:6px;padding:8px 12px 10px;overflow:hidden}
   .node{border:1px solid var(--line);border-radius:9px;padding:6px 10px;background:var(--panel-2);
         display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:2px 9px;align-items:center}
@@ -216,6 +233,28 @@
   .chips{display:flex;gap:4px}
   .chip{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;padding:2px 6px;border-radius:4px;
         border:1px solid var(--line-hi);color:var(--ink-2)}
+  /* COMPUTE (D-743): what each machine is using and what is free, measured by its runner. */
+  .fleet{overflow-y:auto!important;scrollbar-width:thin;scrollbar-color:var(--line-hi) transparent}
+  .cmp{grid-column:1/5;display:flex;flex-direction:column;gap:5px;margin-top:6px}
+  .cmp.stale{opacity:.55}
+  .cl{display:grid;grid-template-columns:50px minmax(0,1fr) 134px;gap:8px;align-items:center}
+  .ck{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:var(--ink-3)}
+  .cv{font-family:var(--mono);font-size:10.5px;color:var(--ink-2);white-space:nowrap;text-align:right;
+      overflow:hidden;text-overflow:ellipsis}
+  .cv b{color:var(--ink);font-weight:600}
+  .cbar{height:10px;border-radius:3px;background:var(--line);display:flex;gap:2px;overflow:hidden}
+  .cbar i{display:block;height:100%;min-width:2px;flex:none}
+  .cbar i:hover{filter:brightness(1.3)}
+  .spark{height:26px;width:100%;display:block}
+  .cnote{font-size:10.5px;color:var(--ink-3)}
+  .clegend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:10.5px;color:var(--ink-2);padding:2px 2px 0}
+  .clegend span{display:inline-flex;align-items:center;gap:5px}
+  .clegend i{width:9px;height:9px;border-radius:2px;display:inline-block}
+  .uses{display:flex;flex-wrap:wrap;gap:5px 8px;align-items:center;font-size:11.5px;color:var(--ink-2)}
+  .use{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line-hi);border-radius:5px;padding:2px 7px;
+       font-family:var(--mono);font-size:10.5px;color:var(--ink)}
+  .use i{width:8px;height:8px;border-radius:2px}
+  .use b{font-weight:600}
   .queue{padding:10px 12px;overflow:hidden;display:flex;flex-direction:column;gap:6px}
   .qrow{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:8px;align-items:center;
         font-size:12.5px;padding:6px 8px;border-radius:7px;background:var(--panel-2);border:1px solid var(--line)}
@@ -559,6 +598,11 @@
 <div class="ticker"><span class="tag">ALERTS</span><span style="overflow:hidden;flex:1"><span class="run still" id="ticker">—</span></span>
   <span class="foot" id="foot"></span></div>
 <div class="tip" id="tip"></div>
+<div class="modal" id="logModal" hidden role="dialog" aria-label="Run log">
+  <div class="mbox"><div class="mhead"><span id="logTitle"></span>
+    <button class="fsbtn" type="button" id="logClose">✕ CLOSE (Esc)</button></div>
+    <div class="term mterm" id="logBody"></div></div>
+</div>
 
 <script>
 "use strict";
@@ -596,8 +640,8 @@ function badge(rag, label){
 }
 function lineClass(t){
   if(/SWITCHING TO THE DOCUMENT MANAGER|without its models|\bERROR\b|\bFAILED\b|Traceback/i.test(t)) return "e";
-  if(/Waiting for|Still waiting|SolidWorks/i.test(t)) return "w";
-  if(/APPLIED|wrote |filed|\bdone\b/i.test(t)) return "g";
+  if(/Waiting for|Still waiting|not yet validated/i.test(t)) return "w";
+  if(/APPLIED|wrote |filed|\bdone\b|turn taken|turn given back/i.test(t)) return "g";
   return "";
 }
 
@@ -637,7 +681,7 @@ function render(){
   $("bannerText").textContent = s.banner || "";
   renderKpis(s.kpis, s.expected_s);
   renderLanes(s);
-  renderFleet(s.fleet || []);
+  renderFleet(s.fleet || [], s.compute || []);
   renderQueue(s.queue || []);
   renderSolidWorks(s.solidworks || [], s.sw_wait_limit_s);
   renderTrend(s.series.run_times || [], s.kpis);
@@ -682,8 +726,34 @@ function ring(frac, rag){
   </svg>`;
 }
 
+/* WHAT A RUN IS USING (D-743): its engine's own processes; SolidWorks while it holds the
+   licence; Excel when it is the only run on its machine. Each says what it is. */
+const CMP = {estimate:"#3987e5", solidworks:"#d95926", excel:"#199e70", other:"#5b6b78"};
+const gb = v => v == null ? "—" : (v >= 10 ? v.toFixed(0) : v.toFixed(1)) + " GB";
+const cpuTxt = v => v == null ? "—" : (v >= 10 ? Math.round(v) : v.toFixed(1)) + "%";
+function laneCompute(c){
+  if(!c) return `<div class="uses"><span>Using:</span><span style="color:var(--ink-3)">not measured: this runner does not report its machine yet</span></div>`;
+  const bits = [];
+  if(c.per_process) bits.push(`<span class="use" title="The engine and the processes it started"><i style="background:${CMP.estimate}"></i>engine <b>${cpuTxt(c.cpu_pct)}</b> CPU · <b>${gb(c.mem_gb)}</b></span>`);
+  if(c.solidworks) bits.push(`<span class="use" title="SolidWorks, while this run holds the licence"><i style="background:${CMP.solidworks}"></i>SolidWorks <b>${cpuTxt(c.solidworks.cpu_pct)}</b> · <b>${gb(c.solidworks.mem_gb)}</b></span>`);
+  if(c.excel) bits.push(`<span class="use" title="Excel; this is the only run on the machine"><i style="background:${CMP.excel}"></i>Excel <b>${cpuTxt(c.excel.cpu_pct)}</b> · <b>${gb(c.excel.mem_gb)}</b></span>`);
+  const machine = `<span style="color:var(--ink-3)">${esc(c.host)} ${cpuTxt(c.machine_cpu_pct)} busy · ${gb(c.machine_mem_free_gb)} free${c.fresh ? "" : " · reading is old"}</span>`;
+  return `<div class="uses"><span>Using:</span>${bits.join("") || '<span style="color:var(--ink-3)">per-process use needs psutil on this machine</span>'}${machine}</div>`;
+}
+function logLines(lines, cursor){
+  return lines.map((t, j) => `<div class="${lineClass(t)}${cursor && j === lines.length - 1 ? " cur" : ""}">${esc(t)}</div>`).join("");
+}
+function keepScroll(sel){
+  const kept = {};
+  document.querySelectorAll(sel).forEach(t => { kept[t.dataset.run] = {top: t.scrollTop, end: t.scrollHeight - t.scrollTop - t.clientHeight < 14}; });
+  return () => document.querySelectorAll(sel).forEach(t => {
+    const k = kept[t.dataset.run];
+    t.scrollTop = !k || k.end ? t.scrollHeight : k.top;
+  });
+}
 function renderLanes(s){
   const live = s.live || [], k = s.kpis, html = [];
+  const restore = keepScroll(".lanes .term[data-run]");
   for(let i = 0; i < SLOTS; i++){
     const r = live[i];
     if(r){
@@ -692,7 +762,7 @@ function renderLanes(s){
       const extract = !!r.job_type;
       const stages = (s.stages || []).map((name, j) =>
         `<div class="${j < r.stage_index ? "done" : j === r.stage_index ? "now" : ""}">${esc(name)}</div>`).join("");
-      const tail = (r.log_tail || []).slice(-14);
+      const tail = r.log_tail || [];
       html.push(`<div class="panel lane ${r.rag}" data-start="${r.started_at || 0}">
         <div class="lanehead"><span class="slotname">RUN ${i + 1} · ${esc(r.runner || "")}</span>${badge(r.rag, WORD[r.rag])}</div>
         <div class="job">
@@ -710,9 +780,10 @@ function renderLanes(s){
           ${r.last_result ? `<span>last run <b>£${Number(r.last_result.engine_price_gbp).toFixed(2)}</b> at ${fmtClock(r.last_result.finished_at)}</span>` : ""}
         </div>
         <div class="facts"><span>Models: ${evidenceChip(r.evidence)}</span></div>`}
+        ${laneCompute(r.compute)}
         ${extract ? "" : `<div class="pipe">${stages}</div>`}
-        <div class="term">${tail.map((t, j) =>
-          `<div class="${lineClass(t)}${j === tail.length - 1 ? " cur" : ""}">${esc(t)}</div>`).join("")}</div>
+        <div class="termwrap"><div class="term" data-run="${esc(r.run_id)}" title="Scroll to read back; ⤢ opens it large">${logLines(tail, true)}</div>
+          <button class="tx" type="button" data-log="${esc(r.run_id)}" title="Open this run's log large">⤢</button></div>
       </div>`);
     }else{
       const on = i < (k.max_runs || 1);
@@ -726,9 +797,72 @@ function renderLanes(s){
     }
   }
   $("lanes").innerHTML = html.join("");
+  restore();
+  renderLog();
 }
 
-function renderFleet(fleet){
+/* ⤢ THE LOG, LARGE: the same lines, big enough to read across the room; it follows the run. */
+let logRun = null;
+function renderLog(){
+  if(!logRun || !snap) return;
+  const r = (snap.live || []).find(x => String(x.run_id) === String(logRun));
+  if(!r){ $("logTitle").textContent = "That run has finished."; return; }
+  $("logTitle").textContent = `${r.drawing_number || r.run_id} · ${r.client || ""} · ${r.runner || ""} · last ${ (r.log_tail || []).length } lines`;
+  const b = $("logBody"), end = !b.childElementCount || b.scrollHeight - b.scrollTop - b.clientHeight < 14;
+  b.innerHTML = logLines(r.log_tail || [], true);
+  if(end) b.scrollTop = b.scrollHeight;
+}
+function openLog(id){ logRun = id; $("logBody").innerHTML = ""; $("logModal").hidden = false; renderLog(); }
+function closeLog(){ logRun = null; $("logModal").hidden = true; }
+document.addEventListener("click", e => {
+  const b = e.target.closest && e.target.closest("[data-log]");
+  if(b) openLog(b.dataset.log);
+  if(e.target === $("logModal")) closeLog();
+});
+$("logClose").addEventListener("click", closeLog);
+document.addEventListener("keydown", e => { if(e.key === "Escape" && logRun) closeLog(); });
+
+/* A MACHINE'S CPU AND MEMORY (D-743): one bar each, the running estimates, SolidWorks, Excel
+   and everything else in order, and what is free as the empty track; the last fifteen
+   minutes of both as a trace. */
+function cbar(segs, other, total, unit, fmt){
+  if(total == null || !total) return '<div class="cbar"></div>';
+  const w = v => Math.max(0, Math.min(100, 100 * v / total)).toFixed(2) + "%";
+  return `<div class="cbar">${segs.filter(x => x.value > 0).map(x =>
+    `<i style="width:${w(x.value)};background:${CMP[x.kind] || CMP.other}" data-tip="<b>${esc(x.label)}</b><div class='m'>${fmt(x.value)}${unit}</div>"></i>`).join("")}${other > 0 ? `<i style="width:${w(other)};background:${CMP.other}" data-tip="<b>Everything else</b><div class='m'>Windows, the browser and other programs: ${fmt(other)}${unit}</div>"></i>` : ""}</div>`;
+}
+function sparkline(hist, now){
+  if(!hist || hist.length < 2) return '<svg class="spark"></svg>';
+  const x = t => Math.max(0, Math.min(100, 100 - (now - t) / 9)).toFixed(2);      // 900 s wide
+  const y = v => (24 - Math.max(0, Math.min(100, v)) * 0.22).toFixed(2);
+  const line = (i, col, dash) => {
+    const pts = hist.filter(h => h[i] != null).map(h => `${x(h[0])},${y(h[i])}`).join(" ");
+    return pts ? `<polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.5" ${dash ? 'stroke-dasharray="3 3"' : ""} vector-effect="non-scaling-stroke"/>` : "";
+  };
+  const cpus = hist.map(h => h[1]).filter(v => v != null), mems = hist.map(h => h[2]).filter(v => v != null);
+  const tip = `<b>Last 15 minutes</b><div class='m'>CPU now ${cpuTxt(cpus[cpus.length - 1])}, peak ${cpuTxt(Math.max(...cpus, 0))}</div><div class='m'>Memory now ${cpuTxt(mems[mems.length - 1])} used, peak ${cpuTxt(Math.max(...mems, 0))}</div>`;
+  return `<svg class="spark" viewBox="0 0 100 26" preserveAspectRatio="none" data-tip="${esc(tip)}"><line x1="0" x2="100" y1="24" y2="24" stroke="#182634" vector-effect="non-scaling-stroke"/>${line(2, "#a3b6c4", true)}${line(1, "#22d3ee", false)}</svg>`;
+}
+function peakTxt(hist){
+  const cpus = (hist || []).map(h => h[1]).filter(v => v != null);
+  return cpus.length ? "CPU peak " + cpuTxt(Math.max(...cpus)) : "";
+}
+function machineCompute(m, now){
+  if(!m) return "";
+  if(!m.connected) return `<div class="cmp"><span class="cnote">Compute shows here once its runner connects.</span></div>`;
+  const cpu = m.cpu || {}, mem = m.mem || {};
+  return `<div class="cmp${m.fresh ? "" : " stale"}">
+    <div class="cl"><span class="ck">CPU</span>${cbar(cpu.segments || [], cpu.other, 100, "% of the machine", v => cpuTxt(v).replace("%", ""))}<span class="cv"><b>${cpuTxt(m.cpu_pct)}</b> · ${cpuTxt(cpu.free)} free</span></div>
+    <div class="cl"><span class="ck">MEMORY</span>${cbar(mem.segments || [], mem.other, m.mem_total_gb, " GB", v => v.toFixed(1))}<span class="cv"><b>${m.mem_used_gb != null ? m.mem_used_gb.toFixed(0) : "—"}</b> / ${gb(m.mem_total_gb)} · ${mem.free != null ? mem.free.toFixed(0) : "—"} free</span></div>
+    <div class="cl"><span class="ck">15 MIN</span>${sparkline(m.history, now)}<span class="cv">${peakTxt(m.history)}</span></div>
+    <span class="cnote">${[m.threads ? m.threads + " threads" : "", m.disk_free_gb != null ? "disk " + gb(m.disk_free_gb) + " free" : "", m.fresh ? "" : "read " + fmtDur(m.age_s) + " ago"].filter(Boolean).join(" · ")}</span>
+    ${m.note ? `<span class="cnote">${esc(m.note)}</span>` : ""}
+  </div>`;
+}
+function renderFleet(fleet, compute){
+  compute = compute || [];
+  const byHost = {}; compute.forEach(m => { byHost[String(m.host).toUpperCase()] = m; });
+  const shown = new Set();
   const up = fleet.filter(f => f.online).length;
   $("fleetCount").textContent = `${up} of ${fleet.length} online`;
   if(!fleet.length){ $("fleet").innerHTML = '<div class="empty">No runner has checked in with this service.</div>'; return; }
@@ -737,11 +871,19 @@ function renderFleet(fleet){
     const caps = (f.capabilities || []).filter(c => capName[c]).map(c => `<span class="chip">${capName[c]}</span>`).join("");
     const seen = f.seconds_since_seen == null ? "" : `seen <b>${fmtDur(f.seconds_since_seen)}</b> ago`;
     const job = f.job ? ` · on <b>${esc(f.job.drawing_number)}</b>` : "";
+    const host = String(f.hostname || "").toUpperCase();
+    const m = shown.has(host) ? null : byHost[host];        // one machine, shown once
+    if(m) shown.add(host);
     return `<div class="node ${f.rag}${f.planned ? " planned" : ""}">
       <span class="hb"></span><span class="nm">${esc(f.label)}</span><span class="chips">${caps}</span>${badge(f.rag, f.rag === "green" ? (f.job ? "Working" : "Ready") : WORD[f.rag])}
       <div class="meta">${esc(f.label !== f.hostname ? f.hostname + " · " : "")}${esc(f.rag_reason)}${job}${seen ? " · " + seen : ""}${f.build ? " · build <b>" + esc(f.build.slice(0, 7)) + "</b>" : ""}</div>
+      ${machineCompute(m, nowS())}
     </div>`;
-  }).join("");
+  }).join("") + (compute.some(m => m.connected) ? `<div class="clegend">
+      <span><i style="background:${CMP.estimate}"></i>Estimates</span><span><i style="background:${CMP.solidworks}"></i>SolidWorks</span>
+      <span><i style="background:${CMP.excel}"></i>Excel</span><span><i style="background:${CMP.other}"></i>Everything else</span>
+      <span><i style="background:var(--line);outline:1px solid var(--line-hi)"></i>Free</span>
+      <span style="color:var(--ink-3)">trace: <span style="color:#22d3ee">━</span> CPU <span style="color:#a3b6c4">┅</span> memory</span></div>` : "");
 }
 
 function renderQueue(q){
