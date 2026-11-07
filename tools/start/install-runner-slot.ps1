@@ -21,7 +21,7 @@
     HOW THE SLOTS SHARE SOLIDWORKS. In turn. One lock file per machine; the engine takes it
     around each model read and a run that finds SolidWorks in use waits for it, saying so in
     the portal every 5 minutes. A normal wait never changes the reader. Only a wait that
-    reaches SDI_SW_TURN_WAIT_MINUTES (default 35) switches that run to the Document Manager,
+    reaches SDI_SW_TURN_WAIT_MINUTES (default 30) switches that run to the Document Manager,
     said in the portal and on its book (SDI_SW_TURN_TIMEOUT=none leaves the models unread
     instead). A second run is claimed only while the machine has the memory and CPU for it
     (SDI_SLOT_MIN_FREE_GB, SDI_SLOT_MAX_CPU_PCT). The service must allow the runs at once:

@@ -19,6 +19,18 @@ WHAT EACH COLOUR MEANS, said on the wall beside it, never colour alone:
              red     offline, or two processes answering to one runner
   THE FLEET  the worst of the above, so the banner never says "nominal" over a red tile
 
+THE DESKTOP'S SOLIDWORKS (D-738). One licence per machine, taken in turn. For each machine the
+wall names the run holding it and since when, and every run waiting for it with how long it has
+waited of its limit (SDI_SW_TURN_WAIT_MINUTES, 30): at the limit that run reads its models with
+the Document Manager and goes on; nothing is stopped.
+
+THE ETA is the run's start plus the usual time, plus any time it has spent waiting for SolidWorks;
+the late mark uses the 90th percentile. A queued job starts when the soonest slot frees, slot by
+slot. THE EXPECTED ACCURACY is what the run's own log shows about how its models were read:
+measured by SolidWorks (high), read by the Document Manager from saved data (medium), or not read
+at all, so priced from its drawings and not firm (low). The drawing's last result is shown beside
+it, so a new price can be read against the one before.
+
 THE EXPECTED TIME is the median of this service's own finished estimates, not a figure typed
 into config: the wall compares a run with the runs before it. With fewer than three to go on
 there is no median, the run is green until it is silent or erring, and the wall says so.
@@ -54,6 +66,47 @@ _SW_WAIT = re.compile(r"Waiting for the desktop's SolidWorks|Still waiting for t
 _SW_FREE = re.compile(r"SolidWorks is free after", re.I)
 _DOCMGR = re.compile(r"SWITCHING TO THE DOCUMENT MANAGER", re.I)
 _ERROR = re.compile(r"\b(ERROR|FAILED|Traceback)\b")
+_ACC_LOW = re.compile(r"goes on without its models|NOT APPLIED|did not produce an extract|still unread "
+                      r"by either reader|COULD NOT LOOK|models were left unread", re.I)
+_ACC_MED = re.compile(r"Document Manager BACKUP reader|SWITCHING TO THE DOCUMENT MANAGER|SolidWorks "
+                      r"could not", re.I)
+_ACC_HIGH = re.compile(r"model extract APPLIED|native extract applied", re.I)
+
+
+def sw_wait_limit_s() -> float:
+    """The engine's SolidWorks wait limit, as this service's environment states it."""
+    return 60.0 * _env_float("SDI_SW_TURN_WAIT_MINUTES", 30.0)
+
+
+def holder_from_log(log: Sequence[str]) -> str:
+    """Who the latest wait line says has SolidWorks ("12677-01-GA (run 4b1c2d) has had it for
+    6 min"), or ""."""
+    for line in reversed([str(x) for x in (log or ())]):
+        if _SW_WAIT.search(line):
+            for seg in re.split(r"[:.]\s+", line):
+                if "has had it" in seg:
+                    return seg.strip()
+            return ""
+    return ""
+
+
+def accuracy(run: Mapping[str, Any]) -> Dict[str, str]:
+    """What the run's log shows about how its models were read: {tier, label, why}."""
+    if not is_estimate(run):
+        return {"tier": "na", "label": "Extract", "why": "a pack extract prices nothing"}
+    log = [str(x) for x in (run.get("log") or [])]
+    text = "\n".join(log)
+    if _ACC_LOW.search(text):
+        return {"tier": "low", "label": "Low",
+                "why": "models not read: priced from its drawings, not a firm price"}
+    if _ACC_MED.search(text):
+        return {"tier": "medium", "label": "Medium",
+                "why": "models read by the Document Manager: saved data only, nothing measured"}
+    if _ACC_HIGH.search(text):
+        return {"tier": "high", "label": "High", "why": "models measured by SolidWorks"}
+    if run.get("sw_wait_since"):
+        return {"tier": "pending", "label": "Pending", "why": "waiting for SolidWorks to read its models"}
+    return {"tier": "pending", "label": "Pending", "why": "the model read has not been reached yet"}
 
 
 def _env_float(name: str, default: float) -> float:
@@ -161,9 +214,14 @@ def run_rag(run: Mapping[str, Any], now: float, expected_s: Optional[float],
         elif _SW_FREE.search(x):
             waiting = False
     if any(_DOCMGR.search(x) for x in log):
-        return AMBER, "switched to the Document Manager"
-    if waiting:
-        return AMBER, "waiting for the desktop's SolidWorks"
+        return AMBER, "switched to the Document Manager after its SolidWorks wait"
+    if waiting or run.get("sw_wait_since"):
+        since = float(run.get("sw_wait_since") or 0.0)
+        held = holder_from_log(log)
+        waited = (f", {max(0.0, now - since) / 60:.0f} of {sw_wait_limit_s() / 60:.0f} min"
+                  if since else "")
+        return AMBER, (f"waiting for the desktop's SolidWorks{waited}"
+                       + (f"; {held}" if held else ""))
     if expected_s and elapsed > th["slow_over"] * expected_s:
         return AMBER, f"slower than usual, expected about {expected_s / 60:.0f} min"
     if expected_s:
@@ -279,6 +337,88 @@ def series(runs: Sequence[Mapping[str, Any]], now: float) -> Dict[str, Any]:
     return {"run_times": trend, "activity_24h": hours}
 
 
+# ── ETA, THE QUEUE, THE LICENCE ──────────────────────────────────────────────────────────
+def eta(run: Mapping[str, Any], now: float, expected_s: Optional[float],
+        p90_s: Optional[float]) -> Dict[str, Any]:
+    """{eta_at, late_at, overdue_s} for a running estimate; {} with no usual time."""
+    if not expected_s or not is_estimate(run):
+        return {}
+    started = float(run.get("started_at") or now)
+    waited = max(0.0, now - float(run.get("sw_wait_since"))) if run.get("sw_wait_since") else 0.0
+    at = started + expected_s + waited
+    late = started + max(expected_s, p90_s or expected_s) + waited
+    return {"eta_at": round(at, 1), "late_at": round(late, 1),
+            "overdue_s": round(max(0.0, now - at), 1)}
+
+
+def queue_etas(queue: Sequence[Mapping[str, Any]], live: Sequence[Mapping[str, Any]],
+               now: float, max_runs: int, expected_s: Optional[float],
+               extract_s: Optional[float]) -> List[Dict[str, Any]]:
+    """When each queued job should start and finish: the soonest slot takes the next job."""
+    slots = max(1, int(max_runs or 1))
+    free = sorted(max(now, float(x.get("eta_at") or (now + (expected_s or 0.0))))
+                  for x in live)[:slots]
+    free += [now] * (slots - len(free))
+    out = []
+    for q in queue:
+        dur = expected_s if is_estimate(q) else extract_s
+        if not dur:
+            out.append({"run_id": q.get("run_id"), "start_at": None, "finish_at": None})
+            continue
+        i = min(range(len(free)), key=lambda k: free[k])
+        start = free[i]
+        free[i] = start + dur
+        out.append({"run_id": q.get("run_id"), "start_at": round(start, 1),
+                    "finish_at": round(start + dur, 1)})
+    return out
+
+
+def solidworks_panel(running: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, Any]],
+                     now: float) -> List[Dict[str, Any]]:
+    """Per machine: the run holding the desktop's SolidWorks, since when, and who waits."""
+    host_of = {str(r.get("runner_id") or ""): str(r.get("hostname") or r.get("runner_id") or "")
+               for r in runners}
+    limit = sw_wait_limit_s()
+    machines: Dict[str, Dict[str, Any]] = {}
+    for rn in runners:
+        if rn.get("online"):
+            h = str(rn.get("hostname") or rn.get("runner_id") or "")
+            machines.setdefault(h, {"host": h, "holder": None, "waiting": [], "said_holder": ""})
+    for r in running:
+        h = host_of.get(str(r.get("runner") or ""), str(r.get("runner") or ""))
+        m = machines.setdefault(h, {"host": h, "holder": None, "waiting": [], "said_holder": ""})
+        if r.get("sw_turn_at"):
+            m["holder"] = {"run_id": r.get("run_id"), "drawing_number": r.get("drawing_number"),
+                           "client": r.get("client"), "since": r.get("sw_turn_at"),
+                           "held_s": round(max(0.0, now - float(r["sw_turn_at"])), 1)}
+        if r.get("sw_wait_since"):
+            waited = max(0.0, now - float(r["sw_wait_since"]))
+            m["waiting"].append({"run_id": r.get("run_id"),
+                                 "drawing_number": r.get("drawing_number"),
+                                 "client": r.get("client"), "waited_s": round(waited, 1),
+                                 "limit_s": limit, "left_s": round(max(0.0, limit - waited), 1)})
+            m["said_holder"] = m["said_holder"] or holder_from_log(r.get("log") or [])
+    for m in machines.values():
+        m["waiting"].sort(key=lambda w: -w["waited_s"])
+        m["state"] = "in_use" if m["holder"] or m["waiting"] else "free"
+    return sorted(machines.values(), key=lambda m: m["host"])
+
+
+def last_result(runs: Sequence[Mapping[str, Any]], drawing: Any, client: Any,
+                before: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """The drawing's last finished estimate with a price, for reading a new price against."""
+    best = None
+    for r in runs:
+        if (is_estimate(r) and outcome(r) == "done" and r.get("engine_price_gbp")
+                and str(r.get("drawing_number") or "") == str(drawing or "")
+                and str(r.get("client") or "") == str(client or "")
+                and (before is None or (r.get("finished_at") or 0) < before)):
+            if best is None or (r.get("finished_at") or 0) > (best.get("finished_at") or 0):
+                best = r
+    return ({"engine_price_gbp": best.get("engine_price_gbp"),
+             "finished_at": best.get("finished_at")} if best else None)
+
+
 # ── THE ONE ANSWER ───────────────────────────────────────────────────────────────────────
 def _summary(r: Mapping[str, Any]) -> Dict[str, Any]:
     return {"run_id": r.get("run_id"), "drawing_number": r.get("drawing_number"),
@@ -298,6 +438,11 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
     now = time.time() if now is None else now
     th = thresholds()
     exp = expected_seconds(runs, now, th["history_days"])
+    k = kpis(runs, now, max_runs)
+    p90 = k.get("p90_s_7d")
+    ext_durs = [d for r in runs if not is_estimate(r) and outcome(r) == "done"
+                for d in [_duration(r)] if d is not None]
+    extract_s = statistics.median(ext_durs) if len(ext_durs) >= 3 else None
     by_runner_run = {str(r.get("run_id")): r for r in runs}
 
     live: List[Dict[str, Any]] = []
@@ -309,6 +454,11 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
         live.append({**_summary(r), "rag": rag, "rag_reason": why,
                      "elapsed_s": round(now - started, 1),
                      "expected_s": (round(exp, 1) if exp and is_estimate(r) else None),
+                     **eta(r, now, exp, p90),
+                     "accuracy": accuracy(r),
+                     "last_result": last_result(runs, r.get("drawing_number"), r.get("client")),
+                     "sw_turn_at": r.get("sw_turn_at") or 0.0,
+                     "sw_wait_since": r.get("sw_wait_since") or 0.0,
                      "stage_index": idx, "stage": name,
                      "silent_s": round(now - (float(r.get("last_line_at") or 0) or started), 1),
                      "log_tail": [str(x) for x in (r.get("log") or [])][-tail_lines:]})
@@ -327,10 +477,16 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
                       "capabilities": list(rn.get("capabilities") or []),
                       "rag": rag, "rag_reason": why,
                       "job": (_summary(job) if job and outcome(job) == "running" else None)})
+    # A SECOND RUNNER ON ONE DESKTOP IS THAT DESKTOP'S SLOT (SCRUM-183): its runner id ends -sN.
+    def _slot(f: Dict[str, Any]) -> str:
+        m = re.search(r"-s(\d+)$", str(f.get("runner_id") or ""))
+        return f" · slot {m.group(1)}" if m and int(m.group(1)) > 1 else ""
+    for f in fleet:
+        f["label"] = f["label"] + _slot(f)
     for plan in fleet_plan():
         matches = [f for f in fleet if f["hostname"].upper() == plan["hostname"].upper()]
         for f in matches:
-            f["label"] = plan["label"]
+            f["label"] = plan["label"] + _slot(f)
         if not matches:
             fleet.append({"runner_id": None, "hostname": plan["hostname"],
                           "label": plan["label"], "online": False, "planned": True,
@@ -338,11 +494,14 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
                           "job": None, "build": "", "capabilities": [],
                           "seconds_since_seen": None})
 
-    queue = [_summary(r) for r in sorted((r for r in runs if outcome(r) == "queued"),
-                                         key=lambda r: r.get("queued_at") or now)]
+    queued = sorted((r for r in runs if outcome(r) == "queued"),
+                    key=lambda r: r.get("queued_at") or now)
+    when = {q["run_id"]: q for q in queue_etas(queued, live, now, max_runs, exp, extract_s)}
+    queue = [{**_summary(r), "start_at": (when.get(r.get("run_id")) or {}).get("start_at"),
+              "finish_at": (when.get(r.get("run_id")) or {}).get("finish_at")} for r in queued]
     recent = [_summary(r) for r in sorted(
         (r for r in runs if outcome(r) in ("done", "failed", "stopped")),
-        key=lambda r: r.get("finished_at") or 0, reverse=True)[:14]]
+        key=lambda r: r.get("finished_at") or 0, reverse=True)[:12]]
 
     banner_rag = worst([x["rag"] for x in live]
                        + [x["rag"] for x in fleet if not x.get("planned")])
@@ -356,6 +515,9 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
     return {"now": now, "service_commit": service_commit, "banner": banner,
             "banner_rag": banner_rag, "expected_s": (round(exp, 1) if exp else None),
             "thresholds": th, "stages": [s for s, _ in STAGES],
-            "kpis": kpis(runs, now, max_runs), "series": series(runs, now),
+            "kpis": k, "series": series(runs, now),
             "live": live, "fleet": fleet, "queue": queue, "recent": recent,
+            "solidworks": solidworks_panel([r for r in runs if outcome(r) == "running"],
+                                           runners, now),
+            "sw_wait_limit_s": sw_wait_limit_s(),
             "alerts": alerts}
