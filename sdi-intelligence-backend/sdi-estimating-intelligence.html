@@ -73,6 +73,13 @@
   .wrap{max-width:1460px;margin:0 auto;padding:28px 22px 80px}
 
   header{border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:26px;display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap}
+  /* THE CONTROL PANEL, ONE CLICK FROM THE TOP OF THE PAGE (D-740): every run, the SolidWorks
+     licence, the fleet and the KPIs, full screen. */
+  .cp-btn{display:inline-flex;align-items:center;gap:8px;padding:9px 14px;border-radius:9px;
+          background:var(--brand);color:#191900;font-weight:700;font-size:13.5px;text-decoration:none;
+          white-space:nowrap;align-self:flex-end}
+  .cp-btn:hover{filter:brightness(1.08)}
+  .cp-btn .dot{width:8px;height:8px;border-radius:50%;background:#191900;opacity:.75}
   h1{font-family:var(--disp);font-size:clamp(24px,3.4vw,34px);font-weight:700;letter-spacing:-.02em;margin:0}
   h1 .mark{color:var(--brand)}
   .sub{color:var(--muted);font-size:14px;margin:4px 0 0}
@@ -381,6 +388,9 @@
            style="color:var(--brand);text-decoration:none;border-bottom:1px solid currentColor">
            SDI Drawing Search Intelligence →</a></p>
     </div>
+    <a class="cp-btn" href="/estimating/wall" target="_blank" rel="noopener"
+       title="The control panel: every run live, who has the SolidWorks licence and who is waiting, the fleet, finish windows and the KPIs. Full screen for a wall monitor.">
+      <span class="dot"></span>Control panel ↗</a>
     <div class="viewctl">
       <button type="button" id="theme-btn" class="vc-btn" aria-pressed="false" title="Switch between light and dark">
         <svg class="ic-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
@@ -562,7 +572,7 @@
         <!-- THE WALL MONITOR (D-737): every run, the fleet and the KPIs, full screen. -->
         <a href="/estimating/wall" target="_blank" rel="noopener"
            style="float:right;font-size:12px;color:var(--brand);text-decoration:none;margin-top:-18px"
-           title="Live runs, the fleet of runners and the run-time KPIs, full screen, for a wall monitor.">Wall monitor ↗</a>
+           title="Live runs, the fleet of runners and the run-time KPIs, full screen, for a wall monitor.">Control panel ↗</a>
         <div class="p" id="runnerText"><span class="pending">Checking…</span></div>
         <div class="runpanes" id="runPanes" hidden></div>
         <p class="note">Estimates are executed on a machine with SOLIDWORKS and Excel. This service
