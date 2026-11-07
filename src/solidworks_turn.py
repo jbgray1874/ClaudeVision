@@ -20,7 +20,11 @@ model read, and the rest of both runs (drawing reads, pricing, the books) go on 
 A WAIT THAT REACHES SDI_SW_TURN_WAIT_MINUTES (default 30: JG, 7 Nov 2026, "we wait up to 30
 minutes with feedback to the control panel of the wait time and which job is currently using the
 solid works com api license. we only switch to the document manager api when the 30 minutes is up
-and we don't kill the job") ends the wait. What the run does next is
+and we don't kill the job") ends the wait. THIS MEANS A RUN'S EVIDENCE CAN DEPEND ON WORKLOAD (7 Nov review): a run that
+waited 30 minutes reads its models with the Document Manager where a lone run would have used
+SolidWorks. That is JG's decision, and it is said wherever it happens: on the console, on the book
+(extract_reader, docmgr_backup_reason) and on the wall ("Document Manager fallback, not yet
+validated") until the Document Manager is accepted. What the run does next is
 SDI_SW_TURN_TIMEOUT: "docmgr" (the default) reads its models with the Document Manager when its
 licence key is set, said on the console and on the book; "none" leaves them unread. Either way the
 run goes on, and a run whose models were left unread is priced from its drawings and DXFs and

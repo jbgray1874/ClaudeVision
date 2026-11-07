@@ -2664,6 +2664,28 @@ def main() -> None:
                       f"the job's latest record and the next run of it will overwrite it.",
                       flush=True)
 
+        # THE OPEN ITEMS, ONE STRUCTURED LINE (D-739), so the service and the wall monitor can
+        # show what still needs a person beside a finished run without ever reading an
+        # estimate: missing costing-critical items apart from provisional assumptions.
+        try:
+            from costed_facts import outstanding_summary as _osum_wall
+            _ow = _osum_wall(summary.get("costed_job") or summary)
+            print("REVIEW_TALLY=" + json.dumps({
+                "total": _ow.get("total"), "blocking": _ow.get("blocking"),
+                "advisory": _ow.get("advisory"),
+                "missing": (_ow.get("prices_missing") or 0) + (_ow.get("stated_not_carried") or 0)
+                           + (_ow.get("labour_not_on_sheet") or 0),
+                "decisions": (_ow.get("manufacturing") or 0) + (_ow.get("rulings") or 0)
+                             + (_ow.get("consistency_checks") or 0),
+                "provisional": (_ow.get("market_figures") or 0) + (_ow.get("provisional") or 0)
+                               + (_ow.get("sizes_assumed") or 0) + (_ow.get("indicative") or 0),
+                # Counted in the total and neither blocking nor advisory in the tally's rule.
+                "quantity_checks": max(0, int(_ow.get("total") or 0) - int(_ow.get("blocking") or 0)
+                                       - int(_ow.get("advisory") or 0)),
+                "phrase": str(_ow.get("phrase") or "")[:300]}, default=str), flush=True)
+        except Exception as _ow_exc:                                  # noqa: BLE001
+            print(f"   [review] the open-item tally could not be said ({_ow_exc})", flush=True)
+
         print("\nPage text preview:\n")
         for page in summary["pages"]:
             preview = (page["pdfplumber_text"] or "[NO TEXT EXTRACTED]").replace("\n", " ")
