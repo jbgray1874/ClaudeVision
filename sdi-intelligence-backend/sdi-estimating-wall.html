@@ -13,6 +13,14 @@
   service (tested there); this page only draws it and ticks the clocks between reads. No data
   of its own, no external files: a wall PC on the LAN needs nothing but the service.
 
+  THE PAGE SCROLLS (D-741). JG, 7 Nov 2026: "there is no scroll and the last runs ... is cut off".
+  The operations view fills the screen when the screen is big enough and keeps its own minimum
+  height when it is not, so a short screen scrolls rather than squeezing the charts; Recent
+  scrolls inside its own panel; the alerts ticker stays at the foot of the screen. Below it sits
+  the parity view: "we should see the parity runs and all kpis/ vizualizations built into this".
+  It comes from the same read, as `parity`, which the service refreshes from the parity share
+  in the background every five minutes (src/parity_job.py wall_summary, tested there).
+
   Every colour carries a word and an icon beside it, never colour alone:
     ✓ green   on pace / ready        ▲ amber   slow, waiting for SolidWorks, Document Manager
     ✕ red     late, silent, erring, offline       ○ grey   a planned machine not yet connected
@@ -30,9 +38,10 @@
     --sans:"Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
   }
   *{box-sizing:border-box}
-  html,body{margin:0;height:100%}
-  body{background:var(--bg);color:var(--ink);font-family:var(--sans);overflow:hidden;
-       font-variant-numeric:tabular-nums}
+  html,body{margin:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);overflow-x:hidden;
+       overflow-y:auto;font-variant-numeric:tabular-nums;min-height:100vh}
   /* THE ROOM: a faint engineering grid, a vignette and one slow scan line. */
   body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
     background:
@@ -45,11 +54,14 @@
   @keyframes scan{to{transform:translateY(calc(100vh + 140px))}}
   @media (prefers-reduced-motion: reduce){body::after{display:none}.pulse,.live-dot{animation:none!important}}
 
-  .wall{position:relative;z-index:1;height:100vh;display:grid;gap:12px;padding:14px 18px 10px;
-        grid-template-rows:auto auto minmax(0,1.9fr) minmax(0,1fr) auto}
+  .wall{position:relative;z-index:1;display:flex;flex-direction:column;gap:12px;padding:14px 18px 10px}
+  /* The operations view: the screen's height, less the header and the ticker, but never less
+     than the height its panels need. Shorter than that, the page scrolls. */
+  .ops{display:grid;gap:12px;height:max(calc(100vh - 106px), 800px);
+       grid-template-rows:auto minmax(0,1.9fr) minmax(0,1fr);scroll-margin-top:12px}
 
   /* ── HEADER ─────────────────────────────────────────────── */
-  header{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:16px}
+  header{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:16px}
   .brand{display:flex;align-items:center;gap:12px;min-width:0}
   .mark{width:38px;height:38px;flex:none}
   .brand h1{margin:0;font-family:var(--mono);font-size:17px;letter-spacing:.18em;font-weight:600;
@@ -59,7 +71,9 @@
               margin-top:3px;white-space:nowrap}
   .banner{display:flex;align-items:center;gap:10px;padding:9px 18px;border-radius:999px;
           border:1px solid var(--line-hi);background:var(--panel);font-family:var(--mono);
-          font-size:13px;letter-spacing:.12em;text-transform:uppercase;white-space:nowrap}
+          font-size:13px;letter-spacing:.12em;text-transform:uppercase;white-space:nowrap;
+          justify-self:center;max-width:100%;min-width:0;overflow:hidden}
+  .banner #bannerText{overflow:hidden;text-overflow:ellipsis}
   .banner .ico{font-size:15px}
   .banner.green{border-color:rgba(12,163,12,.55);box-shadow:0 0 22px rgba(12,163,12,.18)}
   .banner.amber{border-color:rgba(250,178,25,.6);box-shadow:0 0 22px rgba(250,178,25,.2)}
@@ -70,15 +84,18 @@
   .clock{font-family:var(--mono);font-size:34px;font-weight:600;letter-spacing:.04em;line-height:1}
   .date{font-family:var(--mono);font-size:11px;color:var(--ink-3);letter-spacing:.12em;margin-top:4px}
   .link{font-family:var(--mono);font-size:11px;color:var(--ink-2);display:flex;align-items:center;
-        gap:7px;letter-spacing:.06em}
+        gap:7px;letter-spacing:.06em;white-space:nowrap}
   .live-dot{width:9px;height:9px;border-radius:50%;background:var(--good);
             box-shadow:0 0 10px var(--good);animation:blink 2s ease-in-out infinite}
   .live-dot.lost{background:var(--bad);box-shadow:0 0 10px var(--bad)}
   @keyframes blink{50%{opacity:.35}}
   .fsbtn{font-family:var(--mono);font-size:11px;color:var(--ink-2);background:transparent;
          border:1px solid var(--line-hi);border-radius:6px;padding:6px 9px;cursor:pointer;
-         letter-spacing:.06em}
+         letter-spacing:.06em;white-space:nowrap}
   .fsbtn:hover{color:var(--ink);border-color:var(--accent)}
+  /* A narrower screen keeps the header on one line: the link says itself by its dot alone,
+     and full screen by its symbol. */
+  @media (max-width:1600px){ #linkText,.fsbtn .wide{display:none} .clockbox{gap:12px} }
 
   /* ── PANELS ─────────────────────────────────────────────── */
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;min-height:0;
@@ -207,7 +224,7 @@
   .empty{color:var(--ink-3);font-size:12.5px;padding:6px 2px}
 
   /* ── BOTTOM: CHARTS + FEED ──────────────────────────────── */
-  .bottom{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1.25fr) minmax(0,1fr);gap:12px;min-height:0}
+  .bottom{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.2fr);gap:12px;min-height:0}
   .chart{display:flex;flex-direction:column}
   .chart .plot{flex:1;min-height:0;position:relative;margin:4px 10px 4px}
   .chart svg{display:block;width:100%;height:100%;overflow:visible}
@@ -220,7 +237,8 @@
   .refline.p90{stroke-dasharray:2 4;stroke:var(--ink-3)}
   .reflabel{fill:var(--ink-2);font-family:var(--mono);font-size:10px}
   .bar:hover{filter:brightness(1.25)}
-  .feed{padding:8px 12px 10px;overflow:hidden;display:flex;flex-direction:column}
+  .feed{padding:8px 12px 10px;overflow-x:hidden;overflow-y:auto;display:flex;flex-direction:column;
+        scrollbar-width:thin;scrollbar-color:var(--line-hi) transparent}
   .feed table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
   .feed td{padding:5px 6px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;
            text-overflow:ellipsis}
@@ -237,7 +255,8 @@
 
   /* ── TICKER ─────────────────────────────────────────────── */
   .ticker{display:flex;align-items:center;gap:12px;height:30px;border-top:1px solid var(--line);
-          font-family:var(--mono);font-size:12px;color:var(--ink-2);overflow:hidden;white-space:nowrap}
+          font-family:var(--mono);font-size:12px;color:var(--ink-2);overflow:hidden;white-space:nowrap;
+          position:sticky;bottom:0;z-index:5;background:var(--bg);padding:0 18px}
   .ticker .tag{color:var(--accent);letter-spacing:.2em;font-size:10.5px;flex:none}
   .ticker .run{display:inline-block;padding-left:100%;animation:tick 38s linear infinite}
   .ticker .run.still{padding-left:0;animation:none}
@@ -249,16 +268,50 @@
        display:none;max-width:280px}
   .tip b{font-family:var(--mono)}
   .tip .m{color:var(--ink-2);font-size:11.5px;margin-top:2px}
-  .stale .main,.stale .bottom,.stale .kpis{opacity:.45;filter:grayscale(.6)}
+  .stale .main,.stale .bottom,.stale .kpis,.stale .parity{opacity:.45;filter:grayscale(.6)}
   .hidecursor{cursor:none}
+
+  /* ── PARITY (D-741) ─────────────────────────────────────── */
+  .nav{display:flex;gap:6px}
+  .nav a,.nav button{text-decoration:none}
+  .nav .on{color:var(--ink);border-color:var(--accent);box-shadow:0 0 10px rgba(34,211,238,.25)}
+  .parity{display:flex;flex-direction:column;gap:12px;scroll-margin-top:12px;padding-bottom:8px}
+  .sechead{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+           border-top:1px solid var(--line-hi);padding-top:16px;margin-top:6px}
+  .sechead h2{margin:0;font-family:var(--mono);font-size:15px;letter-spacing:.2em;font-weight:600}
+  .sechead h2 b{color:var(--accent);font-weight:600}
+  .sechead .sub{font-family:var(--mono);font-size:11px;color:var(--ink-3);letter-spacing:.08em;margin-top:4px}
+  .sechead .acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .sechead .meta{font-family:var(--mono);font-size:11px;color:var(--ink-2)}
+  .prow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+  .prow .chart{height:300px}
+  .prow.wide{grid-template-columns:minmax(0,2fr) minmax(0,1fr)}
+  .ptable{padding:8px 12px 10px;overflow:auto;max-height:440px;scrollbar-width:thin;
+          scrollbar-color:var(--line-hi) transparent}
+  .ptable table{width:100%;border-collapse:collapse;font-size:12px}
+  .ptable th{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--ink-3);
+             text-transform:uppercase;text-align:left;font-weight:500;padding:6px 6px;
+             border-bottom:1px solid var(--line-hi);position:sticky;top:0;background:#0c131b}
+  .ptable td{padding:6px 6px;border-bottom:1px solid var(--line);white-space:nowrap}
+  .ptable td.n,.ptable th.n{text-align:right;font-family:var(--mono)}
+  .ptable td.d{font-family:var(--mono);color:var(--ink)}
+  .ptable td.t{font-family:var(--mono);color:var(--ink-3)}
+  .ptable td.c{color:var(--ink-2);max-width:200px;overflow:hidden;text-overflow:ellipsis}
+  .ptable a{color:var(--accent);text-decoration:none;font-family:var(--mono);font-size:11px}
+  .ptable a:hover{text-decoration:underline}
+  .ptable .why{display:block;font-size:10.5px;color:var(--ink-3);white-space:normal;max-width:360px}
+  .pmsg{padding:28px 18px;color:var(--ink-2);font-size:13.5px;text-align:center}
+  .pmsg b{font-family:var(--mono);color:var(--ink)}
+  .parity .kpi .s{white-space:normal;line-height:1.4}
+  @media (max-width:1500px){ .parity .kpis{grid-template-columns:repeat(4,minmax(0,1fr))} }
 
   /* A smaller screen still reads: the wall stacks and scrolls rather than clipping. */
   @media (max-width:1200px){
-    body{overflow:auto} .wall{height:auto}
+    .ops{height:auto;grid-template-rows:none}
     .kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
-    .main,.bottom{grid-template-columns:1fr} .lanes{grid-template-columns:1fr}
-    .lane{min-height:300px} .chart{min-height:240px} header{grid-template-columns:1fr}
-    .clockbox{justify-self:start}
+    .main,.bottom,.prow,.prow.wide{grid-template-columns:1fr} .lanes{grid-template-columns:1fr}
+    .lane{min-height:300px} .chart{min-height:240px} .feed{max-height:460px}
+    header{grid-template-columns:1fr} .clockbox{justify-self:start;flex-wrap:wrap}
   }
 </style>
 </head>
@@ -280,11 +333,17 @@
     <div class="banner grey" id="banner"><span class="ico">○</span><span id="bannerText">Connecting…</span></div>
     <div class="clockbox">
       <div class="link"><span class="live-dot" id="liveDot"></span><span id="linkText">connecting</span></div>
-      <button class="fsbtn" id="fsBtn" type="button" title="Full screen (F)">⛶ FULL SCREEN</button>
+      <nav class="nav" aria-label="Sections">
+        <a class="fsbtn" id="navOps" href="#ops" title="Live operations (O)">OPERATIONS</a>
+        <a class="fsbtn" id="navParity" href="#parity" title="Parity: AI against manual (P)">PARITY</a>
+        <button class="fsbtn" id="cycleBtn" type="button" title="Show operations and parity in turn, 45 s each (C); ?cycle=45 starts it">⟳ CYCLE</button>
+      </nav>
+      <button class="fsbtn" id="fsBtn" type="button" title="Full screen (F)">⛶<span class="wide"> FULL SCREEN</span></button>
       <div><div class="clock" id="clock">--:--:--</div><div class="date" id="date"></div></div>
     </div>
   </header>
 
+  <div class="ops" id="ops">
   <section class="kpis" id="kpis"></section>
 
   <section class="main">
@@ -325,10 +384,79 @@
       <table id="recent"></table>
     </div>
   </section>
+  </div>
 
-  <div class="ticker"><span class="tag">ALERTS</span><span style="overflow:hidden;flex:1"><span class="run still" id="ticker">—</span></span>
-    <span class="foot" id="foot"></span></div>
+  <!-- ══ PARITY: THE AI ESTIMATE AGAINST THE MANUAL ONE (D-741) ══════════════════════════ -->
+  <section class="parity" id="parity">
+    <div class="sechead">
+      <div>
+        <h2>PARITY <b>//</b> AI AGAINST MANUAL ESTIMATES</h2>
+        <div class="sub" id="pSub">Each drawing's newest comparison · bands at the comparator's own thresholds</div>
+      </div>
+      <div class="acts">
+        <span class="meta" id="pRead">reading the parity folder…</span>
+        <button class="fsbtn" id="pRefresh" type="button" title="Read the parity folder again now">↻ READ AGAIN</button>
+        <a class="fsbtn" href="/estimating#pjCard" target="_blank" rel="noopener" style="text-decoration:none">PARITY BY JOB NUMBER ↗</a>
+      </div>
+    </div>
+    <div id="pBody">
+      <div class="panel pmsg" id="pMsg">Reading the parity folder…</div>
+    </div>
+    <div id="pMain" hidden>
+      <section class="kpis" id="pKpis"></section>
+      <div class="prow" style="margin-top:12px">
+        <div class="panel chart">
+          <div class="ptitle"><span><b>Where parity stands</b> · unit cost variance</span><span class="r" id="pDistN"></span></div>
+          <div class="plot" id="pDist"></div>
+          <div class="legend"><span><i style="background:var(--good)"></i>✓ match</span>
+            <span><i style="background:var(--warn)"></i>▲ warning</span>
+            <span><i style="background:var(--bad)"></i>✕ outside</span>
+            <span>← AI cheaper · AI dearer →</span></div>
+        </div>
+        <div class="panel chart">
+          <div class="ptitle"><span><b>Median variance</b> · by week</span><span class="r">% of the manual unit cost</span></div>
+          <div class="plot" id="pTrend"></div>
+          <div class="legend"><span>┄ the comparator's match and warning thresholds · each drawing once a week</span></div>
+        </div>
+        <div class="panel chart">
+          <div class="ptitle"><span><b>Comparisons</b> · by week</span><span class="r">drawings compared</span></div>
+          <div class="plot" id="pWeeks"></div>
+          <div class="legend"><span><i style="background:var(--good)"></i>✓ match</span>
+            <span><i style="background:var(--warn)"></i>▲ warning</span>
+            <span><i style="background:var(--bad)"></i>✕ outside</span>
+            <span><i style="background:var(--grey)"></i>○ not comparable</span></div>
+        </div>
+      </div>
+      <div class="prow" style="margin-top:12px">
+        <div class="panel chart" style="height:340px">
+          <div class="ptitle"><span><b>Cost lines</b> · median variance</span><span class="r" id="pAreasN"></span></div>
+          <div class="plot" id="pAreas"></div>
+          <div class="legend"><span>← AI under · AI over → · colour by the median's band · n = comparisons reading both sides</span></div>
+        </div>
+        <div class="panel" style="height:340px;display:flex;flex-direction:column">
+          <div class="ptitle"><span><b>By client</b></span><span class="r" id="pClientsN"></span></div>
+          <div class="ptable" id="pClients"></div>
+        </div>
+        <div class="panel" style="height:340px;display:flex;flex-direction:column">
+          <div class="ptitle"><span><b>Re-estimated</b> · first run against latest</span><span class="r" id="pMoversN"></span></div>
+          <div class="ptable" id="pMovers"></div>
+        </div>
+      </div>
+      <div class="prow wide" style="margin-top:12px">
+        <div class="panel" style="display:flex;flex-direction:column">
+          <div class="ptitle"><span><b>Parity runs</b> · newest first</span><span class="r" id="pRecentN"></span></div>
+          <div class="ptable" id="pRecent"></div>
+        </div>
+        <div class="panel" style="display:flex;flex-direction:column">
+          <div class="ptitle"><span><b>Period comparisons</b></span><span class="r" id="pPeriodsN"></span></div>
+          <div class="ptable" id="pPeriods"></div>
+        </div>
+      </div>
+    </div>
+  </section>
 </div>
+<div class="ticker"><span class="tag">ALERTS</span><span style="overflow:hidden;flex:1"><span class="run still" id="ticker">—</span></span>
+  <span class="foot" id="foot"></span></div>
 <div class="tip" id="tip"></div>
 
 <script>
@@ -386,6 +514,7 @@ async function poll(){
   }catch(e){
     $("liveDot").classList.add("lost");
     $("linkText").textContent = "link lost · retrying (" + (e && e.message ? e.message : e) + ")";
+    $("liveDot").title = $("linkText").textContent;
     if(Date.now() - lastOk > 20000) $("wall").classList.add("stale");
   }finally{
     setTimeout(poll, POLL_MS);
@@ -408,6 +537,7 @@ function render(){
   renderActivity(s.series.activity_24h || []);
   renderRecent(s.recent || []);
   renderTicker(s.alerts || []);
+  renderParity(s.parity);
 }
 
 function renderKpis(k, exp){
@@ -626,9 +756,9 @@ function renderRecent(rows){
   if(!rows.length){ $("recent").innerHTML = '<tr><td class="c">Nothing has finished yet.</td></tr>'; return; }
   const word = {done:"Completed", failed:"Failed", stopped:"Stopped"};
   const icon = {done:"✓", failed:"✕", stopped:"■"};
-  rows = rows.slice(0, 9);                       // two lines each now: the open items under the client
-  $("recent").innerHTML = '<colgroup><col style="width:50px"><col style="width:26%"><col>'
-    + '<col style="width:98px"><col style="width:62px"></colgroup>' + rows.map(r => `<tr>
+  // Every run the service sends (12): the panel scrolls inside itself, nothing is cut off.
+  $("recent").innerHTML = '<colgroup><col style="width:52px"><col style="width:31%"><col>'
+    + '<col style="width:96px"><col style="width:58px"></colgroup>' + rows.map(r => `<tr>
       <td class="t">${r.finished_at ? fmtClock(r.finished_at) : ""}</td>
       <td class="d">${esc(r.drawing_number)}</td>
       <td class="c">${esc(r.client || "")}${r.job_type ? " · extract" : ""}${openItems(r.open_items)}</td>
@@ -665,6 +795,7 @@ function tick(){
     if(age < 15){
       $("liveDot").classList.remove("lost");
       $("linkText").textContent = `live · updated ${Math.round(age)}s ago`;
+      $("liveDot").title = $("linkText").textContent;
     }
   }
   $("foot").textContent = (commit ? "service " + String(commit).slice(0, 7) + " · " : "") + "refreshes every " + POLL_MS / 1000 + "s";
@@ -687,6 +818,297 @@ function fullscreen(){
 $("fsBtn").addEventListener("click", fullscreen);
 document.addEventListener("keydown", e => { if(e.key === "f" || e.key === "F") fullscreen(); });
 let resizeT; addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(render, 150); });
+
+
+/* ══ PARITY (D-741): drawn from the service's `parity`, read from the parity share ════════
+   Green, amber and red are the comparator's own bands, always with ✓ ▲ ✕ and a word: within
+   its match threshold, within its warning threshold, outside it. Direction is position: left
+   of level the AI is cheaper, right of it dearer. Nothing here is worked out on the page. */
+const BAND = {match:"var(--good)", warning:"var(--warn)", fail:"var(--bad)"};
+const OUTCOME = {match:["green", "Match"], warning:["amber", "Warning"], fail:["red", "Outside"],
+                 "quantities differ":["grey", "Quantities differ"], "not compared":["grey", "Not compared"],
+                 review:["grey", "To review"]};
+function pct(v, signed){
+  if(v == null || !isFinite(v)) return "—";
+  const a = Math.abs(v), t = a >= 100 ? a.toFixed(0) : a >= 10 ? a.toFixed(1) : a.toFixed(2);
+  return (signed ? (v > 0 ? "+" : v < 0 ? "−" : "±") : "") + t + "%";
+}
+function gbp(v){ return v == null || !isFinite(v) ? "—" : "£" + Number(v).toLocaleString("en-GB", {minimumFractionDigits:2, maximumFractionDigits:2}); }
+function fmtStamp(st){
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?: (\d{2})-(\d{2}))?/.exec(String(st || ""));
+  if(!m) return esc(st || "");
+  const mon = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][Number(m[2]) - 1];
+  return `${Number(m[3])} ${mon}${m[4] ? " " + m[4] + ":" + m[5] : ""}`;
+}
+function bandOf(absPct, th){ return absPct == null ? null : absPct <= th.match ? "match" : absPct <= th.warning ? "warning" : "fail"; }
+function outcomeBadge(o){ const [rag, word] = OUTCOME[o] || ["grey", o || "—"]; return badge(rag, word); }
+function setText(id, t){ const el = $(id); if(el) el.textContent = t; }
+
+let parityKey = "";
+function renderParity(p){
+  const msg = $("pMsg"), main = $("pMain");
+  if(!p){ return; }
+  const age = p.age_s == null ? "" : p.age_s < 90 ? "just now" : Math.round(p.age_s / 60) + " min ago";
+  setText("pRead", p.state === "ready"
+    ? `read ${age}${p.refreshing ? " · reading again…" : ""} · every ${Math.round((p.every_s || 300) / 60)} min`
+    : p.state === "reading" ? "reading the parity folder…" : "not read");
+  if(p.state !== "ready" || p.reachable === false){
+    main.hidden = true; msg.hidden = false;
+    msg.innerHTML = p.state === "reading" ? "Reading the parity folder… the first read can take a minute on the share."
+      : p.reachable === false ? `${esc(p.note || "The parity folder could not be read.")}<br><span style="color:var(--ink-3)">Set SDI_PARITY_ROOT on this service if it lives elsewhere.</span>`
+      : `The parity view could not be read: <b>${esc(p.read_error || "no answer")}</b>`;
+    return;
+  }
+  // Redraw only when the read or the screen changed: the share is read every few minutes.
+  const key = `${p.read_at}|${innerWidth}x${innerHeight}`;
+  if(key === parityKey) return;
+  parityKey = key;
+  msg.hidden = true; main.hidden = false;
+  const k = p.kpis || {}, th = p.thresholds || {match:3, warning:10};
+  setText("pSub", `Each drawing's newest comparison · ✓ within ±${th.match}% · ▲ within ±${th.warning}% · ✕ outside · ${p.root || ""}`);
+  renderParityKpis(k, th);
+  renderParityDist(p.distribution || [], th, k);
+  renderParityTrend(p.trend || [], th);
+  renderParityWeeks(p.trend || []);
+  renderParityAreas(p.cost_areas || {}, th);
+  renderParityClients(p.by_client || [], p.clients_left_out || 0, th);
+  renderParityMovers(p.movers || {});
+  renderParityRecent(p.recent || [], th);
+  renderParityPeriods(p.periods || [], th);
+}
+
+function renderParityKpis(k, th){
+  const l30 = k.last_30_days || {}, ch = k.median_abs_change_30d;
+  const within = k.within_warning_pct;
+  const notComp = (k.drawings || 0) - (k.compared || 0);
+  const tiles = [
+    ["Drawings compared", `${k.compared ?? 0}<small>/ ${k.drawings ?? 0}</small>`,
+     `${k.comparisons ?? 0} comparisons filed · ${k.this_week ?? 0} this week`],
+    [`Within ±${th.warning}%`, within == null ? "—" : `${within}<small>%</small>`,
+     `✓ ${k.match ?? 0} match · ▲ ${k.warning ?? 0} warning · ✕ ${k.fail ?? 0} outside`],
+    [`Within ±${th.match}%`, k.within_match_pct == null ? "—" : `${k.within_match_pct}<small>%</small>`,
+     `${k.match ?? 0} of ${k.compared ?? 0} at the match threshold`],
+    ["Median variance", k.median_abs_pct == null ? "—" : `${pct(k.median_abs_pct)}`,
+     `mean ${pct(k.mean_abs_pct)} · unit cost against the manual`],
+    ["Direction", k.median_signed_pct == null ? "—" : pct(k.median_signed_pct, true),
+     `AI dearer on ${k.ai_dearer ?? 0} · cheaper on ${k.ai_cheaper ?? 0}`],
+    ["Median · last 30 days", l30.median_abs_pct == null ? "—" : pct(l30.median_abs_pct),
+     ch == null ? `${l30.compared ?? 0} comparable · nothing in the 30 days before to set against`
+       : `${ch < 0 ? "▼ down" : ch > 0 ? "▲ up" : "= level"}${ch ? " " + Math.abs(ch).toFixed(1) + " pts" : ""} on the 30 days before · ${l30.compared ?? 0} comparable`],
+    ["Re-estimated", `${k.re_estimated ?? 0}`,
+     k.re_estimated ? `▼ closer on ${k.closer ?? 0} · ▲ further on ${k.further ?? 0}` : "no drawing compared from two AI runs yet"],
+    ["Not comparable", `${notComp}`,
+     `${k.quantities_differ ?? 0} quantities differ · ${k.not_compared ?? 0} not compared · ${k.review ?? 0} to review`],
+  ];
+  $("pKpis").innerHTML = tiles.map(([key, v, sub]) =>
+    `<div class="panel kpi"><div class="k">${esc(key)}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`).join("");
+}
+
+function emptyPlot(el, w, h, text){
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}"><text x="${w / 2}" y="${h / 2}" text-anchor="middle" class="reflabel">${esc(text)}</text></svg>`;
+}
+function roundTopBar(x, top, bw, base, col, tip){
+  const hh = Math.max(1.5, base - top), rr = Math.min(4, bw / 2, hh);
+  return `<path class="bar" ${tip ? `data-tip="${esc(tip)}"` : ""} fill="${col}" d="M${x},${base} V${top + rr} Q${x},${top} ${x + rr},${top} H${x + bw - rr} Q${x + bw},${top} ${x + bw},${top + rr} V${base} Z"/>`;
+}
+
+function renderParityDist(bins, th, k){
+  const el = $("pDist"), {w, h} = box(el);
+  const total = bins.reduce((a, b) => a + b.count, 0);
+  setText("pDistN", total ? `${total} drawing${total > 1 ? "s" : ""}` : "");
+  if(!total){ emptyPlot(el, w, h, "No comparable comparison filed yet"); return; }
+  const L = 26, R = 8, T = 16, B = 30, pw = w - L - R, ph = h - T - B;
+  const ymax = niceMax(Math.max(1, ...bins.map(b => b.count)));
+  const y = v => T + ph - (v / ymax) * ph;
+  const slot = pw / bins.length, bw = Math.max(6, Math.min(56, slot - 8));
+  const short = b => b.lo == null ? `< −${Math.abs(b.hi)}` : b.hi == null ? `> +${b.lo}` : b.lo < 0 && b.hi > 0 ? `±${b.hi}` : `${b.lo > 0 ? "+" : "−"}${Math.abs(b.lo)}…${Math.abs(b.hi)}`;
+  let g = `<g class="grid">${[0, .5, 1].map(f => `<line x1="${L}" x2="${L + pw}" y1="${y(ymax * f)}" y2="${y(ymax * f)}"/>`).join("")}</g>`;
+  g += `<g class="axis">${[0, 1].map(f => `<text x="${L - 6}" y="${y(ymax * f) + 3}" text-anchor="end">${Math.round(ymax * f)}</text>`).join("")}`;
+  bins.forEach((b, i) => { g += `<text x="${L + i * slot + slot / 2}" y="${T + ph + 14}" text-anchor="middle">${esc(short(b))}%</text>`; });
+  g += `</g>`;
+  const mid = L + 3.5 * slot;
+  g += `<line class="refline p90" x1="${mid}" x2="${mid}" y1="${T - 6}" y2="${T + ph}"/>`;
+  bins.forEach((b, i) => {
+    const x = L + i * slot + (slot - bw) / 2;
+    const word = {match:"✓ match", warning:"▲ warning", fail:"✕ outside"}[b.band];
+    const tip = `<b>${esc(b.label)}</b><div class="m">${word} · ${b.count} drawing${b.count === 1 ? "" : "s"}</div>${b.drawings.length ? `<div class="m">${b.drawings.map(esc).join("<br>")}${b.count > b.drawings.length ? "<br>…" : ""}</div>` : ""}`;
+    if(b.count) g += roundTopBar(x, y(b.count), bw, T + ph, BAND[b.band], tip);
+    if(b.count) g += `<text class="reflabel" x="${x + bw / 2}" y="${y(b.count) - 5}" text-anchor="middle">${b.count}</text>`;
+    g += `<rect data-tip="${esc(tip)}" x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Drawings by unit cost variance band">${g}</svg>`;
+}
+
+function renderParityTrend(weeks, th){
+  const el = $("pTrend"), {w, h} = box(el);
+  const pts = weeks.map((x, i) => ({i, v: x.median_abs_pct, x}));
+  const vals = pts.filter(p => p.v != null).map(p => p.v);
+  if(!vals.length){ emptyPlot(el, w, h, `No comparable comparison in the last ${weeks.length} weeks`); return; }
+  const L = 34, R = 70, T = 10, B = 20, pw = w - L - R, ph = h - T - B;
+  const ymax = niceMax(Math.max(th.warning * 1.25, ...vals));
+  const y = v => T + ph - (Math.min(v, ymax) / ymax) * ph;
+  const slot = pw / Math.max(weeks.length, 1), cx = i => L + i * slot + slot / 2;
+  let g = `<g class="grid">${[0, .5, 1].map(f => `<line x1="${L}" x2="${L + pw}" y1="${y(ymax * f)}" y2="${y(ymax * f)}"/>`).join("")}</g>`;
+  g += `<g class="axis">${[0, .5, 1].map(f => `<text x="${L - 6}" y="${y(ymax * f) + 3}" text-anchor="end">${Math.round(ymax * f)}%</text>`).join("")}`;
+  weeks.forEach((x, i) => { if(i % 2 === (weeks.length - 1) % 2) g += `<text x="${cx(i)}" y="${T + ph + 14}" text-anchor="middle">${esc(x.label)}</text>`; });
+  g += `</g>`;
+  let lm = y(th.match), lw = y(th.warning);
+  if(Math.abs(lm - lw) < 13){ const m = (lm + lw) / 2; lw = m - 7; lm = m + 7; }
+  [[th.warning, lw, "warning"], [th.match, lm, "match"]].forEach(([v, ly, word]) => {
+    g += `<line class="refline p90" x1="${L}" x2="${L + pw}" y1="${y(v)}" y2="${y(v)}"/>`;
+    g += `<text class="reflabel" x="${L + pw + 6}" y="${ly + 3}">${word} ${v}%</text>`;
+  });
+  // The line breaks over a week with nothing comparable rather than drawing through it.
+  let d = "", open = false;
+  pts.forEach(p => { if(p.v == null){ open = false; return; } d += `${open ? "L" : "M"}${cx(p.i).toFixed(1)},${y(p.v).toFixed(1)} `; open = true; });
+  g += `<path d="${d}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  pts.forEach(p => {
+    const x = p.x;
+    const tip = `<b>Week of ${esc(x.label)}</b><div class="m">${x.compared ? `median ${pct(x.median_abs_pct)} · ${x.within_warning_pct}% within ±${th.warning}%` : "nothing comparable"}</div><div class="m">✓ ${x.match} · ▲ ${x.warning} · ✕ ${x.fail} · ○ ${x.not_comparable} not comparable</div>`;
+    if(p.v != null) g += `<circle cx="${cx(p.i)}" cy="${y(p.v)}" r="4" fill="var(--accent)" stroke="var(--bg)" stroke-width="2"/>`;
+    g += `<rect data-tip="${esc(tip)}" x="${L + p.i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>`;
+  });
+  const last = [...pts].reverse().find(p => p.v != null);
+  if(last) g += `<text class="reflabel" x="${cx(last.i)}" y="${y(last.v) - 9}" text-anchor="middle" style="fill:var(--ink)">${pct(last.v)}</text>`;
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Median unit cost variance by week">${g}</svg>`;
+}
+
+function renderParityWeeks(weeks){
+  const el = $("pWeeks"), {w, h} = box(el);
+  if(!weeks.some(x => x.drawings)){ emptyPlot(el, w, h, `No comparison filed in the last ${weeks.length} weeks`); return; }
+  const L = 26, R = 8, T = 10, B = 20, pw = w - L - R, ph = h - T - B;
+  const ymax = niceMax(Math.max(1, ...weeks.map(x => x.drawings)));
+  const y = v => T + ph - (v / ymax) * ph;
+  const slot = pw / weeks.length, bw = Math.max(4, Math.min(30, slot - 4));
+  let g = `<g class="grid">${[0, .5, 1].map(f => `<line x1="${L}" x2="${L + pw}" y1="${y(ymax * f)}" y2="${y(ymax * f)}"/>`).join("")}</g>`;
+  g += `<g class="axis">${[0, 1].map(f => `<text x="${L - 6}" y="${y(ymax * f) + 3}" text-anchor="end">${Math.round(ymax * f)}</text>`).join("")}`;
+  weeks.forEach((x, i) => { if(i % 2 === (weeks.length - 1) % 2) g += `<text x="${L + i * slot + slot / 2}" y="${T + ph + 14}" text-anchor="middle">${esc(x.label)}</text>`; });
+  g += `</g>`;
+  weeks.forEach((x, i) => {
+    const bx = L + i * slot + (slot - bw) / 2;
+    let base = T + ph;
+    const segs = [["match", "var(--good)"], ["warning", "var(--warn)"], ["fail", "var(--bad)"], ["not_comparable", "var(--grey)"]].filter(([kk]) => x[kk] > 0);
+    segs.forEach(([kk, col], j) => {
+      const hh = (x[kk] / ymax) * ph, top = base - hh + (j > 0 ? 2 : 0);
+      const isTop = j === segs.length - 1, rr = isTop ? Math.min(4, bw / 2, hh) : 0;
+      g += `<path fill="${col}" d="M${bx},${base} V${top + rr} ${rr ? `Q${bx},${top} ${bx + rr},${top} H${bx + bw - rr} Q${bx + bw},${top} ${bx + bw},${top + rr}` : `H${bx + bw}`} V${base} Z"/>`;
+      base -= hh;
+    });
+    const tip = `<b>Week of ${esc(x.label)}</b><div class="m">${x.drawings} drawing${x.drawings === 1 ? "" : "s"} · ${x.comparisons} comparison${x.comparisons === 1 ? "" : "s"} filed</div><div class="m">✓ ${x.match} match · ▲ ${x.warning} warning · ✕ ${x.fail} outside · ○ ${x.not_comparable} not comparable</div>`;
+    g += `<rect data-tip="${esc(tip)}" x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Drawings compared per week by outcome">${g}</svg>`;
+}
+
+function renderParityAreas(ca, th){
+  const el = $("pAreas"), {w, h} = box(el), areas = ca.areas || [];
+  setText("pAreasN", ca.from_comparisons ? `from ${ca.from_comparisons} line-by-line comparison${ca.from_comparisons > 1 ? "s" : ""}` : "");
+  if(!areas.length){ emptyPlot(el, w, h, "No line-by-line comparison filed yet"); return; }
+  const LBL = Math.min(190, w * 0.36), R = 44, T = 6, B = 16, pw = w - LBL - R, ph = h - T - B;
+  const ext = niceMax(Math.max(th.warning * 1.5, ...areas.map(a => Math.abs(a.median_signed_pct || 0))));
+  const x = v => LBL + pw / 2 + (Math.max(-ext, Math.min(ext, v)) / ext) * (pw / 2);
+  const row = ph / areas.length, bh = Math.max(6, Math.min(18, row - 6));
+  let g = `<g class="axis">${[-ext, 0, ext].map(v => `<text x="${x(v)}" y="${T + ph + 12}" text-anchor="middle">${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v)}%</text>`).join("")}</g>`;
+  [-th.warning, -th.match, th.match, th.warning].forEach(v => { g += `<line class="refline p90" x1="${x(v)}" x2="${x(v)}" y1="${T}" y2="${T + ph}"/>`; });
+  g += `<line x1="${x(0)}" x2="${x(0)}" y1="${T}" y2="${T + ph}" stroke="var(--ink-3)" stroke-width="1"/>`;
+  areas.forEach((a, i) => {
+    const cy = T + i * row + row / 2, v = a.median_signed_pct || 0, band = bandOf(a.median_abs_pct, th) || "match";
+    const x0 = x(0), x1 = x(v), lo = Math.min(x0, x1), wd = Math.max(1.5, Math.abs(x1 - x0)), rr = Math.min(4, wd / 2, bh / 2);
+    const fit = Math.max(8, Math.floor((LBL - 14) / 6.4));        // characters the label column holds
+    const name = a.label.length > fit ? a.label.slice(0, fit - 1) + "…" : a.label;
+    if(a.kind === "commercial" && (i === 0 || areas[i - 1].kind !== "commercial")){
+      const sy = T + i * row;
+      g += `<line x1="8" x2="${w - 4}" y1="${sy}" y2="${sy}" stroke="var(--line-hi)" stroke-dasharray="3 4"/>`;
+      g += `<text x="8" y="${sy + 10}" class="reflabel" style="fill:var(--ink-3);font-size:9px;letter-spacing:.14em">COMMERCIAL</text>`;
+    }
+    const word = {match:"✓ match", warning:"▲ warning", fail:"✕ outside"}[band];
+    const tip = `<b>${esc(a.label)}</b><div class="m">${a.kind} · median ${pct(a.median_signed_pct, true)} · ${word}</div><div class="m">median size ${pct(a.median_abs_pct)} · ${a.outside_warning} of ${a.count} outside ±${th.warning}%</div>`;
+    g += `<text x="${LBL - 8}" y="${cy + 4}" text-anchor="end" style="fill:var(--ink-2);font-size:11.5px">${esc(name)}</text>`;
+    // The data end is rounded, the end at level is square.
+    const d = v >= 0
+      ? `M${lo},${cy - bh / 2} H${lo + wd - rr} Q${lo + wd},${cy - bh / 2} ${lo + wd},${cy - bh / 2 + rr} V${cy + bh / 2 - rr} Q${lo + wd},${cy + bh / 2} ${lo + wd - rr},${cy + bh / 2} H${lo} Z`
+      : `M${lo + wd},${cy - bh / 2} H${lo + rr} Q${lo},${cy - bh / 2} ${lo},${cy - bh / 2 + rr} V${cy + bh / 2 - rr} Q${lo},${cy + bh / 2} ${lo + rr},${cy + bh / 2} H${lo + wd} Z`;
+    g += `<path class="bar" data-tip="${esc(tip)}" fill="${BAND[band]}" d="${d}"/>`;
+    g += `<text class="reflabel" x="${v >= 0 ? lo + wd + 5 : lo - 5}" y="${cy + 4}" text-anchor="${v >= 0 ? "start" : "end"}">${pct(v, true)}</text>`;
+    g += `<text class="reflabel" x="${w - 4}" y="${cy + 4}" text-anchor="end" style="fill:var(--ink-3)">n=${a.count}</text>`;
+    g += `<rect data-tip="${esc(tip)}" x="0" y="${T + i * row}" width="${w}" height="${row}" fill="transparent"/>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Median variance by cost line, AI against manual">${g}</svg>`;
+}
+
+function renderParityClients(rows, more, th){
+  setText("pClientsN", rows.length ? `${rows.length}${more ? " of " + (rows.length + more) : ""} client${rows.length + more > 1 ? "s" : ""}` : "");
+  if(!rows.length){ $("pClients").innerHTML = '<div class="empty">No comparison filed yet.</div>'; return; }
+  $("pClients").innerHTML = `<table><tr><th>Client</th><th class="n">Drawings</th><th class="n">Comparable</th><th class="n">Within ±${th.warning}%</th><th class="n">Median</th><th class="n">Direction</th></tr>`
+    + rows.map(r => `<tr><td class="c" title="${esc(r.client)}">${esc(r.client)}</td><td class="n">${r.drawings}</td><td class="n">${r.compared}</td>
+      <td class="n">${r.within_warning_pct == null ? "—" : r.within_warning_pct + "%"}</td><td class="n">${pct(r.median_abs_pct)}</td><td class="n">${pct(r.median_signed_pct, true)}</td></tr>`).join("") + "</table>";
+}
+
+function renderParityMovers(m){
+  const rows = m.rows || [];
+  setText("pMoversN", m.drawings ? `${m.drawings} drawing${m.drawings > 1 ? "s" : ""}` : "");
+  if(!rows.length){ $("pMovers").innerHTML = '<div class="empty">No drawing has been compared from two AI runs yet. Re-estimate a compared drawing and compare it again to see whether the gap closed.</div>'; return; }
+  $("pMovers").innerHTML = `<table><tr><th>Drawing</th><th class="n">Runs</th><th class="n">First</th><th class="n">Latest</th><th>Gap</th></tr>`
+    + rows.map(r => {
+      const c = r.change_abs_pct, moved = c < -0.5 ? `▼ closer by ${Math.abs(c).toFixed(1)} pts` : c > 0.5 ? `▲ further by ${c.toFixed(1)} pts` : "= about the same";
+      return `<tr><td class="d" title="${esc(r.client || "")}">${esc(r.drawing)}</td><td class="n">${r.runs}</td>
+        <td class="n" title="${esc(r.first_stamp || "")}">${pct(r.first_pct, true)}</td><td class="n" title="${esc(r.last_stamp || "")}">${pct(r.last_pct, true)}</td>
+        <td>${esc(moved)}</td></tr>`;
+    }).join("") + "</table>";
+}
+
+function renderParityRecent(rows, th){
+  setText("pRecentN", rows.length ? `last ${rows.length}` : "");
+  if(!rows.length){ $("pRecent").innerHTML = '<div class="empty">No comparison filed yet. Parity by job number on the estimating page files one.</div>'; return; }
+  $("pRecent").innerHTML = `<table><tr><th>Filed</th><th>Drawing</th><th>Client</th><th>Outcome</th><th class="n">Variance</th><th class="n">AI</th><th class="n">Manual</th><th>Report</th></tr>`
+    + rows.map(r => {
+      const why = r.error ? r.error : r.quantity_note || "";
+      const links = [r.report_url ? `<a href="${esc(r.report_url)}" target="_blank" rel="noopener">report ↗</a>` : "",
+                     r.listen_url ? `<a href="${esc(r.listen_url)}" target="_blank" rel="noopener">listen</a>` : ""].filter(Boolean).join(" · ");
+      return `<tr><td class="t">${fmtStamp(r.stamp)}</td><td class="d">${esc(r.drawing)}</td><td class="c" title="${esc(r.client || "")}">${esc(r.client || "")}</td>
+        <td>${outcomeBadge(r.outcome)}${why ? `<span class="why">${esc(why)}</span>` : ""}</td>
+        <td class="n">${pct(r.signed_pct, true)}</td><td class="n">${gbp(r.ai_unit)}</td><td class="n">${gbp(r.manual_unit)}</td><td>${links || "—"}</td></tr>`;
+    }).join("") + "</table>";
+}
+
+function renderParityPeriods(rows, th){
+  setText("pPeriodsN", rows.length ? `last ${rows.length}` : "");
+  if(!rows.length){ $("pPeriods").innerHTML = '<div class="empty">No period comparison run yet. Run one from Parity by job number: one period, or Period A against Period B.</div>'; return; }
+  $("pPeriods").innerHTML = `<table><tr><th>Period</th><th class="n">Comparable</th><th class="n">Median</th><th class="n">Within ±${th.warning}%</th><th></th></tr>`
+    + rows.map(r => `<tr><td class="c" title="${esc(r.name)}">${r.kind === "two periods" && r.a && r.b ? `A ${esc(r.a[0])}…${esc(r.a[1])}<span class="why">B ${esc(r.b[0])}…${esc(r.b[1])}</span>` : `${esc(r.start || "")} … ${esc(r.end || "")}`}</td>
+      <td class="n">${r.compared ?? "—"}</td><td class="n">${pct(r.median_abs_pct)}</td><td class="n">${r.within_warning_pct == null ? "—" : r.within_warning_pct + "%"}</td>
+      <td>${r.summary_url ? `<a href="${esc(r.summary_url)}" target="_blank" rel="noopener">summary ↗</a>` : ""}</td></tr>`).join("") + "</table>";
+}
+
+$("pRefresh").addEventListener("click", async () => {
+  setText("pRead", "reading the parity folder again…");
+  try{ await fetch("/api/estimate/wall/parity?refresh=1", {headers:{"X-SDI-Key": API_KEY}, cache:"no-store"}); }catch(e){}
+});
+
+/* ── SECTIONS: OPERATIONS AND PARITY, AND A CYCLE BETWEEN THEM FOR THE WALL SCREEN ── */
+function show(id){
+  document.getElementById(id).scrollIntoView({behavior:"smooth", block:"start"});
+}
+function markSection(){
+  const onParity = $("parity").getBoundingClientRect().top < innerHeight * 0.45;
+  $("navParity").classList.toggle("on", onParity); $("navOps").classList.toggle("on", !onParity);
+}
+addEventListener("scroll", markSection, {passive:true});
+let cycleT = null;
+function cycle(on, secs){
+  clearInterval(cycleT); cycleT = null;
+  $("cycleBtn").classList.toggle("on", !!on);
+  if(on) cycleT = setInterval(() => show($("navParity").classList.contains("on") ? "ops" : "parity"), (secs || 45) * 1000);
+}
+$("cycleBtn").addEventListener("click", () => cycle(!cycleT));
+document.addEventListener("keydown", e => {
+  if(e.target && /input|textarea/i.test(e.target.tagName)) return;
+  if(e.key === "p" || e.key === "P") show("parity");
+  if(e.key === "o" || e.key === "O") show("ops");
+  if(e.key === "c" || e.key === "C") cycle(!cycleT);
+});
+(() => { const c = Number(new URLSearchParams(location.search).get("cycle")); if(c >= 10) cycle(true, c); })();
+markSection();
 
 tick(); setInterval(tick, 1000);
 poll();

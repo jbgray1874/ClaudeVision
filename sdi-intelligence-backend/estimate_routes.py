@@ -947,8 +947,68 @@ def wall(x_sdi_key: Optional[str] = Header(default=None)):
         for rn, obj in zip(runners_now, _RUNNERS.values()):
             rn["capabilities"] = list(obj.capabilities or [])
     commit = str(getattr(_sys.modules.get("app"), "SDI_COMMIT", "") or "")
-    return estimate_wall.snapshot(runs, runners_now, max_runs=_max_concurrent_runs(),
+    snap = estimate_wall.snapshot(runs, runners_now, max_runs=_max_concurrent_runs(),
                                   service_commit=commit)
+    snap["parity"] = parity_for_wall()
+    return snap
+
+
+# THE WALL'S PARITY VIEW (D-741) is read from the parity share in the background, at most once
+# every SDI_WALL_PARITY_SECONDS (five minutes), so the wall's four-second poll never waits on
+# the share. The wall is told when it was read, and why it could not be when it could not.
+_PARITY_WALL: Dict[str, Any] = {"at": 0.0, "tried": 0.0, "body": None, "busy": False,
+                                "error": ""}
+_PARITY_WALL_LOCK = threading.Lock()
+
+
+def _parity_wall_every() -> float:
+    try:
+        return max(30.0, float(os.getenv("SDI_WALL_PARITY_SECONDS", "300") or 300))
+    except ValueError:
+        return 300.0
+
+
+def _parity_wall_read() -> None:
+    body, error = None, ""
+    try:
+        body = _parity_job(["wall"], timeout=180)
+        for row in body.get("recent") or []:
+            links = _report_links(row)
+            row["report_url"], row["listen_url"] = links["report_url"], links["listen_url"]
+        for period in body.get("periods") or []:
+            period["summary_url"] = _summary_link(period)
+    except HTTPException as exc:
+        body, error = None, str(exc.detail)
+    except Exception as exc:                                         # noqa: BLE001
+        body, error = None, f"{type(exc).__name__}: {exc}"
+    with _PARITY_WALL_LOCK:
+        if body is not None:
+            _PARITY_WALL.update(at=time.time(), body=body)
+        _PARITY_WALL.update(busy=False, error=error, tried=time.time())
+
+
+def parity_for_wall(force: bool = False) -> Dict[str, Any]:
+    """The last parity view read, starting a fresh read in the background when it is due."""
+    now = time.time()
+    with _PARITY_WALL_LOCK:
+        last = max(_PARITY_WALL["at"], _PARITY_WALL["tried"])
+        if not _PARITY_WALL["busy"] and (force or now - last >= _parity_wall_every()):
+            _PARITY_WALL["busy"] = True
+            threading.Thread(target=_parity_wall_read, daemon=True, name="wall-parity").start()
+        body, at = _PARITY_WALL["body"], _PARITY_WALL["at"]
+        busy, error = _PARITY_WALL["busy"], _PARITY_WALL["error"]
+    out = dict(body or {})
+    out.update(state="ready" if body else "reading" if busy else "unavailable",
+               read_at=at or None, age_s=round(now - at) if at else None,
+               refreshing=busy, read_error=error, every_s=_parity_wall_every())
+    return out
+
+
+@router.get("/wall/parity")
+def wall_parity(refresh: bool = False, x_sdi_key: Optional[str] = Header(default=None)):
+    """The wall's parity view alone; refresh=1 reads the share again now."""
+    _check_key(x_sdi_key)
+    return parity_for_wall(force=refresh)
 
 
 @router.post("/runner/heartbeat")

@@ -8,6 +8,7 @@ r"""Parity by job number: find both estimates, compare the filed copies, keep th
     python src\parity_job.py period --from 2026-10-01 --to 2026-10-31 [--client X] [--preview]
     python src\parity_job.py periods --a-from D --a-to D --b-from D --b-to D [--client X] [--job N]
     python src\parity_job.py history                                period comparisons already run
+    python src\parity_job.py wall                                   the control panel's parity view (D-741)
 
 JG, 1 Nov 2026 (D-619): compare one job by job number, "we take the most obvious s/sheet
 candidate and we run a parity against it from our AI estimate with html outputs", save both
@@ -61,7 +62,7 @@ import statistics
 import sys
 import time
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 from urllib.parse import quote
@@ -1001,10 +1002,287 @@ def history(parity_root: Optional[Path] = None, limit: int = 100) -> List[Dict[s
                         "compared": s.get("compared", body.get("compared")),
                         "no_manual": s.get("no manual", body.get("no_manual")),
                         "failed": s.get("failed", body.get("failed")),
+                        "median_abs_pct": s.get("median_abs_pct"),
+                        "within_warning_pct": s.get("within_warning_pct"),
                         "summary_html": str(path.parent / f"{stem}.html"),
                         "summary_portal_html": str(path.parent / f"{stem}.portal.html")})
     out.sort(key=lambda x: x["name"].rsplit("(run ", 1)[-1], reverse=True)
     return out[:limit]
+
+
+# ── the control panel's parity view (D-741) ─────────────────────────────────────────────
+# JG, 7 Nov 2026: "we should see the parity runs and all kpis/ vizualizations built into this".
+#
+# ONE READ OF THE FILED COMPARISONS, SUMMED FOR THE WALL. Every figure is a count of filed
+# comparisons, or a percentage of the manual sheet's figure as the comparator states every one,
+# and each says what it counts:
+#   * WHERE PARITY STANDS is each drawing's newest comparison that could be made. A later one
+#     that failed to compare does not hide it; a drawing that never compared counts as such.
+#   * HOW IT HAS MOVED is every comparison, week by week, each drawing once a week.
+#   * WHETHER RE-ESTIMATING CLOSED THE GAP is the drawings compared from more than one AI run:
+#     the first run's variance against the latest run's. Comparing the same run again with a
+#     newer comparator is not a new estimate and does not count as one.
+#   * Quantities that differ, and comparisons that could not be made, are counted apart and
+#     never as a match or a miss.
+
+def signed_pct(index: Dict[str, Any]) -> Optional[float]:
+    """AI against manual as a signed percentage of the manual unit cost, positive when the AI
+    is dearer; at the manual's quantity when the run's quantity sweep priced it. None when
+    either unit cost was not read."""
+    h, q = index.get("headline") or {}, index.get("quantity") or {}
+    manual = _num(h.get("manual_unit_cost_gbp"))
+    ai = _num(q.get("ai_unit_at_manual_qty"))
+    if ai is None:
+        ai = _num(h.get("ai_unit_cost_gbp"))
+    if ai is None or not manual:
+        return None
+    return round((ai - manual) / abs(manual) * 100.0, 2)
+
+
+def _abs_pct(index: Dict[str, Any]) -> Optional[float]:
+    """The comparator's own unit-cost variance, the figure its verdict was made on."""
+    p = unit_pct(index)
+    if p is None:
+        s = signed_pct(index)
+        return abs(s) if s is not None else None
+    return abs(p)
+
+
+def _drawing_key(index: Dict[str, Any]) -> tuple:
+    return (str(index.get("client") or "").strip().lower(),
+            str(index.get("drawing") or "").strip().lower())
+
+
+def _median(values: List[float]) -> Optional[float]:
+    return round(statistics.median(values), 2) if values else None
+
+
+def _newest_per_drawing(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Each drawing's newest comparison, one that compared preferred over a later failure."""
+    keep: Dict[tuple, Dict[str, Any]] = {}
+    for idx in sorted(rows, key=lambda i: str(i.get("stamp", ""))):
+        k = _drawing_key(idx)
+        if idx.get("error") and k in keep and not keep[k].get("error"):
+            continue
+        keep[k] = idx
+    return list(keep.values())
+
+
+def _standing(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Counts and variances over comparisons already reduced to one per drawing."""
+    comparable = [i for i in rows if i.get("outcome") in COMPARABLE]
+    absolute = [p for p in (_abs_pct(i) for i in comparable) if p is not None]
+    signed = [p for p in (signed_pct(i) for i in comparable) if p is not None]
+    n = len(comparable)
+    count = {k: sum(1 for i in rows if i.get("outcome") == k) for k in COMPARABLE}
+    return {"drawings": len(rows), "compared": n, **count,
+            "quantities_differ": sum(1 for i in rows if i.get("outcome") == "quantities differ"),
+            "not_compared": sum(1 for i in rows if i.get("outcome") == "not compared"),
+            "review": sum(1 for i in rows if i.get("outcome") == "review"),
+            "within_match_pct": round(100.0 * count["match"] / n, 1) if n else None,
+            "within_warning_pct": (round(100.0 * (count["match"] + count["warning"]) / n, 1)
+                                   if n else None),
+            "median_abs_pct": _median(absolute),
+            "mean_abs_pct": round(statistics.mean(absolute), 2) if absolute else None,
+            "median_signed_pct": _median(signed),
+            "ai_dearer": sum(1 for p in signed if p > 0),
+            "ai_cheaper": sum(1 for p in signed if p < 0)}
+
+
+def _bins(comparable: List[Dict[str, Any]], match: float, warn: float) -> List[Dict[str, Any]]:
+    """The signed variance of each drawing's standing comparison, in bands either side of
+    level: the comparator's match and warning thresholds, and twice the warning one."""
+    far = 2.0 * warn
+    edges = [(None, -far, "fail"), (-far, -warn, "fail"), (-warn, -match, "warning"),
+             (-match, match, "match"), (match, warn, "warning"), (warn, far, "fail"),
+             (far, None, "fail")]
+
+    def name(lo, hi):
+        if lo is None:
+            return f"AI under by more than {far:g}%"
+        if hi is None:
+            return f"AI over by more than {far:g}%"
+        if lo < 0 < hi:
+            return f"within ±{hi:g}%"
+        return f"{lo:+g}% to {hi:+g}%"
+    out = [{"label": name(lo, hi), "lo": lo, "hi": hi, "band": band, "count": 0, "drawings": []}
+           for lo, hi, band in edges]
+    for idx in comparable:
+        p = signed_pct(idx)
+        if p is None:
+            continue
+        # Each threshold belongs to the band inside it, as the comparator's verdict has it.
+        a = abs(p)
+        step = 0 if a <= match else 1 if a <= warn else 2 if a <= far else 3
+        b = out[3 + step] if p >= 0 else out[3 - step]
+        b["count"] += 1
+        if len(b["drawings"]) < 8:
+            b["drawings"].append(f"{idx.get('drawing')} {p:+.1f}%")
+    return out
+
+
+def _weekly(rows: List[Dict[str, Any]], today: date, weeks: int) -> List[Dict[str, Any]]:
+    """Each of the last `weeks` weeks, Monday to Sunday: the comparisons filed in it, each
+    drawing once (its newest that week)."""
+    monday = today - timedelta(days=today.weekday())
+    out = []
+    for back in range(weeks - 1, -1, -1):
+        start = monday - timedelta(days=7 * back)
+        end = start + timedelta(days=7)
+        inside = [i for i in rows if i["_when"] and start <= i["_when"].date() < end]
+        s = _standing(_newest_per_drawing(inside))
+        out.append({"week": start.isoformat(), "label": f"{start.day} {start.strftime('%b')}",
+                    "comparisons": len(inside), "drawings": s["drawings"],
+                    "compared": s["compared"], "match": s["match"], "warning": s["warning"],
+                    "fail": s["fail"], "not_comparable": s["drawings"] - s["compared"],
+                    "median_abs_pct": s["median_abs_pct"],
+                    "within_warning_pct": s["within_warning_pct"]})
+    return out
+
+
+def _line_pct(line: Dict[str, Any]) -> Optional[float]:
+    a, m = _num(line.get("ai")), _num(line.get("manual"))
+    if a is None or not m:
+        return None
+    return round((a - m) / abs(m) * 100.0, 2)
+
+
+_COST_ORDER = ("Total material cost", "Total labour cost", "Rebate and overhead absorption",
+               "Total unit cost", "Sell price")
+
+
+def _cost_areas(standing: List[Dict[str, Any]], warn: float, limit: int = 10) -> Dict[str, Any]:
+    """Each cost line and commercial category across the standing comparisons made line by
+    line: how many read both sides, the median signed and absolute variance, and how many
+    were outside the warning threshold. Fractions (rebate, margin, divisor) are left out:
+    a percentage of a fraction is not a cost."""
+    from_lines = [i for i in standing if i.get("outcome") in COMPARABLE
+                  and i.get("lines_from") == "line by line"]
+    areas: Dict[tuple, List[float]] = {}
+    for idx in from_lines:
+        for line in idx.get("lines") or []:
+            if line.get("fraction") or line.get("kind") not in ("cost", "selling", "commercial"):
+                continue
+            p = _line_pct(line)
+            if p is None:
+                continue
+            areas.setdefault((line["kind"], str(line.get("label") or "")), []).append(p)
+    rows = []
+    for (kind, label), pcts in areas.items():
+        absolute = [abs(p) for p in pcts]
+        rows.append({"kind": kind, "label": label, "count": len(pcts),
+                     "median_signed_pct": _median(pcts), "median_abs_pct": _median(absolute),
+                     "outside_warning": sum(1 for p in absolute if p > warn)})
+    order = {name: n for n, name in enumerate(_COST_ORDER)}
+    rows.sort(key=lambda r: (0, order[r["label"]]) if r["label"] in order
+              else (1, -r["count"], r["label"]))
+    return {"from_comparisons": len(from_lines), "areas": rows[:limit],
+            "left_out": max(0, len(rows) - limit)}
+
+
+def _movers(rows: List[Dict[str, Any]], limit: int) -> Dict[str, Any]:
+    """Drawings compared from more than one AI run: the first run's variance against the
+    latest's. Each run counts once, by its newest comparison."""
+    runs: Dict[tuple, Dict[str, Dict[str, Any]]] = {}
+    for idx in sorted(rows, key=lambda i: str(i.get("stamp", ""))):
+        if idx.get("outcome") not in COMPARABLE or _abs_pct(idx) is None:
+            continue
+        ai = idx.get("ai") or {}
+        run = str(ai.get("run_folder") or ai.get("run") or ai.get("source") or "")
+        if run:
+            runs.setdefault(_drawing_key(idx), {})[run] = idx
+    out = []
+    for by_run in runs.values():
+        if len(by_run) < 2:
+            continue
+        ordered = sorted(by_run.values(), key=lambda i: str((i.get("ai") or {}).get("run")
+                                                           or i.get("stamp", "")))
+        first, last = ordered[0], ordered[-1]
+        fa, la = _abs_pct(first), _abs_pct(last)
+        out.append({"drawing": last.get("drawing"), "client": last.get("client"),
+                    "runs": len(ordered), "first_stamp": first.get("stamp"),
+                    "last_stamp": last.get("stamp"), "first_pct": signed_pct(first),
+                    "last_pct": signed_pct(last), "first_abs_pct": fa, "last_abs_pct": la,
+                    "first_outcome": first.get("outcome"), "last_outcome": last.get("outcome"),
+                    "change_abs_pct": round(la - fa, 2)})
+    out.sort(key=lambda r: str(r["last_stamp"]), reverse=True)
+    return {"drawings": len(out),
+            "closer": sum(1 for r in out if r["change_abs_pct"] < -0.5),
+            "further": sum(1 for r in out if r["change_abs_pct"] > 0.5),
+            "rows": out[:limit]}
+
+
+def _recent_row(idx: Dict[str, Any]) -> Dict[str, Any]:
+    h, q = idx.get("headline") or {}, idx.get("quantity") or {}
+    return {"stamp": idx.get("stamp"), "job": idx.get("job"), "drawing": idx.get("drawing"),
+            "client": idx.get("client"), "outcome": idx.get("outcome"),
+            "abs_pct": _abs_pct(idx), "signed_pct": signed_pct(idx),
+            "ai_unit": _num(q.get("ai_unit_at_manual_qty")) or _num(h.get("ai_unit_cost_gbp")),
+            "manual_unit": _num(h.get("manual_unit_cost_gbp")),
+            "quantity_note": q.get("note", "") if not q.get("comparable", True) else "",
+            "made_by": idx.get("made_by"), "ai_run": (idx.get("ai") or {}).get("run"),
+            "lines_from": idx.get("lines_from"), "error": str(idx.get("error") or "")[:200],
+            "folder": idx.get("folder"), "report_html": idx.get("report_html"),
+            "walkthrough_wav": idx.get("walkthrough_wav"),
+            "walkthrough_txt": idx.get("walkthrough_txt")}
+
+
+def wall_summary(parity_root: Optional[Path] = None, now: Optional[float] = None,
+                 weeks: int = 12, recent: int = 12) -> Dict[str, Any]:
+    """The parity view on the control panel: where parity stands, how it has moved, by client
+    and by cost line, re-estimated drawings, the newest comparisons and the period runs."""
+    root = Path(parity_root or roots()["parity"])
+    at = datetime.fromtimestamp(now) if now else datetime.now()
+    match, warn = _thresholds()
+    base = {"schema": "sdi_parity_wall.v1", "root": str(root),
+            "as_of": at.strftime("%Y-%m-%d %H:%M:%S"),
+            "thresholds": {"match": match, "warning": warn}}
+    if not root.is_dir():
+        return {**base, "reachable": False,
+                "note": f"The parity folder could not be read from this machine: {root}"}
+    every = _indexes(root)
+    for idx in every:
+        idx["_when"] = _stamp_dt(str(idx.get("stamp", "")))
+    standing = _newest_per_drawing(every)
+    now_s = _standing(standing)
+    comparable = [i for i in standing if i.get("outcome") in COMPARABLE]
+    today = at.date()
+
+    def window(lo_days: int, hi_days: int) -> Dict[str, Any]:
+        lo, hi = today - timedelta(days=lo_days), today - timedelta(days=hi_days)
+        inside = [i for i in every if i["_when"] and lo < i["_when"].date() <= hi]
+        return {**_standing(_newest_per_drawing(inside)), "comparisons": len(inside)}
+    last30, prior30 = window(30, 0), window(60, 30)
+    monday = today - timedelta(days=today.weekday())
+    movers = _movers(every, limit=8)
+    clients: Dict[str, List[Dict[str, Any]]] = {}
+    for idx in standing:
+        clients.setdefault(str(idx.get("client") or "Unknown client"), []).append(idx)
+    by_client = sorted(({"client": c, **_standing(rows)} for c, rows in clients.items()),
+                       key=lambda r: (-r["drawings"], r["client"]))
+    newest = sorted(every, key=lambda i: str(i.get("stamp", "")), reverse=True)
+    out = {**base, "reachable": True,
+           "kpis": {**now_s, "comparisons": len(every),
+                    "this_week": sum(1 for i in every if i["_when"]
+                                     and i["_when"].date() >= monday),
+                    "last_30_days": last30, "prior_30_days": prior30,
+                    "median_abs_change_30d": (round(last30["median_abs_pct"]
+                                                    - prior30["median_abs_pct"], 2)
+                                              if last30["median_abs_pct"] is not None
+                                              and prior30["median_abs_pct"] is not None else None),
+                    "re_estimated": movers["drawings"], "closer": movers["closer"],
+                    "further": movers["further"],
+                    "newest_stamp": newest[0].get("stamp") if newest else None},
+           "distribution": _bins(comparable, match, warn),
+           "trend": _weekly(every, today, weeks),
+           "by_client": by_client[:8], "clients_left_out": max(0, len(by_client) - 8),
+           "cost_areas": _cost_areas(standing, warn),
+           "movers": movers,
+           "recent": [_recent_row(i) for i in newest[:recent]],
+           "periods": history(root, limit=6)}
+    for idx in every:
+        idx.pop("_when", None)
+    return out
 
 
 # ── pages ───────────────────────────────────────────────────────────────────────────────
@@ -1153,7 +1431,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     q.add_argument("--client", default=""); q.add_argument("--job", default="")
     q.add_argument("--preview", action="store_true"); q.add_argument("--read-via-excel", action="store_true")
     hst = sub.add_parser("history")
-    for x in (f, j, s, p, q, hst):
+    w = sub.add_parser("wall", help="the control panel's parity view (D-741)")
+    w.add_argument("--weeks", type=int, default=12); w.add_argument("--recent", type=int, default=12)
+    for x in (f, j, s, p, q, hst, w):
         x.add_argument("--json", action="store_true", help="one JSON line, for the service")
         x.add_argument("--status-file", help="progress for the service, which runs this in the background")
     a = ap.parse_args(argv)
@@ -1205,6 +1485,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             if not a.json:
                 for x in out["periods"]:
                     print(f"  {x['name']}: {x['compared']} comparable  {x['summary_html']}")
+        elif a.cmd == "wall":
+            out = wall_summary(weeks=max(1, min(a.weeks, 52)), recent=max(1, min(a.recent, 50)))
+            if not a.json:
+                k = out.get("kpis") or {}
+                print(out.get("note") or (
+                    f"{k.get('drawings')} drawings, {k.get('compared')} comparable, "
+                    f"{k.get('within_warning_pct')}% within the warning threshold, median "
+                    f"variance {k.get('median_abs_pct')}%"))
         elif a.cmd == "periods":
             out = compare_periods((getattr(a, "a_from"), getattr(a, "a_to")),
                                   (getattr(a, "b_from"), getattr(a, "b_to")),
