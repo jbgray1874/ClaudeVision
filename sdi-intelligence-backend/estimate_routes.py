@@ -4278,6 +4278,38 @@ def recent(x_sdi_key: Optional[str] = Header(default=None), limit: int = 25):
     return {"runs": out}
 
 
+# ── "UNAVAILABLE" SAID NOTHING ANYONE COULD ACT ON (D-741) ─────────────────────
+# JG, 7 Nov 2026, from the phone: "The completed AI briefs share is unavailable to
+# this service." It said so for every area, Live Enquiry and AISheets included,
+# and never which folder or why. A folder that does not exist from this machine,
+# one the service account may not read, and a share that did not answer are
+# fixed by different people, so the message names the folder, the setting that
+# chooses it, and the reason the operating system gave.
+_AREA_WORDS = {"briefs": ("completed AI briefs folder", "SDI_COMPLETED_AI_BRIEFS_ROOT"),
+               "enquiries": ("Live Enquiry folder", "SDI_LIVE_ENQUIRY_ROOT"),
+               "estimates": ("AISheets folder of filed estimates", "SDI_ESTIMATE_OUTPUT_ROOT")}
+
+
+def _area_unreadable(area: str, exc: OSError) -> str:
+    name, setting = _AREA_WORDS.get(area, (f"{area} folder", "its setting"))
+    root = str(areas().get(area, ""))
+    where = str(getattr(exc, "filename", "") or root)
+    at_root = not root or where.rstrip("\\/").lower() == root.rstrip("\\/").lower()
+    if isinstance(exc, FileNotFoundError):
+        if at_root:
+            return (f"The {name} was not found from this service: {root}. Check the share "
+                    f"is reachable from the machine running the service, or set {setting} "
+                    f"to where the folder is.")
+        return f"A folder inside the {name} could not be found from this service: {where}."
+    if isinstance(exc, PermissionError):
+        return (f"This service's account may not read the {name}: {where} (permission "
+                f"denied). Give that account read access to the folder.")
+    reason = (exc.strerror or type(exc).__name__).strip()
+    code = f", error {exc.errno}" if exc.errno is not None else ""
+    return (f"The {name} could not be read from this service: {where} ({reason}{code}). "
+            f"If the share is offline, try again once it is back.")
+
+
 @router.get("/tools/briefs")
 def completed_briefs(relative: str = "", area: str = "briefs",
                      x_sdi_key: Optional[str] = Header(default=None)):
@@ -4295,7 +4327,7 @@ def completed_briefs(relative: str = "", area: str = "briefs",
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except OSError as exc:
-        raise HTTPException(503, "The completed AI briefs share is unavailable to this service.") from exc
+        raise HTTPException(503, _area_unreadable(area, exc)) from exc
     # ── A FILE YOU CAN SEE AND NOT OPEN IS HALF A FOLDER ────────────────────
     # The phone listed every file and opened none of them. Each one the file
     # route will actually serve gets its address here, from the path this
@@ -4342,8 +4374,7 @@ def ask_saved_run(req: SavedRunQuestion, x_sdi_key: Optional[str] = Header(defau
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
         except OSError as exc:
-            raise HTTPException(503, "The completed AI briefs share is unavailable "
-                                     "to this service.") from exc
+            raise HTTPException(503, _area_unreadable(req.area, exc)) from exc
         except json.JSONDecodeError as exc:
             raise HTTPException(409, "That saved record cannot be read as JSON.") from exc
         try:
