@@ -668,6 +668,7 @@
       <div class="ptitle"><span><b>Every run</b> · this service's record</span><span class="r" id="hRunsN"></span></div>
       <div class="hfilter"><input id="hRunsQ" autocomplete="off" placeholder="Filter by drawing, client, machine or what read the models">
         <select id="hRunsO"><option value="">every outcome</option><option value="done">completed</option><option value="failed">failed</option><option value="stopped">stopped</option></select>
+        <select id="hRunsT"><option value="">last 30 days</option><option value="7">last 7 days</option><option value="1">last 24 hours</option><option value="today">today</option></select>
         <span class="cnt" id="hRunsC"></span></div>
       <div class="ptable tall" id="hRuns"></div>
     </div>
@@ -679,7 +680,9 @@
       </div>
       <div class="panel" style="display:flex;flex-direction:column">
         <div class="ptitle"><span><b>Every filed estimate</b> · newest first</span><span class="r" id="hFiledN"></span></div>
-        <div class="hfilter"><input id="hFiledQ" autocomplete="off" placeholder="Filter by drawing or client"><span class="cnt" id="hFiledC"></span></div>
+        <div class="hfilter"><input id="hFiledQ" autocomplete="off" placeholder="Filter by drawing or client">
+          <select id="hFiledT"><option value="">all time</option><option value="365">last 12 months</option><option value="90">last 3 months</option><option value="30">last 30 days</option><option value="7">last 7 days</option></select>
+          <span class="cnt" id="hFiledC"></span></div>
         <div class="ptable tall" id="hFiled"></div>
       </div>
     </div>
@@ -713,6 +716,16 @@ function evidenceChip(ev){
 
 let snap = null, offset = 0, lastOk = 0, commit = "";
 
+// A TIME FRAME (D-746): the epoch second a list starts from, by this device's clock.
+function sinceOf(v){
+  if(!v) return 0;
+  if(v === "today"){ const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime() / 1000; }
+  return Date.now() / 1000 - Number(v) * 86400;
+}
+function dayOf(ts){
+  const d = new Date(ts * 1000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 function fmtDur(s){
   if(s == null || !isFinite(s)) return "—";
   s = Math.max(0, Math.round(s));
@@ -945,7 +958,7 @@ function machineCompute(m, now){
     <div class="cl"><span class="ck">CPU</span>${cbar(cpu.segments || [], cpu.other, 100, "% of the machine", v => cpuTxt(v).replace("%", ""))}<span class="cv"><b>${cpuTxt(m.cpu_pct)}</b> · ${cpuTxt(cpu.free)} free</span></div>
     <div class="cl"><span class="ck">MEMORY</span>${cbar(mem.segments || [], mem.other, m.mem_total_gb, " GB", v => v.toFixed(1))}<span class="cv"><b>${m.mem_used_gb != null ? m.mem_used_gb.toFixed(0) : "—"}</b> / ${gb(m.mem_total_gb)} · ${mem.free != null ? mem.free.toFixed(0) : "—"} free</span></div>
     <div class="cl"><span class="ck">15 MIN</span>${sparkline(m.history, now)}<span class="cv">${peakTxt(m.history)}</span></div>
-    <span class="cnote">${[m.threads ? m.threads + " threads" : "", m.disk_free_gb != null ? "disk " + gb(m.disk_free_gb) + " free" : "", m.fresh ? "" : "read " + fmtDur(m.age_s) + " ago"].filter(Boolean).join(" · ")}</span>
+    <span class="cnote">${[m.threads ? m.threads + " threads" : "", m.disk_free_gb != null ? "disk " + gb(m.disk_free_gb) + " free" : "", (m.fresh ? "measured " : "last measured ") + fmtDur(m.age_s) + " ago"].filter(Boolean).join(" · ")}</span>
     ${m.note ? `<span class="cnote">${esc(m.note)}</span>` : ""}
   </div>`;
 }
@@ -1769,9 +1782,11 @@ let hOpen = new Set();
 function renderHRuns(){
   if(!hist) return;
   const rows = (hist.service || {}).runs || [], q = $("hRunsQ").value.trim().toLowerCase(), o = $("hRunsO").value;
-  const keep = rows.filter(r => (!o || r.outcome === o) && (!q || `${r.drawing_number} ${r.client} ${r.runner} ${r.evidence}`.toLowerCase().includes(q)));
+  const t = $("hRunsT").value, since = sinceOf(t);
+  const keep = rows.filter(r => (!o || r.outcome === o) && (!since || (r.finished_at || 0) >= since)
+    && (!q || `${r.drawing_number} ${r.client} ${r.runner} ${r.evidence}`.toLowerCase().includes(q)));
   setText("hRunsN", `${rows.length} runs${(hist.service || {}).runs_left_out ? " · " + hist.service.runs_left_out + " older not listed" : ""}`);
-  setText("hRunsC", q || o ? `${keep.length} shown` : "");
+  setText("hRunsC", q || o || t ? `${keep.length} shown` : "");
   if(!keep.length){ $("hRuns").innerHTML = '<div class="empty">No run matches.</div>'; return; }
   $("hRuns").innerHTML = `<table><tr><th>Finished</th><th>Drawing</th><th>Client</th><th class="n">Qty</th><th>Outcome</th><th class="n">Time</th><th class="n">Unit cost</th><th>Machine</th><th>Models</th><th>Open</th></tr>`
     + keep.map(r => {
@@ -1794,18 +1809,25 @@ $("hRuns").addEventListener("click", e => {
 });
 $("hRunsQ").addEventListener("input", renderHRuns);
 $("hRunsO").addEventListener("change", renderHRuns);
+$("hRunsT").addEventListener("change", renderHRuns);
 function renderHFiled(){
   if(!hist) return;
   const f = hist.filed || {}, rows = f.recent || [], q = $("hFiledQ").value.trim().toLowerCase();
   if(f.state !== "ready"){ $("hFiled").innerHTML = `<div class="empty">${f.state === "reading" ? "Reading AISheets…" : esc(f.read_error || "AISheets could not be read.")}</div>`; return; }
-  const keep = rows.filter(r => !q || `${r.drawing} ${r.client}`.toLowerCase().includes(q));
+  const t = $("hFiledT").value, from = t ? dayOf(sinceOf(t)) : "";
+  const keep = rows.filter(r => (!from || String(r.stamp || "").slice(0, 10) >= from)
+    && (!q || `${r.drawing} ${r.client}`.toLowerCase().includes(q)));
   setText("hFiledN", `newest ${rows.length} of ${(f.totals || {}).estimates || 0}`);
-  setText("hFiledC", q ? `${keep.length} shown` : "");
+  // ONLY THE NEWEST ARE LISTED: a period reaching past the oldest listed is said to be partial.
+  const partial = from && rows.length < ((f.totals || {}).estimates || 0)
+    && String((rows[rows.length - 1] || {}).stamp || "").slice(0, 10) > from;
+  setText("hFiledC", q || t ? `${keep.length} shown${partial ? " · only the newest " + rows.length + " are listed" : ""}` : "");
   $("hFiled").innerHTML = keep.length ? `<table><tr><th>Filed</th><th>Drawing</th><th>Client</th><th class="n">Qty</th><th class="n">Unit cost</th><th></th></tr>`
     + keep.map(r => `<tr><td class="t">${fmtStamp(r.stamp)}</td><td class="d">${esc(r.drawing)}</td><td class="c">${esc(r.client)}</td><td class="n">${r.units}</td><td class="n">${gbp(r.unit_gbp)}</td><td>${r.book_url ? `<a href="${esc(r.book_url)}" target="_blank" rel="noopener">book ↗</a>` : ""}</td></tr>`).join("") + "</table>"
     : '<div class="empty">No estimate matches.</div>';
 }
 $("hFiledQ").addEventListener("input", renderHFiled);
+$("hFiledT").addEventListener("change", renderHFiled);
 let hParityT = null;
 async function searchParity(){
   const q = $("hParityQ").value.trim();

@@ -116,6 +116,8 @@ def evidence(run: Mapping[str, Any]) -> Dict[str, Any]:
     ended = outcome(run) in _ENDED
     kept = run.get("evidence_kept")
     if ended and isinstance(kept, Mapping) and kept.get("kind"):
+        if kept.get("kind") == "pending":            # kept before D-746 said "not reached yet"
+            return _no_model_read(bool(run.get("sw_wait_since")))
         return {"kind": str(kept.get("kind")), "label": str(kept.get("label") or ""),
                 "why": str(kept.get("why") or ""), "caution": bool(kept.get("caution"))}
     return evidence_from_log(run.get("log") or [], ended=ended,
@@ -148,10 +150,20 @@ def evidence_from_log(log: Sequence[Any], ended: bool = False,
         return {"kind": "unknown", "label": "Not known · only the end of its log was kept",
                 "why": "the service restarted after this run and kept the last lines of its "
                        "console; the full console is in the run's .log file", "caution": False}
+    # A RUN THAT HAS ENDED IS NEVER "NOT REACHED YET" (D-746): there is no later.
+    if ended:
+        return _no_model_read(bool(sw_wait_since))
     if sw_wait_since:
         return {"kind": "pending", "label": "Waiting for SolidWorks",
                 "why": "the models are read when the licence is free", "caution": False}
     return {"kind": "pending", "label": "Model read not reached yet", "why": "",
+            "caution": False}
+
+
+def _no_model_read(was_waiting: bool) -> Dict[str, Any]:
+    return {"kind": "none", "label": "No model read in its log",
+            "why": ("it ended while waiting for SolidWorks" if was_waiting
+                    else "it ended before its console said what read the models"),
             "caution": False}
 
 
@@ -631,7 +643,7 @@ def compute_view(runners: Sequence[Mapping[str, Any]], live: Sequence[Mapping[st
             "mem": {"segments": mem_seg, "other": mem_other,
                     "free": (round(max(0.0, total - used), 2)
                              if total is not None and used is not None else None)},
-            "history": [x for x in h["history"] if now - (x[0] or 0) <= 900][-180:],
+            "history": [x for x in h["history"] if now - (x[0] or 0) <= 900][-500:],
             "runs_here": len(machine_runs),
             "note": "" if per_process else _PER_PROCESS_NOTE})
         for run_id in machine_runs:

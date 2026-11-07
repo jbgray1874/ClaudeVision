@@ -860,7 +860,11 @@ class ProgressRequest(BaseModel):
 # runner can never fill the wall with anything but figures.
 _COMPUTE_NUMBERS = ("at", "cpu_pct", "threads", "cores", "mem_total_gb", "mem_used_gb",
                     "mem_free_gb", "disk_free_gb", "disk_total_gb")
-_COMPUTE_HISTORY = 180          # fifteen minutes at the runner's five-second sample
+# FIFTEEN MINUTES OF READINGS, BY TIME (D-746). It was 180 points of whatever arrived at least
+# 4 s apart: a reading re-sent by the next post counted again, so the "15 MIN" line could span
+# 12 minutes or 45. Now one point per new reading (its own "at"), and only the last 900 s.
+_COMPUTE_WINDOW_S = 900.0
+_COMPUTE_HISTORY = 500          # a cap only: 900 s at the runner's shortest 2 s sample is 450
 
 
 def _num_or_none(v: Any) -> Optional[float]:
@@ -896,14 +900,19 @@ def _note_compute(runner: "Runner", sample: Any, now: float) -> None:
     clean = _clean_compute(sample)
     if not clean:
         return
+    before = (runner.compute or {}).get("at")
     clean["received_at"] = now
     runner.compute = clean
-    total, used = clean.get("mem_total_gb"), clean.get("mem_used_gb")
-    point = [round(now, 1), clean.get("cpu_pct"),
-             round(100.0 * used / total, 1) if total and used is not None else None]
-    if not runner.compute_history or now - runner.compute_history[-1][0] >= 4.0:
-        runner.compute_history.append(point)
-        del runner.compute_history[:-_COMPUTE_HISTORY]
+    hist = runner.compute_history
+    at = clean.get("at")
+    new = (at != before) if at is not None else (not hist or now - hist[-1][0] >= 4.0)
+    if new:
+        total, used = clean.get("mem_total_gb"), clean.get("mem_used_gb")
+        hist.append([round(now, 1), clean.get("cpu_pct"),
+                     round(100.0 * used / total, 1) if total and used is not None else None])
+    while hist and now - hist[0][0] > _COMPUTE_WINDOW_S:
+        hist.pop(0)
+    del hist[:-_COMPUTE_HISTORY]
 
 
 class CompleteRequest(BaseModel):

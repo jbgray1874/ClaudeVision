@@ -1185,9 +1185,13 @@ class _heartbeat_while_busy:
     Through /runner/heartbeat, never /runner/claim: a claim is a request for work, and a
     service that had something queued would hand this runner a second job in the middle of
     the first. An older service without the endpoint answers 404 and is simply shown
-    offline for the length of the job — which is how every service looked before."""
+    offline for the length of the job — which is how every service looked before.
 
-    _EVERY = 15.0
+    AS OFTEN AS THE MACHINE IS MEASURED (D-746). The other services' walls get this machine's
+    compute from this beat alone; at 15 s their numbers were up to 20 s old while the service
+    running the job had them every few seconds."""
+
+    _EVERY = _COMPUTE_EVERY
 
     def __init__(self, requests, servers: List[str], headers: Dict[str, str],
                  runner_id: str, process: str, build: str) -> None:
