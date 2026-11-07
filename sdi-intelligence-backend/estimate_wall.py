@@ -74,11 +74,19 @@ _SW_WAIT = re.compile(r"Waiting for the desktop's SolidWorks|Still waiting for t
 _SW_FREE = re.compile(r"SolidWorks is free after", re.I)
 _DOCMGR = re.compile(r"SWITCHING TO THE DOCUMENT MANAGER", re.I)
 _ERROR = re.compile(r"\b(ERROR|FAILED|Traceback)\b")
-_ACC_LOW = re.compile(r"goes on without its models|NOT APPLIED|did not produce an extract|still unread "
-                      r"by either reader|COULD NOT LOOK|models were left unread", re.I)
-_ACC_MED = re.compile(r"Document Manager BACKUP reader|SWITCHING TO THE DOCUMENT MANAGER|SolidWorks "
-                      r"could not", re.I)
-_ACC_HIGH = re.compile(r"model extract APPLIED|native extract applied", re.I)
+# WHAT READ THE MODELS, AS PLAIN LOWER-CASE PHRASES (D-745). These were case-blind regexes of
+# many alternatives, each costing about 13 ms over one run's 4,000-line console. The History
+# view ran up to five per run, twice, for every run of thirty days: 300 runs held the
+# interpreter for 25 s, and every other request on the service waited behind it. The same
+# phrases found in the console lower-cased once cost well under a millisecond each.
+_EV_MODELS_UNREAD = ("goes on without its models", "not applied", "did not produce an extract",
+                     "still unread by either reader", "could not look", "models were left unread")
+_EV_DOCMGR = ("document manager backup reader", "switching to the document manager")
+_EV_MEASURED = ("model extract applied", "native extract applied")
+_EV_SW_COULD_NOT = "solidworks could not"
+# What a restored run's console starts with when only its end was kept (estimate_history).
+_EV_TRIMMED = "earlier line(s) are in the run's .log file"
+_ENDED = ("done", "failed", "stopped")
 
 
 def sw_wait_limit_s() -> float:
@@ -100,28 +108,47 @@ def holder_from_log(log: Sequence[str]) -> str:
 
 def evidence(run: Mapping[str, Any]) -> Dict[str, Any]:
     """What read the run's models, as its own log says: {kind, label, why, caution}. A fact
-    about the evidence, never a grade of the price."""
+    about the evidence, never a grade of the price. A finished run is read from what was kept
+    when it finished (`evidence_kept`, from its whole console), else from its console."""
     if not is_estimate(run):
         return {"kind": "extract", "label": "Pack extract", "why": "prices nothing",
                 "caution": False}
-    text = "\n".join(str(x) for x in (run.get("log") or []))
-    if _ACC_LOW.search(text):
+    ended = outcome(run) in _ENDED
+    kept = run.get("evidence_kept")
+    if ended and isinstance(kept, Mapping) and kept.get("kind"):
+        return {"kind": str(kept.get("kind")), "label": str(kept.get("label") or ""),
+                "why": str(kept.get("why") or ""), "caution": bool(kept.get("caution"))}
+    return evidence_from_log(run.get("log") or [], ended=ended,
+                             sw_wait_since=run.get("sw_wait_since"))
+
+
+def evidence_from_log(log: Sequence[Any], ended: bool = False,
+                      sw_wait_since: Any = None) -> Dict[str, Any]:
+    """The evidence an estimate's console states, read once, lower-cased, by plain phrases."""
+    text = "\n".join(str(x) for x in (log or ())).lower()
+    if any(p in text for p in _EV_MODELS_UNREAD):
         return {"kind": "drawings", "label": "Drawing/DXF evidence",
                 "why": "the models were not read; the drawings and DXFs are the evidence",
                 "caution": False}
-    if re.search(r"Document Manager BACKUP reader|SWITCHING TO THE DOCUMENT MANAGER", text, re.I):
+    if any(p in text for p in _EV_DOCMGR):
         return {"kind": "dm_fallback", "label": "Document Manager fallback · not yet validated",
                 "why": "saved model data only, nothing measured; the Document Manager is not "
                        "yet accepted", "caution": True}
-    if _ACC_HIGH.search(text):
-        if re.search(r"SolidWorks could not", text, re.I):
+    if any(p in text for p in _EV_MEASURED):
+        if _EV_SW_COULD_NOT in text:
             return {"kind": "sw_partial", "label": "SolidWorks measured model · some files by "
                     "Document Manager (not yet validated)",
                     "why": "the files SolidWorks could not open were read from saved data",
                     "caution": True}
         return {"kind": "sw", "label": "SolidWorks measured model",
                 "why": "the models were opened and measured by SolidWorks", "caution": False}
-    if run.get("sw_wait_since"):
+    # A RUN RESTORED AFTER A RESTART KEEPS ONLY THE END OF ITS CONSOLE, where the model read is
+    # not. Its evidence is not known; it is never said to be a read that was not reached.
+    if ended and text[:200].find(_EV_TRIMMED) >= 0:
+        return {"kind": "unknown", "label": "Not known · only the end of its log was kept",
+                "why": "the service restarted after this run and kept the last lines of its "
+                       "console; the full console is in the run's .log file", "caution": False}
+    if sw_wait_since:
         return {"kind": "pending", "label": "Waiting for SolidWorks",
                 "why": "the models are read when the licence is free", "caution": False}
     return {"kind": "pending", "label": "Model read not reached yet", "why": "",
@@ -199,12 +226,13 @@ def outcome(run: Mapping[str, Any]) -> str:
 
 def stage_of(log: Sequence[str]) -> Tuple[int, str]:
     """(index, name) of the furthest pipeline stage the console has reached; (-1, "") for none."""
+    # Read once, lower-cased: a stage's words never hold a line break, so a word found in the
+    # joined console was found on one of its lines (D-745).
+    low = "\n".join(str(x) for x in (log or ())).lower()
     best = -1
-    for line in log or ():
-        low = str(line).lower()
-        for i, (_name, words) in enumerate(STAGES):
-            if i > best and any(w in low for w in words):
-                best = i
+    for i, (_name, words) in enumerate(STAGES):
+        if any(w in low for w in words):
+            best = i
     return best, (STAGES[best][0] if best >= 0 else "")
 
 
@@ -654,6 +682,12 @@ def history_view(runs: Sequence[Mapping[str, Any]], now: Optional[float] = None,
     est = [r for r in kept if is_estimate(r)]
     done = [r for r in est if outcome(r) == "done"]
     durs = [d for r in done for d in [_duration(r)] if d is not None]
+    evs: Dict[int, Dict[str, Any]] = {}
+
+    def ev_of(r: Mapping[str, Any]) -> Dict[str, Any]:
+        if id(r) not in evs:
+            evs[id(r)] = evidence(r)
+        return evs[id(r)]
     waits = [w for r in est for w in [_wait(r)] if w is not None]
     judged = [r for r in est if outcome(r) in ("done", "failed")]
     daily = []
@@ -683,7 +717,7 @@ def history_view(runs: Sequence[Mapping[str, Any]], now: Optional[float] = None,
         if outcome(r) == "done" and _duration(r) is not None:
             c["durations"].append(_duration(r))
         if outcome(r) == "done":
-            ev = evidence(r)
+            ev = ev_of(r)
             e = evidence_mix.setdefault(ev["kind"], {"kind": ev["kind"], "label": ev["label"],
                                                      "count": 0, "caution": ev["caution"]})
             e["count"] += 1
@@ -698,7 +732,7 @@ def history_view(runs: Sequence[Mapping[str, Any]], now: Optional[float] = None,
                if isinstance(r.get("review"), Mapping) and r["review"].get("total") is not None]
     rows = []
     for r in sorted(kept, key=lambda r: float(r.get("finished_at") or 0), reverse=True)[:table]:
-        ev = evidence(r)
+        ev = ev_of(r)
         rows.append({**_summary(r), "units": r.get("units"),
                      "quantity_prices": list(r.get("quantity_prices") or [])[:8],
                      "evidence": ev["label"], "evidence_caution": ev["caution"],

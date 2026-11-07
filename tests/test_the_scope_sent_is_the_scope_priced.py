@@ -658,7 +658,8 @@ def test_the_deployment_checker_is_read_only():
                  "Out-File", "Add-Content", "New-Item", "Invoke-RestMethod", "-Method",
                  "git push", "git merge", "git reset", "git checkout", "git pull", "git fetch"):
         assert verb not in code, verb
-    # Two reads per port, both GETs: the commit (/api/health) and, since D-744, the voice the
-    # service gives the pages (/api/estimate/speech). Neither carries -Method, so neither writes.
-    assert code.count("Invoke-WebRequest") == 2 and "rev-parse --short HEAD" in code
+    # Reads per port, all GETs: the commit (/api/health); since D-744, the voice the service
+    # gives the pages (/api/estimate/speech); since D-745, when health gives no reply, whether
+    # the process is up at all (/api/estimate/speech again). None carries -Method.
+    assert code.count("Invoke-WebRequest") == 3 and "rev-parse --short HEAD" in code
     assert "/api/health" in code and "/api/estimate/speech" in code

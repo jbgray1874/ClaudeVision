@@ -343,6 +343,9 @@ class Run:
     # THE FINISH WINDOW PREDICTED WHEN IT STARTED (D-739): {lo_s, mid_s, hi_s, basis}, the
     # run's own duration net of waits as history predicted it, so the error can be measured.
     predicted: Dict[str, Any] = field(default_factory=dict)
+    # WHAT READ THE MODELS, FROM THE WHOLE CONSOLE (D-745), worked out when the run finishes and
+    # saved with it: a restart keeps only the end of the console, where the model read is not.
+    evidence_kept: Dict[str, Any] = field(default_factory=dict)
     log: List[str] = field(default_factory=list)
     deliverables: List[Dict[str, str]] = field(default_factory=list)
 
@@ -458,8 +461,26 @@ _PROGRESS_SAVE_SECONDS = 10.0
 _last_progress_save: Dict[str, float] = {}
 
 
+def _note_evidence(run: "Run") -> None:
+    """A finished estimate's evidence, read once from its whole console (D-745). Read again
+    only when the console has grown since, and never from a console a restart trimmed."""
+    if run.status not in ("done", "error") or run.job_type or not run.log:
+        return
+    if (run.evidence_kept or {}).get("lines") == len(run.log):
+        return
+    if run.evidence_kept and "earlier line(s) are in the run's .log file" in str(run.log[0]):
+        return
+    import estimate_wall
+    found = estimate_wall.evidence_from_log(run.log, ended=True, sw_wait_since=run.sw_wait_since)
+    run.evidence_kept = {**found, "lines": len(run.log)}
+
+
 def _keep(run: "Run") -> None:
     """Save one run's state. A save that fails is said on the run's log, never raised."""
+    try:
+        _note_evidence(run)
+    except Exception as exc:                                         # noqa: BLE001
+        print(f"[history] the evidence of {run.run_id} was not noted: {exc}", flush=True)
     why = estimate_history.save(run)
     if why:
         run.line(f"(The run's history could not be saved: {why}. It is safe until the service "
@@ -1032,6 +1053,9 @@ def wall(x_sdi_key: Optional[str] = Header(default=None)):
 # from the share in the background at most every SDI_WALL_HISTORY_SECONDS (ten minutes), each
 # summary once, through a cache beside the service's state.
 _RUN_HISTORY_CLI = str(_REPO_ROOT / "src" / "run_history.py")
+_HISTORY_VIEW: Dict[str, Any] = {"at": 0.0, "days": 0, "body": None}
+_HISTORY_VIEW_LOCK = threading.Lock()
+_HISTORY_VIEW_SECONDS = 20.0
 _FILED: Dict[str, Any] = {"at": 0.0, "tried": 0.0, "body": None, "busy": False, "error": ""}
 _FILED_LOCK = threading.Lock()
 
@@ -1093,15 +1117,27 @@ def wall_history(days: int = 30, refresh: bool = False,
     was read."""
     _check_key(x_sdi_key)
     import estimate_wall
-    with _LOCK:
-        runs = []
-        for r in _RUNS.values():
-            d = r.as_json()
-            d["review"] = dict(r.review or {})
-            d["sw_waited_s"] = r.sw_waited_s
-            d["sw_wait_since"] = r.sw_wait_since
-            runs.append(d)
-    service = estimate_wall.history_view(runs, days=max(1, min(int(days or 30), 90)))
+    days = max(1, min(int(days or 30), 90))
+    # ONE READING AT A TIME, KEPT FOR A FEW SECONDS (D-745): every open control panel asks each
+    # minute, and the answer is the same for all of them; a second page waits for the first
+    # reading rather than making its own beside it.
+    with _HISTORY_VIEW_LOCK:
+        held = _HISTORY_VIEW
+        if (not refresh and held["body"] is not None and held["days"] == days
+                and time.time() - held["at"] < _HISTORY_VIEW_SECONDS):
+            service = held["body"]
+        else:
+            with _LOCK:
+                runs = []
+                for r in _RUNS.values():
+                    d = r.as_json()
+                    d["review"] = dict(r.review or {})
+                    d["sw_waited_s"] = r.sw_waited_s
+                    d["sw_wait_since"] = r.sw_wait_since
+                    d["evidence_kept"] = dict(r.evidence_kept or {})
+                    runs.append(d)
+            service = estimate_wall.history_view(runs, days=days)
+            _HISTORY_VIEW.update(at=time.time(), days=days, body=service)
     return {"service": service, "filed": filed_for_wall(force=refresh),
             "kept_days": float(os.getenv("SDI_RUN_HISTORY_DAYS", "30") or 30)}
 

@@ -374,12 +374,15 @@ if ($task -and -not $svcWasRunning) {
 # virtualenv the service starts from, so the comparison can be made here and nowhere else.
 $head = Get-HeadCommit $Root
 
+# HEALTH ALSO ASKS THE DATABASE AND THE SHARES (D-745), and the database alone may wait 5 s to
+# connect. With 4 s allowed, a service that was up and serving pages was reported as "NOT
+# answering" whenever either was slow, on 7 Nov 2026 on both ports at once.
 $health = $null
 $deadline = (Get-Date).AddSeconds(60)
 while ((Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 2
     try {
-        $health = Invoke-RestMethod "http://localhost:$Port/api/health" -TimeoutSec 4
+        $health = Invoke-RestMethod "http://localhost:$Port/api/health" -TimeoutSec 15
         break
     } catch {
         if ($_.Exception.Response -and $_.Exception.Response.StatusCode.value__ -eq 401) { break }
@@ -387,7 +390,7 @@ while ((Get-Date) -lt $deadline) {
 }
 
 try {
-    $health = Invoke-RestMethod "http://localhost:$Port/api/health" -TimeoutSec 6
+    $health = Invoke-RestMethod "http://localhost:$Port/api/health" -TimeoutSec 20
     $serving = "$($health.commit)".Trim()
     if ($head -and $serving -and $serving -ne "unknown" -and $serving -ne $head) {
         Write-Host ""
@@ -413,7 +416,7 @@ try {
         $otherCommit = ""
         $otherState = "did not answer"
         try {
-            $reply = Invoke-WebRequest "http://localhost:$other/api/health" -UseBasicParsing -TimeoutSec 4
+            $reply = Invoke-WebRequest "http://localhost:$other/api/health" -UseBasicParsing -TimeoutSec 15
             $otherState = "answered"
             $otherCommit = "$($reply.Headers['X-SDI-Commit'])".Trim()
         } catch {
@@ -438,6 +441,21 @@ try {
     if ($_.Exception.Response -and $_.Exception.Response.StatusCode.value__ -eq 401) {
         Write-Host "  answering on $Port (401 - key required, which is fine)" -ForegroundColor Green
     } else {
+        # UP, BUT ITS HEALTH CHECK GIVES NO REPLY (D-745). A route that asks nothing else says
+        # whether the process itself is serving, and stamps its commit like every reply does.
+        $aliveCommit = ""
+        try {
+            $alive = Invoke-WebRequest "http://localhost:$Port/api/estimate/speech" -UseBasicParsing -TimeoutSec 5
+            $aliveCommit = "$($alive.Headers['X-SDI-Commit'])".Trim()
+        } catch { }
+        if ($aliveCommit -and $aliveCommit -ne "unknown") {
+            Write-Host ""
+            Write-Host ("  RUNNING on {0}, serving commit {1}{2}, but /api/health gave no reply in 20 s." -f $Port, $aliveCommit, $(if ($head -and $aliveCommit -eq $head) { ' - matches this checkout' } else { '' })) -ForegroundColor Yellow
+            Write-Host "  Health asks the database and the shares: one of them is not answering (VPN, SQL server or file share)." -ForegroundColor Yellow
+            Write-Host "  Do not start a run until /api/health answers again." -ForegroundColor Yellow
+            if ($head -and $aliveCommit -eq $head) { exit 0 }
+            exit 1
+        }
         Write-Host ""
         Write-Host "  NOT answering on $Port after 60 seconds." -ForegroundColor Red
 
@@ -450,7 +468,7 @@ try {
         foreach ($other in @(8071, 8072, 8073)) {
             if ($other -eq $Port) { continue }
             try {
-                $h2 = Invoke-RestMethod "http://localhost:$other/api/health" -TimeoutSec 4
+                $h2 = Invoke-RestMethod "http://localhost:$other/api/health" -TimeoutSec 15
                 $c2 = "$($h2.commit)".Trim()
                 $tag = ""
                 if ($head -and $c2 -eq $head) { $tag = " - the code on disk" }
