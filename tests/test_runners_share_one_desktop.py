@@ -76,7 +76,10 @@ def test_a_lone_run_never_waits(token):
     said = []
     handle, turn = turn_mod.take_turn(wait_s=10, say=said.append)
     turn_mod.release(handle)
-    assert turn["state"] == "held" and not said
+    # It says it took the turn (D-738: the wall names the run holding SolidWorks), and never
+    # that it waited.
+    assert turn["state"] == "held"
+    assert said == ["SolidWorks turn taken: this run reads its models now."]
 
 
 def test_a_turn_that_never_comes_times_out_in_its_own_words(token):

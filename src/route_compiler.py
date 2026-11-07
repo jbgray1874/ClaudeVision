@@ -4760,6 +4760,27 @@ def _ancestor_distances(identity: str, parents: Mapping[str, Set[str]]) -> Dict[
     return distances
 
 
+_INSERT_WORD_NOISE = {"STEEL", "MILD", "STAINLESS", "ZINC", "PLATED", "SCREW", "WASHER", "THREAD",
+                      "THREADED", "INSERT", "FITTING", "BLACK", "BRIGHT", "METRIC"}
+
+
+def _insert_words(inserted: Iterable[str], graph: Mapping[str, Any]) -> Set[str]:
+    """The words that name an inserted item in prose (D-738): its code without the BI- prefix,
+    and the distinctive words of its description ("M6 HANKBUSH" gives HANKBUSH), never a word
+    any fixing shares (SCREW, INSERT)."""
+    out: Set[str] = set()
+    for pn in inserted or ():
+        code = str(pn or "").upper()
+        out.add(code)
+        if code.startswith("BI-") and len(code) > 6 and code[3:] not in _INSERT_WORD_NOISE:
+            out.add(code[3:])
+        rec = _graph_record(graph, str(pn))
+        for w in re.findall(r"[A-Z][A-Z\-]{4,}", str(rec.get("description") or "").upper()):
+            if w not in _INSERT_WORD_NOISE:
+                out.add(w)
+    return {w for w in out if len(w) >= 5}
+
+
 def _weldment_has_its_own_joints(part: Mapping[str, Any], part_number: str,
                                  graph: Mapping[str, Any]) -> bool:
     """A participant of a parent's welding event that is itself welded from pieces of its own
@@ -7114,7 +7135,18 @@ def compile_job_route(
                 or (_src_rank(str(_d.source or "")) or 0) > _inferred_rank):
             continue
         _named = {str(p) for p in (_d.participants or []) if p and p != _d.target_id}
-        if not _named or not _named <= (_inserted_on.get(str(_d.target_id)) or set()):
+        _ins = _inserted_on.get(str(_d.target_id)) or set()
+        # OR IT NAMES THE PART THE INSERT GOES INTO, AND SAYS SO (D-738). 12002-02-101, 7 Nov
+        # 2026 13:19 book: the read's assemble names M01, the base plate, and its own words are
+        # "M6 HANKBUSH ... Booked once per base as a fit"; the insertion row fits the same bush,
+        # so the bench row charged the fitting a second time (rows 153 and 161). A member of
+        # the welded target counts as fitted when the assemble's words name an inserted item.
+        _hosts = _named - _ins
+        if _hosts and _hosts <= set((graph.get("children") or {}).get(str(_d.target_id)) or {}):
+            _said = " ".join(str(x or "") for x in (_d.reason, _d.evidence)).upper()
+            if any(_w in _said for _w in _insert_words(_ins, graph)):
+                _hosts = set()
+        if not _named or _hosts:
             continue
         _d.status = NOT_APPLICABLE
         _d.reason = ((f"{_d.reason}; " if _d.reason else "")

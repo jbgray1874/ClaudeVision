@@ -1326,6 +1326,9 @@ def _run_analyser(folder: str | Path, analyser: Optional[str | Path] = None,
                 + (f" — {_ELEVATED_HINT}" if running_elevated() else ""))
     finally:
         _sw_turn.release(_handle)
+        if _handle is not None:
+            # SAID, SO THE WALL KNOWS THE LICENCE IS FREE AGAIN (D-738).
+            print("  SolidWorks turn given back: the next run may read its models.", flush=True)
 
 
 # ── the Document Manager backup (SCRUM-184) ──────────────────────────────────────────

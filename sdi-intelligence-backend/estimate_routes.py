@@ -328,6 +328,12 @@ class Run:
     # WHEN THE ENGINE LAST SAID ANYTHING (D-737), so the wall monitor can tell a long run from
     # a stalled one. Set on every progress post that carries lines; 0 until the first.
     last_line_at: float = 0.0
+    # THE DESKTOP'S SOLIDWORKS, AS THIS RUN SAID IT (D-738): when it took the turn (0 when it
+    # holds none) and when it began waiting for it (0 when not waiting). Read off the engine's
+    # own lines as they arrive, so the wall can say who has the licence, since when, and how
+    # long each waiting run has waited of its 30 minutes.
+    sw_turn_at: float = 0.0
+    sw_wait_since: float = 0.0
     log: List[str] = field(default_factory=list)
     deliverables: List[Dict[str, str]] = field(default_factory=list)
 
@@ -920,6 +926,8 @@ def wall(x_sdi_key: Optional[str] = Header(default=None)):
         for r in _RUNS.values():
             d = r.as_json()
             d["last_line_at"] = r.last_line_at
+            d["sw_turn_at"] = r.sw_turn_at
+            d["sw_wait_since"] = r.sw_wait_since
             if r.status != "running":
                 d["log"] = []
             runs.append(d)
@@ -1215,6 +1223,22 @@ def _check_the_engine_was_told(run: "Run", text: str) -> None:
              "runner on that machine and run this again.")
 
 
+_SW_TAKEN = re.compile(r"SolidWorks turn taken|SolidWorks is free after", re.I)
+_SW_GIVEN = re.compile(r"SolidWorks turn given back|SWITCHING TO THE DOCUMENT MANAGER", re.I)
+_SW_WAITING = re.compile(r"Waiting for the desktop's SolidWorks|Still waiting for the desktop's "
+                         r"SolidWorks", re.I)
+
+
+def _note_solidworks_turn(run: "Run", text: str, now: float) -> None:
+    """Keep the run's SolidWorks state from its own words (D-738)."""
+    if _SW_TAKEN.search(text):
+        run.sw_turn_at, run.sw_wait_since = now, 0.0
+    elif _SW_GIVEN.search(text):
+        run.sw_turn_at, run.sw_wait_since = 0.0, 0.0
+    elif _SW_WAITING.search(text) and not run.sw_wait_since:
+        run.sw_wait_since = now
+
+
 @router.post("/runner/{run_id}/progress")
 def progress(run_id: str, req: ProgressRequest,
              x_sdi_key: Optional[str] = Header(default=None)):
@@ -1232,6 +1256,7 @@ def progress(run_id: str, req: ProgressRequest,
         for text in req.lines:
             run.line(text)
             _check_the_engine_was_told(run, text)
+            _note_solidworks_turn(run, text, now)
         if req.lines:
             run.last_line_at = now
         run.lease_until = now + LEASE_SECONDS
