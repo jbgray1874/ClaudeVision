@@ -397,6 +397,10 @@ class Runner:
     busy_elsewhere: bool = False
     # WHAT IT CAN RUN BESIDES AN ESTIMATE (D-640), as it said on its last claim.
     capabilities: List[str] = field(default_factory=list)
+    # WHAT ITS MACHINE IS USING (D-743): the newest sample it sent, and the last fifteen
+    # minutes of CPU and memory for the wall's trace. Measured by the runner, never guessed.
+    compute: Dict[str, Any] = field(default_factory=dict)
+    compute_history: List[List[float]] = field(default_factory=list)
 
     @property
     def online(self) -> bool:
@@ -817,11 +821,68 @@ class ClaimRequest(BaseModel):
     # THE JOB TYPES IT CAN RUN BESIDES AN ESTIMATE (D-640); empty for a runner that predates
     # them, which is then never handed one.
     capabilities: List[str] = []
+    # WHAT ITS MACHINE IS USING (D-743); absent from a runner that predates it.
+    compute: Optional[Dict[str, Any]] = None
 
 
 class ProgressRequest(BaseModel):
     runner_id: str
     lines: List[str] = []
+    compute: Optional[Dict[str, Any]] = None
+
+
+# ── WHAT EACH MACHINE IS USING (D-743) ───────────────────────────────────────────────────
+# JG, 7 Nov 2026: "a graphical representation of the compute resources available on the
+# laptop ... what compute resource each job is taking and it updates dynamically and the
+# remaining compute is also available. we can then add the server downstairs and the new
+# machine." The runner measures; the service keeps only numbers it recognises, rounded, so a
+# runner can never fill the wall with anything but figures.
+_COMPUTE_NUMBERS = ("at", "cpu_pct", "threads", "cores", "mem_total_gb", "mem_used_gb",
+                    "mem_free_gb", "disk_free_gb", "disk_total_gb")
+_COMPUTE_HISTORY = 180          # fifteen minutes at the runner's five-second sample
+
+
+def _num_or_none(v: Any) -> Optional[float]:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    f = float(v)
+    return round(f, 2) if f == f and abs(f) < 1e12 else None
+
+
+def _clean_compute(sample: Any) -> Dict[str, Any]:
+    if not isinstance(sample, dict):
+        return {}
+    out: Dict[str, Any] = {k: _num_or_none(sample.get(k)) for k in _COMPUTE_NUMBERS}
+    out = {k: v for k, v in out.items() if v is not None}
+    for k in ("host", "by", "disk", "error"):
+        if sample.get(k) is not None:
+            out[k] = str(sample[k])[:120]
+
+    def uses(block: Any, limit: int) -> Dict[str, Dict[str, float]]:
+        kept: Dict[str, Dict[str, float]] = {}
+        for name, use in list((block or {}).items())[:limit] if isinstance(block, dict) else []:
+            if isinstance(use, dict):
+                kept[str(name)[:64]] = {k: v for k, v in (
+                    (k, _num_or_none(use.get(k))) for k in ("cpu_pct", "mem_gb", "count", "procs"))
+                    if v is not None}
+        return kept
+    out["apps"] = uses(sample.get("apps"), 8)
+    out["jobs"] = uses(sample.get("jobs"), 8)
+    return out
+
+
+def _note_compute(runner: "Runner", sample: Any, now: float) -> None:
+    clean = _clean_compute(sample)
+    if not clean:
+        return
+    clean["received_at"] = now
+    runner.compute = clean
+    total, used = clean.get("mem_total_gb"), clean.get("mem_used_gb")
+    point = [round(now, 1), clean.get("cpu_pct"),
+             round(100.0 * used / total, 1) if total and used is not None else None]
+    if not runner.compute_history or now - runner.compute_history[-1][0] >= 4.0:
+        runner.compute_history.append(point)
+        del runner.compute_history[:-_COMPUTE_HISTORY]
 
 
 class CompleteRequest(BaseModel):
@@ -933,9 +994,11 @@ def wall(x_sdi_key: Optional[str] = Header(default=None)):
         runners_now = [r.as_json() for r in _RUNNERS.values()]
         for rn, obj in zip(runners_now, _RUNNERS.values()):
             rn["capabilities"] = list(obj.capabilities or [])
+            rn["compute"] = dict(obj.compute or {})
+            rn["compute_history"] = [list(x) for x in obj.compute_history]
     commit = str(getattr(_sys.modules.get("app"), "SDI_COMMIT", "") or "")
     snap = estimate_wall.snapshot(runs, runners_now, max_runs=_max_concurrent_runs(),
-                                  service_commit=commit)
+                                  service_commit=commit, tail_lines=80)
     tasks = parity_tasks_for_wall()
     snap["parity_tasks"] = tasks
     snap["parity"] = parity_for_wall(force=_parity_moved(tasks))
@@ -1114,6 +1177,7 @@ def heartbeat(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)
         if req.build:
             runner.build = req.build
         runner.busy_elsewhere = True
+        _note_compute(runner, req.compute, now)
     return {"ok": True}
 
 
@@ -1134,6 +1198,7 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
             runner.build = req.build
         runner.capabilities = list(req.capabilities or [])
         runner.busy_elsewhere = False
+        _note_compute(runner, req.compute, now)
 
         _refused = _claim_refused_because(req.runner_id, req.hostname, req.capabilities)
         if _refused:
@@ -1446,6 +1511,7 @@ def progress(run_id: str, req: ProgressRequest,
         r = _RUNNERS.setdefault(req.runner_id, Runner(runner_id=req.runner_id))
         r.last_seen = now
         r.run_id = run.run_id
+        _note_compute(r, req.compute, now)
         if now - _last_progress_save.get(run_id, 0.0) >= _PROGRESS_SAVE_SECONDS:
             _last_progress_save[run_id] = now
             _keep(run)

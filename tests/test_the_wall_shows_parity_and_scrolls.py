@@ -262,7 +262,7 @@ def test_the_page_scrolls_and_nothing_in_recent_is_cut_off():
     css = page.split("<style>", 1)[1].split("</style>", 1)[0]
     assert "overflow:hidden;\n       font-variant-numeric" not in css
     assert "overflow-y:auto" in css.split("\n  body{", 1)[1].split("}", 1)[0]
-    assert "height:max(calc(100vh - 106px), 800px)" in css    # a short screen scrolls
+    assert "height:max(calc(100vh - 106px), 940px)" in css    # a short screen scrolls
     assert not __import__("re").search(r"(?<![-\w])height:100vh", css)  # no fixed screen height
     assert "position:sticky;bottom:0" in css                  # the ticker stays in view
     assert "rows.slice(0, 9)" not in page                     # every recent run, scrolled
