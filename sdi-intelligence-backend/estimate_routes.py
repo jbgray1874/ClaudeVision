@@ -936,7 +936,9 @@ def wall(x_sdi_key: Optional[str] = Header(default=None)):
     commit = str(getattr(_sys.modules.get("app"), "SDI_COMMIT", "") or "")
     snap = estimate_wall.snapshot(runs, runners_now, max_runs=_max_concurrent_runs(),
                                   service_commit=commit)
-    snap["parity"] = parity_for_wall()
+    tasks = parity_tasks_for_wall()
+    snap["parity_tasks"] = tasks
+    snap["parity"] = parity_for_wall(force=_parity_moved(tasks))
     return snap
 
 
@@ -989,6 +991,101 @@ def parity_for_wall(force: bool = False) -> Dict[str, Any]:
                read_at=at or None, age_s=round(now - at) if at else None,
                refreshing=busy, read_error=error, every_s=_parity_wall_every())
     return out
+
+
+# PARITY RUNNING, ON THE WALL (D-742). JG, 7 Nov 2026: "I want to run one off jobs, compare a
+# whole set of jobs v manual etc. and see the output in the main screen". Every comparison the
+# service started in the last twelve hours, from the wall, the estimating page or the phone, is
+# read from its own status file: what it is, how far it has got, each drawing's outcome as it
+# lands, and its summary when it ends. One that has written nothing for half an hour is said
+# to have stalled rather than shown as running for ever.
+_PARITY_TASK_HOURS = 12.0
+_PARITY_TASK_STALL_S = 1800.0
+
+
+def _signed(idx: Dict[str, Any]) -> Optional[float]:
+    h, q = idx.get("headline") or {}, idx.get("quantity") or {}
+    ai = q.get("ai_unit_at_manual_qty") if q.get("ai_unit_at_manual_qty") is not None \
+        else h.get("ai_unit_cost_gbp")
+    manual = h.get("manual_unit_cost_gbp")
+    if not isinstance(ai, (int, float)) or not isinstance(manual, (int, float)) or not manual:
+        return None
+    return round((ai - manual) / abs(manual) * 100.0, 2)
+
+
+def _parity_task(tid: str, path: Path, now: float) -> Dict[str, Any]:
+    try:
+        body = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        body = {}
+    meta = _PARITY_TASKS.get(tid, {})
+    try:
+        updated = path.stat().st_mtime
+    except OSError:
+        updated = now
+    finished = bool(body.get("finished"))
+    state = str(body.get("state") or ("done" if finished else "running"))
+    if finished and state in ("running", "starting"):
+        state = "done"
+    if not finished and now - updated > _PARITY_TASK_STALL_S:
+        state = "stalled"
+    kind = meta.get("kind") or body.get("kind") or ("job" if ("job" in body or "result" in body)
+                                                   else "period")
+    label = meta.get("label") or body.get("job") or (
+        f"{body['start']} to {body['end']}" if body.get("start") else "a comparison")
+    rows = list(body.get("rows") or []) + list(body.get("rows_a") or []) + list(body.get("rows_b") or [])
+    out: Dict[str, Any] = {
+        "task_id": tid, "kind": kind, "label": label, "state": state, "finished": finished,
+        "done": body.get("done"), "of": body.get("of"), "step": str(body.get("step") or ""),
+        "started_at": meta.get("started_at") or body.get("started_at"), "updated_at": updated,
+        "error": str(body.get("error") or "")[:400], "preview": bool(body.get("preview")),
+        "rows": [{"drawing": r.get("drawing"), "client": r.get("client"),
+                  "outcome": r.get("outcome"), "pct": r.get("pct"),
+                  "report_url": (_file_link(Path(r["folder"]) / r["report"])
+                                 if r.get("folder") and r.get("report") else None)}
+                 for r in rows[-8:]],
+        "rows_total": len(rows),
+        "stats": body.get("stats") or body.get("stats_b"),
+        "summary_url": (_summary_link(body) if body.get("summary_html")
+                        or body.get("summary_portal_html") else None)}
+    if isinstance(body.get("result"), dict):
+        idx = body["result"]
+        links = _report_links(idx)
+        h, q = idx.get("headline") or {}, idx.get("quantity") or {}
+        out["result"] = {"drawing": idx.get("drawing"), "client": idx.get("client"),
+                         "outcome": idx.get("outcome"), "signed_pct": _signed(idx),
+                         "ai_unit": q.get("ai_unit_at_manual_qty") or h.get("ai_unit_cost_gbp"),
+                         "manual_unit": h.get("manual_unit_cost_gbp"),
+                         "quantity_note": q.get("note", "") if not q.get("comparable", True) else "",
+                         "report_url": links["report_url"], "listen_url": links["listen_url"]}
+    if state == "choose":
+        out["candidates"] = len(body.get("candidates") or [])
+    return out
+
+
+def parity_tasks_for_wall(limit: int = 8) -> List[Dict[str, Any]]:
+    """The comparisons started in the last twelve hours, running ones first, newest first."""
+    now = time.time()
+    folder = _parity_status_file("x").parent
+    try:
+        files = [(p.stat().st_mtime, p) for p in folder.glob("*.json")]
+    except OSError:
+        return []
+    recent = sorted(((m, p) for m, p in files if now - m <= _PARITY_TASK_HOURS * 3600),
+                    reverse=True)[:limit]
+    tasks = [_parity_task(p.stem, p, now) for _, p in recent if _PARITY_TASK_ID.match(p.stem)]
+    tasks.sort(key=lambda t: (t["state"] not in ("running", "starting"), -t["updated_at"]))
+    return tasks
+
+
+def _parity_moved(tasks: List[Dict[str, Any]], every: float = 60.0) -> bool:
+    """A comparison has filed something since the parity view was last read, and the last read
+    was a minute or more ago: read it again, so the tiles and charts follow the run."""
+    with _PARITY_WALL_LOCK:
+        last_read = _PARITY_WALL["at"]
+        last_try = max(_PARITY_WALL["at"], _PARITY_WALL["tried"])
+    return any(t["updated_at"] > last_read and (t["finished"] or t.get("done"))
+               and not t.get("preview") for t in tasks) and time.time() - last_try >= every
 
 
 @router.get("/wall/parity")
@@ -3251,6 +3348,9 @@ MANUAL_ESTIMATES_ROOT = Path(os.getenv(
 _PARITY_TASK_ID = re.compile(r"^[a-f0-9]{8,12}$")
 _PARITY_RUNNING: Dict[str, str] = {}          # what was asked -> the task already doing it
 _PARITY_LOCK = threading.Lock()
+# What each background comparison is, for the wall (D-742): its name and when it began. The
+# status file holds the progress; this holds what the status file does not say.
+_PARITY_TASKS: Dict[str, Dict[str, Any]] = {}
 
 
 def _parity_env() -> Dict[str, str]:
@@ -3295,7 +3395,8 @@ def _parity_job(args: List[str], timeout: int = 300) -> Dict[str, Any]:
     return body
 
 
-def _parity_background(args: List[str], key: str = "") -> Dict[str, Any]:
+def _parity_background(args: List[str], key: str = "", label: str = "",
+                       kind: str = "") -> Dict[str, Any]:
     """Start parity_job.py in the background with a status file; the id to poll. The same
     request while one is still running gets the running one's id."""
     _engine_ready()
@@ -3320,6 +3421,8 @@ def _parity_background(args: List[str], key: str = "") -> Dict[str, Any]:
                          cwd=str(_REPO_ROOT))
         if key:
             _PARITY_RUNNING[key] = tid
+        _PARITY_TASKS[tid] = {"label": label or " ".join(args[:2]), "kind": kind or args[0],
+                              "started_at": time.time()}
     return {"started": True, "task_id": tid, "status_url": f"/api/estimate/parity/task/{tid}"}
 
 
@@ -3474,7 +3577,8 @@ def parity_job_run(req: ParityJobRequest, x_sdi_key: Optional[str] = Header(defa
         args += ["--ai", ai]
     if req.read_via_excel:
         args.append("--read-via-excel")
-    return _parity_background(args, key="job|" + "|".join([job.lower(), manual or "", ai or ""]))
+    return _parity_background(args, key="job|" + "|".join([job.lower(), manual or "", ai or ""]),
+                              label=job, kind="job")
 
 
 def _parity_status_file(tid: str) -> Path:
@@ -3562,7 +3666,10 @@ def parity_period(req: ParityPeriodRequest, x_sdi_key: Optional[str] = Header(de
         args.append("--read-via-excel")
     if req.preview:
         return _parity_job(args + ["--preview"])
-    started = _parity_background(args, key="period|" + "|".join(args))
+    started = _parity_background(args, key="period|" + "|".join(args),
+                                 label=f"{req.start} to {req.end}"
+                                 + (f" · {req.client.strip()}" if req.client.strip() else ""),
+                                 kind="period")
     started["period_id"] = started["task_id"]
     return started
 
@@ -3591,7 +3698,58 @@ def parity_two_periods(req: ParityTwoPeriodsRequest,
         args.append("--read-via-excel")
     if req.preview:
         return _parity_job(args + ["--preview"], timeout=600)
-    return _parity_background(args, key="periods|" + "|".join(args))
+    return _parity_background(args, key="periods|" + "|".join(args),
+                              label=f"A {req.a_start} to {req.a_end} against B {req.b_start} to {req.b_end}",
+                              kind="two periods")
+
+
+class ParityJobsRequest(BaseModel):
+    jobs: List[str] = []          # job or drawing numbers
+    text: str = ""                # or pasted: one per line, or separated by commas
+    client: str = ""
+    preview: bool = False
+    read_via_excel: bool = False
+
+
+_JOB_TOKEN = re.compile(r"^\d{3,}[A-Za-z0-9._\-]{0,77}$")
+
+
+@router.post("/parity/jobs")
+def parity_jobs(req: ParityJobsRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """A set of jobs against their manual estimates (D-742), named by job or drawing number:
+    a bare job number takes every drawing estimated under it. A preview answers at once with
+    what would be compared and what could not be; a real run starts in the background."""
+    _check_key(x_sdi_key)
+    words = [w for w in re.split(r"[,;\s]+", " ".join(list(req.jobs) + [req.text or ""])) if w]
+    jobs, seen, rejected = [], set(), []
+    for w in words:
+        w = w.strip().strip(".")
+        if not _JOB_TOKEN.match(w):
+            rejected.append(w)
+        elif w.lower() not in seen:
+            seen.add(w.lower())
+            jobs.append(w)
+    if not jobs:
+        raise HTTPException(status_code=400, detail=(
+            "Name at least one job or drawing number, such as 12002-02-GA."
+            + (f" These are not job numbers: {', '.join(rejected[:8])}." if rejected else "")))
+    if len(jobs) > 200:
+        raise HTTPException(status_code=400, detail=f"{len(jobs)} jobs is more than one set "
+                                                    f"takes (200). Split it, or compare a period.")
+    args = ["jobs", *jobs] + _filters(req.client, "")
+    if req.read_via_excel:
+        args.append("--read-via-excel")
+    if req.preview:
+        body = _parity_job(args + ["--preview"], timeout=600)
+        body["not_job_numbers"] = rejected + list(body.get("not_job_numbers") or [])
+        return body
+    named = jobs[0] + (f" … {jobs[-1]}" if len(jobs) > 1 else "")
+    started = _parity_background(args, key="jobs|" + "|".join(sorted(seen)) + "|" + req.client.lower(),
+                                 label=f"{len(jobs)} job{'s' if len(jobs) != 1 else ''}: {named}"
+                                 + (f" · {req.client.strip()}" if req.client.strip() else ""),
+                                 kind="jobs")
+    started["not_job_numbers"] = rejected
+    return started
 
 
 # ── Print the drawings behind an estimate ────────────────────────────────────
