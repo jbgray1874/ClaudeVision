@@ -271,7 +271,7 @@ def test_the_page_scrolls_and_nothing_in_recent_is_cut_off():
 
 def test_the_page_draws_parity_from_the_wall_read():
     page = WALL.read_text(encoding="utf-8")
-    assert 'id="parity"' in page and 'href="#parity"' in page and 'id="cycleBtn"' in page
+    assert 'id="parity"' in page and 'id="navParity"' in page and 'id="cycleBtn"' in page
     for fn in ("renderParityKpis", "renderParityDist", "renderParityTrend", "renderParityWeeks",
                "renderParityAreas", "renderParityClients", "renderParityMovers",
                "renderParityRecent", "renderParityPeriods"):

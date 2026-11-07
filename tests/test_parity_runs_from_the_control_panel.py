@@ -178,4 +178,4 @@ def test_typing_in_a_box_never_toggles_full_screen_or_jumps_the_page():
     page = WALL.read_text(encoding="utf-8")
     assert 'const typing = e => e.target && /^(input|textarea|select)$/i.test(e.target.tagName);' in page
     assert 'if(!typing(e) && (e.key === "f" || e.key === "F")) fullscreen();' in page
-    assert "if(typing(e)) return;" in page
+    assert "if(typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;" in page

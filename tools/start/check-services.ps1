@@ -92,6 +92,19 @@ foreach ($p in $Ports) {
     }
     if ($verdict -ne "matches HEAD") { $bad++ }
     Write-Host ("  {0}  {1}, commit {2} - {3}" -f $p, $state, $(if ($commit) { $commit } else { "?" }), $verdict) -ForegroundColor $colour
+    # THE VOICE THIS SERVICE GIVES THE PAGES (D-744). A service started another way can lose
+    # the speech settings, and every page then speaks in the device's old voice without a word.
+    # Setting names only, never a value. It does not change the exit code.
+    try {
+        $sp = (Invoke-WebRequest "http://localhost:$p/api/estimate/speech" -UseBasicParsing -TimeoutSec 4).Content | ConvertFrom-Json
+        if ($sp.speech_tts) {
+            Write-Host ("        voice: neural ({0})" -f $sp.speech_voice) -ForegroundColor Green
+        } else {
+            $why = "not stated by this build"
+            if ($sp.speech_reason) { $why = $sp.speech_reason }
+            Write-Host ("        voice: the device's own only - {0}" -f $why) -ForegroundColor Yellow
+        }
+    } catch { }
 }
 
 if ($up -eq 0) {

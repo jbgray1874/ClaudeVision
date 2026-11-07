@@ -1002,7 +1002,95 @@ def wall(x_sdi_key: Optional[str] = Header(default=None)):
     tasks = parity_tasks_for_wall()
     snap["parity_tasks"] = tasks
     snap["parity"] = parity_for_wall(force=_parity_moved(tasks))
+    # THE VOICE THE PAGES WILL USE (D-744), so falling back to the device's voice is seen.
+    voice = speech_status()
+    snap["speech"] = voice
+    if not voice.get("speech_tts") and voice.get("speech_reason"):
+        snap["alerts"] = list(snap.get("alerts") or []) + [
+            "Voice: the pages are using the device's own voice: " + voice["speech_reason"]]
     return snap
+
+
+# ── HISTORY ON THE WALL (D-744) ──────────────────────────────────────────────────────────
+# JG, 7 Nov 2026: "the control panel should have the entire stats / history of runs and parity
+# runs, etc. and we can build vizuals around that and details." Two records: this service's
+# own runs (thirty days, with how each ended, its times, machine, evidence and open items),
+# worked out when asked; and every estimate ever filed in AISheets (src/run_history.py), read
+# from the share in the background at most every SDI_WALL_HISTORY_SECONDS (ten minutes), each
+# summary once, through a cache beside the service's state.
+_RUN_HISTORY_CLI = str(_REPO_ROOT / "src" / "run_history.py")
+_FILED: Dict[str, Any] = {"at": 0.0, "tried": 0.0, "body": None, "busy": False, "error": ""}
+_FILED_LOCK = threading.Lock()
+
+
+def _filed_every() -> float:
+    try:
+        return max(60.0, float(os.getenv("SDI_WALL_HISTORY_SECONDS", "600") or 600))
+    except ValueError:
+        return 600.0
+
+
+def _filed_read() -> None:
+    body, error = None, ""
+    try:
+        _engine_ready()
+        cache = estimate_email.state_dir() / "run_history_cache.json"
+        proc = subprocess.run([_ENGINE_PYTHON, _RUN_HISTORY_CLI, "--json", "--cache", str(cache)],
+                              capture_output=True, text=True, timeout=600, env=_parity_env(),
+                              cwd=str(_REPO_ROOT))
+        line = next((ln for ln in reversed((proc.stdout or "").splitlines())
+                     if ln.strip().startswith("{")), "")
+        got = json.loads(line) if line else {}
+        if got.get("error") or proc.returncode != 0:
+            error = str(got.get("error") or (proc.stderr or "the history read failed").strip()
+                        .splitlines()[-1:] or "the history read failed")[:300]
+        else:
+            body = got
+            for r in body.get("recent") or []:
+                r["book_url"] = _file_link(r.get("workbook"))
+    except HTTPException as exc:
+        error = str(exc.detail)
+    except Exception as exc:                                         # noqa: BLE001
+        error = f"{type(exc).__name__}: {exc}"
+    with _FILED_LOCK:
+        if body is not None:
+            _FILED.update(at=time.time(), body=body)
+        _FILED.update(busy=False, error=error, tried=time.time())
+
+
+def filed_for_wall(force: bool = False) -> Dict[str, Any]:
+    now = time.time()
+    with _FILED_LOCK:
+        last = max(_FILED["at"], _FILED["tried"])
+        if not _FILED["busy"] and (force or now - last >= _filed_every()):
+            _FILED["busy"] = True
+            threading.Thread(target=_filed_read, daemon=True, name="wall-history").start()
+        body, at, busy, error = _FILED["body"], _FILED["at"], _FILED["busy"], _FILED["error"]
+    out = dict(body or {})
+    out.update(state="ready" if body else "reading" if busy else "unavailable",
+               read_at=at or None, age_s=round(now - at) if at else None, refreshing=busy,
+               read_error=error, every_s=_filed_every())
+    return out
+
+
+@router.get("/wall/history")
+def wall_history(days: int = 30, refresh: bool = False,
+                 x_sdi_key: Optional[str] = Header(default=None)):
+    """The control panel's history: this service's runs, every filed estimate, and when each
+    was read."""
+    _check_key(x_sdi_key)
+    import estimate_wall
+    with _LOCK:
+        runs = []
+        for r in _RUNS.values():
+            d = r.as_json()
+            d["review"] = dict(r.review or {})
+            d["sw_waited_s"] = r.sw_waited_s
+            d["sw_wait_since"] = r.sw_wait_since
+            runs.append(d)
+    service = estimate_wall.history_view(runs, days=max(1, min(int(days or 30), 90)))
+    return {"service": service, "filed": filed_for_wall(force=refresh),
+            "kept_days": float(os.getenv("SDI_RUN_HISTORY_DAYS", "30") or 30)}
 
 
 # THE WALL'S PARITY VIEW (D-741) is read from the parity share in the background, at most once
@@ -3355,14 +3443,30 @@ async def estimate_parity(
 # the three speech facts: nothing else about the CRM's settings reaches these pages.
 @router.get("/speech")
 def speech_status():
+    """Whether this service can give the pages the neural voice, and WHY NOT when it cannot
+    (D-744). JG, 7 Nov 2026: "the voice has regressed back to the old one again". Every page
+    falls back to the device's own voice when this says no, silently, so a service started a
+    different way that lost the speech settings sounded like a regression in the pages. It
+    names the missing settings; it never shows a value."""
+    reason, missing = "", []
     try:
         import voicecrm_speech
         st = voicecrm_speech.status()
-    except Exception:                                                # noqa: BLE001
+        missing = [n for n, v in (("SDI_SPEECH_KEY", voicecrm_speech.KEY),
+                                  ("SDI_SPEECH_REGION", voicecrm_speech.REGION)) if not v]
+        if missing:
+            reason = (f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} not set "
+                      f"for this service, so the pages use the device's own voice")
+        elif not st.get("speech_tts"):
+            reason = "SDI_SPEECH_TTS is off for this service"
+    except Exception as exc:                                         # noqa: BLE001
         st = {}
+        reason = f"the speech module could not load here: {type(exc).__name__}: {exc}"[:240]
     return {"speech_ready": bool(st.get("speech_ready")),
             "speech_stt": str(st.get("speech_stt") or "off"),
-            "speech_tts": bool(st.get("speech_tts"))}
+            "speech_tts": bool(st.get("speech_tts")),
+            "speech_voice": str(st.get("speech_voice") or ""),
+            "speech_reason": reason, "speech_missing": missing}
 
 
 class SpeakRequest(BaseModel):

@@ -57,7 +57,14 @@ def test_figures_are_read_whole():
 def test_speech_status_names_only_the_speech_facts(api):
     er, _ = api
     body = er.speech_status()
-    assert set(body) == {"speech_ready", "speech_stt", "speech_tts"}
+    # D-744 adds why the neural voice is off: the voice's name, a reason, and the NAMES of any
+    # missing settings. Never a key or any other value.
+    assert set(body) == {"speech_ready", "speech_stt", "speech_tts", "speech_voice",
+                         "speech_reason", "speech_missing"}
+    assert set(body["speech_missing"]) <= {"SDI_SPEECH_KEY", "SDI_SPEECH_REGION"}
+    import os
+    key = os.getenv("SDI_SPEECH_KEY", "")
+    assert not key or key not in str(body)
 
 
 # ── the e-mail page ─────────────────────────────────────────────────────────────────────

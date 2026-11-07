@@ -39,7 +39,9 @@
   }
   *{box-sizing:border-box}
   html,body{margin:0}
-  html{scroll-behavior:smooth}
+  /* NOTHING SCROLLS UNLESS ASKED (D-744): no smooth scrolling for the browser to start on its
+     own, and the panes that are redrawn every few seconds are never the browser's anchor. */
+  .lanes,.kpis,.fleet,.feed,.ptasks,.side,.bottom,#pKpis,#pMain{overflow-anchor:none}
   body{background:var(--bg);color:var(--ink);font-family:var(--sans);overflow-x:hidden;
        overflow-y:auto;font-variant-numeric:tabular-nums;min-height:100vh}
   /* THE ROOM: a faint engineering grid, a vignette and one slow scan line. */
@@ -408,6 +410,25 @@
   .badge.run{border-color:rgba(34,211,238,.6)} .badge.run .ico{color:var(--accent);display:inline-block;animation:sweep 1.6s linear infinite}
   @media (max-width:1500px){ .parity .kpis{grid-template-columns:repeat(4,minmax(0,1fr))} }
 
+  /* HISTORY (D-744) */
+  .history{display:flex;flex-direction:column;gap:12px;padding-bottom:12px}
+  .hfilter{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 12px 0}
+  .hfilter input,.hfilter select{background:#05080c;border:1px solid var(--line-hi);border-radius:7px;color:var(--ink);
+       font-family:var(--mono);font-size:12px;padding:6px 9px;color-scheme:dark}
+  .hfilter input{flex:1 1 220px;min-width:0}
+  .hfilter .cnt{font-family:var(--mono);font-size:11px;color:var(--ink-3)}
+  .ptable tr.click{cursor:pointer}
+  .ptable tr.click:hover td{background:rgba(34,211,238,.05)}
+  .ptable tr.more td{background:#0a1018;white-space:normal;color:var(--ink-2);font-size:11.5px;line-height:1.55}
+  .ptable tr.more b{color:var(--ink);font-family:var(--mono);font-weight:600}
+  .ptable.tall{max-height:560px}
+  .rsp{width:120px;height:26px;display:block}
+  .evb{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) 44px;gap:8px;align-items:center;font-size:12px;padding:4px 0}
+  .evb .lb{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .evb .bar{height:10px;border-radius:3px;background:var(--line);overflow:hidden}
+  .evb .bar i{display:block;height:100%;background:#3987e5;border-radius:3px}
+  .evb .n{font-family:var(--mono);text-align:right;color:var(--ink)}
+
   /* A smaller screen still reads: the wall stacks and scrolls rather than clipping. */
   @media (max-width:1200px){
     .ops{height:auto;grid-template-rows:none}
@@ -437,9 +458,10 @@
     <div class="clockbox">
       <div class="link"><span class="live-dot" id="liveDot"></span><span id="linkText">connecting</span></div>
       <nav class="nav" aria-label="Sections">
-        <a class="fsbtn" id="navOps" href="#ops" title="Live operations (O)">OPERATIONS</a>
-        <a class="fsbtn" id="navParity" href="#parity" title="Parity: AI against manual (P)">PARITY</a>
-        <button class="fsbtn" id="cycleBtn" type="button" title="Show operations and parity in turn, 45 s each (C); ?cycle=45 starts it">⟳ CYCLE</button>
+        <button class="fsbtn" id="navOps" type="button" title="Live operations (O)">OPERATIONS</button>
+        <button class="fsbtn" id="navParity" type="button" title="Parity: AI against manual (P)">PARITY</button>
+        <button class="fsbtn" id="navHistory" type="button" title="Every run, estimate and comparison (H)">HISTORY</button>
+        <button class="fsbtn" id="cycleBtn" type="button" title="Show operations and parity in turn, 45 s each, for a wall screen. Scrolling yourself stops it. ?cycle=45 in the address starts it">⟳ CYCLE</button>
       </nav>
       <button class="fsbtn" id="fsBtn" type="button" title="Full screen (F)">⛶<span class="wide"> FULL SCREEN</span></button>
       <div><div class="clock" id="clock">--:--:--</div><div class="date" id="date"></div></div>
@@ -591,6 +613,74 @@
           <div class="ptitle"><span><b>Period comparisons</b></span><span class="r" id="pPeriodsN"></span></div>
           <div class="ptable" id="pPeriods"></div>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ HISTORY: EVERY RUN, EVERY FILED ESTIMATE, EVERY COMPARISON (D-744) ══════════════════ -->
+  <section class="history" id="history">
+    <div class="sechead">
+      <div>
+        <h2>HISTORY <b>//</b> RUNS, ESTIMATES AND PARITY</h2>
+        <div class="sub" id="hSub">This service's runs, every estimate filed in AISheets, and every parity comparison</div>
+      </div>
+      <div class="acts">
+        <span class="meta" id="hRead">not read yet</span>
+        <button class="fsbtn" id="hRefresh" type="button" title="Read the history again now">↻ READ AGAIN</button>
+      </div>
+    </div>
+    <section class="kpis" id="hKpis"></section>
+    <div class="prow">
+      <div class="panel chart">
+        <div class="ptitle"><span><b>Runs</b> · per day</span><span class="r" id="hDailyN"></span></div>
+        <div class="plot" id="hDaily"></div>
+        <div class="legend"><span><i style="background:var(--s-done)"></i>Completed</span>
+          <span><i style="background:var(--s-failed)"></i>Failed</span>
+          <span><i style="background:var(--grey)"></i>Stopped</span>
+          <span><i style="background:var(--s-extract)"></i>Pack extracts</span></div>
+      </div>
+      <div class="panel chart">
+        <div class="ptitle"><span><b>Run time</b> · median per day</span><span class="r">minutes, completed estimates</span></div>
+        <div class="plot" id="hTimes"></div>
+        <div class="legend"><span>┄ the median over the whole period</span></div>
+      </div>
+      <div class="panel chart">
+        <div class="ptitle"><span><b>Estimates filed</b> · per month, AISheets</span><span class="r" id="hMonthsN"></span></div>
+        <div class="plot" id="hMonths"></div>
+        <div class="legend"><span>every run folder with its workbook and own summary</span></div>
+      </div>
+    </div>
+    <div class="prow">
+      <div class="panel" style="height:360px;display:flex;flex-direction:column">
+        <div class="ptitle"><span><b>What read the models</b> · completed estimates</span><span class="r" id="hEvN"></span></div>
+        <div class="ptable" id="hEvidence"></div>
+      </div>
+      <div class="panel" style="height:360px;display:flex;flex-direction:column">
+        <div class="ptitle"><span><b>By client</b></span><span class="r" id="hClientsN"></span></div>
+        <div class="ptable" id="hClients"></div>
+      </div>
+      <div class="panel" style="height:360px;display:flex;flex-direction:column">
+        <div class="ptitle"><span><b>Re-estimated drawings</b> · unit cost run by run</span><span class="r" id="hRepeatsN"></span></div>
+        <div class="ptable" id="hRepeats"></div>
+      </div>
+    </div>
+    <div class="panel" style="display:flex;flex-direction:column">
+      <div class="ptitle"><span><b>Every run</b> · this service's record</span><span class="r" id="hRunsN"></span></div>
+      <div class="hfilter"><input id="hRunsQ" autocomplete="off" placeholder="Filter by drawing, client, machine or what read the models">
+        <select id="hRunsO"><option value="">every outcome</option><option value="done">completed</option><option value="failed">failed</option><option value="stopped">stopped</option></select>
+        <span class="cnt" id="hRunsC"></span></div>
+      <div class="ptable tall" id="hRuns"></div>
+    </div>
+    <div class="prow wide">
+      <div class="panel" style="display:flex;flex-direction:column">
+        <div class="ptitle"><span><b>Every parity comparison</b> · filed</span><span class="r" id="hParityN"></span></div>
+        <div class="hfilter"><input id="hParityQ" autocomplete="off" placeholder="Search by job, drawing or client"><span class="cnt" id="hParityC"></span></div>
+        <div class="ptable tall" id="hParity"></div>
+      </div>
+      <div class="panel" style="display:flex;flex-direction:column">
+        <div class="ptitle"><span><b>Every filed estimate</b> · newest first</span><span class="r" id="hFiledN"></span></div>
+        <div class="hfilter"><input id="hFiledQ" autocomplete="off" placeholder="Filter by drawing or client"><span class="cnt" id="hFiledC"></span></div>
+        <div class="ptable tall" id="hFiled"></div>
       </div>
     </div>
   </section>
@@ -1068,7 +1158,7 @@ function fullscreen(){
 $("fsBtn").addEventListener("click", fullscreen);
 const typing = e => e.target && /^(input|textarea|select)$/i.test(e.target.tagName);
 document.addEventListener("keydown", e => { if(!typing(e) && (e.key === "f" || e.key === "F")) fullscreen(); });
-let resizeT; addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(render, 150); });
+let resizeT; addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => { render(); renderHistory(); }, 150); });
 
 
 /* ══ PARITY (D-741): drawn from the service's `parity`, read from the parity share ════════
@@ -1531,29 +1621,259 @@ $("pRefresh").addEventListener("click", async () => {
   try{ await fetch("/api/estimate/wall/parity?refresh=1", {headers:{"X-SDI-Key": API_KEY}, cache:"no-store"}); }catch(e){}
 });
 
-/* ── SECTIONS: OPERATIONS AND PARITY, AND A CYCLE BETWEEN THEM FOR THE WALL SCREEN ── */
-function show(id){
-  document.getElementById(id).scrollIntoView({behavior:"smooth", block:"start"});
+/* ══ HISTORY (D-744) ═══════════════════════════════════════════════════════════════════════
+   Read when the page opens and once a minute after, never on the four-second beat: it is the
+   record, not the moment. The service's runs come from its own thirty-day record; every filed
+   estimate from AISheets, read in the background; every comparison from the parity folder. */
+let hist = null, histAt = 0, histBusy = false;
+const OUTW = {done:["green", "Completed"], failed:["red", "Failed"], stopped:["amber", "Stopped"]};
+const dayLabel = t => { const d = new Date(t * 1000); return `${d.getDate()} ${d.toLocaleString("en-GB", {month:"short"})}`; };
+const minutes = s => s == null ? null : s / 60;
+async function readHistory(force){
+  if(histBusy) return;
+  histBusy = true;
+  try{
+    hist = await api(`/api/estimate/wall/history${force ? "?refresh=1" : ""}`);
+    histAt = Date.now();
+    renderHistory();
+  }catch(e){ setText("hRead", "could not read: " + e.message); }
+  finally{ histBusy = false; }
 }
+function renderHistory(){
+  if(!hist) return;
+  const sv = hist.service || {}, t = sv.totals || {}, f = hist.filed || {}, ft = f.totals || {};
+  const fAge = f.age_s == null ? "" : f.age_s < 90 ? "just now" : Math.round(f.age_s / 60) + " min ago";
+  setText("hRead", `runs read now · AISheets ${f.state === "ready" ? "read " + fAge : f.state === "reading" ? "being read…" : "not read"}`);
+  setText("hSub", `This service's runs over the last ${sv.days} days (it keeps ${hist.kept_days}) · every estimate filed in AISheets${ft.first_day ? " since " + ft.first_day : ""} · every parity comparison`);
+  const tiles = [
+    [`Estimates · ${sv.days} days`, `${t.estimates ?? 0}`, `✓ ${t.done ?? 0} · ✕ ${t.failed ?? 0} failed · ■ ${t.stopped ?? 0} stopped · ${t.extracts ?? 0} extracts`],
+    ["Success", t.success_pct == null ? "—" : `${t.success_pct}<small>%</small>`, "completed of those that finished or failed"],
+    ["Median run", fmtDur(t.median_s), `90th percentile ${fmtDur(t.p90_s)} · fastest ${fmtDur(t.fastest_s)}`],
+    ["Engine time", `${t.engine_hours ?? 0}<small>h</small>`, `over ${t.drawings ?? 0} drawings for ${t.clients ?? 0} clients`],
+    ["Open items", t.open_items_median == null ? "—" : `${t.open_items_median}`, `median per completed run · ${t.with_review ?? 0} runs with a review tally`],
+    ["Filed estimates", f.state === "ready" ? `${ft.estimates ?? 0}` : "—", f.state === "ready" ? `all time · ${ft.drawings} drawings · ${ft.clients} clients` : (f.read_error ? esc(f.read_error) : "AISheets is being read")],
+    ["Re-estimated", f.state === "ready" ? `${ft.re_estimated ?? 0}` : "—", "drawings estimated more than once, all time"],
+    ["Median unit cost", f.state === "ready" && ft.median_unit_gbp != null ? gbp(ft.median_unit_gbp) : "—", f.state === "ready" ? `of ${ft.priced} priced estimates · ${ft.not_priced} with no price read` : ""],
+  ];
+  $("hKpis").innerHTML = tiles.map(([k, v, sub]) => `<div class="panel kpi"><div class="k">${esc(k)}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`).join("");
+  renderHDaily(sv.daily || []); renderHTimes(sv.daily || [], t); renderHMonths(f);
+  renderHEvidence(sv.evidence || [], sv.machines || []); renderHClients(sv.clients || [], f.clients || []);
+  renderHRepeats(f); renderHRuns(); renderHFiled();
+}
+function renderHDaily(days){
+  const el = $("hDaily"), {w, h} = box(el);
+  const total = days.reduce((a, d) => a + d.done + d.failed + d.stopped + d.extracts, 0);
+  setText("hDailyN", total ? `${total} finished` : "");
+  if(!total){ emptyPlot(el, w, h, "Nothing finished in this period"); return; }
+  const L = 26, R = 8, T = 10, B = 20, pw = w - L - R, ph = h - T - B;
+  const ymax = niceMax(Math.max(1, ...days.map(d => d.done + d.failed + d.stopped + d.extracts)));
+  const y = v => T + ph - (v / ymax) * ph, slot = pw / days.length, bw = Math.max(3, Math.min(22, slot - 3));
+  let g = `<g class="grid">${[0, .5, 1].map(f => `<line x1="${L}" x2="${L + pw}" y1="${y(ymax * f)}" y2="${y(ymax * f)}"/>`).join("")}</g><g class="axis">`;
+  g += [0, 1].map(f => `<text x="${L - 6}" y="${y(ymax * f) + 3}" text-anchor="end">${Math.round(ymax * f)}</text>`).join("");
+  days.forEach((d, i) => { if(i % 5 === (days.length - 1) % 5) g += `<text x="${L + i * slot + slot / 2}" y="${T + ph + 14}" text-anchor="middle">${dayLabel(d.day_start)}</text>`; });
+  g += `</g>`;
+  days.forEach((d, i) => {
+    const bx = L + i * slot + (slot - bw) / 2; let base = T + ph;
+    const segs = [["done", "var(--s-done)"], ["failed", "var(--s-failed)"], ["stopped", "var(--grey)"], ["extracts", "var(--s-extract)"]].filter(([k]) => d[k] > 0);
+    segs.forEach(([k, col], j) => {
+      const hh = (d[k] / ymax) * ph, top = base - hh + (j > 0 ? 2 : 0), rr = j === segs.length - 1 ? Math.min(4, bw / 2, hh) : 0;
+      g += `<path fill="${col}" d="M${bx},${base} V${top + rr} ${rr ? `Q${bx},${top} ${bx + rr},${top} H${bx + bw - rr} Q${bx + bw},${top} ${bx + bw},${top + rr}` : `H${bx + bw}`} V${base} Z"/>`;
+      base -= hh;
+    });
+    const tip = `<b>${dayLabel(d.day_start)}</b><div class="m">✓ ${d.done} completed · ✕ ${d.failed} failed · ■ ${d.stopped} stopped · ${d.extracts} extracts</div>${d.median_s ? `<div class="m">median run ${fmtDur(d.median_s)}</div>` : ""}`;
+    g += `<rect data-tip="${esc(tip)}" x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Runs finished per day">${g}</svg>`;
+}
+function renderHTimes(days, t){
+  const el = $("hTimes"), {w, h} = box(el);
+  const vals = days.map(d => minutes(d.median_s)).filter(v => v != null);
+  if(!vals.length){ emptyPlot(el, w, h, "No completed estimate in this period"); return; }
+  const L = 34, R = 70, T = 10, B = 20, pw = w - L - R, ph = h - T - B;
+  const ymax = niceMax(Math.max(...vals, minutes(t.median_s) || 0) * 1.1);
+  const y = v => T + ph - (v / ymax) * ph, slot = pw / days.length, cx = i => L + i * slot + slot / 2;
+  let g = `<g class="grid">${[0, .5, 1].map(f => `<line x1="${L}" x2="${L + pw}" y1="${y(ymax * f)}" y2="${y(ymax * f)}"/>`).join("")}</g><g class="axis">`;
+  g += [0, .5, 1].map(f => `<text x="${L - 6}" y="${y(ymax * f) + 3}" text-anchor="end">${Math.round(ymax * f)}</text>`).join("");
+  days.forEach((d, i) => { if(i % 5 === (days.length - 1) % 5) g += `<text x="${cx(i)}" y="${T + ph + 14}" text-anchor="middle">${dayLabel(d.day_start)}</text>`; });
+  g += `</g>`;
+  if(t.median_s){ g += `<line class="refline p90" x1="${L}" x2="${L + pw}" y1="${y(minutes(t.median_s))}" y2="${y(minutes(t.median_s))}"/><text class="reflabel" x="${L + pw + 6}" y="${y(minutes(t.median_s)) + 3}">median ${fmtDur(t.median_s)}</text>`; }
+  let path = "", open = false;
+  days.forEach((d, i) => { const v = minutes(d.median_s); if(v == null){ open = false; return; } path += `${open ? "L" : "M"}${cx(i).toFixed(1)},${y(v).toFixed(1)} `; open = true; });
+  g += `<path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>`;
+  days.forEach((d, i) => {
+    const v = minutes(d.median_s);
+    if(v != null) g += `<circle cx="${cx(i)}" cy="${y(v)}" r="4" fill="var(--accent)" stroke="var(--bg)" stroke-width="2"/>`;
+    g += `<rect data-tip="${esc(`<b>${dayLabel(d.day_start)}</b><div class='m'>${v != null ? "median " + fmtDur(d.median_s) + " over " + d.done + " completed" : "no completed estimate"}</div>`)}" x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Median run time per day">${g}</svg>`;
+}
+function renderHMonths(f){
+  const el = $("hMonths"), {w, h} = box(el), ms = f.months || [];
+  const total = ms.reduce((a, m) => a + m.estimates, 0);
+  setText("hMonthsN", f.state === "ready" ? `${total} in ${ms.length} months` : "");
+  if(f.state !== "ready"){ emptyPlot(el, w, h, f.state === "reading" ? "Reading AISheets…" : (f.read_error || "AISheets could not be read")); return; }
+  if(!total){ emptyPlot(el, w, h, "No estimate filed in these months"); return; }
+  const L = 30, R = 8, T = 16, B = 20, pw = w - L - R, ph = h - T - B;
+  const ymax = niceMax(Math.max(1, ...ms.map(m => m.estimates)));
+  const y = v => T + ph - (v / ymax) * ph, slot = pw / ms.length, bw = Math.max(4, Math.min(30, slot - 4));
+  let g = `<g class="grid">${[0, .5, 1].map(f => `<line x1="${L}" x2="${L + pw}" y1="${y(ymax * f)}" y2="${y(ymax * f)}"/>`).join("")}</g><g class="axis">`;
+  g += [0, 1].map(f => `<text x="${L - 6}" y="${y(ymax * f) + 3}" text-anchor="end">${Math.round(ymax * f)}</text>`).join("");
+  const mon = k => { const [yy, mm] = k.split("-"); return ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][Number(mm) - 1] + (mm === "01" ? " " + yy.slice(2) : ""); };
+  ms.forEach((m, i) => { if(i % 3 === (ms.length - 1) % 3) g += `<text x="${L + i * slot + slot / 2}" y="${T + ph + 14}" text-anchor="middle">${mon(m.month)}</text>`; });
+  g += `</g>`;
+  ms.forEach((m, i) => {
+    const x = L + i * slot + (slot - bw) / 2;
+    const tip = `<b>${mon(m.month)} ${m.month.slice(0, 4)}</b><div class="m">${m.estimates} estimates · ${m.drawings} drawings · ${m.clients} clients</div>`;
+    if(m.estimates) g += roundTopBar(x, y(m.estimates), bw, T + ph, "var(--s-done)", tip);
+    g += `<rect data-tip="${esc(tip)}" x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>`;
+  });
+  const last = ms[ms.length - 1];
+  if(last && last.estimates) g += `<text class="reflabel" x="${L + (ms.length - 1) * slot + slot / 2}" y="${y(last.estimates) - 5}" text-anchor="middle" style="fill:var(--ink)">${last.estimates}</text>`;
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Estimates filed per month">${g}</svg>`;
+}
+function renderHEvidence(ev, machines){
+  const n = ev.reduce((a, e) => a + e.count, 0);
+  setText("hEvN", n ? `${n} runs` : "");
+  const top = Math.max(1, ...ev.map(e => e.count));
+  $("hEvidence").innerHTML = (ev.length ? ev.map(e => `<div class="evb"><span class="lb" title="${esc(e.label)}">${e.caution ? "▲ " : ""}${esc(e.label)}</span><span class="bar"><i style="width:${(100 * e.count / top).toFixed(1)}%"></i></span><span class="n">${e.count}</span></div>`).join("")
+      : '<div class="empty">No completed estimate in this period.</div>')
+    + (machines.length ? `<table style="margin-top:10px"><tr><th>Machine</th><th class="n">Runs</th><th class="n">Busy</th><th class="n">Failed</th></tr>${machines.map(m => `<tr><td class="d">${esc(m.machine)}</td><td class="n">${m.runs}</td><td class="n">${fmtDur(m.busy_s)}</td><td class="n">${m.failed}</td></tr>`).join("")}</table>` : "");
+}
+function renderHClients(recent, all){
+  const allBy = {}; all.forEach(c => { allBy[c.client.toLowerCase()] = c; });
+  const names = [...new Set([...recent.map(c => c.client), ...all.map(c => c.client)])];
+  setText("hClientsN", names.length ? `${names.length} clients` : "");
+  if(!names.length){ $("hClients").innerHTML = '<div class="empty">No runs yet.</div>'; return; }
+  const recBy = {}; recent.forEach(c => { recBy[c.client.toLowerCase()] = c; });
+  $("hClients").innerHTML = `<table><tr><th>Client</th><th class="n">Runs · period</th><th class="n">Failed</th><th class="n">Median</th><th class="n">Filed · all time</th><th class="n">Last</th></tr>`
+    + names.slice(0, 60).map(nm => { const r = recBy[nm.toLowerCase()] || {}, a = allBy[nm.toLowerCase()] || {};
+      return `<tr><td class="c" title="${esc(nm)}">${esc(nm)}</td><td class="n">${r.estimates ?? "—"}</td><td class="n">${r.failed ?? "—"}</td><td class="n">${fmtDur(r.median_s)}</td><td class="n">${a.estimates ?? "—"}</td><td class="t">${a.last ? esc(a.last) : r.last_at ? dayLabel(r.last_at) : ""}</td></tr>`; }).join("") + "</table>";
+}
+function priceSpark(points){
+  const vals = points.map(p => p[1]).filter(v => v != null);
+  if(vals.length < 2) return "";
+  const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
+  const pts = vals.map((v, i) => `${(4 + i * 112 / (vals.length - 1)).toFixed(1)},${(22 - (v - lo) / span * 18).toFixed(1)}`);
+  return `<svg class="rsp" viewBox="0 0 120 26"><polyline points="${pts.join(" ")}" fill="none" stroke="#22d3ee" stroke-width="1.5"/>${pts.map(p => `<circle cx="${p.split(",")[0]}" cy="${p.split(",")[1]}" r="2.6" fill="#22d3ee"/>`).join("")}</svg>`;
+}
+function renderHRepeats(f){
+  const rows = f.repeats || [];
+  setText("hRepeatsN", f.state === "ready" ? `${(f.totals || {}).re_estimated || 0} drawings` : "");
+  if(f.state !== "ready"){ $("hRepeats").innerHTML = `<div class="empty">${f.state === "reading" ? "Reading AISheets…" : esc(f.read_error || "AISheets could not be read.")}</div>`; return; }
+  if(!rows.length){ $("hRepeats").innerHTML = '<div class="empty">No drawing has been estimated twice yet.</div>'; return; }
+  $("hRepeats").innerHTML = `<table><tr><th>Drawing</th><th class="n">Runs</th><th>Unit cost, run by run</th><th class="n">Latest</th><th class="n">Since first</th></tr>`
+    + rows.map(r => `<tr title="${esc(r.client)} · at ${r.units} off${r.other_quantities ? " · " + r.other_quantities + " run(s) at another quantity, not compared" : ""}${r.not_priced ? " · " + r.not_priced + " run(s) with no price read" : ""}"><td class="d">${esc(r.drawing)}</td><td class="n">${r.runs}</td><td>${priceSpark(r.points)}</td><td class="n">${gbp(r.last_unit_gbp)}</td>
+      <td class="n">${r.change_gbp == null ? "—" : (r.change_gbp < 0 ? "▼ " : r.change_gbp > 0 ? "▲ " : "= ") + gbp(Math.abs(r.change_gbp)) + (r.change_pct != null ? " · " + Math.abs(r.change_pct) + "%" : "")}</td></tr>`).join("") + "</table>";
+}
+let hOpen = new Set();
+function renderHRuns(){
+  if(!hist) return;
+  const rows = (hist.service || {}).runs || [], q = $("hRunsQ").value.trim().toLowerCase(), o = $("hRunsO").value;
+  const keep = rows.filter(r => (!o || r.outcome === o) && (!q || `${r.drawing_number} ${r.client} ${r.runner} ${r.evidence}`.toLowerCase().includes(q)));
+  setText("hRunsN", `${rows.length} runs${(hist.service || {}).runs_left_out ? " · " + hist.service.runs_left_out + " older not listed" : ""}`);
+  setText("hRunsC", q || o ? `${keep.length} shown` : "");
+  if(!keep.length){ $("hRuns").innerHTML = '<div class="empty">No run matches.</div>'; return; }
+  $("hRuns").innerHTML = `<table><tr><th>Finished</th><th>Drawing</th><th>Client</th><th class="n">Qty</th><th>Outcome</th><th class="n">Time</th><th class="n">Unit cost</th><th>Machine</th><th>Models</th><th>Open</th></tr>`
+    + keep.map(r => {
+      const [rag, word] = OUTW[r.outcome] || ["grey", r.outcome], oi = r.open_items;
+      const open = oi ? (oi.total ? `${oi.total} open` : "nothing open") : "—";
+      const when = r.finished_at ? `${dayLabel(r.finished_at)} ${fmtClock(r.finished_at)}` : "";
+      let h = `<tr class="click" data-run="${esc(r.run_id)}"><td class="t">${when}</td><td class="d">${esc(r.drawing_number || "")}${r.job_type ? ' <span style="color:var(--ink-3)">· extract</span>' : ""}</td><td class="c">${esc(r.client || "")}</td><td class="n">${r.units ?? ""}</td><td>${badge(rag, word)}</td><td class="n">${fmtDur(r.seconds)}</td><td class="n">${gbp(r.engine_price_gbp)}</td><td class="t">${esc(String(r.runner || "").replace(/-[0-9a-f]{6,}(-s\d+)?$/, ""))}</td><td class="c" title="${esc(r.evidence)}">${r.evidence_caution ? "▲ " : ""}${esc(r.evidence)}</td><td class="t">${esc(open)}</td></tr>`;
+      if(hOpen.has(r.run_id)){
+        const qp = (r.quantity_prices || []).map(x => `${x.quantity} off ${gbp(x.unit_gbp)}`).join(" · ");
+        h += `<tr class="more"><td colspan="10">Run <b>${esc(r.run_id)}</b> · queued ${r.queued_at ? fmtClock(r.queued_at) : "?"}, waited ${fmtDur(r.wait_seconds)} for a runner${r.sw_waited_s ? ", " + fmtDur(r.sw_waited_s) + " for SolidWorks" : ""} · ran ${fmtDur(r.seconds)} on ${esc(r.runner || "?")}${r.requested_by ? " · asked by " + esc(r.requested_by) : ""}<br>
+          ${qp ? "Unit cost by quantity: <b>" + esc(qp) + "</b><br>" : ""}${oi && oi.phrase ? "Open: " + esc(oi.phrase) + "<br>" : ""}${r.error ? '<span style="color:#ff8a8a">✕ ' + esc(r.error) + "</span><br>" : ""}${r.walkthrough_url ? `<a href="${esc(r.walkthrough_url)}" target="_blank" rel="noopener">walkthrough ↗</a>` : ""}</td></tr>`;
+      }
+      return h;
+    }).join("") + "</table>";
+}
+$("hRuns").addEventListener("click", e => {
+  const tr = e.target.closest && e.target.closest("tr.click");
+  if(!tr || e.target.closest("a")) return;
+  const id = tr.dataset.run; hOpen.has(id) ? hOpen.delete(id) : hOpen.add(id); renderHRuns();
+});
+$("hRunsQ").addEventListener("input", renderHRuns);
+$("hRunsO").addEventListener("change", renderHRuns);
+function renderHFiled(){
+  if(!hist) return;
+  const f = hist.filed || {}, rows = f.recent || [], q = $("hFiledQ").value.trim().toLowerCase();
+  if(f.state !== "ready"){ $("hFiled").innerHTML = `<div class="empty">${f.state === "reading" ? "Reading AISheets…" : esc(f.read_error || "AISheets could not be read.")}</div>`; return; }
+  const keep = rows.filter(r => !q || `${r.drawing} ${r.client}`.toLowerCase().includes(q));
+  setText("hFiledN", `newest ${rows.length} of ${(f.totals || {}).estimates || 0}`);
+  setText("hFiledC", q ? `${keep.length} shown` : "");
+  $("hFiled").innerHTML = keep.length ? `<table><tr><th>Filed</th><th>Drawing</th><th>Client</th><th class="n">Qty</th><th class="n">Unit cost</th><th></th></tr>`
+    + keep.map(r => `<tr><td class="t">${fmtStamp(r.stamp)}</td><td class="d">${esc(r.drawing)}</td><td class="c">${esc(r.client)}</td><td class="n">${r.units}</td><td class="n">${gbp(r.unit_gbp)}</td><td>${r.book_url ? `<a href="${esc(r.book_url)}" target="_blank" rel="noopener">book ↗</a>` : ""}</td></tr>`).join("") + "</table>"
+    : '<div class="empty">No estimate matches.</div>';
+}
+$("hFiledQ").addEventListener("input", renderHFiled);
+let hParityT = null;
+async function searchParity(){
+  const q = $("hParityQ").value.trim();
+  try{
+    const r = await api(`/api/estimate/parity/reports${q ? "?q=" + encodeURIComponent(q) : ""}`);
+    const rows = r.reports || [];
+    setText("hParityN", `${rows.length} comparison${rows.length === 1 ? "" : "s"}${rows.length >= 200 ? " (newest 200)" : ""}`);
+    setText("hParityC", q ? `matching "${q}"` : "");
+    $("hParity").innerHTML = rows.length ? `<table><tr><th>Filed</th><th>Drawing</th><th>Client</th><th>Outcome</th><th class="n">Variance</th><th class="n">AI</th><th class="n">Manual</th><th>Report</th></tr>`
+      + rows.map(x => { const hd = x.headline || {}, qq = x.quantity || {};
+        const ai = qq.ai_unit_at_manual_qty ?? hd.ai_unit_cost_gbp, mu = hd.manual_unit_cost_gbp;
+        const sp = ai != null && mu ? (ai - mu) / Math.abs(mu) * 100 : null;
+        return `<tr><td class="t">${fmtStamp(x.stamp)}</td><td class="d">${esc(x.drawing)}</td><td class="c">${esc(x.client)}</td><td>${outcomeBadge(x.outcome)}</td><td class="n">${pct(sp, true)}</td><td class="n">${gbp(ai)}</td><td class="n">${gbp(mu)}</td><td>${x.report_url ? `<a href="${esc(x.report_url)}" target="_blank" rel="noopener">report ↗</a>` : ""}${x.listen_url ? ` · <a href="${esc(x.listen_url)}" target="_blank" rel="noopener">listen</a>` : ""}</td></tr>`; }).join("") + "</table>"
+      : '<div class="empty">No comparison matches.</div>';
+  }catch(e){ $("hParity").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+$("hParityQ").addEventListener("input", () => { clearTimeout(hParityT); hParityT = setTimeout(searchParity, 400); });
+$("hRefresh").addEventListener("click", () => { setText("hRead", "reading again…"); readHistory(true); searchParity(); });
+setTimeout(() => { readHistory(false); searchParity(); }, 1200);
+setInterval(() => readHistory(false), 60000);
+
+/* ── SECTIONS: OPERATIONS AND PARITY, AND A CYCLE BETWEEN THEM FOR THE WALL SCREEN ── */
+/* THE PAGE MOVES ONLY WHEN SOMEBODY ASKS (D-744). JG, 7 Nov 2026: "The control panel scrolls
+   down by itself. let's stop that". PARITY used to be a link to #parity, so the address kept it
+   and every refresh glided down to parity on its own. The buttons now move the page without
+   touching the address, a page opened with a #section in it starts at the top, and CYCLE runs
+   only when switched on and stops the moment anybody scrolls. ?view=parity opens at parity on
+   purpose, for a wall screen. */
+function show(id, smooth){
+  const top = id === "ops" ? 0 : document.getElementById(id).getBoundingClientRect().top + scrollY - 8;
+  scrollTo({top, behavior: smooth === false ? "auto" : "smooth"});
+}
+if(location.hash){
+  history.replaceState(null, "", location.pathname + location.search);
+  scrollTo({top: 0, behavior: "auto"});
+}
+$("navOps").addEventListener("click", () => show("ops"));
+$("navParity").addEventListener("click", () => show("parity"));
+$("navHistory").addEventListener("click", () => show("history"));
 function markSection(){
-  const onParity = $("parity").getBoundingClientRect().top < innerHeight * 0.45;
-  $("navParity").classList.toggle("on", onParity); $("navOps").classList.toggle("on", !onParity);
+  const onHistory = $("history").getBoundingClientRect().top < innerHeight * 0.45;
+  const onParity = !onHistory && $("parity").getBoundingClientRect().top < innerHeight * 0.45;
+  $("navHistory").classList.toggle("on", onHistory);
+  $("navParity").classList.toggle("on", onParity); $("navOps").classList.toggle("on", !onParity && !onHistory);
 }
 addEventListener("scroll", markSection, {passive:true});
 let cycleT = null;
 function cycle(on, secs){
   clearInterval(cycleT); cycleT = null;
   $("cycleBtn").classList.toggle("on", !!on);
+  $("cycleBtn").textContent = on ? `⟳ CYCLE ON · ${secs || 45}s` : "⟳ CYCLE";
   if(on) cycleT = setInterval(() => show($("navParity").classList.contains("on") ? "ops" : "parity"), (secs || 45) * 1000);
 }
 $("cycleBtn").addEventListener("click", () => cycle(!cycleT));
+// Somebody scrolling, swiping or paging is reading: the cycle stops for them.
+["wheel", "touchstart"].forEach(ev => addEventListener(ev, () => { if(cycleT) cycle(false); }, {passive:true}));
 document.addEventListener("keydown", e => {
-  if(typing(e)) return;
+  if(typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;
+  if(cycleT && /^(ArrowUp|ArrowDown|PageUp|PageDown|Home|End| )$/.test(e.key)) cycle(false);
   if(e.key === "p" || e.key === "P") show("parity");
   if(e.key === "o" || e.key === "O") show("ops");
-  if(e.key === "c" || e.key === "C") cycle(!cycleT);
+  if(e.key === "h" || e.key === "H") show("history");
 });
-(() => { const c = Number(new URLSearchParams(location.search).get("cycle")); if(c >= 10) cycle(true, c); })();
+(() => {
+  const q = new URLSearchParams(location.search), c = Number(q.get("cycle"));
+  if(q.get("view") === "parity" || q.get("view") === "history") setTimeout(() => show(q.get("view"), false), 800);
+  if(c >= 10) cycle(true, c);
+})();
 markSection();
 
 tick(); setInterval(tick, 1000);
