@@ -526,6 +526,13 @@ as xAI/LLM estimates so estimators know to verify (see Pending #3 below).
   stays a line, even with no recorded source. Do not turn inferred work into a question or drop
   it from the price. "Honest flag" is for where there is nothing to infer from. (D-715 and D-716
   did the opposite on 12676-01-GA2 and were reverted in ad86873f.)
+- **JIRA STAYS CURRENT (JG, 7 Nov 2026): "this needs to be constantly updated. we need to update
+  the start and end dates also as we go".** After each pushed change, comment on the SCRUM issue it
+  serves: what changed, the commit, the status. Set Start date (`customfield_10015`) when work on an
+  issue begins, from its first commit, and Due date when its development finishes. Status: To Do,
+  then In Progress while being built, In Review when built, tested and live on the laptop, and Done
+  only when JG accepts. Work done or under way that Jira does not have gets its own issue. No
+  customer names in Jira.
 - **Confirm ALL related files deploy**, not just the obvious one (the section-detection pair gap).
 - **Solutions must EXTEND across all drawings**, not special-case 1282 (general recognisers, not
   enumerated lists).
