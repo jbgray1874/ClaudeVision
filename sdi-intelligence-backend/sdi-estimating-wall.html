@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estimating Wall</title>
+<!--
+  THE ESTIMATING WALL (D-737). JG, 7 Nov 2026: "build the full-screen page for the wall monitor
+  ... something SUPER impressive and techie ... runtime stats, KPIs around run times, monitoring
+  on activity, red amber green on running."
+
+  Everything on it comes from GET /api/estimate/wall, worked out by estimate_wall.py on the
+  service (tested there); this page only draws it and ticks the clocks between reads. No data
+  of its own, no external files: a wall PC on the LAN needs nothing but the service.
+
+  Every colour carries a word and an icon beside it, never colour alone:
+    ✓ green   on pace / ready        ▲ amber   slow, waiting for SolidWorks, Document Manager
+    ✕ red     late, silent, erring, offline       ○ grey   a planned machine not yet connected
+-->
+<style>
+  :root{
+    color-scheme: dark;
+    --bg:#060a0f; --surface:#0b1118; --panel:rgba(12,19,27,.86); --panel-2:#0f1822;
+    --line:#182634; --line-hi:#22405a;
+    --ink:#e8f1f6; --ink-2:#a3b6c4; --ink-3:#647b8d;
+    --accent:#22d3ee; --accent-dim:rgba(34,211,238,.14);
+    --good:#0ca30c; --warn:#fab219; --bad:#d03b3b; --grey:#5b6b78;
+    --s-done:#3987e5; --s-failed:#d03b3b; --s-extract:#9085e9;
+    --mono:"Cascadia Code","JetBrains Mono",Consolas,"SFMono-Regular",Menlo,monospace;
+    --sans:"Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);overflow:hidden;
+       font-variant-numeric:tabular-nums}
+  /* THE ROOM: a faint engineering grid, a vignette and one slow scan line. */
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+    background:
+      radial-gradient(ellipse at 50% 0%, rgba(34,211,238,.07), transparent 60%),
+      linear-gradient(rgba(34,211,238,.035) 1px, transparent 1px) 0 0/40px 40px,
+      linear-gradient(90deg, rgba(34,211,238,.035) 1px, transparent 1px) 0 0/40px 40px;}
+  body::after{content:"";position:fixed;left:0;right:0;height:140px;top:-140px;z-index:0;
+    pointer-events:none;background:linear-gradient(transparent, rgba(34,211,238,.05), transparent);
+    animation:scan 9s linear infinite}
+  @keyframes scan{to{transform:translateY(calc(100vh + 140px))}}
+  @media (prefers-reduced-motion: reduce){body::after{display:none}.pulse,.live-dot{animation:none!important}}
+
+  .wall{position:relative;z-index:1;height:100vh;display:grid;gap:12px;padding:14px 18px 10px;
+        grid-template-rows:auto auto minmax(0,1.55fr) minmax(0,1fr) auto}
+
+  /* ── HEADER ─────────────────────────────────────────────── */
+  header{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:16px}
+  .brand{display:flex;align-items:center;gap:12px;min-width:0}
+  .mark{width:38px;height:38px;flex:none}
+  .brand h1{margin:0;font-family:var(--mono);font-size:17px;letter-spacing:.18em;font-weight:600;
+            white-space:nowrap}
+  .brand h1 b{color:var(--accent);font-weight:600}
+  .brand .sub{font-family:var(--mono);font-size:11px;color:var(--ink-3);letter-spacing:.14em;
+              margin-top:3px;white-space:nowrap}
+  .banner{display:flex;align-items:center;gap:10px;padding:9px 18px;border-radius:999px;
+          border:1px solid var(--line-hi);background:var(--panel);font-family:var(--mono);
+          font-size:13px;letter-spacing:.12em;text-transform:uppercase;white-space:nowrap}
+  .banner .ico{font-size:15px}
+  .banner.green{border-color:rgba(12,163,12,.55);box-shadow:0 0 22px rgba(12,163,12,.18)}
+  .banner.amber{border-color:rgba(250,178,25,.6);box-shadow:0 0 22px rgba(250,178,25,.2)}
+  .banner.red{border-color:rgba(208,59,59,.7);box-shadow:0 0 26px rgba(208,59,59,.3);
+              animation:alarm 1.6s ease-in-out infinite}
+  @keyframes alarm{50%{box-shadow:0 0 6px rgba(208,59,59,.15)}}
+  .clockbox{justify-self:end;text-align:right;display:flex;gap:18px;align-items:center}
+  .clock{font-family:var(--mono);font-size:34px;font-weight:600;letter-spacing:.04em;line-height:1}
+  .date{font-family:var(--mono);font-size:11px;color:var(--ink-3);letter-spacing:.12em;margin-top:4px}
+  .link{font-family:var(--mono);font-size:11px;color:var(--ink-2);display:flex;align-items:center;
+        gap:7px;letter-spacing:.06em}
+  .live-dot{width:9px;height:9px;border-radius:50%;background:var(--good);
+            box-shadow:0 0 10px var(--good);animation:blink 2s ease-in-out infinite}
+  .live-dot.lost{background:var(--bad);box-shadow:0 0 10px var(--bad)}
+  @keyframes blink{50%{opacity:.35}}
+  .fsbtn{font-family:var(--mono);font-size:11px;color:var(--ink-2);background:transparent;
+         border:1px solid var(--line-hi);border-radius:6px;padding:6px 9px;cursor:pointer;
+         letter-spacing:.06em}
+  .fsbtn:hover{color:var(--ink);border-color:var(--accent)}
+
+  /* ── PANELS ─────────────────────────────────────────────── */
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;min-height:0;
+         position:relative;overflow:hidden;backdrop-filter:blur(2px)}
+  .panel::before{content:"";position:absolute;left:0;top:0;width:28px;height:2px;background:var(--accent)}
+  .ptitle{display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+          font-family:var(--mono);font-size:11px;letter-spacing:.2em;color:var(--ink-3);
+          text-transform:uppercase;padding:10px 14px 0}
+  .ptitle b{color:var(--ink-2);font-weight:600}
+  .ptitle .r{letter-spacing:.08em;text-transform:none}
+
+  /* ── KPI STRIP ──────────────────────────────────────────── */
+  .kpis{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:12px}
+  .kpi{padding:12px 14px 12px}
+  .kpi .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;color:var(--ink-3);
+          text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .kpi .v{font-family:var(--mono);font-size:38px;font-weight:600;line-height:1.05;margin-top:6px;
+          white-space:nowrap;letter-spacing:-.01em}
+  .kpi .v small{font-size:17px;color:var(--ink-2);font-weight:500;margin-left:3px}
+  .kpi .s{font-size:12px;color:var(--ink-2);margin-top:5px;white-space:nowrap;overflow:hidden;
+          text-overflow:ellipsis}
+  .slots{display:flex;gap:4px;margin-top:8px}
+  .slots i{flex:1;height:6px;border-radius:3px;background:var(--line-hi)}
+  .slots i.on{background:var(--accent);box-shadow:0 0 8px rgba(34,211,238,.5)}
+  .slots i.off{background:transparent;border:1px dashed var(--line-hi)}
+
+  /* ── MAIN: LANES + FLEET ────────────────────────────────── */
+  .main{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,1.05fr);gap:12px;min-height:0}
+  .lanes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;min-height:0}
+  .lane{display:flex;flex-direction:column;padding:12px 14px;gap:9px}
+  .lane.green{border-color:rgba(12,163,12,.45)}
+  .lane.amber{border-color:rgba(250,178,25,.55)}
+  .lane.red{border-color:rgba(208,59,59,.7);box-shadow:inset 0 0 40px rgba(208,59,59,.12)}
+  .lanehead{display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .slotname{font-family:var(--mono);font-size:11px;letter-spacing:.22em;color:var(--ink-3)}
+  .badge{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;
+         letter-spacing:.1em;text-transform:uppercase;padding:4px 9px;border-radius:999px;
+         border:1px solid var(--line-hi);color:var(--ink);white-space:nowrap}
+  .badge .ico{font-size:12px}
+  .badge.green{border-color:rgba(12,163,12,.6)} .badge.green .ico{color:var(--good)}
+  .badge.amber{border-color:rgba(250,178,25,.6)} .badge.amber .ico{color:var(--warn)}
+  .badge.red{border-color:rgba(208,59,59,.75)} .badge.red .ico{color:var(--bad)}
+  .badge.grey .ico{color:var(--grey)}
+  .job{display:flex;gap:14px;align-items:center;min-width:0}
+  .ring{flex:none;width:96px;height:96px;position:relative}
+  .ring svg{width:96px;height:96px;transform:rotate(-90deg)}
+  .ring .pct{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+             justify-content:center;font-family:var(--mono)}
+  .ring .pct b{font-size:20px;font-weight:600}
+  .ring .pct span{font-size:9.5px;color:var(--ink-3);letter-spacing:.12em}
+  .jobtext{min-width:0}
+  .dn{font-family:var(--mono);font-size:22px;font-weight:600;white-space:nowrap;overflow:hidden;
+      text-overflow:ellipsis}
+  .cl{font-size:13px;color:var(--ink-2);margin-top:2px;white-space:nowrap;overflow:hidden;
+      text-overflow:ellipsis}
+  .elapsed{font-family:var(--mono);font-size:30px;font-weight:600;margin-top:6px;line-height:1}
+  .elapsed small{font-size:12px;color:var(--ink-3);font-weight:400;margin-left:6px;letter-spacing:.04em}
+  .why{font-size:12px;color:var(--ink-2)}
+  .pipe{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+  .pipe div{font-family:var(--mono);font-size:9px;letter-spacing:.06em;text-align:center;
+            color:var(--ink-3);padding-top:9px;position:relative;white-space:nowrap;overflow:hidden}
+  .pipe div::before{content:"";position:absolute;left:0;right:0;top:0;height:4px;border-radius:2px;
+                    background:var(--line-hi)}
+  .pipe div.done{color:var(--ink-2)}
+  .pipe div.done::before{background:var(--accent);opacity:.65}
+  .pipe div.now{color:var(--ink)}
+  .pipe div.now::before{background:var(--accent);box-shadow:0 0 10px var(--accent);
+                        animation:blink 1.4s ease-in-out infinite}
+  .term{flex:1;min-height:0;background:#05080c;border:1px solid var(--line);border-radius:8px;
+        padding:8px 10px;font-family:var(--mono);font-size:11px;line-height:1.5;color:#9fb4c3;
+        overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end}
+  .term div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .term .w{color:var(--warn)} .term .e{color:#ff7a7a} .term .g{color:#5fd35f}
+  .term .cur::after{content:"▌";color:var(--accent);animation:blink 1s steps(1) infinite;margin-left:2px}
+  .idle{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
+        color:var(--ink-3);text-align:center;font-size:13px}
+  .radar{width:90px;height:90px;border-radius:50%;border:1px solid var(--line-hi);position:relative;
+         background:radial-gradient(circle, transparent 30%, rgba(34,211,238,.04) 31%, transparent 32%,
+                    transparent 62%, rgba(34,211,238,.04) 63%, transparent 64%)}
+  .radar::after{content:"";position:absolute;inset:0;border-radius:50%;
+    background:conic-gradient(from 0deg, rgba(34,211,238,.35), transparent 70deg);
+    animation:sweep 3.2s linear infinite}
+  .radar.off::after{display:none}
+  @keyframes sweep{to{transform:rotate(360deg)}}
+  .idle b{font-family:var(--mono);letter-spacing:.2em;color:var(--ink-2);font-size:12px}
+
+  .side{display:grid;grid-template-rows:minmax(0,2.1fr) minmax(0,.9fr);gap:12px;min-height:0}
+  .fleet{display:flex;flex-direction:column;gap:7px;padding:10px 12px 12px;overflow:hidden}
+  .node{border:1px solid var(--line);border-radius:9px;padding:8px 11px;background:var(--panel-2);
+        display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:3px 9px;align-items:center}
+  .node.red{border-color:rgba(208,59,59,.6)} .node.amber{border-color:rgba(250,178,25,.5)}
+  .node.planned{border-style:dashed;opacity:.75}
+  .node .hb{width:10px;height:10px;border-radius:50%;background:var(--grey)}
+  .node.green .hb{background:var(--good);box-shadow:0 0 9px var(--good);animation:blink 2.2s ease-in-out infinite}
+  .node.amber .hb{background:var(--warn);box-shadow:0 0 9px var(--warn)}
+  .node.red .hb{background:var(--bad);box-shadow:0 0 9px var(--bad)}
+  .node .nm{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .node .meta{grid-column:2/5;font-family:var(--mono);font-size:10.5px;color:var(--ink-3);
+              white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .node .meta b{color:var(--ink-2);font-weight:500}
+  .chips{display:flex;gap:4px}
+  .chip{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;padding:2px 6px;border-radius:4px;
+        border:1px solid var(--line-hi);color:var(--ink-2)}
+  .queue{padding:10px 12px;overflow:hidden;display:flex;flex-direction:column;gap:6px}
+  .qrow{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:8px;align-items:center;
+        font-size:12.5px;padding:6px 8px;border-radius:7px;background:var(--panel-2);border:1px solid var(--line)}
+  .qrow .n{font-family:var(--mono);color:var(--accent);font-size:11px}
+  .qrow .t{font-family:var(--mono);color:var(--ink-2);font-size:11px}
+  .empty{color:var(--ink-3);font-size:12.5px;padding:6px 2px}
+
+  /* ── BOTTOM: CHARTS + FEED ──────────────────────────────── */
+  .bottom{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1.25fr) minmax(0,1fr);gap:12px;min-height:0}
+  .chart{display:flex;flex-direction:column}
+  .chart .plot{flex:1;min-height:0;position:relative;margin:4px 10px 4px}
+  .chart svg{display:block;width:100%;height:100%;overflow:visible}
+  .legend{display:flex;gap:14px;font-size:11.5px;color:var(--ink-2);padding:0 14px 9px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
+  .axis text{fill:var(--ink-3);font-family:var(--mono);font-size:10px}
+  .axis line,.grid line{stroke:var(--line);stroke-width:1}
+  .refline{stroke:var(--ink-2);stroke-width:1.5;stroke-dasharray:5 4}
+  .refline.p90{stroke-dasharray:2 4;stroke:var(--ink-3)}
+  .reflabel{fill:var(--ink-2);font-family:var(--mono);font-size:10px}
+  .bar:hover{filter:brightness(1.25)}
+  .feed{padding:8px 12px 10px;overflow:hidden;display:flex;flex-direction:column}
+  .feed table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
+  .feed td{padding:5px 6px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;
+           text-overflow:ellipsis}
+  .feed td.t{font-family:var(--mono);color:var(--ink-3)}
+  .feed td.d{font-family:var(--mono);color:var(--ink)}
+  .feed td.c{color:var(--ink-2)}
+  .feed td.s{font-family:var(--mono);text-align:right;color:var(--ink-2)}
+  .o-done{color:var(--good)} .o-failed{color:var(--bad)} .o-stopped{color:var(--warn)}
+  .feed .lbl{color:var(--ink-2)}
+
+  /* ── TICKER ─────────────────────────────────────────────── */
+  .ticker{display:flex;align-items:center;gap:12px;height:30px;border-top:1px solid var(--line);
+          font-family:var(--mono);font-size:12px;color:var(--ink-2);overflow:hidden;white-space:nowrap}
+  .ticker .tag{color:var(--accent);letter-spacing:.2em;font-size:10.5px;flex:none}
+  .ticker .run{display:inline-block;padding-left:100%;animation:tick 38s linear infinite}
+  .ticker .run.still{padding-left:0;animation:none}
+  @keyframes tick{to{transform:translateX(-100%)}}
+  .ticker .foot{margin-left:auto;flex:none;color:var(--ink-3);font-size:10.5px;padding-left:12px}
+
+  .tip{position:fixed;z-index:9;pointer-events:none;background:#0d151e;border:1px solid var(--line-hi);
+       border-radius:8px;padding:8px 10px;font-size:12px;color:var(--ink);box-shadow:0 8px 24px rgba(0,0,0,.5);
+       display:none;max-width:280px}
+  .tip b{font-family:var(--mono)}
+  .tip .m{color:var(--ink-2);font-size:11.5px;margin-top:2px}
+  .stale .main,.stale .bottom,.stale .kpis{opacity:.45;filter:grayscale(.6)}
+  .hidecursor{cursor:none}
+
+  /* A smaller screen still reads: the wall stacks and scrolls rather than clipping. */
+  @media (max-width:1200px){
+    body{overflow:auto} .wall{height:auto}
+    .kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .main,.bottom{grid-template-columns:1fr} .lanes{grid-template-columns:1fr}
+    .lane{min-height:300px} .chart{min-height:240px} header{grid-template-columns:1fr}
+    .clockbox{justify-self:start}
+  }
+</style>
+</head>
+<body>
+<div class="wall" id="wall">
+  <header>
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 40 40" aria-hidden="true">
+        <circle cx="20" cy="20" r="18" fill="none" stroke="#22d3ee" stroke-opacity=".35"/>
+        <circle cx="20" cy="20" r="11" fill="none" stroke="#22d3ee" stroke-opacity=".6"/>
+        <path d="M20 2 V10 M20 30 V38 M2 20 H10 M30 20 H38" stroke="#22d3ee" stroke-width="1.5"/>
+        <circle cx="20" cy="20" r="3.2" fill="#22d3ee"/>
+      </svg>
+      <div>
+        <h1>SDI INTELLIGENCE <b>//</b> ESTIMATING</h1>
+        <div class="sub">LIVE OPERATIONS WALL</div>
+      </div>
+    </div>
+    <div class="banner grey" id="banner"><span class="ico">○</span><span id="bannerText">Connecting…</span></div>
+    <div class="clockbox">
+      <div class="link"><span class="live-dot" id="liveDot"></span><span id="linkText">connecting</span></div>
+      <button class="fsbtn" id="fsBtn" type="button" title="Full screen (F)">⛶ FULL SCREEN</button>
+      <div><div class="clock" id="clock">--:--:--</div><div class="date" id="date"></div></div>
+    </div>
+  </header>
+
+  <section class="kpis" id="kpis"></section>
+
+  <section class="main">
+    <div class="lanes" id="lanes"></div>
+    <div class="side">
+      <div class="panel">
+        <div class="ptitle"><span><b>Fleet</b> · runners</span><span class="r" id="fleetCount"></span></div>
+        <div class="fleet" id="fleet"></div>
+      </div>
+      <div class="panel">
+        <div class="ptitle"><span><b>Queue</b></span><span class="r" id="queueCount"></span></div>
+        <div class="queue" id="queue"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="bottom">
+    <div class="panel chart">
+      <div class="ptitle"><span><b>Run time</b> · last 30 estimates</span><span class="r">minutes</span></div>
+      <div class="plot" id="trend"></div>
+      <div class="legend"><span><i style="background:var(--s-done)"></i>Completed</span>
+        <span><i style="background:var(--s-failed)"></i>Failed</span>
+        <span>┄ median · ⋯ 90th percentile, last 7 days</span></div>
+    </div>
+    <div class="panel chart">
+      <div class="ptitle"><span><b>Activity</b> · last 24 hours</span><span class="r">jobs finished per hour</span></div>
+      <div class="plot" id="activity"></div>
+      <div class="legend"><span><i style="background:var(--s-done)"></i>Estimates completed</span>
+        <span><i style="background:var(--s-failed)"></i>Failed</span>
+        <span><i style="background:var(--s-extract)"></i>Pack extracts</span></div>
+    </div>
+    <div class="panel feed">
+      <div class="ptitle" style="padding:2px 2px 6px"><span><b>Recent</b> · finished</span><span class="r" id="recentCount"></span></div>
+      <table id="recent"></table>
+    </div>
+  </section>
+
+  <div class="ticker"><span class="tag">ALERTS</span><span style="overflow:hidden;flex:1"><span class="run still" id="ticker">—</span></span>
+    <span class="foot" id="foot"></span></div>
+</div>
+<div class="tip" id="tip"></div>
+
+<script>
+"use strict";
+const API_KEY = "";                       // set if SDI_API_KEY is enabled, as on the estimating page
+const POLL_MS = 4000;
+const SLOTS = 3;
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const ICON = {green:"✓", amber:"▲", red:"✕", grey:"○"};
+const WORD = {green:"On pace", amber:"Attention", red:"Action", grey:"Planned"};
+
+let snap = null, offset = 0, lastOk = 0, commit = "";
+
+function fmtDur(s){
+  if(s == null || !isFinite(s)) return "—";
+  s = Math.max(0, Math.round(s));
+  if(s < 60) return s + "s";
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  return h ? `${h}h ${String(m).padStart(2,"0")}m` : `${m}m ${String(x).padStart(2,"0")}s`;
+}
+function fmtClock(ts){
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString("en-GB", {hour:"2-digit", minute:"2-digit"});
+}
+function nowS(){ return (Date.now() + offset) / 1000; }
+function badge(rag, label){
+  return `<span class="badge ${rag}"><span class="ico">${ICON[rag] || "○"}</span>${esc(label)}</span>`;
+}
+function lineClass(t){
+  if(/SWITCHING TO THE DOCUMENT MANAGER|without its models|\bERROR\b|\bFAILED\b|Traceback/i.test(t)) return "e";
+  if(/Waiting for|Still waiting|SolidWorks/i.test(t)) return "w";
+  if(/APPLIED|wrote |filed|\bdone\b/i.test(t)) return "g";
+  return "";
+}
+
+/* ── POLL ───────────────────────────────────────────────── */
+async function poll(){
+  try{
+    const r = await fetch("/api/estimate/wall", {headers:{"X-SDI-Key": API_KEY}, cache:"no-store"});
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    commit = r.headers.get("X-SDI-Commit") || j.service_commit || commit;
+    offset = j.now * 1000 - Date.now();
+    snap = j; lastOk = Date.now();
+    $("wall").classList.remove("stale");
+    render();
+  }catch(e){
+    $("liveDot").classList.add("lost");
+    $("linkText").textContent = "link lost · retrying (" + (e && e.message ? e.message : e) + ")";
+    if(Date.now() - lastOk > 20000) $("wall").classList.add("stale");
+  }finally{
+    setTimeout(poll, POLL_MS);
+  }
+}
+
+/* ── RENDER ─────────────────────────────────────────────── */
+function render(){
+  const s = snap; if(!s) return;
+  const b = $("banner");
+  b.className = "banner " + s.banner_rag;
+  b.querySelector(".ico").textContent = ICON[s.banner_rag] || "○";
+  $("bannerText").textContent = s.banner || "";
+  renderKpis(s.kpis, s.expected_s);
+  renderLanes(s);
+  renderFleet(s.fleet || []);
+  renderQueue(s.queue || []);
+  renderTrend(s.series.run_times || [], s.kpis);
+  renderActivity(s.series.activity_24h || []);
+  renderRecent(s.recent || []);
+  renderTicker(s.alerts || []);
+}
+
+function renderKpis(k, exp){
+  const rate = k.success_rate_7d;
+  const rateRag = rate == null ? "grey" : rate >= 90 ? "green" : rate >= 75 ? "amber" : "red";
+  const rateWord = rate == null ? "no finished runs yet" : {green:"healthy", amber:"watch", red:"low"}[rateRag];
+  const slots = Array.from({length: SLOTS}, (_, i) =>
+    `<i class="${i < k.running ? "on" : i < k.max_runs ? "" : "off"}"></i>`).join("");
+  const tiles = [
+    ["Runs today", `${k.runs_today}`, `✓ ${k.done_today} done · ✕ ${k.failed_today} failed · ${k.extracts_today} extracts`],
+    ["Completed · 24 h", `${k.done_24h}`, "estimates finished in the last day"],
+    ["Success · 7 days", rate == null ? "—" : `${rate}<small>%</small>`,
+     `${badge(rateRag, rateWord)} <span style="margin-left:6px">${k.judged_7d} finished</span>`],
+    ["Median run · 7 days", fmtDur(k.median_s_7d), `fastest ${fmtDur(k.fastest_s_7d)}`],
+    ["90th pct · 7 days", fmtDur(k.p90_s_7d), "9 in 10 estimates finish inside this"],
+    ["Queue", `${k.queued}`, `average wait ${fmtDur(k.mean_wait_s_7d)}, last 7 days`],
+    ["Capacity", `${k.running}<small>/ ${k.max_runs}</small>`,
+     `${k.utilisation_pct}% of slots busy<div class="slots">${slots}</div>`],
+  ];
+  $("kpis").innerHTML = tiles.map(([key, v, sub]) =>
+    `<div class="panel kpi"><div class="k">${esc(key)}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`).join("");
+}
+
+function ring(frac, rag){
+  const R = 42, C = 2 * Math.PI * R, f = Math.max(0, Math.min(1, frac || 0));
+  const col = {green:"#0ca30c", amber:"#fab219", red:"#d03b3b"}[rag] || "#22d3ee";
+  return `<svg viewBox="0 0 96 96" aria-hidden="true">
+    <circle cx="48" cy="48" r="${R}" fill="none" stroke="#182634" stroke-width="7"/>
+    <circle cx="48" cy="48" r="${R}" fill="none" stroke="${col}" stroke-width="7" stroke-linecap="round"
+      stroke-dasharray="${(C * f).toFixed(1)} ${C.toFixed(1)}" style="filter:drop-shadow(0 0 6px ${col}88)"/>
+  </svg>`;
+}
+
+function renderLanes(s){
+  const live = s.live || [], k = s.kpis, html = [];
+  for(let i = 0; i < SLOTS; i++){
+    const r = live[i];
+    if(r){
+      const exp = r.expected_s;
+      const frac = exp ? r.elapsed_s / exp : null;
+      const extract = !!r.job_type;
+      const stages = (s.stages || []).map((name, j) =>
+        `<div class="${j < r.stage_index ? "done" : j === r.stage_index ? "now" : ""}">${esc(name)}</div>`).join("");
+      const tail = (r.log_tail || []).slice(-14);
+      html.push(`<div class="panel lane ${r.rag}" data-start="${r.started_at || 0}">
+        <div class="lanehead"><span class="slotname">RUN ${i + 1} · ${esc(r.runner || "")}</span>${badge(r.rag, WORD[r.rag])}</div>
+        <div class="job">
+          <div class="ring">${ring(frac == null ? 0 : frac, r.rag)}
+            <div class="pct"><b>${frac == null ? "—" : Math.round(frac * 100) + "%"}</b><span>OF USUAL</span></div></div>
+          <div class="jobtext">
+            <div class="dn">${esc(r.drawing_number || r.run_id)}</div>
+            <div class="cl">${esc(r.client || "")}${extract ? " · " + esc(r.job_type.replace("_", " ")) : ""}</div>
+            <div class="elapsed" data-elapsed><span>${fmtDur(r.elapsed_s)}</span><small>${exp ? "usual " + fmtDur(exp) : "no history yet"}</small></div>
+          </div>
+        </div>
+        <div class="why">${esc(r.rag_reason || "")}${r.silent_s > 60 ? " · last log line " + fmtDur(r.silent_s) + " ago" : ""}</div>
+        ${extract ? "" : `<div class="pipe">${stages}</div>`}
+        <div class="term">${tail.map((t, j) =>
+          `<div class="${lineClass(t)}${j === tail.length - 1 ? " cur" : ""}">${esc(t)}</div>`).join("")}</div>
+      </div>`);
+    }else{
+      const on = i < (k.max_runs || 1);
+      html.push(`<div class="panel lane">
+        <div class="lanehead"><span class="slotname">RUN ${i + 1}</span>${badge(on ? "green" : "grey", on ? "Free" : "Off")}</div>
+        <div class="idle"><div class="radar${on ? "" : " off"}"></div>
+          <b>${on ? "SLOT FREE" : "SLOT OFF"}</b>
+          <div>${on ? "The next queued estimate starts here."
+                    : `The service runs ${k.max_runs} estimate${k.max_runs > 1 ? "s" : ""} at once.<br>Raise SDI_MAX_CONCURRENT_RUNS to open it.`}</div></div>
+      </div>`);
+    }
+  }
+  $("lanes").innerHTML = html.join("");
+}
+
+function renderFleet(fleet){
+  const up = fleet.filter(f => f.online).length;
+  $("fleetCount").textContent = `${up} of ${fleet.length} online`;
+  if(!fleet.length){ $("fleet").innerHTML = '<div class="empty">No runner has checked in with this service.</div>'; return; }
+  const capName = {sw_extract:"SW", xai_extract:"xAI", dm_extract:"DM", desktop_token:"TURN"};
+  $("fleet").innerHTML = fleet.map(f => {
+    const caps = (f.capabilities || []).filter(c => capName[c]).map(c => `<span class="chip">${capName[c]}</span>`).join("");
+    const seen = f.seconds_since_seen == null ? "" : `seen <b>${fmtDur(f.seconds_since_seen)}</b> ago`;
+    const job = f.job ? ` · on <b>${esc(f.job.drawing_number)}</b>` : "";
+    return `<div class="node ${f.rag}${f.planned ? " planned" : ""}">
+      <span class="hb"></span><span class="nm">${esc(f.label)}</span><span class="chips">${caps}</span>${badge(f.rag, f.rag === "green" ? (f.job ? "Working" : "Ready") : WORD[f.rag])}
+      <div class="meta">${esc(f.label !== f.hostname ? f.hostname + " · " : "")}${esc(f.rag_reason)}${job}${seen ? " · " + seen : ""}${f.build ? " · build <b>" + esc(f.build.slice(0, 7)) + "</b>" : ""}</div>
+    </div>`;
+  }).join("");
+}
+
+function renderQueue(q){
+  $("queueCount").textContent = q.length ? `${q.length} waiting` : "empty";
+  if(!q.length){ $("queue").innerHTML = '<div class="empty">Nothing waiting. A new estimate starts as soon as it is queued.</div>'; return; }
+  const n = nowS();
+  $("queue").innerHTML = q.slice(0, 6).map((r, i) => `<div class="qrow"><span class="n">#${i + 1}</span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")}</span></span>
+      <span class="t">${fmtDur(n - (r.queued_at || n))}</span></div>`).join("")
+    + (q.length > 6 ? `<div class="empty">+ ${q.length - 6} more</div>` : "");
+}
+
+/* ── CHARTS: inline SVG, thin marks, 2px gaps, recessive axes, a tooltip on every mark ── */
+function box(el){ const r = el.getBoundingClientRect(); return {w: Math.max(120, r.width), h: Math.max(80, r.height)}; }
+function niceMax(v){ if(v <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); const m = v / p;
+  return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p; }
+
+function renderTrend(rows, k){
+  const el = $("trend"), {w, h} = box(el);
+  const L = 34, R = 96, T = 8, B = 18, pw = w - L - R, ph = h - T - B;
+  const mins = rows.map(r => (r.seconds || 0) / 60);
+  const ymax = niceMax(Math.max(1, ...mins, (k.p90_s_7d || 0) / 60));
+  const y = v => T + ph - (v / ymax) * ph;
+  const n = Math.max(rows.length, 1), slot = pw / n, bw = Math.max(3, Math.min(22, slot - 2));
+  let g = `<g class="grid">${[0, .5, 1].map(f => `<line x1="${L}" x2="${L + pw}" y1="${y(ymax * f)}" y2="${y(ymax * f)}"/>`).join("")}</g>`;
+  g += `<g class="axis">${[0, .5, 1].map(f => `<text x="${L - 6}" y="${y(ymax * f) + 3}" text-anchor="end">${Math.round(ymax * f)}</text>`).join("")}</g>`;
+  if(!rows.length) g += `<text x="${L + pw / 2}" y="${T + ph / 2}" text-anchor="middle" class="reflabel">No finished estimates yet</text>`;
+  rows.forEach((r, i) => {
+    const v = mins[i], x = L + i * slot + (slot - bw) / 2, top = y(v), hh = Math.max(1.5, T + ph - top);
+    const col = r.outcome === "failed" ? "var(--s-failed)" : "var(--s-done)";
+    const tip = `<b>${esc(r.drawing)}</b><div class="m">${esc(r.client)} · ${r.outcome === "failed" ? "✕ failed" : "✓ completed"}</div><div class="m">${fmtDur(r.seconds)} · finished ${r.finished_at ? fmtClock(r.finished_at) : ""}</div>`;
+    // 4px rounded data-end, square at the baseline.
+    const rr = Math.min(4, bw / 2, hh);
+    g += `<path class="bar" data-tip="${esc(tip)}" fill="${col}" d="M${x},${T + ph} V${top + rr} Q${x},${top} ${x + rr},${top} H${x + bw - rr} Q${x + bw},${top} ${x + bw},${top + rr} V${T + ph} Z"/>`;
+    g += `<rect data-tip="${esc(tip)}" x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>`;
+  });
+  // Two reference lines, each labelled at its right end; labels closer than 13px are pushed
+  // apart (the 90th percentile up, the median down) so neither sits on the other.
+  const yMed = k.median_s_7d ? y(k.median_s_7d / 60) : null;
+  const yP90 = k.p90_s_7d ? y(k.p90_s_7d / 60) : null;
+  let lMed = yMed, lP90 = yP90;
+  if(yMed != null && yP90 != null && Math.abs(yMed - yP90) < 13){
+    const mid = (yMed + yP90) / 2; lP90 = mid - 7; lMed = mid + 7;
+  }
+  [[yMed, lMed, k.median_s_7d, "median", ""], [yP90, lP90, k.p90_s_7d, "p90", " p90"]].forEach(([yy, ly, s, lbl, cls]) => {
+    if(yy == null) return;
+    g += `<line class="refline${cls}" x1="${L}" x2="${L + pw}" y1="${yy}" y2="${yy}"/>`;
+    g += `<text class="reflabel" x="${L + pw + 6}" y="${ly + 3}">${lbl} ${fmtDur(s)}</text>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Run time of the last ${rows.length} finished estimates, in minutes">${g}</svg>`;
+}
+
+function renderActivity(hours){
+  const el = $("activity"), {w, h} = box(el);
+  const L = 26, R = 8, T = 8, B = 18, pw = w - L - R, ph = h - T - B;
+  const tot = hours.map(x => x.done + x.failed + x.extracts);
+  const ymax = niceMax(Math.max(1, ...tot));
+  const y = v => T + ph - (v / ymax) * ph;
+  const slot = pw / 24, bw = Math.max(3, slot - 3);
+  let g = `<g class="grid">${[0, .5, 1].map(f => `<line x1="${L}" x2="${L + pw}" y1="${y(ymax * f)}" y2="${y(ymax * f)}"/>`).join("")}</g>`;
+  g += `<g class="axis">${[0, 1].map(f => `<text x="${L - 6}" y="${y(ymax * f) + 3}" text-anchor="end">${Math.round(ymax * f)}</text>`).join("")}`;
+  hours.forEach((x, i) => { if(i % 4 === 0) g += `<text x="${L + i * slot + slot / 2}" y="${T + ph + 13}" text-anchor="middle">${fmtClock(x.hour_start)}</text>`; });
+  g += `</g>`;
+  hours.forEach((x, i) => {
+    const bx = L + i * slot + (slot - bw) / 2;
+    let base = T + ph;
+    const segs = [["done", "var(--s-done)"], ["failed", "var(--s-failed)"], ["extracts", "var(--s-extract)"]]
+      .filter(([kk]) => x[kk] > 0);
+    segs.forEach(([kk, col], j) => {
+      const hh = (x[kk] / ymax) * ph;
+      const top = base - hh + (j > 0 ? 2 : 0);            // a 2px surface gap between stacked fills
+      const isTop = j === segs.length - 1, rr = isTop ? Math.min(4, bw / 2, hh) : 0;
+      g += `<path fill="${col}" d="M${bx},${base} V${top + rr} ${rr ? `Q${bx},${top} ${bx + rr},${top} H${bx + bw - rr} Q${bx + bw},${top} ${bx + bw},${top + rr}` : `H${bx + bw}`} V${base} Z"/>`;
+      base = base - hh;
+    });
+    const tip = `<b>${fmtClock(x.hour_start)}–${fmtClock(x.hour_start + 3600)}</b><div class="m">✓ ${x.done} completed · ✕ ${x.failed} failed · ${x.extracts} extracts</div>`;
+    g += `<rect data-tip="${esc(tip)}" x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Jobs finished per hour over the last 24 hours">${g}</svg>`;
+}
+
+function renderRecent(rows){
+  $("recentCount").textContent = rows.length ? `last ${rows.length}` : "";
+  if(!rows.length){ $("recent").innerHTML = '<tr><td class="c">Nothing has finished yet.</td></tr>'; return; }
+  const word = {done:"Completed", failed:"Failed", stopped:"Stopped"};
+  const icon = {done:"✓", failed:"✕", stopped:"■"};
+  $("recent").innerHTML = '<colgroup><col style="width:58px"><col style="width:34%"><col>'
+    + '<col style="width:108px"><col style="width:68px"></colgroup>' + rows.map(r => `<tr>
+      <td class="t">${r.finished_at ? fmtClock(r.finished_at) : ""}</td>
+      <td class="d">${esc(r.drawing_number)}</td>
+      <td class="c">${esc(r.client || "")}${r.job_type ? " · extract" : ""}</td>
+      <td class="o"><span class="o-${r.outcome}">${icon[r.outcome] || "·"}</span> <span class="lbl">${word[r.outcome] || esc(r.outcome)}</span></td>
+      <td class="s">${fmtDur(r.seconds)}</td></tr>`).join("");
+}
+
+function renderTicker(alerts){
+  const t = $("ticker");
+  if(!alerts.length){
+    t.className = "run still";
+    t.textContent = "No alerts. Every run on pace and every runner checked in.";
+  }else{
+    t.className = "run";
+    t.textContent = alerts.map(a => "▲ " + a).join("     ◆     ");
+  }
+}
+
+/* ── THE SECOND HAND: clocks and run timers tick between reads ── */
+function tick(){
+  const d = new Date(Date.now() + offset);
+  $("clock").textContent = d.toLocaleTimeString("en-GB", {hour12:false});
+  $("date").textContent = d.toLocaleDateString("en-GB", {weekday:"short", day:"2-digit", month:"short", year:"numeric"}).toUpperCase();
+  const n = nowS();
+  document.querySelectorAll(".lane[data-start]").forEach(el => {
+    const st = Number(el.dataset.start); const sp = el.querySelector("[data-elapsed] span");
+    if(st && sp) sp.textContent = fmtDur(n - st);
+  });
+  if(lastOk){
+    const age = (Date.now() - lastOk) / 1000;
+    if(age < 15){
+      $("liveDot").classList.remove("lost");
+      $("linkText").textContent = `live · updated ${Math.round(age)}s ago`;
+    }
+  }
+  $("foot").textContent = (commit ? "service " + String(commit).slice(0, 7) + " · " : "") + "refreshes every " + POLL_MS / 1000 + "s";
+}
+
+/* ── TOOLTIP, FULL SCREEN, AN IDLE CURSOR ──────────────────── */
+const tip = $("tip");
+document.addEventListener("mousemove", e => {
+  const t = e.target.closest && e.target.closest("[data-tip]");
+  if(t){ tip.innerHTML = t.getAttribute("data-tip"); tip.style.display = "block";
+         const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8);
+         tip.style.left = x + "px"; tip.style.top = Math.max(8, e.clientY - tip.offsetHeight - 10) + "px"; }
+  else tip.style.display = "none";
+  document.body.classList.remove("hidecursor");
+  clearTimeout(window.__cur); window.__cur = setTimeout(() => document.body.classList.add("hidecursor"), 3000);
+});
+function fullscreen(){
+  if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {});
+}
+$("fsBtn").addEventListener("click", fullscreen);
+document.addEventListener("keydown", e => { if(e.key === "f" || e.key === "F") fullscreen(); });
+let resizeT; addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(render, 150); });
+
+tick(); setInterval(tick, 1000);
+poll();
+</script>
+</body>
+</html>

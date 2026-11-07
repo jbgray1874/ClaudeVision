@@ -129,6 +129,9 @@
   .exgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px}
   .exgrid .btn-run{width:auto;margin-top:0;padding:11px 12px;font-size:13.5px;line-height:1.25}
   @media(max-width:640px){.exgrid{grid-template-columns:1fr}}
+  /* The three pack readers side by side, one row (D-737). */
+  .exgrid.ex3{grid-template-columns:repeat(3,1fr)}
+  @media(max-width:760px){.exgrid.ex3{grid-template-columns:1fr}}
   /* The second book, sitting under the first rather than beside it — same size, so it reads
      as the same kind of thing, but it never lights up because nothing is behind it. */
   .btn-soon{margin-top:0;cursor:not-allowed}
@@ -572,6 +575,10 @@
 
       <div class="dest" id="runnerBox" style="border-left-color:var(--dim);margin-bottom:14px">
         <span class="k">Estimating runner</span>
+        <!-- THE WALL MONITOR (D-737): every run, the fleet and the KPIs, full screen. -->
+        <a href="/estimating/wall" target="_blank" rel="noopener"
+           style="float:right;font-size:12px;color:var(--brand);text-decoration:none;margin-top:-18px"
+           title="Live runs, the fleet of runners and the run-time KPIs, full screen, for a wall monitor.">Wall monitor ↗</a>
         <div class="p" id="runnerText"><span class="pending">Checking…</span></div>
         <div class="runpanes" id="runPanes" hidden></div>
         <p class="note">Estimates are executed on a machine with SOLIDWORKS and Excel. This service
@@ -1027,13 +1034,18 @@
         (the same files "Add drawing files…" and "Add job folder…" choose) with <b>one reader</b>
         and files what it found, organised, under the client and drawing number. <b>Prices
         nothing.</b></p>
-      <div class="exgrid">
+      <div class="exgrid ex3">
         <button class="btn-run" id="pxSw"
                 title="The SolidWorks analyser on the pack's models: every part's material, gauge, flat blank, bends, cut length, mass and envelope; the assembly tree with per-parent counts; the product BOM; the drawings' BOM tables; and what could not be read. Workbook and JSON.">
           SolidWorks pack extract</button>
         <button class="btn-run" id="pxXai"
                 title="The whole-document xAI read on the pack's PDFs, exactly as returned (JSON), and laid out as tables (workbook).">
           xAI extract</button>
+        <!-- THE THIRD READER (D-737, JG 7 Nov 2026): the Document Manager on the same models,
+             in the SolidWorks extract's own tables, so the two can be compared pack by pack. -->
+        <button class="btn-run" id="pxDm"
+                title="The SolidWorks Document Manager on the pack's models: what each file saved (custom properties, cut lists, BOMs, any saved mass or flat pattern), read without a SolidWorks seat, so it never waits for SolidWorks. It measures nothing: a field the file did not save stays blank and is named. Same tables as the SolidWorks extract, to compare the two. The runner needs SDI_SW_DOCMGR_KEY in its .env.">
+          SolidWorks Document Manager extract</button>
       </div>
       <div class="files" id="pxOut" style="margin-top:10px"></div>
     </section>
@@ -3539,7 +3551,8 @@ async function runPackExtract(kind, label){
   };
   tick();
 }
-[["pxSw","sw","SolidWorks pack extract"], ["pxXai","xai","xAI extract"]].forEach(([id, kind, label]) => {
+[["pxSw","sw","SolidWorks pack extract"], ["pxXai","xai","xAI extract"],
+ ["pxDm","dm","SolidWorks Document Manager extract"]].forEach(([id, kind, label]) => {
   const b = document.getElementById(id);
   if(b) b.addEventListener("click", () => runPackExtract(kind, label));
 });

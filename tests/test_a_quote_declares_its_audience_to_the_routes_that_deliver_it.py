@@ -197,8 +197,10 @@ def test_every_route_that_delivers_a_file_is_covered():
     # of two files, behind sign-in. Since 31 Oct 2026 (D-610), /estimating/walkthrough/<token>:
     # the walkthrough page itself, one fixed file, behind sign-in. Since 1 Nov 2026 (D-622),
     # /estimating/sdi-voice.js: the shared voice script, one fixed file of code with no job data
-    # in it. None of them is a deliverable.
-    assert known_file_responses["app.py"] == 11, (
+    # in it. Since 7 Nov 2026 (D-737), /estimating/wall: the wall monitor page, one fixed file
+    # behind sign-in; what it shows comes from /api/estimate/wall, never from the file. None of
+    # them is a deliverable.
+    assert known_file_responses["app.py"] == 12, (
         f"a new file-serving route appeared in app.py ({known_file_responses['app.py']} "
         f"FileResponse calls, was 5) — does it need the release gate?")
     # estimate_routes.py: the drawings-print PDF, which is a drawing pack and not a quotation;
