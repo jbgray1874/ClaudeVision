@@ -303,13 +303,77 @@
   .pmsg{padding:28px 18px;color:var(--ink-2);font-size:13.5px;text-align:center}
   .pmsg b{font-family:var(--mono);color:var(--ink)}
   .parity .kpi .s{white-space:normal;line-height:1.4}
+  /* Run parity from here (D-742) */
+  .prow.runrow{grid-template-columns:minmax(0,1.15fr) minmax(0,1fr)}
+  .runbox{display:flex;flex-direction:column;padding-bottom:12px}
+  .tabs{display:flex;gap:6px;padding:10px 14px 0;flex-wrap:wrap}
+  .tab{font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--ink-2);background:transparent;
+       border:1px solid var(--line-hi);border-radius:6px;padding:6px 10px;cursor:pointer}
+  .tab.on{color:var(--ink);border-color:var(--accent);box-shadow:0 0 10px rgba(34,211,238,.25)}
+  .tabpane{padding:10px 14px 0;display:flex;flex-direction:column;gap:8px}
+  .tabpane[hidden],.prow [hidden]{display:none}
+  .frow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .frow label{font-family:var(--mono);font-size:11px;color:var(--ink-3);display:flex;gap:6px;align-items:center}
+  .runbox input:not([type=checkbox]):not([type=radio]),.runbox textarea,.runbox select{background:#05080c;
+       border:1px solid var(--line-hi);border-radius:7px;color:var(--ink);font-family:var(--mono);font-size:13px;
+       padding:8px 10px;min-width:0;color-scheme:dark}
+  .runbox input:focus,.runbox textarea:focus,.runbox select:focus{outline:none;border-color:var(--accent);
+       box-shadow:0 0 0 2px rgba(34,211,238,.2)}
+  .runbox textarea{width:100%;resize:vertical;line-height:1.5}
+  .runbox select{width:100%}
+  #oneJob{flex:2 1 220px} #oneClient,#setClient,#perClient{flex:1 1 150px}
+  .act{font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;color:var(--ink);background:var(--panel-2);
+       border:1px solid var(--line-hi);border-radius:7px;padding:8px 14px;cursor:pointer;white-space:nowrap}
+  .act:hover:not(:disabled){border-color:var(--accent)}
+  .act.go{border-color:rgba(34,211,238,.6);background:rgba(34,211,238,.12)}
+  .act.sm{padding:4px 9px;font-size:10.5px}
+  .act:disabled{opacity:.4;cursor:default}
+  .out{font-size:12.5px;color:var(--ink-2);display:flex;flex-direction:column;gap:6px}
+  .out:empty{display:none}
+  .out .say.err{color:#ff8a8a}
+  .out .lbl2{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;color:var(--ink-3);text-transform:uppercase;margin-top:4px}
+  .out .lbl2 .why{text-transform:none;letter-spacing:0;font-family:var(--sans);font-size:11.5px;color:var(--ink-2)}
+  .pick{display:flex;gap:8px;align-items:flex-start;padding:6px 8px;border:1px solid var(--line);border-radius:7px;
+        cursor:pointer;background:var(--panel-2)}
+  .pick:has(input:checked){border-color:var(--accent)}
+  .pick input{margin-top:3px;accent-color:#22d3ee}
+  .pick .nm{display:block;font-family:var(--mono);color:var(--ink);font-size:12px;word-break:break-all}
+  .pick .why{display:block;font-size:11px;color:var(--ink-3)}
+  .pv{width:100%;border-collapse:collapse;font-size:12px}
+  .pv td{padding:4px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+  .pv td.d{font-family:var(--mono);color:var(--ink);white-space:nowrap}
+  .pv td.w{color:var(--ink-3);font-size:11px}
+  .pv button.link{background:none;border:0;padding:0;color:var(--accent);font-family:var(--mono);font-size:12px;cursor:pointer}
+  .pvwrap{max-height:260px;overflow:auto;scrollbar-width:thin;scrollbar-color:var(--line-hi) transparent}
+  .chk{display:flex;gap:7px;align-items:center;font-size:11.5px;color:var(--ink-3);padding:10px 14px 0}
+  .chk input{accent-color:#22d3ee}
+  .ptasks{padding:8px 12px 10px;display:flex;flex-direction:column;gap:8px;overflow:auto;max-height:560px;
+          scrollbar-width:thin;scrollbar-color:var(--line-hi) transparent}
+  .task{border:1px solid var(--line);border-radius:9px;padding:9px 11px;background:var(--panel-2)}
+  .task.running,.task.starting{border-color:rgba(34,211,238,.5);box-shadow:inset 0 0 24px rgba(34,211,238,.06)}
+  .task.failed{border-color:rgba(208,59,59,.6)} .task.choose,.task.stalled{border-color:rgba(250,178,25,.55)}
+  .task .th{display:flex;align-items:center;gap:8px;justify-content:space-between}
+  .task .tk{display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;color:var(--ink-3)}
+  .task .nm{display:block;font-family:var(--mono);font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .task .bar{height:5px;border-radius:3px;background:var(--line-hi);margin-top:8px;overflow:hidden}
+  .task .bar i{display:block;height:100%;background:var(--accent);border-radius:3px;box-shadow:0 0 8px rgba(34,211,238,.5);transition:width .6s}
+  .task .tm{font-size:11.5px;color:var(--ink-2);margin-top:5px}
+  .task .rcs{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+  .rc{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10.5px;color:var(--ink);
+      border:1px solid var(--line-hi);border-radius:5px;padding:2px 6px;text-decoration:none}
+  a.rc:hover{border-color:var(--accent)}
+  .rc i{width:7px;height:7px;border-radius:50%;flex:none}
+  .task .res{font-size:12px;color:var(--ink);margin-top:7px;display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
+  .task .res a{color:var(--accent);text-decoration:none;font-family:var(--mono);font-size:11px}
+  .task .why2{font-size:11.5px;color:var(--ink-2);margin-top:6px}
+  .badge.run{border-color:rgba(34,211,238,.6)} .badge.run .ico{color:var(--accent);display:inline-block;animation:sweep 1.6s linear infinite}
   @media (max-width:1500px){ .parity .kpis{grid-template-columns:repeat(4,minmax(0,1fr))} }
 
   /* A smaller screen still reads: the wall stacks and scrolls rather than clipping. */
   @media (max-width:1200px){
     .ops{height:auto;grid-template-rows:none}
     .kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
-    .main,.bottom,.prow,.prow.wide{grid-template-columns:1fr} .lanes{grid-template-columns:1fr}
+    .main,.bottom,.prow,.prow.wide,.prow.runrow{grid-template-columns:1fr} .lanes{grid-template-columns:1fr}
     .lane{min-height:300px} .chart{min-height:240px} .feed{max-height:460px}
     header{grid-template-columns:1fr} .clockbox{justify-self:start;flex-wrap:wrap}
   }
@@ -397,6 +461,43 @@
         <span class="meta" id="pRead">reading the parity folder…</span>
         <button class="fsbtn" id="pRefresh" type="button" title="Read the parity folder again now">↻ READ AGAIN</button>
         <a class="fsbtn" href="/estimating#pjCard" target="_blank" rel="noopener" style="text-decoration:none">PARITY BY JOB NUMBER ↗</a>
+      </div>
+    </div>
+    <!-- RUN PARITY FROM HERE (D-742): one job, a set of jobs or a period, and each one's
+         progress and outcome live beside it, wherever it was started. -->
+    <div class="prow runrow">
+      <div class="panel runbox">
+        <div class="ptitle"><span><b>Run parity</b> · AI estimate against the manual one</span><span class="r">nothing is compared until you press Compare</span></div>
+        <div class="tabs" role="tablist">
+          <button class="tab on" type="button" data-tab="one">ONE JOB</button>
+          <button class="tab" type="button" data-tab="set">A SET OF JOBS</button>
+          <button class="tab" type="button" data-tab="period">A PERIOD</button>
+        </div>
+        <div class="tabpane" id="tab-one">
+          <div class="frow"><input id="oneJob" autocomplete="off" placeholder="Job or drawing number, e.g. 12002-02-GA">
+            <input id="oneClient" autocomplete="off" placeholder="Client (optional)">
+            <button class="act" type="button" id="oneFind">FIND</button></div>
+          <div class="out" id="oneOut"></div>
+        </div>
+        <div class="tabpane" id="tab-set" hidden>
+          <textarea id="setJobs" rows="4" placeholder="Job or drawing numbers: one per line, or separated by commas. A bare job number, such as 12002, takes every drawing estimated under it."></textarea>
+          <div class="frow"><input id="setClient" autocomplete="off" placeholder="Client (optional)">
+            <button class="act" type="button" id="setPreview">PREVIEW</button>
+            <button class="act go" type="button" id="setRun" disabled>COMPARE ALL</button></div>
+          <div class="out" id="setOut"></div>
+        </div>
+        <div class="tabpane" id="tab-period" hidden>
+          <div class="frow"><label>From <input type="date" id="perFrom"></label><label>To <input type="date" id="perTo"></label>
+            <input id="perClient" autocomplete="off" placeholder="Client (optional)"></div>
+          <div class="frow"><button class="act" type="button" id="perPreview">PREVIEW</button>
+            <button class="act go" type="button" id="perRun" disabled>COMPARE ALL</button></div>
+          <div class="out" id="perOut"></div>
+        </div>
+        <label class="chk"><input type="checkbox" id="viaExcel"> Resolve formulas through Excel: slower, only for a manual sheet whose saved values are missing</label>
+      </div>
+      <div class="panel" style="display:flex;flex-direction:column">
+        <div class="ptitle"><span><b>Parity running</b> · and finished in the last 12 hours</span><span class="r" id="pTasksN"></span></div>
+        <div class="ptasks" id="pTasks"><div class="empty">Nothing running.</div></div>
       </div>
     </div>
     <div id="pBody">
@@ -501,7 +602,11 @@ function lineClass(t){
 }
 
 /* ── POLL ───────────────────────────────────────────────── */
+let pollT = null, polling = false;
+function pollSoon(){ setTimeout(() => { clearTimeout(pollT); poll(); }, 700); }
 async function poll(){
+  if(polling) return;
+  polling = true;
   try{
     const r = await fetch("/api/estimate/wall", {headers:{"X-SDI-Key": API_KEY}, cache:"no-store"});
     if(!r.ok) throw new Error("HTTP " + r.status);
@@ -517,7 +622,9 @@ async function poll(){
     $("liveDot").title = $("linkText").textContent;
     if(Date.now() - lastOk > 20000) $("wall").classList.add("stale");
   }finally{
-    setTimeout(poll, POLL_MS);
+    polling = false;
+    clearTimeout(pollT);
+    pollT = setTimeout(poll, POLL_MS);
   }
 }
 
@@ -538,6 +645,7 @@ function render(){
   renderRecent(s.recent || []);
   renderTicker(s.alerts || []);
   renderParity(s.parity);
+  renderParityTasks(s.parity_tasks || []);
 }
 
 function renderKpis(k, exp){
@@ -816,7 +924,8 @@ function fullscreen(){
   if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {});
 }
 $("fsBtn").addEventListener("click", fullscreen);
-document.addEventListener("keydown", e => { if(e.key === "f" || e.key === "F") fullscreen(); });
+const typing = e => e.target && /^(input|textarea|select)$/i.test(e.target.tagName);
+document.addEventListener("keydown", e => { if(!typing(e) && (e.key === "f" || e.key === "F")) fullscreen(); });
 let resizeT; addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(render, 150); });
 
 
@@ -1080,6 +1189,201 @@ function renderParityPeriods(rows, th){
       <td>${r.summary_url ? `<a href="${esc(r.summary_url)}" target="_blank" rel="noopener">summary ↗</a>` : ""}</td></tr>`).join("") + "</table>";
 }
 
+/* ══ RUN PARITY FROM HERE (D-742) ═══════════════════════════════════════════════════════
+   JG, 7 Nov 2026: "I want to run one off jobs, compare a whole set of jobs v manual etc. and
+   see the output in the main screen". The rules are the service's (src/parity_job.py): the
+   newest AI run, the manual sheet chosen only when the choice is clear, a pair already compared
+   reused. This only asks, shows what would happen, and starts it. */
+async function api(path, body){
+  const opt = {headers:{"X-SDI-Key": API_KEY}, cache:"no-store"};
+  if(body !== undefined){ opt.method = "POST"; opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  const r = await fetch(path, opt);
+  let j = null; try{ j = await r.json(); }catch(e){}
+  if(!r.ok){
+    const d = j && j.detail;
+    throw new Error(typeof d === "string" ? d : d && d.error ? d.error : "the service said " + r.status);
+  }
+  return j;
+}
+function tab(name){
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("on", b.dataset.tab === name));
+  ["one", "set", "period"].forEach(t => { $("tab-" + t).hidden = t !== name; });
+}
+document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => tab(b.dataset.tab)));
+function busy(btn, on, text){
+  if(!btn) return;
+  if(!btn.dataset.text) btn.dataset.text = btn.textContent;
+  btn.disabled = on; btn.textContent = on && text ? text : btn.dataset.text;
+}
+function say(el, html, cls){ el.innerHTML = `<div class="say ${cls || ""}">${html}</div>`; }
+function addSay(el, html, cls){ el.insertAdjacentHTML("beforeend", `<div class="say ${cls || ""}">${html}</div>`); }
+const viaExcel = () => $("viaExcel").checked;
+
+/* ── ONE JOB: find both sides, show them, compare ── */
+let oneFound = null;
+async function findOne(){
+  const job = $("oneJob").value.trim(), client = $("oneClient").value.trim();
+  if(!job){ say($("oneOut"), "Type a job or drawing number first.", "err"); return; }
+  busy($("oneFind"), true, "FINDING…");
+  say($("oneOut"), "Looking in AISheets and the manual estimates…");
+  try{
+    const f = await api(`/api/estimate/parity/find?job=${encodeURIComponent(job)}&client=${encodeURIComponent(client)}`);
+    oneFound = {job, client: client || f.client || "", body: f};
+    renderFind(f);
+  }catch(e){ say($("oneOut"), esc(e.message), "err"); }
+  finally{ busy($("oneFind"), false); }
+}
+function renderFind(f){
+  const ai = f.ai || [], man = f.manual || [], d = f.decision || {};
+  let h = "";
+  if(!ai.length) h += `<div class="say err">✕ No AI estimate of ${esc(f.job)} is filed in AISheets: no run folder holds both the engine's workbook and its summary. Run the estimate first.</div>`;
+  else h += `<div class="lbl2">AI estimate · newest first</div><select id="oneAi">${ai.slice(0, 15).map((r, i) =>
+    `<option value="${esc(r.workbook)}">${esc(r.drawing)} · ${esc(r.client)} · ${fmtStamp(r.stamp)} · ${r.units} off${i === 0 ? " · newest" : ""}</option>`).join("")}</select>`;
+  if(!man.length) h += `<div class="say err">✕ No manual estimate for ${esc(f.job)} was found: no job folder or workbook starts with that number.</div>`;
+  else{
+    h += `<div class="lbl2">Manual estimate · ${d.clear ? "✓ clear" : "▲ choose one"} <span class="why">${esc(d.reason || "")}</span></div>`;
+    h += man.slice(0, 8).map(c => `<label class="pick"><input type="radio" name="oneMan" value="${esc(c.path)}"${d.clear && c.path === d.path ? " checked" : ""}>
+      <span><span class="nm">${esc(c.name || c.path)}</span><span class="why">${esc([c.client, c.year, c.why, c.modified_text].filter(Boolean).join(" · "))}</span></span></label>`).join("");
+  }
+  if(ai.length && man.length) h += `<div class="frow"><button class="act go" type="button" id="oneGo">COMPARE AND FILE</button></div>`;
+  $("oneOut").innerHTML = h;
+  if($("oneGo")) $("oneGo").addEventListener("click", compareOne);
+}
+async function compareOne(){
+  const f = oneFound && oneFound.body, picked = document.querySelector('input[name="oneMan"]:checked');
+  if(!picked){ addSay($("oneOut"), "Choose the manual estimate first.", "err"); return; }
+  // A path is sent only when it differs from what the service would choose itself.
+  const d = f.decision || {}, ai = $("oneAi").value, newest = (f.ai[0] || {}).workbook;
+  const body = {job: oneFound.job, client: oneFound.client || null, read_via_excel: viaExcel()};
+  if(!d.clear || picked.value !== d.path) body.manual_path = picked.value;
+  if(ai !== newest) body.ai_path = ai;
+  busy($("oneGo"), true, "STARTING…");
+  try{
+    const r = await api("/api/estimate/parity/job", body);
+    addSay($("oneOut"), r.already_running ? "That comparison is already running. Follow it under Parity running." : "✓ Started. Follow it under Parity running →");
+    pollSoon();
+  }catch(e){ addSay($("oneOut"), esc(e.message), "err"); }
+  finally{ busy($("oneGo"), false); }
+}
+function chooseOne(job, client){
+  tab("one"); $("oneJob").value = job || ""; $("oneClient").value = client || "";
+  $("oneJob").scrollIntoView({behavior:"smooth", block:"center"});
+  findOne();
+}
+$("oneFind").addEventListener("click", findOne);
+$("oneJob").addEventListener("keydown", e => { if(e.key === "Enter") findOne(); });
+
+/* ── A SET, OR A PERIOD: preview what would happen, then compare all ── */
+const WOULD = {"would compare":["✓", "will be compared"], "no manual":["○", "no manual estimate"],
+               ambiguous:["▲", "manual sheet not clear"], "no AI run":["○", "no AI estimate"]};
+function renderPreview(el, body, runBtn){
+  const rows = body.rows || [];
+  const count = k => rows.filter(r => r.outcome === k).length;
+  const go = count("would compare");
+  let h = `<div class="say">${go} will be compared · ${count("no manual")} no manual estimate · ${count("ambiguous")} manual sheet not clear`
+        + `${count("no AI run") ? " · " + count("no AI run") + " no AI estimate" : ""}${body.stats && body.stats.runs_collapsed ? " · " + body.stats.runs_collapsed + " older run(s) of the same drawing left out" : ""}</div>`;
+  if((body.not_job_numbers || []).length) h += `<div class="say err">Left out, not job numbers: ${esc(body.not_job_numbers.slice(0, 12).join(", "))}</div>`;
+  if(rows.length) h += `<div class="pvwrap"><table class="pv">` + rows.slice(0, 120).map(r => {
+    const [ico, word] = WOULD[r.outcome] || ["·", r.outcome];
+    const name = r.outcome === "ambiguous"
+      ? `<button class="link" type="button" data-choose="${esc(r.drawing)}" data-client="${esc(r.client || "")}" title="Choose the sheet under One job">${esc(r.drawing)}</button>`
+      : esc(r.drawing);
+    return `<tr><td class="d">${name}</td><td>${esc(r.client || "")}</td><td>${ico} ${esc(word)}</td><td class="w">${esc(r.outcome === "would compare" ? (r.why || "") : (r.note || ""))}</td></tr>`;
+  }).join("") + `</table></div>` + (rows.length > 120 ? `<div class="say">and ${rows.length - 120} more</div>` : "");
+  if(go) h += `<div class="say">A drawing already compared with the same manual sheet is reused, not compared again.</div>`;
+  if(count("ambiguous")) h += `<div class="say">▲ A sheet that is not clear is never guessed: press its drawing number to choose it under One job.</div>`;
+  el.innerHTML = h;
+  runBtn.disabled = !go;
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest && e.target.closest("[data-choose]");
+  if(b) chooseOne(b.dataset.choose, b.dataset.client || "");
+});
+function setBody(preview){
+  return {text: $("setJobs").value, client: $("setClient").value.trim(), preview, read_via_excel: viaExcel()};
+}
+function periodBody(preview){
+  return {start: $("perFrom").value, end: $("perTo").value, client: $("perClient").value.trim(), preview, read_via_excel: viaExcel()};
+}
+async function preview(kind){
+  const [btn, run, out, url, body] = kind === "set"
+    ? [$("setPreview"), $("setRun"), $("setOut"), "/api/estimate/parity/jobs", setBody(true)]
+    : [$("perPreview"), $("perRun"), $("perOut"), "/api/estimate/parity/period", periodBody(true)];
+  if(kind === "period" && (!body.start || !body.end)){ say(out, "Choose both dates first.", "err"); return; }
+  busy(btn, true, "READING…"); run.disabled = true;
+  say(out, "Reading AISheets and the manual estimates. A long list or a long period takes a minute…");
+  try{ renderPreview(out, await api(url, body), run); }
+  catch(e){ say(out, esc(e.message), "err"); }
+  finally{ busy(btn, false); }
+}
+async function compareAll(kind){
+  const [run, out, url, body] = kind === "set"
+    ? [$("setRun"), $("setOut"), "/api/estimate/parity/jobs", setBody(false)]
+    : [$("perRun"), $("perOut"), "/api/estimate/parity/period", periodBody(false)];
+  busy(run, true, "STARTING…");
+  try{
+    const r = await api(url, body);
+    addSay(out, r.already_running ? "That set is already running. Follow it under Parity running." : "✓ Started. Each drawing's outcome appears under Parity running as it lands →");
+    pollSoon();
+  }catch(e){ addSay(out, esc(e.message), "err"); }
+  finally{ busy(run, false); run.disabled = true; }
+}
+$("setPreview").addEventListener("click", () => preview("set"));
+$("perPreview").addEventListener("click", () => preview("period"));
+$("setRun").addEventListener("click", () => compareAll("set"));
+$("perRun").addEventListener("click", () => compareAll("period"));
+// A preview answers for what was typed then: change it and the preview must be read again.
+["setJobs", "setClient"].forEach(id => $(id).addEventListener("input", () => { $("setRun").disabled = true; }));
+["perFrom", "perTo", "perClient"].forEach(id => $(id).addEventListener("input", () => { $("perRun").disabled = true; }));
+
+/* ── PARITY RUNNING: every comparison of the last twelve hours, wherever it was started ── */
+const KIND = {job:"ONE JOB", jobs:"A SET OF JOBS", period:"A PERIOD", "two periods":"TWO PERIODS"};
+const ROWWORD = {match:"✓", warning:"▲", fail:"✕", "quantities differ":"qty differ", "no manual":"no manual",
+                 ambiguous:"not clear", "no AI run":"no AI estimate", failed:"failed", "not compared":"not compared"};
+function taskBadge(state){
+  if(state === "running" || state === "starting") return '<span class="badge run"><span class="ico">◌</span>Running</span>';
+  return {done: badge("green", "Done"), failed: badge("red", "Failed"), choose: badge("amber", "Choose the sheet"),
+          stalled: badge("amber", "No progress")}[state] || badge("grey", state);
+}
+function renderParityTasks(tasks){
+  const running = tasks.filter(t => t.state === "running" || t.state === "starting").length;
+  $("navParity").textContent = running ? `PARITY ● ${running}` : "PARITY";
+  setText("pTasksN", tasks.length ? `${running} running · ${tasks.length - running} finished` : "");
+  if(!tasks.length){
+    $("pTasks").innerHTML = '<div class="empty">Nothing running. Start one on the left: a comparison started from the estimating page or the phone shows here too.</div>';
+    return;
+  }
+  const n = nowS();
+  $("pTasks").innerHTML = tasks.map(t => {
+    const live = t.state === "running" || t.state === "starting";
+    const frac = t.of ? Math.min(1, (t.done || 0) / t.of) : null;
+    const took = t.started_at ? fmtDur((live ? n : t.updated_at) - t.started_at) : "";
+    const when = [t.started_at ? "started " + fmtClock(t.started_at) : "", took ? (live ? took + " so far" : "took " + took) : ""].filter(Boolean).join(" · ");
+    let h = `<div class="task ${esc(t.state)}"><div class="th"><span style="min-width:0"><span class="tk">${KIND[t.kind] || esc(t.kind)}</span><span class="nm" title="${esc(t.label)}">${esc(t.label)}</span></span>${taskBadge(t.state)}</div>`;
+    if(frac != null && t.kind !== "job") h += `<div class="bar"><i style="width:${(frac * 100).toFixed(1)}%"></i></div><div class="tm">${t.done || 0} of ${t.of} drawings compared${when ? " · " + when : ""}</div>`;
+    else h += `<div class="tm">${live && t.step ? esc(t.step) + " · " : ""}${when}</div>`;
+    if(t.kind !== "job" && (t.rows || []).length) h += `<div class="rcs">${t.rows.map(r => {
+      const col = BAND[r.outcome] || "var(--grey)", w = ROWWORD[r.outcome] || r.outcome;
+      const inner = `<i style="background:${col}"></i>${esc(r.drawing)} ${esc(w)}${r.pct != null && BAND[r.outcome] ? " " + pct(r.pct) : ""}`;
+      return r.report_url ? `<a class="rc" href="${esc(r.report_url)}" target="_blank" rel="noopener" title="${esc(r.client || "")} · ${esc(r.outcome)}">${inner}</a>`
+                          : `<span class="rc" title="${esc(r.client || "")} · ${esc(r.outcome)}">${inner}</span>`;
+    }).join("")}${t.rows_total > t.rows.length ? `<span class="rc">+ ${t.rows_total - t.rows.length} earlier</span>` : ""}</div>`;
+    if(t.finished && t.stats) {
+      const st = t.stats;
+      h += `<div class="res"><span>✓ ${st.match || 0} · ▲ ${st.warning || 0} · ✕ ${st.fail || 0} · ${st.compared || 0} comparable of ${st.drawings || 0}${st.median_abs_pct != null ? " · median " + pct(st.median_abs_pct) : ""}</span>${t.summary_url ? `<a href="${esc(t.summary_url)}" target="_blank" rel="noopener">summary ↗</a>` : ""}</div>`;
+    }
+    if(t.result){
+      const r = t.result;
+      h += `<div class="res">${outcomeBadge(r.outcome)}<span>AI ${gbp(r.ai_unit)} against manual ${gbp(r.manual_unit)} · ${pct(r.signed_pct, true)}</span>${r.report_url ? `<a href="${esc(r.report_url)}" target="_blank" rel="noopener">report ↗</a>` : ""}${r.listen_url ? `<a href="${esc(r.listen_url)}" target="_blank" rel="noopener">listen</a>` : ""}</div>`;
+      if(r.quantity_note) h += `<div class="why2">${esc(r.quantity_note)}</div>`;
+    }
+    if(t.state === "choose") h += `<div class="why2">${esc(t.error)}</div><div class="res"><button class="act sm" type="button" data-choose="${esc(t.label)}">CHOOSE THE SHEET</button></div>`;
+    else if(t.state === "failed" && t.error) h += `<div class="why2">✕ ${esc(t.error)}</div>`;
+    else if(t.state === "stalled") h += `<div class="why2">▲ Nothing written for ${fmtDur(n - t.updated_at)}: the comparison may have stopped. Start it again.</div>`;
+    return h + "</div>";
+  }).join("");
+}
+
 $("pRefresh").addEventListener("click", async () => {
   setText("pRead", "reading the parity folder again…");
   try{ await fetch("/api/estimate/wall/parity?refresh=1", {headers:{"X-SDI-Key": API_KEY}, cache:"no-store"}); }catch(e){}
@@ -1102,7 +1406,7 @@ function cycle(on, secs){
 }
 $("cycleBtn").addEventListener("click", () => cycle(!cycleT));
 document.addEventListener("keydown", e => {
-  if(e.target && /input|textarea/i.test(e.target.tagName)) return;
+  if(typing(e)) return;
   if(e.key === "p" || e.key === "P") show("parity");
   if(e.key === "o" || e.key === "O") show("ops");
   if(e.key === "c" || e.key === "C") cycle(!cycleT);

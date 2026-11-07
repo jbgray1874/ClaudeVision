@@ -9,6 +9,7 @@ r"""Parity by job number: find both estimates, compare the filed copies, keep th
     python src\parity_job.py periods --a-from D --a-to D --b-from D --b-to D [--client X] [--job N]
     python src\parity_job.py history                                period comparisons already run
     python src\parity_job.py wall                                   the control panel's parity view (D-741)
+    python src\parity_job.py jobs 12002-02-GA 11908-22-GA [--client X] [--preview]   a set of jobs (D-742)
 
 JG, 1 Nov 2026 (D-619): compare one job by job number, "we take the most obvious s/sheet
 candidate and we run a parity against it from our AI estimate with html outputs", save both
@@ -294,36 +295,44 @@ def _record_for(folder: Path) -> Optional[Path]:
     return records[0] if len(records) == 1 else None
 
 
+def _drawing_dirs(root: Path) -> List[tuple]:
+    """Every client and drawing folder under AISheets, listed once, so a set of jobs reads
+    the share's two top levels once rather than once a job."""
+    if not root.is_dir():
+        raise ParityJobError(f"AISheets is not reachable: {root}")
+    return [(cdir, ddir) for cdir in sorted(p for p in root.iterdir() if p.is_dir())
+            for ddir in sorted(p for p in cdir.iterdir() if p.is_dir())]
+
+
 def find_ai(job: str, aisheets_root: Optional[Path] = None,
-            client: str = "") -> List[Dict[str, Any]]:
+            client: str = "", listing: Optional[List[tuple]] = None) -> List[Dict[str, Any]]:
     """Every AI run of this job that holds a workbook and its summary, the exact drawing and
     the client's own runs first, then newest first."""
     root = Path(aisheets_root or roots()["aisheets"])
     digits = job_digits(job)
     full = _bare(job)
-    if not root.is_dir():
-        raise ParityJobError(f"AISheets is not reachable: {root}")
+    if listing is None:
+        listing = _drawing_dirs(root)
     runs: List[Dict[str, Any]] = []
-    for cdir in sorted(p for p in root.iterdir() if p.is_dir()):
-        for ddir in sorted(p for p in cdir.iterdir() if p.is_dir()):
-            if not _starts_with_job(ddir.name, digits):
+    for cdir, ddir in listing:
+        if not _starts_with_job(ddir.name, digits):
+            continue
+        exact = _bare(ddir.name) == full or len(full) <= len(digits)
+        for rdir in sorted(p for p in ddir.iterdir() if p.is_dir()):
+            m = _RUN_FOLDER.match(rdir.name)
+            if not m:
                 continue
-            exact = _bare(ddir.name) == full or len(full) <= len(digits)
-            for rdir in sorted(p for p in ddir.iterdir() if p.is_dir()):
-                m = _RUN_FOLDER.match(rdir.name)
-                if not m:
-                    continue
-                book = _engine_workbook(rdir, ddir.name)
-                summary = _summary_for(book) if book else None
-                if not book or not summary:
-                    continue
-                record = _record_for(rdir)
-                runs.append({"workbook": str(book), "summary": str(summary),
-                             "record": str(record) if record else "",
-                             "run_folder": str(rdir), "client": cdir.name,
-                             "drawing": ddir.name, "stamp": rdir.name[:19],
-                             "day": m.group(1), "units": int(m.group(5)), "exact": exact,
-                             "client_match": bool(client) and client_matches(cdir.name, client)})
+            book = _engine_workbook(rdir, ddir.name)
+            summary = _summary_for(book) if book else None
+            if not book or not summary:
+                continue
+            record = _record_for(rdir)
+            runs.append({"workbook": str(book), "summary": str(summary),
+                         "record": str(record) if record else "",
+                         "run_folder": str(rdir), "client": cdir.name,
+                         "drawing": ddir.name, "stamp": rdir.name[:19],
+                         "day": m.group(1), "units": int(m.group(5)), "exact": exact,
+                         "client_match": bool(client) and client_matches(cdir.name, client)})
     runs.sort(key=lambda r: (r["exact"], r["client_match"], r["stamp"]), reverse=True)
     return runs
 
@@ -857,7 +866,7 @@ def stats(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     pcts = [abs(float(x["pct"])) for x in comparable if isinstance(x.get("pct"), (int, float))]
     count = {k: sum(1 for x in rows if x["outcome"] == k)
              for k in ("match", "warning", "fail", "quantities differ", "no manual", "ambiguous",
-                       "failed", "not compared", "would compare")}
+                       "failed", "not compared", "would compare", "no AI run")}
     return {"drawings": len(rows), "compared": len(comparable), **count,
             "runs_collapsed": sum(max(0, int(x.get("runs_in_period") or 1) - 1) for x in rows),
             "median_abs_pct": round(statistics.median(pcts), 2) if pcts else None,
@@ -981,13 +990,128 @@ def compare_periods(a: tuple, b: tuple, *, client: str = "", job: str = "",
     return result
 
 
+# ── a set of jobs (D-742) ───────────────────────────────────────────────────────────────
+# JG, 7 Nov 2026: "I want to run one off jobs, compare a whole set of jobs v manual etc. and
+# see the output in the main screen". A set is named by its job or drawing numbers rather than
+# by dates. Each drawing in it is compared exactly as a period compares one: its newest AI run,
+# the manual sheet chosen only when the choice is clear, a pair already compared reused rather
+# than redone, and everything that could not be compared listed apart with its reason. A bare
+# job number takes every drawing estimated under it; a drawing number takes that drawing.
+
+MAX_SET = 200
+_TOKEN = re.compile(r"[,;\s]+")
+
+
+def parse_jobs(text: Any) -> tuple:
+    """The job and drawing numbers in what a person typed or pasted, each once, in order;
+    and the words that were not one."""
+    words = text if isinstance(text, (list, tuple)) else [text]
+    jobs, rejected, seen = [], [], set()
+    for word in words:
+        for token in _TOKEN.split(str(word or "")):
+            token = token.strip().strip(".")
+            if not token:
+                continue
+            if not re.match(r"\d{3,}", token):
+                rejected.append(token)
+                continue
+            if _bare(token) not in seen:
+                seen.add(_bare(token))
+                jobs.append(token)
+    return jobs, rejected
+
+
+def _set_runs(jobs: List[str], r: Dict[str, Path], client: str) -> tuple:
+    """Each drawing the set names, once, with its newest AI run; and the jobs with none."""
+    listing = _drawing_dirs(r["aisheets"])
+    runs: List[Dict[str, Any]] = []
+    missing: List[str] = []
+    seen: set = set()
+    for job in jobs:
+        found = [x for x in find_ai(job, r["aisheets"], client=client, listing=listing)
+                 if x["exact"] and (not client or client_matches(x["client"], client))]
+        if not found:
+            missing.append(job)
+            continue
+        newest: Dict[tuple, Dict[str, Any]] = {}
+        for x in sorted(found, key=lambda x: x["stamp"], reverse=True):
+            key = (x["client"].lower(), x["drawing"].lower())
+            if key in newest:
+                newest[key]["runs_in_period"] += 1
+                continue
+            newest[key] = {"client": x["client"], "drawing": x["drawing"],
+                           "run": Path(x["run_folder"]).name, "run_folder": x["run_folder"],
+                           "workbook": x["workbook"], "units": x["units"],
+                           "estimate_date": x["day"], "runs_in_period": 1, "asked_as": job}
+        for key, run in newest.items():
+            if key not in seen:
+                seen.add(key)
+                runs.append(run)
+    return runs, missing
+
+
+def run_jobs(jobs: Any, *, preview: bool = False, read_via_excel: bool = False,
+             client: str = "", compare: Optional[Callable[..., Dict[str, Any]]] = None,
+             say: Callable[[str], None] = print,
+             status_file: Optional[Path] = None) -> Dict[str, Any]:
+    """Every drawing a set of job numbers names against its manual estimate, each filed."""
+    r = roots()
+    wanted, rejected = parse_jobs(jobs)
+    if not wanted:
+        raise ParityJobError("Name at least one job or drawing number, such as 12002-02-GA."
+                             + (f" These are not job numbers: {', '.join(rejected[:8])}."
+                                if rejected else ""))
+    if len(wanted) > MAX_SET:
+        raise ParityJobError(f"{len(wanted)} jobs is more than one set takes ({MAX_SET}). "
+                             f"Split it, or compare a period instead.")
+    folder = None
+    if not preview:
+        named = wanted[0] + (f" to {wanted[-1]}" if len(wanted) > 1 else "")
+        folder = _new_folder(r["parity"] / "_periods", _safe(
+            f"jobs {len(wanted)} {named} (run {time.strftime('%Y-%m-%d %H-%M-%S')})"))
+    base = {"kind": "jobs", "jobs": wanted, "not_job_numbers": rejected, "client": client,
+            "preview": preview, "folder": str(folder or "")}
+    _status(status_file, {**base, "done": 0, "of": None, "rows": []})
+    runs, missing = _set_runs(wanted, r, client)
+    rows: List[Dict[str, Any]] = [
+        {"client": client, "drawing": job, "ai_run": "", "estimate_date": "",
+         "runs_in_period": 0, "outcome": "no AI run",
+         "note": (f"No AI estimate of {job} was found in AISheets"
+                  + (f" for {client}" if client else "")
+                  + ": no run folder holds both the engine's workbook and its summary.")}
+        for job in missing]
+    archive = _indexes(r["parity"]) if r["parity"].is_dir() else []
+    for i, run in enumerate(runs, start=1):
+        rows.append(_pair(run, r, archive, preview=preview, read_via_excel=read_via_excel,
+                          compare=compare, made_by=f"a set of {len(wanted)} jobs"))
+        say(f"  {i}/{len(runs)}  {rows[-1]['drawing']}: {rows[-1]['outcome']}")
+        progress = {**base, "done": i, "of": len(runs), "rows": rows}
+        _status(status_file, progress)
+        if folder:
+            _status(folder / "status.json", progress)
+    dates = sorted(x["estimate_date"] for x in rows if x.get("estimate_date"))
+    s = stats(rows)
+    result = {**base, "rows": rows, "stats": s, "date_basis": DATE_BASIS,
+              "start": dates[0] if dates else "", "end": dates[-1] if dates else "",
+              "compared": s["compared"], "no_manual": s["no manual"], "failed": s["failed"]}
+    if folder:
+        _write_pages(folder, "jobs_summary", result, jobs_page)
+        result["summary_html"] = str(folder / "jobs_summary.html")
+        result["summary_portal_html"] = str(folder / "jobs_summary.portal.html")
+    done = {**result, "done": len(runs), "of": len(runs), "finished": True}
+    _status(status_file, done)
+    if folder:
+        _status(folder / "status.json", done)
+    return result
+
+
 def history(parity_root: Optional[Path] = None, limit: int = 100) -> List[Dict[str, Any]]:
     """Period comparisons already run, newest first."""
     root = Path(parity_root or roots()["parity"]) / "_periods"
     if not root.is_dir():
         return []
     out = []
-    for name in ("period_summary.json", "comparison.json"):
+    for name in ("period_summary.json", "comparison.json", "jobs_summary.json"):
         for path in root.glob(f"*/{name}"):
             body = _load(str(path))
             if not body:
@@ -999,6 +1123,8 @@ def history(parity_root: Optional[Path] = None, limit: int = 100) -> List[Dict[s
                         "start": body.get("start") or (body.get("a") or [None])[0],
                         "end": body.get("end") or (body.get("b") or [None, None])[-1],
                         "a": body.get("a"), "b": body.get("b"),
+                        "jobs": (body.get("jobs") or [])[:12],
+                        "job_count": len(body.get("jobs") or []),
                         "compared": s.get("compared", body.get("compared")),
                         "no_manual": s.get("no manual", body.get("no_manual")),
                         "failed": s.get("failed", body.get("failed")),
@@ -1342,7 +1468,8 @@ def _stats_line(s: Dict[str, Any]) -> str:
             f"mean {_pct(s['mean_abs_pct']) or 'n/a'}, within warning "
             f"{_pct(s['within_warning_pct']) or 'n/a'}. Apart: {s['quantities differ']} with "
             f"quantities that differ, {s['ambiguous']} ambiguous, {s['no manual']} with no manual "
-            f"estimate, {s['failed']} that failed. {s['runs_collapsed']} repeat run(s) collapsed.")
+            f"estimate, {s['failed']} that failed. {s['runs_collapsed']} repeat run(s) collapsed."
+            + (f" {s['no AI run']} with no AI estimate." if s.get("no AI run") else ""))
 
 
 def period_page(result: Dict[str, Any], here: Path, portal: bool) -> str:
@@ -1357,6 +1484,23 @@ def period_page(result: Dict[str, Any], here: Path, portal: bool) -> str:
             f"<h2>Quantities differ</h2>{_rows_table(rows, here, portal, ['quantities differ'])}"
             f"<h2>Ambiguous: choose the manual sheet</h2>{_rows_table(rows, here, portal, ['ambiguous'])}"
             f"<h2>No manual estimate found</h2>{_rows_table(rows, here, portal, ['no manual'])}"
+            f"<h2>Could not be compared</h2>{_rows_table(rows, here, portal, ['failed', 'not compared'])}")
+
+
+def jobs_page(result: Dict[str, Any], here: Path, portal: bool) -> str:
+    rows, s, jobs = result["rows"], result["stats"], result["jobs"]
+    named = ", ".join(jobs[:30]) + (f" and {len(jobs) - 30} more" if len(jobs) > 30 else "")
+    return (f"<!doctype html><meta charset=utf-8><title>Parity: a set of {len(jobs)} jobs</title>"
+            f"{_STYLE}<h1>AI against manual estimates: a set of {len(jobs)} job"
+            f"{'s' if len(jobs) != 1 else ''}</h1><p class=note>{html.escape(named)}"
+            + (f" · client {html.escape(result['client'])}" if result.get("client") else "")
+            + f"</p><p>{html.escape(_stats_line(s))}</p><p class=note>"
+            f"{html.escape(result['date_basis'])} Internal costing only.</p>"
+            f"<h2>Comparable</h2>{_rows_table(rows, here, portal, COMPARABLE)}"
+            f"<h2>Quantities differ</h2>{_rows_table(rows, here, portal, ['quantities differ'])}"
+            f"<h2>Ambiguous: choose the manual sheet</h2>{_rows_table(rows, here, portal, ['ambiguous'])}"
+            f"<h2>No manual estimate found</h2>{_rows_table(rows, here, portal, ['no manual'])}"
+            f"<h2>No AI estimate found</h2>{_rows_table(rows, here, portal, ['no AI run'])}"
             f"<h2>Could not be compared</h2>{_rows_table(rows, here, portal, ['failed', 'not compared'])}")
 
 
@@ -1433,7 +1577,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     hst = sub.add_parser("history")
     w = sub.add_parser("wall", help="the control panel's parity view (D-741)")
     w.add_argument("--weeks", type=int, default=12); w.add_argument("--recent", type=int, default=12)
-    for x in (f, j, s, p, q, hst, w):
+    js = sub.add_parser("jobs", help="a set of jobs, by job or drawing number (D-742)")
+    js.add_argument("jobs", nargs="+"); js.add_argument("--client", default="")
+    js.add_argument("--preview", action="store_true"); js.add_argument("--read-via-excel", action="store_true")
+    for x in (f, j, s, p, q, hst, w, js):
         x.add_argument("--json", action="store_true", help="one JSON line, for the service")
         x.add_argument("--status-file", help="progress for the service, which runs this in the background")
     a = ap.parse_args(argv)
@@ -1493,6 +1640,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                     f"{k.get('drawings')} drawings, {k.get('compared')} comparable, "
                     f"{k.get('within_warning_pct')}% within the warning threshold, median "
                     f"variance {k.get('median_abs_pct')}%"))
+        elif a.cmd == "jobs":
+            out = run_jobs(a.jobs, preview=a.preview, read_via_excel=a.read_via_excel,
+                           client=a.client, say=quiet, status_file=status)
+            if not a.json:
+                print(_stats_line(out["stats"]) + (f"\nFiled in {out['folder']}"
+                                                   if out.get("folder") else "\nPreview only"))
         elif a.cmd == "periods":
             out = compare_periods((getattr(a, "a_from"), getattr(a, "a_to")),
                                   (getattr(a, "b_from"), getattr(a, "b_to")),

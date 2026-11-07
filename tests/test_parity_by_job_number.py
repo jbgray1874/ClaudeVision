@@ -571,3 +571,50 @@ def test_no_manual_exits_2_and_a_period_that_cannot_start_says_so(shares, capsys
                             "--status-file", str(status)]) == 2
     body = json.loads(status.read_text("utf-8"))
     assert body["finished"] is True and "not reachable" in body["error"]
+
+
+# ── a set of jobs (D-742) ───────────────────────────────────────────────────────────────
+# JG, 7 Nov 2026: "I want to run one off jobs, compare a whole set of jobs v manual etc."
+
+def test_a_set_names_its_jobs_and_compares_each_drawing_once(shares, compare, tmp_path):
+    manual, aisheets, parity = shares
+    _october(manual, aisheets)
+    _touch(manual / "2026" / "Acme" / "12677" / "12677-02 ISS 1.xls")
+    _ai_run(aisheets, "Acme", "12677-02", "2026-10-25 09-00-00")
+    status = tmp_path / "state" / "set.json"
+    out = parity_job.run_jobs("12677, 55555-01\n77777-01; 12677-01-GA 99999 hello",
+                              compare=compare, say=lambda m: None, status_file=status)
+    outcomes = {r["drawing"]: r["outcome"] for r in out["rows"]}
+    # A bare job number takes every drawing estimated under it; a repeat is taken once.
+    assert outcomes == {"12677-01-GA": "warning", "12677-02": "warning", "55555-01": "no manual",
+                        "77777-01": "ambiguous", "99999": "no AI run"}
+    assert out["jobs"] == ["12677", "55555-01", "77777-01", "12677-01-GA", "99999"]
+    assert out["not_job_numbers"] == ["hello"]
+    assert out["stats"]["compared"] == 2 and out["stats"]["no AI run"] == 1
+    row = next(r for r in out["rows"] if r["drawing"] == "12677-01-GA")
+    assert row["ai_run"].startswith("2026-10-20") and row["runs_in_period"] == 2
+    folder = Path(out["folder"])
+    assert folder.parent.name == "_periods" and folder.name.startswith("jobs 5 12677 to 99999")
+    page = (folder / "jobs_summary.portal.html").read_text("utf-8")
+    assert "a set of 5 jobs" in page and "No AI estimate found" in page
+    body = json.loads(status.read_text("utf-8"))
+    assert body["finished"] is True and body["kind"] == "jobs" and body["done"] == body["of"] == 4
+    assert parity_job.history(parity)[0]["kind"] == "jobs"
+    assert parity_job.history(parity)[0]["job_count"] == 5
+
+
+def test_a_set_preview_files_nothing_and_a_client_narrows_it(shares, compare):
+    manual, aisheets, parity = shares
+    _october(manual, aisheets)
+    _ai_run(aisheets, "Other", "12677-01-GA", "2026-10-28 09-00-00")
+    out = parity_job.run_jobs(["12677-01-GA", "55555-01"], client="Acme", preview=True,
+                              compare=compare, say=lambda m: None)
+    assert {r["drawing"]: r["outcome"] for r in out["rows"]} == {
+        "12677-01-GA": "would compare", "55555-01": "no manual"}
+    assert next(r for r in out["rows"] if r["drawing"] == "12677-01-GA")["client"] == "Acme"
+    assert compare.calls == [] and not parity.exists()
+
+
+def test_a_set_with_no_job_number_in_it_is_refused(shares):
+    with pytest.raises(parity_job.ParityJobError, match="not job numbers: hello, world"):
+        parity_job.run_jobs("hello world", preview=True, say=lambda m: None)
