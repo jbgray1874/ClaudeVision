@@ -784,6 +784,7 @@ function render(){
   $("bannerText").textContent = s.banner || "";
   renderKpis(s.kpis, s.expected_s);
   renderLanes(s);
+  serviceHost = s.service_host || "";
   renderFleet(s.fleet || [], s.compute || []);
   renderQueue(s.queue || []);
   renderSolidWorks(s.solidworks || [], s.sw_wait_limit_s);
@@ -962,13 +963,14 @@ function machineCompute(m, now){
     ${m.note ? `<span class="cnote">${esc(m.note)}</span>` : ""}
   </div>`;
 }
+let serviceHost = "";
 function renderFleet(fleet, compute){
   compute = compute || [];
   const byHost = {}; compute.forEach(m => { byHost[String(m.host).toUpperCase()] = m; });
   const shown = new Set();
   const up = fleet.filter(f => f.online).length;
   $("fleetCount").textContent = `${up} of ${fleet.length} online`;
-  if(!fleet.length){ $("fleet").innerHTML = '<div class="empty">No runner has checked in with this service.</div>'; return; }
+  if(!fleet.length){ $("fleet").innerHTML = `<div class="empty">No runner has checked in with this service${serviceHost ? " on " + esc(serviceHost) : ""}. Each service keeps its own queue: a run started on another machine's service shows on that service's control panel, not here.</div>`; return; }
   const capName = {sw_extract:"SW", xai_extract:"xAI", dm_extract:"DM", desktop_token:"TURN"};
   $("fleet").innerHTML = fleet.map(f => {
     const caps = (f.capabilities || []).filter(c => capName[c]).map(c => `<span class="chip">${capName[c]}</span>`).join("");
@@ -1151,7 +1153,7 @@ function tick(){
       $("liveDot").title = $("linkText").textContent;
     }
   }
-  $("foot").textContent = (commit ? "service " + String(commit).slice(0, 7) + " · " : "") + "refreshes every " + POLL_MS / 1000 + "s";
+  $("foot").textContent = (commit ? "service " + String(commit).slice(0, 7) + (serviceHost ? " on " + serviceHost : "") + " · " : "") + "refreshes every " + POLL_MS / 1000 + "s";
 }
 
 /* ── TOOLTIP, FULL SCREEN, AN IDLE CURSOR ──────────────────── */

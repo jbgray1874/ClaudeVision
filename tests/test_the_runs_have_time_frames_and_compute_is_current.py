@@ -145,3 +145,24 @@ def test_the_panel_is_named_live_estimating():
     ESTIMATING"."""
     page = WALL.read_text(encoding="utf-8")
     assert "<h1>SDI INTELLIGENCE <b>//</b> LIVE ESTIMATING</h1>" in page
+
+
+def test_the_panel_says_which_machine_its_service_is_on(client):
+    """JG, 8 Nov 2026: "Phone app doesn't refresh with the live run like the portal does". The
+    phone reached the published service, which has its own queue and no runner, while the run
+    was on the laptop's (D-750). The panel now names the machine, and says why it is empty."""
+    import platform
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    er = client
+    app = FastAPI()
+    app.include_router(er.router)
+    tc = TestClient(app)
+    key = getattr(er.config, "API_KEY", "") or ""
+    if key:
+        tc.headers.update({"X-SDI-Key": key})
+    assert tc.get("/api/estimate/wall").json()["service_host"] == platform.node()
+    page = WALL.read_text(encoding="utf-8")
+    assert 'serviceHost = s.service_host || "";' in page
+    assert '(serviceHost ? " on " + serviceHost : "")' in page
+    assert "Each service keeps its own queue: a run started on another machine's service shows on that service's control panel, not here." in page

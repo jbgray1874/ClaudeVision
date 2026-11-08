@@ -1029,6 +1029,11 @@ def wall(x_sdi_key: Optional[str] = Header(default=None)):
     commit = str(getattr(_sys.modules.get("app"), "SDI_COMMIT", "") or "")
     snap = estimate_wall.snapshot(runs, runners_now, max_runs=_max_concurrent_runs(),
                                   service_commit=commit, tail_lines=80)
+    # WHICH MACHINE THIS IS (D-750). Each service keeps its own queue, and the phone reaches
+    # the published service while a run is going on the laptop's: the phone's panel showed
+    # "0 of 0 online" and an empty slot, which read as a page that would not refresh.
+    import platform as _platform
+    snap["service_host"] = _platform.node()
     tasks = parity_tasks_for_wall()
     snap["parity_tasks"] = tasks
     snap["parity"] = parity_for_wall(force=_parity_moved(tasks))
