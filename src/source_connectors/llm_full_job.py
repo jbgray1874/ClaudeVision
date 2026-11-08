@@ -37,7 +37,47 @@ _RE_SECTION = re.compile(r"(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d
 
 
 def _clean_pn(s: Any) -> str:
-    return str(s or "").strip().upper()
+    """ONE PART, ONE KEY, HOWEVER A READER SPELT IT (D-749).
+
+    This was str.strip().upper(), so the read's "UPC0358141M4" (the part's own sheet, its PDF
+    text without spaces) never met the priced "UPC0358141 M4" (the parts list). 0358141's read
+    had the upright as 30 x 30 x 2 at 1,383 mm, the end caps as 3 mm plate and the rub strips
+    as 3 mm brushed stainless; not one of those facts reached a priced part, and the sheet
+    priced 1,400 mm of 30 x 15 tube for all four members and a plastic strip. Every join in
+    this module goes through this key, so they all read one identity:
+    part_identity.normalize_part_code, the reader that knows the drawing's spellings."""
+    raw = str(s or "").strip().upper()
+    try:
+        from part_identity import normalize_part_code
+        return normalize_part_code(raw) or raw
+    except Exception:                                                # noqa: BLE001
+        return re.sub(r"\s+", "", raw)
+
+
+# The facts a read gives a part that the price depends on. A read part carrying any of them
+# that reaches no priced part is evidence lost, and is said (D-749).
+_PRICED_FACTS = ("tube_section", "cut_length_mm", "cut_lengths_mm", "material", "thickness_mm",
+                 "weight_g", "overall_size_mm", "finish")
+
+
+def _index_job_parts(rows: Any) -> Dict[str, Dict[str, Any]]:
+    """The read's parts by identity. The read can name one part under two spellings, from its
+    parts list and from its own sheet; the two rows are combined, each field from whichever
+    row has it, never one row silently replacing the other."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for p in (rows or []):
+        if not isinstance(p, dict) or not p.get("part_number"):
+            continue
+        k = _clean_pn(p.get("part_number"))
+        if k not in out:
+            out[k] = p
+            continue
+        merged = dict(out[k])
+        for f, v in p.items():
+            if merged.get(f) in (None, "", [], {}) and v not in (None, "", [], {}):
+                merged[f] = v
+        out[k] = merged
+    return out
 
 
 # The one reason bought_in_reason gives that is not evidence of a purchase: it is what a
@@ -293,15 +333,41 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
     except Exception:                                                # noqa: BLE001
         pass
 
-    by_pn = {_clean_pn(p.get("part_number")): p for p in (job.get("parts") or []) if isinstance(p, dict)}
+    by_pn = _index_job_parts(job.get("parts"))
     assembly_pns = {_clean_pn(a.get("part_number")) for a in (job.get("assemblies") or []) if isinstance(a, dict)}
     qty_rollup = _rollup_quantities(job)
+    _priced_keys = {_clean_pn(p.get("part_number")) for p in parts if isinstance(p, dict)}
+    _used: set = set()
 
     for part in parts:
         if not isinstance(part, dict):
             continue
         pn = _clean_pn(part.get("part_number"))
         jp = by_pn.get(pn)
+        if jp is not None:
+            _used.add(pn)
+        # ONE DIGIT APART, CORROBORATED AND SAID (D-749): a read part no priced part claims,
+        # whose number differs from this one's by a digit in the drawing number, whose
+        # description agrees, and whose spelling the pack's other parts carry. Its facts fill
+        # this part's gaps; the join is written on the part to be confirmed.
+        try:
+            from part_identity import corroborated_near_code, near_code_note
+            _unclaimed = {k: (v or {}).get("description") for k, v in by_pn.items()
+                          if k not in _priced_keys and k not in _used}
+            _near = corroborated_near_code(pn, part.get("description"), _unclaimed,
+                                           list(_priced_keys))
+        except Exception:                                            # noqa: BLE001
+            _near = None
+        if _near:
+            _used.add(_near)
+            near_jp = by_pn[_near]
+            jp = dict(jp or {})
+            for f, v in near_jp.items():
+                if jp.get(f) in (None, "", [], {}) and v not in (None, "", [], {}):
+                    jp[f] = v
+            part.setdefault("review_flags", []).append(
+                near_code_note(part.get("part_number"), near_jp.get("part_number"),
+                               part.get("description")))
 
         # Sub-assembly: flag it (it is a weld/build step, not a fabricated flat part).
         if pn in assembly_pns:
@@ -521,6 +587,16 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
                 "enriched from whole-document LLM extract (transcribed from drawing — verify)")
 
     out["operations"] += apply_routes_to_parts(parts, job)
+    # EVIDENCE THAT REACHED NO PRICED PART IS SAID, NEVER DROPPED (D-749). On 0358141 every
+    # detail sheet's facts sat on a read part no priced part matched, and nothing said so: the
+    # sheet was priced on fallbacks while the run reported the extract as applied.
+    out["unmatched"] = [
+        {"part_number": jp.get("part_number"), "description": jp.get("description"),
+         "facts": {f: jp.get(f) for f in _PRICED_FACTS if jp.get(f) not in (None, "", [], {})}}
+        for k, jp in by_pn.items()
+        if k not in _priced_keys and k not in _used and k not in assembly_pns
+        and not jp.get("is_bought_in")
+        and any(jp.get(f) not in (None, "", [], {}) for f in _PRICED_FACTS)]
     return out
 
 

@@ -1130,15 +1130,26 @@ def merge_inference(job: Dict[str, Any], inference: Dict[str, Any]) -> Dict[str,
     if not isinstance(parts, list):
         parts = []
         job["parts"] = parts
+    # ONE IDENTITY (D-749): the inference names a part as the sheet prints it, the transcription
+    # as the parts list does; "UPC0358141M4" and "UPC0358141 M4" are one part, not a part and
+    # an addition.
+    def _key(v: Any) -> str:
+        raw = str(v or "").strip().upper()
+        try:
+            from part_identity import normalize_part_code
+            return normalize_part_code(raw) or raw
+        except Exception:                                            # noqa: BLE001
+            return raw.replace(" ", "")
+
     by_pn = {}
     for p in parts:
         if isinstance(p, dict) and p.get("part_number"):
-            by_pn[str(p["part_number"]).strip().upper()] = p
+            by_pn.setdefault(_key(p["part_number"]), p)
 
     for row in (inference.get("parts") or []):
         if not isinstance(row, dict) or not row.get("part_number"):
             continue
-        pn = str(row["part_number"]).strip().upper()
+        pn = _key(row["part_number"])
         target = by_pn.get(pn)
         if target is None:
             # A part the transcription never listed at all. Added whole, and every field on it
@@ -1168,7 +1179,7 @@ def merge_inference(job: Dict[str, Any], inference: Dict[str, Any]) -> Dict[str,
         job["routes"] = routes
     # An operation the transcription already read for the same part is not repeated: it is
     # already there at the higher rank, and adding it again would only make it look inferred.
-    seen = {(str(r.get("operation") or "").strip().lower(), str(p).strip().upper())
+    seen = {(str(r.get("operation") or "").strip().lower(), _key(p))
             for r in routes if isinstance(r, dict)
             for p in (r.get("part_numbers") or [])}
     for r in (inference.get("routes") or []):
@@ -1176,14 +1187,14 @@ def merge_inference(job: Dict[str, Any], inference: Dict[str, Any]) -> Dict[str,
             continue
         op = str(r.get("operation") or "").strip().lower()
         pns = [str(p).strip().upper() for p in (r.get("part_numbers") or []) if p]
-        keep = [p for p in pns if (op, p) not in seen]
+        keep = [p for p in pns if (op, _key(p)) not in seen]
         if pns and not keep:
             continue
         r["part_numbers"] = keep or pns
         r["inferred"] = True
         routes.append(r)
         for p in keep:
-            seen.add((op, p))
+            seen.add((op, _key(p)))
         counts["routes"] += 1
     return counts
 

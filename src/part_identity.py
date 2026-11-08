@@ -1215,3 +1215,74 @@ def fold_one_cell_duplicates(parts: Any) -> List[Tuple[str, str]]:
         parts.remove(drop)
         i = 0
     return folded
+
+
+
+# ── ONE DIGIT APART, AND SAID SO (D-749) ─────────────────────────────────────────────────
+# 0358141's parts list prints its base end cap as "UPC0358131 M7" — the drawing number with one
+# digit wrong — while its siblings, and the drawings, carry UPC0358141. Matched on spelling the
+# cap's own sheet never reaches it, and it is priced on a fallback. Merging numbers that differ
+# silently would be worse: M6 and M7 also differ by one digit, and they are different parts.
+# So a one-digit difference joins two spellings only when every one of these holds, and the
+# join is written on the part for a person to confirm:
+#   * the digit is not in the item number (the last run of digits), so M6 never answers for M7;
+#   * the two descriptions share a word of substance;
+#   * another code in the pack carries one of the two spellings at that digit — the
+#     difference sits in the drawing number the siblings share;
+#   * exactly one candidate answers.
+_PLAIN_WORDS = frozenset({"THE", "AND", "FOR", "WITH", "OFF", "QTY", "REV", "ITEM", "PART",
+                          "ASSY", "ASSEMBLY", "SEE", "DRG", "DWG", "SHEET", "MILD", "STEEL"})
+
+
+def one_digit_apart(a: Any, b: Any) -> Optional[int]:
+    """The position at which two codes differ by a single digit outside the item number, or
+    None. Compared as normalize_part_code reads them, so spacing never counts."""
+    x, y = normalize_part_code(a), normalize_part_code(b)
+    if not x or not y or len(x) != len(y) or x == y:
+        return None
+    diff = [i for i, (p, q) in enumerate(zip(x, y)) if p != q]
+    if len(diff) != 1:
+        return None
+    i = diff[0]
+    if not (x[i].isdigit() and y[i].isdigit()):
+        return None
+    runs = list(re.finditer(r"\d+", x))
+    if not runs or runs[-1].start() <= i < runs[-1].end():
+        return None                                   # the item number decides the item
+    return i
+
+
+def describe_alike(a: Any, b: Any) -> bool:
+    """Whether two descriptions share a word of substance (three letters or more)."""
+    def words(t: Any) -> Set[str]:
+        return {w for w in re.findall(r"[A-Z]{3,}", str(t or "").upper()) if w not in _PLAIN_WORDS}
+    return bool(words(a) & words(b))
+
+
+def corroborated_near_code(code: Any, description: Any, candidates: Dict[str, Any],
+                           context: Iterable[Any]) -> Optional[str]:
+    """The one candidate code (candidate -> its description) that this code differs from by a
+    single digit in the drawing number, with the descriptions agreeing and another code in
+    `context` sharing one spelling at that digit; None unless exactly one answers."""
+    want = normalize_part_code(code)
+    if not want:
+        return None
+    ctx = [normalize_part_code(c) for c in (context or [])]
+    hits: List[str] = []
+    for cand, cand_desc in (candidates or {}).items():
+        i = one_digit_apart(code, cand)
+        if i is None or not describe_alike(description, cand_desc):
+            continue
+        have = normalize_part_code(cand)
+        if any(c and c not in (want, have) and c[:i + 1] in (want[:i + 1], have[:i + 1])
+               for c in ctx):
+            hits.append(cand)
+    return hits[0] if len(hits) == 1 else None
+
+
+def near_code_note(listed: Any, other: Any, description: Any) -> str:
+    """The sentence a part carries when two spellings one digit apart were taken as one."""
+    return (f"{listed} and {other} are one digit apart and were taken as ONE part: both "
+            f"describe {str(description or '').strip()[:60]!r}, and the digit sits in the "
+            f"drawing number the pack's other parts share. Confirm the number with the drawing "
+            f"office; if they are two parts, one is mis-numbered.")

@@ -3917,6 +3917,13 @@ def _finalize_scan_summary(
                 print(f"   [llm-full-extract] drove tube+{_c['tube']} qty+{_c.get('qty', 0)} "
                       f"material+{_c['material']} weight+{_c['weight']} thickness+{_c['thickness']} "
                       f"assembly-flagged+{_c['assembly_flagged']} into the estimate", flush=True)
+                # WHAT THE READ SAID THAT REACHED NO PRICED PART (D-749), loud, every run.
+                _lost = _c.get("unmatched") or []
+                if _lost:
+                    print(f"   [llm-full-extract] {len(_lost)} part(s) the read described reached "
+                          f"NO priced part, so their facts are not in the price: "
+                          + "; ".join(f"{u.get('part_number')} ({', '.join(u.get('facts') or {})})"
+                                      for u in _lost[:8]), flush=True)
             else:
                 print(f"   [llm-full-extract] no job returned ({_job.get('error', '')})", flush=True)
         except Exception as _e_llm:
