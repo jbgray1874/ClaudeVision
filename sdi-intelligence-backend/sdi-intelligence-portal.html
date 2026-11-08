@@ -6,31 +6,32 @@
 <title>SDI Intelligence — Portal</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Spectral:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Spectral:wght@400;600&family=Outfit:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,300;9..144,400&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg:#0a0a0b; --bg-2:#0d0d0f; --surface:#121214; --surface-2:#17171a;
-    --line:#26262b; --line-soft:#1e1e22;
-    --ink:#f0efec; --ink-dim:#9b9ba3; --ink-faint:#6a6a72;
-    --accent:#e8a33d; --accent-deep:#cf8c26;
+    --bg:#0b0b0a; --bg-2:#0e0e0c; --surface:#141412; --surface-2:#1a1a17;
+    --line:#2b2b26; --line-soft:#20201c;
+    --ink:#f2f2ea; --ink-dim:#b6b6a7; --ink-faint:#83837a;
+    --accent:#F6D946; --accent-deep:#D9BD2C; --accent-fill:#F6D946;
     --ok:#4ec97f; --warn:#e8a33d; --fail:#e8544f; --info:#6da8e8;
     /* Aliases. Both names were in use against no definition, so `var(--acc)` fell back to
        inherit and `background:var(--good)` fell back to transparent — which is why the two
        "Done" bars on the estimating timeline rendered as empty tracks. */
-    --acc:#e8a33d; --good:#4ec97f;
+    --acc:#F6D946; --good:#4ec97f;
     /* The creative-design workstream's colour, and the avatar gradient. Both were inline
        literals in a dozen places, which is fine on a page with one palette and impossible
        on a page with two. */
     --violet:#a78bfa;
-    --avatar-a:#2a2a30; --avatar-b:#3a3a44;
+    --avatar-a:#2b2b26; --avatar-b:#3c3c35;
     /* The sticky header's ground and the table row hover were written as rgba(),
        so the pass that tokenised 214 hex values could not see either of them —
        and a dark bar across the top of a light page is the first thing you'd see. */
-    --top-bg:rgba(10,10,11,.82); --row-hover:rgba(255,255,255,.015);
+    --top-bg:rgba(11,11,10,.82); --row-hover:rgba(255,255,255,.015);
     --r:4px;
     --mono:'JetBrains Mono',ui-monospace,monospace;
     --serif:'Spectral','Source Serif 4',Georgia,serif;
-    --disp:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --disp:'Outfit','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --serif-disp:'Fraunces','Spectral',Georgia,serif;
     --body:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
   }
 
@@ -50,12 +51,12 @@
      OS clock rolled past sunset would be worse than one that never offered the choice.
      So there is no prefers-color-scheme rule here — only what the user picked. */
   :root[data-theme="light"]{
-    --bg:#f4f4f2; --bg-2:#ecebe8; --surface:#ffffff; --surface-2:#f7f7f5;
+    --bg:#f4f4f0; --bg-2:#ebebe5; --surface:#ffffff; --surface-2:#f7f7f5;
     --line:#d9d8d3; --line-soft:#e6e5e1;
     --ink:#17171a; --ink-dim:#5b5b63; --ink-faint:#83838c;
-    --accent:#a9701a; --accent-deep:#8a5a12;
+    --accent:#7a6300; --accent-deep:#5f4d00; --accent-fill:#F6D946;
     --ok:#1f7a45; --warn:#a9701a; --fail:#c0342f; --info:#2b6cb0;
-    --acc:#a9701a; --good:#1f7a45;
+    --acc:#7a6300; --good:#1f7a45;
     --violet:#6b4fa8;
     --avatar-a:#4a4a54; --avatar-b:#6a6a76;
     --top-bg:rgba(248,248,246,.86); --row-hover:rgba(0,0,0,.028);
@@ -75,7 +76,7 @@
     min-height:100vh;
   }
   a{color:inherit;text-decoration:none}
-  ::selection{background:var(--accent);color:#000}
+  ::selection{background:var(--accent-fill);color:#000}
 
   .app{display:grid;grid-template-columns:248px 1fr;min-height:100vh}
 
@@ -85,8 +86,8 @@
     display:flex;flex-direction:column;position:sticky;top:0;height:100vh;
   }
   .brand{padding:22px 22px 20px;border-bottom:1px solid var(--line-soft);display:flex;gap:12px;align-items:center}
-  .mark{width:34px;height:34px;background:var(--accent);border-radius:3px;display:grid;place-items:center;flex:none;
-        box-shadow:0 0 0 1px rgba(0,0,0,.4), 0 6px 18px rgba(232,163,61,.18)}
+  .mark{width:34px;height:34px;background:var(--accent-fill);border-radius:3px;display:grid;place-items:center;flex:none;
+        box-shadow:0 0 0 1px rgba(0,0,0,.4), 0 6px 18px rgba(246,217,70,.18)}
   .mark b{font-family:var(--disp);font-weight:900;color:#000;font-size:20px;line-height:1;letter-spacing:-1px}
   .brand-txt .t1{font-family:var(--disp);font-weight:800;letter-spacing:.05em;font-size:12.5px;white-space:nowrap}
   .brand-txt .t2{font-size:10.5px;color:var(--ink-faint);letter-spacing:.34em;text-transform:uppercase;margin-top:2px}
@@ -345,7 +346,7 @@
   .tool code{font-family:var(--mono);font-size:11px;color:var(--accent);background:var(--bg);border:1px solid var(--line-soft);
              padding:7px 9px;border-radius:3px;display:block;overflow:auto;white-space:nowrap}
   .run{font-family:var(--disp);font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;
-       background:var(--accent);color:#000;border:0;border-radius:3px;padding:9px 12px;cursor:pointer;transition:.15s;align-self:flex-start}
+       background:var(--accent-fill);color:#000;border:0;border-radius:3px;padding:9px 12px;cursor:pointer;transition:.15s;align-self:flex-start}
   .run:hover{background:#fff} .run:disabled{opacity:.5;cursor:wait}
 
   .console{margin-top:16px;background:var(--bg);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;
@@ -381,6 +382,27 @@
      its own; .mark is kept only as the fallback when the endpoint is unreachable (a page opened
      off the share rather than through the portal). */
   .brandlogo{height:24px;width:auto;max-width:70px;display:block;flex:none}
+
+  /* ── we.are.sdi (D-754) ──────────────────────────────────────────────────────────
+     The look of wearesdi.com on the dark ground: the wordmark, SDI yellow for the brand
+     (warnings keep their amber, so the two never read as one), the geometric display face,
+     pill-shaped primary buttons and the halftone dot circle. Tokens only, so light mode
+     follows. */
+  .sdi-word{display:inline-block;height:1em;width:auto;vertical-align:-.12em;color:var(--sdi-word-ink,currentColor)}
+  .sdi-word .d{fill:var(--accent)}
+  .sdi-dots{position:absolute;pointer-events:none;border-radius:50%;opacity:.16;z-index:0;
+    background-image:radial-gradient(var(--accent) 1.1px, transparent 1.6px);background-size:9px 9px;
+    -webkit-mask-image:radial-gradient(circle at center,#000 58%,transparent 71%);
+            mask-image:radial-gradient(circle at center,#000 58%,transparent 71%)}
+  .brand-txt .t2{text-transform:none;letter-spacing:0;margin-top:5px}
+  .brand-txt .t2 .sdi-word{height:12px;color:var(--ink)}
+  .pagehead.hero{position:relative}
+  .pagehead.hero > :not(.sdi-dots){position:relative;z-index:1}
+  .pagehead.hero .sdi-dots{width:300px;height:300px;right:-30px;top:-70px}
+  .pagehead.hero .kicker .sdi-word{height:22px;color:var(--ink)}
+  h1.tagline{font-family:var(--serif-disp);font-weight:300;font-size:46px;letter-spacing:-.01em;
+             line-height:1.08;margin-top:14px}
+  .run{border-radius:999px;padding:10px 18px}
 </style>
 </head>
 <body>
@@ -395,10 +417,10 @@
            plain mark app.py falls back to, so the page degrades to exactly what the endpoint
            would have given it. onerror is cleared first so a failure here cannot loop. -->
       <img class="brandlogo" src="/api/brand/logo" alt="we.are.sdi"
-           onerror="this.onerror=null;this.src='data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ccircle cx=%2250%22 cy=%2250%22 r=%2250%22 fill=%22%23e8a33d%22/%3E%3Ctext x=%2250%22 y=%2266%22 text-anchor=%22middle%22 font-family=%22Inter,Arial,sans-serif%22 font-weight=%22800%22 font-size=%2254%22 fill=%22%23000%22%3ES%3C/text%3E%3C/svg%3E'">
+           onerror="this.onerror=null;this.src='data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ccircle cx=%2250%22 cy=%2250%22 r=%2250%22 fill=%22%23F6D946%22/%3E%3Ctext x=%2250%22 y=%2266%22 text-anchor=%22middle%22 font-family=%22Inter,Arial,sans-serif%22 font-weight=%22800%22 font-size=%2254%22 fill=%22%23000%22%3ES%3C/text%3E%3C/svg%3E'">
       <div class="brand-txt">
         <div class="t1">SDI INTELLIGENCE</div>
-        <div class="t2">we.are.sdi</div>
+        <div class="t2"><svg class="sdi-word" viewBox="0 0 950 169" role="img" aria-label="we.are.sdi" fill="currentColor"><path d="M158.915 36.7773L135.389 114.85C133.118 122.35 130.447 133.08 129.137 138.467C127.991 133.14 125.689 122.658 123.777 115.372L103.183 36.7773H80.9663L59.639 115.365C57.7134 122.531 55.2616 133.193 54.0544 138.537C52.7665 133.175 50.1337 122.393 48.0313 114.866L25.7238 36.7773H2.41797L42.8867 164.183H64.817L86.1457 87.545C88.1938 80.2145 90.5008 70.1606 91.6815 64.8782C92.7926 70.1676 94.9785 80.2145 97.0252 87.5408L118.11 164.183H139.793L181.494 36.7773H158.915Z"/><path d="M198.247 89.3881C201.717 65.0993 215.393 51.2041 235.907 51.2041C257.026 51.2041 269.942 65.1035 271.475 89.3881H198.247ZM235.907 33.6262C200.848 33.6262 175.402 61.7925 175.402 100.602C175.402 140.036 200.782 167.576 237.122 167.576C266.097 167.576 286.107 151.905 292.022 124.58L292.29 123.331H271.037L270.838 124.105C266.638 140.412 254.981 149.03 237.122 149.03C214.607 149.03 199.568 132.667 197.679 106.238H294.716V105.207C294.716 61.0546 272.181 33.6262 235.907 33.6262Z"/><path d="M423.094 99.3426V116.845C423.094 129.476 413.093 149.514 386.253 149.514C374.763 149.514 361.066 146.034 361.066 129.453C361.066 111.983 374.55 109.012 395.107 106.475C405.222 105.353 416.174 102.542 423.094 99.3426ZM442.876 145.211V75.1457C442.876 48.0778 427.173 34.3525 396.207 34.3525C365.325 34.3525 345.882 50.5756 344.199 77.7479L344.132 78.8422H365.115L365.189 77.8927C366.611 59.6855 376.543 51.2036 396.449 51.2036C413.721 51.2036 422.85 58.4756 422.85 72.2358C422.85 84.7721 413.6 87.9131 394.162 89.8791C365.81 92.711 338.128 98.1354 338.128 129.937C338.128 152.214 355.493 166.609 382.369 166.609C399.062 166.609 412.196 160.665 422.446 148.455C422.81 156.828 424.039 161.374 426.552 163.882L426.853 164.184H447.488V161.874L447.029 161.569C445.354 160.452 442.876 154.482 442.876 145.211Z"/><path d="M544.015 89.3881C547.485 65.0993 561.162 51.2041 581.676 51.2041C602.794 51.2041 615.711 65.1035 617.244 89.3881H544.015ZM581.676 33.6262C546.616 33.6262 521.17 61.7925 521.17 100.602C521.17 140.036 546.551 167.576 582.89 167.576C611.865 167.576 631.875 151.905 637.79 124.58L638.059 123.331H616.805L616.606 124.105C612.407 140.412 600.749 149.03 582.89 149.03C560.375 149.03 545.337 132.667 543.447 106.238H640.484V105.207C640.484 61.0546 617.95 33.6262 581.676 33.6262Z"/><path d="M851.701 149.272C829.697 149.272 816.561 131.258 816.561 101.086C816.561 71.215 829.932 52.6584 851.46 52.6584C875.53 52.6584 890.484 71.215 890.484 101.086C890.484 143.012 866.185 149.272 851.701 149.272ZM889.27 52.9591C880.17 40.7959 866.17 33.8678 850.487 33.8678C816.91 33.8678 794.351 60.7839 794.351 100.843C794.351 141.529 816.576 167.82 850.973 167.82C867.235 167.82 879.136 162.367 889.27 150.196V164.182H910.994V0.13501H889.27V52.9591Z"/><path d="M927.143 164.182H948.867V36.7761H927.143V164.182Z"/><path d="M927.143 21.2634H948.867V0.135254H927.143V21.2634Z"/><path d="M743.393 88.1957C721.16 83.7055 710.475 80.996 710.475 68.5976C710.475 57.8517 719.302 51.688 734.692 51.688C752.847 51.688 761.398 58.5214 763.285 74.5371L763.393 75.4463H785.617L785.479 74.2949C782.352 48.0054 764.958 34.1101 735.178 34.1101C706.259 34.1101 688.993 47.3649 688.993 69.568C688.993 98.3525 713.23 103.337 736.664 108.156C761.031 113.28 768.617 116.918 768.617 129.693C768.617 142.319 758.639 149.272 740.518 149.272C719.615 149.272 708.61 141.227 705.884 123.957L705.746 123.087H683.493L683.602 124.216C686.301 152.334 706.342 167.819 740.032 167.819C771.687 167.819 790.585 153.204 790.585 128.724C790.585 97.7135 765.514 92.6566 743.393 88.1957Z"/><path d="M525.691 57.6969V37.1089L525.044 36.8513C522.561 35.86 520.488 35.3225 516.649 35.3225C502.335 35.3225 488.734 42.983 479.81 55.9426V36.7775H458.086V164.183H479.81V93.5711C479.81 69.2586 497.61 56.5371 515.193 56.5371C519.064 56.5371 520.872 56.7877 523.607 57.6969H525.691Z"/><path class="d" d="M304.438 145.847H322.879V164.158H304.438V145.847Z"/><path class="d" d="M650.643 145.691H669.084V164.002H650.643V145.691Z"/></svg></div>
       </div>
     </div>
     <nav class="nav">
@@ -495,9 +517,10 @@
 
     <!-- ===== DASHBOARD ===== -->
     <section class="view show" id="dashboard">
-      <div class="pagehead">
-        <div class="kicker">we.are.sdi.</div>
-        <h1>Experiences. Designed &amp; Made.</h1>
+      <div class="pagehead hero">
+        <span class="sdi-dots" aria-hidden="true"></span>
+        <div class="kicker"><svg class="sdi-word" viewBox="0 0 950 169" role="img" aria-label="we.are.sdi" fill="currentColor"><path d="M158.915 36.7773L135.389 114.85C133.118 122.35 130.447 133.08 129.137 138.467C127.991 133.14 125.689 122.658 123.777 115.372L103.183 36.7773H80.9663L59.639 115.365C57.7134 122.531 55.2616 133.193 54.0544 138.537C52.7665 133.175 50.1337 122.393 48.0313 114.866L25.7238 36.7773H2.41797L42.8867 164.183H64.817L86.1457 87.545C88.1938 80.2145 90.5008 70.1606 91.6815 64.8782C92.7926 70.1676 94.9785 80.2145 97.0252 87.5408L118.11 164.183H139.793L181.494 36.7773H158.915Z"/><path d="M198.247 89.3881C201.717 65.0993 215.393 51.2041 235.907 51.2041C257.026 51.2041 269.942 65.1035 271.475 89.3881H198.247ZM235.907 33.6262C200.848 33.6262 175.402 61.7925 175.402 100.602C175.402 140.036 200.782 167.576 237.122 167.576C266.097 167.576 286.107 151.905 292.022 124.58L292.29 123.331H271.037L270.838 124.105C266.638 140.412 254.981 149.03 237.122 149.03C214.607 149.03 199.568 132.667 197.679 106.238H294.716V105.207C294.716 61.0546 272.181 33.6262 235.907 33.6262Z"/><path d="M423.094 99.3426V116.845C423.094 129.476 413.093 149.514 386.253 149.514C374.763 149.514 361.066 146.034 361.066 129.453C361.066 111.983 374.55 109.012 395.107 106.475C405.222 105.353 416.174 102.542 423.094 99.3426ZM442.876 145.211V75.1457C442.876 48.0778 427.173 34.3525 396.207 34.3525C365.325 34.3525 345.882 50.5756 344.199 77.7479L344.132 78.8422H365.115L365.189 77.8927C366.611 59.6855 376.543 51.2036 396.449 51.2036C413.721 51.2036 422.85 58.4756 422.85 72.2358C422.85 84.7721 413.6 87.9131 394.162 89.8791C365.81 92.711 338.128 98.1354 338.128 129.937C338.128 152.214 355.493 166.609 382.369 166.609C399.062 166.609 412.196 160.665 422.446 148.455C422.81 156.828 424.039 161.374 426.552 163.882L426.853 164.184H447.488V161.874L447.029 161.569C445.354 160.452 442.876 154.482 442.876 145.211Z"/><path d="M544.015 89.3881C547.485 65.0993 561.162 51.2041 581.676 51.2041C602.794 51.2041 615.711 65.1035 617.244 89.3881H544.015ZM581.676 33.6262C546.616 33.6262 521.17 61.7925 521.17 100.602C521.17 140.036 546.551 167.576 582.89 167.576C611.865 167.576 631.875 151.905 637.79 124.58L638.059 123.331H616.805L616.606 124.105C612.407 140.412 600.749 149.03 582.89 149.03C560.375 149.03 545.337 132.667 543.447 106.238H640.484V105.207C640.484 61.0546 617.95 33.6262 581.676 33.6262Z"/><path d="M851.701 149.272C829.697 149.272 816.561 131.258 816.561 101.086C816.561 71.215 829.932 52.6584 851.46 52.6584C875.53 52.6584 890.484 71.215 890.484 101.086C890.484 143.012 866.185 149.272 851.701 149.272ZM889.27 52.9591C880.17 40.7959 866.17 33.8678 850.487 33.8678C816.91 33.8678 794.351 60.7839 794.351 100.843C794.351 141.529 816.576 167.82 850.973 167.82C867.235 167.82 879.136 162.367 889.27 150.196V164.182H910.994V0.13501H889.27V52.9591Z"/><path d="M927.143 164.182H948.867V36.7761H927.143V164.182Z"/><path d="M927.143 21.2634H948.867V0.135254H927.143V21.2634Z"/><path d="M743.393 88.1957C721.16 83.7055 710.475 80.996 710.475 68.5976C710.475 57.8517 719.302 51.688 734.692 51.688C752.847 51.688 761.398 58.5214 763.285 74.5371L763.393 75.4463H785.617L785.479 74.2949C782.352 48.0054 764.958 34.1101 735.178 34.1101C706.259 34.1101 688.993 47.3649 688.993 69.568C688.993 98.3525 713.23 103.337 736.664 108.156C761.031 113.28 768.617 116.918 768.617 129.693C768.617 142.319 758.639 149.272 740.518 149.272C719.615 149.272 708.61 141.227 705.884 123.957L705.746 123.087H683.493L683.602 124.216C686.301 152.334 706.342 167.819 740.032 167.819C771.687 167.819 790.585 153.204 790.585 128.724C790.585 97.7135 765.514 92.6566 743.393 88.1957Z"/><path d="M525.691 57.6969V37.1089L525.044 36.8513C522.561 35.86 520.488 35.3225 516.649 35.3225C502.335 35.3225 488.734 42.983 479.81 55.9426V36.7775H458.086V164.183H479.81V93.5711C479.81 69.2586 497.61 56.5371 515.193 56.5371C519.064 56.5371 520.872 56.7877 523.607 57.6969H525.691Z"/><path class="d" d="M304.438 145.847H322.879V164.158H304.438V145.847Z"/><path class="d" d="M650.643 145.691H669.084V164.002H650.643V145.691Z"/></svg></div>
+        <h1 class="tagline">Experiences.<br>Designed &amp; Made.</h1>
         <p class="sub">An expert end-to-end design-led manufacturer creating imaginative brand experiences for retail and hospitality. Strategists, Creatives, Engineers, Makers, Builders &amp; Installers — together, every step of the way.</p>
       </div>
 
@@ -3145,11 +3168,11 @@
       <div class="note reveal" style="animation-delay:.08s">
         <h4>Action plan — secure the perimeter &amp; add VPN MFA</h4>
         <div style="display:grid;gap:10px;margin-top:10px">
-          <div style="display:flex;gap:12px;align-items:flex-start"><span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:var(--accent);color:#000;font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center">1</span><div style="font-size:13px"><b>Discovery &amp; fitness check.</b> Log into the WatchGuard (web UI / WatchGuard Cloud). Record Firebox model, Fireware OS version, VPN type, current ruleset and inbound exposure. Confirm admin credentials are held. Identify the Aruba kit at the rack. <span style="color:var(--ink-dim)">— answers "is the current VPN adequate"</span></div></div>
-          <div style="display:flex;gap:12px;align-items:flex-start"><span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:var(--accent);color:#000;font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center">2</span><div style="font-size:13px"><b>Add MFA to the VPN.</b> Two viable routes — <b>WatchGuard AuthPoint</b> (their own MFA, tightest integration) or <b>RADIUS → Entra ID</b> (reuse the NPS/RADIUS already running on SDI-RDS01 and the Entra Connect sync on the DC, so one identity &amp; MFA across M365 and VPN). The RADIUS→Entra route needs no new infrastructure. <span style="color:var(--ink-dim)">— closes the core gap</span></div></div>
-          <div style="display:flex;gap:12px;align-items:flex-start"><span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:var(--accent);color:#000;font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center">3</span><div style="font-size:13px"><b>Scope the VPN by role.</b> Replace "everyone reaches everything" with role-based access — grant services not whole subnets. Three role groups: single-app/service users, general staff, and IT/admin. <span style="color:var(--ink-dim)">— reduces blast radius</span></div></div>
-          <div style="display:flex;gap:12px;align-items:flex-start"><span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:var(--accent);color:#000;font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center">4</span><div style="font-size:13px"><b>Consolidate remote access.</b> Reduce the six entry paths to one or two controlled, MFA-protected routes. Remove TeamViewer, LogMeIn, OpenVPN and ScreenConnect where not strictly needed; standardise on the WatchGuard VPN + RD Gateway (both MFA-protected). <span style="color:var(--ink-dim)">— shrinks the attack surface</span></div></div>
-          <div style="display:flex;gap:12px;align-items:flex-start"><span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:var(--accent);color:#000;font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center">5</span><div style="font-size:13px"><b>Verify inbound exposure.</b> Confirm no RDP (3389) or management ports are published directly to the internet. Document the public IP and all inbound NAT/policies. <span style="color:var(--ink-dim)">— removes the most common breach vector</span></div></div>
+          <div style="display:flex;gap:12px;align-items:flex-start"><span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:var(--accent-fill);color:#000;font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center">1</span><div style="font-size:13px"><b>Discovery &amp; fitness check.</b> Log into the WatchGuard (web UI / WatchGuard Cloud). Record Firebox model, Fireware OS version, VPN type, current ruleset and inbound exposure. Confirm admin credentials are held. Identify the Aruba kit at the rack. <span style="color:var(--ink-dim)">— answers "is the current VPN adequate"</span></div></div>
+          <div style="display:flex;gap:12px;align-items:flex-start"><span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:var(--accent-fill);color:#000;font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center">2</span><div style="font-size:13px"><b>Add MFA to the VPN.</b> Two viable routes — <b>WatchGuard AuthPoint</b> (their own MFA, tightest integration) or <b>RADIUS → Entra ID</b> (reuse the NPS/RADIUS already running on SDI-RDS01 and the Entra Connect sync on the DC, so one identity &amp; MFA across M365 and VPN). The RADIUS→Entra route needs no new infrastructure. <span style="color:var(--ink-dim)">— closes the core gap</span></div></div>
+          <div style="display:flex;gap:12px;align-items:flex-start"><span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:var(--accent-fill);color:#000;font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center">3</span><div style="font-size:13px"><b>Scope the VPN by role.</b> Replace "everyone reaches everything" with role-based access — grant services not whole subnets. Three role groups: single-app/service users, general staff, and IT/admin. <span style="color:var(--ink-dim)">— reduces blast radius</span></div></div>
+          <div style="display:flex;gap:12px;align-items:flex-start"><span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:var(--accent-fill);color:#000;font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center">4</span><div style="font-size:13px"><b>Consolidate remote access.</b> Reduce the six entry paths to one or two controlled, MFA-protected routes. Remove TeamViewer, LogMeIn, OpenVPN and ScreenConnect where not strictly needed; standardise on the WatchGuard VPN + RD Gateway (both MFA-protected). <span style="color:var(--ink-dim)">— shrinks the attack surface</span></div></div>
+          <div style="display:flex;gap:12px;align-items:flex-start"><span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:var(--accent-fill);color:#000;font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center">5</span><div style="font-size:13px"><b>Verify inbound exposure.</b> Confirm no RDP (3389) or management ports are published directly to the internet. Document the public IP and all inbound NAT/policies. <span style="color:var(--ink-dim)">— removes the most common breach vector</span></div></div>
         </div>
         <div style="margin-top:14px;padding:12px;background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.2);border-radius:6px;font-size:12px">
           <b style="color:var(--accent)">⚠ Highest-risk work in the programme.</b> Firewall and VPN changes can lock out users (including remote admins) or open holes if done wrong. No live changes without: a full config backup, a documented rollback, and a scheduled maintenance window. Plan first, change second. Feeds directly into Cyber Essentials Plus.
