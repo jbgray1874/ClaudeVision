@@ -1002,7 +1002,24 @@ def reconcile_job(
               f"selected page(s)...")
         for (pdf_name, pi), sel in sorted((worth or {}).items()):
             print(f"    {'read ' if sel else 'skip '} {pdf_name} p{pi + 1}: {why.get((pdf_name, pi), '')}")
-    b_boms = run_path_b(pdf_paths, _args, unread, worth, spend)
+    # NO VISION READ AND NO CACHED ONE (D-753): a deterministic-only run tests the drawing
+    # reader alone, and a page answer replayed from the cache is still the model's reading.
+    try:
+        from run_readers import run_was_deterministic_only as _det_only
+        _det = _det_only()
+    except Exception:                                                   # noqa: BLE001
+        _det = False
+    if _det:
+        b_boms = []
+        if unread is not None:
+            unread.append({"path": "B", "scope": "job", "pdf": "", "page": None,
+                           "detail": "vision BOM reader DISABLED by --deterministic-only: no "
+                                     "page was sent to the model and no cached page answer "
+                                     "was used"})
+        if verbose:
+            print("  Path B SKIPPED (--deterministic-only): no vision read, none from cache.")
+    else:
+        b_boms = run_path_b(pdf_paths, _args, unread, worth, spend)
     if verbose:
         print(f"  Path B found {len(b_boms)} BOM table(s). "
               f"Vision calls: {spend['paid']} paid, {spend['cached']} from cache, "

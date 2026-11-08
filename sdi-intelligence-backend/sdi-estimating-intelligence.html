@@ -630,6 +630,15 @@
         <p class="note" id="runManualWhy" hidden></p>
       </div>
 
+      <!-- THE DRAWING READER ON ITS OWN (D-753, SCRUM-194). A test, not an estimate: no
+           language model reads the drawings and no cached answer is replayed, so the run shows
+           what the deterministic reader supplies by itself. Off by default. -->
+      <label style="display:flex;gap:9px;align-items:center;margin:8px 0;cursor:pointer;text-transform:none;font-family:var(--body);letter-spacing:normal;font-size:inherit">
+        <input id="detOnly" type="checkbox"> <span class="note" style="margin:0"><b>Drawing
+        reader test only, no AI read.</b> No language model reads the drawings and no
+        earlier AI reading is reused. Tests what the drawing reader finds on its own. Not an
+        estimate to quote.</span></label>
+
       <!-- TWO ESTIMATING BOOKS, SO THE BUTTON HAS TO SAY WHICH ONE. Every rate behind this
            button is a UK rate: UDEF plain stock, UK labour, UK finishing. An estimate for
            work placed in China is a different set of numbers, and the two must not be told
@@ -3600,6 +3609,8 @@ runBtn.onclick = async () => {
     job_folder: folder ? folder.path : null,
     files: drawings.filter(d => !d.is_dir).map(d => d.path),
     output_root: OUTPUT_ROOT,
+    // D-753: the drawing reader on its own, when ticked; otherwise the method stays the default.
+    method: (document.getElementById("detOnly") || {}).checked ? "deterministic" : undefined,
     deliverables: true,                   // --deliverables, always
     // The optional parity partner. null means no comparison was asked for and the run is
     // exactly as it was before this existed.

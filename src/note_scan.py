@@ -341,6 +341,9 @@ def scan_notes_for_bought_in(
             return []
     except Exception:
         return []
+    import os as _os_ns                         # D-753: no model on a deterministic-only run
+    if _os_ns.getenv("SDI_DETERMINISTIC_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return []
 
     if not note_text or stub_builder is None:
         return []

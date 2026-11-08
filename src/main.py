@@ -137,6 +137,19 @@ def parse_args() -> argparse.Namespace:
              "extraction happen either way, because the cache KEY is computed from them.",
     )
     parser.add_argument(
+        "--deterministic-only",
+        action="store_true",
+        help="THE DRAWING READER ON ITS OWN (D-753, SCRUM-194). No language model reads the "
+             "drawings, and no answer one gave before is replayed: the whole-pack read and its "
+             "inference pass, the vision BOM reader, the page vision pass, the DXF "
+             "interpretation, the note scan and the concept read are all off, cached answers "
+             "included. The PDF text and tables, the deterministic BOM reader, the vector "
+             "geometry, DXF flat patterns and the SolidWorks extract run as normal. This is "
+             "the test that the printed BOM, part-to-page links, materials, gauges and stated "
+             "dimensions come from the drawing reader itself. Prices are still looked up as on "
+             "any run. Not an estimate to quote.",
+    )
+    parser.add_argument(
         "--folder-as-job",
         action="store_true",
         help="Group all PDFs in each folder into one pooled BOM + single bay estimate (overrides config default).",
@@ -787,6 +800,33 @@ def main() -> None:
         print("   " + "=" * 68)
         print("")
 
+    # ── --deterministic-only: NO LANGUAGE MODEL READS THE DRAWINGS (D-753) ─────────────
+    # The 8 Nov review: reusing cached LLM facts can prove a transfer fix, never that the
+    # deterministic reader supplied those facts; "no new LLM call" is not "no LLM dependence".
+    # So every reader that asks a model about the drawing is off, AND every cached answer. Set
+    # as environment, like --llm-only, so the gates deep in the scan see it without a flag
+    # threaded through every signature (run_readers.run_was_deterministic_only).
+    if getattr(args, "deterministic_only", False):
+        if getattr(args, "llm_only", False):
+            raise SystemExit("--deterministic-only and --llm-only ask opposite questions; "
+                             "pass one of them.")
+        os.environ["SDI_DETERMINISTIC_ONLY"] = "1"
+        os.environ["SDI_LLM_FULL_EXTRACT"] = "0"
+        os.environ["SKIP_VISION_EXTRACTION"] = "1"
+        os.environ["SDI_DXF_LLM_INTERPRET"] = "0"
+        from run_readers import DETERMINISTIC_ONLY_OFF as _det_off
+        print("")
+        print("   " + "=" * 68)
+        print("   DETERMINISTIC-ONLY RUN. No language model reads the drawings, and no")
+        print("   earlier answer from one is reused. OFF for this run:")
+        for _w in _det_off:
+            print(f"     - {_w}")
+        print("   ON as normal: PDF text and tables, the deterministic BOM reader, vector")
+        print("   geometry, DXF flat patterns and the SolidWorks extract. Prices are looked")
+        print("   up as on any run. This tests the drawing reader; it is not a quote.")
+        print("   " + "=" * 68)
+        print("")
+
     # ── --fresh-read: ASK THE MODEL AGAIN ───────────────────────────────────────────
     # SET AS ENVIRONMENT, like SDI_LLM_ONLY, because the two caches sit at opposite ends of
     # the pipeline -- one inside the per-page vision reader, one inside the whole-pack
@@ -1004,6 +1044,8 @@ def main() -> None:
         # Stamped here, immediately after the scan, so there is no window in which a
         # deliverable can be built by something that does not know what kind of run it is.
         summary["llm_only"] = bool(getattr(args, "llm_only", False))
+        # D-753: a saved run says it was read with no language model, for every reader after.
+        summary["deterministic_only"] = bool(getattr(args, "deterministic_only", False))
         _time_stage("enrichment_reader_provenance", True)
         summary["fresh_read"] = bool(getattr(args, "fresh_read", False))
         # WHICH MACHINE, WHICH RUNNER, WHICH BUILD — onto the run, for the book's first page
@@ -1029,7 +1071,8 @@ def main() -> None:
             from run_readers import readers_that_ran as _readers
             summary["readers_that_ran"] = _readers(
                 llm_only=bool(getattr(args, "llm_only", False)),
-                dxf_enabled=bool(auto_discover_dxf))
+                dxf_enabled=bool(auto_discover_dxf),
+                deterministic_only=bool(getattr(args, "deterministic_only", False)))
         except Exception as _rr_exc:
             # SAID, NOT SWALLOWED. The report falls back to deriving this from the flag, which
             # is correct but coarser; a silent failure here would look like a full run.
@@ -2296,6 +2339,12 @@ def main() -> None:
                             received_customer=str(summary.get("customer") or ""))
                     if "fresh_read" in summary:
                         _d["fresh_read"] = bool(summary["fresh_read"])
+                    if getattr(args, "deterministic_only", False):
+                        _d["deterministic_only"] = True
+                        _d["read_by"] = ("the drawing reader alone (--deterministic-only): no "
+                                         "language model read the drawings and no cached "
+                                         "answer was reused — a TEST of the deterministic "
+                                         "reader, not an estimate to quote")
                     if getattr(args, "llm_only", False):
                         _d["llm_only"] = True
                         _d["read_by"] = ("BOM from the vision model alone (--llm-only); "

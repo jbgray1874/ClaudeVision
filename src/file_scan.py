@@ -967,6 +967,11 @@ def pdf_readings(pdf_path: Path) -> Dict[str, Any]:
     again on bytes nothing had changed.
     """
     skip_vision = os.getenv("SKIP_VISION_EXTRACTION", "").lower() in {"1", "true", "yes"}
+    try:                                       # D-753: no vision pass on a deterministic-only run
+        from run_readers import run_was_deterministic_only as _det_only_vis
+        skip_vision = skip_vision or _det_only_vis()
+    except Exception:                                                   # noqa: BLE001
+        pass
     pdf_path = Path(pdf_path)
 
     def _make() -> Dict[str, Any]:
@@ -3812,6 +3817,16 @@ def _finalize_scan_summary(
     # Explicit SDI_LLM_FULL_EXTRACT=0/false/no/off disables it; =1/true/yes/on forces it on.
     _llm_flag = _os_llm.getenv("SDI_LLM_FULL_EXTRACT", "").strip().lower()
     _llm_off = _llm_flag in {"0", "false", "no", "off"}
+    # D-753: no whole-pack read on a deterministic-only run, and so no cached one either:
+    # extract_full_pack is where the cache is read, and it is not called.
+    try:
+        from run_readers import run_was_deterministic_only as _det_only_llm
+        if _det_only_llm():
+            _llm_off = True
+            print("   [llm-full-extract] OFF — deterministic-only run: no language model reads "
+                  "the drawings and no cached read is applied", flush=True)
+    except Exception:                                                   # noqa: BLE001
+        pass
     _llm_on = (_llm_flag in {"1", "true", "yes", "on"}
                or (_llm_flag == "" and bool(_os_llm.getenv("XAI_API_KEY"))))
     if pdf_path and _llm_on and not _llm_off:

@@ -273,6 +273,10 @@ class Run:
     # right for an estimate and wrong for a measurement of the model. Nothing is deleted: the
     # engine is told to bypass them, so no other job loses its settled answer.
     fresh_read: bool = False
+    # THE DRAWING READER ON ITS OWN (D-753, SCRUM-194): main.py --deterministic-only. No
+    # language model reads the drawings and no cached answer is replayed; a test of the
+    # deterministic reader, never an estimate to quote.
+    deterministic_only: bool = False
     # THE INSTRUCTION WAS GIVEN AND NOT CARRIED OUT. Set when the engine's own command line
     # comes back on the log without a flag this run asked for -- either of them; see
     # _check_the_engine_was_told below. It forces the outcome to a failure whatever the runner
@@ -1406,6 +1410,7 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         "quantity_breaks": [int(q) for q in (run.quantity_breaks or [])],
         "llm_only": bool(run.llm_only),
         "fresh_read": bool(run.fresh_read),
+        "deterministic_only": bool(getattr(run, "deterministic_only", False)),
         "job_type": run.job_type,
         # WHAT WAS SUBMITTED (D-604), for the engine to compare with what it receives.
         "submitted_scope": dict(run.submitted_scope),
@@ -1562,7 +1567,9 @@ def _check_the_engine_was_told(run: "Run", text: str) -> None:
                    "the module it loaded at start, and git pull does not reload it.")
 
     wanted = [f for f, asked in (("--llm-only", run.llm_only),
-                                 ("--fresh-read", run.fresh_read)) if asked]
+                                 ("--fresh-read", run.fresh_read),
+                                 ("--deterministic-only",
+                                  getattr(run, "deterministic_only", False))) if asked]
     if not wanted or run.instruction_refused:
         return
     missing = [f for f in wanted if f not in line]
@@ -1579,6 +1586,9 @@ def _check_the_engine_was_told(run: "Run", text: str) -> None:
         "--fresh-read": "the LLM caches were used, so the model was never asked — the run "
                         "replays the answer held for this pack and would be reported as a "
                         "fresh reading of it",
+        "--deterministic-only": "the language-model readers ran or their cached answers were "
+                                "applied, so the run could not show what the drawing reader "
+                                "supplies on its own (SCRUM-194)",
     }
     run.refusal_reason = ("This run asked for " + " and ".join(missing) + " and the engine was "
                           "NOT told to do it. Stopped rather than filed.")
@@ -2518,9 +2528,11 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     # doing that and then refusing the run over a typo in one word leaves the estimator's
     # job folder rewritten for nothing.
     method = str(req.method or "both").strip().lower()
-    if method not in {"both", "llm", "engine"}:
-        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm or "
-                                 f"engine.")
+    # "deterministic" (D-753): the full engine with no language model reading the drawings and
+    # no cached answer replayed — the SCRUM-194 reader test. Queued like "engine".
+    if method not in {"both", "llm", "engine", "deterministic"}:
+        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm, "
+                                 f"engine or deterministic.")
     if req.concept_document and method != "llm":
         raise HTTPException(400, "Client-document costing requires the LLM read method.")
     _ref_docs = [Path(str(f)).name for f in (req.reference_documents or [])
@@ -2802,7 +2814,8 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                   manual_workbook=manual_wb, queued_at=queued_at,
                   compare_with_manual=bool(req.compare_with_manual) and not manual_wb,
                   llm_only=(method == "llm"),
-                  fresh_read=bool(req.fresh_read),
+                  fresh_read=bool(req.fresh_read) and method != "deterministic",
+                  deterministic_only=(method == "deterministic"),
                   email_to=_email_to, email_quote=bool(req.email_quote),
                   requested_by=_caller)
         # NOT QUEUED YET (D-607). A run in _RUNS can be claimed, and a runner polling between
@@ -2830,6 +2843,11 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                  "the DXF flat patterns and the SolidWorks extract are all OFF. This is a "
                  "MEASUREMENT of the model, not an estimate, and its total must not be "
                  "quoted or compared with a normal run's.")
+    if getattr(run, "deterministic_only", False):
+        run.line("DETERMINISTIC-ONLY: no language model reads the drawings and no cached "
+                 "answer from one is reused (whole-pack read, vision BOM reader, page vision, "
+                 "DXF interpretation, note scan and concept read all OFF). This TESTS the "
+                 "drawing reader; it is not an estimate to quote.")
     # EVERY RUN FILES ITS OWN BRIEF, OR CLEARS A STALE ONE (D-598y). An estimate of a drawing
     # no reader can read falls back to the vision read (D-598g), and that read takes the brief;
     # filed only on LLM runs, a customer's change could never reach it. On a measured pack the
