@@ -61,6 +61,19 @@ def is_public(request: Request) -> bool:
     return auth.request_host(request) in auth.PUBLIC_HOSTS
 
 
+def signed_in_url(request: Request):
+    """The same page on the published https address, where Microsoft 365 signs the person in - or None when nothing is
+    published, sign-in isn't set up, or SDI_SAMEDAY_OFFICE_SIGNIN=no."""
+    if os.getenv("SDI_SAMEDAY_OFFICE_SIGNIN", "yes").strip().lower() in ("no", "0", "off", "false"):
+        return None
+    hosts = sorted(auth.PUBLIC_HOSTS)
+    if not hosts or not auth.ENABLED:
+        return None
+    raw = request.scope.get("raw_path") or request.url.path.encode("utf-8")
+    q = request.url.query
+    return "https://" + hosts[0] + raw.decode("latin-1") + ("?" + q if q else "")
+
+
 def refusal(request: Request):
     """None when this person may use SameDay through here, else the response that says why not."""
     public = is_public(request)
@@ -70,6 +83,15 @@ def refusal(request: Request):
         if wants_page:
             return auth.login_redirect(request)           # back to SameDay once signed in
         return JSONResponse(status_code=401, content={"error": "Signed out - open SDI Live again from the app portal."})
+    if not public and wants_page and user.get("kind") != "user":
+        # 8 Nov 2026 (James, on the office address: "why does it think I'm Andy ... it needs to read the person who is
+        # logged in ... it's governed by my MS 365 business tenancy"). The office address is plain http, so Microsoft
+        # signs no one in there and SDI Live had to guess who was briefing. The page goes to the same page on the
+        # published https address instead, where Microsoft 365 says who it is (and Talk live gets the microphone).
+        # Only pages: the watch's and the laptop scripts' /api/ calls on the office address carry on as before.
+        to = signed_in_url(request)
+        if to:
+            return RedirectResponse(to, status_code=302)
     if public and (not auth.ENABLED or user.get("kind") != "user"):
         # Outside the office only a person signed in with their SDI account - never the service key, and never
         # anyone at all on a server where sign-in isn't set up.

@@ -88,9 +88,26 @@ class WhoGetsInTests(Base):
         r = self.outside("POST", "/sameday/api/chat", json={"t": 1}, headers={"origin": "https://" + PUBLIC})
         self.assertEqual(r.status_code, 200)
 
-    def test_the_office_network_as_before(self):
-        r = self.c.get("/sameday/", headers={"host": "10.0.0.5:8071"})
+    def test_the_office_address_sends_the_page_to_microsoft_sign_in(self):
+        """8 Nov 2026 (James: "why does it think I'm Andy ... it needs to read the person who is logged in"): the office
+        address is plain http, so nobody is signed in there. The page goes to the published https address, where
+        Microsoft 365 says who it is - the same page, the same query."""
+        r = self.c.get("/sameday/?s=abc", headers={"host": "10.0.0.5:8071"})
+        self.assertEqual((r.status_code, r.headers["location"]), (302, f"https://{PUBLIC}/sameday/?s=abc"))
+        self.assertEqual(self.sent, [])                                    # SDI Live never saw an unnamed visit
+
+    def test_the_checks_on_the_office_address_carry_on(self):
+        r = self.c.get("/sameday/api/version", headers={"host": "10.0.0.5:8071"})      # the watch and the laptop scripts
         self.assertEqual(r.status_code, 200)
+
+    def test_it_can_be_turned_off_and_does_nothing_where_nothing_is_published(self):
+        os.environ["SDI_SAMEDAY_OFFICE_SIGNIN"] = "no"
+        try:
+            self.assertEqual(self.c.get("/sameday/", headers={"host": "10.0.0.5:8071"}).status_code, 200)
+        finally:
+            os.environ.pop("SDI_SAMEDAY_OFFICE_SIGNIN", None)
+        auth.PUBLIC_HOSTS = set()
+        self.assertEqual(self.c.get("/sameday/", headers={"host": "10.0.0.5:8071"}).status_code, 200)
 
 
 class WhatSameDayIsSentTests(Base):
