@@ -692,6 +692,13 @@ def _bom_line_price_traced(_pe: Dict[str, Any]) -> Tuple[Optional[float], List[s
     if _pe.get("_price_explicitly_withheld"):
         _t.append("_price_explicitly_withheld -> withheld, no price")
         return None, _t
+    # THE SAME ARTICLE IS COSTED ON ONE LINE (D-748). The merge below set unit_cost_gbp to 0 on
+    # the other line, but a fabricated leaf is priced from its material estimate, so 0358141's
+    # upright and end caps read "SAME ARTICLE AS UPC0358141 M2: costed there, not here" and
+    # carried GBP 13.66 each all the same. A line that says its money is elsewhere has none.
+    if _pe.get("_duplicate_of"):
+        _t.append(f"_duplicate_of={_pe.get('_duplicate_of')!r} -> 0.00, costed on that line")
+        return 0.0, _t
     _me = _pe.get("material_estimate") or {}
     # WHAT THE PART IS DECIDES WHICH FIELDS CAN PRICE IT.
     #

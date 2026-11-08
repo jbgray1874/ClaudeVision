@@ -192,6 +192,46 @@ def document_gauge_to_hand_down(summary: Dict[str, Any]) -> Any:
     return (doc.get("primary_fields") or {}).get("thickness_mm")
 
 
+def _the_listed_spelling(pn: str, parts: Dict[str, Dict[str, Any]]) -> str:
+    """The parts list's own key for a code a sheet prints another way (D-748).
+
+    0358141's parts list reads "UPC0358141 M4" and the part's own sheet, whose PDF text has
+    its spaces stripped ("MILDSTEELBALLAST", "CUTOUTTHRUALL"), reads "UPC0358141M4". Keyed by
+    the literal string, the sheet minted a second record that held the geometry and was never
+    priced, while the listed record, with the quantity and the parent, bound to the parts
+    list and was priced as a 1,400 mm length of somebody else's tube. One part, one record:
+    the spellings are joined by part_identity.normalize_part_code, and only where exactly one
+    listed part answers, so two parts are never made one.
+    """
+    if pn in parts:
+        return pn
+    try:
+        from part_identity import normalize_part_code
+    except Exception:                                                   # noqa: BLE001
+        return pn
+    want = normalize_part_code(pn)
+    if not want:
+        return pn
+    hits = [k for k in parts if normalize_part_code(k) == want]
+    return hits[0] if len(hits) == 1 else pn
+
+
+def _page_mentions(pn: str, text: str) -> bool:
+    """Whether a page's text names this code, with or without the spaces the PDF text may
+    have lost (D-748). The spaced form is tried first, exactly as before; the joined form
+    only where it is not followed by another digit, so M1 never answers for M10."""
+    if not pn or not text:
+        return False
+    if pn in text:
+        return True
+    want = re.sub(r"\s+", "", pn).upper()
+    if len(want) < 4 or want == pn.upper():
+        return False
+    flat = re.sub(r"\s+", "", text).upper()
+    return any(not flat[m.end():m.end() + 1].isdigit()
+               for m in re.finditer(re.escape(want), flat))
+
+
 def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[str, Any]]:
     dedupe = deps.dedupe
     is_valid_part_identifier = deps.is_valid_part_identifier
@@ -279,6 +319,7 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
         for pn in page_target_part_numbers:
             if not is_valid_part_identifier(pn):
                 continue
+            pn = _the_listed_spelling(pn, parts)
             if pn not in parts:
                 parts[pn] = empty_part_record(part_number=pn)
 
@@ -462,7 +503,8 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
         pn = part.get("part_number")
         if not pn:
             continue
-        matching_pages = [page for page in summary["pages"] if pn in (page.get("normalized_text") or "")]
+        matching_pages = [page for page in summary["pages"]
+                          if _page_mentions(pn, page.get("normalized_text") or "")]
         if not matching_pages:
             continue
         # An assembly's OWN parts list is the page that defines it, so it is not demoted for
