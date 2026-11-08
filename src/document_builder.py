@@ -1170,7 +1170,30 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                         f"section '{_path}' read from a shared page was NOT applied — this "
                         f"part's own detail sheet (page {_detail_pages[0]}) names no section, "
                         f"so the callout is another part's on the drawing that lists them both")
+                # A PARTS LIST SPEAKS FOR THE ROW THAT PRINTS THE PROFILE, NOT FOR EVERY ROW
+                # (D-751). 0358141's end caps M5 and M7 have no sheet of their own and were
+                # bound to page 3, the rail's parts list, which prints the rail's
+                # "15x30x2mm MS TOP TUBE". Every guard above keys on the part's own sheet or a
+                # code in the callout, and this part has neither, so the rail's tube became two
+                # 3 mm plate caps' stock at 1,400 mm. With no sheet of its own, nothing on its
+                # row and nothing in its name saying section, the callout is another row's.
+                # The list's page is often an assembly sheet, so its role says nothing about
+                # this part: only the record's own parent flag makes it an assembly here.
+                elif (part.get("bound_to_parts_list_page") and not _detail_pages
+                      and not _row_says_section and not _looks_like_section
+                      and not part.get("is_assembly_parent")):
+                    part.setdefault("review_flags", []).append(
+                        f"section '{_path}' read from page {part.get('bound_to_parts_list_page')} "
+                        f"was NOT applied — that page is a parts list this part is only listed "
+                        f"on, and neither its own row nor its name says it is section stock, so "
+                        f"the callout belongs to another row on that list")
                 else:
+                    # Said on the section where it was read off a list the part is only
+                    # listed on (D-751): the part's own read can still say it is not tube.
+                    if (part.get("bound_to_parts_list_page") and not _detail_pages
+                            and not _row_says_section):
+                        _sec = dict(_sec, read_from="parts_list_page",
+                                    read_from_page=part.get("bound_to_parts_list_page"))
                     # THE CUT LENGTH IS THE SHEET'S FIGURE, NOT A NUMBER IN ITS PROSE (D-584):
                     # on a part's own detail page the largest leading figure printed along an
                     # axis is its length — 703 for the cross rail, 1395 for the upright —

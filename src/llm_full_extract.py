@@ -857,6 +857,9 @@ def project_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "tube_section": sec or row.get("tube_section"),
         "cut_length_mm": row.get("cut_length_mm"),
         "cut_lengths_mm": row.get("cut_lengths_mm") or None,
+        # The row's own count, kept beside its pieces (D-751): two equal pieces on a row of
+        # two are that row's two parts, one piece each, not one part cut twice.
+        "row_qty": row.get("qty"),
         "weight_g": row.get("weight_g"),
         "finish": row.get("finish") or None,
         "colour": row.get("colour") or None,

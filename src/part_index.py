@@ -555,6 +555,9 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
                 f"{pn} is bound to page {chosen_page.get('page_number')}, which is a parts "
                 f"list — no page in this pack details it, so it has no drawing of its own to "
                 f"take dimensions from")
+            # Kept as a fact, not only as words (D-751): a page that lists many parts speaks
+            # for none of them on its own, and the stock readers downstream must know it.
+            part["bound_to_parts_list_page"] = chosen_page.get("page_number")
 
     result: List[Dict[str, Any]] = []
     for part in parts.values():
