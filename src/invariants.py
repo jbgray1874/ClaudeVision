@@ -2631,6 +2631,40 @@ def check_what_the_read_returned_is_accounted_for(summary: Any) -> List[Dict[str
     return out
 
 
+def check_what_the_read_said_reaches_a_priced_part(summary: Any) -> List[Dict[str, Any]]:
+    """Every part the whole-pack read described with a priced fact reaches a priced part, or
+    the loss is named (D-749).
+
+    0358141, 7 Nov 2026: the read had the upright as 30 x 30 x 2 at 1,383 mm, the end caps as
+    3 mm plate and the rub strips as 3 mm brushed stainless, under the spellings their own
+    sheets print. The parts list spelt them with a space, the join compared text, and every
+    fact sat on a read part no priced part matched. The sheet priced 1,400 mm of 30 x 15 tube
+    and a plastic strip, and nothing said a word. A read fact that changes the stock, the size
+    or the material and reaches nothing holds the release until a person rules on it."""
+    if not isinstance(summary, dict):
+        return []
+    ext = summary.get("llm_full_extract") if isinstance(summary.get("llm_full_extract"), dict) else {}
+    lost = [u for u in ((ext.get("counts") or {}).get("unmatched") or []) if isinstance(u, dict)]
+    if not lost:
+        return []
+    _shape = ("tube_section", "cut_length_mm", "cut_lengths_mm", "thickness_mm",
+              "overall_size_mm", "material")
+
+    def _said(u: Mapping[str, Any]) -> str:
+        facts = u.get("facts") or {}
+        return (f"{u.get('part_number')} ({u.get('description') or 'no description'}: "
+                + ", ".join(f"{k} {v}" for k, v in list(facts.items())[:4]) + ")")
+    hard = [u for u in lost if any(k in (u.get("facts") or {}) for k in _shape)]
+    sev = BLOCKING if hard else WARNING
+    return [_violation(
+        "read_facts_reached_no_priced_part", sev,
+        f"{len(lost)} part(s) the read described reached no priced part, so what it read is not "
+        f"in the price: " + "; ".join(_said(u) for u in lost[:6])
+        + ". Each is a part the sheet should carry under another number, or one the read added: "
+          "join it to its part, or rule it out of scope.",
+        lines=lost[:20], count=len(lost), needs_ruling=True)]
+
+
 def check_every_page_reached_a_read(summary: Any) -> List[Dict[str, Any]]:
     """Every page of every document reached a reading, or the gap is named (D-597).
 
@@ -5460,6 +5494,7 @@ CHECKS = (
     check_a_charged_identity_is_whole_and_charged_once,
     check_a_sheet_blank_and_a_bought_item_reach_the_charged_cells,
     check_what_the_read_returned_is_accounted_for,
+    check_what_the_read_said_reaches_a_priced_part,
     check_every_page_reached_a_read,
     check_a_blank_and_its_cut_path_can_both_be_true,
     check_prices_are_firm,

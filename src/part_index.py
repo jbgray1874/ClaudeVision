@@ -216,6 +216,22 @@ def _the_listed_spelling(pn: str, parts: Dict[str, Dict[str, Any]]) -> str:
     return hits[0] if len(hits) == 1 else pn
 
 
+def _the_listed_part_one_digit_away(pn: str, description: Any,
+                                    parts: Dict[str, Dict[str, Any]]) -> Optional[str]:
+    """A listed part whose number differs from this sheet's by one digit in the drawing
+    number, corroborated by its description and its siblings (D-749); None otherwise. Only a
+    listed part that no sheet has claimed is a candidate."""
+    if pn in parts:
+        return None
+    try:
+        from part_identity import corroborated_near_code
+    except Exception:                                                   # noqa: BLE001
+        return None
+    unclaimed = {k: v.get("description") for k, v in parts.items()
+                 if isinstance(v, dict) and not v.get("pages")}
+    return corroborated_near_code(pn, description, unclaimed, list(parts))
+
+
 def _page_mentions(pn: str, text: str) -> bool:
     """Whether a page's text names this code, with or without the spaces the PDF text may
     have lost (D-748). The spaced form is tried first, exactly as before; the joined form
@@ -320,6 +336,13 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
             if not is_valid_part_identifier(pn):
                 continue
             pn = _the_listed_spelling(pn, parts)
+            _near = _the_listed_part_one_digit_away(
+                pn, " ".join(str(d) for d in (title_block.get("descriptions") or []) if d), parts)
+            if _near:
+                from part_identity import near_code_note
+                parts[_near].setdefault("review_flags", []).append(
+                    near_code_note(_near, pn, parts[_near].get("description")))
+                pn = _near
             if pn not in parts:
                 parts[pn] = empty_part_record(part_number=pn)
 
