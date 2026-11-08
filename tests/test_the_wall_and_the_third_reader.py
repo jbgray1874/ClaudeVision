@@ -325,3 +325,23 @@ def test_the_service_serves_the_wall(client):
         "green", "amber")
     assert len(snap["series"]["activity_24h"]) == 24
     assert er.Run.__dataclass_fields__["last_line_at"].default == 0.0
+
+
+# ── ALLOWED IS NOT STAFFED (D-753a) ──────────────────────────────────────────────────────
+
+def test_a_slot_with_no_free_runner_is_not_shown_free(monkeypatch):
+    """8 Nov: RUN 2 read "SLOT FREE, the next queued estimate starts here" with one runner
+    online and busy. A runner takes one run at a time, so a second estimate would wait."""
+    w = _wall()
+    monkeypatch.setenv("SDI_WALL_FLEET", "LAPTOP-1=Laptop")
+    busy = [{"runner_id": "l1", "hostname": "LAPTOP-1", "online": True, "run_id": "live",
+             "seconds_since_seen": 2, "build": "a509f73a"}]
+    snap = w.snapshot(HISTORY + [_running(5)], busy, now=NOW, max_runs=2, tail_lines=10)
+    assert snap["kpis"]["max_runs"] == 2 and snap["kpis"]["free_runners"] == 0
+    idle = busy + [{"runner_id": "l1-s2", "hostname": "LAPTOP-1", "online": True,
+                    "run_id": None, "seconds_since_seen": 2, "build": "a509f73a"}]
+    snap2 = w.snapshot(HISTORY + [_running(5)], idle, now=NOW, max_runs=2, tail_lines=10)
+    assert snap2["kpis"]["free_runners"] == 1
+    page = (Path(__file__).resolve().parents[1] / "sdi-intelligence-backend"
+            / "sdi-estimating-wall.html").read_text(encoding="utf-8")
+    assert "NO RUNNER FREE" in page and "install-runner-slot.ps1 -Slot 2" in page

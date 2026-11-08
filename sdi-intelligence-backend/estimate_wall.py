@@ -847,6 +847,12 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
     compute = compute_view(runners, live, now)
     for x in live:
         x["compute"] = compute["runs"].get(str(x.get("run_id")))
+    # A SLOT THE SERVICE ALLOWS IS NOT A SLOT ANYTHING CAN FILL (D-753a). 8 Nov: the wall showed
+    # RUN 2 "SLOT FREE, the next queued estimate starts here" with one runner online and busy.
+    # A runner takes one run at a time, so a second estimate would have waited behind the
+    # first. A free slot needs an online runner with no run of its own.
+    k["free_runners"] = sum(1 for f in fleet if f.get("online") and not f.get("planned")
+                            and not f.get("job"))
 
     queued = sorted((r for r in runs if outcome(r) == "queued"),
                     key=lambda r: r.get("queued_at") or now)

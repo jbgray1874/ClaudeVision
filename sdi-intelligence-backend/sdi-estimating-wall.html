@@ -891,12 +891,17 @@ function renderLanes(s){
       </div>`);
     }else{
       const on = i < (k.max_runs || 1);
+      /* D-753a: allowed is not staffed. A free slot needs an idle online runner; with every
+         runner busy, a queued estimate waits, and the lane says so and how to add one. */
+      const staffed = on && (i - live.length) < (k.free_runners == null ? 1 : k.free_runners);
+      const word = !on ? "Off" : staffed ? "Free" : "No runner";
       html.push(`<div class="panel lane">
-        <div class="lanehead"><span class="slotname">RUN ${i + 1}</span>${badge(on ? "green" : "grey", on ? "Free" : "Off")}</div>
-        <div class="idle"><div class="radar${on ? "" : " off"}"></div>
-          <b>${on ? "SLOT FREE" : "SLOT OFF"}</b>
-          <div>${on ? "The next queued estimate starts here."
-                    : `The service runs ${k.max_runs} estimate${k.max_runs > 1 ? "s" : ""} at once.<br>Raise SDI_MAX_CONCURRENT_RUNS to open it.`}</div></div>
+        <div class="lanehead"><span class="slotname">RUN ${i + 1}</span>${badge(staffed ? "green" : "grey", word)}</div>
+        <div class="idle"><div class="radar${staffed ? "" : " off"}"></div>
+          <b>${!on ? "SLOT OFF" : staffed ? "SLOT FREE" : "NO RUNNER FREE"}</b>
+          <div>${!on ? `The service runs ${k.max_runs} estimate${k.max_runs > 1 ? "s" : ""} at once.<br>Raise SDI_MAX_CONCURRENT_RUNS to open it.`
+                : staffed ? "The next queued estimate starts here."
+                : "Allowed, but every runner is busy, so a queued estimate waits for one to finish.<br>A second runner on this desktop: install-runner-slot.ps1 -Slot 2."}</div></div>
       </div>`);
     }
   }
