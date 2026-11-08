@@ -64,7 +64,10 @@ def test_a_part_with_its_own_sheet_is_not_touched_by_the_rule():
 def test_part_index_records_the_binding_as_a_fact():
     src = (ROOT / "src" / "part_index.py").read_text(encoding="utf-8")
     at = src.index("which is a parts ")
-    assert 'part["bound_to_parts_list_page"] = chosen_page.get("page_number")' in src[at:at + 700]
+    assert 'part["bound_to_parts_list_page"] = chosen_page.get("page_number")' in src[at:at + 900]
+    # The engine failed to bind a sheet; it cannot know there is none (8 Nov review).
+    assert "no detail sheet in this pack was bound to it" in src[at:at + 400]
+    assert "no page in this pack details it" not in src
 
 
 # ── the part's own read outranks the list's profile ─────────────────────────────────────
@@ -117,6 +120,34 @@ def test_two_equal_pieces_on_a_row_of_two_are_one_piece_each():
                for f in part.get("review_flags") or [])
 
 
+def test_a_part_the_read_joins_on_its_own_keeps_its_pieces_and_says_both():
+    """Two equal cuts alone do not say per part or per copy (8 Nov review): a frame drawn as
+    one part, 2 off, of two equal tubes it is welded from, keeps both pieces."""
+    frame = {"part_number": "F-03", "description": "FRAME", "quantity": 2}
+    job = _job([{"part_number": "F-03", "row_qty": 2, "material_family": "tube",
+                 "tube_section": "30x30x2", "cut_lengths_mm": [500, 500]}])
+    job["routes"] = [{"operation": "welding", "part_numbers": ["F-03"], "inferred": False}]
+    lj.apply_full_job_to_pre_estimate([frame], job)
+    assert e._infer_section_length_mm(frame) == 1000
+    assert any("the read joins this part on its own" in str(f) and "500 mm a part" in str(f)
+               for f in frame.get("review_flags") or [])
+
+
+def test_a_stated_weight_decides_between_one_piece_and_all_of_them():
+    # 30x30x2 steel is about 1.70 kg/m: one 1,383 mm piece ~2.35 kg, two ~4.70 kg.
+    heavy = {"part_number": "W-1", "quantity": 2}
+    lj.apply_full_job_to_pre_estimate([heavy], _job([{
+        "part_number": "W-1", "row_qty": 2, "material_family": "tube", "weight_g": 4700,
+        "tube_section": "30x30x2", "cut_lengths_mm": [1383, 1383]}]))
+    assert e._infer_section_length_mm(heavy) == 2766
+    assert any("is all 2 pieces'" in str(f) for f in heavy.get("review_flags") or [])
+    light = {"part_number": "W-2", "quantity": 2}
+    lj.apply_full_job_to_pre_estimate([light], _job([{
+        "part_number": "W-2", "row_qty": 2, "material_family": "tube", "weight_g": 2350,
+        "tube_section": "30x30x2", "cut_lengths_mm": [1383, 1383]}]))
+    assert e._infer_section_length_mm(light) == 1383
+
+
 def test_a_frames_pieces_and_an_assemblys_members_are_still_summed():
     frame = {"part_number": "12173-03-04M", "quantity": 1}
     lj.apply_full_job_to_pre_estimate([frame], _job([{
@@ -143,3 +174,27 @@ def test_the_row_count_travels_with_the_read():
     got = lfe.project_row({"part_number": "M4", "qty": 2, "material_family": "tube",
                            "thickness_or_section": "30x30x2", "cut_lengths_mm": [1383, 1383]})
     assert got["row_qty"] == 2 and got["cut_lengths_mm"] == [1383, 1383]
+
+
+# ── a route lands on the part, whatever its spelling (D-752) ─────────────────────────────
+
+def test_a_route_spelled_as_the_sheet_prints_lands_on_the_listed_record():
+    """0358141's read keyed its drilling to "UPC0358141M4"; the record is "UPC0358141 M4". The
+    route's spelling became a target of its own and M4's drilling was charged twice."""
+    from route_compiler import compile_job_route
+    parts = [{"part_number": "UPC0358141 M4", "description": "UPRIGHT", "quantity": 2,
+              "textual_operations": ["hole_machining"]}]
+    extract = {"assemblies": [], "parts": [], "routes": [
+        {"operation": "hole_machining", "part_numbers": ["UPC0358141M4"], "inferred": False,
+         "evidence": "4 x M4 TAP", "scope": "part"}]}
+    graph = compile_job_route(parts, extract)
+    targets = {d["target_id"] for d in graph["decisions"] if d["operation"] == "hole_machining"}
+    assert "UPC0358141M4" not in targets, targets
+    assert "UPC0358141 M4" in targets, targets
+
+
+def test_two_records_one_spacing_apart_are_never_guessed_between():
+    from route_compiler import _record_for_model_assembly_name as resolve
+    raw = {"AB 1": {}, "A B1": {}}
+    assert resolve("AB1", raw) == "AB1"            # two candidates: left as read, not guessed
+    assert resolve("AB1", {"AB 1": {}}) == "AB 1"

@@ -5320,9 +5320,20 @@ def weldment_finish_for_gate(record: Mapping[str, Any], target_id: str,
 
 def _record_for_model_assembly_name(item: str, raw: Mapping[str, Any]) -> str:
     """`item`, or the job record its model-assembly name stands for: "12002-02-101 SA" is
-    12002-02-101 where the job has that record and none of the longer name (D-734)."""
+    12002-02-101 where the job has that record and none of the longer name (D-734).
+
+    ONE PART, ONE TARGET, WHATEVER ITS SPELLING (D-752). 0358141's read keyed its route to
+    "UPC0358141M4" as the detail sheet prints it; the record is "UPC0358141 M4" as the parts
+    list prints it. The route's spelling was a target of its own, so M4's drilling was charged
+    twice (rows 170 and 171) and M1's saw, tap and drill sat on a line no record carried. A
+    route participant no record carries resolves to the one record that differs from it only
+    in spacing, by the graph's own join rule (spelling_key)."""
     if raw.get(item):
         return item
+    _key = spelling_key(item)
+    _same = [k for k in raw if spelling_key(k) == _key] if _key else []
+    if len(_same) == 1:
+        return _same[0]
     try:
         from source_connectors.solidworks import model_assembly_stem as _stem
     except Exception:                                                # noqa: BLE001
