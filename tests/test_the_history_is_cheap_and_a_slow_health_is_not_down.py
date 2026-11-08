@@ -60,12 +60,17 @@ def _run(i, log, status="done", job_type=""):
     (["Document Manager BACKUP reader filled 2 files"], "dm_fallback"),
     (["the extract was NOT APPLIED", "model extract applied"], "drawings"),
     (["the estimate goes on without its models"], "drawings"),
-    (["[pricing] parts priced"], "pending"),
 ])
 def test_the_evidence_is_said_as_before(lines, kind):
     W = _wall()
     assert W.evidence(_run(1, ["[scan] staged"] + lines))["kind"] == kind
     assert W.evidence_from_log(lines)["kind"] == kind
+
+
+def test_a_running_estimate_that_has_not_read_its_models_says_so():
+    W = _wall()
+    assert W.evidence(_run(1, ["[pricing] parts priced"], status="running"))["kind"] == "pending"
+    assert W.evidence_from_log(["[pricing] parts priced"])["kind"] == "pending"
 
 
 def test_a_run_restored_with_only_the_end_of_its_log_is_not_known_never_not_reached():
