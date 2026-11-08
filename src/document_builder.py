@@ -1094,8 +1094,17 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 _row_says_sheet = bool(_own_row) and not _row_says_section and bool(
                     re.search(r"\b\d+(?:\.\d+)?\s*MM\b", _own_row)) and not re.search(
                     r"\d\s*X\s*\d+(?:\.\d+)?\s*X\s*\d", _own_row)
+                # A PAGE THE PART IS ONLY LISTED ON IS NOT ITS OWN SHEET, WHATEVER ITS ROLE
+                # (D-755). 0358141's page 3 is the rail's own detail sheet and also prints the
+                # rail's parts list. The caps M5 to M7 are bound to it only because their own
+                # sheets were not bound (part_index says so: bound_to_parts_list_page). Read
+                # as each cap's single detail sheet, it gave them the rail's 15x30x2 tube and
+                # the rail's 1,400 mm as their length, and D-751's guard, which waits for a
+                # part with no detail sheet, never fired.
+                _list_page = part.get("bound_to_parts_list_page")
                 _detail_pages = [pn for pn in page_nums if pn in page_lookup
-                                 and str(page_lookup[pn].get("role") or "") == "detail"]
+                                 and str(page_lookup[pn].get("role") or "") == "detail"
+                                 and pn != _list_page]
                 _shared = len(page_nums) != 1 or len(_detail_pages) != 1
                 # THE PART'S OWN DETAIL SHEET SPEAKS FOR IT WITHOUT A ROW (D-584, fourth
                 # tranche). The top blank is bound to the rail sheet that lists it AND to its

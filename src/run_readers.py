@@ -36,8 +36,8 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional
 
-__all__ = ["READERS", "readers_that_ran", "run_was_llm_only", "reader_by_key",
-           "pdf_reader_summary"]
+__all__ = ["READERS", "readers_that_ran", "run_was_llm_only", "run_was_deterministic_only",
+           "reader_by_key", "pdf_reader_summary", "DETERMINISTIC_ONLY_OFF"]
 
 
 # The order is the order the pack is read in, which is also the order that makes the list
@@ -157,8 +157,32 @@ def run_was_llm_only(summary: Optional[Dict[str, Any]] = None) -> bool:
     return _env_on("SDI_LLM_ONLY")
 
 
+# WHAT --deterministic-only TURNS OFF (D-753, SCRUM-194). Every reader that asks a language
+# model about the drawing, AND every answer one gave before: a cached read replayed is still
+# the model's reading, so a run that only "made no new call" has not shown the drawing reader
+# can stand on its own (8 Nov review). Named once, so the banner, the report and the gates
+# all speak from this list.
+DETERMINISTIC_ONLY_OFF = (
+    "the whole-pack drawing read (Grok) and its inference pass, cached answers included",
+    "the vision BOM reader (Path B), cached pages included",
+    "the page vision pass",
+    "the DXF interpretation read",
+    "the note scan for bought-in items in prose",
+    "the concept read of a brief or a scanned pack",
+)
+
+
+def run_was_deterministic_only(summary: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether this run read the drawings with no language model at all (D-753): the
+    summary key for a saved run, the environment for the run in flight."""
+    if isinstance(summary, dict) and summary.get("deterministic_only"):
+        return True
+    return _env_on("SDI_DETERMINISTIC_ONLY")
+
+
 def readers_that_ran(*, llm_only: bool, dxf_enabled: bool = True,
-                     solidworks_enabled: Optional[bool] = None) -> List[Dict[str, Any]]:
+                     solidworks_enabled: Optional[bool] = None,
+                     deterministic_only: bool = False) -> List[Dict[str, Any]]:
     """The catalogue with `ran` decided for THIS run, and why, where it is off.
 
     The three readers --llm-only switches off are exactly the three named in main.py's own
@@ -177,7 +201,10 @@ def readers_that_ran(*, llm_only: bool, dxf_enabled: bool = True,
         "pdf_text":   (True, ""),
         "pdf_vector": (True, ""),
         "bom_reader": (not llm_only, _off_llm if llm_only else ""),
-        "vision":     (True, ""),
+        "vision":     (not deterministic_only,
+                       "switched off for this run by --deterministic-only: no language model "
+                       "read the drawings and no earlier reading was reused"
+                       if deterministic_only else ""),
         "dxf":        (bool(dxf_enabled) and not llm_only,
                        _off_llm if llm_only else
                        ("switched off for this run by --no-dxf-augment"
@@ -210,4 +237,6 @@ def pdf_reader_summary(summary: Optional[Dict[str, Any]] = None) -> str:
              "rendered to an image and read by Grok (xAI)"]
     if not llm:
         parts.insert(2, "deterministic BOM reader")
+    if run_was_deterministic_only(summary):
+        parts = [p for p in parts if "Grok" not in p] + ["no language model (deterministic only)"]
     return " · ".join(parts)

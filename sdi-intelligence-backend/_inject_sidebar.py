@@ -33,7 +33,7 @@ END = "<!-- SDI-SIDEBAR:END -->"
 _LOGO_FALLBACK_URI = (
     "data:image/svg+xml;charset=utf-8,"
     "%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E"
-    "%3Ccircle cx=%2250%22 cy=%2250%22 r=%2250%22 fill=%22%23e8a33d%22/%3E"
+    "%3Ccircle cx=%2250%22 cy=%2250%22 r=%2250%22 fill=%22%23F6D946%22/%3E"
     "%3Ctext x=%2250%22 y=%2266%22 text-anchor=%22middle%22 "
     "font-family=%22Inter,Arial,sans-serif%22 font-weight=%22800%22 font-size=%2254%22 "
     "fill=%22%23000%22%3ES%3C/text%3E%3C/svg%3E"
@@ -170,6 +170,10 @@ CSS = """
     letter-spacing:.02em; display:block; line-height:1.15; white-space:nowrap; }
   .sdinav-brand span{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.14em;
     color:var(--dim); display:block; }
+  /* we.are.sdi as the site writes it (D-754): lower case, the two dots in SDI yellow. */
+  .sdinav-brand .sdinav-word{ font-family:'Outfit',var(--disp,'Inter',sans-serif); font-size:12.5px;
+    letter-spacing:0; text-transform:none; color:var(--ink); margin-top:2px; }
+  .sdinav-word i{ font-style:normal; color:var(--brand); }
   .sdinav-grp{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.16em;
     text-transform:uppercase; color:var(--dim); padding:16px 16px 6px; }
   .sdinav a.sdinav-item{ display:block; padding:8px 16px; color:var(--muted);
@@ -195,7 +199,7 @@ def _markup(current: str) -> str:
            # shows a hole. onerror is cleared first so a failure here cannot loop.
            '    <img class="sdinav-logo" src="/api/brand/logo" alt="we.are.sdi"'
            ' onerror="this.onerror=null;this.src=\'' + _LOGO_FALLBACK_URI + '\'">',
-           '    <span><b>SDI INTELLIGENCE</b><span>WE.ARE.SDI</span></span>',
+           '    <span><b>SDI INTELLIGENCE</b><span class="sdinav-word">we<i>.</i>are<i>.</i>sdi</span></span>',
            '  </a>',
            # The items live in their own box so the toggle can sit beneath them and stay
            # at the bottom of a rail that scrolls.

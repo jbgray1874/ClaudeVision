@@ -797,6 +797,9 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
     try:
         import os as _os_di
         _di_flag = _os_di.getenv("SDI_DXF_LLM_INTERPRET", "").strip().lower()
+        if _os_di.getenv("SDI_DETERMINISTIC_ONLY", "").strip().lower() in {"1", "true", "yes",
+                                                                           "on"}:
+            _di_flag = "0"                     # D-753: no model reads a drawing on this run
         if _di_flag not in {"0", "false", "no", "off"} and (
                 _di_flag in {"1", "true", "yes", "on"} or _os_di.getenv("XAI_API_KEY")):
             from dxf_llm_interpret import interpret as _dxf_interpret, apply_to_part as _dxf_apply

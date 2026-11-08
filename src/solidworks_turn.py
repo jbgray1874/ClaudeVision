@@ -36,8 +36,14 @@ the turn; a waiting run reads it, so every wait line names the job using SolidWo
 long, and the wall shows the same. The lock alone decides who holds the turn: the name is only
 what is said about it, and a missing or stale name never stops anyone.
 
-A TOKEN THAT CANNOT BE USED AT ALL (no folder can be made, a filesystem with no locks) fails
-open: the run reads as a lone run always has, and says so. A lone run never waits.
+A TOKEN THAT CANNOT BE USED AT ALL (no folder can be made, a filesystem with no locks) FAILS
+CLOSED (D-755, 8 Nov review). It used to fail open, the run reading as a lone run would, and
+with two or three runners on one desktop that lets two runs drive the one SolidWorks at once.
+Now no run reads SolidWorks without the turn: an unusable token is tried again for
+SDI_SW_TOKEN_RETRY_SECONDS (default 60), said on the console, and if it stays unusable the run
+follows the same policy as a wait that reached its limit (SDI_SW_TURN_TIMEOUT: the Document
+Manager, said, or its models left unread), with the reason naming the token to fix. A run that
+finds the turn free still never waits.
 """
 from __future__ import annotations
 
@@ -56,6 +62,15 @@ TIMEOUT_ENV = "SDI_SW_TURN_TIMEOUT"
 TURN_WAIT_LIMIT = 30.0                     # in minutes (JG, 7 Nov 2026)
 TURN_UPDATE_EVERY = 5.0                    # in minutes: how often a waiting run says so
 POLL_SECONDS = 2.0
+TOKEN_RETRY_ENV = "SDI_SW_TOKEN_RETRY_SECONDS"
+TOKEN_RETRY_SECONDS = 60.0                 # an unusable token is tried again this long (D-755)
+
+
+def token_retry_seconds() -> float:
+    try:
+        return max(0.0, float(str(os.getenv(TOKEN_RETRY_ENV, "")).strip() or TOKEN_RETRY_SECONDS))
+    except ValueError:
+        return TOKEN_RETRY_SECONDS
 
 HELD, BUSY, UNAVAILABLE, TIMED_OUT = "held", "busy", "unavailable", "timed_out"
 
@@ -218,13 +233,15 @@ def take_turn(path: Optional[Path] = None, wait_s: Optional[float] = None,
               update_s: Optional[float] = None) -> Tuple[Any, Dict[str, Any]]:
     """Wait for the desktop's SolidWorks. Returns (handle, turn) where turn says what happened:
     {"state": held | unavailable | timed_out, "waited_s": seconds, "token": path}. The caller
-    reads models with SolidWorks only on held or unavailable, and releases the handle when the
-    read ends. While it waits it says so at the start and every `update_s` seconds (D-732)."""
+    reads models with SolidWorks ONLY on held (D-755: an unusable token is retried, then follows
+    the timed-out policy, never an unprotected read), and releases the handle when the read
+    ends. While it waits it says so at the start and every `update_s` seconds (D-732)."""
     path = Path(path) if path else token_path()
     wait_s = wait_minutes() * 60.0 if wait_s is None else float(wait_s)
     update_s = update_minutes() * 60.0 if update_s is None else max(0.001, float(update_s))
     started = clock()
     said_waiting = False
+    said_unusable = False
     next_update = update_s
     while True:
         handle, state = try_take(path, announce=True)
@@ -237,9 +254,22 @@ def take_turn(path: Optional[Path] = None, wait_s: Optional[float] = None,
                 say("SolidWorks turn taken: this run reads its models now.")
             return handle, turn
         if state == UNAVAILABLE:
-            say(f"The desktop's SolidWorks token ({path}) could not be used, so this run reads "
-                f"its models as a lone run would, without waiting for any other run.")
-            return None, turn
+            # FAIL CLOSED (D-755): no turn, no SolidWorks. Tried again for a short while, then
+            # the same policy as a wait that reached its limit, with the reason said.
+            retry_s = token_retry_seconds()
+            if not said_unusable:
+                say(f"The desktop's SolidWorks token ({path}) could not be used. No run reads "
+                    f"SolidWorks without its turn, so this run tries the token again for up to "
+                    f"{retry_s:.0f} s.")
+                said_unusable = True
+            if waited >= retry_s:
+                turn["state"] = TIMED_OUT
+                turn["token_unusable"] = True
+                say(f"The SolidWorks token ({path}) is still unusable after {waited:.0f} s: this "
+                    f"run does not read SolidWorks. Fix the token path ({TOKEN_ENV}).")
+                return None, turn
+            sleep(poll_s)
+            continue
         holder = read_holder(path)
         if holder:
             turn["holder"] = holder
@@ -265,6 +295,10 @@ def take_turn(path: Optional[Path] = None, wait_s: Optional[float] = None,
 def timed_out_reason(turn: Dict[str, Any]) -> str:
     """The run's own words for a turn that never came. What happened next is said by the
     caller, which knows whether the Document Manager read the models."""
+    if turn.get("token_unusable"):
+        return (f"the desktop's SolidWorks token ({turn.get('token') or token_path()}) could not "
+                f"be used, and no run reads SolidWorks without its turn (D-755), so SolidWorks "
+                f"did not read this run's models; fix {TOKEN_ENV}")
     return (f"the desktop's SolidWorks stayed in use by another run on this machine for "
             f"{float(turn.get('waited_s') or 0) / 60:.0f} minutes ({WAIT_ENV} allows "
             f"{wait_minutes():g}), so SolidWorks did not read this run's models")

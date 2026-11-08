@@ -372,7 +372,7 @@ def engine_command(engine_root: Path, engine_python: Path, job: Path,
                    quantity_breaks: Optional[List[int]] = None,
                    manual_workbook: Optional[Path] = None,
                    llm_only: bool = False, fresh_read: bool = False,
-                   product: str = "") -> List[str]:
+                   product: str = "", deterministic_only: bool = False) -> List[str]:
     """Exactly what a person would type. --deliverables is not optional: the page
     promises a complete set every time, so it is not a flag the caller can forget.
 
@@ -425,6 +425,10 @@ def engine_command(engine_root: Path, engine_python: Path, job: Path,
         # not a tidy-up: the caches are what make two runs of one pack agree, and 2085 halved
         # its own unit cost between identical runs before they existed.
         ["--fresh-read"] if fresh_read else []
+    ) + (
+        # THE DRAWING READER ON ITS OWN (D-753). No language model reads the drawings and no
+        # cached answer from one is replayed: the SCRUM-194 test, never an estimate to quote.
+        ["--deterministic-only"] if deterministic_only else []
     )
 
 
@@ -1463,7 +1467,8 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
                          quantity_breaks=[int(q) for q in (job.get("quantity_breaks") or [])],
                          llm_only=bool(job.get("llm_only")),
                          fresh_read=bool(job.get("fresh_read")),
-                         product=str(job.get("drawing_number") or ""))
+                         product=str(job.get("drawing_number") or ""),
+                         deterministic_only=bool(job.get("deterministic_only")))
     if extract_job:
         cmd = pack_extract_command(engine_root, engine_python, job)
     say("$ " + " ".join(f'"{c}"' if " " in c else c for c in cmd))

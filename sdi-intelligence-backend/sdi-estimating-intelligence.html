@@ -5,14 +5,14 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SDI Estimating Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Spectral:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Spectral:wght@400;600&family=Outfit:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,300;9..144,400&display=swap" rel="stylesheet">
 <style>
   /* ── House tokens, taken from sdi-intelligence-portal.html ────────────── */
   :root{
-    --bg:#0d0d0f; --panel:#121214; --panel-2:#17171a; --line:#26262b;
-    --ink:#f0efec; --muted:#9b9ba3; --dim:#6a6a72;
-    --brand:#e8a33d; --ok:#4ec97f; --info:#6da8e8; --warn:#e8a33d; --bad:#ff6b6b;
-    --disp:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --bg:#0c0c0b; --panel:#141412; --panel-2:#1a1a17; --line:#2b2b26;
+    --ink:#f2f2ea; --muted:#b6b6a7; --dim:#8f8f84;
+    --brand:#F6D946; --brand-fill:#F6D946; --ok:#4ec97f; --info:#6da8e8; --warn:#e8a33d; --bad:#ff6b6b;
+    --disp:'Outfit','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
     --body:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
     --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
     --serif:'Spectral','Source Serif 4',Georgia,serif;
@@ -32,9 +32,9 @@
 
      No prefers-color-scheme here either — opt-in only, same reasoning. */
   :root[data-theme="light"]{
-    --bg:#f4f4f2; --panel:#ffffff; --panel-2:#f7f7f5; --line:#d9d8d3;
+    --bg:#f4f4f0; --panel:#ffffff; --panel-2:#f7f7f5; --line:#d9d9cf;
     --ink:#17171a; --muted:#5b5b63; --dim:#83838c;
-    --brand:#a9701a; --ok:#1f7a45; --info:#2b6cb0; --warn:#a9701a; --bad:#c0342f;
+    --brand:#7a6300; --brand-fill:#F6D946; --ok:#1f7a45; --info:#2b6cb0; --warn:#a9701a; --bad:#c0342f;
     --tint:#00000008; --scrim:rgba(0,0,0,.42);
   }
   :root{color-scheme:dark}
@@ -76,7 +76,7 @@
   /* THE CONTROL PANEL, ONE CLICK FROM THE TOP OF THE PAGE (D-740): every run, the SolidWorks
      licence, the fleet and the KPIs, full screen. */
   .cp-btn{display:inline-flex;align-items:center;gap:8px;padding:9px 14px;border-radius:9px;
-          background:var(--brand);color:#191900;font-weight:700;font-size:13.5px;text-decoration:none;
+          background:var(--brand-fill);color:#191900;font-weight:700;font-size:13.5px;text-decoration:none;
           white-space:nowrap;align-self:flex-end}
   .cp-btn:hover{filter:brightness(1.08)}
   .cp-btn .dot{width:8px;height:8px;border-radius:50%;background:#191900;opacity:.75}
@@ -123,7 +123,7 @@
   button:hover:not(:disabled){border-color:var(--dim)}
   button:disabled{opacity:.42;cursor:not-allowed}
   button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
-  .btn-run{width:100%;background:var(--brand);color:#191900;border-color:var(--brand);padding:15px 18px;font-size:16px;font-weight:700;letter-spacing:-.01em;margin-top:18px}
+  .btn-run{width:100%;background:var(--brand-fill);color:#191900;border-color:var(--brand-fill);padding:15px 18px;font-size:16px;font-weight:700;letter-spacing:-.01em;margin-top:18px}
   .btn-run:hover:not(:disabled){filter:brightness(1.08)}
   .btn-run:disabled{background:var(--panel-2);color:var(--dim);border-color:var(--line);filter:none}
   /* THE EXTRACTS, LAID OUT RATHER THAN STACKED. .btn-run is width:100% — right for the one big
@@ -224,6 +224,24 @@
   .listing li[aria-selected=true]{background:rgba(232,163,61,.09)}
   .dfoot{display:flex;gap:10px;justify-content:flex-end;padding:14px 20px;border-top:1px solid var(--line)}
   .dfoot .left{margin-right:auto;color:var(--dim);font-size:12px;align-self:center}
+
+  /* ── we.are.sdi (D-754) ──────────────────────────────────────────────────────────
+     The look of wearesdi.com on the dark ground: the wordmark, SDI yellow for the brand
+     (warnings keep their amber, so the two never read as one), the geometric display face,
+     pill-shaped primary buttons and the halftone dot circle. Tokens only, so light mode
+     follows. */
+  .sdi-word{display:inline-block;height:1em;width:auto;vertical-align:-.12em;color:var(--sdi-word-ink,currentColor)}
+  .sdi-word .d{fill:var(--brand)}
+  .sdi-dots{position:absolute;pointer-events:none;border-radius:50%;opacity:.16;z-index:0;
+    background-image:radial-gradient(var(--brand) 1.1px, transparent 1.6px);background-size:9px 9px;
+    -webkit-mask-image:radial-gradient(circle at center,#000 58%,transparent 71%);
+            mask-image:radial-gradient(circle at center,#000 58%,transparent 71%)}
+  header{position:relative}
+  header > :not(.sdi-dots){position:relative;z-index:1}
+  header .sdi-dots{width:230px;height:230px;right:-40px;top:-120px}
+  h1{font-family:var(--disp)}
+  .eyebrow .sdi-word,.kicker .sdi-word{height:13px;margin-right:9px;color:var(--ink)}
+  .btn-run,.cp-btn{border-radius:999px}
 </style>
 </head>
 <body>
@@ -275,7 +293,7 @@
   }
   .sdinav-brand{ display:flex; align-items:center; gap:10px; padding:18px 16px 16px;
     text-decoration:none; color:inherit; }
-  .sdinav-mark{ width:30px; height:30px; border-radius:7px; background:var(--brand);
+  .sdinav-mark{ width:30px; height:30px; border-radius:7px; background:var(--brand-fill);
     /* #000, as the portal's own .mark b uses, and NOT the near-black palette literal:
        the mark sits on amber in both themes, so its ink is not theme-dependent, and a
        palette literal here is one no [data-theme] rule can reach. The pages had been
@@ -290,6 +308,10 @@
     letter-spacing:.02em; display:block; line-height:1.15; white-space:nowrap; }
   .sdinav-brand span{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.14em;
     color:var(--dim); display:block; }
+  /* we.are.sdi as the site writes it (D-754): lower case, the two dots in SDI yellow. */
+  .sdinav-brand .sdinav-word{ font-family:'Outfit',var(--disp,'Inter',sans-serif); font-size:12.5px;
+    letter-spacing:0; text-transform:none; color:var(--ink); margin-top:2px; }
+  .sdinav-word i{ font-style:normal; color:var(--brand); }
   .sdinav-grp{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.16em;
     text-transform:uppercase; color:var(--dim); padding:16px 16px 6px; }
   .sdinav a.sdinav-item{ display:block; padding:8px 16px; color:var(--muted);
@@ -307,8 +329,8 @@
 
 <nav class="sdinav" aria-label="SDI Intelligence">
   <a class="sdinav-brand" href="/">
-    <img class="sdinav-logo" src="/api/brand/logo" alt="we.are.sdi" onerror="this.onerror=null;this.src='data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ccircle cx=%2250%22 cy=%2250%22 r=%2250%22 fill=%22%23e8a33d%22/%3E%3Ctext x=%2250%22 y=%2266%22 text-anchor=%22middle%22 font-family=%22Inter,Arial,sans-serif%22 font-weight=%22800%22 font-size=%2254%22 fill=%22%23000%22%3ES%3C/text%3E%3C/svg%3E'">
-    <span><b>SDI INTELLIGENCE</b><span>WE.ARE.SDI</span></span>
+    <img class="sdinav-logo" src="/api/brand/logo" alt="we.are.sdi" onerror="this.onerror=null;this.src='data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ccircle cx=%2250%22 cy=%2250%22 r=%2250%22 fill=%22%23F6D946%22/%3E%3Ctext x=%2250%22 y=%2266%22 text-anchor=%22middle%22 font-family=%22Inter,Arial,sans-serif%22 font-weight=%22800%22 font-size=%2254%22 fill=%22%23000%22%3ES%3C/text%3E%3C/svg%3E'">
+    <span><b>SDI INTELLIGENCE</b><span class="sdinav-word">we<i>.</i>are<i>.</i>sdi</span></span>
   </a>
   <div class="sdinav-body">
   <div class="sdinav-grp">Overview</div>
@@ -385,8 +407,9 @@
 <div class="wrap">
 
   <header>
+    <span class="sdi-dots" aria-hidden="true"></span>
     <div style="flex:1">
-      <p class="eyebrow">SDI Intelligence</p>
+      <p class="eyebrow"><svg class="sdi-word" viewBox="0 0 950 169" role="img" aria-label="we.are.sdi" fill="currentColor"><path d="M158.915 36.7773L135.389 114.85C133.118 122.35 130.447 133.08 129.137 138.467C127.991 133.14 125.689 122.658 123.777 115.372L103.183 36.7773H80.9663L59.639 115.365C57.7134 122.531 55.2616 133.193 54.0544 138.537C52.7665 133.175 50.1337 122.393 48.0313 114.866L25.7238 36.7773H2.41797L42.8867 164.183H64.817L86.1457 87.545C88.1938 80.2145 90.5008 70.1606 91.6815 64.8782C92.7926 70.1676 94.9785 80.2145 97.0252 87.5408L118.11 164.183H139.793L181.494 36.7773H158.915Z"/><path d="M198.247 89.3881C201.717 65.0993 215.393 51.2041 235.907 51.2041C257.026 51.2041 269.942 65.1035 271.475 89.3881H198.247ZM235.907 33.6262C200.848 33.6262 175.402 61.7925 175.402 100.602C175.402 140.036 200.782 167.576 237.122 167.576C266.097 167.576 286.107 151.905 292.022 124.58L292.29 123.331H271.037L270.838 124.105C266.638 140.412 254.981 149.03 237.122 149.03C214.607 149.03 199.568 132.667 197.679 106.238H294.716V105.207C294.716 61.0546 272.181 33.6262 235.907 33.6262Z"/><path d="M423.094 99.3426V116.845C423.094 129.476 413.093 149.514 386.253 149.514C374.763 149.514 361.066 146.034 361.066 129.453C361.066 111.983 374.55 109.012 395.107 106.475C405.222 105.353 416.174 102.542 423.094 99.3426ZM442.876 145.211V75.1457C442.876 48.0778 427.173 34.3525 396.207 34.3525C365.325 34.3525 345.882 50.5756 344.199 77.7479L344.132 78.8422H365.115L365.189 77.8927C366.611 59.6855 376.543 51.2036 396.449 51.2036C413.721 51.2036 422.85 58.4756 422.85 72.2358C422.85 84.7721 413.6 87.9131 394.162 89.8791C365.81 92.711 338.128 98.1354 338.128 129.937C338.128 152.214 355.493 166.609 382.369 166.609C399.062 166.609 412.196 160.665 422.446 148.455C422.81 156.828 424.039 161.374 426.552 163.882L426.853 164.184H447.488V161.874L447.029 161.569C445.354 160.452 442.876 154.482 442.876 145.211Z"/><path d="M544.015 89.3881C547.485 65.0993 561.162 51.2041 581.676 51.2041C602.794 51.2041 615.711 65.1035 617.244 89.3881H544.015ZM581.676 33.6262C546.616 33.6262 521.17 61.7925 521.17 100.602C521.17 140.036 546.551 167.576 582.89 167.576C611.865 167.576 631.875 151.905 637.79 124.58L638.059 123.331H616.805L616.606 124.105C612.407 140.412 600.749 149.03 582.89 149.03C560.375 149.03 545.337 132.667 543.447 106.238H640.484V105.207C640.484 61.0546 617.95 33.6262 581.676 33.6262Z"/><path d="M851.701 149.272C829.697 149.272 816.561 131.258 816.561 101.086C816.561 71.215 829.932 52.6584 851.46 52.6584C875.53 52.6584 890.484 71.215 890.484 101.086C890.484 143.012 866.185 149.272 851.701 149.272ZM889.27 52.9591C880.17 40.7959 866.17 33.8678 850.487 33.8678C816.91 33.8678 794.351 60.7839 794.351 100.843C794.351 141.529 816.576 167.82 850.973 167.82C867.235 167.82 879.136 162.367 889.27 150.196V164.182H910.994V0.13501H889.27V52.9591Z"/><path d="M927.143 164.182H948.867V36.7761H927.143V164.182Z"/><path d="M927.143 21.2634H948.867V0.135254H927.143V21.2634Z"/><path d="M743.393 88.1957C721.16 83.7055 710.475 80.996 710.475 68.5976C710.475 57.8517 719.302 51.688 734.692 51.688C752.847 51.688 761.398 58.5214 763.285 74.5371L763.393 75.4463H785.617L785.479 74.2949C782.352 48.0054 764.958 34.1101 735.178 34.1101C706.259 34.1101 688.993 47.3649 688.993 69.568C688.993 98.3525 713.23 103.337 736.664 108.156C761.031 113.28 768.617 116.918 768.617 129.693C768.617 142.319 758.639 149.272 740.518 149.272C719.615 149.272 708.61 141.227 705.884 123.957L705.746 123.087H683.493L683.602 124.216C686.301 152.334 706.342 167.819 740.032 167.819C771.687 167.819 790.585 153.204 790.585 128.724C790.585 97.7135 765.514 92.6566 743.393 88.1957Z"/><path d="M525.691 57.6969V37.1089L525.044 36.8513C522.561 35.86 520.488 35.3225 516.649 35.3225C502.335 35.3225 488.734 42.983 479.81 55.9426V36.7775H458.086V164.183H479.81V93.5711C479.81 69.2586 497.61 56.5371 515.193 56.5371C519.064 56.5371 520.872 56.7877 523.607 57.6969H525.691Z"/><path class="d" d="M304.438 145.847H322.879V164.158H304.438V145.847Z"/><path class="d" d="M650.643 145.691H669.084V164.002H650.643V145.691Z"/></svg>Intelligence</p>
       <h1>SDI Estimating <span class="mark">Intelligence</span></h1>
       <p class="sub">Drawings in, costed estimate out. Every run writes a complete deliverable set to the shared estimating folder.
         &nbsp;<a href="/guide" target="_blank" rel="noopener"
@@ -645,6 +668,15 @@
            and the run is unchanged.</p>
         <p class="note" id="runManualWhy" hidden></p>
       </div>
+
+      <!-- THE DRAWING READER ON ITS OWN (D-753, SCRUM-194). A test, not an estimate: no
+           language model reads the drawings and no cached answer is replayed, so the run shows
+           what the deterministic reader supplies by itself. Off by default. -->
+      <label style="display:flex;gap:9px;align-items:center;margin:8px 0;cursor:pointer;text-transform:none;font-family:var(--body);letter-spacing:normal;font-size:inherit">
+        <input id="detOnly" type="checkbox"> <span class="note" style="margin:0"><b>Drawing
+        reader test only, no AI read.</b> No language model reads the drawings and no
+        earlier AI reading is reused. Tests what the drawing reader finds on its own. Not an
+        estimate to quote.</span></label>
 
       <!-- TWO ESTIMATING BOOKS, SO THE BUTTON HAS TO SAY WHICH ONE. Every rate behind this
            button is a UK rate: UDEF plain stock, UK labour, UK finishing. An estimate for
@@ -3689,6 +3721,8 @@ runBtn.onclick = async () => {
     job_folder: folder ? folder.path : null,
     files: drawings.filter(d => !d.is_dir).map(d => d.path),
     output_root: OUTPUT_ROOT,
+    // D-753: the drawing reader on its own, when ticked; otherwise the method stays the default.
+    method: (document.getElementById("detOnly") || {}).checked ? "deterministic" : undefined,
     deliverables: true,                   // --deliverables, always
     // The optional parity partner. null means no comparison was asked for and the run is
     // exactly as it was before this existed.

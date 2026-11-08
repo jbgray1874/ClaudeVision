@@ -48,6 +48,21 @@ def test_an_end_cap_only_listed_on_the_rails_list_takes_no_tube():
                for f in got.get("review_flags") or [])
 
 
+def test_the_list_page_is_not_the_parts_own_sheet_even_when_it_is_a_detail_page():
+    """D-755, 0358141 at 15:47: page 3 is the rail's own DETAIL sheet carrying its parts list.
+    Read as each cap's single detail sheet it gave them the rail's tube at the rail's 1,400 mm,
+    and D-751's guard (no detail page) never fired."""
+    got = _post_build({"part_number": "UPC0358141 M5", "description": "ENDCAP"}, role="detail")
+    assert not got.get("section_stock")
+    assert any("a parts list this part is only listed on" in str(f)
+               for f in got.get("review_flags") or [])
+    m6 = _post_build({"part_number": "UPC0358141 M6", "description": "O A RAIL END"},
+                     role="detail")
+    ss = m6.get("section_stock") or {}
+    assert ss.get("read_from") == "parts_list_page", "so the part's own read can withdraw it"
+    assert ss.get("length_source") != "detail_sheet_figure", "never the rail's length"
+
+
 def test_a_part_whose_name_says_section_still_takes_it_and_is_marked():
     got = _post_build({"part_number": "UPC0358141 M6", "description": "O A RAIL END"})
     ss = got.get("section_stock") or {}

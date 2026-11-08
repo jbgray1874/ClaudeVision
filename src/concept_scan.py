@@ -1763,6 +1763,10 @@ def _call_vision_llm(png_pages: List[bytes], model: str, brief: str = "",
         raise ConceptUnavailable(
             "SDI_OFFLINE=1 — the concept read needs the vision model and this run may not "
             "call one.")
+    if os.getenv("SDI_DETERMINISTIC_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}:
+        raise ConceptUnavailable(
+            "deterministic-only run (D-753) — the concept read is a vision-model read, and "
+            "this run tests the drawing reader with no language model at all.")
     api_key = os.environ.get("XAI_API_KEY")
     if not api_key:
         raise ConceptUnavailable(
@@ -1926,6 +1930,12 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
     (design-intent GAs): their own text goes in with them under the sheet preamble (D-415).
     `recheck` is what `sheet_check` found wrong with a first answer, put back once.
     """
+    # BEFORE THE CACHE (D-753): a concept read replayed from the cache is still the model's
+    # reading, and a deterministic-only run uses neither a new one nor a kept one.
+    if os.getenv("SDI_DETERMINISTIC_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}:
+        raise ConceptUnavailable(
+            "deterministic-only run (D-753) — the concept read is a vision-model read, and "
+            "this run tests the drawing reader with no language model, new or cached.")
     import _bom_vision_reader as pathB                              # noqa: WPS433
 
     if model is None:

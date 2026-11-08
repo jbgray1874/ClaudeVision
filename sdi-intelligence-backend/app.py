@@ -888,7 +888,7 @@ def knowledge_map(request: Request, x_sdi_key: str | None = Header(default=None)
 _LOGO_EXTS = (".svg", ".png", ".jpg", ".jpeg", ".webp")
 _LOGO_FALLBACK = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">'
-    '<circle cx="50" cy="50" r="50" fill="#e8a33d"/>'
+    '<circle cx="50" cy="50" r="50" fill="#F6D946"/>'
     '<text x="50" y="66" text-anchor="middle" font-family="Inter,Arial,sans-serif" '
     'font-weight="800" font-size="54" fill="#000">S</text></svg>'
 )

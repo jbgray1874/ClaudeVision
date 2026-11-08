@@ -1956,7 +1956,9 @@ def _files_read_section(summary: Dict[str, Any]) -> str:
     else:
         # An older JSON, or a run where the stamp did not land. Derive it from the flag: the
         # answer is coarser but it is never wrong about the three readers --llm-only disables.
-        _readers = readers_that_ran(llm_only=run_was_llm_only(summary))
+        from run_readers import run_was_deterministic_only as _det_only_rep
+        _readers = readers_that_ran(llm_only=run_was_llm_only(summary),
+                                    deterministic_only=_det_only_rep(summary))
     _ran = {r.get("key"): bool(r.get("ran")) for r in _readers if isinstance(r, dict)}
     _sw_ran = _ran.get("solidworks", True)
 

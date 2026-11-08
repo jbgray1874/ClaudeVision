@@ -74,7 +74,7 @@ def test_it_refuses_before_it_stages():
     typo in one word leaves the estimator's job folder rewritten for nothing."""
     at = _ROUTES.index('def start(req: EstimateRequest')
     body = _ROUTES[at:_ROUTES.index("_sources: List[str] = []", at)]
-    assert 'method not in {"both", "llm", "engine"}' in body, (
+    assert 'method not in {"both", "llm", "engine", "deterministic"}' in body, (
         "the method is validated after staging, or not at all")
 
 

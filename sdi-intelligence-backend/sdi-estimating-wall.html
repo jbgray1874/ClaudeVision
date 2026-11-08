@@ -28,11 +28,11 @@
 <style>
   :root{
     color-scheme: dark;
-    --bg:#060a0f; --surface:#0b1118; --panel:rgba(12,19,27,.86); --panel-2:#0f1822;
-    --line:#182634; --line-hi:#22405a;
-    --ink:#e8f1f6; --ink-2:#a3b6c4; --ink-3:#647b8d;
-    --accent:#22d3ee; --accent-dim:rgba(34,211,238,.14);
-    --good:#0ca30c; --warn:#fab219; --bad:#d03b3b; --grey:#5b6b78;
+    --bg:#0a0a09; --surface:#10100e; --panel:rgba(20,20,17,.88); --panel-2:#161613;
+    --line:#26261f; --line-hi:#4a4421;
+    --ink:#f2f2ea; --ink-2:#b6b6a7; --ink-3:#8a8a7f;
+    --accent:#F6D946; --accent-dim:rgba(246,217,70,.14);
+    --good:#0ca30c; --warn:#f0a030; --bad:#d03b3b; --grey:#5b6b78;
     --s-done:#3987e5; --s-failed:#d03b3b; --s-extract:#9085e9;
     --mono:"Cascadia Code","JetBrains Mono",Consolas,"SFMono-Regular",Menlo,monospace;
     --sans:"Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
@@ -47,11 +47,11 @@
   /* THE ROOM: a faint engineering grid, a vignette and one slow scan line. */
   body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
     background:
-      radial-gradient(ellipse at 50% 0%, rgba(34,211,238,.07), transparent 60%),
-      linear-gradient(rgba(34,211,238,.035) 1px, transparent 1px) 0 0/40px 40px,
-      linear-gradient(90deg, rgba(34,211,238,.035) 1px, transparent 1px) 0 0/40px 40px;}
+      radial-gradient(ellipse at 50% 0%, rgba(246,217,70,.07), transparent 60%),
+      linear-gradient(rgba(246,217,70,.035) 1px, transparent 1px) 0 0/40px 40px,
+      linear-gradient(90deg, rgba(246,217,70,.035) 1px, transparent 1px) 0 0/40px 40px;}
   body::after{content:"";position:fixed;left:0;right:0;height:140px;top:-140px;z-index:0;
-    pointer-events:none;background:linear-gradient(transparent, rgba(34,211,238,.05), transparent);
+    pointer-events:none;background:linear-gradient(transparent, rgba(246,217,70,.05), transparent);
     animation:scan 9s linear infinite}
   @keyframes scan{to{transform:translateY(calc(100vh + 140px))}}
   @media (prefers-reduced-motion: reduce){body::after{display:none}.pulse,.live-dot{animation:none!important}}
@@ -121,7 +121,7 @@
           text-overflow:ellipsis}
   .slots{display:flex;gap:4px;margin-top:8px}
   .slots i{flex:1;height:6px;border-radius:3px;background:var(--line-hi)}
-  .slots i.on{background:var(--accent);box-shadow:0 0 8px rgba(34,211,238,.5)}
+  .slots i.on{background:var(--accent);box-shadow:0 0 8px rgba(246,217,70,.5)}
   .slots i.off{background:transparent;border:1px dashed var(--line-hi)}
 
   /* ── MAIN: LANES + FLEET ────────────────────────────────── */
@@ -208,10 +208,10 @@
   .idle{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
         color:var(--ink-3);text-align:center;font-size:13px}
   .radar{width:90px;height:90px;border-radius:50%;border:1px solid var(--line-hi);position:relative;
-         background:radial-gradient(circle, transparent 30%, rgba(34,211,238,.04) 31%, transparent 32%,
-                    transparent 62%, rgba(34,211,238,.04) 63%, transparent 64%)}
+         background:radial-gradient(circle, transparent 30%, rgba(246,217,70,.04) 31%, transparent 32%,
+                    transparent 62%, rgba(246,217,70,.04) 63%, transparent 64%)}
   .radar::after{content:"";position:absolute;inset:0;border-radius:50%;
-    background:conic-gradient(from 0deg, rgba(34,211,238,.35), transparent 70deg);
+    background:conic-gradient(from 0deg, rgba(246,217,70,.35), transparent 70deg);
     animation:sweep 3.2s linear infinite}
   .radar.off::after{display:none}
   @keyframes sweep{to{transform:rotate(360deg)}}
@@ -315,7 +315,7 @@
   /* ── PARITY (D-741) ─────────────────────────────────────── */
   .nav{display:flex;gap:6px}
   .nav a,.nav button{text-decoration:none}
-  .nav .on{color:var(--ink);border-color:var(--accent);box-shadow:0 0 10px rgba(34,211,238,.25)}
+  .nav .on{color:var(--ink);border-color:var(--accent);box-shadow:0 0 10px rgba(246,217,70,.25)}
   .parity{display:flex;flex-direction:column;gap:12px;scroll-margin-top:12px;padding-bottom:8px}
   .sechead{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
            border-top:1px solid var(--line-hi);padding-top:16px;margin-top:6px}
@@ -350,7 +350,7 @@
   .tabs{display:flex;gap:6px;padding:10px 14px 0;flex-wrap:wrap}
   .tab{font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--ink-2);background:transparent;
        border:1px solid var(--line-hi);border-radius:6px;padding:6px 10px;cursor:pointer}
-  .tab.on{color:var(--ink);border-color:var(--accent);box-shadow:0 0 10px rgba(34,211,238,.25)}
+  .tab.on{color:var(--ink);border-color:var(--accent);box-shadow:0 0 10px rgba(246,217,70,.25)}
   .tabpane{padding:10px 14px 0;display:flex;flex-direction:column;gap:8px}
   .tabpane[hidden],.prow [hidden]{display:none}
   .frow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -359,14 +359,14 @@
        border:1px solid var(--line-hi);border-radius:7px;color:var(--ink);font-family:var(--mono);font-size:13px;
        padding:8px 10px;min-width:0;color-scheme:dark}
   .runbox input:focus,.runbox textarea:focus,.runbox select:focus{outline:none;border-color:var(--accent);
-       box-shadow:0 0 0 2px rgba(34,211,238,.2)}
+       box-shadow:0 0 0 2px rgba(246,217,70,.2)}
   .runbox textarea{width:100%;resize:vertical;line-height:1.5}
   .runbox select{width:100%}
   #oneJob{flex:2 1 220px} #oneClient,#setClient,#perClient{flex:1 1 150px}
   .act{font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;color:var(--ink);background:var(--panel-2);
        border:1px solid var(--line-hi);border-radius:7px;padding:8px 14px;cursor:pointer;white-space:nowrap}
   .act:hover:not(:disabled){border-color:var(--accent)}
-  .act.go{border-color:rgba(34,211,238,.6);background:rgba(34,211,238,.12)}
+  .act.go{border-color:rgba(246,217,70,.6);background:rgba(246,217,70,.12)}
   .act.sm{padding:4px 9px;font-size:10.5px}
   .act:disabled{opacity:.4;cursor:default}
   .out{font-size:12.5px;color:var(--ink-2);display:flex;flex-direction:column;gap:6px}
@@ -377,7 +377,7 @@
   .pick{display:flex;gap:8px;align-items:flex-start;padding:6px 8px;border:1px solid var(--line);border-radius:7px;
         cursor:pointer;background:var(--panel-2)}
   .pick:has(input:checked){border-color:var(--accent)}
-  .pick input{margin-top:3px;accent-color:#22d3ee}
+  .pick input{margin-top:3px;accent-color:#F6D946}
   .pick .nm{display:block;font-family:var(--mono);color:var(--ink);font-size:12px;word-break:break-all}
   .pick .why{display:block;font-size:11px;color:var(--ink-3)}
   .pv{width:100%;border-collapse:collapse;font-size:12px}
@@ -387,17 +387,17 @@
   .pv button.link{background:none;border:0;padding:0;color:var(--accent);font-family:var(--mono);font-size:12px;cursor:pointer}
   .pvwrap{max-height:260px;overflow:auto;scrollbar-width:thin;scrollbar-color:var(--line-hi) transparent}
   .chk{display:flex;gap:7px;align-items:center;font-size:11.5px;color:var(--ink-3);padding:10px 14px 0}
-  .chk input{accent-color:#22d3ee}
+  .chk input{accent-color:#F6D946}
   .ptasks{padding:8px 12px 10px;display:flex;flex-direction:column;gap:8px;overflow:auto;max-height:560px;
           scrollbar-width:thin;scrollbar-color:var(--line-hi) transparent}
   .task{border:1px solid var(--line);border-radius:9px;padding:9px 11px;background:var(--panel-2)}
-  .task.running,.task.starting{border-color:rgba(34,211,238,.5);box-shadow:inset 0 0 24px rgba(34,211,238,.06)}
+  .task.running,.task.starting{border-color:rgba(246,217,70,.5);box-shadow:inset 0 0 24px rgba(246,217,70,.06)}
   .task.failed{border-color:rgba(208,59,59,.6)} .task.choose,.task.stalled{border-color:rgba(250,178,25,.55)}
   .task .th{display:flex;align-items:center;gap:8px;justify-content:space-between}
   .task .tk{display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;color:var(--ink-3)}
   .task .nm{display:block;font-family:var(--mono);font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .task .bar{height:5px;border-radius:3px;background:var(--line-hi);margin-top:8px;overflow:hidden}
-  .task .bar i{display:block;height:100%;background:var(--accent);border-radius:3px;box-shadow:0 0 8px rgba(34,211,238,.5);transition:width .6s}
+  .task .bar i{display:block;height:100%;background:var(--accent);border-radius:3px;box-shadow:0 0 8px rgba(246,217,70,.5);transition:width .6s}
   .task .tm{font-size:11.5px;color:var(--ink-2);margin-top:5px}
   .task .rcs{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
   .rc{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10.5px;color:var(--ink);
@@ -407,7 +407,7 @@
   .task .res{font-size:12px;color:var(--ink);margin-top:7px;display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
   .task .res a{color:var(--accent);text-decoration:none;font-family:var(--mono);font-size:11px}
   .task .why2{font-size:11.5px;color:var(--ink-2);margin-top:6px}
-  .badge.run{border-color:rgba(34,211,238,.6)} .badge.run .ico{color:var(--accent);display:inline-block;animation:sweep 1.6s linear infinite}
+  .badge.run{border-color:rgba(246,217,70,.6)} .badge.run .ico{color:var(--accent);display:inline-block;animation:sweep 1.6s linear infinite}
   @media (max-width:1500px){ .parity .kpis{grid-template-columns:repeat(4,minmax(0,1fr))} }
 
   /* HISTORY (D-744) */
@@ -418,7 +418,7 @@
   .hfilter input{flex:1 1 220px;min-width:0}
   .hfilter .cnt{font-family:var(--mono);font-size:11px;color:var(--ink-3)}
   .ptable tr.click{cursor:pointer}
-  .ptable tr.click:hover td{background:rgba(34,211,238,.05)}
+  .ptable tr.click:hover td{background:rgba(246,217,70,.05)}
   .ptable tr.more td{background:#0a1018;white-space:normal;color:var(--ink-2);font-size:11.5px;line-height:1.55}
   .ptable tr.more b{color:var(--ink);font-family:var(--mono);font-weight:600}
   .ptable.tall{max-height:560px}
@@ -437,18 +437,31 @@
     .lane{min-height:300px} .chart{min-height:240px} .feed{max-height:460px}
     header{grid-template-columns:1fr} .clockbox{justify-self:start;flex-wrap:wrap}
   }
+
+  /* ── we.are.sdi (D-754) ──────────────────────────────────────────────────────────
+     The look of wearesdi.com on the dark ground: the wordmark, SDI yellow for the brand
+     (warnings keep their amber, so the two never read as one), the geometric display face,
+     pill-shaped primary buttons and the halftone dot circle. Tokens only, so light mode
+     follows. */
+  .sdi-word{display:inline-block;height:1em;width:auto;vertical-align:-.12em;color:var(--sdi-word-ink,currentColor)}
+  .sdi-word .d{fill:var(--accent)}
+  .sdi-dots{position:absolute;pointer-events:none;border-radius:50%;opacity:.16;z-index:0;
+    background-image:radial-gradient(var(--accent) 1.1px, transparent 1.6px);background-size:9px 9px;
+    -webkit-mask-image:radial-gradient(circle at center,#000 58%,transparent 71%);
+            mask-image:radial-gradient(circle at center,#000 58%,transparent 71%)}
+  header{position:relative}
+  header > :not(.sdi-dots){position:relative;z-index:1}
+  header .sdi-dots{width:220px;height:220px;left:-60px;top:-110px}
+  .brand .mark-word{height:30px;color:var(--ink);flex:none;margin-right:6px;padding-right:16px;
+                    border-right:1px solid var(--line-hi)}
 </style>
 </head>
 <body>
 <div class="wall" id="wall">
   <header>
+    <span class="sdi-dots" aria-hidden="true"></span>
     <div class="brand">
-      <svg class="mark" viewBox="0 0 40 40" aria-hidden="true">
-        <circle cx="20" cy="20" r="18" fill="none" stroke="#22d3ee" stroke-opacity=".35"/>
-        <circle cx="20" cy="20" r="11" fill="none" stroke="#22d3ee" stroke-opacity=".6"/>
-        <path d="M20 2 V10 M20 30 V38 M2 20 H10 M30 20 H38" stroke="#22d3ee" stroke-width="1.5"/>
-        <circle cx="20" cy="20" r="3.2" fill="#22d3ee"/>
-      </svg>
+      <svg class="sdi-word mark-word" viewBox="0 0 950 169" role="img" aria-label="we.are.sdi" fill="currentColor"><path d="M158.915 36.7773L135.389 114.85C133.118 122.35 130.447 133.08 129.137 138.467C127.991 133.14 125.689 122.658 123.777 115.372L103.183 36.7773H80.9663L59.639 115.365C57.7134 122.531 55.2616 133.193 54.0544 138.537C52.7665 133.175 50.1337 122.393 48.0313 114.866L25.7238 36.7773H2.41797L42.8867 164.183H64.817L86.1457 87.545C88.1938 80.2145 90.5008 70.1606 91.6815 64.8782C92.7926 70.1676 94.9785 80.2145 97.0252 87.5408L118.11 164.183H139.793L181.494 36.7773H158.915Z"/><path d="M198.247 89.3881C201.717 65.0993 215.393 51.2041 235.907 51.2041C257.026 51.2041 269.942 65.1035 271.475 89.3881H198.247ZM235.907 33.6262C200.848 33.6262 175.402 61.7925 175.402 100.602C175.402 140.036 200.782 167.576 237.122 167.576C266.097 167.576 286.107 151.905 292.022 124.58L292.29 123.331H271.037L270.838 124.105C266.638 140.412 254.981 149.03 237.122 149.03C214.607 149.03 199.568 132.667 197.679 106.238H294.716V105.207C294.716 61.0546 272.181 33.6262 235.907 33.6262Z"/><path d="M423.094 99.3426V116.845C423.094 129.476 413.093 149.514 386.253 149.514C374.763 149.514 361.066 146.034 361.066 129.453C361.066 111.983 374.55 109.012 395.107 106.475C405.222 105.353 416.174 102.542 423.094 99.3426ZM442.876 145.211V75.1457C442.876 48.0778 427.173 34.3525 396.207 34.3525C365.325 34.3525 345.882 50.5756 344.199 77.7479L344.132 78.8422H365.115L365.189 77.8927C366.611 59.6855 376.543 51.2036 396.449 51.2036C413.721 51.2036 422.85 58.4756 422.85 72.2358C422.85 84.7721 413.6 87.9131 394.162 89.8791C365.81 92.711 338.128 98.1354 338.128 129.937C338.128 152.214 355.493 166.609 382.369 166.609C399.062 166.609 412.196 160.665 422.446 148.455C422.81 156.828 424.039 161.374 426.552 163.882L426.853 164.184H447.488V161.874L447.029 161.569C445.354 160.452 442.876 154.482 442.876 145.211Z"/><path d="M544.015 89.3881C547.485 65.0993 561.162 51.2041 581.676 51.2041C602.794 51.2041 615.711 65.1035 617.244 89.3881H544.015ZM581.676 33.6262C546.616 33.6262 521.17 61.7925 521.17 100.602C521.17 140.036 546.551 167.576 582.89 167.576C611.865 167.576 631.875 151.905 637.79 124.58L638.059 123.331H616.805L616.606 124.105C612.407 140.412 600.749 149.03 582.89 149.03C560.375 149.03 545.337 132.667 543.447 106.238H640.484V105.207C640.484 61.0546 617.95 33.6262 581.676 33.6262Z"/><path d="M851.701 149.272C829.697 149.272 816.561 131.258 816.561 101.086C816.561 71.215 829.932 52.6584 851.46 52.6584C875.53 52.6584 890.484 71.215 890.484 101.086C890.484 143.012 866.185 149.272 851.701 149.272ZM889.27 52.9591C880.17 40.7959 866.17 33.8678 850.487 33.8678C816.91 33.8678 794.351 60.7839 794.351 100.843C794.351 141.529 816.576 167.82 850.973 167.82C867.235 167.82 879.136 162.367 889.27 150.196V164.182H910.994V0.13501H889.27V52.9591Z"/><path d="M927.143 164.182H948.867V36.7761H927.143V164.182Z"/><path d="M927.143 21.2634H948.867V0.135254H927.143V21.2634Z"/><path d="M743.393 88.1957C721.16 83.7055 710.475 80.996 710.475 68.5976C710.475 57.8517 719.302 51.688 734.692 51.688C752.847 51.688 761.398 58.5214 763.285 74.5371L763.393 75.4463H785.617L785.479 74.2949C782.352 48.0054 764.958 34.1101 735.178 34.1101C706.259 34.1101 688.993 47.3649 688.993 69.568C688.993 98.3525 713.23 103.337 736.664 108.156C761.031 113.28 768.617 116.918 768.617 129.693C768.617 142.319 758.639 149.272 740.518 149.272C719.615 149.272 708.61 141.227 705.884 123.957L705.746 123.087H683.493L683.602 124.216C686.301 152.334 706.342 167.819 740.032 167.819C771.687 167.819 790.585 153.204 790.585 128.724C790.585 97.7135 765.514 92.6566 743.393 88.1957Z"/><path d="M525.691 57.6969V37.1089L525.044 36.8513C522.561 35.86 520.488 35.3225 516.649 35.3225C502.335 35.3225 488.734 42.983 479.81 55.9426V36.7775H458.086V164.183H479.81V93.5711C479.81 69.2586 497.61 56.5371 515.193 56.5371C519.064 56.5371 520.872 56.7877 523.607 57.6969H525.691Z"/><path class="d" d="M304.438 145.847H322.879V164.158H304.438V145.847Z"/><path class="d" d="M650.643 145.691H669.084V164.002H650.643V145.691Z"/></svg>
       <div>
         <h1>SDI INTELLIGENCE <b>//</b> LIVE ESTIMATING</h1>
         <div class="sub">LIVE OPERATIONS WALL</div>
@@ -822,7 +835,7 @@ function renderKpis(k, exp){
 
 function ring(frac, rag){
   const R = 42, C = 2 * Math.PI * R, f = Math.max(0, Math.min(1, frac || 0));
-  const col = {green:"#0ca30c", amber:"#fab219", red:"#d03b3b"}[rag] || "#22d3ee";
+  const col = {green:"#0ca30c", amber:"#fab219", red:"#d03b3b"}[rag] || "#F6D946";
   return `<svg viewBox="0 0 96 96" aria-hidden="true">
     <circle cx="48" cy="48" r="${R}" fill="none" stroke="#182634" stroke-width="7"/>
     <circle cx="48" cy="48" r="${R}" fill="none" stroke="${col}" stroke-width="7" stroke-linecap="round"
@@ -891,12 +904,17 @@ function renderLanes(s){
       </div>`);
     }else{
       const on = i < (k.max_runs || 1);
+      /* D-753a: allowed is not staffed. A free slot needs an idle online runner; with every
+         runner busy, a queued estimate waits, and the lane says so and how to add one. */
+      const staffed = on && (i - live.length) < (k.free_runners == null ? 1 : k.free_runners);
+      const word = !on ? "Off" : staffed ? "Free" : "No runner";
       html.push(`<div class="panel lane">
-        <div class="lanehead"><span class="slotname">RUN ${i + 1}</span>${badge(on ? "green" : "grey", on ? "Free" : "Off")}</div>
-        <div class="idle"><div class="radar${on ? "" : " off"}"></div>
-          <b>${on ? "SLOT FREE" : "SLOT OFF"}</b>
-          <div>${on ? "The next queued estimate starts here."
-                    : `The service runs ${k.max_runs} estimate${k.max_runs > 1 ? "s" : ""} at once.<br>Raise SDI_MAX_CONCURRENT_RUNS to open it.`}</div></div>
+        <div class="lanehead"><span class="slotname">RUN ${i + 1}</span>${badge(staffed ? "green" : "grey", word)}</div>
+        <div class="idle"><div class="radar${staffed ? "" : " off"}"></div>
+          <b>${!on ? "SLOT OFF" : staffed ? "SLOT FREE" : "NO RUNNER FREE"}</b>
+          <div>${!on ? `The service runs ${k.max_runs} estimate${k.max_runs > 1 ? "s" : ""} at once.<br>Raise SDI_MAX_CONCURRENT_RUNS to open it.`
+                : staffed ? "The next queued estimate starts here."
+                : "Allowed, but every runner is busy, so a queued estimate waits for one to finish.<br>A second runner on this desktop: install-runner-slot.ps1 -Slot 2."}</div></div>
       </div>`);
     }
   }
@@ -945,7 +963,7 @@ function sparkline(hist, now){
   };
   const cpus = hist.map(h => h[1]).filter(v => v != null), mems = hist.map(h => h[2]).filter(v => v != null);
   const tip = `<b>Last 15 minutes</b><div class='m'>CPU now ${cpuTxt(cpus[cpus.length - 1])}, peak ${cpuTxt(Math.max(...cpus, 0))}</div><div class='m'>Memory now ${cpuTxt(mems[mems.length - 1])} used, peak ${cpuTxt(Math.max(...mems, 0))}</div>`;
-  return `<svg class="spark" viewBox="0 0 100 26" preserveAspectRatio="none" data-tip="${esc(tip)}"><line x1="0" x2="100" y1="24" y2="24" stroke="#182634" vector-effect="non-scaling-stroke"/>${line(2, "#a3b6c4", true)}${line(1, "#22d3ee", false)}</svg>`;
+  return `<svg class="spark" viewBox="0 0 100 26" preserveAspectRatio="none" data-tip="${esc(tip)}"><line x1="0" x2="100" y1="24" y2="24" stroke="#182634" vector-effect="non-scaling-stroke"/>${line(2, "#a3b6c4", true)}${line(1, "#F6D946", false)}</svg>`;
 }
 function peakTxt(hist){
   const cpus = (hist || []).map(h => h[1]).filter(v => v != null);
@@ -988,7 +1006,7 @@ function renderFleet(fleet, compute){
       <span><i style="background:${CMP.estimate}"></i>Estimates</span><span><i style="background:${CMP.solidworks}"></i>SolidWorks</span>
       <span><i style="background:${CMP.excel}"></i>Excel</span><span><i style="background:${CMP.other}"></i>Everything else</span>
       <span><i style="background:var(--line);outline:1px solid var(--line-hi)"></i>Free</span>
-      <span style="color:var(--ink-3)">trace: <span style="color:#22d3ee">━</span> CPU <span style="color:#a3b6c4">┅</span> memory</span></div>` : "");
+      <span style="color:var(--ink-3)">trace: <span style="color:#F6D946">━</span> CPU <span style="color:#a3b6c4">┅</span> memory</span></div>` : "");
 }
 
 function renderQueue(q){
@@ -1769,7 +1787,7 @@ function priceSpark(points){
   if(vals.length < 2) return "";
   const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
   const pts = vals.map((v, i) => `${(4 + i * 112 / (vals.length - 1)).toFixed(1)},${(22 - (v - lo) / span * 18).toFixed(1)}`);
-  return `<svg class="rsp" viewBox="0 0 120 26"><polyline points="${pts.join(" ")}" fill="none" stroke="#22d3ee" stroke-width="1.5"/>${pts.map(p => `<circle cx="${p.split(",")[0]}" cy="${p.split(",")[1]}" r="2.6" fill="#22d3ee"/>`).join("")}</svg>`;
+  return `<svg class="rsp" viewBox="0 0 120 26"><polyline points="${pts.join(" ")}" fill="none" stroke="#F6D946" stroke-width="1.5"/>${pts.map(p => `<circle cx="${p.split(",")[0]}" cy="${p.split(",")[1]}" r="2.6" fill="#F6D946"/>`).join("")}</svg>`;
 }
 function renderHRepeats(f){
   const rows = f.repeats || [];
