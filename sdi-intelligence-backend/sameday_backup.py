@@ -106,7 +106,7 @@ def backup(sameday: Path, to: Path, now: Optional[datetime] = None, free: Callab
             return {**rep, "status": "failed", "detail": f"{to.anchor or to} can't be read on this server"}
         dbs = [(sameday / rel, rel) for rel in DATABASES if (sameday / rel).exists()]
         if not any(rel == DATABASES[0] for _, rel in dbs):
-            return {**rep, "status": "failed", "detail": f"SameDay's chats ({sameday / DATABASES[0]}) weren't found"}
+            return {**rep, "status": "failed", "detail": f"SDI Live's chats ({sameday / DATABASES[0]}) weren't found"}
         need_db = sum(p.stat().st_size for p, _ in dbs) / 1e9
         if space - need_db < keep_free:
             return {**rep, "status": "skipped", "detail": f"not copied: {to.anchor} has {space:.0f} GB free and "
@@ -168,15 +168,15 @@ def backup(sameday: Path, to: Path, now: Optional[datetime] = None, free: Callab
 def summary(rep: Optional[dict]) -> str:
     """One line for the daily email."""
     if not rep:
-        return "Backup of SameDay's chats (D:): not run yet - it runs from 1am."
+        return "Backup of SDI Live's chats (D:): not run yet - it runs from 1am."
     when = rep.get("when", "")[:16].replace("T", " ")
     lite = (rep.get("databases") or {}).get("lite.db") or {}
     what = (f"{lite.get('sessions', 0):,} chats, {lite.get('messages', 0):,} lines" if lite.get("ok") else "")
     files = f"{rep.get('files_copied', 0):,} new files ({rep.get('files_mb', 0):,.0f} MB)"
     free = f"; D: {rep['free_gb']:,.0f} GB free" if rep.get("free_gb") is not None else ""
     if rep.get("status") == "ok":
-        return f"Backup of SameDay's chats (D:): done {when} - {what}, {files}{free}."
-    return f"Backup of SameDay's chats (D:): {rep.get('status', '').upper()} {when} - {rep.get('detail')}{free}."
+        return f"Backup of SDI Live's chats (D:): done {when} - {what}, {files}{free}."
+    return f"Backup of SDI Live's chats (D:): {rep.get('status', '').upper()} {when} - {rep.get('detail')}{free}."
 
 
 def problem(rep: Optional[dict], now: datetime) -> Optional[dict]:
@@ -186,7 +186,7 @@ def problem(rep: Optional[dict], now: datetime) -> Optional[dict]:
     if not rep:
         return None
     if rep.get("status") in ("failed", "skipped"):
-        return {"key": "backup", "level": "warn", "title": f"SameDay's nightly backup wasn't made: {rep.get('detail')}",
+        return {"key": "backup", "level": "warn", "title": f"SDI Live's nightly backup wasn't made: {rep.get('detail')}",
                 "fix": fix}
     try:
         age = now - datetime.fromisoformat(rep.get("when", ""))
@@ -194,7 +194,7 @@ def problem(rep: Optional[dict], now: datetime) -> Optional[dict]:
         return None
     if age > timedelta(hours=36):
         return {"key": "backup", "level": "warn",
-                "title": f"SameDay's nightly backup hasn't run since {rep.get('when', '')[:16].replace('T', ' ')}",
+                "title": f"SDI Live's nightly backup hasn't run since {rep.get('when', '')[:16].replace('T', ' ')}",
                 "fix": fix}
     return None
 

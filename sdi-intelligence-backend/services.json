@@ -1012,7 +1012,7 @@
     },
     {
       "id": "sameday",
-      "name": "SDI SameDay Intelligence",
+      "name": "SDI Live",
       "status": "Live · phone and office",
       "cls": "c-prog",
       "category": "Apps",
@@ -1020,18 +1020,18 @@
       "surface": "both",
       "app_url": "/sameday/",
       "guide_url": "guide-sameday.html",
-      "desc": "Talk or type a client brief. SameDay asks what is missing, draws the concept, takes changes as new options, then makes the client pack (render, GA and client sheet) and the SDI brief PDF.",
+      "desc": "Talk or type a client brief. SDI Live asks what is missing, draws the concept, takes changes as new options, then makes the client pack (render, GA and client sheet) and the SDI brief PDF.",
       "requires": "Sign in with your SDI account - on a phone too, from anywhere. Talk live needs the secure (https) address, which is the one the app portal uses on a phone; on the office http address the microphone is not available, so type there (in the office or on the VPN).",
       "phase": "Live on the server · 3 Nov 2026",
       "detail": "Built by Muhammad Yazir (AI &amp; Automation) for account managers and designers, for anyone in the company to use. It is its own app: it runs beside SDI Intelligence on the same server, on its own port, with its own data, and touches nothing else in this portal.",
       "sections": [
         {
           "title": "A brief, start to finish",
-          "body": "During or straight after a client call, talk or type the brief. SameDay asks the missing questions one at a time, draws a concept render, takes changes as new options (A, B, C…), and from the one you choose makes the GA drawing and a one-page client sheet. Then it asks the internal questions and makes the brief PDF for the studio. Everything is kept in the chat, under Images and Sheets &amp; PDFs."
+          "body": "During or straight after a client call, talk or type the brief. SDI Live asks the missing questions one at a time, draws a concept render, takes changes as new options (A, B, C…), and from the one you choose makes the GA drawing and a one-page client sheet. Then it asks the internal questions and makes the brief PDF for the studio. Everything is kept in the chat, under Images and Sheets &amp; PDFs."
         },
         {
           "title": "For now",
-          "body": "On a phone, open SameDay from the app portal: it signs you in with your SDI account, and Talk live works. On the office http address the browser will not give it the microphone, so type there. Past SDI jobs live on W:, which the server cannot read yet, so finding a past job may come back empty."
+          "body": "On a phone, open SDI Live from the app portal: it signs you in with your SDI account, and Talk live works. On the office http address the browser will not give it the microphone, so type there. Past SDI jobs live on W:, which the server cannot read yet, so finding a past job may come back empty."
         },
         {
           "title": "Cost",
@@ -1039,7 +1039,7 @@
         },
         {
           "title": "User guide",
-          "body": "<a href=\"/app/guide-sameday.html\" target=\"_blank\" rel=\"noopener\">The SameDay user guide</a> — Muhammad Yazir's: how a call goes, the questions it asks, and what to do if it does not hear you."
+          "body": "<a href=\"/app/guide-sameday.html\" target=\"_blank\" rel=\"noopener\">The SDI Live user guide</a> — Muhammad Yazir's: how a call goes, the questions it asks, and what to do if it does not hear you."
         }
       ],
       "next": "Reading past work on W: from the server, and its picture index.",
@@ -1050,7 +1050,7 @@
         "SQLite"
       ],
       "link": "/sameday/",
-      "linkLabel": "Open SDI SameDay Intelligence ↗"
+      "linkLabel": "Open SDI Live Intelligence ↗"
     },
     {
       "id": "remote-control",
