@@ -175,6 +175,15 @@ class WiredInTests(unittest.TestCase):
         self.assertIn("from sameday_proxy import install as install_sameday", self.SRC)
         self.assertIn("install_sameday(app)", self.SRC)
 
+    def test_every_sdi_live_file_is_on_the_deploy(self):
+        """8 Nov 2026 ("stillandy..."): sameday_proxy.py was on no deploy list, so Ship-It said all ok and the server
+        kept the old one - the office address never went to sign-in."""
+        deploy = (BACKEND / "deploy" / "Deploy-AMCRM.ps1").read_text(encoding="utf-8")
+        listed = deploy.split("$Files = @(", 1)[1].split("\n)", 1)[0]
+        for f in sorted(BACKEND.glob("sameday_*.py")):
+            with self.subTest(file=f.name):
+                self.assertIn(f'"{f.name}"', listed)
+
     def test_it_can_be_switched_off(self):
         old = os.environ.get("SDI_SAMEDAY_ENABLED")
         os.environ["SDI_SAMEDAY_ENABLED"] = "no"
