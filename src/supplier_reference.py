@@ -442,7 +442,25 @@ def identity_keys(part: Dict[str, Any]) -> Set[str]:
         refs = find_references(part.get("description"), part.get("part_number"))
     keys = {str((r or {}).get("reference") or "").strip().upper() for r in refs}
     keys.discard("")
-    return keys
+    pn = str(part.get("part_number") or "").strip().upper()
+    return {k for k in keys if not _drawing_number_in_own_code(k, pn)}
+
+
+def _drawing_number_in_own_code(key: str, part_number: str) -> bool:
+    """Whether this "reference" is only the drawing number at the front of the line's own part
+    number (D-748).
+
+    0358141's components are numbered "UPC0358141 M2", "UPC0358141 M4", "UPC0358141 M5": the
+    drawing's number, then the item. Read as a manufacturer reference, UPC0358141 made the
+    rub strip, the upright and both end caps one article, and each was written up as "SAME
+    ARTICLE AS UPC0358141 M2". What is left once the fragment is taken out decides it: an
+    item mark with a digit ("M2") means the fragment is the drawing the item sits on; a word
+    ("HAFELE" in "HAFELE 651.09.302") means the fragment is the maker's number, the identity.
+    """
+    if not key or not part_number or key == part_number or key not in part_number:
+        return False
+    rest = part_number.replace(key, " ", 1)
+    return any(ch.isdigit() for ch in rest)
 
 
 def _is_a_service_line(part: Dict[str, Any]) -> bool:
