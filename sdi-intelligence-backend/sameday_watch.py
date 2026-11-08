@@ -158,19 +158,19 @@ def check(get: Callable = http_get, service: Callable = service_state, env: Opti
     # SameDay itself
     st = service("SDISameDay")
     if st and st not in ("RUNNING", "absent"):
-        problems.append(_problem("service", "down", f"SameDay's service is {st.lower()}",
+        problems.append(_problem("service", "down", f"SDI Live's service is {st.lower()}",
                                  "On the server: Start-Service SDISameDay. If it stops again, the end of "
                                  r"C:\SDI_Automation\logs\SDISameDay.log says why."))
     code, ver, _ = get(base + "/api/version")
     if code != 200 or not isinstance(ver, dict):
-        problems.append(_problem("answer", "down", "SameDay isn't answering",
+        problems.append(_problem("answer", "down", "SDI Live isn't answering",
                                  f"{base}/api/version gave {code or 'no answer'}. Check the service on the server "
                                  "(Get-Service SDISameDay) and the end of its log."))
         ver = {}
     else:
         facts["version"] = str(ver.get("version") or "")
         if facts["version"] and " repo " not in facts["version"]:
-            problems.append(_problem("code", "warn", "SameDay is running code that didn't come from the repository",
+            problems.append(_problem("code", "warn", "SDI Live is running code that didn't come from the repository",
                                      f"It reports version '{facts['version']}' - most likely K:'s copy was put on the "
                                      "server (UPDATE_SAME_DAY.bat). From the laptop: Update-SameDay.ps1 -Branch "
                                      "claude/inspiring-planck-8juriz puts the repository's code back."))
@@ -178,14 +178,14 @@ def check(get: Callable = http_get, service: Callable = service_state, env: Opti
         facts["past_jobs"] = past.get("jobs")
         facts["pictures"] = "on" if past.get("pictures") else f"off ({past.get('why') or 'not reported'})"
         if past and not past.get("jobs"):
-            problems.append(_problem("past_jobs", "down", "SameDay can't find past jobs",
+            problems.append(_problem("past_jobs", "down", "SDI Live can't find past jobs",
                                      f"It says: {past.get('why') or 'no reason given'}. The job index "
                                      r"(projects.db) belongs in C:\SDI_Automation\brief_lite on the server."))
         reads = ver.get("can_read") or {}
         facts["drives"] = ", ".join(f"{d}: {'yes' if ok else 'NO'}" for d, ok in reads.items())
         bad = [d for d, ok in reads.items() if not ok]
         if bad:
-            problems.append(_problem("drives", "down", "SameDay can't read " + ", ".join(d + ":" for d in bad),
+            problems.append(_problem("drives", "down", "SDI Live can't read " + ", ".join(d + ":" for d in bad),
                                      "Past jobs and their drawings live there. The service maps the drives at start - "
                                      "restart SDISameDay; if it still can't, the 'drive' lines of its log say why."))
 
@@ -202,7 +202,7 @@ def check(get: Callable = http_get, service: Callable = service_state, env: Opti
     if code == 401 and not machine:
         facts["phone"] = "SDI Intelligence answering at /sameday/ (SDI_API_KEY not set, so not followed through)"
     elif code != 200 or not isinstance(body, dict):
-        problems.append(_problem("phone", "down", "The phone address isn't reaching SameDay",
+        problems.append(_problem("phone", "down", "The phone address isn't reaching SDI Live",
                                  f"SDI Intelligence at /sameday/ gave {code or 'no answer'}"
                                  + (f" ({str(body)[:100]})" if code else "") + ". Run Ship-It, then check SameDay."))
     code, _, where = get(public, redirects=False)
@@ -218,12 +218,12 @@ def check(get: Callable = http_get, service: Callable = service_state, env: Opti
     # the keys
     k = env.get("OPENAI_API_KEY", "")
     if not k:
-        problems.append(_problem("openai", "down", "No OpenAI key in SameDay's .env",
+        problems.append(_problem("openai", "down", "No OpenAI key in SDI Live's .env",
                                  "Live voice and renders can't work. Set OPENAI_API_KEY in C:\\SDI_Automation\\.env."))
     else:
         code, _, _ = get("https://api.openai.com/v1/models", headers={"Authorization": f"Bearer {k}"})
         if code in (401, 403):
-            problems.append(_problem("openai", "down", "OpenAI refused SameDay's key",
+            problems.append(_problem("openai", "down", "OpenAI refused SDI Live's key",
                                      "Live voice and renders can't work. Replace OPENAI_API_KEY in "
                                      "C:\\SDI_Automation\\.env and restart SDISameDay."))
         elif code != 200:
@@ -234,7 +234,7 @@ def check(get: Callable = http_get, service: Callable = service_state, env: Opti
         code, _, _ = get("https://api.anthropic.com/v1/models",
                          headers={"x-api-key": k, "anthropic-version": "2023-06-01"})
         if code in (401, 403):
-            problems.append(_problem("anthropic", "down", "Anthropic refused SameDay's key",
+            problems.append(_problem("anthropic", "down", "Anthropic refused SDI Live's key",
                                      "The typed chat and the design step can't work. Replace ANTHROPIC_API_KEY in "
                                      "C:\\SDI_Automation\\.env and restart SDISameDay."))
     if NO_CREDIT.search(log_text or ""):
@@ -247,8 +247,8 @@ def check(get: Callable = http_get, service: Callable = service_state, env: Opti
     free = disk(_opt("SAMEDAY_DISK", "C:\\"))
     if free is not None:
         facts["server C: free"] = f"{free:.1f} GB"
-        fix = (r"Clear space on the server's C:. SameDay's own big folders are C:\SDI_Automation\all_img_thumbs "
-               r"(optional thumbnails - SameDay works without them) and C:\SDI_Automation\backups (old copies).")
+        fix = (r"Clear space on the server's C:. SDI Live's own big folders are C:\SDI_Automation\all_img_thumbs "
+               r"(optional thumbnails - SDI Live works without them) and C:\SDI_Automation\backups (old copies).")
         if free < 5:
             problems.append(_problem("disk", "down", f"The server's C: is almost full ({free:.1f} GB free)", fix))
         elif free < 10:
@@ -264,10 +264,10 @@ def check(get: Callable = http_get, service: Callable = service_state, env: Opti
                "brief_lite_budget_reset_at to now to start today's count again.")
         if cap and spent >= cap:
             problems.append(_problem("spend", "down", f"Today's AI budget is used up ({facts['spend']})",
-                                     "SameDay has stopped making AI calls until midnight. " + fix))
+                                     "SDI Live has stopped making AI calls until midnight. " + fix))
         elif cap and spent >= cap * warn_at:
             problems.append(_problem("spend", "warn", f"Today's AI budget is nearly used ({facts['spend']})",
-                                     "At the cap SameDay stops, live calls included. " + fix))
+                                     "At the cap SDI Live stops, live calls included. " + fix))
     return problems, facts
 
 
@@ -319,10 +319,10 @@ def compose(todo: dict, facts: dict, now: datetime) -> Optional[dict]:
         return None
     if bad:
         down = [p for p in bad if p["level"] == "down"]
-        subject = (f"SameDay: {'PROBLEM' if down else 'warning'} - " + "; ".join(p["title"] for p in bad[:2])
+        subject = (f"SDI Live: {'PROBLEM' if down else 'warning'} - " + "; ".join(p["title"] for p in bad[:2])
                    + (f" (+{len(bad) - 2} more)" if len(bad) > 2 else ""))
     else:
-        subject = "SameDay: all clear - " + "; ".join(todo["recovered"][:2])
+        subject = "SDI Live: all clear - " + "; ".join(todo["recovered"][:2])
     lines, rows = [], []
     for p in bad:
         tag = ("Still wrong" if p in todo["remind"] else "New") + (" - DOWN" if p["level"] == "down" else " - warning")
@@ -337,7 +337,7 @@ def compose(todo: dict, facts: dict, now: datetime) -> Optional[dict]:
     text = ("\n".join(lines) + "\nSameDay now - " + "; ".join(about) + "\n\nChecked "
             + now.strftime("%A %d %B %Y, %H:%M") + " on the server, every 15 minutes (sameday_watch.py).")
     body = ("<div style='font:14px/1.5 Segoe UI,Arial,sans-serif;color:#17181B'><table style='border-collapse:collapse'>"
-            + "".join(rows) + "</table><p style='color:#555'>SameDay now: " + html.escape("; ".join(about))
+            + "".join(rows) + "</table><p style='color:#555'>SDI Live now: " + html.escape("; ".join(about))
             + "</p><p style='color:#888;font-size:12px'>Checked " + now.strftime("%A %d %B %Y, %H:%M")
             + " on the server, every 15 minutes (sameday_watch.py).</p></div>")
     return {"subject": subject, "text": text, "html": body}
@@ -367,7 +367,7 @@ def save_state(state: dict) -> None:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Check SDI SameDay and email when something is wrong.")
+    ap = argparse.ArgumentParser(description="Check SDI Live and email when something is wrong.")
     ap.add_argument("--send", action="store_true", help="email SAMEDAY_ALERT_TO (otherwise print only)")
     args = ap.parse_args(argv)
     os.chdir(HERE)

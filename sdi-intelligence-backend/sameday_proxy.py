@@ -69,11 +69,11 @@ def refusal(request: Request):
     if user is None:
         if wants_page:
             return auth.login_redirect(request)           # back to SameDay once signed in
-        return JSONResponse(status_code=401, content={"error": "Signed out - open SameDay again from the app portal."})
+        return JSONResponse(status_code=401, content={"error": "Signed out - open SDI Live again from the app portal."})
     if public and (not auth.ENABLED or user.get("kind") != "user"):
         # Outside the office only a person signed in with their SDI account - never the service key, and never
         # anyone at all on a server where sign-in isn't set up.
-        return JSONResponse(status_code=403, content={"error": "SameDay from outside the office needs your SDI sign-in."})
+        return JSONResponse(status_code=403, content={"error": "SDI Live from outside the office needs your SDI sign-in."})
     if public and request.method not in ("GET", "HEAD"):
         host = request.headers.get("host", "").lower()
         origin = request.headers.get("origin", "").lower().rstrip("/")
@@ -131,6 +131,6 @@ def install(app):
                                       headers=headers_out(request, auth.current_user(request)), content=body)
         except httpx.HTTPError:
             if "/api/" in request.url.path:
-                return JSONResponse(status_code=503, content={"error": "SameDay isn't answering on the server just now."})
+                return JSONResponse(status_code=503, content={"error": "SDI Live isn't answering on the server just now."})
             return HTMLResponse(DOWN_PAGE, status_code=503)
         return Response(content=r.content, status_code=r.status_code, headers=headers_back(r))

@@ -155,15 +155,15 @@ class DailyEmailTests(unittest.TestCase):
         rep = {"action": "none", "detail": "", "k_build": OLD, "server_build": OLD, "all_img_index.npz": "496 MB",
                "projects.db": "78 MB", "pictures_on": None, "jobs": None}
         mail = SI.compose(rep, 417_900, 417_787, self.NOW)
-        self.assertEqual(mail["subject"], "SameDay index: no change")
+        self.assertEqual(mail["subject"], "SDI Live index: no change")
         self.assertIn("Thumbnails on K:: 417,900 (+113 since yesterday)", mail["text"])
         self.assertIn("On the server: " + OLD, mail["text"])
         copied = SI.compose(dict(rep, action="copied", detail="picture matching is on", jobs=12090, pictures_on=True),
                             None, None, self.NOW)
-        self.assertEqual(copied["subject"], "SameDay index: new build copied to the server")
+        self.assertEqual(copied["subject"], "SDI Live index: new build copied to the server")
         self.assertIn("12090 past jobs, picture matching on", copied["text"])
         self.assertEqual(SI.compose(dict(rep, action="skipped", detail="x"), None, None, self.NOW)["subject"],
-                         "SameDay index: new build NOT copied")
+                         "SDI Live index: new build NOT copied")
 
     def test_the_watch_does_it_once_a_day_and_emails_once(self):
         d = Path(tempfile.mkdtemp(prefix="daily-"))
@@ -200,7 +200,7 @@ class DailyEmailTests(unittest.TestCase):
             self.assertEqual((len(refreshed), sent), (1, []))
             clock[0] = datetime(2026, 11, 12, 7, 0)
             W.main(["--send"])                       # 07:00 - the email, to James only
-            self.assertEqual(sent, [(["james@example.com"], "SameDay index: no change")])
+            self.assertEqual(sent, [(["james@example.com"], "SDI Live index: no change")])
             clock[0] = datetime(2026, 11, 12, 7, 15)
             W.main(["--send"])                       # and not again today
             self.assertEqual((len(refreshed), len(sent)), (1, 1))

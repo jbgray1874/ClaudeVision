@@ -122,7 +122,7 @@ class ReportTests(unittest.TestCase):
           "databases": {"lite.db": {"ok": True, "sessions": 57, "messages": 2310}}}
 
     def test_the_daily_email_line(self):
-        self.assertEqual(B.summary(self.OK), "Backup of SameDay's chats (D:): done 2026-11-06 01:00 - 57 chats, 2,310 "
+        self.assertEqual(B.summary(self.OK), "Backup of SDI Live's chats (D:): done 2026-11-06 01:00 - 57 chats, 2,310 "
                                              "lines, 40 new files (120 MB); D: 512 GB free.")
         self.assertIn("SKIPPED", B.summary(dict(self.OK, status="skipped", detail="not copied: D: has 40 GB free")))
         self.assertIn("not run yet", B.summary(None))

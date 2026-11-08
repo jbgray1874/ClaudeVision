@@ -1,4 +1,4 @@
-"""The weekday morning summary for HR, emailed at 08:45 with a link to the app.
+"""The weekday morning summary for HR, emailed at 09:00 with a link to the app.
 
 Simon and Charlotte asked for one email each morning: who is in, what needs
 looking at, and the roll calls since the last one. A check changes nothing;
@@ -236,11 +236,11 @@ def test_it_is_sent_from_the_sdi_intelligence_mailbox_through_microsoft(server, 
     assert graph == [["alex.example@wearesdi.com", "pat.example@wearesdi.com"]] and server["sent"] == []
 
 
-def test_the_task_runs_at_0845_on_weekdays_as_the_service():
+def test_the_task_runs_at_0900_on_weekdays_as_the_service():
     ps1 = (BACKEND / "deploy" / "install_hr_morning_task.ps1").read_bytes()
     assert ps1.isascii() and b"\r\n" in ps1
     text = ps1.decode()
-    assert '"08:45"' in text and "Monday, Tuesday, Wednesday, Thursday, Friday" in text
+    assert '"09:00"' in text and "Monday, Tuesday, Wednesday, Thursday, Friday" in text
     assert '"SYSTEM"' in text and "--weekdays-only" in text and "^SDI_HR_MORNING_TO=" in text
     assert "--update" in text and "[switch]$Update" in text                  # off unless asked
 

@@ -214,7 +214,7 @@ def refresh(server: Path, k_dir: Path, get: Callable, service: Callable, sc: Cal
         swap_in([(keep / p.name, p) for p in (s_db, s_npz) if (keep / p.name).exists()])
         if (keep / s_build.name).exists():
             shutil.copyfile(keep / s_build.name, s_build)
-        rep.update(action="failed", detail=f"SameDay couldn't read the new job list ({past.get('why')}) - "
+        rep.update(action="failed", detail=f"SDI Live couldn't read the new job list ({past.get('why')}) - "
                                            "the old one has been put back")
         return rep
     rep.update(action="copied", server_build=build_text(s_build),
@@ -238,7 +238,7 @@ def compose(rep: dict, thumbs: Optional[int], thumbs_before: Optional[int], now:
         change = "" if thumbs_before is None else f" ({thumbs - thumbs_before:+,} since yesterday)"
         lines.append(f"Thumbnails on K:: {thumbs:,}{change}")
     if rep.get("jobs") is not None:
-        lines.append(f"SameDay now: {rep['jobs']} past jobs, picture matching {'on' if rep['pictures_on'] else 'off'}")
+        lines.append(f"SDI Live now: {rep['jobs']} past jobs, picture matching {'on' if rep['pictures_on'] else 'off'}")
     if backup:
         lines += ["", backup]
     lines += ["", now.strftime("Checked %A %d %B %Y, %H:%M on the server (sameday_watch.py, daily).")]
@@ -246,4 +246,4 @@ def compose(rep: dict, thumbs: Optional[int], thumbs_before: Optional[int], now:
     import html as _h
     body = ("<div style='font:14px/1.5 Segoe UI,Arial,sans-serif;color:#17181B'>"
             + "".join(f"<p style='margin:0 0 6px'>{_h.escape(x)}</p>" if x else "<br>" for x in lines) + "</div>")
-    return {"subject": f"SameDay index: {head}", "text": text, "html": body}
+    return {"subject": f"SDI Live index: {head}", "text": text, "html": body}

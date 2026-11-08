@@ -83,7 +83,7 @@ class WhatItChecksTests(unittest.TestCase):
         self.assertIn("W:", p[0]["title"])
 
     def test_the_phone_address(self):
-        self.assertEqual(keys(run(Fake(**{"8071/sameday/api/version": (503, "SameDay isn't answering")}))[0]).get("phone"),
+        self.assertEqual(keys(run(Fake(**{"8071/sameday/api/version": (503, "SDI Live isn't answering")}))[0]).get("phone"),
                          "down")
         self.assertEqual(keys(run(services={"SDIIntelligence": "STOPPED"})[0]).get("intelligence"), "down")
         self.assertEqual(keys(run(services={"WAPCSvc": "STOPPED"})[0]).get("connector"), "down")
@@ -161,7 +161,7 @@ class WhatItChecksTests(unittest.TestCase):
 
 class WhenItEmailsTests(unittest.TestCase):
     NOW = datetime(2026, 11, 5, 10, 0)
-    DOWN = [{"key": "answer", "level": "down", "title": "SameDay isn't answering", "fix": "Start it."}]
+    DOWN = [{"key": "answer", "level": "down", "title": "SDI Live isn't answering", "fix": "Start it."}]
 
     def test_once_then_a_reminder_then_all_clear(self):
         state = {}
@@ -172,7 +172,7 @@ class WhenItEmailsTests(unittest.TestCase):
         later = W.decide(state, self.DOWN, self.NOW + timedelta(hours=3), True, 3)
         self.assertEqual([p["key"] for p in later["remind"]], ["answer"])
         fixed = W.decide(state, [], self.NOW + timedelta(hours=3, minutes=15), True, 3)
-        self.assertEqual(fixed["recovered"], ["SameDay isn't answering"])
+        self.assertEqual(fixed["recovered"], ["SDI Live isn't answering"])
         self.assertEqual(W.decide(state, [], self.NOW + timedelta(hours=4), True, 3)["recovered"], [])
 
     def test_nothing_at_night_and_the_morning_hears_what_is_still_wrong(self):
@@ -200,11 +200,11 @@ class WhenItEmailsTests(unittest.TestCase):
 
     def test_the_email_says_what_to_do(self):
         mail = W.compose({"new": self.DOWN, "remind": [], "recovered": []}, {"version": "v1"}, self.NOW)
-        self.assertTrue(mail["subject"].startswith("SameDay: PROBLEM - SameDay isn't answering"))
+        self.assertTrue(mail["subject"].startswith("SDI Live: PROBLEM - SDI Live isn't answering"))
         self.assertIn("What to do: Start it.", mail["text"])
         self.assertIn("Start it.", mail["html"])
-        clear = W.compose({"new": [], "remind": [], "recovered": ["SameDay isn't answering"]}, {}, self.NOW)
-        self.assertTrue(clear["subject"].startswith("SameDay: all clear"))
+        clear = W.compose({"new": [], "remind": [], "recovered": ["SDI Live isn't answering"]}, {}, self.NOW)
+        self.assertTrue(clear["subject"].startswith("SDI Live: all clear"))
         self.assertIsNone(W.compose({"new": [], "remind": [], "recovered": []}, {}, self.NOW))
 
     def test_an_email_that_wasnt_sent_is_tried_again(self):
