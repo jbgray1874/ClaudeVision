@@ -117,12 +117,28 @@ def test_the_update_interval_and_the_timeout_reader_are_settings(monkeypatch):
     assert turn_mod.timeout_reader() == "none"
 
 
-def test_an_unusable_token_fails_open_as_a_lone_run(tmp_path, monkeypatch):
+def test_an_unusable_token_fails_closed_and_follows_the_timeout_policy(tmp_path, monkeypatch):
+    """D-755, 8 Nov review: it used to fail open, the run reading SolidWorks as a lone run
+    would; with two runners that lets two runs drive the one SolidWorks at once. Now no run
+    reads SolidWorks without its turn: the token is tried again, then the run follows the
+    timed-out policy (the Document Manager, or its models unread), with the token named."""
     blocker = tmp_path / "file"
     blocker.write_text("x")
     monkeypatch.setenv(turn_mod.TOKEN_ENV, str(blocker / "solidworks.token"))
-    handle, turn = turn_mod.take_turn(wait_s=0, say=lambda m: None)
-    assert handle is None and turn["state"] == "unavailable"
+    monkeypatch.setenv(turn_mod.TOKEN_RETRY_ENV, "4")
+    said, slept, now = [], [], [0.0]
+    def fake_sleep(s):
+        slept.append(s)
+        now[0] += s
+    handle, turn = turn_mod.take_turn(wait_s=1800, poll_s=2, say=said.append,
+                                      sleep=fake_sleep, clock=lambda: now[0])
+    assert handle is None and turn["state"] == turn_mod.TIMED_OUT and turn["token_unusable"]
+    assert slept, "the token is tried again before giving up"
+    assert any("No run reads SolidWorks without its turn" in m for m in said)
+    reason = turn_mod.timed_out_reason(turn)
+    assert "could not be used" in reason and turn_mod.TOKEN_ENV in reason
+    src = (ROOT / "src" / "solidworks_turn.py").read_text(encoding="utf-8")
+    assert "as a lone run would, without waiting" not in src
 
 
 def test_the_token_is_one_per_machine_not_per_checkout(monkeypatch):
