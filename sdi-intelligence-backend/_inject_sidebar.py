@@ -49,7 +49,7 @@ _LOGO_FALLBACK_URI = (
 #
 # Each links to the portal's own deep link for that service: /#aisvc-<id>.
 def _services_from_the_portal():
-    """The AI Services menu, read from the portal that defines it.
+    """The AI Services menu, read from the catalogue the portal renders.
 
     THIS WAS A HAND-KEPT COPY AND IT DRIFTED, exactly as the check below had been warning. By
     17 Sep 2026 the portal carried SDI Technical Design Intelligence, SDI Drawing Search
@@ -57,22 +57,25 @@ def _services_from_the_portal():
     pages shipped a menu three services short of the portal's -- and the entry they did share,
     Sage X3, was under an older name.
 
-    A check that tells you two lists disagree is worth less than not having two lists. The
-    portal's SERVICES array is the definition; this reads it, in order, so a service added
-    there appears here the next time the injector runs and there is nothing to remember.
+    THEN THE PORTAL MOVED ITS LIST AND THIS STOPPED RUNNING (repaired 8 Nov 2026, D-754a). The
+    portal no longer carries a SERVICES array: it loads services.json at boot, the single source
+    of truth it shares with the app at /app/, and shows every entry whose surface is not "app".
+    This read the array that had gone and refused to write, so the sidebars could only be
+    edited by hand -- and a later run would have undone the hand edits. It now reads the same
+    file, with the same filter, in the same order.
     """
-    portal = HERE / "sdi-intelligence-portal.html"
-    text = portal.read_text(encoding="utf-8")
-    body = text[text.index("const SERVICES=["):]
+    import json
+    data = json.loads((HERE / "services.json").read_text(encoding="utf-8"))
     out = []
-    for sid, name in re.findall(r"\{id:'([a-z0-9_-]+)',\s*name:'((?:[^'\\]|\\.)*)'", body):
-        # The portal writes its names with JS escapes (\u00b7 for a middle dot). The sidebar is
-        # HTML, so they are decoded here rather than pasted through as literal backslashes.
-        out.append((sid, re.sub(r"\\u([0-9a-fA-F]{4})",
-                                lambda m: chr(int(m.group(1), 16)), name).replace("&", "&amp;")))
+    for svc in data.get("services") or []:
+        if not isinstance(svc, dict) or svc.get("surface") == "app":
+            continue
+        sid, name = str(svc.get("id") or ""), str(svc.get("name") or "")
+        if sid and name:
+            out.append((sid, name.replace("&", "&amp;")))
     if not out:                                     # a parse that finds nothing is a bug, not an empty menu
-        raise SystemExit("could not read SERVICES from the portal -- refusing to write an empty "
-                         "AI Services menu")
+        raise SystemExit("could not read the services from services.json -- refusing to write "
+                         "an empty AI Services menu")
     return out
 
 
@@ -134,11 +137,13 @@ CSS = """
   .sdinav-toggle{
     display:flex; align-items:center; gap:9px; width:100%;
     padding:10px 16px; border:0; border-top:1px solid var(--line);
-    background:transparent; color:var(--muted); cursor:pointer;
+    /* The panel's own colour, not transparent: the bar is sticky over a menu that scrolls,
+       and see-through it laid "Collapse" over the last entry (seen 8 Nov 2026, D-754a). */
+    background:var(--panel); color:var(--muted); cursor:pointer;
     font-family:inherit; font-size:11.5px; letter-spacing:.04em; text-align:left;
     position:sticky; bottom:0; transition:.16s;
   }
-  .sdinav-toggle:hover{ color:var(--ink); background:#ffffff08; }
+  .sdinav-toggle:hover{ color:var(--ink); background:var(--panel-2,var(--panel)); }
   .sdinav-toggle:focus-visible{ outline:2px solid var(--brand); outline-offset:-2px; }
   body.nav-collapsed .sdinav-toggle{ justify-content:center; padding:10px 0; }
   .sdinav-toggle .chev{ width:14px; height:14px; flex:none; transition:transform .18s; }
@@ -151,13 +156,15 @@ CSS = """
   .sdinav{
     position:fixed; left:0; top:0; bottom:0; width:var(--sdinav-w); overflow-y:auto;
     background:var(--panel); border-right:1px solid var(--line);
-    z-index:900; padding-bottom:24px;
+    /* No bottom padding: a sticky bar sits inside the padding, so 24px of it left a strip
+       under "Collapse" where the menu scrolled into view (D-754a). */
+    z-index:900; padding-bottom:0;
   }
   .sdinav-brand{ display:flex; align-items:center; gap:10px; padding:18px 16px 16px;
     text-decoration:none; color:inherit; }
-  .sdinav-mark{ width:30px; height:30px; border-radius:7px; background:var(--brand);
+  .sdinav-mark{ width:30px; height:30px; border-radius:7px; background:var(--brand-fill,var(--brand));
     /* #000, as the portal's own .mark b uses, and NOT the near-black palette literal:
-       the mark sits on amber in both themes, so its ink is not theme-dependent, and a
+       the mark sits on SDI yellow in both themes (D-754), so its ink is not theme-dependent, and a
        palette literal here is one no [data-theme] rule can reach. The pages had been
        hand-corrected for that once already and re-running this file undid it. */
     color:#000; font-weight:900; font-size:17px; display:flex; align-items:center;
