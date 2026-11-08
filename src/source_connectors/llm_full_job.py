@@ -555,20 +555,38 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
         # the two parts. Kept as two pieces of one part, the length reader summed them to
         # 2,766 mm and the quantity doubled it again, so four lengths were bought for two.
         # A row that is an assembly keeps its pieces: they are its members, not its copies.
+        # TWO EQUAL CUTS ALONE DO NOT SAY WHICH (8 Nov review). A frame drawn as one part, 2 off,
+        # each of two equal tubes, reads exactly the same. So the pieces are taken as copies
+        # only where nothing says the part is made of them: it is no assembly in the read's
+        # tree, no route in the read joins this part on its own (a part welded from its pieces
+        # is a weldment), and a weight the read states for the part, where there is one, is
+        # one piece's weight, not all of them. Where the evidence points the other way, or the
+        # weight cannot be weighed against a piece, the pieces stay a cut list and both
+        # readings are said with the length each would charge.
         _row_q = _num(jp.get("row_qty"))
         if (len(_pieces) > 1 and _row_q and abs(_row_q - len(_pieces)) < 1e-6
-                and max(_pieces) - min(_pieces) <= 1.0 and pn not in assembly_pns):
-            part.setdefault("review_flags", []).append(
-                f"the read lists {len(_pieces)} pieces of {_pieces[0]:g} mm on a row of "
-                f"{int(_row_q)} off — taken as one {_pieces[0]:g} mm piece for each of the "
-                f"{int(_row_q)}, not {len(_pieces)} pieces in every one; confirm on the drawing")
-            _pieces = [_pieces[0]]
-            if not (cut and cut > 0):
-                cut = _pieces[0]
+                and max(_pieces) - min(_pieces) <= 1.0):
+            _why_not = _pieces_are_its_own(pn, jp, a, b, t, _pieces, assembly_pns, job)
+            if not _why_not:
+                part.setdefault("review_flags", []).append(
+                    f"the read lists {len(_pieces)} pieces of {_pieces[0]:g} mm on a row of "
+                    f"{int(_row_q)} off — taken as one {_pieces[0]:g} mm piece for each of the "
+                    f"{int(_row_q)}, not {len(_pieces)} pieces in every one: the read gives it "
+                    f"no members, no joint of its own and no weight that says otherwise; "
+                    f"confirm on the drawing")
+                _pieces = [_pieces[0]]
+                if not (cut and cut > 0):
+                    cut = _pieces[0]
+            else:
+                part.setdefault("review_flags", []).append(
+                    f"the read lists {len(_pieces)} pieces of {_pieces[0]:g} mm on a row of "
+                    f"{int(_row_q)} off — kept as {len(_pieces)} pieces in every one "
+                    f"({sum(_pieces):g} mm a part) because {_why_not}; if each part is one "
+                    f"piece it is {_pieces[0]:g} mm a part. Confirm on the drawing")
         if _pieces and not (cut and cut > 0):
             cut = max(_pieces)
         # THE PART'S OWN READ OUTRANKS A PROFILE OFF A LIST IT IS ONLY LISTED ON (D-751).
-        # 0358141's M6 "O A RAIL END" has no sheet of its own; "RAIL" in its name let the rail's
+        # 0358141's M6 "O A RAIL END" had no sheet bound to it; "RAIL" in its name let the rail's
         # "15x30x2mm TOP TUBE" from the parts list it shares become its stock. The read of
         # this part says 3 mm and names no section: a plate is not a 2 mm wall tube, so the
         # list's profile is withdrawn and the part is costed as what its own read says.
@@ -635,6 +653,40 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
         and not jp.get("is_bought_in")
         and any(jp.get(f) not in (None, "", [], {}) for f in _PRICED_FACTS)]
     return out
+
+
+_JOINING_OPS = ("welding", "tig_welding", "mig_welding", "spot_welding", "resistance_welding",
+                "brazing", "soldering")
+
+
+def _pieces_are_its_own(pn: str, jp: Mapping[str, Any], a: Any, b: Any, t: Any,
+                        pieces: List[float], assembly_pns: set, job: Mapping[str, Any]) -> str:
+    """Why N equal pieces on a row of N are the part's own cut list, not one piece for each
+    copy, or "" where nothing says so (D-752). The reason is said on the part."""
+    if pn in assembly_pns:
+        return "the read gives this row members of its own"
+    for route in (job.get("routes") or []):
+        if not isinstance(route, Mapping):
+            continue
+        op = str(route.get("operation") or "").strip().lower().replace(" ", "_")
+        names = {_clean_pn(p) for p in (route.get("part_numbers") or []) if p}
+        if op in _JOINING_OPS and names == {pn}:
+            return f"the read joins this part on its own ({op})"
+    wt = _num(jp.get("weight_g"))
+    if wt and wt > 0:
+        try:
+            from section_profile import section_kg_per_m
+            kgm = section_kg_per_m(a, b, t)
+        except Exception:                                                # noqa: BLE001
+            kgm = None
+        if not kgm:
+            return "the read states a weight for the part that could not be weighed against a piece"
+        one = kgm * pieces[0]                    # kg/m x mm = g
+        every = kgm * sum(pieces)
+        if abs(wt - every) < abs(wt - one):
+            return (f"the weight the read states for the part, {wt:g} g, is all "
+                    f"{len(pieces)} pieces' ({every:,.0f} g), not one piece's ({one:,.0f} g)")
+    return ""
 
 
 def _tube_operations() -> set:

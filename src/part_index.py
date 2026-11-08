@@ -553,8 +553,9 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
             # part with no detail sheet has no measured size either and the two go together.
             part.setdefault("review_flags", []).append(
                 f"{pn} is bound to page {chosen_page.get('page_number')}, which is a parts "
-                f"list — no page in this pack details it, so it has no drawing of its own to "
-                f"take dimensions from")
+                f"list — no detail sheet in this pack was bound to it, so nothing of its own "
+                f"gives it dimensions. Where its sheet exists, the engine failed to bind it: "
+                f"check the binding before the dimensions")
             # Kept as a fact, not only as words (D-751): a page that lists many parts speaks
             # for none of them on its own, and the stock readers downstream must know it.
             part["bound_to_parts_list_page"] = chosen_page.get("page_number")
