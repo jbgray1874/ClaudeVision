@@ -138,3 +138,10 @@ def test_the_lists_take_a_time_frame():
     assert '$("hFiledT").addEventListener("change", renderHFiled);' in page
     # A period reaching past the newest listed is said to be partial, never shown as whole.
     assert '" · only the newest " + rows.length + " are listed"' in page
+
+
+def test_the_panel_is_named_live_estimating():
+    """JG, 8 Nov 2026: "SDI INTELLIGENCE // ESTIMATING - pls change to SDI INTELLIGENCE // LIVE
+    ESTIMATING"."""
+    page = WALL.read_text(encoding="utf-8")
+    assert "<h1>SDI INTELLIGENCE <b>//</b> LIVE ESTIMATING</h1>" in page
