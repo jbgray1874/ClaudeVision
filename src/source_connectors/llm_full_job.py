@@ -550,8 +550,45 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
         # section so the length reader can see them.
         _pieces = [v for v in (_num(x) for x in (jp.get("cut_lengths_mm") or [])
                                if not isinstance(x, (dict, list))) if v and v > 0]
+        # N EQUAL PIECES ON A ROW OF N ARE THE ROW'S N PARTS (D-751). 0358141's upright M4 is
+        # listed 2 off and the read gave it cut_lengths_mm [1383, 1383]: one piece for each of
+        # the two parts. Kept as two pieces of one part, the length reader summed them to
+        # 2,766 mm and the quantity doubled it again, so four lengths were bought for two.
+        # A row that is an assembly keeps its pieces: they are its members, not its copies.
+        _row_q = _num(jp.get("row_qty"))
+        if (len(_pieces) > 1 and _row_q and abs(_row_q - len(_pieces)) < 1e-6
+                and max(_pieces) - min(_pieces) <= 1.0 and pn not in assembly_pns):
+            part.setdefault("review_flags", []).append(
+                f"the read lists {len(_pieces)} pieces of {_pieces[0]:g} mm on a row of "
+                f"{int(_row_q)} off — taken as one {_pieces[0]:g} mm piece for each of the "
+                f"{int(_row_q)}, not {len(_pieces)} pieces in every one; confirm on the drawing")
+            _pieces = [_pieces[0]]
+            if not (cut and cut > 0):
+                cut = _pieces[0]
         if _pieces and not (cut and cut > 0):
             cut = max(_pieces)
+        # THE PART'S OWN READ OUTRANKS A PROFILE OFF A LIST IT IS ONLY LISTED ON (D-751).
+        # 0358141's M6 "O A RAIL END" has no sheet of its own; "RAIL" in its name let the rail's
+        # "15x30x2mm TOP TUBE" from the parts list it shares become its stock. The read of
+        # this part says 3 mm and names no section: a plate is not a 2 mm wall tube, so the
+        # list's profile is withdrawn and the part is costed as what its own read says.
+        _ss_list = part.get("section_stock") if isinstance(part.get("section_stock"), dict) else None
+        if (_ss_list and _ss_list.get("read_from") == "parts_list_page" and not _dxf_backed
+                and not a and not _pieces and not (cut and cut > 0)
+                and _fam not in ("tube", "wire")):
+            _plate_t = _num(jp.get("thickness_mm"))
+            _wall_t = _num(_ss_list.get("t"))
+            if _plate_t and _plate_t > 0 and (_wall_t is None or abs(_plate_t - _wall_t) > 0.05):
+                part.pop("section_stock", None)
+                part.setdefault("review_flags", []).append(
+                    f"section {_ss_list.get('a')}x{_ss_list.get('b')}x{_ss_list.get('t')} read "
+                    f"from page {_ss_list.get('read_from_page')}, a parts list this part is only "
+                    f"listed on, was WITHDRAWN — this part's own read says {_plate_t:g} mm and "
+                    f"names no section, so the profile is another row's on that list")
+                if not _num(part.get("normalized_thickness_mm")):
+                    part["normalized_thickness_mm"] = _plate_t
+                    part["thickness_source"] = _src(jp, "thickness_mm")
+                _flagged = True
         if a and b and t and cut and cut > 0 and not _dxf_backed:  # DXF geometry wins; LLM drives no-DXF
             # THROUGH THE ARBITER, FIELD BY FIELD (D-383). This used to replace section_stock
             # wholesale, so whichever pass ran last won: a cut list read deterministically off
