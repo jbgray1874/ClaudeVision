@@ -171,6 +171,9 @@ _OURS = {
     # A record whose read ID names another response or a line this one does not hold
     # (D-598): the engine audited a record against a read it was not minted from — ours.
     "read_id_stale",
+    # A part the whole-pack read described, with a fact that changes its stock, size or
+    # material, that reached no priced part (D-749): the engine was given it and lost it.
+    "read_facts_reached_no_priced_part",
     # A page whose words the engine had and no reading received in full, or a page read only
     # from a coarse or unread image (D-597): a perfect engine reads every page it is given.
     "page_text_not_read",
