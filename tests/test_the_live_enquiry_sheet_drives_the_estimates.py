@@ -495,6 +495,9 @@ def test_nothing_on_the_design_share_leaves_the_hand_dropped_pack_to_the_share(r
     _pack(root, "M&S", "8188-08", "ga.pdf")
     d = L.locate(rows[0], [L.DesignShare(root, folders=lambda: _design(tmp_path)), L.LiveEnquiryShare(root)])
     assert d.status == "found" and d.source == "Live Enquiry share"
+    other = L.rows_from_table(_table(_line("M&S", "9000-01", "5 off")))
+    w = L.locate(other[0], [L.DesignShare(root, folders=lambda: []), L.LiveEnquiryShare(root)])
+    assert w.status == "waiting" and w.source == "Live Enquiry share", "no index: the share's own reason stands"
 
 
 def test_the_production_share_is_never_a_source():

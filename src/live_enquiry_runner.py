@@ -513,8 +513,8 @@ class DesignShare:
     pricer resolve it (src/pack_resolver.py), and the pack is kept in the Live Enquiry share's
     <customer>\\<drawing> (src/pack_store.py): an unchanged pack is used as it is, a changed one
     gets a new folder beside the old, so the ledger sees new drawings and the row is ready again.
-    An ambiguous pack holds the row with the question to answer; nothing on the design share
-    leaves it waiting, and the Live Enquiry share is then asked for a pack dropped by hand."""
+    An ambiguous pack holds the row with the question to answer. With nothing to search, or no
+    file named for the drawing, it has no say, and the Live Enquiry share's own reason stands."""
     name = "design share"
 
     def __init__(self, root: Path, folders: Optional[Callable[[], Any]] = None):
@@ -532,12 +532,12 @@ class DesignShare:
         import pack_store as ps
         if not str(row.drawing or "").strip():
             return None
-        folders, source = self._load()
+        folders, _source = self._load()
         if not folders:
-            return Located("waiting", f"the design share cannot be searched: {source}", source=self.name)
+            return None             # nothing to search: the share's own reason is the useful one
         m = pr.resolve(row.drawing, folders, client=row.customer)
         if m["status"] == "not found":
-            return Located("waiting", f"no file named {row.drawing} on the design share", source=self.name)
+            return None             # not on design: the share is asked, and its reason stands
         if not m["price_ok"]:
             return Located("held", f"design share: {m['question']}", source=self.name)
         named = customer_folders(_subfolders(self.root), row.customer) if self.root.is_dir() else []
