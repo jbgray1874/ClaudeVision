@@ -106,7 +106,8 @@ def _list(folder: Path) -> Optional[Dict[str, Any]]:
 
 
 def refresh(roots: List[Path], path: Path, depth: int = 10, full: bool = False,
-            full_days: float = 7.0, now: Optional[float] = None) -> Dict[str, Any]:
+            full_days: float = 7.0, now: Optional[float] = None,
+            progress: Optional[Any] = None, every: int = 2000) -> Dict[str, Any]:
     """Bring the index up to date and save it; the summary of what was done."""
     now = now if now is not None else time.time()
     old = load(path) or {}
@@ -148,6 +149,9 @@ def refresh(roots: List[Path], path: Path, depth: int = 10, full: bool = False,
                 rec = dict(got, mtime=mt)
                 stats["listed"] += 1
             folders[key] = rec
+            if progress and len(folders) % every == 0:
+                progress(f"  ... {len(folders)} folder(s), listed {stats['listed']}, reused {stats['reused']}, "
+                         f"{round(time.time() - started)} s, now in {key}")
             if lvl < depth:
                 stack.extend((f / d, lvl + 1) for d in rec.get("dirs") or [])
     index = {"schema": SCHEMA, "built_at": now, "full_at": now if full else old.get("full_at") or now,
@@ -206,7 +210,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         pass
     cfg = settings()
     if args.build:
-        s = refresh(cfg["roots"], cfg["path"], cfg["depth"], full=args.full, full_days=cfg["full_days"])
+        s = refresh(cfg["roots"], cfg["path"], cfg["depth"], full=args.full, full_days=cfg["full_days"],
+                    progress=lambda line: print(line, flush=True))
         for r, v in s["roots"].items():
             print(f"{r}  {'readable' if v.get('readable') else 'NOT READABLE from this window'}", flush=True)
         last = s["last"]
