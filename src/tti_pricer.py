@@ -48,6 +48,8 @@ DRAWING_EXT = {".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step",
 SKIP = re.compile(r"\b(archive|archived|superseded|old|backup|obsolete)\b", re.IGNORECASE)
 DEFAULT_DESIGN = r"\\sdi-dc01\CAD\Design\Customers April 08 Onwards\TTI"  # W:
 DEFAULT_PROTOTYPE = r"\\sdi-dc01\CAD\Prototype\TTi"
+PACK_NAMED = "candidate pack: drawing number in the file or folder name; not verified"
+PACK_JOB_FOLDER = "candidate pack: job folder only; drawings not matched to this number; not verified"
 HEADER = re.compile(r"^\s*(drawing|dwg)\s*(number|no\.?|num|#|ref(erence)?)?\s*$", re.IGNORECASE)
 _REF = re.compile(r"(?<![0-9A-Za-z])(?:[A-Za-z]{1,4}-)?\d{3,}[A-Za-z]?(?:-[A-Za-z0-9]+)*")
 
@@ -448,7 +450,10 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                          else "full estimate (job folder)") if found else "LLM estimate (no drawings found)",
                 "found": {k: v for k, v in found.items() if k != "files"} if found else None,
                 "files": len(found.get("files") or []) if found else 0,
-                "thumbnails": len(r["pictures"]), "cost_before": r["cost_before"], "state": "planned"}
+                "thumbnails": len(r["pictures"]), "cost_before": r["cost_before"], "state": "planned",
+                # WHAT WAS FOUND IS A CANDIDATE, NOT A VERIFIED PACK (SCRUM-199). Nothing here has read
+                # the GA's title block, revision or references yet; the screen says so on every row.
+                "pack": (PACK_JOB_FOLDER if found.get("match") == "job folder" else PACK_NAMED) if found else ""}
         if not found and r["drawing"]:
             item["job_folders"] = job_folders(r["drawing"], listings)
         report["rows"].append(item)
@@ -564,7 +569,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             shown += f" [{cell[:30]}]"
         print(f"row {it['row']:>4}  {shown:<28} {it['kind']:<34} {it['state']:<12} "
               f"{it.get('unit_cost', '') if it.get('unit_cost') is not None else ''}  {where}", flush=True)
-    print(f"{found} of {len(rep['rows'])} row(s) have drawings; status file: {status}", flush=True)
+        if it.get("pack"):
+            print(f"{'':<11}{it['pack']}", flush=True)
+    print(f"{found} of {len(rep['rows'])} row(s) have candidate drawings; none is a verified pack yet "
+          f"(drawing number, revision and references are not read until the pack resolver, SCRUM-199). "
+          f"status file: {status}", flush=True)
     return 0
 
 

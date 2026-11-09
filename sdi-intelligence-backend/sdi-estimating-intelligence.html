@@ -3723,7 +3723,7 @@ function ttiRender(st){
     + (st.finished ? " · finished " + st.finished.slice(11, 16) : st.state === "starting" ? " · starting" : " · working")
     + (st.roots && !st.roots.design_readable ? " · DESIGN AREA NOT READABLE FROM THIS SERVICE: " + st.roots.design : "");
   $("ttiOut").innerHTML = rows.length ? `<table class="tbl"><tr><th>Row</th><th>Drawing</th><th>Estimate</th><th>Drawings found in</th><th>State</th><th>AICost</th></tr>`
-    + rows.map(r => `<tr><td>${r.row}</td><td>${ttiEsc(r.drawing || "")}</td><td>${ttiEsc(r.kind || "")}</td>
+    + rows.map(r => `<tr><td>${r.row}</td><td>${ttiEsc(r.drawing || "")}</td><td>${ttiEsc(r.kind || "")}${r.pack ? `<div class="note" style="margin:2px 0 0">${ttiEsc(r.pack)}</div>` : ""}</td>
         <td title="${ttiEsc((r.found || {}).folder || "")}">${ttiEsc(((r.found || {}).folder || "").split("\\").slice(-3).join("\\") || "—")}${r.files ? " (" + r.files + " file(s))" : ""}${r.thumbnails ? " · " + r.thumbnails + " thumbnail(s)" : ""}</td>
         <td>${ttiEsc(r.state || "")}${r.why ? " · " + ttiEsc(r.why) : ""}</td><td>${r.unit_cost != null ? "£" + Number(r.unit_cost).toFixed(2) : ""}</td></tr>`).join("") + "</table>"
     : `<pre style="white-space:pre-wrap">${ttiEsc(st.log_tail || "")}</pre>`;
