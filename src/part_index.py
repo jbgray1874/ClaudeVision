@@ -248,6 +248,93 @@ def _page_mentions(pn: str, text: str) -> bool:
                for m in re.finditer(re.escape(want), flat))
 
 
+# ── A TITLE BLOCK THAT PRINTS THE DRAWING REFERENCE AND THE MEMBER IN SEPARATE FIELDS (D-758) ──
+#
+# 0358141's detail sheets print "UPC 0358141" in one title-block field and "M2" (page 5), "M4"
+# (page 7) or "M7" (page 10) in another, with the quantity beside them. No field holds the parts
+# list's "UPC0358141 M2", so no spelling of it matched, and the drawing reference on its own named
+# the top assembly UPC0358141: the members' own sheets were never bound to them, and the strips
+# and caps were priced off the lists they appear on (D-751, D-755, D-756).
+#
+# The identity is rebuilt from the title block alone, never from the whole page, so a parts list
+# that prints several members' numbers cannot answer. A listed part answers when its own number
+# splits into a drawing reference and a member suffix, that reference is in the title block, the
+# suffix stands there as a field of its own, exactly one listed part answers that way, and its
+# description or its quantity agrees with the sheet. The fields read, the page and the evidence
+# are kept on the part. A reference one digit away from the parts list's (0358141's M7 is listed
+# as UPC0358131 M7) binds only where nothing matches exactly, and is said on the part.
+_MEMBER_SPLIT = re.compile(r"^(?P<base>.*?[A-Z0-9])[\s\-_/.]+(?P<suf>[A-Z]{1,3}\d{1,3}[A-Z]?|\d{1,3}[A-Z]?)$")
+
+
+def _compact_code(text: Any) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(text or "").upper())
+
+
+def _one_digit_apart(a: str, b: str) -> bool:
+    diff = [(x, y) for x, y in zip(a, b) if x != y]
+    return len(a) == len(b) and len(diff) == 1 and diff[0][0].isdigit() and diff[0][1].isdigit()
+
+
+def _field_stands_alone(suffix: str, text: str) -> bool:
+    return re.search(rf"(?<![A-Z0-9]){re.escape(suffix)}(?![A-Z0-9])", text) is not None
+
+
+def _composite_title_block_identity(page: Dict[str, Any], title_block: Dict[str, Any],
+                                    parts: Dict[str, Dict[str, Any]]) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """(listed part, evidence) for a sheet whose title block prints the drawing reference and
+    the member suffix as separate fields (D-758); None where it does not, or not uniquely."""
+    tb_text = str((page.get("region_text") or {}).get("title_block") or "").upper()
+    if not tb_text.strip():
+        return None
+    tb_compact = _compact_code(tb_text)
+    exact: List[Tuple[str, str, str]] = []
+    near: List[Tuple[str, str, str, str]] = []
+    for pn in parts:
+        m = _MEMBER_SPLIT.match(str(pn or "").upper().strip())
+        if not m:
+            continue
+        base, suf = _compact_code(m.group("base")), m.group("suf")
+        if len(base) < 5 or not _field_stands_alone(suf, tb_text):
+            continue
+        if base in tb_compact:
+            exact.append((pn, m.group("base"), suf))
+            continue
+        for i in range(0, max(0, len(tb_compact) - len(base) + 1)):
+            window = tb_compact[i:i + len(base)]
+            if window[:3] == base[:3] and _one_digit_apart(window, base):
+                near.append((pn, m.group("base"), suf, window))
+                break
+    if exact:
+        found = {pn for pn, _b, _s in exact}
+        if len(found) != 1:
+            return None
+        pn, base, suf = exact[0]
+        printed_ref = base
+    else:
+        found = {pn for pn, _b, _s, _w in near}
+        if len(found) != 1:
+            return None
+        pn, base, suf, printed_ref = near[0]
+    rec = parts.get(pn) or {}
+    corroborated: List[str] = []
+    words = [w for w in re.findall(r"[A-Z]{3,}", str(rec.get("description") or "").upper())]
+    page_text = (tb_text + " " + str(page.get("normalized_text") or "").upper())
+    page_compact = _compact_code(page_text)
+    hits = [w for w in words if w in page_text or w in page_compact]
+    if words and len(hits) * 2 >= len(words):
+        corroborated.append(f"description '{rec.get('description')}'")
+    qty = rec.get("quantity")
+    qty_read = re.search(r"\bQ(?:TY|UANTITY)\b\W{0,3}(\d{1,4})\b", tb_text)
+    if qty not in (None, "") and qty_read and str(qty_read.group(1)) == str(qty).split(".")[0]:
+        corroborated.append(f"quantity {qty_read.group(1)}")
+    if not corroborated:
+        return None
+    return pn, {"page": page.get("page_number"), "drawing_reference_printed": printed_ref,
+                "member_field_printed": suf, "listed_as": pn,
+                "reference_differs_from_list": not exact, "corroborated_by": corroborated,
+                "source": "title_block_region"}
+
+
 def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[str, Any]]:
     dedupe = deps.dedupe
     is_valid_part_identifier = deps.is_valid_part_identifier
@@ -328,6 +415,13 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
             if len(title_block_drawing_numbers) == 1 and is_valid_part_identifier(title_block_drawing_numbers[0]):
                 page_target_part_numbers.extend(title_block_drawing_numbers)
 
+        # THE SHEET'S OWN MEMBER, FROM ITS TITLE BLOCK'S SEPARATE FIELDS (D-758). Where the
+        # title block prints the drawing reference and the member suffix apart, the sheet is
+        # that member's, not the reference's on its own (which can name the top assembly).
+        _composite = (_composite_title_block_identity(page, title_block, parts)
+                      if page_role == "detail" else None)
+        if _composite:
+            page_target_part_numbers = [_composite[0]]
         page_target_part_numbers = dedupe(page_target_part_numbers)
         component_sheet = is_component_sheet(page_role, title_block, page_target_part_numbers, cues, ops)
         effective_page_role = effective_part_page_role(page_role, title_block_drawing_numbers, component_sheet)
@@ -351,6 +445,18 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
                 part["pages"].append(page["page_number"])
             if effective_page_role:
                 part["page_roles"].append(effective_page_role)
+            if _composite and pn == _composite[0]:
+                _ev = _composite[1]
+                part.setdefault("title_block_identity", []).append(_ev)
+                _differs = (f" The sheet's reference '{_ev['drawing_reference_printed']}' is one "
+                            f"digit away from the parts list's, which lists it as {pn}: the "
+                            f"two disagree and the list's number is kept, to confirm"
+                            if _ev.get("reference_differs_from_list") else "")
+                part.setdefault("review_flags", []).append(
+                    f"bound to page {_ev['page']} by its title block, which prints the drawing "
+                    f"reference and the member '{_ev['member_field_printed']}' in separate fields, "
+                    f"matched to the listed {pn} and corroborated by "
+                    f"{' and '.join(_ev['corroborated_by'])}.{_differs}")
 
             allow_local_component_data = bool(component_sheet)
             # A TITLE-BLOCK READ THAT CAPTURED A PARTS LIST SPEAKS FOR NO PART (D-587).
