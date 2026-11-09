@@ -44,7 +44,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-DRAWING_EXT = {".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step", ".stp"}
+DRAWING_EXT = {".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step", ".stp", ".igs", ".iges"}
 SKIP = re.compile(r"\b(archive|archived|superseded|old|backup|obsolete)\b", re.IGNORECASE)
 DEFAULT_DESIGN = r"\\sdi-dc01\CAD\Design\Customers April 08 Onwards\TTI"  # W:
 DEFAULT_PROTOTYPE = r"\\sdi-dc01\CAD\Prototype\TTi"
@@ -178,6 +178,17 @@ def list_folders(root: Path, depth: int = 7) -> List[Path]:
 
 _FILES: Dict[str, List[Path]] = {}
 _MTIME: Dict[str, float] = {}
+_SIZE: Dict[str, int] = {}
+
+
+def _size(p: Path) -> int:
+    k = str(p)
+    if k not in _SIZE:
+        try:
+            _SIZE[k] = p.stat().st_size
+        except OSError:
+            _SIZE[k] = 0
+    return _SIZE[k]
 
 
 def _mtime(p: Path) -> float:
@@ -207,8 +218,9 @@ def area_listings(design: Path, proto: Path) -> Tuple[List[Tuple[str, List[Path]
             for folder, files in di.folders_under(idx, root):
                 folders.append(folder)
                 _FILES[str(folder)] = sorted(f for f, _s, _m in files)
-                for f, _s, m in files:
+                for f, s, m in files:
                     _MTIME[str(f)] = m
+                    _SIZE[str(f)] = s
             out.append((area, folders))
         return out, f"drawing index built {di.summary(idx)['built_at']}"
     why = ("no drawing index" if not idx else "the drawing index is stale" if not di.is_fresh(idx, cfg["max_hours"])
@@ -392,6 +404,46 @@ def unit_cost_of(st: Dict[str, Any], qty: int) -> Optional[float]:
     return None
 
 
+def pack_for(drawing: str, listings: List[Tuple[str, List[Path]]], client: str
+             ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    """The row's drawing pack through the shared resolver (src/pack_resolver.py, SCRUM-199): the
+    same rules and manifest as the estimating page and Self-Running. ({}, None) when no file is
+    named for the drawing, so the job-folder fallback can say what it found instead."""
+    import pack_resolver as pr
+    folders = [(f, area) for area, fs in listings for f in fs]
+    own = [f for f, _a in folders if any(pr._same(pr.drawing_id(x.name), drawing) for x in drawings_in(f))]
+    if not own:
+        return {}, None
+    # The candidates' folders and everything below them; the job's other folders for children the
+    # GA references elsewhere; shared-library parts are looked up by name across both areas.
+    job = re.match(r"\s*(\d{3,})", drawing)
+    keep = [f for f, _a in folders
+            if any(f == o or o in f.parents for o in own) or (job and job.group(1) in str(f))]
+    rows = [(f, [(x, _size(x), _mtime(x)) for x in drawings_in(f)], False) for f in keep]
+    m = pr.resolve(drawing, rows, client=client)
+    if m["status"] == "not found":
+        return {}, None
+    area = next((a for f, a in folders if str(f) == m.get("selected_folder")), "design")
+    files = [f["path"] for x in m["members"] for f in x["files"]]
+    found = {"area": area, "match": "pack", "folder": m.get("selected_folder"), "files": files,
+             "technical": "technical" in str(m.get("selected_folder") or "").lower(),
+             "newest": "", "other_folders": [c["folder"] for c in m["candidates"]
+                                             if c["folder"] != m.get("selected_folder")][:5]}
+    return found, m
+
+
+def pack_line(m: Dict[str, Any]) -> str:
+    """One line for the screen: the pack's status, size and revision, and why."""
+    bits = [f"{m['status']} pack: {len(m['members'])} drawing(s), revision {m.get('revision') or 'not read'}"]
+    if m.get("missing"):
+        bits.append(f"{len(m['missing'])} referenced drawing(s) missing")
+    if m.get("conflicts"):
+        bits.append("CONFLICT: " + m["conflicts"][0])
+    if m.get("question"):
+        bits.append("ASK: " + m["question"])
+    return "; ".join(bits)
+
+
 def inputs_root() -> Path:
     """Where each row's drawings and thumbnails are copied before its run. The service's own
     reader takes files only from inside its shares (SDI_FILE_ROOTS), so the default is a
@@ -418,6 +470,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
     proto = Path(to_unc(os.getenv("SDI_TTI_PROTOTYPE_ROOT") or DEFAULT_PROTOTYPE))
     _FILES.clear()
     _MTIME.clear()
+    _SIZE.clear()
     if not args.dry_run and not design.is_dir() and not proto.is_dir():
         # Every row would fall to an LLM estimate for want of a readable share, not of drawings.
         raise SystemExit(f"Neither drawing area can be read from here ({design}; {proto}), so every row "
@@ -443,17 +496,29 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
     writer = None if args.dry_run else SheetWriter(sheet, args.sheet_name or "", args.col_cost)
     priced: Dict[Tuple[str, int], Dict[str, Any]] = {}
     for r in data["rows"]:
-        found = find_drawings(r["drawing"], listings) if r["drawing"] else {}
+        manifest = None
+        found: Dict[str, Any] = {}
+        if r["drawing"]:
+            found, manifest = pack_for(r["drawing"], listings, args.client)
+            if not found:
+                found = find_drawings(r["drawing"], listings)
         item = {"row": r["row"], "drawing": r["drawing"], "drawing_cell": r.get("drawing_cell", r["drawing"]),
                 "quantity": r["quantity"],
-                "kind": ("full estimate" if found.get("match") != "job folder"
-                         else "full estimate (job folder)") if found else "LLM estimate (no drawings found)",
+                "kind": (f"full estimate ({manifest['status']} pack)" if manifest
+                         else "full estimate (job folder)" if found.get("match") == "job folder"
+                         else "full estimate") if found else "LLM estimate (no drawings found)",
                 "found": {k: v for k, v in found.items() if k != "files"} if found else None,
                 "files": len(found.get("files") or []) if found else 0,
                 "thumbnails": len(r["pictures"]), "cost_before": r["cost_before"], "state": "planned",
                 # WHAT WAS FOUND IS A CANDIDATE, NOT A VERIFIED PACK (SCRUM-199). Nothing here has read
                 # the GA's title block, revision or references yet; the screen says so on every row.
-                "pack": (PACK_JOB_FOLDER if found.get("match") == "job folder" else PACK_NAMED) if found else ""}
+                "pack": (pack_line(manifest) if manifest else PACK_JOB_FOLDER if found.get("match") == "job folder"
+                         else PACK_NAMED) if found else ""}
+        if manifest:
+            item["pack_status"] = manifest["status"]
+            item["pack_detail"] = {k: manifest.get(k) for k in ("selected_folder", "revision", "revision_from",
+                                                                "reason", "missing", "conflicts", "assumptions",
+                                                                "question", "candidates")}
         if not found and r["drawing"]:
             item["job_folders"] = job_folders(r["drawing"], listings)
         report["rows"].append(item)
@@ -478,15 +543,32 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                 item["why"] = f"{args.col_cost}{r['row']} could not be written ({exc})"
             save()
             continue
+        if manifest and not manifest["price_ok"]:
+            # An ambiguity the evidence cannot settle is asked, not priced on a guess (SCRUM-199).
+            item.update(state="ask", why=manifest["question"])
+            save()
+            continue
         name = re.sub(r"[^\w .-]", "_", r["drawing"] or f"row{r['row']}")
-        inputs = copy_inputs(found.get("files") or [], [] if found else r["pictures"], out_root / f"row{r['row']}_{name}")
+        if manifest:
+            # THE PACK IS KEPT IN LIVE ENQUIRY\<client>\<drawing> (src/pack_store.py): re-used when
+            # unchanged, a new version beside it when changed; the run reads the kept copy.
+            import pack_store as ps
+            kept = ps.store(manifest, args.client)
+            item["kept"] = kept
+            inputs = ps.stored_files(kept, manifest)
+        else:
+            inputs = copy_inputs(found.get("files") or [], [] if found else r["pictures"],
+                                 out_root / f"row{r['row']}_{name}")
         if not inputs and not (r["notes"] or r["description"]):
             item.update(state="skipped", why="no drawings, pictures, description or notes to price from")
             save()
             continue
         body = {"client": args.client, "drawing_number": r["drawing"] or f"TTI-row{r['row']}",
                 "units": r["quantity"], "files": inputs, "deliverables": True,
-                "method": args.method if found else "llm", "enquiry_brief": brief_for(r)}
+                "method": args.method if found else "llm",
+                "enquiry_brief": brief_for(r) + (
+                    f" Drawing pack {manifest['status']}: " + "; ".join(manifest["assumptions"][:6])
+                    if manifest and manifest.get("assumptions") else "")}
         try:
             started = portal.start(body)
         except Exception as exc:                                         # noqa: BLE001

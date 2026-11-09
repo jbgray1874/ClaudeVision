@@ -38,14 +38,16 @@ def _share(tmp_path: Path) -> Path:
     return w
 
 
-def test_the_index_holds_every_drawing_and_leaves_archives_out(tmp_path):
+def test_the_index_holds_every_drawing_and_keeps_archives_as_evidence_only(tmp_path):
     w = _share(tmp_path)
     s = di.refresh([w], tmp_path / "ix.json.gz")
-    assert s["drawings"] == 2 and s["roots"][str(w)]["readable"]
+    assert s["drawings"] == 3 and s["roots"][str(w)]["readable"]
     idx = di.load(tmp_path / "ix.json.gz")
     names = sorted(f.name for _folder, files in di.folders_under(idx, w) for f, _s, _m in files)
-    assert names == ["12181-00-GA.pdf", "a.dxf"]
-    assert not any("Archive" in k for k in idx["folders"])
+    assert names == ["12181-00-GA.pdf", "a.dxf"], "an archive is never offered as a candidate"
+    every = sorted(f.name for _folder, files in di.folders_under(idx, w, include_archive=True) for f, _s, _m in files)
+    assert every == ["12181-00-GA.pdf", "a.dxf", "x.pdf"], "but it is indexed, as evidence"
+    assert di.is_archive(r"TTI\Archive\old job") and not di.is_archive(r"TTI\12181 Stand")
 
 
 def test_a_second_refresh_lists_only_the_folder_that_changed(tmp_path):
@@ -58,7 +60,7 @@ def test_a_second_refresh_lists_only_the_folder_that_changed(tmp_path):
     os.utime(tech, (time.time() + 5, time.time() + 5))
     again = di.refresh([w], p)
     assert again["last"]["listed"] == 1 and again["last"]["reused"] == first["folders"] - 1
-    assert again["drawings"] == 3
+    assert again["drawings"] == 4
 
 
 def test_an_unreadable_share_keeps_what_was_last_known(tmp_path):
@@ -68,7 +70,7 @@ def test_an_unreadable_share_keeps_what_was_last_known(tmp_path):
     gone = tmp_path / "moved"
     w.rename(gone)
     s = di.refresh([w], p)
-    assert not s["roots"][str(w)]["readable"] and s["drawings"] == 2
+    assert not s["roots"][str(w)]["readable"] and s["drawings"] == 3
     assert not di.covers(di.load(p), w / "TTI"), "an index over an unreadable share is not used for lookups"
 
 

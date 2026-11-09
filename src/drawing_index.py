@@ -40,9 +40,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 SCHEMA = "drawing_index.v1"
 HERE = Path(__file__).resolve().parent
-DRAWING_EXT = {".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step", ".stp"}
-SKIP = re.compile(r"\b(archive|archived|old|superseded|backup|back up|obsolete|recycle)\b|^[._~$]",
-                  re.IGNORECASE)
+DRAWING_EXT = {".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step", ".stp", ".igs", ".iges"}
+# ARCHIVES ARE INDEXED AND MARKED, NOT LEFT OUT (SCRUM-199 review): never chosen automatically, but
+# searchable evidence where a reference needs an older revision or no current copy exists. Only
+# system and temporary folders (. _ ~ $) are left out.
+ARCHIVE = re.compile(r"\b(archive|archived|old|superseded|backup|back up|obsolete|recycle)\b", re.IGNORECASE)
+SKIP = re.compile(r"^[._~$]")
+
+
+def is_archive(path: str) -> bool:
+    return any(ARCHIVE.search(part) for part in re.split(r"[\\/]", str(path)) if part)
 DEFAULT_ROOTS = r"\\sdi-dc01\CAD\Design\Customers April 08 Onwards|\\sdi-dc01\CAD\Prototype"  # W:
 
 sys.path.insert(0, str(HERE))
@@ -173,12 +180,14 @@ def covers(index: Dict[str, Any], root: Path) -> bool:
                for r in (index.get("roots") or {}))
 
 
-def folders_under(index: Dict[str, Any], root: Path) -> List[Tuple[Path, List[Tuple[Path, int, float]]]]:
-    """Every indexed folder under a root, each with its drawing files (path, size, modified)."""
+def folders_under(index: Dict[str, Any], root: Path, include_archive: bool = False
+                  ) -> List[Tuple[Path, List[Tuple[Path, int, float]]]]:
+    """Every indexed folder under a root, each with its drawing files (path, size, modified).
+    Archive folders only when asked for: they are evidence, not candidates."""
     out = []
     r = str(root)
     for k, v in (index.get("folders") or {}).items():
-        if _under(k, r):
+        if _under(k, r) and (include_archive or not is_archive(k[len(r):])):
             p = Path(k)
             out.append((p, [(p / n, int(s), float(m)) for n, s, m in v.get("files") or []]))
     return out
