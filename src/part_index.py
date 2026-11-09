@@ -349,10 +349,38 @@ _TB_GAUGE_MATERIAL = re.compile(
     r"ALUMINI?UM|ZINTEC|GALVANI[SZ]ED(?:\s*STEEL)?)", re.IGNORECASE)
 
 
+# A MATERIALS FIELD WITH NO GAUGE (SCRUM-194). A weldment's sheet prints only the metal: 0358141's
+# rail prints "... QTY BULKQTY M1 A 1 MILDSTEEL SHEET DATE ..." — its sections are on the
+# drawing, so the field holds no size. Read only in the title block's own field window (after
+# the QTY / BULK QTY headings, before SHEET), and only where it holds exactly one metal name, so
+# a specification legend's "304-STAINLESS STEEL" or "POWDER COATED STEEL" is never it.
+_TB_BARE_MATERIAL = re.compile(
+    r"(?<![A-Z0-9-])(MILD\s*STEEL|STAINLESS\s*STE[EL]{2}|ALUMINI?UM|ZINTEC|GALVANI[SZ]ED\s*STEEL)(?![A-Z])",
+    re.IGNORECASE)
+_TB_FIELD_WINDOW = re.compile(r"BULK\s*QTY(?P<field>.{0,80}?)\bSHEET\b", re.IGNORECASE | re.DOTALL)
+
+
+def _title_block_bare_material(tb_text: Any) -> Optional[Dict[str, Any]]:
+    m = _TB_FIELD_WINDOW.search(str(tb_text or ""))
+    if not m:
+        return None
+    hits = list(_TB_BARE_MATERIAL.finditer(m.group("field")))
+    if len({re.sub(r"\s+", "", h.group(0).upper()) for h in hits}) != 1:
+        return None
+    word = re.sub(r"\s+", "", hits[0].group(0).upper())
+    material = ("STAINLESS STEEL" if word.startswith("STAINLESS") else "MILD STEEL" if word.startswith("MILD")
+                else "ALUMINIUM" if word.startswith("ALUMIN") else "ZINTEC" if word == "ZINTEC"
+                else "GALVANISED STEEL")
+    return {"printed": hits[0].group(0).strip(), "material": material, "thickness_mm": None, "section": None}
+
+
 def _title_block_gauge_and_material(tb_text: Any) -> Optional[Dict[str, Any]]:
     """{printed, material, thickness_mm, section} from a title block's glued MATERIALS field,
-    or None where the field does not hold exactly one such reading (D-761)."""
+    or None where the field does not hold exactly one such reading (D-761). A field holding a
+    metal with no gauge (a weldment's) gives the metal alone."""
     hits = list(_TB_GAUGE_MATERIAL.finditer(str(tb_text or "")))
+    if not hits:
+        return _title_block_bare_material(tb_text)
     if len({h.group(0).upper().replace(" ", "") for h in hits}) != 1:
         return None
     h = hits[0]

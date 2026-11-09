@@ -121,11 +121,22 @@ def test_the_trace_tool_reports_a_record_without_a_calculated_workbook_as_not_te
                                "final_estimate": {"source": "engine_estimate"}}), encoding="utf-8")
     t = rt.trace(rec, None)
     assert t["status"] == "NOT TESTED" and "calculated workbook" in t["why"]
-    good = tmp_path / "y_record.json"
-    good.write_text(json.dumps(_costed()), encoding="utf-8")
-    t2 = rt.trace(good, None)
-    assert t2["status"].startswith(("PASS", "FAIL")) and t2["ledger_captured_here"]
-    assert any(i["state"] == "carried" for i in t2["items"])
+    old = tmp_path / "y_record.json"
+    old.write_text(json.dumps(_costed()), encoding="utf-8")
+    t2 = rt.trace(old, None)
+    assert t2["status"] == "NOT TESTED" and "reader findings" in t2["why"], \
+        "a record without the findings captured at scan is NOT TESTED, never a pass"
+    assert t2["ledger_captured_here"] and "RECONSTRUCTED" in t2["ledger_provenance"]
+    import reader_findings as rf
+    s = _costed()
+    s["reader_findings"] = {"schema": rf.SCHEMA, "captured": "scan", "items": [
+        {"id": "F1", "page": 7, "part": "UPC0358141 M4", "kind": "material", "value": "MILD STEEL",
+         "words": "30x30x2mmM S", "source": "title_block"}]}
+    good = tmp_path / "z_record.json"
+    good.write_text(json.dumps(s), encoding="utf-8")
+    t3 = rt.trace(good, None)
+    assert t3["status"].startswith(("PASS", "FAIL")) and t3["findings"]["applicable"]
+    assert any(i["state"] == "carried" for i in t3["items"])
 
 
 # ── costed lines the drawing never stated ───────────────────────────────────────────────

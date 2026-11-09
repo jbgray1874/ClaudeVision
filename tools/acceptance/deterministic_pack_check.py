@@ -101,8 +101,18 @@ def _f(v: Any) -> Optional[float]:
         return None
 
 
-def observe(part: Dict[str, Any]) -> Dict[str, Any]:
+def observe(part: Dict[str, Any], parts: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     ss = part.get("section_stock") if isinstance(part.get("section_stock"), dict) else {}
+    pn_key = re.sub(r"\s+", " ", str(part.get("part_number") or "")).upper()
+    members = [q for q in (parts or []) if re.sub(r"\s+", " ", str(q.get("cut_list_member_of") or "")).upper() == pn_key]
+    pieces = []
+    for q in members:
+        qs = q.get("section_stock") or {}
+        pieces.append({"length_mm": _f(qs.get("length_mm")),
+                       "section": None if qs.get("profile_provisional") else sorted(_f(qs.get(k)) for k in ("a", "b", "t")),
+                       "page": qs.get("length_page")})
+    if members and not ss:
+        ss = dict(part.get("section_stock_as_read") or {})
     ops = {str(o).strip().lower() for k in ("textual_operations", "inferred_operations", "operations")
            for o in (part.get(k) or []) if str(o).strip()}
     thk = _f(part.get("normalized_thickness_mm"))
@@ -124,6 +134,9 @@ def observe(part: Dict[str, Any]) -> Dict[str, Any]:
         "blank_mm": blank if any(blank) else None,
         "bound_to_list": part.get("bound_to_parts_list_page"),
         "flags": [str(f) for f in (part.get("review_flags") or [])],
+        "pieces": pieces,
+        "features": [{k: f.get(k) for k in ("kind", "diameter_mm", "thread", "count", "page") if f.get(k) is not None}
+                     for f in (part.get("stated_features") or []) if isinstance(f, dict)],
     }
 
 
@@ -169,7 +182,7 @@ def compare(expected: Dict[str, Any], parts: List[Dict[str, Any]]) -> List[Dict[
             for fact in [k for k in want if k not in ("page_of", "strict", "listed_as", "note")]:
                 row(fact, want[fact], None, None)
             continue
-        got = observe(rec)
+        got = observe(rec, parts)
         for fact, exp in want.items():
             if fact in ("page_of", "strict", "listed_as", "note"):
                 continue
@@ -189,6 +202,18 @@ def compare(expected: Dict[str, Any], parts: List[Dict[str, Any]]) -> List[Dict[
                 row(fact, exp, present, not present)
             elif fact == "no_section":
                 row(fact, exp, got["section"], (got["section"] is None) == bool(exp))
+            elif fact == "pieces":
+                # each piece's own length and section; a provisional section is not a reading
+                miss = [e for e in exp if not any(_same(e["length_mm"], g["length_mm"]) and g["section"]
+                                                    and _same_list(e["section"], g["section"]) for g in got["pieces"])]
+                row(fact, exp, got["pieces"], not miss)
+            elif fact == "features":
+                miss = [e for e in exp if not any(
+                    g.get("kind") == e.get("kind") and _same(g.get("count"), e.get("count"))
+                    and (_same(g.get("diameter_mm"), e.get("diameter_mm")) if e.get("diameter_mm") else True)
+                    and (str(g.get("thread") or "").upper() == str(e.get("thread") or "").upper() if e.get("thread") else True)
+                    for g in got["features"])]
+                row(fact, exp, got["features"], not miss)
             elif fact == "flag_contains":
                 hit = [f for f in got["flags"] if str(exp).lower() in f.lower()]
                 row(fact, exp, hit[:1], bool(hit))
@@ -233,6 +258,11 @@ def costing_results(record_path: Optional[Path], xlsx: Optional[Path]) -> Dict[s
         except Exception:                                            # noqa: BLE001
             snapshot = None
     res = rcc.audit(rec, snapshot, ledger=ledger)
+    try:
+        import findings_trace as ftr
+        out["findings"] = ftr.audit(rec, res)
+    except Exception as exc:                                         # noqa: BLE001
+        out["findings"] = {"applicable": False, "why": f"NOT TESTED: {type(exc).__name__}: {exc}"}
     for it in res.get("items") or []:
         out["items"].setdefault(re.sub(r"\s+", " ", str(it.get("record") or "")).upper(), {})[str(it.get("id"))] = it
     # An engine allowance beside the facts (a saw on a stated section) and a purchase of the
@@ -248,7 +278,7 @@ def costing_results(record_path: Optional[Path], xlsx: Optional[Path]) -> Dict[s
 
 def _costing_cell(row: Dict[str, Any], costing: Dict[str, Any]) -> Tuple[str, Optional[bool]]:
     """(text for the costing/workbook column, ok) — ok None where this fact has no charge."""
-    if not costing:
+    if not costing.get("record"):
         return "not evaluated (scan stage; give --record for the costed run)", None
     if not costing.get("read_back"):
         return f"NOT TESTED: {costing.get('why')}", None
@@ -292,13 +322,13 @@ def _costing_cell(row: Dict[str, Any], costing: Dict[str, Any]) -> Tuple[str, Op
 
 def verdict(row: Dict[str, Any], costing_ok: Optional[bool], costing: Dict[str, Any]) -> str:
     read_ok = row["status"] == "extracted_and_linked"
-    if costing and not costing.get("read_back"):
+    if costing.get("record") and not costing.get("read_back"):
         return "NOT TESTED"
     if not read_ok:
         return "FAIL" if row["strict"] else "ADVISORY"
     if costing_ok is False:
         return "FAIL"
-    return "PASS" if costing else "PASS (reading)"
+    return "PASS" if costing.get("record") else "PASS (reading)"
 
 
 # ── the report ──────────────────────────────────────────────────────────────────────────
@@ -311,7 +341,7 @@ def render(pack: str, mode: str, pdf: Optional[Path], sha: str, readers: str, ro
            f"- engine build (scan): {build}",
            (f"- costed record: {Path(costing['record']).name}  engine {costing.get('engine')}  "
             f"deterministic-only {costing.get('deterministic_only')}  ledger {costing.get('ledger_provenance')}  "
-            f"workbook file read: {'yes' if costing.get('verified_against_file') else 'no'}") if costing
+            f"workbook file read: {'yes' if costing.get('verified_against_file') else 'no'}") if costing.get("record")
            else "- costed record: none given (scan stage only; requirement 2 needs --record)",
            f"- result: **{status}**", "",
            "| Finding | Page | Expected | Reader result | Costing / workbook result | Verdict |",
@@ -325,6 +355,19 @@ def render(pack: str, mode: str, pdf: Optional[Path], sha: str, readers: str, ro
     for r in rows:
         counts[r["verdict"]] = counts.get(r["verdict"], 0) + 1
     out += ["", f"verdicts: {json.dumps(counts)}"]
+    fnd = costing.get("findings") or {}
+    rf = costing.get("scan_findings") or {}
+    out += ["", f"## Every reader finding ({len(rf.get('items') or [])} on the scan; the expected facts above are "
+                f"{len(rows)} of what the reviewer checked, never all the reader found)", ""]
+    if costing.get("record") and not fnd.get("applicable"):
+        out += [f"Costed record: {fnd.get('why') or 'NOT TESTED: no reader findings on the record'}", ""]
+    trace_rows = {r["id"]: r for r in (fnd.get("items") or [])}
+    out += ["| Finding | Page | Part | Kind | Read | Record / disposition | Verdict |", "|---|---|---|---|---|---|---|"]
+    for f in rf.get("items") or []:
+        tr = trace_rows.get(f.get("id")) or {}
+        disp = tr.get("disposition") or (tr.get("record") or {}).get("note") or (tr.get("record") or {}).get("state") or f.get("scan_disposition") or ""
+        out.append(f"| {f.get('id')} | {f.get('page')} | {f.get('part') or 'none'} | {f.get('kind')} | "
+                   f"{json.dumps(f.get('value'))[:60]} | {str(disp)[:90]} | {tr.get('verdict') or f.get('scan_verdict') or ''} |")
     if costing.get("issues"):
         out += ["", "costed record issues:"] + [f"- {i.get('code')}: {i.get('item') or ''} {i.get('why') or i.get('text') or ''}"
                                                for i in costing["issues"][:20]]
@@ -356,18 +399,37 @@ def check_pack(pack: str, mode: str, out_dir: Optional[Path] = None, record: Opt
         costing = costing_results(record, xlsx)
     except Exception as exc:                                         # noqa: BLE001
         costing = {"record": str(record), "read_back": False, "why": f"the record could not be read: {exc!r}"}
+    # every reader finding on the scan, with its disposition where no part carries it
+    try:
+        import findings_trace as ftr
+        scan_trace = ftr.audit(summary, None)
+        by_id = {t["id"]: t for t in scan_trace.get("items") or []}
+        sf = []
+        for f in (summary.get("reader_findings") or {}).get("items") or []:
+            t = by_id.get(f.get("id")) or {}
+            sf.append(dict(f, scan_disposition=t.get("disposition") or (t.get("record") or {}).get("note")
+                           or (t.get("record") or {}).get("state"), scan_verdict=t.get("verdict")))
+        costing = dict(costing) if costing else {}
+        costing["scan_findings"] = {"items": sf}
+    except Exception:                                                # noqa: BLE001
+        pass
     for r in rows:
         text, ok = _costing_cell(r, costing)
         r["costing_text"], r["costing_ok"] = text, ok
         r["verdict"] = verdict(r, ok, costing)
     fails = [r for r in rows if r["verdict"] == "FAIL"]
-    if costing and not costing.get("read_back"):
+    open_scan = [f for f in (costing.get("scan_findings") or {}).get("items") or [] if f.get("scan_verdict") == "UNASSIGNED"]
+    if open_scan:
+        fails += [{"fact": f"finding {f['id']} unassigned"} for f in open_scan]
+    if costing.get("record") and not (costing.get("findings") or {}).get("applicable"):
+        code, status = NOT_TESTED, "NOT TESTED on the costed record: it holds no reader findings captured at scan"
+    elif costing.get("record") and not costing.get("read_back"):
         code, status = NOT_TESTED, f"NOT TESTED on the costed record ({costing.get('why')}); reading: " + (
             "all strict facts extracted and linked" if not any(
                 r["status"] != "extracted_and_linked" and r["strict"] for r in rows) else "strict facts open")
     else:
         code = PASS if not fails else FAIL
-        status = "PASS" if code == PASS else f"FAIL ({len(fails)} fact(s))"
+        status = "PASS" if code == PASS else f"FAIL ({len(fails)} fact(s) or finding(s))"
     build = str((summary.get("run_provenance") or {}).get("engine_build")
                 or (summary.get("estimate_summary") or {}).get("engine_build") or "?")
     text = render(pack, mode, pdf, sha, readers, rows, build, status, costing)
@@ -378,7 +440,7 @@ def check_pack(pack: str, mode: str, out_dir: Optional[Path] = None, record: Opt
     (out_dir / f"{pack}_{mode}_{stamp}.json").write_text(json.dumps(
         {"pack": pack, "mode": mode, "drawing": str(pdf), "drawing_sha256": sha, "readers": readers,
          "engine": build, "status": status, "rows": rows,
-         "costed_record": {k: v for k, v in costing.items() if k != "items"},
+         "costed_record": {k: v for k, v in costing.items() if k not in ("items", "scan_findings")},
          "reader_findings": (summary.get("reader_findings") or {})},
         indent=1, default=str), encoding="utf-8")
     return code, text

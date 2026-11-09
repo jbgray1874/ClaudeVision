@@ -107,3 +107,47 @@ def test_a_model_that_cannot_be_reached_leaves_the_gap_named(monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     rec2 = gf.run(_summary(), call=lambda p: "{}")
     assert rec2["why_not_asked"] == "no model key on this machine" and rec2["open"] == ["UPC0358141 M2: size"]
+
+
+def test_targeted_mode_turns_the_whole_pack_reads_off_and_keeps_the_gap_fill_asking(monkeypatch):
+    import run_readers as rr
+    monkeypatch.delenv("SDI_DETERMINISTIC_ONLY", raising=False)
+    monkeypatch.delenv("SDI_LLM_MODE", raising=False)
+    assert rr.llm_mode() == "whole_pack" and not rr.whole_reads_off()
+    monkeypatch.setenv("SDI_LLM_MODE", "targeted")
+    assert rr.llm_mode() == "targeted" and rr.whole_reads_off()
+    monkeypatch.setenv("XAI_API_KEY", "test-key-never-sent")
+    assert gf.enabled({}) is None, "targeted mode asks about the gaps"
+    monkeypatch.setenv("SDI_DETERMINISTIC_ONLY", "1")
+    assert rr.llm_mode() == "deterministic" and gf.enabled({}) == "deterministic-only run"
+
+
+def test_a_provisional_piece_profile_is_asked_over_the_ga_and_must_be_printed_in_the_pack(monkeypatch):
+    monkeypatch.delenv("SDI_DETERMINISTIC_ONLY", raising=False)
+    monkeypatch.setenv("XAI_API_KEY", "test-key-never-sent")
+    rail = {"part_number": "R M1", "pages": [3, 4], "materials": ["MILD STEEL"], "quantity": 1,
+            "section_stock_on_members": ["R M1-CL1"], "page_roles": ["detail"]}
+    piece = {"part_number": "R M1-CL1", "pages": [4], "materials": ["MILD STEEL"], "quantity": 1,
+             "cut_list_member_of": "R M1", "page_roles": ["section"],
+             "section_stock": {"a": 15.0, "b": 30.0, "t": 2.0, "length_mm": 1170.0, "profile_provisional": True}}
+    s = {"manufacturing_writeup": {"parts": [rail, piece]},
+         "pages": [{"page_number": 1, "page_role": {"primary_role": "assembly"},
+                    "pdfplumber_text": "30x15TOPRAIL&LEGS WITH30x30UPRIGHTS&BOTTOMCROSSBAR"},
+                   {"page_number": 3, "pdfplumber_text": "15x30x2mm TOP TUBE 1394TUBE"},
+                   {"page_number": 4, "pdfplumber_text": "1170TUBE"}]}
+    seen = []
+
+    def model(payload):
+        seen.append(payload)
+        return json.dumps({"section_mm": [30, 30, 2], "page": 1, "words": "WITH 30x30 UPRIGHTS & BOTTOM CROSSBAR"})
+
+    rec = gf.run(s, call=model)
+    item = next(i for i in rec["items"] if i["gap"] == "section_profile")
+    assert "PAGE 1" in seen[0] and item["validation"]["ok"], item
+    ss = piece["section_stock"]
+    assert (ss["a"], ss["b"], ss["t"]) == (30.0, 30.0, 2.0) and ss["profile_source"] == "llm_assisted"
+    assert ss["profile_provisional"] is False
+    piece["section_stock"] = {"a": 15.0, "b": 30.0, "t": 2.0, "length_mm": 1170.0, "profile_provisional": True}
+    rec2 = gf.run(s, call=lambda p: json.dumps({"section_mm": [40, 40, 3], "page": 1, "words": "40x40"}))
+    bad = next(i for i in rec2["items"] if i["gap"] == "section_profile")
+    assert not bad["validation"]["ok"] and "printed nowhere" in bad["validation"]["why"]

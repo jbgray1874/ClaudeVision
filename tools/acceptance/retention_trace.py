@@ -93,9 +93,16 @@ def trace(record: Path, xlsx: Optional[Path]) -> Dict[str, Any]:
     out["allowances_noted"] = result.get("allowances_noted") or []
     out["lines_noted"] = result.get("lines_noted") or []
     unresolved = [i for i in out["items"] if i.get("state") == "unresolved"]
-    lost = [r for r in (out["findings"].get("items") or []) if r.get("verdict") == "FAIL"]
+    lost = [r for r in (out["findings"].get("items") or []) if r.get("verdict") in ("FAIL", "UNASSIGNED")]
+    if not out["findings"].get("applicable"):
+        # NOT APPLICABLE IS NOT A PASS (reviewer, 9 Nov 2026): without the findings captured at
+        # scan, nothing shows what the reader found before the build.
+        out["status"] = "NOT TESTED"
+        out["why"] = out["findings"].get("why") or "no reader findings on this record"
+        out["items_without_findings"] = len(out["items"])
+        return out
     out["status"] = ("PASS" if not unresolved and not out["issues"] and not lost else
-                     f"FAIL ({len(unresolved)} unresolved, {len(out['issues'])} issue(s), {len(lost)} finding(s) lost)")
+                     f"FAIL ({len(unresolved)} unresolved, {len(out['issues'])} issue(s), {len(lost)} finding(s) lost or unassigned)")
     out["verified_against_file"] = bool(snapshot)
     return out
 
@@ -118,7 +125,7 @@ def render(t: Dict[str, Any]) -> str:
                   "|---|---|---|---|---|---|---|---|"]
         for r in fnd.get("items") or []:
             rs, cs, ws = r.get("record") or {}, r.get("costing") or {}, r.get("workbook") or {}
-            lines.append(f"| {r.get('id')} {r.get('kind')} | {r.get('page')} | {r.get('part') or 'UNASSIGNED'} | "
+            lines.append(f"| {r.get('id')} {r.get('kind')} | {r.get('page')} | {r.get('part') or ('none: ' + str(r.get('disposition') or ''))} | "
                          f"{json.dumps(r.get('value'))[:50]} {('(' + str(r.get('words'))[:40] + ')') if r.get('words') else ''} | "
                          f"{rs.get('state')} {rs.get('note') or ''} | {cs.get('state')} | "
                          f"{ws.get('state')} {', '.join(ws.get('cells') or [])} | **{r.get('verdict')}** |")

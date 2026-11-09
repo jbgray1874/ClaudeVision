@@ -28,13 +28,24 @@ SCHEMA = "reader_findings.v1"
 
 _OA = re.compile(r"(?<![\d.])(\d{1,5}(?:\.\d+)?)\s*O\s*/?\s*A(?![A-Z])")
 # "(5x)n3.4THRU", "(5X) Ø3.4 THRU", "Ø10 THRU", "n10THRU" (pdfplumber renders Ø as n or w).
-_HOLE = re.compile(r"(?:\(\s*(?P<count>\d{1,3})\s*[xX]\s*\)\s*)?[nwØ⌀]\s*(?P<dia>\d{1,3}(?:\.\d+)?)\s*THRU",
+_HOLE = re.compile(r"(?:\(\s*(?P<count>\d{1,3})\s*[xX]\s*\)\s*)?(?<![A-Z])[nwØ⌀]\s*(?P<dia>\d{1,3}(?:\.\d+)?)\s*THRU",
                    re.IGNORECASE)
+# A count printed AFTER the callout: "M8x1.25 THRU BOTTOM FACE (4 TOTAL)", "Ø10 THRU ... (11 TOTAL)".
+_TOTAL = re.compile(r"\(\s*(\d{1,3})\s*TOTAL\s*\)", re.IGNORECASE)
+# What the hole is for, where the callout says ("FOR PUDDLE WELD").
+_PURPOSE = re.compile(r"\bFOR\s*([A-Z]+(?:\s*[A-Z]+){0,2})", re.IGNORECASE)
 # "wn6.3X90.00°": a countersink diameter and its included angle.
 _CSK = re.compile(r"[nwØ⌀]\s*(?P<dia>\d{1,3}(?:\.\d+)?)\s*[xX]\s*(?P<angle>82|90|100|120)(?:\.0+)?\s*°")
 # "(9X) M3X0.5", "4x M8x1.25", "M6 x 1.0 TAPPED".
 _THREAD = re.compile(r"(?:\(\s*(?P<count>\d{1,3})\s*[xX]\s*\)\s*|(?P<count2>\d{1,3})\s*[xX]\s+)?"
-                     r"M(?P<dia>\d{1,2})\s*[xX]\s*(?P<pitch>\d\.\d{1,2})(?!\s*MM)", re.IGNORECASE)
+                     r"(?<![A-Z0-9])M(?P<dia>\d{1,2})\s*[xX]\s*(?P<pitch>\d\.\d{1,2})(?!\s*MM)", re.IGNORECASE)
+_CALLOUT_START = re.compile(r"(?<![A-Z])[nwØ⌀]\s*\d{1,3}(?:\.\d+)?\s*THRU|(?<![A-Z0-9])M\d{1,2}\s*[xX]\s*\d\.\d", re.IGNORECASE)
+
+
+def _trailing(text: str, end: int) -> str:
+    """The words after a callout up to the next callout (at most 80 characters)."""
+    nxt = _CALLOUT_START.search(text, end)
+    return text[end: min(nxt.start() if nxt else len(text), end + 80)]
 _OPS = ("welding", "tapping", "countersinking", "folding", "drilling", "deburring")
 
 
@@ -155,20 +166,30 @@ def capture(summary: Mapping[str, Any]) -> Dict[str, Any]:
             add(page=pno, part=part, kind="overall", value=[v for v, _w in oa], units="mm",
                 words=", ".join(w for _v, w in oa))
         for m in _HOLE.finditer(text):
-            add(page=pno, part=part, kind="hole", value={"diameter_mm": float(m.group("dia")),
-                                                         "count": int(m.group("count") or 1)},
-                units="mm", words=m.group(0).strip())
+            tail = _trailing(text, m.end())
+            tot = _TOTAL.search(tail)
+            purpose = _PURPOSE.search(tail)
+            count = int(m.group("count") or (tot.group(1) if tot else 0) or 1)
+            v = {"diameter_mm": float(m.group("dia")), "count": count,
+                 "count_printed": bool(m.group("count") or tot)}
+            if purpose:
+                v["purpose"] = " ".join(purpose.group(1).split()).lower()
+            cut = max([x.end() for x in (tot, purpose) if x] or [0])
+            add(page=pno, part=part, kind="hole", value=v, units="mm",
+                words=" ".join((m.group(0) + " " + tail[:cut]).split())[:120])
         for m in _CSK.finditer(text):
             add(page=pno, part=part, kind="countersink",
                 value={"diameter_mm": float(m.group("dia")), "angle_deg": float(m.group("angle"))},
                 units="mm", words=m.group(0).strip())
         for m in _THREAD.finditer(text):
-            if re.search(r"\d\s*M\d", text[max(0, m.start() - 2):m.start() + 2]):
-                continue                    # "30X30X2MM" is not a thread
+            tail = _trailing(text, m.end())
+            tot = _TOTAL.search(tail)
+            count = int(m.group("count") or m.group("count2") or (tot.group(1) if tot else 0) or 1)
             add(page=pno, part=part, kind="thread",
-                value={"thread": f"M{m.group('dia')}x{m.group('pitch')}",
-                       "count": int(m.group("count") or m.group("count2") or 1)},
-                words=m.group(0).strip())
+                value={"thread": f"M{m.group('dia')}x{m.group('pitch')}", "count": count,
+                       "count_printed": bool(m.group("count") or m.group("count2") or tot),
+                       "through": bool(re.match(r"\s*THRU", tail, re.IGNORECASE))},
+                words=" ".join((m.group(0) + " " + tail[:tot.end() if tot else 0]).split())[:120])
         try:
             from section_profile import detect_section_stock
             sec = detect_section_stock(text)
@@ -206,3 +227,48 @@ def by_part(findings: Mapping[str, Any]) -> Dict[Optional[str], List[Dict[str, A
     for i in findings.get("items") or []:
         out.setdefault(i.get("part"), []).append(dict(i))
     return out
+
+
+# The work a hole, a thread or a countersink asks of its part, and the operation that does it.
+_FEATURE_OP = {"thread": "tapping", "countersink": "countersinking"}
+
+
+def attach_stated_features(summary: Mapping[str, Any]) -> int:
+    """Put each hole, thread and countersink the reader found on a part's own sheet on that
+    part's record, with its count, page and words (SCRUM-194). A feature already on the record
+    at the same size is not added twice. The work it asks for is put on the part where the
+    record lacks it, sourced to the sheet's note: a thread is tapped, a countersink sunk, and a
+    hole through section stock (which no laser cuts) is drilled. Returns features attached."""
+    findings = summary.get("reader_findings") if isinstance(summary.get("reader_findings"), Mapping) else {}
+    parts = {" ".join(str(p.get("part_number") or "").split()).upper(): p
+             for p in ((summary.get("manufacturing_writeup") or {}).get("parts") or []) if isinstance(p, dict)}
+    n = 0
+    for f in findings.get("items") or []:
+        kind = f.get("kind")
+        if kind not in ("hole", "thread", "countersink"):
+            continue
+        part = parts.get(" ".join(str(f.get("part") or "").split()).upper())
+        if part is None:
+            continue
+        feat = {"kind": kind, **dict(f.get("value") or {}), "page": f.get("page"), "words": f.get("words"),
+                "finding": f.get("id"), "source": "drawing_notes"}
+        have = part.setdefault("stated_features", [])
+        key = (kind, feat.get("diameter_mm"), feat.get("thread"), feat.get("page"))
+        if any((h.get("kind"), h.get("diameter_mm"), h.get("thread"), h.get("page")) == key for h in have):
+            continue
+        have.append(feat)
+        n += 1
+        if kind == "hole" and feat.get("diameter_mm"):
+            sizes = part.setdefault("hole_sizes_mm", [])
+            if not any(_num(x) == feat["diameter_mm"] for x in sizes):
+                sizes.append(feat["diameter_mm"])
+        op = _FEATURE_OP.get(kind)
+        if kind == "hole" and (part.get("section_stock") or part.get("section_stock_on_members")):
+            op = "drilling"
+        if op:
+            ops = part.setdefault("textual_operations", [])
+            if op not in ops:
+                ops.append(op)
+            part.setdefault("operation_sources", {}).setdefault(op, "drawing_notes")
+            part.setdefault("operation_evidence", {}).setdefault(op, str(f.get("words") or "")[:120])
+    return n

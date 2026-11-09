@@ -827,6 +827,19 @@ def main() -> None:
         print("   " + "=" * 68)
         print("")
 
+    # ── SDI_LLM_MODE=targeted: THE MODEL IS ASKED ONLY ABOUT THE GAPS (SCRUM-194 req. 3) ──
+    if (not getattr(args, "deterministic_only", False)
+            and os.getenv("SDI_LLM_MODE", "").strip().lower() == "targeted"):
+        from run_readers import TARGETED_MODE_OFF as _tgt_off
+        print("")
+        print("   " + "=" * 68)
+        print("   TARGETED MODEL MODE. The deterministic readers run first; the model is then")
+        print("   asked one question per gap, on that part's own pages (gap fill). OFF:")
+        for _w in _tgt_off:
+            print(f"     - {_w}")
+        print("   " + "=" * 68)
+        print("")
+
     # ── --fresh-read: ASK THE MODEL AGAIN ───────────────────────────────────────────
     # SET AS ENVIRONMENT, like SDI_LLM_ONLY, because the two caches sit at opposite ends of
     # the pipeline -- one inside the per-page vision reader, one inside the whole-pack
@@ -1046,6 +1059,11 @@ def main() -> None:
         summary["llm_only"] = bool(getattr(args, "llm_only", False))
         # D-753: a saved run says it was read with no language model, for every reader after.
         summary["deterministic_only"] = bool(getattr(args, "deterministic_only", False))
+        try:
+            from run_readers import llm_mode as _llm_mode_rec
+            summary["llm_mode"] = _llm_mode_rec()
+        except Exception:                                            # noqa: BLE001
+            pass
         _time_stage("enrichment_reader_provenance", True)
         summary["fresh_read"] = bool(getattr(args, "fresh_read", False))
         # WHICH MACHINE, WHICH RUNNER, WHICH BUILD — onto the run, for the book's first page

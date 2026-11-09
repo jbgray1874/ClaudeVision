@@ -1005,7 +1005,7 @@ def reconcile_job(
     # NO VISION READ AND NO CACHED ONE (D-753): a deterministic-only run tests the drawing
     # reader alone, and a page answer replayed from the cache is still the model's reading.
     try:
-        from run_readers import run_was_deterministic_only as _det_only
+        from run_readers import whole_reads_off as _det_only          # targeted mode too
         _det = _det_only()
     except Exception:                                                   # noqa: BLE001
         _det = False

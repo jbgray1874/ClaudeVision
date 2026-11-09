@@ -57,10 +57,38 @@ def _ops(rec: Mapping[str, Any]) -> set:
             for o in (rec.get(k) or []) if str(o).strip()}
 
 
-def _record_stage(f: Mapping[str, Any], rec: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+def is_assembly_sheet(page: Mapping[str, Any]) -> bool:
+    """A general arrangement or exploded parts sheet: no single part's own sheet. Its role, or
+    its title block's sheet title, says so."""
+    role = str((page.get("page_role") or {}).get("primary_role") or "").lower()
+    if role in ("assembly", "ga", "general_arrangement"):
+        return True
+    tb = str((page.get("region_text") or {}).get("title_block") or "").upper()
+    return bool(re.search(r"GENERAL\s*ASSEMBLY|GENERAL\s*ARRANGEMENT|EXPLODED\s*VIEW", tb))
+
+
+def _record_stage(f: Mapping[str, Any], rec: Optional[Mapping[str, Any]],
+                  pieces: Optional[List[Mapping[str, Any]]] = None) -> Dict[str, Any]:
     kind, val = f.get("kind"), f.get("value")
     if rec is None:
         return {"state": "dropped", "note": "no built part record for this part"}
+    if rec.get("section_stock_on_members") and kind in ("overall", "section_callout", "section_profile"):
+        # A WELDMENT WHOSE STOCK IS ON ITS PIECES: the section and lengths are held there.
+        held = [p.get("section_stock") or {} for p in (pieces or [])]
+        if kind == "overall":
+            return {"state": "reference", "value": [h.get("length_mm") for h in held],
+                    "note": "a weldment's extents; its stock is its pieces"}
+        prof = val if kind == "section_profile" else [(val or {}).get("a"), (val or {}).get("b"), (val or {}).get("t")]
+        match = [h for h in held if all(_same(x, h.get(k)) for x, k in zip(sorted(prof or [], key=lambda x: float(x or 0))[1:] + sorted(prof or [], key=lambda x: float(x or 0))[:1], ("a", "b", "t")))]
+        want_len = _num((val or {}).get("length_mm")) if kind == "section_callout" else None
+        if match:
+            return {"state": "in_record", "value": [h.get("length_mm") for h in match],
+                    "note": f"held on its pieces {', '.join(str(p.get('part_number')) for p in (pieces or []) if (p.get('section_stock') or {}) in match)}"
+                            + (f"; the read's {want_len:g} is "
+                               + ("one piece's length" if any(_same(want_len, h.get("length_mm")) for h in held)
+                                  else "on no piece") if want_len else "")}
+        return {"state": "changed", "value": [[h.get("a"), h.get("b"), h.get("t")] for h in held],
+                "note": "its pieces hold other profiles"}
     ss = rec.get("section_stock") if isinstance(rec.get("section_stock"), Mapping) else {}
     ops = _ops(rec)
     if kind == "identity":
@@ -222,13 +250,51 @@ def _workbook_stage(f: Mapping[str, Any], rec: Optional[Mapping[str, Any]],
     return {"state": it.get("state"), "how": it.get("how"), "cells": it.get("cells") or [], "item": it.get("id")}
 
 
+def disposition_unassigned(f: Mapping[str, Any], summary: Mapping[str, Any]) -> Dict[str, Any]:
+    """A finding no part's sheet carried, given a disposition where the pack itself settles it,
+    else left UNASSIGNED and open (reviewer, 9 Nov 2026: each one listed and resolved or
+    explicitly dispositioned). Never a guess:
+
+      an overall figure on an assembly sheet is the assembly's envelope: REFERENCE (it sizes the
+          pack, it is not a part's stock);
+      a countersink cue that names a fastener ("CSK SCREWS", "CSK BOLT") is the head style of a
+          bought item: COVERED where a made part's own sheet states the countersinking;
+      a finish on an assembly sheet that a made part's own sheet states too: COVERED by it;
+      an operation every part that could take it already carries: COVERED by them."""
+    kind, words = f.get("kind"), str(f.get("words") or "").upper()
+    pages = {p.get("page_number"): p for p in (summary.get("pages") or []) if isinstance(p, Mapping)}
+    role = str(((pages.get(f.get("page")) or {}).get("page_role") or {}).get("primary_role") or "").lower()
+    findings = (summary.get("reader_findings") or {}).get("items") or []
+    owned = [g for g in findings if g.get("part") and g.get("kind") == kind]
+    if kind == "overall" and (role in ("assembly", "ga", "general_arrangement", "")
+                              or is_assembly_sheet(pages.get(f.get("page")) or {})):
+        return {"verdict": "REFERENCE", "disposition": f"the assembly's overall envelope on page {f.get('page')} "
+                                                       f"(sizes the pack; no part's stock)"}
+    if kind == "operation" and f.get("value") == "countersinking" and re.search(r"CSK\s*(SCREW|BOLT)", re.sub(r"\s+", " ", words)):
+        holders = sorted({g["part"] for g in owned if g.get("value") == "countersinking"})
+        if holders:
+            return {"verdict": "COVERED", "disposition": f"names a bought fastener's head style; the countersinks "
+                                                         f"it seats in are stated on {', '.join(holders)}'s own sheets"}
+        return {"verdict": "UNASSIGNED", "disposition": "names a countersunk fastener; no made part's sheet states the countersinks"}
+    if kind == "finish":
+        holders = sorted({g["part"] for g in owned if g.get("value") == f.get("value")})
+        if holders:
+            return {"verdict": "COVERED", "disposition": f"the same {f.get('value')} finish is stated on "
+                                                         f"{', '.join(holders)}'s own sheets"}
+    if kind == "operation":
+        holders = sorted({g["part"] for g in owned if g.get("value") == f.get("value")})
+        if holders:
+            return {"verdict": "COVERED", "disposition": f"{f.get('value')} is stated on {', '.join(holders)}'s own sheets"}
+    return {"verdict": "UNASSIGNED", "disposition": "no part named, and the pack does not settle it: open"}
+
+
 def _verdict(rec_s: str, cost_s: str, wb_s: str, part: Any) -> str:
     if not part:
         return "UNASSIGNED"
-    if wb_s == "not_read_back":
-        return "NOT TESTED"
     if rec_s == "reference":
         return "REFERENCE"
+    if wb_s == "not_read_back":
+        return "NOT TESTED"
     if rec_s == "dropped" or cost_s == "not_costed":
         return "FAIL"
     if wb_s in ("unresolved", "no_item"):
@@ -241,10 +307,10 @@ def _verdict(rec_s: str, cost_s: str, wb_s: str, part: Any) -> str:
 def audit(summary: Mapping[str, Any], charge_result: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     findings = summary.get("reader_findings") if isinstance(summary.get("reader_findings"), Mapping) else None
     if not findings or not findings.get("items"):
-        return {"applicable": False, "items": [],
-                "why": ("no reader findings on this record: the scan predates their capture, so "
+        return {"applicable": False, "status": "NOT TESTED", "items": [],
+                "why": ("NOT TESTED: no reader findings on this record (the scan predates their capture), so "
                         "nothing can be shown about what the reader found before the build" if not findings
-                        else "the reader made no finding")}
+                        else "NOT TESTED: the reader made no finding")}
     recs = {_pn(p.get("part_number")): p for p in ((summary.get("manufacturing_writeup") or {}).get("parts") or [])
             if isinstance(p, Mapping)}
     es = summary.get("estimate_summary") if isinstance(summary.get("estimate_summary"), Mapping) else {}
@@ -259,15 +325,21 @@ def audit(summary: Mapping[str, Any], charge_result: Optional[Mapping[str, Any]]
         pn = _pn(f.get("part"))
         rec = recs.get(pn) if pn else None
         cost = costs.get(pn) if pn else None
-        r = _record_stage(f, rec) if pn else {"state": "unassigned", "note": "no part named on the page"}
+        pieces = [p for p in recs.values() if _pn(p.get("cut_list_member_of")) == pn] if pn else []
+        r = _record_stage(f, rec, pieces) if pn else {"state": "unassigned", "note": "no part named on the page"}
         c = _costing_stage(f, cost) if pn else {"state": "unassigned"}
         w = _workbook_stage(f, rec, items, read_back) if pn else {"state": "unassigned"}
-        rows.append({"id": f.get("id"), "page": f.get("page"), "part": f.get("part"), "kind": f.get("kind"),
-                     "value": f.get("value"), "units": f.get("units"), "words": f.get("words"),
-                     "source": f.get("source"), "record": r, "costing": c, "workbook": w,
-                     "verdict": _verdict(r["state"], c["state"], w["state"], pn)})
+        row = {"id": f.get("id"), "page": f.get("page"), "part": f.get("part"), "kind": f.get("kind"),
+               "value": f.get("value"), "units": f.get("units"), "words": f.get("words"),
+               "source": f.get("source"), "record": r, "costing": c, "workbook": w,
+               "verdict": _verdict(r["state"], c["state"], w["state"], pn)}
+        if not pn:
+            d = disposition_unassigned(f, summary)
+            row["verdict"], row["disposition"] = d["verdict"], d["disposition"]
+        rows.append(row)
     counts: Dict[str, int] = {}
     for r in rows:
         counts[r["verdict"]] = counts.get(r["verdict"], 0) + 1
     return {"applicable": True, "captured": findings.get("captured"), "items": rows, "counts": counts,
-            "read_back": read_back, "unassigned": [r for r in rows if r["verdict"] == "UNASSIGNED"]}
+            "read_back": read_back, "unassigned": [r for r in rows if not r.get("part")],
+            "open": [r for r in rows if r["verdict"] in ("FAIL", "UNASSIGNED")]}

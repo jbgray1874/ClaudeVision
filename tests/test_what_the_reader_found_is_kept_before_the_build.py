@@ -53,11 +53,11 @@ def test_the_findings_are_read_off_the_pages_with_page_part_value_and_words():
     assert by[(5, "thickness", "UPC0358141 M2")]["value"] == 3.0
     assert by[(5, "finish", "UPC0358141 M2")]["value"] == "brushed"
     hole = next(i for i in led["items"] if i["page"] == 5 and i["kind"] == "hole")
-    assert hole["value"] == {"diameter_mm": 3.4, "count": 5}, "counts survive"
+    assert hole["value"]["diameter_mm"] == 3.4 and hole["value"]["count"] == 5, "counts survive"
     csk = next(i for i in led["items"] if i["page"] == 5 and i["kind"] == "countersink")
     assert csk["value"] == {"diameter_mm": 6.3, "angle_deg": 90.0}
     thread = next(i for i in led["items"] if i["page"] == 3 and i["kind"] == "thread")
-    assert thread["value"] == {"thread": "M3x0.5", "count": 9} and thread["part"] == "UPC0358141 M1"
+    assert thread["value"]["thread"] == "M3x0.5" and thread["value"]["count"] == 9 and thread["part"] == "UPC0358141 M1"
     assert not any(i["kind"] == "thread" and i["value"]["thread"].startswith("M30") for i in led["items"]), \
         "30x30x2mm is a section, not a thread"
     ga = next(i for i in led["items"] if i["page"] == 1 and i["kind"] == "overall")
@@ -131,7 +131,8 @@ def test_each_finding_is_followed_through_record_costing_and_workbook_and_a_lost
     thread = by[(3, "thread", "UPC0358141 M1")]
     assert thread["record"]["state"] == "held_as_operation" and thread["verdict"] == "PASS"
     ga = by[(1, "overall", "None")]
-    assert ga["verdict"] == "UNASSIGNED" and ga in t["unassigned"]
+    assert ga["verdict"] == "REFERENCE" and "envelope" in ga["disposition"] and ga in t["unassigned"], \
+        "a finding no part was given is listed with its disposition"
     lost = ft.audit(_costed(blank=False))
     size2 = {(r["page"], r["kind"], str(r["part"])): r for r in lost["items"]}[(5, "overall", "UPC0358141 M2")]
     assert size2["record"]["state"] == "dropped" and size2["verdict"] == "FAIL", size2
@@ -141,4 +142,58 @@ def test_a_record_without_captured_findings_is_not_applicable_never_reconstructe
     s = _costed()
     s.pop("reader_findings")
     t = ft.audit(s)
-    assert t["applicable"] is False and "predates" in t["why"] and t["items"] == []
+    assert t["applicable"] is False and t["status"] == "NOT TESTED" and "predates" in t["why"] and t["items"] == []
+
+
+# ── M1's transfer defects (reviewer, 9 Nov 2026) ─────────────────────────────────────────
+
+_P4 = ("AF FRONTVIEW 3\n3 3\n12\n60\nM8x1.25THRUBOTTOMFACE\n(4TOTAL)\n222 n10THRUBOTTOMFACE\n102CTS\n"
+       "TUBE FORPUDDLEWELD\n(11TOTAL)\n60\n80 505CTS 505CTS 80\n1170TUBE")
+
+
+def test_a_count_printed_after_the_callout_survives_and_each_thread_keeps_its_own_spec():
+    s = {"pages": [{"page_number": 4, "pdfplumber_text": _P4, "region_text": {"title_block": "BULKQTY M1 A SHEET"}},
+                   {"page_number": 3, "pdfplumber_text": "(9x)M3x0.5 AA 30x30x2mm MSUPRIGHTS",
+                    "region_text": {"title_block": "REV QTY BULKQTY M1 A 1 MILDSTEEL SHEET DATE"}}],
+         "document_analysis": {"bom_rows": [{"part_number": "UPC0358141 M1", "description": "RAIL", "quantity": 1}]}}
+    led = rf.capture(s)
+    holes = [i for i in led["items"] if i["kind"] == "hole"]
+    threads = sorted((i["page"], i["value"]["thread"], i["value"]["count"]) for i in led["items"] if i["kind"] == "thread")
+    assert len(holes) == 1 and holes[0]["value"]["count"] == 11 and holes[0]["value"]["count_printed"]
+    assert holes[0]["value"]["purpose"] == "puddleweld" and "(11TOTAL)" in holes[0]["words"]
+    assert threads == [(3, "M3x0.5", 9), (4, "M8x1.25", 4)], "page 4's four M8 are not page 3's nine M3"
+    mat = next(i for i in led["items"] if i["kind"] == "material")
+    assert mat["page"] == 3 and mat["value"] == "MILD STEEL" and mat["words"] == "MILDSTEEL"
+
+
+def test_a_title_block_that_prints_only_the_metal_gives_the_metal():
+    import part_index as pi
+    got = pi._title_block_gauge_and_material("REV QTY BULKQTY M1 A 1 MILDSTEEL SHEET DATE DRAWNB")
+    assert got == {"printed": "MILDSTEEL", "material": "MILD STEEL", "thickness_mm": None, "section": None}
+    assert pi._title_block_gauge_and_material("BULKQTY M1 A SHEET DATE 304-STAINLESSSTEEL") is None, \
+        "a legend's metal outside the field window is not the part's"
+
+
+def test_each_labelled_tube_length_keeps_the_section_printed_on_its_own_sheet():
+    p3 = ("15x30x2mm\nMSTOPTUBE\n3\n480\n(9x)M3x0.5 AA 30x30x2mm\nMSUPRIGHTS\nTOPFACE\n1394TUBE\nISOMETRIC")
+    rail = {"part_number": "UPC0358141 M1", "description": "RAIL", "pages": [3, 4], "materials": ["MILD STEEL"],
+            "quantity": 1,
+            "section_stock": {"a": 15.0, "b": 30.0, "t": 2.0, "length_mm": 2564.0, "cut_lengths_mm": [1170.0, 1394.0],
+                              "length_source": "tube_callouts", "pieces_counted_once": True}}
+    upright = {"part_number": "UPC0358141 M4", "description": "UPRIGHT", "pages": [7]}
+    summary = {"pages": [{"page_number": 3, "pdfplumber_text": p3}, {"page_number": 4, "pdfplumber_text": _P4}]}
+    parts = [rail, upright]
+    members = db.sheet_piece_member_records(parts, summary)
+    by = {m["section_stock"]["length_mm"]: m for m in members}
+    assert set(by) == {1394.0, 1170.0} and all(m["cut_list_member_of"] == "UPC0358141 M1" for m in members)
+    top = by[1394.0]["section_stock"]
+    assert (top["a"], top["b"], top["t"]) == (15.0, 30.0, 2.0) and top["profile_source"] == "same_sheet", \
+        "the 30x30 on page 3 is the UPRIGHT's, not this piece's"
+    bar = by[1170.0]["section_stock"]
+    assert bar["profile_provisional"] is True and bar["length_page"] == 4, \
+        "page 4 prints no profile: provisional, said, and an open gap"
+    assert any("provisionally" in f for f in by[1170.0]["review_flags"])
+    assert "section_stock" not in rail and rail["section_stock_on_members"] == [m["part_number"] for m in members]
+    assert rail["section_stock_as_read"]["length_mm"] == 2564.0, "what was read is kept beside the pieces"
+    import gap_fill as gf
+    assert gf.gaps_of(by[1170.0]) == ["section_profile"] and gf.gaps_of(rail) == []
