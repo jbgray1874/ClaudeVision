@@ -1,0 +1,61 @@
+"""The app portal (/app/) in the we.are.sdi look, as the estimating pages and the wall (D-754).
+
+9 Nov 2026, James: "can we also ensure that the look and feel of the web app portal page falls
+also in line with the we are sdi style of fonts etc", pointing at the estimating page and the
+operations wall. The site's look on the dark ground: the lower-case wordmark with its two dots
+in SDI yellow, a geometric sans for headings (Outfit, for the licensed Sofia Pro), an elegant
+serif for the tagline (Fraunces light, for Juana), pill buttons, the halftone circle, and the
+short yellow line over each panel. Amber stays the warning colour, so a warning never reads as
+brand.
+"""
+import re
+import unittest
+from pathlib import Path
+
+APP = Path(__file__).resolve().parent.parent / "appportal"
+PAGE = (APP / "index.html").read_text(encoding="utf-8")
+ROOT = PAGE[PAGE.index(":root{"):]
+ROOT = ROOT[:ROOT.index("}")]
+
+
+class TheAppPortalIsWeAreSdiTests(unittest.TestCase):
+    def test_the_wordmark_with_its_two_yellow_dots(self):
+        m = re.search(r'<svg class="sdi-word" viewBox="0 0 950 169" role="img" '
+                      r'aria-label="we\.are\.sdi" fill="currentColor">(.*?)</svg>', PAGE, re.S)
+        self.assertTrue(m, "no we.are.sdi wordmark in the header")
+        self.assertEqual(m.group(1).count('<path class="d"'), 2)
+        self.assertIn(".sdi-word .d{fill:var(--brand)}", PAGE)
+        self.assertNotIn('<div class="mark"><b>S</b></div>', PAGE)          # the old lettered square
+
+    def test_sdi_yellow_is_the_brand_and_amber_the_warning(self):
+        self.assertIn("--brand:#F6D946", ROOT)
+        warn = re.search(r"--warn:(#[0-9a-fA-F]{6})", ROOT).group(1)
+        self.assertNotEqual(warn.upper(), "#F6D946")
+        self.assertNotIn("#ffd400", PAGE.lower())                             # the old yellow, gone
+
+    def test_the_sites_kind_of_type(self):
+        self.assertIn("family=Outfit", PAGE)
+        self.assertIn("family=Fraunces", PAGE)
+        self.assertIn("--disp:'Outfit'", ROOT)
+        self.assertIn(".tagline{font-family:var(--serif-disp)", PAGE)
+        for old in ("Archivo", "Hanken"):
+            self.assertNotIn(old, PAGE)
+
+    def test_pill_buttons_the_halftone_circle_and_the_yellow_line(self):
+        self.assertRegex(PAGE, r"\.card \.go,\.btn\{[^}]*border-radius:999px")
+        self.assertIn('class="sdi-dots"', PAGE)
+        self.assertRegex(PAGE, r"\.card::before,\.note::before\{[^}]*background:var\(--brand\)")
+
+    def test_what_the_page_does_is_unchanged(self):
+        """A restyle only: the catalogue, sign-in, search, detail and the office-only note as before."""
+        for kept in ("fetch('../api/services?surface=app'", "location.href='/auth/login?next='",
+                     "$('q').addEventListener('input'", "function renderDetail(s)",
+                     "if(s.link && s.link!==s.app_url)", "didn't open from here",
+                     "navigator.serviceWorker.register('sw.js')"):
+            self.assertIn(kept, PAGE)
+        for el in ('id="q"', 'id="who"', 'id="list"', 'id="detail"', 'id="banner"', 'id="foot"', 'id="back"'):
+            self.assertIn(el, PAGE)
+
+
+if __name__ == "__main__":
+    unittest.main()
