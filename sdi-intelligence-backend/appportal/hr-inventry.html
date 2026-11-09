@@ -3,119 +3,194 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#0d0d0f">
+<meta name="theme-color" content="#0c0c0b">
 <title>HRInventry Anywhere · SDI Intelligence</title>
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,300;9..144,400&display=swap" rel="stylesheet">
 <style>
+  /* ── we.are.sdi (9 Nov 2026, SCRUM-195): the app portal's look, as appportal/index.html has it.
+     The wordmark with its two yellow dots, Outfit headings, Inter body, JetBrains Mono labels, pill
+     buttons, and the short yellow line over each panel. Warnings keep their amber, so a warning
+     never reads as brand. Dark only, as before. Presentation only: no id, class or wording changed. */
   :root{
-    --bg:#0d0d0f; --surface:#17171b; --surface-2:#1d1d22;
-    --line:#2a2a31; --line-soft:#202026;
-    --ink:#f3f2ee; --ink-dim:#a3a3aa; --ink-faint:#6b6b73;
-    --accent:#ffd400; --ok:#5fd08a; --warn:#ff9d42; --fail:#ff5d5d;
-    --r:4px;
-    --mono:'JetBrains Mono',ui-monospace,monospace;
-    --disp:'Archivo',sans-serif;
-    --body:'Hanken Grotesk',sans-serif;
+    --bg:#0c0c0b; --panel:#141412; --panel-2:#1a1a17; --line:#2b2b26; --line-soft:#21211d;
+    --ink:#f2f2ea; --muted:#b6b6a7; --dim:#8f8f84;
+    --brand:#F6D946; --brand-fill:#F6D946; --ok:#4ec97f; --warn:#e8a33d; --bad:#ff6b6b;
+    --disp:'Outfit','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --body:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
+    --r:10px;
     --safe-t:env(safe-area-inset-top,0px); --safe-b:env(safe-area-inset-bottom,0px);
+    color-scheme:dark;
   }
   *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
   body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;
-       line-height:1.5;-webkit-font-smoothing:antialiased;min-height:100vh;overflow-wrap:anywhere;
-       background-image:radial-gradient(900px 500px at 88% -8%,rgba(255,212,0,.06),transparent 60%)}
-  a{color:var(--accent);text-decoration:none}
-  .top{position:sticky;top:0;z-index:20;background:rgba(13,13,15,.92);backdrop-filter:blur(12px);
-       border-bottom:1px solid var(--line);padding:calc(12px + var(--safe-t)) 16px 12px;
-       display:flex;justify-content:space-between;align-items:center;gap:10px}
-  .back{display:flex;align-items:center;gap:7px;background:none;border:0;color:var(--ink-dim);
-        font-family:var(--body);font-size:14px;cursor:pointer;padding:2px}
-  .back svg{width:17px;height:17px}
-  .who{font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
-  .wrap{padding:18px 16px calc(32px + var(--safe-b));max-width:840px;margin:0 auto}
-  .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--accent);text-transform:uppercase}
-  h1{font-family:var(--disp);font-weight:800;font-size:25px;line-height:1.15;margin:8px 0 10px}
-  .sub{color:var(--ink-dim);font-size:14.5px}
-  .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:15px;margin-top:14px}
-  .panel h4{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--ink-faint);
+       line-height:1.5;-webkit-font-smoothing:antialiased;min-height:100vh;overflow-wrap:anywhere;overflow-x:hidden}
+  a{color:var(--brand);text-decoration:none}
+
+  .sdi-word{display:inline-block;height:1em;width:auto;vertical-align:-.12em;color:var(--ink)}
+  .sdi-word .d{fill:var(--brand)}
+  .sdi-dots{position:absolute;pointer-events:none;border-radius:50%;opacity:.16;z-index:0;
+    background-image:radial-gradient(var(--brand) 1.1px, transparent 1.6px);background-size:9px 9px;
+    -webkit-mask-image:radial-gradient(circle at center,#000 58%,transparent 71%);
+            mask-image:radial-gradient(circle at center,#000 58%,transparent 71%)}
+
+  /* ── header: the wordmark and the app's name, then the way back to the portal ── */
+  .top{position:sticky;top:0;z-index:20;background:rgba(12,12,11,.9);
+       backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--line);
+       padding:calc(12px + var(--safe-t)) 16px 6px}
+  .top .in{max-width:808px;margin:0 auto}
+  .bar{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:34px}
+  .brand{display:flex;align-items:center;gap:12px;min-width:0;flex:none}
+  .brand .sdi-word{height:22px}
+  .brand .pipe{width:1px;height:20px;background:var(--line);flex:none}
+  .brand .lbl{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.22em;
+    color:var(--brand);text-transform:uppercase;white-space:nowrap}
+  .nav{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:4px}
+  .back{display:flex;align-items:center;gap:7px;background:none;border:0;color:var(--muted);
+        font-family:var(--body);font-size:14px;cursor:pointer;padding:6px 2px;text-decoration:none}
+  .back svg{width:17px;height:17px;flex:none}
+  .back:hover{color:var(--ink)}
+  .back:focus-visible{outline:2px solid var(--brand);outline-offset:2px;border-radius:4px}
+  .who{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--dim);
+       min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* ── the opening, over the faint halftone circle ── */
+  .wrap{padding:22px 16px calc(32px + var(--safe-b));max-width:840px;margin:0 auto}
+  .hero{position:relative}
+  .hero > :not(.sdi-dots){position:relative;z-index:1}
+  .hero .sdi-dots{width:210px;height:210px;right:-16px;top:-64px}
+  .kicker{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:10.5px;
+    letter-spacing:.22em;color:var(--brand);text-transform:uppercase}
+  .kicker::before{content:"";width:26px;height:2px;background:var(--brand);flex:none}
+  h1{font-family:var(--disp);font-weight:600;font-size:clamp(26px,6vw,34px);line-height:1.12;
+     margin:10px 0 10px;letter-spacing:-.015em}
+  .sub{color:var(--muted);font-size:14.5px;max-width:600px}
+
+  /* ── panels: the short yellow line over the top left, amber for a warning ── */
+  .panel{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+         padding:16px;margin-top:14px}
+  .panel::before{content:"";position:absolute;top:-1px;left:16px;width:30px;height:2px;
+         background:var(--brand);border-radius:0 0 2px 2px}
+  .panel .panel{background:var(--panel-2)}
+  .panel h4{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--dim);
             text-transform:uppercase;font-weight:500;margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-  .panel.warn{border-color:rgba(255,157,66,.35);background:rgba(255,157,66,.06)}
-  .panel.ok{border-color:rgba(95,208,138,.35);background:rgba(95,208,138,.06)}
-  .panel.fail{border-color:rgba(255,93,93,.35);background:rgba(255,93,93,.06)}
+  .panel.warn{border-color:rgba(232,163,61,.35);background:rgba(232,163,61,.06)}
+  .panel.warn::before{background:var(--warn)}
+  .panel.ok{border-color:rgba(78,201,127,.3);background:rgba(78,201,127,.05)}
+  .panel.ok::before{background:var(--ok)}
+  .panel.fail{border-color:rgba(255,107,107,.35);background:rgba(255,107,107,.06)}
+  .panel.fail::before{background:var(--bad)}
+
+  /* ── buttons: pills, yellow with black ink, or ghost ── */
   .btns{display:flex;flex-wrap:wrap;gap:10px}
-  .btn{background:var(--accent);color:#000;font-family:var(--disp);font-weight:800;font-size:15px;
-       padding:12px 18px;border:0;border-radius:var(--r);cursor:pointer}
-  .btn[disabled]{opacity:.45;cursor:not-allowed}
-  .btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
-  .chip{font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;
-        padding:4px 7px;border-radius:2px;border:1px solid transparent;white-space:nowrap}
-  .c-ok{background:rgba(95,208,138,.12);color:var(--ok);border-color:rgba(95,208,138,.3)}
-  .c-warn{background:rgba(255,157,66,.12);color:var(--warn);border-color:rgba(255,157,66,.3)}
-  .c-fail{background:rgba(255,93,93,.12);color:var(--fail);border-color:rgba(255,93,93,.3)}
-  .c-off{background:rgba(163,163,170,.1);color:var(--ink-dim);border-color:var(--line)}
-  .muted{color:var(--ink-faint);font-size:12.5px}
-  .err{color:var(--fail);font-size:14px;margin-top:10px}
+  .btn{display:inline-flex;align-items:center;gap:6px;background:var(--brand-fill);color:#000;
+       font-family:var(--disp);font-weight:600;font-size:15px;line-height:1.3;padding:10px 20px;
+       border:1px solid var(--brand-fill);border-radius:999px;cursor:pointer;transition:filter .15s,border-color .15s}
+  .btn:hover{filter:brightness(1.06)}
+  .btn:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+  .btn[disabled]{opacity:.45;cursor:not-allowed;filter:none}
+  .btn.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+  .btn.ghost:hover{border-color:var(--muted)}
+  .chip{font-family:var(--mono);font-size:9.5px;font-weight:500;letter-spacing:.09em;text-transform:uppercase;
+        padding:4px 9px;border-radius:999px;border:1px solid transparent;white-space:nowrap}
+  .chip:empty{display:none}
+  .c-ok{background:rgba(78,201,127,.1);color:var(--ok);border-color:rgba(78,201,127,.3)}
+  .c-warn{background:rgba(232,163,61,.1);color:var(--warn);border-color:rgba(232,163,61,.3)}
+  .c-fail{background:rgba(255,107,107,.1);color:var(--bad);border-color:rgba(255,107,107,.3)}
+  .c-off{background:rgba(182,182,167,.08);color:var(--muted);border-color:var(--line)}
+  .muted{color:var(--dim);font-size:12.5px}
+  .muted b{color:var(--muted);font-weight:600}
+  .err{color:var(--bad);font-size:14px;margin-top:10px}
   .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-top:4px}
-  .stat{background:var(--surface-2);border:1px solid var(--line-soft);border-radius:var(--r);padding:10px}
-  .stat b{display:block;font-family:var(--disp);font-size:22px;line-height:1.1}
-  .stat span{font-size:12px;color:var(--ink-dim)}
+  .stat{background:var(--panel-2);border:1px solid var(--line-soft);border-radius:8px;padding:11px 12px}
+  .stat b{display:block;font-family:var(--disp);font-weight:600;font-size:24px;line-height:1.1;letter-spacing:-.01em}
+  .stat span{font-size:12px;color:var(--muted)}
   ul.names{list-style:none;columns:2 220px;column-gap:18px}
-  ul.names li{padding:5px 0;border-bottom:1px solid var(--line-soft);break-inside:avoid;font-size:14.5px}
-  ul.names li small{display:block;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+  ul.names li{padding:6px 0;border-bottom:1px solid var(--line-soft);break-inside:avoid;font-size:14.5px}
+  ul.names li small{display:block;font-family:var(--mono);font-size:11px;color:var(--dim)}
   ul.names li.late small{color:var(--warn)}
-  .notes li{margin:0 0 6px 18px;color:var(--ink-dim);font-size:13.5px}
-  .tabs{display:flex;gap:6px;overflow-x:auto;margin-top:16px;padding-bottom:2px;-webkit-overflow-scrolling:touch}
-  .tab{flex:0 0 auto;background:transparent;border:1px solid var(--line);color:var(--ink-dim);border-radius:999px;
-       font-family:var(--body);font-weight:600;font-size:13.5px;padding:8px 14px;cursor:pointer}
-  .tab.on{background:var(--accent);border-color:var(--accent);color:#000}
+  .notes li{margin:0 0 6px 18px;color:var(--muted);font-size:13.5px}
+
+  /* ── tabs: pills in the back control's type; the open one filled yellow. They wrap
+     rather than scroll, so on a phone every tab is in sight. ── */
+  .tabs{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px;padding:2px 0}
+  .tab{flex:0 0 auto;background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:999px;
+       font-family:var(--body);font-weight:500;font-size:14px;padding:8px 15px;cursor:pointer;
+       transition:color .15s,border-color .15s}
+  .tab:hover{color:var(--ink);border-color:var(--muted)}
+  .tab:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+  .tab.on{background:var(--brand-fill);border-color:var(--brand-fill);color:#000;font-weight:600}
   .view{display:none}
   .view.on{display:block}
+
+  /* ── roll call ── */
   ul.roll{list-style:none}
+  #roll{scroll-margin-top:100px}      /* a link to ...#roll lands below the sticky header */
   ul.roll li{display:flex;align-items:center;gap:12px;padding:10px 2px;border-bottom:1px solid var(--line-soft)}
   ul.roll input{width:22px;height:22px;accent-color:var(--ok);flex:0 0 auto}
-  ul.roll li.done span.n{color:var(--ink-faint);text-decoration:line-through}
-  ul.roll small{display:block;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
-  details.grp{border:1px solid var(--line);border-radius:var(--r);margin:8px 0;background:var(--surface-2)}
-  details.grp>summary{cursor:pointer;padding:11px 12px;font-weight:600;font-size:14.5px;list-style:none;
+  ul.roll li.done span.n{color:var(--dim);text-decoration:line-through}
+  ul.roll small{display:block;font-family:var(--mono);font-size:11px;color:var(--dim)}
+  #rollhide{accent-color:var(--brand)}
+  details.grp{border:1px solid var(--line);border-radius:8px;margin:8px 0;background:var(--panel-2)}
+  details.grp>summary{cursor:pointer;padding:11px 12px;font-family:var(--disp);font-weight:600;font-size:15px;list-style:none;
        display:flex;justify-content:space-between;gap:10px}
   details.grp>summary::-webkit-details-marker{display:none}
-  details.grp>summary::before{content:"\25B8";color:var(--ink-faint);margin-right:2px}
+  details.grp>summary::before{content:"\25B8";color:var(--brand);margin-right:2px}
   details.grp[open]>summary::before{content:"\25BE"}
-  details.grp>summary .muted{font-weight:400;margin-left:auto}
+  details.grp>summary:focus-visible{outline:2px solid var(--brand);outline-offset:-2px;border-radius:8px}
+  details.grp>summary .muted{font-family:var(--body);font-weight:400;margin-left:auto}
   details.grp>ul{padding:0 12px 6px}
   ul.roll li.grpli{display:block;padding:0;border:0}
   .grpbar{display:flex;gap:10px;align-items:center;margin:4px 0 8px}
   .rollgrid{display:grid;gap:0 14px;align-items:start}
   @media (min-width:780px){.rollgrid{grid-template-columns:minmax(0,1fr) 250px}}
   ul.runs{list-style:none;margin-top:8px}
-  button.run{display:block;width:100%;text-align:left;background:var(--surface-2);color:var(--ink);
-       border:1px solid var(--line-soft);border-radius:var(--r);padding:9px 10px;margin:0 0 6px;
-       font-family:var(--body);font-size:14px;font-weight:600;cursor:pointer}
-  button.run.on{border-color:var(--accent)}
+  button.run{display:block;width:100%;text-align:left;background:var(--panel-2);color:var(--ink);
+       border:1px solid var(--line-soft);border-radius:8px;padding:10px 11px;margin:0 0 6px;
+       font-family:var(--disp);font-size:14.5px;font-weight:600;cursor:pointer;transition:border-color .15s}
+  button.run:hover{border-color:var(--line)}
+  button.run:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+  button.run.on{border-color:var(--brand)}
   button.run .rt{display:flex;gap:8px;align-items:center;margin-bottom:2px}
-  button.run small{display:block;font-family:var(--mono);font-size:11px;font-weight:400;color:var(--ink-faint)}
+  button.run small{display:block;font-family:var(--mono);font-size:11px;font-weight:400;color:var(--dim)}
   button.run small.w{color:var(--warn)}
-  .path{font-family:var(--mono);font-size:11.5px;color:var(--ink-dim)}
+  .path{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+
+  /* ── history and tables ── */
   .hist li{list-style:none;padding:9px 0;border-bottom:1px solid var(--line-soft);font-size:14px}
-  .hist li small{display:block;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+  .hist li small{display:block;font-family:var(--mono);font-size:11px;color:var(--dim)}
   table.t{width:100%;border-collapse:collapse;font-size:13.5px}
-  table.t td,table.t th{padding:6px 4px;border-bottom:1px solid var(--line-soft);text-align:left;vertical-align:top}
-  table.t th{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--ink-faint);text-transform:uppercase;font-weight:500}
+  table.t td,table.t th{padding:7px 8px 7px 0;border-bottom:1px solid var(--line-soft);text-align:left;vertical-align:top}
+  table.t th{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dim);text-transform:uppercase;font-weight:500}
 </style>
 </head>
 <body>
-<div class="top">
-  <button class="back" onclick="location.href='./'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>All apps</button>
-  <span style="display:flex;gap:14px;align-items:center"><a href="guide-hr-inventry.html" style="font-size:14px">User guide</a>
-  <span class="who" id="who"></span></span>
-</div>
+<header class="top"><div class="in">
+  <div class="bar">
+    <div class="brand">
+      <svg class="sdi-word" viewBox="0 0 950 169" role="img" aria-label="we.are.sdi" fill="currentColor"><path d="M158.915 36.7773L135.389 114.85C133.118 122.35 130.447 133.08 129.137 138.467C127.991 133.14 125.689 122.658 123.777 115.372L103.183 36.7773H80.9663L59.639 115.365C57.7134 122.531 55.2616 133.193 54.0544 138.537C52.7665 133.175 50.1337 122.393 48.0313 114.866L25.7238 36.7773H2.41797L42.8867 164.183H64.817L86.1457 87.545C88.1938 80.2145 90.5008 70.1606 91.6815 64.8782C92.7926 70.1676 94.9785 80.2145 97.0252 87.5408L118.11 164.183H139.793L181.494 36.7773H158.915Z"/><path d="M198.247 89.3881C201.717 65.0993 215.393 51.2041 235.907 51.2041C257.026 51.2041 269.942 65.1035 271.475 89.3881H198.247ZM235.907 33.6262C200.848 33.6262 175.402 61.7925 175.402 100.602C175.402 140.036 200.782 167.576 237.122 167.576C266.097 167.576 286.107 151.905 292.022 124.58L292.29 123.331H271.037L270.838 124.105C266.638 140.412 254.981 149.03 237.122 149.03C214.607 149.03 199.568 132.667 197.679 106.238H294.716V105.207C294.716 61.0546 272.181 33.6262 235.907 33.6262Z"/><path d="M423.094 99.3426V116.845C423.094 129.476 413.093 149.514 386.253 149.514C374.763 149.514 361.066 146.034 361.066 129.453C361.066 111.983 374.55 109.012 395.107 106.475C405.222 105.353 416.174 102.542 423.094 99.3426ZM442.876 145.211V75.1457C442.876 48.0778 427.173 34.3525 396.207 34.3525C365.325 34.3525 345.882 50.5756 344.199 77.7479L344.132 78.8422H365.115L365.189 77.8927C366.611 59.6855 376.543 51.2036 396.449 51.2036C413.721 51.2036 422.85 58.4756 422.85 72.2358C422.85 84.7721 413.6 87.9131 394.162 89.8791C365.81 92.711 338.128 98.1354 338.128 129.937C338.128 152.214 355.493 166.609 382.369 166.609C399.062 166.609 412.196 160.665 422.446 148.455C422.81 156.828 424.039 161.374 426.552 163.882L426.853 164.184H447.488V161.874L447.029 161.569C445.354 160.452 442.876 154.482 442.876 145.211Z"/><path d="M544.015 89.3881C547.485 65.0993 561.162 51.2041 581.676 51.2041C602.794 51.2041 615.711 65.1035 617.244 89.3881H544.015ZM581.676 33.6262C546.616 33.6262 521.17 61.7925 521.17 100.602C521.17 140.036 546.551 167.576 582.89 167.576C611.865 167.576 631.875 151.905 637.79 124.58L638.059 123.331H616.805L616.606 124.105C612.407 140.412 600.749 149.03 582.89 149.03C560.375 149.03 545.337 132.667 543.447 106.238H640.484V105.207C640.484 61.0546 617.95 33.6262 581.676 33.6262Z"/><path d="M851.701 149.272C829.697 149.272 816.561 131.258 816.561 101.086C816.561 71.215 829.932 52.6584 851.46 52.6584C875.53 52.6584 890.484 71.215 890.484 101.086C890.484 143.012 866.185 149.272 851.701 149.272ZM889.27 52.9591C880.17 40.7959 866.17 33.8678 850.487 33.8678C816.91 33.8678 794.351 60.7839 794.351 100.843C794.351 141.529 816.576 167.82 850.973 167.82C867.235 167.82 879.136 162.367 889.27 150.196V164.182H910.994V0.13501H889.27V52.9591Z"/><path d="M927.143 164.182H948.867V36.7761H927.143V164.182Z"/><path d="M927.143 21.2634H948.867V0.135254H927.143V21.2634Z"/><path d="M743.393 88.1957C721.16 83.7055 710.475 80.996 710.475 68.5976C710.475 57.8517 719.302 51.688 734.692 51.688C752.847 51.688 761.398 58.5214 763.285 74.5371L763.393 75.4463H785.617L785.479 74.2949C782.352 48.0054 764.958 34.1101 735.178 34.1101C706.259 34.1101 688.993 47.3649 688.993 69.568C688.993 98.3525 713.23 103.337 736.664 108.156C761.031 113.28 768.617 116.918 768.617 129.693C768.617 142.319 758.639 149.272 740.518 149.272C719.615 149.272 708.61 141.227 705.884 123.957L705.746 123.087H683.493L683.602 124.216C686.301 152.334 706.342 167.819 740.032 167.819C771.687 167.819 790.585 153.204 790.585 128.724C790.585 97.7135 765.514 92.6566 743.393 88.1957Z"/><path d="M525.691 57.6969V37.1089L525.044 36.8513C522.561 35.86 520.488 35.3225 516.649 35.3225C502.335 35.3225 488.734 42.983 479.81 55.9426V36.7775H458.086V164.183H479.81V93.5711C479.81 69.2586 497.61 56.5371 515.193 56.5371C519.064 56.5371 520.872 56.7877 523.607 57.6969H525.691Z"/><path class="d" d="M304.438 145.847H322.879V164.158H304.438V145.847Z"/><path class="d" d="M650.643 145.691H669.084V164.002H650.643V145.691Z"/></svg>
+      <span class="pipe" aria-hidden="true"></span>
+      <span class="lbl">HRInventry</span>
+    </div>
+    <span class="who" id="who"></span>
+  </div>
+  <nav class="nav" aria-label="App portal">
+    <button class="back" type="button" onclick="location.href='./'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>All apps</button>
+    <a class="back" href="guide-hr-inventry.html">User guide</a>
+  </nav>
+</div></header>
 <div class="wrap">
+  <section class="hero" aria-label="HRInventry Anywhere">
+  <div class="sdi-dots" aria-hidden="true"></div>
   <div class="kicker">SDI Intelligence app</div>
   <h1>HRInventry Anywhere</h1>
   <p class="sub">See who is clocked in on BrightHR, and update InVentry's on-site list, the fire roll
   call, to match. Clocked in and not signed in: signed in. Clocked out and signed in by this sync:
   signed out. Anyone signed in at reception is left alone, and nothing in BrightHR is changed.</p>
+  </section>
 
   <div class="panel" id="gate" style="display:none"></div>
   <div class="panel warn" id="expired" style="display:none"><h4>Sign in again</h4><div>Your Microsoft
@@ -160,7 +235,7 @@
         <div class="btns"><button class="btn ghost" id="rollload">Refresh</button>
           <button class="btn ghost" id="rollnew">Start a new roll call</button>
           <button class="btn ghost" type="button" data-group>Group by manager</button></div>
-        <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:14px;color:var(--ink-dim)">
+        <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:14px;color:var(--muted)">
           <input type="checkbox" id="rollhide" style="width:18px;height:18px"> Show only people not yet accounted for</label>
         <p class="muted" style="margin-top:10px" id="rollmeta">Everyone InVentry shows on site, plus anyone clocked in on
         BrightHR. Tick people off as they are accounted for: every marshal's phone sees the same ticks.</p>

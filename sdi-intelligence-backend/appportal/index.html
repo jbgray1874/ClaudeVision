@@ -104,7 +104,9 @@
   body.detail .hero{display:none}
 
   /* ---------- Layout ---------- */
-  .wrap{padding:6px 16px calc(28px + var(--safe-b));max-width:1180px;margin:0 auto}
+  /* Clipped: the halftone circle hangs off the right of the heading, and on a 390px phone it widened the
+     page to 444px, so the page could be dragged sideways (found by the SCRUM-195 checks). */
+  .wrap{padding:6px 16px calc(28px + var(--safe-b));max-width:1180px;margin:0 auto;overflow-x:hidden;overflow-x:clip}
   .grp{
     display:flex;align-items:center;gap:10px;
     font-family:var(--mono);font-size:10.5px;letter-spacing:.22em;color:var(--dim);

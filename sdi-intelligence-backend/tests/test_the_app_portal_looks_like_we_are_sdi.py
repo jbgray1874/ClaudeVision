@@ -57,5 +57,16 @@ class TheAppPortalIsWeAreSdiTests(unittest.TestCase):
             self.assertIn(el, PAGE)
 
 
+class EveryAppPageReachesTheServerTests(unittest.TestCase):
+    def test_every_app_portal_page_is_on_the_deploy(self):
+        """SCRUM-195, 9 Nov 2026: three pages were on no deploy list, so a restyle of them would have said
+        "all ok" and never reached the server (as sameday_proxy.py had, 8 Nov)."""
+        deploy = (APP.parent / "deploy" / "Deploy-AMCRM.ps1").read_text(encoding="utf-8")
+        listed = deploy.split("$Files = @(", 1)[1].split("\n)", 1)[0]
+        for page in sorted(APP.glob("*.html")):
+            with self.subTest(page=page.name):
+                self.assertIn(f'"appportal/{page.name}"', listed)
+
+
 if __name__ == "__main__":
     unittest.main()
