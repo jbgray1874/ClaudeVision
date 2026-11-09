@@ -81,6 +81,11 @@ $Files = @(
     # The app portal page: an app in both portals shows one Open button, 3 Nov.
     "appportal/index.html",
     "appportal/estimating-pocket.html",
+    # Three app portal pages that were on no list, so a change to them reached the
+    # server only when a core file happened to change too - SCRUM-195, 9 Nov.
+    "appportal/hr-inventry.html",
+    "appportal/guide-hr-inventry.html",
+    "appportal/brief-estimate.html",
     "sdi_ops_routes.py",
     "appportal/sdi-remote-control.html",
     "private-email-readonly.html",
