@@ -13032,7 +13032,11 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     )
     _existing_ops = list(_part_ops(part) or [])
     _cutting_ops = {"laser_cutting", "guillotine", "plasma_cutting", "waterjet"}
-    if _is_sheet_metal and _has_blank and not any(op in _cutting_ops for op in _existing_ops):
+    # A SECTION IS CUT ON THE SAW, NOT THE LASER (D-762). 0358141's upright M4, 30x30x2 tube
+    # at 1,383 mm, read "2" as a gauge and took the sheet default's laser beside its saw.
+    _is_section = bool(isinstance(part.get("section_stock"), dict) and part["section_stock"].get("a"))
+    if (_is_sheet_metal and _has_blank and not _is_section
+            and not any(op in _cutting_ops for op in _existing_ops)):
         record_operation(part, "laser_cutting", "inference", inferred=False)
 
     op_set = {str(op).strip().lower() for op in _part_ops(part) if str(op).strip()}

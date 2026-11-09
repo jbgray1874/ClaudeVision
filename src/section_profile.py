@@ -127,7 +127,29 @@ def detect_section_stock(text: str) -> Optional[Dict[str, Any]]:
                 # number is read; what is left is the sheet's own figures.
                 _clean = _prose_free(up)
                 tail_nums = [float(n) for n in _figures_in(_clean[m.end():])]
-                length = next((n for n in tail_nums if n >= max(side_a, side_b) * 2), None)
+                # A FIGURE THE SHEET LABELS AS THE TUBE IS THE LENGTH (D-762). 0358141's rail
+                # sheet prints "15x30x2mm M/S TOP TUBE" beside the plan, whose first figure is
+                # the 480 O/A depth; "1394 TUBE" is written against the tube itself. Where one
+                # figure stands against TUBE, LONG or LG, it is the cut length, read before
+                # the nearest number after the profile.
+                _labelled = {float(x) for x in re.findall(
+                    r"(?<![\d.])(\d{2,5}(?:\.\d+)?)\s*(?:MM)?\s*(?:TUBE|LONG|LG)\b", _clean)}
+                _labelled |= {float(x) for x in re.findall(
+                    r"\bTUBE\s*[=:]?\s*(\d{3,5}(?:\.\d+)?)(?![\d.])", _clean)}
+                _labelled = sorted(x for x in _labelled if x >= max(side_a, side_b) * 2)
+                _pieces = None
+                if len(_labelled) == 1:
+                    length, _length_source = _labelled[0], "tube_callout"
+                elif len(_labelled) > 1:
+                    # SEVERAL FIGURES LABELLED TUBE ARE SEVERAL PIECES OF ONE WELDMENT (D-762):
+                    # 0358141's rail prints "1394 TUBE" and "1170 TUBE" across its two sheets.
+                    # Each distinct figure is one piece, counted once; the length is their sum
+                    # and the pieces are kept, so a count the sheet does not print is asked.
+                    length, _length_source, _pieces = sum(_labelled), "tube_callouts", _labelled
+                else:
+                    length, _length_source = None, None
+                if length is None:
+                    length = next((n for n in tail_nums if n >= max(side_a, side_b) * 2), None)
                 if length is None:
                     all_nums = [float(n) for n in _figures_in(_clean)]
                     cand = [n for n in all_nums if n >= max(side_a, side_b) * 3]
@@ -143,6 +165,11 @@ def detect_section_stock(text: str) -> Optional[Dict[str, Any]]:
                     "detection_path": "canonical_profile",
                     "source_text": text[m.start():m.start() + 60].strip(),
                 }
+                if _length_source:
+                    out["length_source"] = _length_source
+                if _pieces:
+                    out["cut_lengths_mm"] = list(_pieces)
+                    out["pieces_counted_once"] = True
                 if _oval:
                     # Weighed on the ellipse (section_kg_per_m's OVAL). A flat-sided oval is a
                     # stadium, about 6% longer round its outside at 30 x 15; said on the stock
