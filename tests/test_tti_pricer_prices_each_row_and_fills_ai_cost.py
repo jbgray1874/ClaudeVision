@@ -303,3 +303,13 @@ def test_nothing_is_priced_when_neither_drawing_area_can_be_read(tmp_path, monke
     with pytest.raises(SystemExit) as exc:
         tp.run_batch(_args(sheet), portal=portal, status_path=None, sleep=lambda s: None)
     assert "Nothing was queued or written" in str(exc.value) and portal.started == []
+
+
+def test_every_found_pack_is_labelled_a_candidate_not_a_verified_pack(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)
+    _areas(tmp_path, monkeypatch)
+    rep = tp.run_batch(_args(sheet, dry_run=True), portal=None, status_path=None)
+    by = {r["row"]: r for r in rep["rows"]}
+    assert by[3]["pack"] == tp.PACK_NAMED and "not verified" in by[3]["pack"]
+    assert by[4]["pack"] == "" and by[6]["pack"] == ""
+    assert "not verified" in tp.PACK_JOB_FOLDER and "r.pack" in PAGE
