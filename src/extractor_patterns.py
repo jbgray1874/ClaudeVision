@@ -161,6 +161,9 @@ _LEGEND_DEFAULT_STOPS = [
     r"FINISH\s*:", r"SCALE\b", r"MAX LOADING"]
 _LEGEND_DEFAULT_SENTENCES = [
     r"\bALL\s+WELDS?\b[^.;\n•]{0,60}?\bUNLESS\s+(?:OTHERWISE\s+)?(?:STATED|SPECIFIED|NOTED|SHOWN|INDICATED)\b",
+    # The same legend with its spaces lost, and its bare heading (D-757; see config).
+    r"ALLWELDS?[A-Z0-9]{0,40}?UNLESS(?:OTHERWISE)?(?:STATED|SPECIFIED|NOTED|SHOWN|INDICATED)",
+    r"WELD(?:ING)?\s*SPECIFICATIONS?",
     r"\bRESISTANCE\s+WELDING\s+WIRE\s+TO\s+WIRE\b[^•\n]{0,80}"]
 _LEGEND_RES: Dict[str, Any] = {}
 

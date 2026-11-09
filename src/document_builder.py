@@ -1564,27 +1564,27 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
 
         current_ops: List[str] = part.get("textual_operations", [])
         # OPERATION CUES ARE READ WITH THE LEGEND REMOVED — see _strip_specification_legend.
-        #
-        # AND NEVER OFF A PARTS LIST THE PART IS ONLY LISTED ON (D-756). 0358141's rub strips
-        # M2 and M3 had no sheet of their own bound, so part_index bound them to page 2, the
-        # frame M1's sheet with its parts list. Its notes, "WELD AND DRESS, TAP M4, FOLD", are
-        # the frame's; read as the strips' own, they charged a weld and a dress on two screw-
-        # fixed strips (Estimate rows 157 and 158) beside the frame's own weld. The same
-        # binding gave the end caps the rail's tube (D-751, D-755). A page a part is only
-        # listed on speaks for the sheet's own part, so its notes give this part no operation.
-        _cue_list_page = part.get("bound_to_parts_list_page")
-        _cue_pages = [pn for pn in page_nums if pn in page_lookup and pn != _cue_list_page]
-        if _cue_list_page and len(_cue_pages) != len([pn for pn in page_nums if pn in page_lookup]):
-            if not _cue_pages and (_strip_specification_legend(combined_text) or "").strip():
-                part.setdefault("review_flags", []).append(
-                    f"no operation read from the notes on page {_cue_list_page}: that page is "
-                    f"a parts list this part is only listed on, so its notes are the sheet's "
-                    f"own part's. Bind this part's own sheet for its operations")
-            combined_cue = " ".join(page_lookup[pn]["text"] for pn in _cue_pages)
-        else:
-            combined_cue = combined_text
-        cue_text = _strip_specification_legend(combined_cue)
+        cue_text = _strip_specification_legend(combined_text)
         cue_upper = cue_text.upper()
+        # A JOINT IS NOT TAKEN FROM A SHEET THE PART IS ONLY LISTED ON (D-756, narrowed by
+        # D-757). 0358141's rub strips M2 and M3 had no sheet of their own bound, so part_index
+        # bound them to page 2, the frame M1's sheet with its parts list, and every note on it
+        # was read as theirs. A weld or a dress read there is the joint of the sheet's own part,
+        # charged once at that owner, never again on each member it lists. Everything else on
+        # that page still reaches the member as before: an assembly-level instruction (deburr,
+        # finish) applies to the parts it lists. An assembly keeps its own page's joints.
+        _cue_list_page = part.get("bound_to_parts_list_page")
+        _own_cue_pages = [pn for pn in page_nums if pn in page_lookup and pn != _cue_list_page]
+        _joint_cue_upper = cue_upper
+        if (_cue_list_page and not part.get("is_assembly_parent")
+                and len(_own_cue_pages) != len([pn for pn in page_nums if pn in page_lookup])):
+            _joint_cue_upper = _strip_specification_legend(
+                " ".join(page_lookup[pn]["text"] for pn in _own_cue_pages)).upper()
+
+        def _is_joint_op(_op: Any) -> bool:
+            return "weld" in str(_op).lower() or "braz" in str(_op).lower()
+
+        _joints_withheld: List[str] = []
         if geo_reliability == 0.0 and not current_ops and cue_text.strip():
             finishes = part.get("surface_finishes", [])
             try:
@@ -1601,6 +1601,16 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                     inferred = []
             except Exception:
                 inferred = []
+            if inferred and _joint_cue_upper is not cue_upper:
+                _own_joints = set()
+                if _joint_cue_upper.strip():
+                    try:
+                        _own_joints = {o for o in (_infer_ops_from_text(_joint_cue_upper) or [])
+                                       if _is_joint_op(o)}
+                    except Exception:                                # noqa: BLE001
+                        _own_joints = set()
+                _joints_withheld += [o for o in inferred if _is_joint_op(o) and o not in _own_joints]
+                inferred = [o for o in inferred if not _is_joint_op(o) or o in _own_joints]
             if inferred:
                 part["textual_operations"] = list(inferred)
                 # THE WORDS TRAVEL WITH THE OPERATION (D-586). An op inferred here reached
@@ -1640,6 +1650,9 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
 
             _weld_phrase = next(
                 (p for p in _ASSEMBLY_WELD_PHRASES if p in cue_upper), None)
+            if _weld_phrase and _weld_phrase not in _joint_cue_upper:
+                _joints_withheld += ["welding", "dress_welds"]
+                _weld_phrase = None
             if _weld_phrase:
                 for op in ("welding", "dress_welds"):
                     if op not in ops_set:
@@ -1665,6 +1678,12 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 # intentionally NOT calling _interpret_part here — assembly weld callouts
                 # are recorded for visibility but NOT re-costed. Re-running routing on the
                 # assembly over-estimates weld time (Drawing 1 went 4.9%→14.4% over).
+
+        if _joints_withheld:
+            part.setdefault("review_flags", []).append(
+                f"no weld or dressing taken from page {_cue_list_page}: it is a parts list this "
+                f"part is only listed on, so a joint read there belongs to that sheet's own part "
+                f"and is charged once, there. Bind this part's own sheet if it is welded")
 
         # Wire parts — replace sheet-metal ops with wire route (robomac / weld / spot)
         if _is_wire_part and not inherited_steel:
