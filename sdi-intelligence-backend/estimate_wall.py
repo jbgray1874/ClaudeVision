@@ -17,7 +17,7 @@ WHAT EACH COLOUR MEANS, said on the wall beside it, never colour alone:
              amber   quiet but still inside the online window, or on a different build from
                      the service
              red     offline, or two processes answering to one runner
-  THE FLEET  the worst of the above, so the banner never says "nominal" over a red tile
+  THE FLEET  the worst of the above, so the banner never says "normal" over a red tile
 
 THE DESKTOP'S SOLIDWORKS (D-738). One licence per machine, taken in turn. For each machine the
 wall names the run holding it and since when, and every run waiting for it with how long it has
@@ -866,7 +866,7 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
 
     banner_rag = worst([x["rag"] for x in live]
                        + [x["rag"] for x in fleet if not x.get("planned")])
-    banner = {GREEN: "All systems nominal", AMBER: "Attention: see the amber tiles",
+    banner = {GREEN: "All systems normal", AMBER: "Attention: see the amber tiles",
               RED: "Action needed: see the red tiles", GREY: ""}[banner_rag]
     if not any(x.get("online") for x in fleet):
         banner_rag, banner = RED, "No runner connected: estimates cannot run"

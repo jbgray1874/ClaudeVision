@@ -241,6 +241,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--server", default=os.getenv("SDI_SERVER", "http://10.0.0.5:8071"))
     ap.add_argument("--api-key", default=os.getenv("SDI_API_KEY", ""))
     ap.add_argument("--log", default="", help="append the sweep's lines to this file")
+    ap.add_argument("--no-index", action="store_true", help="do not refresh the drawing index")
     args = ap.parse_args(argv)
     if args.log:
         Path(args.log).parent.mkdir(parents=True, exist_ok=True)
@@ -264,6 +265,20 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"   {c['status']:<8} {c['client']} / {c['name']}", flush=True)
             return 0
         save_ledger(cfg["ledger"], ledger)
+        # THE DRAWING INDEX rides on the same hourly beat (src/drawing_index.py): the TTI pricer
+        # and anything else finding a drawing by number reads it instead of walking the share.
+        if not args.no_index:
+            try:
+                import drawing_index as di
+                icfg = di.settings()
+                report["index"] = di.refresh(icfg["roots"], icfg["path"], icfg["depth"], full_days=icfg["full_days"])
+                last = report["index"]["last"]
+                print(f"[design-sweep] drawing index: {report['index']['folders']} folder(s), "
+                      f"{report['index']['drawings']} drawing(s); listed {last.get('listed')}, reused "
+                      f"{last.get('reused')} in {last.get('seconds')} s", flush=True)
+            except Exception as exc:                                     # noqa: BLE001
+                report["index"] = {"error": str(exc)}
+                print(f"[design-sweep] the drawing index was not refreshed: {exc}", flush=True)
         for p in report_to(servers, args.api_key, report):
             print(f"[design-sweep] the service did not take the report: {p}", flush=True)
         if args.once:

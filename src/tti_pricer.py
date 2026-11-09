@@ -48,6 +48,32 @@ DRAWING_EXT = {".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step",
 SKIP = re.compile(r"\b(archive|archived|superseded|old|backup|obsolete)\b", re.IGNORECASE)
 DEFAULT_DESIGN = r"W:\Design\Customers April 08 Onwards\TTI"
 DEFAULT_PROTOTYPE = r"W:\Prototype\TTi"
+HEADER = re.compile(r"^\s*(drawing|dwg)\s*(number|no\.?|num|#|ref(erence)?)?\s*$", re.IGNORECASE)
+_REF = re.compile(r"(?<![0-9A-Za-z])(?:[A-Za-z]{1,4}-)?\d{3,}[A-Za-z]?(?:-[A-Za-z0-9]+)*")
+
+
+def drawing_ref(cell: str) -> str:
+    """The drawing number in a cell that may say more: "12535-00-GA REV A (LARGER GRAPHICS)" is
+    12535-00-GA, "7438 AS BASE" is 7438, "N/A" is nothing."""
+    m = _REF.search(str(cell or ""))
+    return m.group(0).upper() if m else ""
+
+
+def job_folders(ref: str, listings: List[Tuple[str, List[Path]]], limit: int = 3) -> List[str]:
+    """Where a drawing that was not found might be: folders naming its job number. Reported, never
+    priced from, so a naming difference can be seen and fixed rather than guessed at."""
+    job = re.search(r"\d{3,}", ref or "")
+    if not job:
+        return []
+    pat = re.compile(r"(?<![0-9])" + job.group(0) + r"(?![0-9])")
+    out: List[str] = []
+    for _area, folders in listings:
+        for f in folders:
+            if pat.search(f.name):
+                out.append(str(f))
+                if len(out) >= limit:
+                    return out
+    return out
 
 
 def col_index(letter: str) -> int:
@@ -66,11 +92,20 @@ def read_rows(sheet: Path, cols: Dict[str, str], rows: Optional[Tuple[int, int]]
     wb = openpyxl.load_workbook(sheet, data_only=True)
     ws = wb[sheet_name] if sheet_name else wb.active
     dcol = col_index(cols["drawing"])
+    # THE HEADER IS THE CELL THAT NAMES THE COLUMN, not the first one mentioning drawings: a
+    # title row above it ("... drawings ...") was taken for the header once, and the real header
+    # row then priced as a job called "Drawing Number" (9 Nov 2026 dry run).
     header_row = None
     for r in range(1, min(ws.max_row, 20) + 1):
-        if re.search(r"draw", str(ws.cell(r, dcol).value or ""), re.IGNORECASE):
+        if HEADER.match(str(ws.cell(r, dcol).value or "")):
             header_row = r
             break
+    if header_row is None:
+        for r in range(1, min(ws.max_row, 20) + 1):
+            v = str(ws.cell(r, dcol).value or "")
+            if re.search(r"draw|dwg", v, re.IGNORECASE) and len(v) <= 40:
+                header_row = r
+                break
     if header_row is None:
         raise SystemExit(f"No header naming the drawing number in column {cols['drawing']} in the "
                          f"first 20 rows of {sheet.name} ({ws.title}). Pass --col-drawing.")
@@ -95,6 +130,8 @@ def read_rows(sheet: Path, cols: Dict[str, str], rows: Optional[Tuple[int, int]]
     first, last = rows if rows else (header_row + 1, ws.max_row)
     for r in range(max(first, header_row + 1), min(last, ws.max_row) + 1):
         drawing = str(ws.cell(r, dcol).value or "").strip()
+        if HEADER.match(drawing):
+            continue                                        # a repeated header row is not a job
         notes = str(ws.cell(r, col_index(cols["notes"])).value or "").strip()
         desc = str(ws.cell(r, desc_c).value or "").strip() if desc_c else ""
         if not (drawing or notes or desc or pics.get(r)):
@@ -103,7 +140,7 @@ def read_rows(sheet: Path, cols: Dict[str, str], rows: Optional[Tuple[int, int]]
             qty = int(float(ws.cell(r, qty_c).value)) if qty_c and ws.cell(r, qty_c).value else 1
         except (TypeError, ValueError):
             qty = 1
-        out.append({"row": r, "drawing": drawing, "notes": notes, "description": desc,
+        out.append({"row": r, "drawing": drawing_ref(drawing), "drawing_cell": drawing, "notes": notes, "description": desc,
                     "quantity": max(1, qty), "pictures": pics.get(r, []),
                     "cost_before": ws.cell(r, col_index(cols["cost"])).value})
     return {"sheet": ws.title, "header_row": header_row,
@@ -137,11 +174,65 @@ def list_folders(root: Path, depth: int = 7) -> List[Path]:
     return out
 
 
-def drawings_in(folder: Path) -> List[Path]:
+_FILES: Dict[str, List[Path]] = {}
+_MTIME: Dict[str, float] = {}
+
+
+def _mtime(p: Path) -> float:
+    k = str(p)
+    if k not in _MTIME:
+        try:
+            _MTIME[k] = p.stat().st_mtime
+        except OSError:
+            _MTIME[k] = 0.0
+    return _MTIME[k]
+
+
+def area_listings(design: Path, proto: Path) -> Tuple[List[Tuple[str, List[Path]]], str]:
+    """The folders of both areas, from the drawing index where it is fresh and covers them,
+    else walked live; and which of the two it was, said on the status and the console."""
     try:
-        return sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in DRAWING_EXT)
-    except OSError:
-        return []
+        sys.path.insert(0, str(HERE))
+        import drawing_index as di
+        cfg = di.settings()
+        idx = di.load(cfg["path"])
+    except Exception:                                                    # noqa: BLE001
+        idx, cfg, di = None, None, None
+    if idx and di.is_fresh(idx, cfg["max_hours"]) and di.covers(idx, design) and di.covers(idx, proto):
+        out = []
+        for area, root in (("design", design), ("prototype", proto)):
+            folders = []
+            for folder, files in di.folders_under(idx, root):
+                folders.append(folder)
+                _FILES[str(folder)] = sorted(f for f, _s, _m in files)
+                for f, _s, m in files:
+                    _MTIME[str(f)] = m
+            out.append((area, folders))
+        return out, f"drawing index built {di.summary(idx)['built_at']}"
+    why = ("no drawing index" if not idx else "the drawing index is stale" if not di.is_fresh(idx, cfg["max_hours"])
+           else "the drawing index does not cover these folders")
+    return [("design", list_folders(design)), ("prototype", list_folders(proto))], f"walked live ({why})"
+
+
+def drawings_in(folder: Path) -> List[Path]:
+    """The drawing files directly in a folder, listed once per batch: two hundred rows must not
+    list every folder on the share two hundred times."""
+    key = str(folder)
+    if key not in _FILES:
+        try:
+            _FILES[key] = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in DRAWING_EXT)
+        except OSError:
+            _FILES[key] = []
+    return _FILES[key]
+
+
+def _best(hits: List[Dict[str, Any]], area: str, match: str) -> Dict[str, Any]:
+    hits.sort(key=lambda h: (h["technical"], h["newest"]), reverse=True)
+    best = hits[0]
+    return {"area": area, "match": match, "folder": str(best["folder"]), "files": [str(x) for x in best["files"]],
+            "technical": best["technical"],
+            "newest": datetime.fromtimestamp(best["newest"]).isoformat(timespec="minutes"),
+            "other_folders": [str(h["folder"]) for h in hits[1:6]]}
 
 
 def find_drawings(drawing: str, listings: List[Tuple[str, List[Path]]]) -> Dict[str, Any]:
@@ -158,15 +249,31 @@ def find_drawings(drawing: str, listings: List[Tuple[str, List[Path]]]) -> Dict[
             if not (pat.search(path_txt) and files) and not named_files:
                 continue
             use = files if pat.search(path_txt) else named_files
-            newest = max((x.stat().st_mtime for x in use), default=0)
+            newest = max((_mtime(x) for x in use), default=0)
             hits.append({"folder": f, "files": use, "technical": "technical" in path_txt.lower(),
                          "newest": newest})
         if hits:
-            hits.sort(key=lambda h: (h["technical"], h["newest"]), reverse=True)
-            best = hits[0]
-            return {"area": area, "folder": str(best["folder"]), "files": [str(x) for x in best["files"]],
-                    "technical": best["technical"], "newest": datetime.fromtimestamp(best["newest"]).isoformat(timespec="minutes"),
-                    "other_folders": [str(h["folder"]) for h in hits[1:6]]}
+            return _best(hits, area, "drawing number")
+    # THE JOB FOLDER, WHEN NO FILE CARRIES THE DRAWING NUMBER. Design files a job as
+    # "12181 - Sander Application Demo [Rome 2026]": the job number only. A folder whose own name
+    # starts with the job number is the job; its Technical folder and newest drawings are used,
+    # and the row says it was matched by job, not by drawing number (JG, 9 Nov 2026).
+    job = re.search(r"\d{3,}", drawing or "")
+    if not job:
+        return {}
+    jpat = re.compile(r"^\s*" + job.group(0) + r"(?![0-9])")
+    for area, folders in listings:
+        roots = [f for f in folders if jpat.search(f.name)]
+        hits = []
+        for f in folders:
+            if not any(f == r or r in f.parents for r in roots):
+                continue
+            files = drawings_in(f)
+            if files:
+                hits.append({"folder": f, "files": files, "technical": "technical" in str(f).lower(),
+                             "newest": max(_mtime(x) for x in files)})
+        if hits:
+            return _best(hits, area, "job folder")
     return {}
 
 
@@ -244,7 +351,9 @@ class SheetWriter:
 def brief_for(r: Dict[str, Any]) -> str:
     parts = [f"TTI job, sheet row {r['row']}."]
     if r.get("drawing"):
-        parts.append(f"Drawing number {r['drawing']}.")
+        cell = str(r.get("drawing_cell") or "")
+        extra = f" (the sheet says: {cell})" if cell and cell.upper() != r["drawing"] else ""
+        parts.append(f"Drawing number {r['drawing']}{extra}.")
     if r.get("description"):
         parts.append(f"Description: {r['description']}.")
     if r.get("notes"):
@@ -304,13 +413,17 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
     data = read_rows(sheet, cols, rows, args.sheet_name)
     design = Path(os.getenv("SDI_TTI_DESIGN_ROOT") or DEFAULT_DESIGN)
     proto = Path(os.getenv("SDI_TTI_PROTOTYPE_ROOT") or DEFAULT_PROTOTYPE)
-    listings = [("design", list_folders(design)), ("prototype", list_folders(proto))]
+    _FILES.clear()
+    _MTIME.clear()
+    listings, source = area_listings(design, proto)
     out_root = inputs_root() / re.sub(r"[^\w .-]", "_", sheet.stem)
     report: Dict[str, Any] = {"sheet": str(sheet), "tab": data["sheet"], "header_row": data["header_row"],
                               "header": data["header"], "started": datetime.now().isoformat(timespec="seconds"),
                               "dry_run": bool(args.dry_run), "method": args.method,
                               "roots": {"design": str(design), "design_readable": design.is_dir(),
-                                        "prototype": str(proto), "prototype_readable": proto.is_dir()},
+                                        "design_folders": len(listings[0][1]),
+                                        "prototype": str(proto), "prototype_readable": proto.is_dir(),
+                                        "prototype_folders": len(listings[1][1]), "source": source},
                               "rows": []}
 
     def save() -> None:
@@ -319,16 +432,39 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             status_path.write_text(json.dumps(report, indent=1, default=str), encoding="utf-8")
 
     writer = None if args.dry_run else SheetWriter(sheet, args.sheet_name or "", args.col_cost)
+    priced: Dict[Tuple[str, int], Dict[str, Any]] = {}
     for r in data["rows"]:
         found = find_drawings(r["drawing"], listings) if r["drawing"] else {}
-        item = {"row": r["row"], "drawing": r["drawing"], "quantity": r["quantity"],
-                "kind": "full estimate" if found else "LLM estimate (no drawings found)",
+        item = {"row": r["row"], "drawing": r["drawing"], "drawing_cell": r.get("drawing_cell", r["drawing"]),
+                "quantity": r["quantity"],
+                "kind": ("full estimate" if found.get("match") != "job folder"
+                         else "full estimate (job folder)") if found else "LLM estimate (no drawings found)",
                 "found": {k: v for k, v in found.items() if k != "files"} if found else None,
                 "files": len(found.get("files") or []) if found else 0,
                 "thumbnails": len(r["pictures"]), "cost_before": r["cost_before"], "state": "planned"}
+        if not found and r["drawing"]:
+            item["job_folders"] = job_folders(r["drawing"], listings)
         report["rows"].append(item)
         save()
+        # THE SAME DRAWING AT THE SAME QUANTITY IS PRICED ONCE PER BATCH; later rows take its cost.
+        same = priced.get((r["drawing"], r["quantity"])) if r["drawing"] else None
+        if same is not None:
+            item.update(state="same as row %d" % same["row"], same_as_row=same["row"])
+            if args.dry_run or same.get("unit_cost") is None:
+                save()
+                continue
         if args.dry_run:
+            if r["drawing"]:
+                priced[(r["drawing"], r["quantity"])] = item
+            continue
+        if same is not None:
+            item["unit_cost"] = same["unit_cost"]
+            try:
+                writer.write(r["row"], same["unit_cost"])
+                item["written"] = f"{args.col_cost}{r['row']} = {same['unit_cost']}"
+            except OSError as exc:
+                item["why"] = f"{args.col_cost}{r['row']} could not be written ({exc})"
+            save()
             continue
         name = re.sub(r"[^\w .-]", "_", r["drawing"] or f"row{r['row']}")
         inputs = copy_inputs(found.get("files") or [], [] if found else r["pictures"], out_root / f"row{r['row']}_{name}")
@@ -350,6 +486,8 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         st = wait_for(portal, item["run_id"], sleep=sleep)
         cost = unit_cost_of(st, r["quantity"])
         item.update(state=str(st.get("status")), unit_cost=cost, output=st.get("output_path") or st.get("output"))
+        if r["drawing"]:
+            priced[(r["drawing"], r["quantity"])] = item
         if cost is not None and str(st.get("status")) == "done":
             try:
                 writer.write(r["row"], cost)
@@ -400,11 +538,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         portal = ler.Portal(args.server, args.api_key, timeout=120)
     status = Path(args.status_file) if args.status_file else (ROOT / "output" / "tti" / "last_tti_run.json")
     rep = run_batch(args, portal, status)
+    ro = rep["roots"]
+    for k in ("design", "prototype"):
+        state = f"{ro[k + '_folders']} folder(s)" if ro[k + "_readable"] else "NOT READABLE from this window"
+        print(f"{k:<10} {ro[k]}  {state}", flush=True)
+    print(f"folders from: {ro.get('source')}", flush=True)
+    print(f"header row {rep['header_row']} ({rep['header'].get('drawing')}); {len(rep['rows'])} job row(s)", flush=True)
+    found = 0
     for it in rep["rows"]:
-        where = (it.get("found") or {}).get("folder") or "no drawings found"
-        print(f"row {it['row']:>4}  {it['drawing'] or '(none)':<20} {it['kind']:<34} {it['state']:<10} "
+        where = (it.get("found") or {}).get("folder")
+        found += bool(where)
+        if not where:
+            near = it.get("job_folders") or []
+            where = ("not found; job folder(s): " + " | ".join(near)) if near else "no drawings found"
+        cell = it.get("drawing_cell") or ""
+        shown = it["drawing"] or "(none)"
+        if cell and cell.upper() != it["drawing"]:
+            shown += f" [{cell[:30]}]"
+        print(f"row {it['row']:>4}  {shown:<28} {it['kind']:<34} {it['state']:<12} "
               f"{it.get('unit_cost', '') if it.get('unit_cost') is not None else ''}  {where}", flush=True)
-    print(f"status file: {status}", flush=True)
+    print(f"{found} of {len(rep['rows'])} row(s) have drawings; status file: {status}", flush=True)
     return 0
 
 

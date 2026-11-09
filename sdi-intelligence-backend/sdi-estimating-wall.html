@@ -849,7 +849,10 @@ function renderDesignSweep(d){
   const c = d.candidates || [];
   if(d.state === "never"){ setText("dsRead", "no sweep yet"); $("dsList").innerHTML = `<div class="empty">${esc(d.why || "No sweep has reported yet.")}</div>`; return; }
   const late = d.state === "late" ? " · LATE: the sweep has not reported on time" : "";
-  setText("dsRead", `swept ${fmtStamp((d.swept_at || "").replace("T", " ").replace("Z", ""))} · ${d.clients || 0} client folder(s), ${d.packs || 0} pack(s) · next ${(d.next_at || "").slice(11, 16)}${late}`);
+  const ix = d.index || {};
+  const idx = ix.error ? ` · drawing index NOT refreshed: ${ix.error}`
+            : ix.folders ? ` · drawing index ${ix.folders} folders, ${ix.drawings} drawings, built ${(ix.built_at || "").slice(11, 16)}` : "";
+  setText("dsRead", `swept ${fmtStamp((d.swept_at || "").replace("T", " ").replace("Z", ""))} · ${d.clients || 0} client folder(s), ${d.packs || 0} pack(s) · next ${(d.next_at || "").slice(11, 16)}${idx}${late}`);
   setText("dsSub", d.baseline ? "First sweep: the packs already there are the baseline; new ones are flagged from the next sweep"
                               : `Root ${d.root || ""} · candidates kept until dismissed or two weeks old`);
   if(!c.length){ $("dsList").innerHTML = `<div class="empty">No new or changed drawing pack since the last look.${(d.errors || []).length ? " Errors: " + esc(d.errors.join("; ")) : ""}</div>`; return; }

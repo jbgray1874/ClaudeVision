@@ -235,3 +235,61 @@ def test_the_service_refuses_a_bad_sheet_and_runs_a_dry_run_to_its_status(servic
         time.sleep(0.5)
     assert st.get("finished"), st.get("log_tail")
     assert [x["kind"] for x in st["rows"]][0] == "full estimate" and st["dry_run"] is True
+
+
+def test_a_title_row_above_the_header_is_not_the_header_and_drawing_cells_are_read_for_their_number(tmp_path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["L1"] = "Conference drawings and costs"
+    ws["L2"], ws["G2"], ws["P2"] = "Drawing Number", "Notes", "AICost"
+    ws["L3"], ws["G3"] = "12535-00-GA REV A (LARGER GRAPHICS)", "graphics panel"
+    ws["L4"], ws["G4"] = "7438 AS BASE", "base"
+    ws["L5"], ws["G5"] = "N/A", "loose item"
+    ws["L6"] = "Drawing Number"
+    p = tmp_path / "t.xlsx"
+    wb.save(p)
+    got = tp.read_rows(p, {"drawing": "L", "notes": "G", "thumbs": ["I", "J"], "cost": "P"})
+    assert got["header_row"] == 2
+    assert [(r["row"], r["drawing"]) for r in got["rows"]] == [(3, "12535-00-GA"), (4, "7438"), (5, "")]
+    assert "the sheet says: 12535-00-GA REV A" in tp.brief_for(got["rows"][0])
+
+
+def test_a_drawing_not_found_names_the_folders_holding_its_job_number(tmp_path, monkeypatch):
+    design, proto, _ = _areas(tmp_path, monkeypatch)
+    (design / "Conference 2027" / "12181 Stand build").mkdir(parents=True)
+    listings = [("design", tp.list_folders(design)), ("prototype", tp.list_folders(proto))]
+    assert tp.find_drawings("12181-00-GA", listings) == {}
+    assert [Path(x).name for x in tp.job_folders("12181-00-GA", listings)] == ["12181 Stand build"]
+
+
+def test_the_same_drawing_at_the_same_quantity_is_priced_once(tmp_path, monkeypatch):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["L1"], ws["G1"], ws["D1"], ws["P1"] = "Drawing Number", "Notes", "Qty", "AICost"
+    for r in (2, 3):
+        ws[f"L{r}"], ws[f"G{r}"], ws[f"D{r}"] = "12110-01-GA1", "stand", 2
+    p = tmp_path / "d.xlsx"
+    wb.save(p)
+    _areas(tmp_path, monkeypatch)
+    monkeypatch.setattr(tp.SheetWriter, "write", lambda self, row, value: None)
+    portal = FakePortal()
+    rep = tp.run_batch(_args(p), portal=portal, status_path=None, sleep=lambda s: None)
+    assert len(portal.started) == 1
+    assert rep["rows"][1]["same_as_row"] == 2 and rep["rows"][1]["unit_cost"] == 123.46
+
+
+def test_a_job_folder_named_by_job_number_is_used_when_no_file_carries_the_drawing_number(tmp_path, monkeypatch):
+    design, proto, _ = _areas(tmp_path, monkeypatch)
+    job = design / "12181 - Sander Application Demo [Rome 2026]"
+    (job / "Technical").mkdir(parents=True)
+    (job / "Concept").mkdir()
+    (job / "Technical" / "GA sheet.pdf").write_text("ga")
+    (job / "Concept" / "idea.pdf").write_text("c")
+    (design / "121810 Other job").mkdir()
+    (design / "121810 Other job" / "z.pdf").write_text("z")
+    tp._FILES.clear()
+    listings = [("design", tp.list_folders(design)), ("prototype", tp.list_folders(proto))]
+    f = tp.find_drawings("12181-00-GA", listings)
+    assert f["match"] == "job folder" and f["folder"] == str(job / "Technical")
+    assert [Path(x).name for x in f["files"]] == ["GA sheet.pdf"]
+    assert tp.find_drawings("TTI-10234", listings)["match"] == "drawing number", "a named drawing still wins"
