@@ -175,6 +175,43 @@ def list_folders(root: Path, depth: int = 7) -> List[Path]:
 
 
 _FILES: Dict[str, List[Path]] = {}
+_MTIME: Dict[str, float] = {}
+
+
+def _mtime(p: Path) -> float:
+    k = str(p)
+    if k not in _MTIME:
+        try:
+            _MTIME[k] = p.stat().st_mtime
+        except OSError:
+            _MTIME[k] = 0.0
+    return _MTIME[k]
+
+
+def area_listings(design: Path, proto: Path) -> Tuple[List[Tuple[str, List[Path]]], str]:
+    """The folders of both areas, from the drawing index where it is fresh and covers them,
+    else walked live; and which of the two it was, said on the status and the console."""
+    try:
+        sys.path.insert(0, str(HERE))
+        import drawing_index as di
+        cfg = di.settings()
+        idx = di.load(cfg["path"])
+    except Exception:                                                    # noqa: BLE001
+        idx, cfg, di = None, None, None
+    if idx and di.is_fresh(idx, cfg["max_hours"]) and di.covers(idx, design) and di.covers(idx, proto):
+        out = []
+        for area, root in (("design", design), ("prototype", proto)):
+            folders = []
+            for folder, files in di.folders_under(idx, root):
+                folders.append(folder)
+                _FILES[str(folder)] = sorted(f for f, _s, _m in files)
+                for f, _s, m in files:
+                    _MTIME[str(f)] = m
+            out.append((area, folders))
+        return out, f"drawing index built {di.summary(idx)['built_at']}"
+    why = ("no drawing index" if not idx else "the drawing index is stale" if not di.is_fresh(idx, cfg["max_hours"])
+           else "the drawing index does not cover these folders")
+    return [("design", list_folders(design)), ("prototype", list_folders(proto))], f"walked live ({why})"
 
 
 def drawings_in(folder: Path) -> List[Path]:
@@ -212,7 +249,7 @@ def find_drawings(drawing: str, listings: List[Tuple[str, List[Path]]]) -> Dict[
             if not (pat.search(path_txt) and files) and not named_files:
                 continue
             use = files if pat.search(path_txt) else named_files
-            newest = max((x.stat().st_mtime for x in use), default=0)
+            newest = max((_mtime(x) for x in use), default=0)
             hits.append({"folder": f, "files": use, "technical": "technical" in path_txt.lower(),
                          "newest": newest})
         if hits:
@@ -234,7 +271,7 @@ def find_drawings(drawing: str, listings: List[Tuple[str, List[Path]]]) -> Dict[
             files = drawings_in(f)
             if files:
                 hits.append({"folder": f, "files": files, "technical": "technical" in str(f).lower(),
-                             "newest": max(x.stat().st_mtime for x in files)})
+                             "newest": max(_mtime(x) for x in files)})
         if hits:
             return _best(hits, area, "job folder")
     return {}
@@ -377,7 +414,8 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
     design = Path(os.getenv("SDI_TTI_DESIGN_ROOT") or DEFAULT_DESIGN)
     proto = Path(os.getenv("SDI_TTI_PROTOTYPE_ROOT") or DEFAULT_PROTOTYPE)
     _FILES.clear()
-    listings = [("design", list_folders(design)), ("prototype", list_folders(proto))]
+    _MTIME.clear()
+    listings, source = area_listings(design, proto)
     out_root = inputs_root() / re.sub(r"[^\w .-]", "_", sheet.stem)
     report: Dict[str, Any] = {"sheet": str(sheet), "tab": data["sheet"], "header_row": data["header_row"],
                               "header": data["header"], "started": datetime.now().isoformat(timespec="seconds"),
@@ -385,7 +423,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                               "roots": {"design": str(design), "design_readable": design.is_dir(),
                                         "design_folders": len(listings[0][1]),
                                         "prototype": str(proto), "prototype_readable": proto.is_dir(),
-                                        "prototype_folders": len(listings[1][1])},
+                                        "prototype_folders": len(listings[1][1]), "source": source},
                               "rows": []}
 
     def save() -> None:
@@ -504,6 +542,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     for k in ("design", "prototype"):
         state = f"{ro[k + '_folders']} folder(s)" if ro[k + "_readable"] else "NOT READABLE from this window"
         print(f"{k:<10} {ro[k]}  {state}", flush=True)
+    print(f"folders from: {ro.get('source')}", flush=True)
     print(f"header row {rep['header_row']} ({rep['header'].get('drawing')}); {len(rep['rows'])} job row(s)", flush=True)
     found = 0
     for it in rep["rows"]:
