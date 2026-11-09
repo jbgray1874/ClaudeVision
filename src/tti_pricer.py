@@ -174,11 +174,28 @@ def list_folders(root: Path, depth: int = 7) -> List[Path]:
     return out
 
 
+_FILES: Dict[str, List[Path]] = {}
+
+
 def drawings_in(folder: Path) -> List[Path]:
-    try:
-        return sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in DRAWING_EXT)
-    except OSError:
-        return []
+    """The drawing files directly in a folder, listed once per batch: two hundred rows must not
+    list every folder on the share two hundred times."""
+    key = str(folder)
+    if key not in _FILES:
+        try:
+            _FILES[key] = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in DRAWING_EXT)
+        except OSError:
+            _FILES[key] = []
+    return _FILES[key]
+
+
+def _best(hits: List[Dict[str, Any]], area: str, match: str) -> Dict[str, Any]:
+    hits.sort(key=lambda h: (h["technical"], h["newest"]), reverse=True)
+    best = hits[0]
+    return {"area": area, "match": match, "folder": str(best["folder"]), "files": [str(x) for x in best["files"]],
+            "technical": best["technical"],
+            "newest": datetime.fromtimestamp(best["newest"]).isoformat(timespec="minutes"),
+            "other_folders": [str(h["folder"]) for h in hits[1:6]]}
 
 
 def find_drawings(drawing: str, listings: List[Tuple[str, List[Path]]]) -> Dict[str, Any]:
@@ -199,11 +216,27 @@ def find_drawings(drawing: str, listings: List[Tuple[str, List[Path]]]) -> Dict[
             hits.append({"folder": f, "files": use, "technical": "technical" in path_txt.lower(),
                          "newest": newest})
         if hits:
-            hits.sort(key=lambda h: (h["technical"], h["newest"]), reverse=True)
-            best = hits[0]
-            return {"area": area, "folder": str(best["folder"]), "files": [str(x) for x in best["files"]],
-                    "technical": best["technical"], "newest": datetime.fromtimestamp(best["newest"]).isoformat(timespec="minutes"),
-                    "other_folders": [str(h["folder"]) for h in hits[1:6]]}
+            return _best(hits, area, "drawing number")
+    # THE JOB FOLDER, WHEN NO FILE CARRIES THE DRAWING NUMBER. Design files a job as
+    # "12181 - Sander Application Demo [Rome 2026]": the job number only. A folder whose own name
+    # starts with the job number is the job; its Technical folder and newest drawings are used,
+    # and the row says it was matched by job, not by drawing number (JG, 9 Nov 2026).
+    job = re.search(r"\d{3,}", drawing or "")
+    if not job:
+        return {}
+    jpat = re.compile(r"^\s*" + job.group(0) + r"(?![0-9])")
+    for area, folders in listings:
+        roots = [f for f in folders if jpat.search(f.name)]
+        hits = []
+        for f in folders:
+            if not any(f == r or r in f.parents for r in roots):
+                continue
+            files = drawings_in(f)
+            if files:
+                hits.append({"folder": f, "files": files, "technical": "technical" in str(f).lower(),
+                             "newest": max(x.stat().st_mtime for x in files)})
+        if hits:
+            return _best(hits, area, "job folder")
     return {}
 
 
@@ -343,6 +376,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
     data = read_rows(sheet, cols, rows, args.sheet_name)
     design = Path(os.getenv("SDI_TTI_DESIGN_ROOT") or DEFAULT_DESIGN)
     proto = Path(os.getenv("SDI_TTI_PROTOTYPE_ROOT") or DEFAULT_PROTOTYPE)
+    _FILES.clear()
     listings = [("design", list_folders(design)), ("prototype", list_folders(proto))]
     out_root = inputs_root() / re.sub(r"[^\w .-]", "_", sheet.stem)
     report: Dict[str, Any] = {"sheet": str(sheet), "tab": data["sheet"], "header_row": data["header_row"],
@@ -365,7 +399,8 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         found = find_drawings(r["drawing"], listings) if r["drawing"] else {}
         item = {"row": r["row"], "drawing": r["drawing"], "drawing_cell": r.get("drawing_cell", r["drawing"]),
                 "quantity": r["quantity"],
-                "kind": "full estimate" if found else "LLM estimate (no drawings found)",
+                "kind": ("full estimate" if found.get("match") != "job folder"
+                         else "full estimate (job folder)") if found else "LLM estimate (no drawings found)",
                 "found": {k: v for k, v in found.items() if k != "files"} if found else None,
                 "files": len(found.get("files") or []) if found else 0,
                 "thumbnails": len(r["pictures"]), "cost_before": r["cost_before"], "state": "planned"}

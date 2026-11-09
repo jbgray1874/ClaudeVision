@@ -276,3 +276,20 @@ def test_the_same_drawing_at_the_same_quantity_is_priced_once(tmp_path, monkeypa
     rep = tp.run_batch(_args(p), portal=portal, status_path=None, sleep=lambda s: None)
     assert len(portal.started) == 1
     assert rep["rows"][1]["same_as_row"] == 2 and rep["rows"][1]["unit_cost"] == 123.46
+
+
+def test_a_job_folder_named_by_job_number_is_used_when_no_file_carries_the_drawing_number(tmp_path, monkeypatch):
+    design, proto, _ = _areas(tmp_path, monkeypatch)
+    job = design / "12181 - Sander Application Demo [Rome 2026]"
+    (job / "Technical").mkdir(parents=True)
+    (job / "Concept").mkdir()
+    (job / "Technical" / "GA sheet.pdf").write_text("ga")
+    (job / "Concept" / "idea.pdf").write_text("c")
+    (design / "121810 Other job").mkdir()
+    (design / "121810 Other job" / "z.pdf").write_text("z")
+    tp._FILES.clear()
+    listings = [("design", tp.list_folders(design)), ("prototype", tp.list_folders(proto))]
+    f = tp.find_drawings("12181-00-GA", listings)
+    assert f["match"] == "job folder" and f["folder"] == str(job / "Technical")
+    assert [Path(x).name for x in f["files"]] == ["GA sheet.pdf"]
+    assert tp.find_drawings("TTI-10234", listings)["match"] == "drawing number", "a named drawing still wins"
