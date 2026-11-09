@@ -70,6 +70,7 @@ def _areas(tmp_path: Path, monkeypatch) -> tuple:
     monkeypatch.setenv("SDI_TTI_DESIGN_ROOT", str(design))
     monkeypatch.setenv("SDI_TTI_PROTOTYPE_ROOT", str(proto))
     monkeypatch.setenv("SDI_TTI_INPUTS", str(tmp_path / "held"))
+    monkeypatch.setenv("SDI_PACK_STORE", str(tmp_path / "held" / "LiveEnquiry"))
     return design, proto, tech
 
 
@@ -136,7 +137,8 @@ def test_a_dry_run_finds_the_drawings_and_queues_and_writes_nothing(tmp_path, mo
     before = sheet.read_bytes()
     rep = tp.run_batch(_args(sheet, dry_run=True), portal=None, status_path=tmp_path / "s.json")
     kinds = {r["row"]: r["kind"] for r in rep["rows"]}
-    assert kinds == {3: "full estimate", 4: "LLM estimate (no drawings found)", 6: "LLM estimate (no drawings found)"}
+    assert kinds == {3: "full estimate (provisional pack)", 4: "LLM estimate (no drawings found)",
+                     6: "LLM estimate (no drawings found)"}
     assert sheet.read_bytes() == before and not (tmp_path / "held").exists()
     assert json.loads((tmp_path / "s.json").read_text())["finished"]
 
@@ -234,7 +236,7 @@ def test_the_service_refuses_a_bad_sheet_and_runs_a_dry_run_to_its_status(servic
             break
         time.sleep(0.5)
     assert st.get("finished"), st.get("log_tail")
-    assert [x["kind"] for x in st["rows"]][0] == "full estimate" and st["dry_run"] is True
+    assert [x["kind"] for x in st["rows"]][0].startswith("full estimate") and st["dry_run"] is True
 
 
 def test_a_title_row_above_the_header_is_not_the_header_and_drawing_cells_are_read_for_their_number(tmp_path):
@@ -310,6 +312,21 @@ def test_every_found_pack_is_labelled_a_candidate_not_a_verified_pack(tmp_path, 
     _areas(tmp_path, monkeypatch)
     rep = tp.run_batch(_args(sheet, dry_run=True), portal=None, status_path=None)
     by = {r["row"]: r for r in rep["rows"]}
-    assert by[3]["pack"] == tp.PACK_NAMED and "not verified" in by[3]["pack"]
+    assert by[3]["pack"].startswith("provisional pack: 1 drawing(s), revision B"), "a name-only match is never verified"
+    assert by[3]["pack_detail"]["assumptions"] and by[3]["pack_status"] == "provisional"
     assert by[4]["pack"] == "" and by[6]["pack"] == ""
     assert "not verified" in tp.PACK_JOB_FOLDER and "r.pack" in PAGE
+
+
+def test_a_priced_rows_pack_is_kept_in_live_enquiry_and_reused_next_time(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)
+    _areas(tmp_path, monkeypatch)
+    monkeypatch.setattr(tp.SheetWriter, "write", lambda self, row, value: None)
+    first = tp.run_batch(_args(sheet, rows="3"), portal=FakePortal(), status_path=None, sleep=lambda s: None)
+    kept = first["rows"][0]["kept"]
+    assert kept["state"] == "new" and kept["folder"] == str(tmp_path / "held" / "LiveEnquiry" / "TTI" / "TTI-10234")
+    again = tp.run_batch(_args(sheet, rows="3"), portal=FakePortal(), status_path=None, sleep=lambda s: None)
+    assert again["rows"][0]["kept"]["state"] == "unchanged"
+    portal = FakePortal()
+    tp.run_batch(_args(sheet, rows="3"), portal=portal, status_path=None, sleep=lambda s: None)
+    assert "Drawing pack provisional:" in portal.started[0]["enquiry_brief"], "the pack's assumptions travel with the job"
