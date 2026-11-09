@@ -2317,6 +2317,16 @@ SPECIFICATION_LEGEND_STOPS = [
 #   "CORNERS TO BE WELDED") is not touched.
 SPECIFICATION_DEFAULT_SENTENCES = [
     r"\bALL\s+WELDS?\b[^.;\n•]{0,60}?\bUNLESS\s+(?:OTHERWISE\s+)?(?:STATED|SPECIFIED|NOTED|SHOWN|INDICATED)\b",
+    # THE SAME LEGEND WITH ITS SPACES LOST (D-757). 0358141's PDF text strips the spaces from
+    # its border: "ALLWELDSTOBEMIGUNLESSSTATED" and the heading "WELDSPECIFICATION", with no
+    # colon. Neither form above matched, so the keyword recogniser read "WELD" off the legend
+    # and charged Weld (CO2) and Dress Welds on two screw-fixed rub strips. The legend says how
+    # a weld is made, never that one exists, spaced or not. Matched only where the spaces are
+    # gone, so a spaced line still goes through the patterns above.
+    r"ALLWELDS?[A-Z0-9]{0,40}?UNLESS(?:OTHERWISE)?(?:STATED|SPECIFIED|NOTED|SHOWN|INDICATED)",
+    #   A heading alone is not work: "WELD SPECIFICATION" with no colon starts no block (the
+    #   block form above needs one), so only the heading words go.
+    r"WELD(?:ING)?\s*SPECIFICATIONS?",
     # The legend's how-to for wire-to-wire joints (json_normaliser strips the same line).
     r"\bRESISTANCE\s+WELDING\s+WIRE\s+TO\s+WIRE\b[^•\n]{0,80}",
     # A GRADE FOR A THICKNESS RANGE IS NOT A GAUGE (D-394). The material legend's "Q195 UP TO
