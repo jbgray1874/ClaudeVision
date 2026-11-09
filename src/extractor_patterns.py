@@ -180,6 +180,21 @@ def _legend_res():
         _LEGEND_RES["start"] = re.compile("|".join(heads), re.IGNORECASE)
         _LEGEND_RES["stop"] = re.compile("|".join(stops), re.IGNORECASE)
         _LEGEND_RES["sentences"] = [re.compile(x, re.IGNORECASE) for x in sents]
+        # EVERY LEGEND SENTENCE, ALSO WITH ITS SPACES LOST (D-760). 0358141's PDF text strips
+        # the border's spaces, and each legend line then slipped past its spaced pattern one at
+        # a time: "ALLWELDSTOBEMIGUNLESSSTATED" (D-757), then "RESISTANCEWELDINGWIRETOWIRE
+        # THESETDOWNSHOULD..." on every detail sheet, which put a weld on all seven members.
+        # The joined form of each configured sentence is derived here, so a line added to the
+        # legend later is covered without a second pattern.
+        _joined = []
+        for x in sents:
+            j = re.sub(r"\\s[+*]", "", x).replace("\\b", "")
+            if j != x:
+                try:
+                    _joined.append(re.compile(j, re.IGNORECASE))
+                except re.error:
+                    pass
+        _LEGEND_RES["sentences"] += _joined
     return _LEGEND_RES
 
 
