@@ -5342,6 +5342,94 @@ def _record_for_model_assembly_name(item: str, raw: Mapping[str, Any]) -> str:
     return stem if stem and raw.get(stem) else item
 
 
+# ── A WELD THE ASSEMBLY'S OWN SHEET REFERENCES IS THE ASSEMBLY'S, CHARGED ONCE (D-759) ─────
+#
+# JG, 9 Nov 2026, on D-757 (the weld legend never welds a part by itself): "if a weld is
+# referenced, I'd say we need to add welding." The reviewer, the same day: a general weld-
+# process note "specifies how an established weld is made; it does not establish a weld on
+# every member", and genuine frame joints are kept, charged once. Both hold when the weld an
+# assembly's own sheet references is charged at that assembly: a metal assembly built from at
+# least two metal parts, whose own sheet states a weld process, and on which nothing has
+# claimed, ruled out or charged a weld, takes one welding event, priced as an inference with
+# its reason and its members named; no member is charged for it. Where the drawing, the
+# model, the read or a person already says how the assembly is joined, that stands.
+_METAL_WORDS = ("STEEL", "STAINLESS", "ALUMIN", "ZINTEC", "GALV", "MILD")
+
+
+def _is_metal_record(rec: Any) -> bool:
+    if not isinstance(rec, Mapping):
+        return False
+    fam = str(rec.get("material_family") or "").strip().lower()
+    if fam in {"metal", "tube", "sheet_metal", "wire", "bar", "section", "steel"}:
+        return True
+    text = " ".join(str(m) for m in (rec.get("materials") or []) if m) + " " + str(
+        rec.get("material_text_as_printed") or "")
+    return any(w in text.upper() for w in _METAL_WORDS)
+
+
+def _referenced_weld_process(rec: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """The weld process the record's own sheet states, from its notes or its stated process."""
+    stated = rec.get("weld_process_stated")
+    if isinstance(stated, Mapping) and stated.get("process"):
+        return dict(stated)
+    notes = " ".join(str(n) for f in ("process_notes", "notes", "general_notes")
+                     for n in (rec.get(f) or []) if n)
+    if not notes.strip():
+        return None
+    try:
+        from extractor_patterns import weld_process_stated
+        read = weld_process_stated(notes)
+    except Exception:                                                # noqa: BLE001
+        read = None
+    return dict(read) if isinstance(read, Mapping) and read.get("process") else None
+
+
+def _referenced_weld_claims(graph: Mapping[str, Any], kinds: Mapping[str, str],
+                            claims_by_event: Mapping[str, List["OperationClaim"]],
+                            add_claim: Any, issues: List[Dict[str, Any]]) -> List[str]:
+    children = graph.get("children") or {}
+    records = graph.get("records") or {}
+    raw = graph.get("raw") or {}
+    joined: Set[str] = set()
+    for _claims in claims_by_event.values():
+        for _c in _claims:
+            if "weld" in str(_c.operation) or "braz" in str(_c.operation):
+                joined.add(_c.target_id)
+                joined.update(_c.participants or [])
+    added: List[str] = []
+    for pn, kind in sorted(kinds.items()):
+        if kind != "assembly" or pn in joined:
+            continue
+        rec = records.get(pn) or raw.get(pn) or {}
+        if not isinstance(rec, Mapping):
+            continue
+        if "welding" in {clean_operation(o) for o in (rec.get("operations_ruled_out") or [])}:
+            continue
+        process = _referenced_weld_process(rec)
+        if not process:
+            continue
+        metal = sorted(k for k in (children.get(pn) or ())
+                       if _is_metal_record(records.get(k) or raw.get(k)))
+        if len(metal) < 2:
+            continue
+        word = str(process.get("word") or process.get("process") or "")
+        add_claim(stable_id("decision", {"origin": "referenced_weld", "operation": "welding",
+                                         "scope": "assembly", "target_id": pn}),
+                  make_claim("welding", REQUIRED, "inference", subject_id=pn, target_id=pn,
+                             scope="assembly", participants=metal,
+                             reason=(f"inferred: {pn}'s own sheet references welding (its weld "
+                                     f"specification states {word}) and it is built from "
+                                     f"{len(metal)} metal parts, so its joints are taken as "
+                                     f"welded: charged once on {pn}, never on each member. "
+                                     f"Confirm the joints and the process"),
+                             evidence=f"weld specification: {word}",
+                             evidence_where=f"{pn}'s own sheet"))
+        issues.append({"code": "referenced_weld_charged_at_assembly", "part": pn,
+                       "members": metal, "process": process.get("process")})
+        added.append(pn)
+    return added
+
+
 def compile_job_route(
     parts: Sequence[Mapping[str, Any]],
     llm_extract: Optional[Mapping[str, Any]] = None,
@@ -6117,6 +6205,9 @@ def compile_job_route(
                     reason=reason,
                     route_id=template.route_id if template else "",
                 ))
+
+    # A weld the assembly's own sheet references is the assembly's, charged once (D-759).
+    _referenced_weld_claims(graph, kinds, claims_by_event, add_claim, issues)
 
     # Pressed fasteners are a route fact carried by the BOM, not a workbook-side guess.
     # One insertion event belongs to the lowest assembly containing the PEM/clinch items;
