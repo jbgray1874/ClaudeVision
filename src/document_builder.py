@@ -860,6 +860,51 @@ def _page_lookup_key(page: Dict[str, Any], summary: Dict[str, Any]) -> Optional[
     return int(pnum) if pnum is not None else None
 
 
+_OA_FIGURE = re.compile(r"(?<![\d.])(\d{1,5}(?:\.\d+)?)\s*O\s*/?\s*A(?![A-Z])")
+
+
+def _own_sheet_overall_blank(part: Dict[str, Any], page_lookup: Dict[int, Dict[str, Any]]) -> bool:
+    """THE SIZE THE PART'S OWN SHEET CALLS OVERALL (SCRUM-194, D-764). A flat part's detail
+    sheet prints its extents as "<n> O/A" (the PDF text: "1168O A", "11O A"); exactly two such
+    figures on its own sheets are its length and width, the same figure twice included (a
+    30 x 30 cap). 0358141's five flat parts (1168 x 11, 80 x 11, 30 x 30, 60 x 19, 30 x 15)
+    had no blank at all: the text fallback reads nothing under 50 mm, by design, and the DXF
+    path had no file. The printed words are kept beside the figures. A section's single O/A is
+    its length (D-761), read where the section is; three or more O/A figures are a folded
+    part's extents, not a flat blank, and are left to the fold geometry. The sheet's own text
+    is read once (the merged page text repeats every token from its regions), so two figures
+    are two figures. Returns True when it set the blank."""
+    if _safe_float(part.get("blank_length_mm")) and _safe_float(part.get("blank_width_mm")):
+        return False
+    if (part.get("section_stock") or {}).get("a"):
+        return False
+    own_sheets = [p for p in (part.get("pages") or []) if isinstance(p, int)
+                  and p != part.get("bound_to_parts_list_page") and p in page_lookup]
+    hits: List[Tuple[float, str]] = []
+    for pno in own_sheets:
+        sheet = page_lookup[pno].get("page") if isinstance(page_lookup[pno].get("page"), dict) else {}
+        text = str(sheet.get("pdfplumber_text") or sheet.get("normalized_text") or "")
+        seen: set = set()
+        if not text.strip():
+            text = str(page_lookup[pno].get("text") or "")
+            for m in _OA_FIGURE.finditer(text.upper()):          # merged text: distinct only
+                key = (float(m.group(1)), m.group(0).strip())
+                if key not in seen:
+                    seen.add(key)
+                    hits.append(key)
+            continue
+        hits.extend((float(m.group(1)), m.group(0).strip()) for m in _OA_FIGURE.finditer(text.upper()))
+    if len(hits) != 2 or not all(v > 0 for v, _w in hits):
+        return False
+    hits.sort(key=lambda h: -h[0])
+    part["blank_length_mm"], part["blank_width_mm"] = hits[0][0], hits[1][0]
+    part["blank_length_mm_source"] = "detail_sheet_overall"
+    part["blank_width_mm_source"] = "detail_sheet_overall"
+    part["blank_printed"] = " x ".join(re.sub(r"\s*O\s*/?\s*A$", " O/A", w) for _v, w in hits)
+    part["blank_page"] = own_sheets[0] if len(own_sheets) == 1 else own_sheets
+    return True
+
+
 def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Post-build fixes after part_index and bought-in merge.
@@ -1846,6 +1891,7 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 "LAMINATE",
             )
         )
+        _own_sheet_overall_blank(part, page_lookup)
         if _is_non_metal_mat and not inherited_steel:
             _raw_thick = part.get("thicknesses_mm") or []
             _valid_thick = [

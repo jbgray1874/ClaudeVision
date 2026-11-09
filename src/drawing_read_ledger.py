@@ -156,7 +156,10 @@ def capture(summary: Mapping[str, Any], parts: Optional[Iterable[Mapping[str, An
                     "thickness": _num(part.get("normalized_thickness_mm"))}
             if any(v for v in size.values()):
                 add(id=f"{rid}.size", kind="size", work=False, label=f"{name}: size", record=pn,
-                    of=rid, page=page, as_read={k: v for k, v in size.items() if v})
+                    of=rid, page=part.get("blank_page") or page,
+                    as_read={k: v for k, v in size.items() if v},
+                    words=part.get("blank_printed") or part.get("material_text_as_printed"),
+                    said_by=str(part.get("blank_length_mm_source") or SAID_BY))
         fin = _stated_finish(part)
         if fin:
             add(id=f"{rid}.finish", kind="stated", work=True, item=fin["item"], label=f"{name}: finish",

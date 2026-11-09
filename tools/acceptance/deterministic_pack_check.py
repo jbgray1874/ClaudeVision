@@ -197,35 +197,145 @@ def compare(expected: Dict[str, Any], parts: List[Dict[str, Any]]) -> List[Dict[
     return rows
 
 
+# ── the costed record, joined (requirement 2 on the same rows) ──────────────────────────
+
+_LEDGER_SUFFIX = {"material": ".material", "thickness_mm": ".size", "blank_mm": ".size",
+                  "section": ".section", "length_mm": ".section", "cut_lengths_mm": ".section",
+                  "quantity": ".quantity"}
+
+
+def costing_results(record_path: Optional[Path], xlsx: Optional[Path]) -> Dict[str, Any]:
+    """The drawing ledger's dispositions on the costed record, by (part, ledger suffix), plus
+    the record's provenance. {} when no record was given."""
+    if record_path is None:
+        return {}
+    import drawing_read_ledger as drl
+    import read_charge_contract as rcc
+    rec = json.loads(Path(record_path).read_text(encoding="utf-8"))
+    final = rec.get("final_estimate") if isinstance(rec.get("final_estimate"), dict) else {}
+    out: Dict[str, Any] = {"record": str(record_path), "read_back": final.get("source") == "excel_calculated",
+                           "engine": str((rec.get("run_provenance") or {}).get("engine_build") or "?"),
+                           "deterministic_only": bool(rec.get("deterministic_only")), "items": {}}
+    ledger = rec.get("drawing_ledger")
+    if not isinstance(ledger, dict) or not ledger.get("items"):
+        ledger = drl.capture(rec)
+        out["ledger_provenance"] = "RECONSTRUCTED from the record's parts: cannot prove nothing was lost earlier"
+    else:
+        out["ledger_provenance"] = "captured by the run at scan"
+    if not out["read_back"]:
+        out["why"] = f"no calculated workbook read-back (final_estimate.source is {final.get('source')!r})"
+        return out
+    snapshot = None
+    if xlsx:
+        try:
+            import final_charge_contract as fcc
+            snapshot = fcc.snapshot_xlsx(xlsx)
+        except Exception:                                            # noqa: BLE001
+            snapshot = None
+    res = rcc.audit(rec, snapshot, ledger=ledger)
+    for it in res.get("items") or []:
+        out["items"].setdefault(re.sub(r"\s+", " ", str(it.get("record") or "")).upper(), {})[str(it.get("id"))] = it
+    # An engine allowance beside the facts (a saw on a stated section) and a purchase of the
+    # parts list are not drawing-ledger items; they are priced and listed, and the row says so.
+    out["allowances"] = {}
+    for a in res.get("allowances") or []:
+        out["allowances"].setdefault(re.sub(r"\s+", " ", str(a.get("part") or "")).upper(), {})[str(a.get("operation"))] = a
+    out["lines"] = {re.sub(r"\s+", " ", str(l.get("record") or "")).upper(): l for l in res.get("lines_noted") or []}
+    out["issues"] = res.get("issues") or []
+    out["verified_against_file"] = bool(snapshot)
+    return out
+
+
+def _costing_cell(row: Dict[str, Any], costing: Dict[str, Any]) -> Tuple[str, Optional[bool]]:
+    """(text for the costing/workbook column, ok) — ok None where this fact has no charge."""
+    if not costing:
+        return "not evaluated (scan stage; give --record for the costed run)", None
+    if not costing.get("read_back"):
+        return f"NOT TESTED: {costing.get('why')}", None
+    fact = row["fact"]
+    items = costing["items"].get(re.sub(r"\s+", " ", row["part"]).upper()) or {}
+    if fact in ("pages", "listed_as", "flag_contains", "no_section"):
+        return "n/a (a reading, not a charge)", None
+    pn_key = re.sub(r"\s+", " ", row["part"]).upper()
+    line = (costing.get("lines") or {}).get(pn_key)
+    if line and not items:
+        return f"{line.get('class')}: {line.get('basis')} {', '.join(str(c) for c in line.get('cells') or [] if c)}".strip(), True
+    if fact == "operations_present":
+        allow = (costing.get("allowances") or {}).get(pn_key) or {}
+        parts, oks = [], []
+        for o in row["expected"]:
+            i = next((i for k, i in items.items() if k.endswith(f".op.{o}")), None)
+            if i:
+                parts.append(f"{o}: {i['state']} {', '.join(i.get('cells') or [])}".strip())
+                oks.append(i["state"] in ("charged", "covered", "excluded"))
+            elif o in allow:
+                a = allow[o]
+                parts.append(f"{o}: engine allowance priced {a.get('cell') or ''} ({a.get('basis') or ''})".strip())
+                oks.append(bool(a.get("cell")) and not a.get("holds"))
+            else:
+                parts.append(f"{o}: no ledger item and no allowance")
+                oks.append(False)
+        return "; ".join(parts), all(oks)
+    if fact == "operations_absent":
+        charged = [o for o in row["expected"] if any(k.endswith(f".op.{o}") and i.get("state") == "charged"
+                                                       for k, i in items.items())]
+        return ("none charged" if not charged else f"charged although absent: {charged}"), not charged
+    suf = _LEDGER_SUFFIX.get(fact)
+    it = next((i for k, i in items.items() if suf and k.endswith(suf)), None)
+    if not items:
+        return "no ledger item for this part on the costed record", False
+    if it is None:
+        return f"no {suf} item on the ledger", False
+    good = it["state"] in ("charged", "covered", "carried", "corrected", "excluded")
+    return f"{it['state']}: {it.get('how') or ''} {', '.join(it.get('cells') or [])}".strip(), good
+
+
+def verdict(row: Dict[str, Any], costing_ok: Optional[bool], costing: Dict[str, Any]) -> str:
+    read_ok = row["status"] == "extracted_and_linked"
+    if costing and not costing.get("read_back"):
+        return "NOT TESTED"
+    if not read_ok:
+        return "FAIL" if row["strict"] else "ADVISORY"
+    if costing_ok is False:
+        return "FAIL"
+    return "PASS" if costing else "PASS (reading)"
+
+
 # ── the report ──────────────────────────────────────────────────────────────────────────
 
-def render(pack: str, mode: str, pdf: Optional[Path], readers: str, rows: List[Dict[str, Any]],
-           build: str, status: str) -> str:
-    out = [f"# Deterministic reading check: {pack}", "",
-           f"- mode: **{mode}**  ({readers})",
-           f"- drawing: {pdf.name if pdf else 'NOT FOUND'}",
-           f"- engine: {build}",
+def render(pack: str, mode: str, pdf: Optional[Path], sha: str, readers: str, rows: List[Dict[str, Any]],
+           build: str, status: str, costing: Dict[str, Any]) -> str:
+    out = [f"# Acceptance: {pack}", "",
+           f"- drawing: {pdf.name if pdf else 'NOT FOUND'}  sha256 {sha[:16]}…" if sha else f"- drawing: {pdf.name if pdf else 'NOT FOUND'}",
+           f"- test mode: **{mode}**  ({readers})",
+           f"- engine build (scan): {build}",
+           (f"- costed record: {Path(costing['record']).name}  engine {costing.get('engine')}  "
+            f"deterministic-only {costing.get('deterministic_only')}  ledger {costing.get('ledger_provenance')}  "
+            f"workbook file read: {'yes' if costing.get('verified_against_file') else 'no'}") if costing
+           else "- costed record: none given (scan stage only; requirement 2 needs --record)",
            f"- result: **{status}**", "",
-           "Scan stage only: a fact here is *extracted and linked* to its part. Whether it reached the "
-           "costing input and the workbook row is the retention trace (requirement 2), run on the "
-           "costed record.", ""]
-    if rows:
-        out += ["| Part | Fact | Page | Expected | Observed | Status |", "|---|---|---|---|---|---|"]
-        for r in rows:
-            mark = {"extracted_and_linked": "extracted and linked", "mismatch": "MISMATCH",
-                    "not_found": "NOT FOUND"}[r["status"]] + ("" if r["strict"] else " (advisory)")
-            out.append(f"| {r['part']} | {r['fact']} | {r['page']} | {json.dumps(r['expected'])} | "
-                       f"{json.dumps(r['observed'])} | {mark} |")
-    n = len(rows)
-    ok = sum(1 for r in rows if r["status"] == "extracted_and_linked")
-    bad_strict = [r for r in rows if r["status"] != "extracted_and_linked" and r["strict"]]
-    adv = [r for r in rows if r["status"] != "extracted_and_linked" and not r["strict"]]
-    out += ["", f"{ok} of {n} facts extracted and linked; {len(bad_strict)} strict open; "
-                f"{len(adv)} advisory open."]
+           "| Finding | Page | Expected | Reader result | Costing / workbook result | Verdict |",
+           "|---|---|---|---|---|---|"]
+    for r in rows:
+        mark = {"extracted_and_linked": "extracted and linked", "mismatch": "MISMATCH",
+                "not_found": "NOT FOUND"}[r["status"]]
+        out.append(f"| {r['part']} {r['fact']} | {r['page']} | {json.dumps(r['expected'])} | "
+                   f"{json.dumps(r['observed'])} ({mark}) | {r.get('costing_text') or ''} | **{r['verdict']}** |")
+    counts: Dict[str, int] = {}
+    for r in rows:
+        counts[r["verdict"]] = counts.get(r["verdict"], 0) + 1
+    out += ["", f"verdicts: {json.dumps(counts)}"]
+    if costing.get("issues"):
+        out += ["", "costed record issues:"] + [f"- {i.get('code')}: {i.get('item') or ''} {i.get('why') or i.get('text') or ''}"
+                                               for i in costing["issues"][:20]]
+    out += ["", "A fact extracted and linked at the scan stage is the first check only. With a costed record it "
+                "must reach the correct charge or carry an explicit disposition; without one the verdict says "
+                "(reading)."]
     return "\n".join(out) + "\n"
 
 
-def check_pack(pack: str, mode: str, out_dir: Optional[Path] = None) -> Tuple[int, str]:
+def check_pack(pack: str, mode: str, out_dir: Optional[Path] = None, record: Optional[Path] = None,
+               xlsx: Optional[Path] = None) -> Tuple[int, str]:
     pack_dir = PACKS / pack
     facts_path = pack_dir / "expected_facts.json"
     if not facts_path.is_file():
@@ -235,24 +345,42 @@ def check_pack(pack: str, mode: str, out_dir: Optional[Path] = None) -> Tuple[in
     if pdf is None:
         return NOT_TESTED, (f"NOT TESTED: {pack}: drawing '{facts.get('source_pdf')}' not beside "
                             f"{facts_path.name} and not under $SDI_ACCEPTANCE_PACKS/{pack}/")
+    import hashlib
+    sha = hashlib.sha256(pdf.read_bytes()).hexdigest()
     try:
         summary, parts, readers = scan(pdf, mode)
     except Exception as exc:                                         # noqa: BLE001
         return NOT_TESTED, f"NOT TESTED: {pack}: the scanner failed: {exc!r}"
     rows = compare(facts, parts)
-    strict_open = [r for r in rows if r["status"] != "extracted_and_linked" and r["strict"]]
-    code = PASS if not strict_open else FAIL
-    status = "PASS" if code == PASS else f"FAIL ({len(strict_open)} strict facts open)"
+    try:
+        costing = costing_results(record, xlsx)
+    except Exception as exc:                                         # noqa: BLE001
+        costing = {"record": str(record), "read_back": False, "why": f"the record could not be read: {exc!r}"}
+    for r in rows:
+        text, ok = _costing_cell(r, costing)
+        r["costing_text"], r["costing_ok"] = text, ok
+        r["verdict"] = verdict(r, ok, costing)
+    fails = [r for r in rows if r["verdict"] == "FAIL"]
+    if costing and not costing.get("read_back"):
+        code, status = NOT_TESTED, f"NOT TESTED on the costed record ({costing.get('why')}); reading: " + (
+            "all strict facts extracted and linked" if not any(
+                r["status"] != "extracted_and_linked" and r["strict"] for r in rows) else "strict facts open")
+    else:
+        code = PASS if not fails else FAIL
+        status = "PASS" if code == PASS else f"FAIL ({len(fails)} fact(s))"
     build = str((summary.get("run_provenance") or {}).get("engine_build")
                 or (summary.get("estimate_summary") or {}).get("engine_build") or "?")
-    text = render(pack, mode, pdf, readers, rows, build, status)
+    text = render(pack, mode, pdf, sha, readers, rows, build, status, costing)
     out_dir = out_dir or Path(os.getenv("SDI_ACCEPTANCE_OUT") or (ROOT / "output" / "acceptance"))
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
     (out_dir / f"{pack}_{mode}_{stamp}.md").write_text(text, encoding="utf-8")
     (out_dir / f"{pack}_{mode}_{stamp}.json").write_text(json.dumps(
-        {"pack": pack, "mode": mode, "drawing": str(pdf), "readers": readers, "engine": build,
-         "status": status, "rows": rows}, indent=1, default=str), encoding="utf-8")
+        {"pack": pack, "mode": mode, "drawing": str(pdf), "drawing_sha256": sha, "readers": readers,
+         "engine": build, "status": status, "rows": rows,
+         "costed_record": {k: v for k, v in costing.items() if k != "items"},
+         "reader_findings": (summary.get("reader_findings") or {})},
+        indent=1, default=str), encoding="utf-8")
     return code, text
 
 
@@ -261,17 +389,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("packs", nargs="*", help="pack folder names under tests/acceptance/packs/")
     ap.add_argument("--all", action="store_true", help="every pack that has an expected_facts.json")
     ap.add_argument("--mode", choices=("deterministic", "pdf-only"), default="deterministic")
+    ap.add_argument("--record", type=Path, default=None,
+                    help="the costed run's _record.json: each fact is then also held to its charge")
+    ap.add_argument("--xlsx", type=Path, default=None, help="the run's workbook, read for its own cells")
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args(argv)
     packs = args.packs or ([p.name for p in sorted(PACKS.iterdir())
                             if (p / "expected_facts.json").is_file()] if args.all else [])
     if not packs:
         ap.error("name a pack, or --all")
+    if args.record and len(packs) != 1:
+        ap.error("--record goes with one pack")
     worst = PASS
+    summary_lines = []
     for pack in packs:
-        code, text = check_pack(pack, args.mode, args.out)
+        code, text = check_pack(pack, args.mode, args.out, args.record, args.xlsx)
         print(text)
+        summary_lines.append(f"- {pack}: {'PASS' if code == PASS else 'FAIL' if code == FAIL else 'NOT TESTED'}")
         worst = max(worst, code) if code != NOT_TESTED else (worst if worst == FAIL else NOT_TESTED)
+    if len(packs) > 1:
+        print("# Packs\n" + "\n".join(summary_lines))
     return worst
 
 

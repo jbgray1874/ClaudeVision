@@ -2798,6 +2798,39 @@ def pre_costing_passes(summary: Dict[str, Any]) -> None:
         print(f"   [weld process] pack default not applied "
               f"({type(_wp_exc).__name__}: {_wp_exc})", flush=True)
 
+    # LAST OF THE PRE-COSTING PASSES, SO THE REPLAY RUNS IT TOO, AND BEFORE THE PRICE: the ledger and the
+    # gap check read the part records once every deterministic source has written them (a row's
+    # material, a sheet's material, a stated cut list), so a gap is a gap and a stated fact is on
+    # the ledger. A material inherited from the document after costing is an inference, and the
+    # gap it fills stays named here.
+    # THE DRAWING LEDGER (SCRUM-194 requirement 2): every fact the drawing's own text gave a
+    # made part, captured once the deterministic build is done and before costing, to be held
+    # to the calculated workbook after Excel as the LLM read's ledger is.
+    try:
+        import drawing_read_ledger as _drl
+        summary["drawing_ledger"] = _drl.capture(summary)
+        print(f"   [drawing-ledger] {len(summary['drawing_ledger'].get('items') or [])} fact(s) the "
+              f"drawing states on {summary['drawing_ledger'].get('parts_read', 0)} part(s), each to be "
+              f"charged, covered, excluded or held", flush=True)
+    except Exception as _dl_exc:                                      # noqa: BLE001
+        summary["drawing_ledger"] = {"schema": "drawing_ledger.v1", "items": [],
+                                     "error": f"{type(_dl_exc).__name__}: {_dl_exc}"}
+    # THE GAPS THE DETERMINISTIC READ LEFT, ASKED ONE AT A TIME (SCRUM-194 requirement 3):
+    # for each made part missing a material, a gauge or section, a size or a quantity, the
+    # model is shown that part's own pages only and asked one question; the answer is checked
+    # against the sheet's own readings before it is used, written as llm_assisted, and every
+    # ask is on the record. A deterministic-only run asks nothing and records each gap.
+    try:
+        import gap_fill as _gf
+        _gfr = _gf.run(summary)
+        if _gfr.get("items"):
+            print(f"   [gap-fill] {len(_gfr['items'])} gap(s) on made parts; asked {_gfr.get('asked', 0)}, "
+                  f"filled {_gfr.get('filled', 0)}, open {len(_gfr.get('open') or [])}"
+                  + (f" ({_gfr.get('why_not_asked')})" if _gfr.get("why_not_asked") else ""), flush=True)
+    except Exception as _gf_exc:                                      # noqa: BLE001
+        summary["gap_fill"] = {"schema": "gap_fill.v1", "items": [],
+                               "error": f"{type(_gf_exc).__name__}: {_gf_exc}"}
+
 
 def _finalize_scan_summary(
     summary: Dict[str, Any],
@@ -2947,20 +2980,21 @@ def _finalize_scan_summary(
         # _reconcile_dualpath_into_part_estimates after estimate_document. Removed by the
         # pipeline audit (docs/PIPELINE_WRITER_INVENTORY.md, stage 0).
 
+    # THE READER'S OWN FINDINGS, BEFORE THE BUILD CAN MERGE, FILTER OR DROP THEM (SCRUM-194
+    # requirement 2; reviewer, 9 Nov 2026): page by page, with the value, units, words and the
+    # part the page names, so the retention trace can audit each transition and a finding no
+    # part was given stays visible.
+    try:
+        import reader_findings as _rf
+        summary["reader_findings"] = _rf.capture(summary)
+        print(f"   [reader-findings] {len(summary['reader_findings'].get('items') or [])} finding(s) on "
+              f"{summary['reader_findings'].get('pages_read', 0)} page(s), "
+              f"{summary['reader_findings'].get('unassigned', 0)} not given to a part", flush=True)
+    except Exception as _rf_exc:                                      # noqa: BLE001
+        summary["reader_findings"] = {"schema": "reader_findings.v1", "captured": "scan", "items": [],
+                                      "error": f"{type(_rf_exc).__name__}: {_rf_exc}"}
     _debug("start build_document_writeup")
     summary["manufacturing_writeup"] = build_document_writeup(summary)
-    # THE DRAWING LEDGER (SCRUM-194 requirement 2): every fact the drawing's own text gave a
-    # made part, captured once the deterministic build is done and before costing, to be held
-    # to the calculated workbook after Excel as the LLM read's ledger is.
-    try:
-        import drawing_read_ledger as _drl
-        summary["drawing_ledger"] = _drl.capture(summary)
-        print(f"   [drawing-ledger] {len(summary['drawing_ledger'].get('items') or [])} fact(s) the "
-              f"drawing states on {summary['drawing_ledger'].get('parts_read', 0)} part(s), each to be "
-              f"charged, covered, excluded or held", flush=True)
-    except Exception as _dl_exc:                                      # noqa: BLE001
-        summary["drawing_ledger"] = {"schema": "drawing_ledger.v1", "items": [],
-                                     "error": f"{type(_dl_exc).__name__}: {_dl_exc}"}
     _debug("done build_document_writeup")
 
     # Fill each part's revision from its own drawing's title block BEFORE DXF matching,

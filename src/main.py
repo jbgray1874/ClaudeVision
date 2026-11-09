@@ -2248,6 +2248,20 @@ def main() -> None:
                 from read_charge_contract import record_drawing as _record_drawing_charges
                 _record_drawing_charges(_target, xlsx_path)
                 summary["drawing_charge_result"] = _target.get("drawing_charge_result")
+                # EACH READER FINDING THROUGH THE BUILD, THE COSTING AND THE WORKBOOK (SCRUM-194
+                # requirement 2): the pre-build findings, each with its three transitions and a
+                # verdict; a finding no part was given stays visible. Reporting, not a hold:
+                # the drawing ledger above is the release condition.
+                try:
+                    import findings_trace as _ftr
+                    _target["findings_trace"] = summary["findings_trace"] = _ftr.audit(
+                        _target, _target.get("drawing_charge_result"))
+                    _fc = (summary["findings_trace"] or {}).get("counts") or {}
+                    if summary["findings_trace"].get("applicable"):
+                        print(f"   [findings-trace] {json.dumps(_fc)}", flush=True)
+                except Exception as _ft_exc:                              # noqa: BLE001
+                    summary["findings_trace"] = {"applicable": False,
+                                                 "why": f"{type(_ft_exc).__name__}: {_ft_exc}"}
             except Exception as _rc_exc:                                 # noqa: BLE001
                 _target["read_charge_result"] = summary["read_charge_result"] = {
                     "schema": "read_charge_contract.v1", "applicable": True, "passed": False,

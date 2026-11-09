@@ -5,7 +5,7 @@
   "reviewed_by": null,
   "notes": [
     "Facts are what the sheets print, with the page each comes from. Nothing here is taken from a previous estimate.",
-    "strict=false marks a fact the reviewer asked to be checked but whose reading from the views is still to be confirmed.",
+    "strict=false marks a fact the reviewer asked to be checked but whose reading from the views is still to be confirmed. The five blank sizes are strict (reviewer, 9 Nov 2026): a missing blank fails the reading, it is never advisory.",
     "M7's parts-list code is UPC0358131 M7 (one digit from the pack); its own sheet prints UPC 0358141 + M7. The engine keeps the list's code and must say the two disagree."
   ],
   "parts": {
@@ -30,8 +30,7 @@
       "operations_absent": ["welding", "dress_welds", "folding"],
       "no_section": true,
       "page_of": {"material": 5, "thickness_mm": 5, "quantity": 5, "blank_mm": "5 (1168 O/A x 11)",
-                  "operations_present": "5 ((5x) 3.4 THRU, 6.3 X 90°)", "operations_absent": "1 (secured with M3 S/S CSK screws)"},
-      "strict": {"blank_mm": false}
+                  "operations_present": "5 ((5x) 3.4 THRU, 6.3 X 90°)", "operations_absent": "1 (secured with M3 S/S CSK screws)"}
     },
     "UPC0358141 M3": {
       "pages": [6],
@@ -43,8 +42,7 @@
       "operations_absent": ["welding", "dress_welds", "folding"],
       "no_section": true,
       "page_of": {"material": "6 (printed 3mm STAINLESS STELL)", "thickness_mm": 6, "quantity": 6, "blank_mm": "6 (80 O/A x 11 O/A)",
-                  "operations_present": "6 ((2x) 3.4 THRU, 6.3 X 90°)"},
-      "strict": {"blank_mm": false}
+                  "operations_present": "6 ((2x) 3.4 THRU, 6.3 X 90°)"}
     },
     "UPC0358141 M4": {
       "pages": [7],
@@ -65,8 +63,7 @@
       "blank_mm": [30, 30],
       "no_section": true,
       "operations_absent": ["welding", "folding"],
-      "page_of": {"material": "8 (3mm M/S)", "thickness_mm": 8, "quantity": 8, "blank_mm": "8 (30 x 30, R2)"},
-      "strict": {"blank_mm": false}
+      "page_of": {"material": "8 (3mm M/S)", "thickness_mm": 8, "quantity": 8, "blank_mm": "8 (30 x 30, R2)"}
     },
     "UPC0358141 M6": {
       "pages": [9],
@@ -76,8 +73,7 @@
       "blank_mm": [60, 19],
       "no_section": true,
       "operations_absent": ["welding", "folding"],
-      "page_of": {"material": "9 (3mm M/S)", "thickness_mm": 9, "quantity": 9, "blank_mm": "9 (60 x 19, R9.5)"},
-      "strict": {"blank_mm": false}
+      "page_of": {"material": "9 (3mm M/S)", "thickness_mm": 9, "quantity": 9, "blank_mm": "9 (60 x 19, R9.5)"}
     },
     "UPC0358131 M7": {
       "listed_as": "UPC0358131 M7",
@@ -90,8 +86,7 @@
       "operations_absent": ["welding", "folding"],
       "flag_contains": "one digit away",
       "page_of": {"material": "10 (3mm M/S)", "thickness_mm": 10, "quantity": 10, "blank_mm": "10 (30 x 15, R2)",
-                  "flag_contains": "3 (parts list prints UPC0358131 M7), 10 (title block prints UPC 0358141 + M7)"},
-      "strict": {"blank_mm": false}
+                  "flag_contains": "3 (parts list prints UPC0358131 M7), 10 (title block prints UPC 0358141 + M7)"}
     },
     "HAFELE 651.09.302": {
       "quantity": 4,

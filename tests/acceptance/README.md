@@ -22,6 +22,26 @@ It does not mean charged. Requirement 2, the retention trace, takes the costed `
 and the workbook and gives each finding its disposition: used, covered elsewhere, superseded or
 excluded with a reason, or unresolved, with the row named.
 
+With a costed run the same rows are also held to their charge, on the reviewer's format
+(Finding | Expected | Reader result | Costing/workbook result | Verdict), with the drawing's
+sha256, the test mode and the build on the header:
+
+    python tools/acceptance/deterministic_pack_check.py 0358141 --record <job>_record.json --xlsx <book.xlsx>
+
+Every costing-critical fact is strict: a missing blank FAILS the reading, it is never advisory.
+A fixture-backed run (the PDF present) is the evidence; the suite's run with
+`SDI_REPLAY_ALLOW_MISSING=1` skips a missing drawing as NOT TESTED and is not that evidence.
+
+The reader's findings are captured page by page at scan, before the build can merge, filter or
+drop them (`reader_findings`, on the record), and the trace follows each one: finding -> built
+record -> costed record -> workbook cell, with a finding no part was given listed as UNASSIGNED.
+A record without captured findings says NOT APPLICABLE; nothing is reconstructed.
+
+Requirement 3: the gaps the deterministic read left are asked one at a time (`gap_fill`, on the
+record): one question per gap on the part's own pages, the answer checked against the sheet's
+own readings, written as `llm_assisted`. A deterministic-only run asks nothing and names each
+gap; an LLM recovery never turns the deterministic reading test into a pass.
+
 Requirement 2 runs on a saved run, never on the scan:
 
     python tools/acceptance/retention_trace.py --record <job>_record.json [--xlsx <book.xlsx>]

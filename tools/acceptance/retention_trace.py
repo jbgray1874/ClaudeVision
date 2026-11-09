@@ -70,8 +70,21 @@ def trace(record: Path, xlsx: Optional[Path]) -> Dict[str, Any]:
     if not isinstance(ledger, dict) or not ledger.get("items"):
         ledger = drl.capture(summary)
         out["ledger_captured_here"] = True
+    # THE TWO ARE NOT THE SAME EVIDENCE (reviewer, 9 Nov 2026): a ledger the run captured at
+    # scan holds what the drawing stated before anything could drop it; one reconstructed here
+    # from the record's parts is a diagnosis of that record and cannot prove nothing was lost.
+    out["ledger_provenance"] = ("RECONSTRUCTED from the record's built parts: diagnosis only, it cannot "
+                                "prove nothing was lost before the build" if out.get("ledger_captured_here")
+                                else "captured by the run at scan, before costing")
+    try:
+        import findings_trace as ftr
+        out["findings"] = ftr.audit(summary, None)
+    except Exception as exc:                                         # noqa: BLE001
+        out["findings"] = {"applicable": False, "why": f"{type(exc).__name__}: {exc}"}
     snapshot = fcc.snapshot_xlsx(xlsx) if (xlsx and fcc is not None) else None
     result = rcc.audit(summary, snapshot, ledger=ledger)
+    if out["findings"].get("applicable"):
+        out["findings"] = ftr.audit(summary, result)
     out["ledger"] = {"items": len(ledger.get("items") or []), "parts_read": ledger.get("parts_read")}
     out["items"] = result.get("items") or []
     out["issues"] = result.get("issues") or []
@@ -80,7 +93,9 @@ def trace(record: Path, xlsx: Optional[Path]) -> Dict[str, Any]:
     out["allowances_noted"] = result.get("allowances_noted") or []
     out["lines_noted"] = result.get("lines_noted") or []
     unresolved = [i for i in out["items"] if i.get("state") == "unresolved"]
-    out["status"] = "PASS" if not unresolved and not out["issues"] else f"FAIL ({len(unresolved)} unresolved, {len(out['issues'])} issue(s))"
+    lost = [r for r in (out["findings"].get("items") or []) if r.get("verdict") == "FAIL"]
+    out["status"] = ("PASS" if not unresolved and not out["issues"] and not lost else
+                     f"FAIL ({len(unresolved)} unresolved, {len(out['issues'])} issue(s), {len(lost)} finding(s) lost)")
     out["verified_against_file"] = bool(snapshot)
     return out
 
@@ -89,9 +104,26 @@ def render(t: Dict[str, Any]) -> str:
     lines = [f"# Retention trace: {Path(t['record']).name}", "",
              f"- engine: {t['engine']}  deterministic-only run: {t['deterministic_only']}",
              f"- workbook file read: {'yes' if t.get('verified_against_file') else 'no (read-back taken on trust)'}",
+             f"- drawing ledger: {t.get('ledger_provenance') or ''}",
              f"- result: **{t['status']}**", ""]
     if t["status"] == "NOT TESTED":
         return "\n".join(lines + [t["why"], ""])
+    fnd = t.get("findings") or {}
+    lines += ["## What the reader found, through the build, the costing and the workbook", ""]
+    if not fnd.get("applicable"):
+        lines += [f"NOT APPLICABLE: {fnd.get('why')}", ""]
+    else:
+        lines += [f"findings captured at {fnd.get('captured')}; verdicts {json.dumps(fnd.get('counts'))}", "",
+                  "| Finding | Page | Part | Reader result | Built record | Costing | Workbook | Verdict |",
+                  "|---|---|---|---|---|---|---|---|"]
+        for r in fnd.get("items") or []:
+            rs, cs, ws = r.get("record") or {}, r.get("costing") or {}, r.get("workbook") or {}
+            lines.append(f"| {r.get('id')} {r.get('kind')} | {r.get('page')} | {r.get('part') or 'UNASSIGNED'} | "
+                         f"{json.dumps(r.get('value'))[:50]} {('(' + str(r.get('words'))[:40] + ')') if r.get('words') else ''} | "
+                         f"{rs.get('state')} {rs.get('note') or ''} | {cs.get('state')} | "
+                         f"{ws.get('state')} {', '.join(ws.get('cells') or [])} | **{r.get('verdict')}** |")
+        lines.append("")
+    lines += ["## What the drawing stated, held to the charged cells", ""]
     lines += ["| Item | Part | Page | As read | State | How | Cells |", "|---|---|---|---|---|---|---|"]
     for i in t["items"]:
         lines.append(f"| {i.get('id')} {i.get('label') or ''} | {i.get('record') or ''} | {i.get('page') or ''} | "
