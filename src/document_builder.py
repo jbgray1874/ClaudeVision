@@ -1564,7 +1564,26 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
 
         current_ops: List[str] = part.get("textual_operations", [])
         # OPERATION CUES ARE READ WITH THE LEGEND REMOVED — see _strip_specification_legend.
-        cue_text = _strip_specification_legend(combined_text)
+        #
+        # AND NEVER OFF A PARTS LIST THE PART IS ONLY LISTED ON (D-756). 0358141's rub strips
+        # M2 and M3 had no sheet of their own bound, so part_index bound them to page 2, the
+        # frame M1's sheet with its parts list. Its notes, "WELD AND DRESS, TAP M4, FOLD", are
+        # the frame's; read as the strips' own, they charged a weld and a dress on two screw-
+        # fixed strips (Estimate rows 157 and 158) beside the frame's own weld. The same
+        # binding gave the end caps the rail's tube (D-751, D-755). A page a part is only
+        # listed on speaks for the sheet's own part, so its notes give this part no operation.
+        _cue_list_page = part.get("bound_to_parts_list_page")
+        _cue_pages = [pn for pn in page_nums if pn in page_lookup and pn != _cue_list_page]
+        if _cue_list_page and len(_cue_pages) != len([pn for pn in page_nums if pn in page_lookup]):
+            if not _cue_pages and (_strip_specification_legend(combined_text) or "").strip():
+                part.setdefault("review_flags", []).append(
+                    f"no operation read from the notes on page {_cue_list_page}: that page is "
+                    f"a parts list this part is only listed on, so its notes are the sheet's "
+                    f"own part's. Bind this part's own sheet for its operations")
+            combined_cue = " ".join(page_lookup[pn]["text"] for pn in _cue_pages)
+        else:
+            combined_cue = combined_text
+        cue_text = _strip_specification_legend(combined_cue)
         cue_upper = cue_text.upper()
         if geo_reliability == 0.0 and not current_ops and cue_text.strip():
             finishes = part.get("surface_finishes", [])
