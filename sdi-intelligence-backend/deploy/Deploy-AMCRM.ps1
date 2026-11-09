@@ -93,6 +93,9 @@ $Files = @(
     "sameday_index.py",
     # ... and backs up SameDay's chats and work to D: every night, 5 Nov.
     "sameday_backup.py",
+    # SDI Live at /sameday/, imported by app.py. Left off this list, its changes never
+    # reached the server: the office address kept greeting James as Andy, 8 Nov.
+    "sameday_proxy.py",
     # The app portal's catalogue. Not Python, so it copies without a restart -
     # the service reads it from disk on each request.
     "services.json"
