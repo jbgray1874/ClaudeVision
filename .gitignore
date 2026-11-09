@@ -58,6 +58,10 @@ output/
 # facts: what a book of that job must reproduce, checked by tools/check_book_against_brief.py.
 # Not a run output and not job data — it holds no price.
 !docs/briefs/*.facts.json
+# AN ACCEPTANCE PACK'S EXPECTED FACTS ARE WHAT THE DRAWING PRINTS, drafted from its pages
+# and checked by the reviewer (SCRUM-194, tests/acceptance/README.md). Not a run output and
+# never a previous estimate; the drawing beside it stays out (*.pdf below).
+!tests/acceptance/packs/*/expected_facts.json
 
 # ── Input data (drawings, spreadsheets) ──────────────────────────────────
 input/
