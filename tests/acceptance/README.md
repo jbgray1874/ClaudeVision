@@ -22,5 +22,17 @@ It does not mean charged. Requirement 2, the retention trace, takes the costed `
 and the workbook and gives each finding its disposition: used, covered elsewhere, superseded or
 excluded with a reason, or unresolved, with the row named.
 
+Requirement 2 runs on a saved run, never on the scan:
+
+    python tools/acceptance/retention_trace.py --record <job>_record.json [--xlsx <book.xlsx>]
+
+It takes the record's `drawing_ledger` (captured once the deterministic build is done, before
+costing) and holds every stated fact to the calculated workbook: charged, covered, excluded,
+unresolved; a quantity, material, size or section carried or corrected by a named source. An
+engine allowance beside the drawing's facts is priced and named, not a hold; a purchase or a
+commercial line is listed; a made part with a sheet the read gave no fact holds. A record with
+no calculated read-back is **NOT TESTED**. The same audit runs in `main` after Excel
+(`drawing_charge_result`) and the release invariant `drawing_*` holds on an unresolved item.
+
 A pack whose drawing is missing is **NOT TESTED** (exit 2). `tests/acceptance/` fails on that
 unless `SDI_REPLAY_ALLOW_MISSING=1`, which only GitHub CI sets.

@@ -450,6 +450,14 @@ def bought_in_reason(part: Dict[str, Any]) -> str:
             return f"read from a bought-in-only source ({tok})"
     if _upper(part.get("part_number")).startswith(_BOUGHT_IN_PREFIXES):
         return "the part number is a bought-in code family"
+    # A SUPPLIER'S ARTICLE NUMBER NAMES SOMETHING BOUGHT (D-584, SCRUM-194): a dotted article
+    # number, with or without the maker's name in front, or a standard's designation with its
+    # size. 0358141's "HAFELE 651.09.302 / M8 x 22 Base Leveller" sits on the parts list with
+    # no sheet of its own; read without a model it inherited MILD STEEL and was costed as a
+    # part we make. Measured geometry of the part's own still outranks the shape of its code.
+    if part_code_conventions.is_supplier_article(_upper(part.get("part_number"))) \
+            and not has_fabrication_evidence(part):
+        return "the part number is a supplier's article (a dotted article number or a standard's designation), not a drawing number"
     # THE PRINTED CODE IS A PURCHASE CLASS. SDI prints "P/P" (or a bare "FIXING") in the code
     # column of a line it buys, and part_identity gives each such row an identity of
     # "<class>-<its words>" so the articles stay apart. The class word is the drawing saying

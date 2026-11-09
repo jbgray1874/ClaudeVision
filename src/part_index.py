@@ -567,6 +567,21 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
             part["slot_detected"] = part["slot_detected"] or cues.get("slot_detected", False)
             part["assembly_candidate"] = part["assembly_candidate"] or effective_page_role == "assembly"
             part["textual_operations"].extend(ops)
+            # THE WORDS THE SHEET STATES THE WORK IN TRAVEL WITH IT (D-586, closed for this
+            # writer by SCRUM-194 requirement 2). An operation the page's text gave this part
+            # reached the record with no source and nothing quoted, so the drawing ledger could
+            # not tell "(9x) M3x0.5" from an inference. Each op the page's own words name is
+            # stamped a note on the drawing with those words; one the text does not quote stays
+            # unsourced and is never promoted.
+            if ops:
+                try:
+                    from extractor_patterns import operation_evidence_in_text as _op_words
+                    _quoted = _op_words(page.get("pdfplumber_text") or page.get("normalized_text") or "", ops)
+                except Exception:                                    # noqa: BLE001
+                    _quoted = {}
+                for _op, _snippet in (_quoted or {}).items():
+                    part.setdefault("operation_evidence", {}).setdefault(_op, _snippet)
+                    part.setdefault("operation_sources", {}).setdefault(_op, "drawing_notes")
             # Title-block readings: rank 70. `x = x or y` fills a gap, which is the right
             # direction, but records no source — and an unattributed datum is invisible to
             # arbitration, so the next pass has nothing to weigh itself against.

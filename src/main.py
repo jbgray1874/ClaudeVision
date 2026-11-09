@@ -2245,6 +2245,9 @@ def main() -> None:
                 from read_charge_contract import record as _record_read_charges
                 _record_read_charges(_target, xlsx_path)
                 summary["read_charge_result"] = _target.get("read_charge_result")
+                from read_charge_contract import record_drawing as _record_drawing_charges
+                _record_drawing_charges(_target, xlsx_path)
+                summary["drawing_charge_result"] = _target.get("drawing_charge_result")
             except Exception as _rc_exc:                                 # noqa: BLE001
                 _target["read_charge_result"] = summary["read_charge_result"] = {
                     "schema": "read_charge_contract.v1", "applicable": True, "passed": False,

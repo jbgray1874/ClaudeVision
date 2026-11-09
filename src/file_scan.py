@@ -2949,6 +2949,18 @@ def _finalize_scan_summary(
 
     _debug("start build_document_writeup")
     summary["manufacturing_writeup"] = build_document_writeup(summary)
+    # THE DRAWING LEDGER (SCRUM-194 requirement 2): every fact the drawing's own text gave a
+    # made part, captured once the deterministic build is done and before costing, to be held
+    # to the calculated workbook after Excel as the LLM read's ledger is.
+    try:
+        import drawing_read_ledger as _drl
+        summary["drawing_ledger"] = _drl.capture(summary)
+        print(f"   [drawing-ledger] {len(summary['drawing_ledger'].get('items') or [])} fact(s) the "
+              f"drawing states on {summary['drawing_ledger'].get('parts_read', 0)} part(s), each to be "
+              f"charged, covered, excluded or held", flush=True)
+    except Exception as _dl_exc:                                      # noqa: BLE001
+        summary["drawing_ledger"] = {"schema": "drawing_ledger.v1", "items": [],
+                                     "error": f"{type(_dl_exc).__name__}: {_dl_exc}"}
     _debug("done build_document_writeup")
 
     # Fill each part's revision from its own drawing's title block BEFORE DXF matching,

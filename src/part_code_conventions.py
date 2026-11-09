@@ -189,8 +189,12 @@ _DRAWING_NUMBER_SHAPE = re.compile(r"^(?:[A-Z]{1,4})?[0-9]{3,}[0-9A-Z]*(?:-[0-9A
                                    re.IGNORECASE)
 _LETTER_PREFIX = re.compile(r"^([A-Z]{1,4})(?=[0-9])", re.IGNORECASE)
 # A supplier's article number: dotted numeric groups (Hafele 651.02.909), or a standard's
-# designation with its size. Never a drawing SDI holds, so never structure on a GA.
-_DOTTED_ARTICLE = re.compile(r"^\d+(?:\.\d+){1,}[A-Z]?$", re.IGNORECASE)
+# designation with its size. Never a drawing SDI holds, so never structure on a GA. The
+# maker's name may be written in front of it (HAFELE 651.09.302, 0358141's base leveller,
+# which a deterministic read priced as a mild steel part we make): with a word in front the
+# number needs two dotted groups, so a revision mark (REV1.2) is not an article.
+_DOTTED_ARTICLE = re.compile(r"^(?:\d+(?:\.\d+){1,}|[A-Z]{2,12}\d{2,}(?:\.\d+){2,})[A-Z]?$",
+                             re.IGNORECASE)
 
 
 def _refused_prefixes() -> "frozenset":

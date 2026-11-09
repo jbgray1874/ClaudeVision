@@ -2521,6 +2521,31 @@ def check_a_charged_identity_is_whole_and_charged_once(summary: Any) -> List[Dic
         lines=out, count=len(out))]
 
 
+def check_what_the_drawing_stated_is_accounted_for(summary: Any) -> List[Dict[str, Any]]:
+    """Every fact the drawing's own text stated for a made part is charged, covered, excluded or
+    unresolved, and unresolved holds the release (SCRUM-194 requirement 2). The same check as
+    the read ledger's, over the drawing ledger and its result; the codes carry a prefix so a
+    release row says which ledger holds it."""
+    if not isinstance(summary, dict):
+        return []
+    ledger = summary.get("drawing_ledger")
+    if not isinstance(ledger, dict) or not (ledger.get("items") or ledger.get("error")):
+        return []
+    view = dict(summary)
+    view["read_ledger"] = ledger
+    if isinstance(summary.get("drawing_charge_result"), dict):
+        view["read_charge_result"] = summary["drawing_charge_result"]
+    else:
+        view.pop("read_charge_result", None)
+    out = []
+    for v in check_what_the_read_returned_is_accounted_for(view):
+        v = dict(v)
+        v["code"] = "drawing_" + str(v.get("code") or "")
+        v["message"] = "DRAWING LEDGER: " + str(v.get("message") or "")
+        out.append(v)
+    return out
+
+
 def check_what_the_read_returned_is_accounted_for(summary: Any) -> List[Dict[str, Any]]:
     """Every item an LLM read returned is charged, covered by a named charge, excluded by a
     person with a reason, or unresolved — and unresolved holds the release (D-596). Every
@@ -5494,6 +5519,7 @@ CHECKS = (
     check_a_charged_identity_is_whole_and_charged_once,
     check_a_sheet_blank_and_a_bought_item_reach_the_charged_cells,
     check_what_the_read_returned_is_accounted_for,
+    check_what_the_drawing_stated_is_accounted_for,
     check_what_the_read_said_reaches_a_priced_part,
     check_every_page_reached_a_read,
     check_a_blank_and_its_cut_path_can_both_be_true,
