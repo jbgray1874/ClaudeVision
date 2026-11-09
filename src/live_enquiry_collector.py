@@ -28,6 +28,7 @@ import os
 import re
 import shutil
 import smtplib
+import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -121,7 +122,14 @@ class RowResult:
 
 
 def _env_path(key: str, default: str) -> Path:
-    return Path(os.getenv(key, default)).expanduser()
+    # A K: or W: path is read through its UNC form (src/drive_map.py): the collector runs as a
+    # scheduled task, which has no mapped drive letters (JG, 9 Nov 2026).
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from drive_map import to_unc
+        return Path(to_unc(os.getenv(key, default))).expanduser()
+    except ImportError:
+        return Path(os.getenv(key, default)).expanduser()
 
 
 def load_settings(dry_run: bool = False) -> Settings:
@@ -149,7 +157,7 @@ def load_settings(dry_run: bool = False) -> Settings:
             r"K:\Estimating\Completed\Manual Estimates\Live Enquiry.xls",
         ),
         sheet_name=os.getenv("LIVE_ENQUIRY_SHEET", "Live Enquiries"),
-        production_root=_env_path("PRODUCTION_ROOT", r"W:\Production"),
+        production_root=_env_path("PRODUCTION_ROOT", r"\\sdi-dc01\CAD\Production"),
         dest_root=_env_path(
             "AI_ENQUIRY_DEST",
             r"K:\Estimating\Completed\AI Estimating\Live Enquiry",
