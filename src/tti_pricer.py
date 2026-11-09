@@ -12,8 +12,8 @@ ONE ROW, ONE JOB. Each row is one TTI job:
     column P   AICost: the unit cost is written here, overwriting any earlier figure
 A column headed Description (or Item / Job) and one headed Qty / Quantity are used where present.
 
-WHERE THE DRAWINGS ARE. Under SDI_TTI_DESIGN_ROOT (W:\\Design\\Customers April 08 Onwards\\TTI), then
-SDI_TTI_PROTOTYPE_ROOT (W:\\Prototype\\TTi): a folder whose path names the drawing number (as a
+WHERE THE DRAWINGS ARE. Under SDI_TTI_DESIGN_ROOT (\\\\sdi-dc01\\CAD\\Design\\Customers April 08 Onwards\\TTI, W:), then
+SDI_TTI_PROTOTYPE_ROOT (\\\\sdi-dc01\\CAD\\Prototype\\TTi): a folder whose path names the drawing number (as a
 whole token, so 12693-01 is never 12693-012), preferring one with "Technical" in its path, and the
 newest drawings within it. The drawings found are copied before the run into a `_held\\tti` folder
 under the staging share (SDI_TTI_INPUTS to change it), so the service reads them from a folder it
@@ -46,8 +46,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 DRAWING_EXT = {".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step", ".stp"}
 SKIP = re.compile(r"\b(archive|archived|superseded|old|backup|obsolete)\b", re.IGNORECASE)
-DEFAULT_DESIGN = r"W:\Design\Customers April 08 Onwards\TTI"
-DEFAULT_PROTOTYPE = r"W:\Prototype\TTi"
+DEFAULT_DESIGN = r"\\sdi-dc01\CAD\Design\Customers April 08 Onwards\TTI"  # W:
+DEFAULT_PROTOTYPE = r"\\sdi-dc01\CAD\Prototype\TTi"
 HEADER = re.compile(r"^\s*(drawing|dwg)\s*(number|no\.?|num|#|ref(erence)?)?\s*$", re.IGNORECASE)
 _REF = re.compile(r"(?<![0-9A-Za-z])(?:[A-Za-z]{1,4}-)?\d{3,}[A-Za-z]?(?:-[A-Za-z0-9]+)*")
 

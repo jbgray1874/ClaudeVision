@@ -10,7 +10,7 @@ has to find a drawing by number) reads it.
     python src/drawing_index.py --find 12181-00-GA
 
 WHAT IS INDEXED. Every folder under each root in SDI_DRAWING_INDEX_ROOTS ('|' between them;
-default W:\\Design\\Customers April 08 Onwards and W:\\Prototype), down to SDI_DRAWING_INDEX_DEPTH
+default \\\\sdi-dc01\\CAD\\Design\\Customers April 08 Onwards and ...\\Prototype, which is W:), down to SDI_DRAWING_INDEX_DEPTH
 (10) levels, with the drawing and model files directly in it (.pdf .dxf .dwg .sldprt .sldasm
 .slddrw .step .stp): name, size, modified time. Archive, old, superseded and backup folders are
 left out, as the sweep leaves them out.
@@ -43,7 +43,7 @@ HERE = Path(__file__).resolve().parent
 DRAWING_EXT = {".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step", ".stp"}
 SKIP = re.compile(r"\b(archive|archived|old|superseded|backup|back up|obsolete|recycle)\b|^[._~$]",
                   re.IGNORECASE)
-DEFAULT_ROOTS = r"W:\Design\Customers April 08 Onwards|W:\Prototype"
+DEFAULT_ROOTS = r"\\sdi-dc01\CAD\Design\Customers April 08 Onwards|\\sdi-dc01\CAD\Prototype"  # W:
 
 sys.path.insert(0, str(HERE))
 from drive_map import to_unc  # noqa: E402  (W:\ as its network path where the letter is not mapped)

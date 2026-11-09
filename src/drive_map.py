@@ -6,7 +6,7 @@ there, and the drawing index found nothing on its first build. A path that start
 is therefore translated to its UNC form before it is read:
 
   1. SDI_DRIVE_MAP, the service's own setting: "K=\\\\server\\share;W=\\\\server\\share2". Unset,
-     it is the one mapping this business has always used, K.
+     it is this business's two: K (shared data) and W (the CAD share, \\\\sdi-dc01\\CAD).
   2. Otherwise, on Windows, the user's own saved mapping (HKCU\\Network\\<letter>, which an
      administrator window of the same user can read even where the letter itself is missing).
   3. Otherwise the path is left as it was.
@@ -17,7 +17,7 @@ import os
 import re
 from typing import Dict, Optional
 
-DEFAULT = r"K=\\sdi-dc01\shareddata$\Shared"
+DEFAULT = r"K=\\sdi-dc01\shareddata$\Shared;W=\\sdi-dc01\CAD"
 _LETTER = re.compile(r"^([A-Za-z]):[\\/]?(.*)$", re.S)
 
 

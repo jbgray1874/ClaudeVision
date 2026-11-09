@@ -175,7 +175,7 @@ def _parse_drive_map(raw: str) -> dict:
 
 
 DRIVE_MAP = _parse_drive_map(
-    _opt("SDI_DRIVE_MAP", r"K=\\sdi-dc01\shareddata$\Shared"))
+    _opt("SDI_DRIVE_MAP", r"K=\\sdi-dc01\shareddata$\Shared;W=\\sdi-dc01\CAD"))
 
 
 # ── Document Manager (DM) extract tool ──────────────────────────────────────

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """New drawing packs on the design share, flagged as candidate jobs (JG, 9 Nov 2026).
 
-An hourly sweep of the design share's client folders (SDI_DESIGN_SWEEP_ROOT, default W:\\Design\\Customers April 08 Onwards) that
+An hourly sweep of the design share's client folders (SDI_DESIGN_SWEEP_ROOT, default \\\\sdi-dc01\\CAD\\Design\\Customers April 08 Onwards, which is W:) that
 finds drawing-pack folders and lists the NEW ones on the control panel as candidate jobs to
 discuss with design. It runs on the estimating machine, which holds the share rights, and
 reports to the service the way the self-running watcher does; the service only shows it.
@@ -55,7 +55,7 @@ def _iso(ts: float) -> str:
 
 
 # The client folders (Boots, TTI and the rest) sit directly under this one (JG, 9 Nov 2026).
-DEFAULT_ROOT = r"W:\Design\Customers April 08 Onwards"
+DEFAULT_ROOT = r"\\sdi-dc01\CAD\Design\Customers April 08 Onwards"  # W:
 
 def _to_unc(path: str, env: Dict[str, str]) -> str:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
