@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """New drawing packs on the design share, flagged as candidate jobs (JG, 9 Nov 2026).
 
-An hourly sweep of the design share's client folders (SDI_DESIGN_SWEEP_ROOT, default W:\\) that
+An hourly sweep of the design share's client folders (SDI_DESIGN_SWEEP_ROOT, default W:\\Design\\Customers April 08 Onwards) that
 finds drawing-pack folders and lists the NEW ones on the control panel as candidate jobs to
 discuss with design. It runs on the estimating machine, which holds the share rights, and
 reports to the service the way the self-running watcher does; the service only shows it.
@@ -54,11 +54,14 @@ def _iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# The client folders (Boots, TTI and the rest) sit directly under this one (JG, 9 Nov 2026).
+DEFAULT_ROOT = r"W:\Design\Customers April 08 Onwards"
+
 def settings(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     e = env if env is not None else os.environ
     here = Path(__file__).resolve().parents[1]
     return {
-        "root": Path(e.get("SDI_DESIGN_SWEEP_ROOT") or "W:\\"),
+        "root": Path(e.get("SDI_DESIGN_SWEEP_ROOT") or DEFAULT_ROOT),
         "depth": max(1, int(e.get("SDI_DESIGN_SWEEP_DEPTH") or 3)),
         "minutes": max(5, int(e.get("SDI_DESIGN_SWEEP_MINUTES") or 60)),
         "keep_days": max(1, int(e.get("SDI_DESIGN_SWEEP_KEEP_DAYS") or 14)),
