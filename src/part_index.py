@@ -335,6 +335,38 @@ def _composite_title_block_identity(page: Dict[str, Any], title_block: Dict[str,
                 "source": "title_block_region"}
 
 
+# ── THE TITLE BLOCK'S MATERIALS FIELD, GLUED TO ITS GAUGE (D-761) ──────────────────────────
+#
+# 0358141's detail sheets print the material field as the PDF text runs it together:
+# "3mmSTAINLESSSTELL" (the sheet's own spelling), "30x30x2mmM S", "3mmM S". The title-block
+# parser found no material in any of them, so M3 to M7 reached the book with no material at
+# all. Read from the part's OWN sheet's title-block region only: a gauge or a section run
+# straight into a metal name. "M S" and "M/S" are mild steel and "S/S" stainless, as SDI's
+# sheets write them. The printed words and the page are kept, and the reading is said.
+_TB_GAUGE_MATERIAL = re.compile(
+    r"(?P<size>(?:\d+(?:\.\d+)?\s*[xX]\s*){0,2}\d+(?:\.\d+)?)\s*MM\s*"
+    r"(?P<mat>STAINLESS\s*STE[EL]{2}|MILD\s*STEEL|M\s*/?\s*S(?![A-Z])|S\s*/\s*S(?![A-Z])|"
+    r"ALUMINI?UM|ZINTEC|GALVANI[SZ]ED(?:\s*STEEL)?)", re.IGNORECASE)
+
+
+def _title_block_gauge_and_material(tb_text: Any) -> Optional[Dict[str, Any]]:
+    """{printed, material, thickness_mm, section} from a title block's glued MATERIALS field,
+    or None where the field does not hold exactly one such reading (D-761)."""
+    hits = list(_TB_GAUGE_MATERIAL.finditer(str(tb_text or "")))
+    if len({h.group(0).upper().replace(" ", "") for h in hits}) != 1:
+        return None
+    h = hits[0]
+    word = re.sub(r"\s+", "", h.group("mat").upper())
+    material = ("STAINLESS STEEL" if word.startswith("STAINLESS") or word in {"S/S"} else
+                "MILD STEEL" if word.startswith("MILD") or word in {"MS", "M/S"} else
+                "ALUMINIUM" if word.startswith("ALUMIN") else
+                "ZINTEC" if word == "ZINTEC" else "GALVANISED STEEL")
+    dims = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", h.group("size"))]
+    return {"printed": h.group(0).strip(), "material": material,
+            "thickness_mm": dims[-1] if len(dims) in (1, 3) else None,
+            "section": dims if len(dims) == 3 else None}
+
+
 def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[str, Any]]:
     dedupe = deps.dedupe
     is_valid_part_identifier = deps.is_valid_part_identifier
@@ -445,6 +477,21 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
                 part["pages"].append(page["page_number"])
             if effective_page_role:
                 part["page_roles"].append(effective_page_role)
+            if page_role == "detail" and not (title_block.get("materials") or []):
+                _tbm = _title_block_gauge_and_material(
+                    (page.get("region_text") or {}).get("title_block"))
+                if _tbm:
+                    if _tbm["material"] not in part["materials"]:
+                        part["materials"].append(_tbm["material"])
+                    if _tbm["thickness_mm"] and not _tbm["section"]:
+                        part["thicknesses_mm"].append(f"{_tbm['thickness_mm']:g}")
+                    part.setdefault("material_text_as_printed", _tbm["printed"])
+                    part.setdefault("title_block_material", dict(_tbm, page=page.get("page_number")))
+                    part.setdefault("review_flags", []).append(
+                        f"material {_tbm['material']}"
+                        + (f", {_tbm['thickness_mm']:g} mm" if _tbm["thickness_mm"] and not _tbm["section"] else "")
+                        + f" read from page {page.get('page_number')}'s title-block MATERIALS "
+                          f"field, printed '{_tbm['printed']}'")
             if _composite and pn == _composite[0]:
                 _ev = _composite[1]
                 part.setdefault("title_block_identity", []).append(_ev)
