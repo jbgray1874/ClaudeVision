@@ -117,3 +117,18 @@ def test_the_report_no_longer_prints_an_example_as_if_quoted():
     src = Path(plain_english.__file__).read_text(encoding="utf-8")
     at = src.index('"a note on the drawing":')
     assert "TAP M4" not in src[at:at + 300]
+
+
+# ── D-760: every legend sentence, also with its spaces lost ──────────────────────────────
+
+def test_every_legend_line_is_set_aside_with_its_spaces_stripped():
+    """0358141's 09:32 record: every detail sheet carries "RESISTANCEWELDINGWIRETOWIRE
+    THESETDOWNSHOULD..." from the legend, which put a weld on all seven members once D-757 had
+    taken the MIG line away. The joined form of each configured legend sentence is derived."""
+    from extractor_patterns import infer_operations_from_text as infer
+    from extractor_patterns import strip_specification_legend as strip
+    for text in ("M2 1 RESISTANCEWELDINGWIRETOWIRETHESETDOWNSHOULD CHINAMATERIALSPECIFICATIONS",
+                 "RESISTANCE WELDING WIRE TO WIRE THE SET DOWN SHOULD BE"):
+        assert not {o for o in infer(strip(text)) if "weld" in o}, text
+    for text in ("RESISTANCE WELD THE MESH TO THE FRAME", "SPOTWELD 4 PLACES", "PUDDLEWELDED"):
+        assert "welding" in infer(strip(text)), text
