@@ -327,6 +327,10 @@ SOURCE_RANK: Dict[str, int] = {
     # A measured or modelled count (the SolidWorks tree) still outranks both.
     "bom_tree_per_unit": 61,
     "override_rule": 50,
+    # THE MODEL ASKED ONE QUESTION ABOUT ONE PART'S OWN SHEET (SCRUM-194 requirement 3,
+    # gap_fill): below every deterministic reading of the sheet, above the whole-pack read and
+    # every inference. It fills a gap; it never displaces a reading.
+    "llm_assisted": 41,
     "llm_extract": 40,
     "llm_full_extract": 40,
     "inference": 20,
@@ -583,6 +587,7 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "llm_extract":            "Grok (xAI)",
     "llm_full_extract":       "Grok (xAI)",
     "llm_full_job":           "Grok (xAI)",
+    "llm_assisted":           "Grok (xAI), asked one question about this part's own sheet",
     "inference":              "engine inference",
     "geometry_inference":     "engine inference from geometry",
     # A WELD JOINT READ FROM THE PART'S OWN FOLDS (D-718): a closing seam or corner seams.
