@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#0d0d0f">
+<meta name="theme-color" content="#0c0c0b">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="SDI Intelligence">
@@ -12,70 +12,110 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,300;9..144,400&display=swap" rel="stylesheet">
 <style>
+  /* ── we.are.sdi (9 Nov 2026, James: "the look and feel of the web app portal page ... in line with
+     the we are sdi style of fonts etc", as the estimating pages and the wall, D-754). The site's look
+     on the dark ground: the lower-case wordmark with its two dots in SDI yellow, a geometric sans for
+     headings (Outfit, kin to the site's licensed Sofia Pro), an elegant serif for the tagline
+     (Fraunces light, for its Juana), pill buttons, a halftone dot circle, and the short yellow line
+     over each panel that the wall carries. Warnings keep their amber, so a warning never reads as
+     brand. Tokens as the estimating page has them. */
   :root{
-    --bg:#0d0d0f; --surface:#17171b; --surface-2:#1d1d22;
-    --line:#2a2a31; --line-soft:#202026;
-    --ink:#f3f2ee; --ink-dim:#a3a3aa; --ink-faint:#6b6b73;
-    --accent:#ffd400;
-    --ok:#5fd08a; --warn:#ff9d42; --fail:#ff5d5d;
-    --r:4px;
-    --mono:'JetBrains Mono',ui-monospace,monospace;
-    --disp:'Archivo',sans-serif;
-    --body:'Hanken Grotesk',sans-serif;
+    --bg:#0c0c0b; --panel:#141412; --panel-2:#1a1a17; --line:#2b2b26; --line-soft:#21211d;
+    --ink:#f2f2ea; --muted:#b6b6a7; --dim:#8f8f84;
+    --brand:#F6D946; --brand-fill:#F6D946; --ok:#4ec97f; --warn:#e8a33d; --bad:#ff6b6b;
+    --disp:'Outfit','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --body:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
+    --serif-disp:'Fraunces',Georgia,serif;
+    --r:10px;
     --safe-t:env(safe-area-inset-top,0px);
     --safe-b:env(safe-area-inset-bottom,0px);
+    color-scheme:dark;
   }
   *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
   body{
     background:var(--bg); color:var(--ink); font-family:var(--body);
     font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased;
-    background-image:radial-gradient(900px 500px at 88% -8%, rgba(255,212,0,.06), transparent 60%);
-    min-height:100vh; overflow-wrap:anywhere;
+    min-height:100vh; overflow-wrap:anywhere; overflow-x:hidden;
   }
-  a{color:var(--accent);text-decoration:none}
+  a{color:var(--brand);text-decoration:none}
+
+  .sdi-word{display:inline-block;height:1em;width:auto;vertical-align:-.12em;color:var(--ink)}
+  .sdi-word .d{fill:var(--brand)}
+  .sdi-dots{position:absolute;pointer-events:none;border-radius:50%;opacity:.16;z-index:0;
+    background-image:radial-gradient(var(--brand) 1.1px, transparent 1.6px);background-size:9px 9px;
+    -webkit-mask-image:radial-gradient(circle at center,#000 58%,transparent 71%);
+            mask-image:radial-gradient(circle at center,#000 58%,transparent 71%)}
 
   /* ---------- Header ---------- */
   .top{
-    position:sticky;top:0;z-index:20;background:rgba(13,13,15,.92);
-    backdrop-filter:blur(12px);border-bottom:1px solid var(--line);
-    padding:calc(12px + var(--safe-t)) 16px 12px;
+    position:sticky;top:0;z-index:20;background:rgba(12,12,11,.9);
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--line);
+    padding:calc(14px + var(--safe-t)) 16px 14px;
   }
-  .top > *{max-width:1180px;margin-left:auto;margin-right:auto}
-  .bar{display:flex;align-items:center;gap:12px}
-  .mark{width:32px;height:32px;background:var(--accent);border-radius:3px;display:grid;place-items:center;flex:none}
-  .mark b{font-family:var(--disp);font-weight:900;color:#000;font-size:19px;line-height:1;letter-spacing:-1px}
-  .t1{font-family:var(--disp);font-weight:800;letter-spacing:.11em;font-size:13px}
-  .t2{font-size:9.5px;color:var(--ink-faint);letter-spacing:.3em;text-transform:uppercase;margin-top:2px}
+  /* The header lines up with the apps below it: the same left edge, the search as wide as the list. */
+  .top .in{max-width:1148px;margin:0 auto}
+  .bar{display:flex;align-items:center;gap:12px;min-height:34px}
+  .brand{display:flex;align-items:center;gap:12px;min-width:0}
+  .brand .sdi-word{height:22px}
+  .brand .pipe{width:1px;height:20px;background:var(--line);flex:none}
+  .brand .lbl{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.22em;
+    color:var(--brand);text-transform:uppercase;white-space:nowrap}
   .back{
-    display:none;align-items:center;gap:7px;background:none;border:0;color:var(--ink-dim);
+    display:none;align-items:center;gap:7px;background:none;border:0;color:var(--muted);
     font-family:var(--body);font-size:14px;cursor:pointer;padding:6px 2px
   }
   .back svg{width:17px;height:17px}
+  .back:hover{color:var(--ink)}
   body.detail .back{display:flex}
   body.detail .brand{display:none}
 
   .search{
-    margin-top:12px;width:100%;background:var(--surface);border:1px solid var(--line);
-    border-radius:var(--r);color:var(--ink);font-family:var(--body);font-size:15px;
-    padding:11px 13px;outline:none
+    display:block;margin-top:14px;width:100%;max-width:980px;background:var(--panel);border:1px solid var(--line);
+    border-radius:999px;color:var(--ink);font-family:var(--body);font-size:15px;
+    padding:11px 18px;outline:none;transition:border-color .15s
   }
-  .search:focus{border-color:var(--accent)}
-  .search::placeholder{color:var(--ink-faint)}
+  .search:focus{border-color:var(--brand)}
+  .search::placeholder{color:var(--dim)}
   body.detail .search{display:none}
 
-  /* ---------- Layout ---------- */
-  .wrap{padding:18px 16px calc(28px + var(--safe-b));max-width:1180px;margin:0 auto}
-  .grp{
-    font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--ink-faint);
-    text-transform:uppercase;margin:24px 0 10px
+  .who{
+    display:none;margin-top:10px;font-family:var(--mono);font-size:10.5px;
+    color:var(--dim);letter-spacing:.06em;align-items:center;gap:8px
   }
-  .grp:first-child{margin-top:4px}
+  .who.on{display:flex}
+  .who b{color:var(--muted);font-weight:500}
+  .who a{color:var(--dim);text-decoration:underline}
+  body.detail .who{display:none}
+
+  /* ---------- The opening: the site's tagline over a halftone circle ---------- */
+  .hero{position:relative;padding:26px 2px 6px;max-width:980px}
+  .hero > :not(.sdi-dots){position:relative;z-index:1}
+  .hero .sdi-dots{width:240px;height:240px;right:-70px;top:-60px}
+  .eyebrow{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:10.5px;
+    letter-spacing:.22em;text-transform:uppercase;color:var(--muted)}
+  .eyebrow::before{content:"";width:26px;height:2px;background:var(--brand);flex:none}
+  .tagline{font-family:var(--serif-disp);font-weight:300;font-size:clamp(30px,7.4vw,46px);
+    line-height:1.06;letter-spacing:-.01em;margin:12px 0 10px}
+  .tagline em{font-style:normal;color:var(--brand)}
+  .hero p{color:var(--muted);font-size:14.5px;max-width:560px}
+  body.detail .hero{display:none}
+
+  /* ---------- Layout ---------- */
+  .wrap{padding:6px 16px calc(28px + var(--safe-b));max-width:1180px;margin:0 auto}
+  .grp{
+    display:flex;align-items:center;gap:10px;
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.22em;color:var(--dim);
+    text-transform:uppercase;margin:26px 0 10px
+  }
+  .grp::before{content:"";width:18px;height:2px;background:var(--brand);flex:none}
+  .grp:first-child{margin-top:14px}
 
   /* One column on a phone; a grid once there is room. Category headings span
      the full width so the grouping still reads on a laptop. */
-  #list{display:grid;grid-template-columns:1fr;gap:9px;align-content:start}
+  #list{display:grid;grid-template-columns:1fr;gap:12px;align-content:start}
   #list .grp{grid-column:1/-1}
   /* TWO ACROSS, NEVER THREE. Five apps in threes left one card alone on its row and the
      estimating card alone under its own heading — "randomly scattered". Two columns read as
@@ -86,106 +126,111 @@
   @media (min-width:680px){ #list .grp + .card{grid-column:1/-1} }
 
   .card{
-    display:flex;flex-direction:column;width:100%;text-align:left;background:var(--surface);
-    border:1px solid var(--line);border-radius:var(--r);padding:14px;cursor:pointer;
-    font-family:var(--body);color:var(--ink);transition:.14s
+    position:relative;display:flex;flex-direction:column;width:100%;text-align:left;background:var(--panel);
+    border:1px solid var(--line);border-radius:var(--r);padding:18px 16px 16px;cursor:pointer;
+    font-family:var(--body);color:var(--ink);transition:border-color .15s,background .15s
   }
-  .card:hover{border-color:var(--ink-faint)}
-  .card:active{background:var(--surface-2);transform:scale(.995)}
-  .card .ch{display:flex;gap:9px;align-items:flex-start;justify-content:space-between}
-  .card .nm{font-weight:600;font-size:15px;line-height:1.3}
-  .card .ds{color:var(--ink-dim);font-size:13.5px;margin-top:6px}
+  /* The short yellow line over each panel, as the wall has it. */
+  .card::before,.note::before{content:"";position:absolute;top:-1px;left:16px;width:30px;height:2px;
+    background:var(--brand);border-radius:0 0 2px 2px}
+  .card:hover{border-color:#4a4421;background:var(--panel-2)}
+  .card:active{transform:scale(.995)}
+  .card:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+  .card .ch{display:flex;gap:10px;align-items:flex-start;justify-content:space-between}
+  .card .nm{font-family:var(--disp);font-weight:600;font-size:18px;line-height:1.25;letter-spacing:-.005em}
+  .card .ds{color:var(--muted);font-size:13.5px;margin-top:7px}
   /* Says what you cannot do from this device, rather than hiding the app. */
   .req{font-family:var(--mono);font-size:10px;color:var(--warn);letter-spacing:.04em;
-       margin-top:9px;padding-top:8px;border-top:1px solid var(--line-soft)}
+       margin-top:11px;padding-top:9px;border-top:1px solid var(--line-soft)}
   /* An app with a screen opens from its own square; the rest of the square still
      opens the detail page. */
-  .card .gos{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
-  .card .go{background:var(--accent);color:#000;
-       font-family:var(--disp);font-weight:800;font-size:13.5px;padding:8px 14px;border-radius:var(--r)}
-  .card .go.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+  .card .gos{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .card .go,.btn{display:inline-flex;align-items:center;gap:6px;background:var(--brand-fill);color:#000;
+       font-family:var(--disp);font-weight:600;font-size:14px;padding:9px 18px;border-radius:999px;
+       border:1px solid var(--brand-fill);transition:filter .15s}
+  .card .go:hover,.btn:hover{filter:brightness(1.06)}
+  .card .go.ghost,.btn.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+  .card .go.ghost:hover,.btn.ghost:hover{border-color:var(--muted)}
 
   .chip{
     font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;
-    padding:4px 7px;border-radius:2px;white-space:nowrap;flex:none;border:1px solid transparent
+    padding:4px 9px;border-radius:999px;white-space:nowrap;flex:none;border:1px solid transparent
   }
-  .c-done{background:rgba(95,208,138,.12);color:var(--ok);border-color:rgba(95,208,138,.3)}
-  .c-prog{background:rgba(255,212,0,.12);color:var(--accent);border-color:rgba(255,212,0,.3)}
-  .c-plan{background:rgba(163,163,170,.1);color:var(--ink-dim);border-color:var(--line)}
+  .c-done{background:rgba(78,201,127,.1);color:var(--ok);border-color:rgba(78,201,127,.3)}
+  .c-prog{background:rgba(246,217,70,.1);color:var(--brand);border-color:rgba(246,217,70,.3)}
+  .c-plan{background:rgba(182,182,167,.08);color:var(--muted);border-color:var(--line)}
 
   /* ---------- Detail ---------- */
-  #detail{display:none;max-width:720px}
+  #detail{display:none;max-width:720px;padding-top:18px}
   body.detail #detail{display:block}
   body.detail #list{display:none}
-  .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--accent);text-transform:uppercase}
-  h1{font-family:var(--disp);font-weight:800;font-size:25px;line-height:1.15;margin:8px 0 10px;letter-spacing:-.01em}
-  .sub{color:var(--ink-dim);font-size:14.5px}
+  .kicker{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:10.5px;
+    letter-spacing:.22em;color:var(--brand);text-transform:uppercase}
+  .kicker::before{content:"";width:26px;height:2px;background:var(--brand);flex:none}
+  h1{font-family:var(--disp);font-weight:600;font-size:clamp(26px,6vw,34px);line-height:1.12;
+    margin:10px 0 10px;letter-spacing:-.015em}
+  .sub{color:var(--muted);font-size:15px}
   .meta{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}
-  .note{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-top:14px}
-  .note.warnbox{border-color:rgba(255,157,66,.35);background:rgba(255,157,66,.06)}
+  .note{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+    padding:16px;margin-top:14px}
+  .note.warnbox{border-color:rgba(232,163,61,.35);background:rgba(232,163,61,.06)}
+  .note.warnbox::before{background:var(--warn)}
   .note h4{
-    font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--ink-faint);
+    font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--dim);
     text-transform:uppercase;font-weight:500;margin-bottom:9px
   }
-  .note p,.note div{font-size:14px;color:var(--ink-dim)}
+  .note p,.note div{font-size:14px;color:var(--muted)}
   .note b{color:var(--ink)}
-  .body-txt{font-size:14.5px;color:var(--ink-dim);margin-top:14px}
+  .body-txt{font-size:14.5px;color:var(--muted);margin-top:14px}
   .body-txt b{color:var(--ink)}
   ul{margin:6px 0 0 18px}
-  li{margin:4px 0;font-size:14px;color:var(--ink-dim)}
-  code{font-family:var(--mono);font-size:12.5px;background:var(--surface-2);padding:1px 5px;border-radius:2px;color:var(--accent)}
+  li{margin:4px 0;font-size:14px;color:var(--muted)}
+  code{font-family:var(--mono);font-size:12.5px;background:var(--panel-2);padding:1px 5px;border-radius:4px;color:var(--brand)}
   .tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
-  .tag{font-family:var(--mono);font-size:11px;background:var(--surface-2);border:1px solid var(--line);
-       color:var(--ink-dim);padding:4px 8px;border-radius:2px}
-  .btn{
-    display:inline-block;background:var(--accent);color:#000;font-weight:700;font-size:14px;
-    padding:11px 16px;border-radius:var(--r);margin-top:18px;border:0;font-family:var(--body)
-  }
-  .btn + .btn{margin-left:8px}
+  .tag{font-family:var(--mono);font-size:11px;background:var(--panel-2);border:1px solid var(--line);
+       color:var(--muted);padding:4px 10px;border-radius:999px}
+  .btn{margin-top:18px;margin-right:8px}
 
-  .who{
-    display:none;margin-top:9px;font-family:var(--mono);font-size:10.5px;
-    color:var(--ink-faint);letter-spacing:.06em;align-items:center;gap:8px
-  }
-  .who.on{display:flex}
-  .who b{color:var(--ink-dim);font-weight:500}
-  .who a{color:var(--ink-faint);text-decoration:underline}
-  body.detail .who{display:none}
-
-  .msg{color:var(--ink-faint);font-size:14px;padding:26px 2px;text-align:center}
+  .msg{color:var(--dim);font-size:14px;padding:26px 2px;text-align:center}
   .banner{
-    background:rgba(255,157,66,.1);border:1px solid rgba(255,157,66,.3);color:var(--warn);
-    border-radius:var(--r);padding:10px 13px;font-size:13px;margin-bottom:14px
+    background:rgba(232,163,61,.1);border:1px solid rgba(232,163,61,.3);color:var(--warn);
+    border-radius:var(--r);padding:10px 14px;font-size:13px;margin:14px 0 4px
   }
-  .foot{margin-top:30px;padding-top:16px;border-top:1px solid var(--line-soft);
-        font-size:11px;color:var(--ink-faint);font-family:var(--mono);letter-spacing:.05em}
+  .foot{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+        margin-top:34px;padding-top:16px;border-top:1px solid var(--line-soft);
+        font-size:11px;color:var(--dim);font-family:var(--mono);letter-spacing:.05em}
+  .foot .sdi-word{height:13px;color:var(--muted)}
 </style>
 </head>
 <body>
 
-<header class="top">
+<header class="top"><div class="in">
   <div class="bar">
     <button class="back" id="back" type="button">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
       All apps
     </button>
-    <div class="bar brand" style="gap:11px">
-      <div class="mark"><b>S</b></div>
-      <div>
-        <div class="t1">SDI INTELLIGENCE</div>
-        <div class="t2">App Portal</div>
-      </div>
+    <div class="brand">
+      <svg class="sdi-word" viewBox="0 0 950 169" role="img" aria-label="we.are.sdi" fill="currentColor"><path d="M158.915 36.7773L135.389 114.85C133.118 122.35 130.447 133.08 129.137 138.467C127.991 133.14 125.689 122.658 123.777 115.372L103.183 36.7773H80.9663L59.639 115.365C57.7134 122.531 55.2616 133.193 54.0544 138.537C52.7665 133.175 50.1337 122.393 48.0313 114.866L25.7238 36.7773H2.41797L42.8867 164.183H64.817L86.1457 87.545C88.1938 80.2145 90.5008 70.1606 91.6815 64.8782C92.7926 70.1676 94.9785 80.2145 97.0252 87.5408L118.11 164.183H139.793L181.494 36.7773H158.915Z"/><path d="M198.247 89.3881C201.717 65.0993 215.393 51.2041 235.907 51.2041C257.026 51.2041 269.942 65.1035 271.475 89.3881H198.247ZM235.907 33.6262C200.848 33.6262 175.402 61.7925 175.402 100.602C175.402 140.036 200.782 167.576 237.122 167.576C266.097 167.576 286.107 151.905 292.022 124.58L292.29 123.331H271.037L270.838 124.105C266.638 140.412 254.981 149.03 237.122 149.03C214.607 149.03 199.568 132.667 197.679 106.238H294.716V105.207C294.716 61.0546 272.181 33.6262 235.907 33.6262Z"/><path d="M423.094 99.3426V116.845C423.094 129.476 413.093 149.514 386.253 149.514C374.763 149.514 361.066 146.034 361.066 129.453C361.066 111.983 374.55 109.012 395.107 106.475C405.222 105.353 416.174 102.542 423.094 99.3426ZM442.876 145.211V75.1457C442.876 48.0778 427.173 34.3525 396.207 34.3525C365.325 34.3525 345.882 50.5756 344.199 77.7479L344.132 78.8422H365.115L365.189 77.8927C366.611 59.6855 376.543 51.2036 396.449 51.2036C413.721 51.2036 422.85 58.4756 422.85 72.2358C422.85 84.7721 413.6 87.9131 394.162 89.8791C365.81 92.711 338.128 98.1354 338.128 129.937C338.128 152.214 355.493 166.609 382.369 166.609C399.062 166.609 412.196 160.665 422.446 148.455C422.81 156.828 424.039 161.374 426.552 163.882L426.853 164.184H447.488V161.874L447.029 161.569C445.354 160.452 442.876 154.482 442.876 145.211Z"/><path d="M544.015 89.3881C547.485 65.0993 561.162 51.2041 581.676 51.2041C602.794 51.2041 615.711 65.1035 617.244 89.3881H544.015ZM581.676 33.6262C546.616 33.6262 521.17 61.7925 521.17 100.602C521.17 140.036 546.551 167.576 582.89 167.576C611.865 167.576 631.875 151.905 637.79 124.58L638.059 123.331H616.805L616.606 124.105C612.407 140.412 600.749 149.03 582.89 149.03C560.375 149.03 545.337 132.667 543.447 106.238H640.484V105.207C640.484 61.0546 617.95 33.6262 581.676 33.6262Z"/><path d="M851.701 149.272C829.697 149.272 816.561 131.258 816.561 101.086C816.561 71.215 829.932 52.6584 851.46 52.6584C875.53 52.6584 890.484 71.215 890.484 101.086C890.484 143.012 866.185 149.272 851.701 149.272ZM889.27 52.9591C880.17 40.7959 866.17 33.8678 850.487 33.8678C816.91 33.8678 794.351 60.7839 794.351 100.843C794.351 141.529 816.576 167.82 850.973 167.82C867.235 167.82 879.136 162.367 889.27 150.196V164.182H910.994V0.13501H889.27V52.9591Z"/><path d="M927.143 164.182H948.867V36.7761H927.143V164.182Z"/><path d="M927.143 21.2634H948.867V0.135254H927.143V21.2634Z"/><path d="M743.393 88.1957C721.16 83.7055 710.475 80.996 710.475 68.5976C710.475 57.8517 719.302 51.688 734.692 51.688C752.847 51.688 761.398 58.5214 763.285 74.5371L763.393 75.4463H785.617L785.479 74.2949C782.352 48.0054 764.958 34.1101 735.178 34.1101C706.259 34.1101 688.993 47.3649 688.993 69.568C688.993 98.3525 713.23 103.337 736.664 108.156C761.031 113.28 768.617 116.918 768.617 129.693C768.617 142.319 758.639 149.272 740.518 149.272C719.615 149.272 708.61 141.227 705.884 123.957L705.746 123.087H683.493L683.602 124.216C686.301 152.334 706.342 167.819 740.032 167.819C771.687 167.819 790.585 153.204 790.585 128.724C790.585 97.7135 765.514 92.6566 743.393 88.1957Z"/><path d="M525.691 57.6969V37.1089L525.044 36.8513C522.561 35.86 520.488 35.3225 516.649 35.3225C502.335 35.3225 488.734 42.983 479.81 55.9426V36.7775H458.086V164.183H479.81V93.5711C479.81 69.2586 497.61 56.5371 515.193 56.5371C519.064 56.5371 520.872 56.7877 523.607 57.6969H525.691Z"/><path class="d" d="M304.438 145.847H322.879V164.158H304.438V145.847Z"/><path class="d" d="M650.643 145.691H669.084V164.002H650.643V145.691Z"/></svg>
+      <span class="pipe" aria-hidden="true"></span>
+      <span class="lbl">Intelligence</span>
     </div>
   </div>
   <input class="search" id="q" type="search" placeholder="Search apps…" autocomplete="off">
   <div class="who" id="who"></div>
-</header>
+</div></header>
 
 <div class="wrap">
+  <section class="hero" aria-label="SDI Intelligence apps">
+    <div class="sdi-dots" aria-hidden="true"></div>
+    <div class="eyebrow">App portal</div>
+    <h1 class="tagline">Experiences.<br>Designed <em>&amp;</em> Made.</h1>
+    <p>Every SDI Intelligence app, on your phone and at your desk. Signed in with your SDI account.</p>
+  </section>
   <div id="banner"></div>
   <div id="list"><div class="msg">Loading…</div></div>
   <div id="detail"></div>
-  <div class="foot" id="foot"></div>
+  <div class="foot"><span id="foot"></span><svg class="sdi-word" aria-hidden="true" viewBox="0 0 950 169" fill="currentColor"><path d="M158.915 36.7773L135.389 114.85C133.118 122.35 130.447 133.08 129.137 138.467C127.991 133.14 125.689 122.658 123.777 115.372L103.183 36.7773H80.9663L59.639 115.365C57.7134 122.531 55.2616 133.193 54.0544 138.537C52.7665 133.175 50.1337 122.393 48.0313 114.866L25.7238 36.7773H2.41797L42.8867 164.183H64.817L86.1457 87.545C88.1938 80.2145 90.5008 70.1606 91.6815 64.8782C92.7926 70.1676 94.9785 80.2145 97.0252 87.5408L118.11 164.183H139.793L181.494 36.7773H158.915Z"/><path d="M198.247 89.3881C201.717 65.0993 215.393 51.2041 235.907 51.2041C257.026 51.2041 269.942 65.1035 271.475 89.3881H198.247ZM235.907 33.6262C200.848 33.6262 175.402 61.7925 175.402 100.602C175.402 140.036 200.782 167.576 237.122 167.576C266.097 167.576 286.107 151.905 292.022 124.58L292.29 123.331H271.037L270.838 124.105C266.638 140.412 254.981 149.03 237.122 149.03C214.607 149.03 199.568 132.667 197.679 106.238H294.716V105.207C294.716 61.0546 272.181 33.6262 235.907 33.6262Z"/><path d="M423.094 99.3426V116.845C423.094 129.476 413.093 149.514 386.253 149.514C374.763 149.514 361.066 146.034 361.066 129.453C361.066 111.983 374.55 109.012 395.107 106.475C405.222 105.353 416.174 102.542 423.094 99.3426ZM442.876 145.211V75.1457C442.876 48.0778 427.173 34.3525 396.207 34.3525C365.325 34.3525 345.882 50.5756 344.199 77.7479L344.132 78.8422H365.115L365.189 77.8927C366.611 59.6855 376.543 51.2036 396.449 51.2036C413.721 51.2036 422.85 58.4756 422.85 72.2358C422.85 84.7721 413.6 87.9131 394.162 89.8791C365.81 92.711 338.128 98.1354 338.128 129.937C338.128 152.214 355.493 166.609 382.369 166.609C399.062 166.609 412.196 160.665 422.446 148.455C422.81 156.828 424.039 161.374 426.552 163.882L426.853 164.184H447.488V161.874L447.029 161.569C445.354 160.452 442.876 154.482 442.876 145.211Z"/><path d="M544.015 89.3881C547.485 65.0993 561.162 51.2041 581.676 51.2041C602.794 51.2041 615.711 65.1035 617.244 89.3881H544.015ZM581.676 33.6262C546.616 33.6262 521.17 61.7925 521.17 100.602C521.17 140.036 546.551 167.576 582.89 167.576C611.865 167.576 631.875 151.905 637.79 124.58L638.059 123.331H616.805L616.606 124.105C612.407 140.412 600.749 149.03 582.89 149.03C560.375 149.03 545.337 132.667 543.447 106.238H640.484V105.207C640.484 61.0546 617.95 33.6262 581.676 33.6262Z"/><path d="M851.701 149.272C829.697 149.272 816.561 131.258 816.561 101.086C816.561 71.215 829.932 52.6584 851.46 52.6584C875.53 52.6584 890.484 71.215 890.484 101.086C890.484 143.012 866.185 149.272 851.701 149.272ZM889.27 52.9591C880.17 40.7959 866.17 33.8678 850.487 33.8678C816.91 33.8678 794.351 60.7839 794.351 100.843C794.351 141.529 816.576 167.82 850.973 167.82C867.235 167.82 879.136 162.367 889.27 150.196V164.182H910.994V0.13501H889.27V52.9591Z"/><path d="M927.143 164.182H948.867V36.7761H927.143V164.182Z"/><path d="M927.143 21.2634H948.867V0.135254H927.143V21.2634Z"/><path d="M743.393 88.1957C721.16 83.7055 710.475 80.996 710.475 68.5976C710.475 57.8517 719.302 51.688 734.692 51.688C752.847 51.688 761.398 58.5214 763.285 74.5371L763.393 75.4463H785.617L785.479 74.2949C782.352 48.0054 764.958 34.1101 735.178 34.1101C706.259 34.1101 688.993 47.3649 688.993 69.568C688.993 98.3525 713.23 103.337 736.664 108.156C761.031 113.28 768.617 116.918 768.617 129.693C768.617 142.319 758.639 149.272 740.518 149.272C719.615 149.272 708.61 141.227 705.884 123.957L705.746 123.087H683.493L683.602 124.216C686.301 152.334 706.342 167.819 740.032 167.819C771.687 167.819 790.585 153.204 790.585 128.724C790.585 97.7135 765.514 92.6566 743.393 88.1957Z"/><path d="M525.691 57.6969V37.1089L525.044 36.8513C522.561 35.86 520.488 35.3225 516.649 35.3225C502.335 35.3225 488.734 42.983 479.81 55.9426V36.7775H458.086V164.183H479.81V93.5711C479.81 69.2586 497.61 56.5371 515.193 56.5371C519.064 56.5371 520.872 56.7877 523.607 57.6969H525.691Z"/><path class="d" d="M304.438 145.847H322.879V164.158H304.438V145.847Z"/><path class="d" d="M650.643 145.691H669.084V164.002H650.643V145.691Z"/></svg></div>
 </div>
 
 <script>
@@ -274,9 +319,9 @@ function renderDetail(s){
   if(s.invoke)   h+='<div class="note"><h4>How to use it</h4><div>'+s.invoke+'</div></div>';
   if(s.next)     h+='<div class="note"><h4>Next</h4><div>'+s.next+'</div></div>';
   if(s.app_url)  h+='<a class="btn" href="'+esc(s.app_url)+'">Open '+esc(s.name.split(' · ')[0])+' →</a>';
-  if(s.guide_url) h+='<a class="btn" href="'+esc(s.guide_url)+'">User guide</a>';
+  if(s.guide_url) h+='<a class="btn ghost" href="'+esc(s.guide_url)+'">User guide</a>';
   // An app in BOTH portals carries `link` for the intranet; here app_url already opens it.
-  if(s.link && s.link!==s.app_url) h+='<a class="btn" href="'+esc(s.link)+'" target="_blank" rel="noopener">'+esc(s.linkLabel||'Open ↗')+'</a>';
+  if(s.link && s.link!==s.app_url) h+='<a class="btn ghost" href="'+esc(s.link)+'" target="_blank" rel="noopener">'+esc(s.linkLabel||'Open ↗')+'</a>';
   $('detail').innerHTML=h;
 }
 
@@ -335,7 +380,8 @@ if('serviceWorker' in navigator){
   function note(msg){
     if(!box){ box=document.createElement('div'); box.setAttribute('role','status');
       box.style.cssText='position:fixed;left:12px;right:12px;bottom:16px;z-index:999;max-width:560px;margin:0 auto;'
-        +'padding:14px 16px;border-radius:12px;background:#17181B;color:#fff;font:15px/1.45 system-ui,sans-serif;'
+        +'padding:14px 16px;border-radius:12px;background:#141412;border:1px solid #2b2b26;color:#f2f2ea;'
+        +'font:15px/1.45 Inter,system-ui,sans-serif;'
         +'box-shadow:0 8px 30px rgba(0,0,0,.35)';
       box.addEventListener('click',()=>{ box.remove(); box=null; });
       document.body.appendChild(box); }
