@@ -277,6 +277,13 @@ class Run:
     # language model reads the drawings and no cached answer is replayed; a test of the
     # deterministic reader, never an estimate to quote.
     deterministic_only: bool = False
+    # THE READER MODE (run modes): "targeted" (main.py --targeted), "solidworks"
+    # (--solidworks-only), "docmgr" (--docmgr-only); "" for a full estimate. One per run, chosen
+    # on the page, never from the runner machine's .env.
+    reader_mode: str = ""
+    # A PRE-RUN FOR ESTIMATING (job_type "bom_routes", main.py --bom-routes-only): the pack read
+    # and the routes compiled, BOMs and Routes written, no workbook and nothing priced shown.
+    bom_routes_only: bool = False
     # THE INSTRUCTION WAS GIVEN AND NOT CARRIED OUT. Set when the engine's own command line
     # comes back on the log without a flag this run asked for -- either of them; see
     # _check_the_engine_was_told below. It forces the outcome to a failure whatever the runner
@@ -743,6 +750,8 @@ class EstimateRequest(BaseModel):
     # no branching. That is why it belongs here rather than on the batch endpoint, which has
     # to keep treating every file as a separate enquiry.
     method: str = "both"
+    # A PRE-RUN: BOMs and Routes only, stopped before the workbook (run modes). Any method.
+    bom_routes_only: bool = False
     # ASK THE MODEL AGAIN, rather than replaying what it said about this pack last time.
     # Only meaningful alongside an LLM read; harmless and ignored on an ordinary estimate,
     # which has three other readers and does not want its one reproducible source moving.
@@ -820,6 +829,27 @@ class SendRequest(BaseModel):
     # Which of the run's OWN deliverables to attach. Empty means all of them except the
     # customer quote, which is the same rule the automatic send follows.
     files: List[str] = []
+
+
+# ── RUN MODES: ONE PER RUN, CHOSEN ON THE PAGE ────────────────────────────────────────
+# "both"/"engine" a full estimate; "llm" the vision read alone; "deterministic" the drawing reader
+# alone (D-753); "targeted" the drawing reader first and the model asked only about the gaps
+# (SCRUM-194 requirement 3); "solidworks" and "docmgr" the pack's models read by one reader.
+READER_MODE_FLAG = {"targeted": "--targeted", "solidworks": "--solidworks-only",
+                    "docmgr": "--docmgr-only"}
+READER_MODE_SAYS = {
+    "targeted": "TARGETED: the drawing reader runs first; the whole-pack model read, the vision "
+                "BOM reader, the page vision pass and the DXF interpretation are OFF, and the model "
+                "is asked one question per gap on that part's own pages. Every ask is on the record.",
+    "solidworks": "SOLIDWORKS-ONLY: the pack's models are read by the SolidWorks analyser alone; no "
+                  "language model reads the drawings. A measurement of what the models give, not "
+                  "an estimate to quote.",
+    "docmgr": "DOCUMENT-MANAGER-ONLY: the pack's models are read by the SolidWorks Document Manager "
+              "alone; no language model reads the drawings and the COM analyser is not driven. A "
+              "measurement, not an estimate to quote.",
+}
+RUN_METHODS = {"both", "llm", "engine", "deterministic"} | set(READER_MODE_FLAG)
+BATCH_METHODS = {"both", "llm", "engine", "deterministic", "targeted"}
 
 
 class BatchRequest(BaseModel):
@@ -1411,6 +1441,8 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         "llm_only": bool(run.llm_only),
         "fresh_read": bool(run.fresh_read),
         "deterministic_only": bool(getattr(run, "deterministic_only", False)),
+        "reader_mode": str(getattr(run, "reader_mode", "") or ""),
+        "bom_routes_only": bool(getattr(run, "bom_routes_only", False)),
         "job_type": run.job_type,
         # WHAT WAS SUBMITTED (D-604), for the engine to compare with what it receives.
         "submitted_scope": dict(run.submitted_scope),
@@ -1569,7 +1601,10 @@ def _check_the_engine_was_told(run: "Run", text: str) -> None:
     wanted = [f for f, asked in (("--llm-only", run.llm_only),
                                  ("--fresh-read", run.fresh_read),
                                  ("--deterministic-only",
-                                  getattr(run, "deterministic_only", False))) if asked]
+                                  getattr(run, "deterministic_only", False)),
+                                 (READER_MODE_FLAG.get(getattr(run, "reader_mode", "") or "", ""),
+                                  bool(getattr(run, "reader_mode", ""))),
+                                 ("--bom-routes-only", getattr(run, "bom_routes_only", False))) if asked]
     if not wanted or run.instruction_refused:
         return
     missing = [f for f in wanted if f not in line]
@@ -1586,6 +1621,12 @@ def _check_the_engine_was_told(run: "Run", text: str) -> None:
         "--fresh-read": "the LLM caches were used, so the model was never asked — the run "
                         "replays the answer held for this pack and would be reported as a "
                         "fresh reading of it",
+        "--targeted": "the whole-pack model reads ran, so the run cannot show what the targeted "
+                      "gap fill alone supplies",
+        "--solidworks-only": "the run was not limited to the SolidWorks reader",
+        "--docmgr-only": "the run was not limited to the Document Manager reader",
+        "--bom-routes-only": "the run went on to build and price a workbook instead of stopping "
+                             "at the BOMs and Routes",
         "--deterministic-only": "the language-model readers ran or their cached answers were "
                                 "applied, so the run could not show what the drawing reader "
                                 "supplies on its own (SCRUM-194)",
@@ -2530,9 +2571,19 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     method = str(req.method or "both").strip().lower()
     # "deterministic" (D-753): the full engine with no language model reading the drawings and
     # no cached answer replayed — the SCRUM-194 reader test. Queued like "engine".
-    if method not in {"both", "llm", "engine", "deterministic"}:
-        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm, "
-                                 f"engine or deterministic.")
+    if method not in RUN_METHODS:
+        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use "
+                                 f"{', '.join(sorted(RUN_METHODS))}.")
+    # A MODE THAT NEEDS A READER NO CONNECTED RUNNER HAS IS REFUSED BEFORE STAGING.
+    with _LOCK:
+        _caps = [set(r.capabilities or []) for r in _online_runners()]
+    if method == "docmgr" and _caps and not any("dm_extract" in c for c in _caps):
+        raise HTTPException(503, "No connected runner holds the Document Manager licence key, so a "
+                                 "Document-Manager-only run cannot read the models. Add "
+                                 "SDI_SW_DOCMGR_KEY to the runner machine's .env and restart the runner.")
+    if req.bom_routes_only and _caps and not any("bom_routes" in c for c in _caps):
+        raise HTTPException(503, "The connected runner cannot run a BOMs & routes pre-run yet: restart "
+                                 "it on the current build (.\\tools\\start\\restart-runner.ps1).")
     if req.concept_document and method != "llm":
         raise HTTPException(400, "Client-document costing requires the LLM read method.")
     _ref_docs = [Path(str(f)).name for f in (req.reference_documents or [])
@@ -2814,8 +2865,11 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                   manual_workbook=manual_wb, queued_at=queued_at,
                   compare_with_manual=bool(req.compare_with_manual) and not manual_wb,
                   llm_only=(method == "llm"),
-                  fresh_read=bool(req.fresh_read) and method != "deterministic",
+                  fresh_read=bool(req.fresh_read) and method not in ("deterministic", "solidworks", "docmgr"),
                   deterministic_only=(method == "deterministic"),
+                  reader_mode=method if method in READER_MODE_FLAG else "",
+                  bom_routes_only=bool(req.bom_routes_only),
+                  job_type="bom_routes" if req.bom_routes_only else "",
                   email_to=_email_to, email_quote=bool(req.email_quote),
                   requested_by=_caller)
         # NOT QUEUED YET (D-607). A run in _RUNS can be claimed, and a runner polling between
@@ -2843,6 +2897,12 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                  "the DXF flat patterns and the SolidWorks extract are all OFF. This is a "
                  "MEASUREMENT of the model, not an estimate, and its total must not be "
                  "quoted or compared with a normal run's.")
+    if getattr(run, "reader_mode", ""):
+        run.line(READER_MODE_SAYS[run.reader_mode])
+    if getattr(run, "bom_routes_only", False):
+        run.line("PRE-RUN: the pack is read and the routes compiled as an estimate would, then "
+                 "the run stops before the workbook. You get the BOMs and Routes (xlsx and page) "
+                 "and the record; nothing priced is shown.")
     if getattr(run, "deterministic_only", False):
         run.line("DETERMINISTIC-ONLY: no language model reads the drawings and no cached "
                  "answer from one is reused (whole-pack read, vision BOM reader, page vision, "
@@ -4266,16 +4326,16 @@ def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
     # doing that and then refusing the run over a typo in one word leaves the estimator's
     # job folder rewritten for nothing.
     method = str(req.method or "both").strip().lower()
-    if method not in {"both", "llm", "engine"}:
-        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm or "
-                                 f"engine.")
+    if method not in BATCH_METHODS:
+        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use "
+                                 f"{', '.join(sorted(BATCH_METHODS))}.")
     if not req.files:
         raise HTTPException(400, "Add the drawings to estimate.")
 
     method = str(req.method or "both").strip().lower()
-    if method not in {"both", "llm", "engine"}:
-        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm or "
-                                 f"engine.")
+    if method not in BATCH_METHODS:
+        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use "
+                                 f"{', '.join(sorted(BATCH_METHODS))}.")
     root = Path(req.output_root) if req.output_root else OUTPUT_ROOT
     batch_id = uuid.uuid4().hex[:12]
     queued_at = time.time()
@@ -4327,7 +4387,9 @@ def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
                       units=int(req.units), job_folder=str(Path(raw).parent),
                       output_path=str(out), queued_at=queued_at,
                       pdf_path=str(path), batch_id=batch_id,
-                      llm_only=(method == "llm"))
+                      llm_only=(method == "llm"),
+                      deterministic_only=(method == "deterministic"),
+                      reader_mode=method if method in READER_MODE_FLAG else "")
             # ITS SCOPE AS SUBMITTED, like a single run's (D-607): a batch run takes no brief
             # and no reference document, and its book compares what arrived with that.
             run.submitted_scope = submitted_scope(run, method, None, "none", [])

@@ -129,7 +129,8 @@ def test_a_runner_that_drops_the_flag_is_stopped(er):
 
 def test_the_service_accepts_the_method_and_hands_it_to_the_runner():
     src = _read("sdi-intelligence-backend/estimate_routes.py")
-    assert 'if method not in {"both", "llm", "engine", "deterministic"}:' in src
+    assert "if method not in RUN_METHODS:" in src
+    assert 'RUN_METHODS = {"both", "llm", "engine", "deterministic"} | set(READER_MODE_FLAG)' in src
     assert 'deterministic_only=(method == "deterministic"),' in src
     assert '"deterministic_only": bool(getattr(run, "deterministic_only", False)),' in src
     assert "DETERMINISTIC-ONLY: no language model reads the drawings" in src
@@ -137,6 +138,6 @@ def test_the_service_accepts_the_method_and_hands_it_to_the_runner():
 
 def test_the_page_offers_it_as_a_test_not_an_estimate():
     page = _read("sdi-intelligence-backend/sdi-estimating-intelligence.html")
-    assert 'id="detOnly"' in page and "Not an" in page[page.index('id="detOnly"'):][:600]
-    assert ('method: (document.getElementById("detOnly") || {}).checked ? "deterministic" '
-            ': undefined,') in page
+    sel = page[page.index('id="runMode"'):][:1400]
+    assert '<option value="deterministic">Drawing reader only: no AI read (test, not a quote)' in sel
+    assert 'method: ($("runMode").value || undefined),' in page
