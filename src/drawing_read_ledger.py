@@ -166,6 +166,18 @@ def capture(summary: Mapping[str, Any], parts: Optional[Iterable[Mapping[str, An
                 record=pn, of=rid, page=page, as_read=fin["as_read"], text=fin["text"],
                 words=part.get("finish_text_as_printed") or fin["text"],
                 said_by=str(part.get("finish_source") or SAID_BY))
+        for k, feat in enumerate(part.get("stated_features") or [], start=1):
+            if not isinstance(feat, Mapping):
+                continue
+            fk = str(feat.get("kind") or "")
+            what = ("hole" if fk == "hole" else f"thread {feat.get('thread')}" if fk == "thread"
+                    else "countersink" if fk == "countersink" else fk)
+            add(id=f"{rid}.feature.{k}", kind="feature", work=True, item=what,
+                label=f"{name}: {what}" + (f" x{feat.get('count')}" if feat.get("count") else ""),
+                record=pn, of=rid, page=feat.get("page") or page,
+                as_read={x: feat.get(x) for x in ("diameter_mm", "count", "thread", "angle_deg", "purpose")
+                         if feat.get(x) is not None},
+                words=feat.get("words"), said_by=str(feat.get("source") or "drawing_notes"))
         srcs = part.get("operation_sources") if isinstance(part.get("operation_sources"), Mapping) else {}
         ev = part.get("operation_evidence") if isinstance(part.get("operation_evidence"), Mapping) else {}
         for op in part.get("textual_operations") or []:

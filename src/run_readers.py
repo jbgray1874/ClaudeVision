@@ -37,6 +37,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 __all__ = ["READERS", "readers_that_ran", "run_was_llm_only", "run_was_deterministic_only",
+           "llm_mode", "whole_reads_off", "TARGETED_MODE_OFF",
            "reader_by_key", "pdf_reader_summary", "DETERMINISTIC_ONLY_OFF"]
 
 
@@ -170,6 +171,30 @@ DETERMINISTIC_ONLY_OFF = (
     "the note scan for bought-in items in prose",
     "the concept read of a brief or a scanned pack",
 )
+
+
+# TARGETED MODE (SCRUM-194 requirement 3): the whole-pack reads are off and the model is asked
+# only about the gaps the deterministic read left (gap_fill). Kept on: the note scan (already a
+# narrow read of prose notes) and the concept read, which is the only reader of an image-only pack.
+TARGETED_MODE_OFF = (
+    "the whole-pack drawing read (Grok) and its inference pass",
+    "the vision BOM reader (Path B)",
+    "the page vision pass",
+    "the DXF interpretation read",
+)
+
+
+def llm_mode() -> str:
+    """'deterministic', 'targeted' or 'whole_pack' for the run in flight."""
+    if _env_on("SDI_DETERMINISTIC_ONLY"):
+        return "deterministic"
+    return "targeted" if os.getenv("SDI_LLM_MODE", "").strip().lower() == "targeted" else "whole_pack"
+
+
+def whole_reads_off() -> bool:
+    """True when the whole-pack and page-vision model reads must not run: a deterministic-only
+    run, or a targeted one (the gaps are asked one at a time instead)."""
+    return llm_mode() in ("deterministic", "targeted")
 
 
 def run_was_deterministic_only(summary: Optional[Dict[str, Any]] = None) -> bool:

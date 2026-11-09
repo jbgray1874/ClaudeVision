@@ -50,6 +50,12 @@ _QUESTION = {
             "{\"length_mm\": <number or null>, \"width_mm\": <number or null>, \"page\": <n>, \"words\": <quoted>}.",
     "quantity": "How many of this part does the parts list call for per unit? Answer "
                 "{\"quantity\": <integer or null>, \"page\": <n>, \"words\": <quoted>}.",
+    "section_profile": "This piece is a length of hollow section cut for a welded frame. Which section "
+                       "profile (A x B x T mm) do the pages state for THIS piece? Answer {\"section_mm\": [A, B, T] "
+                       "or null, \"page\": <n>, \"words\": <quoted>}.",
+    "unassigned_finding": "This note was read on a page that names no part. Which ONE listed part number does "
+                          "it apply to, if the pages say? Answer {\"part_number\": <one of the listed codes or "
+                          "null>, \"page\": <n>, \"words\": <quoted>}.",
 }
 
 
@@ -72,6 +78,13 @@ def gaps_of(part: Mapping[str, Any]) -> List[str]:
     ss = part.get("section_stock") if isinstance(part.get("section_stock"), Mapping) else {}
     if not [m for m in (part.get("materials") or []) if m]:
         out.append("material")
+    if part.get("section_stock_on_members"):
+        # A weldment whose stock is on its pieces has no gauge or size of its own to find.
+        if _num(part.get("quantity")) is None:
+            out.append("quantity")
+        return out
+    if ss.get("profile_provisional"):
+        out.append("section_profile")
     if _num(part.get("normalized_thickness_mm")) is None and not ss.get("a"):
         out.append("thickness_or_section")
     if ss.get("a"):
@@ -116,7 +129,8 @@ def _row_text(summary: Mapping[str, Any], pn: str) -> str:
 
 def validate(gap: str, answer: Mapping[str, Any], part: Mapping[str, Any]) -> Dict[str, Any]:
     """{ok, why, value} — the answer held against what the deterministic read established."""
-    pages = set(_own_pages(part)) | ({part["bound_to_parts_list_page"]} if part.get("bound_to_parts_list_page") else set())
+    pages = set(answer.get("_allowed_pages") or []) or (
+        set(_own_pages(part)) | ({part["bound_to_parts_list_page"]} if part.get("bound_to_parts_list_page") else set()))
     page = answer.get("page")
     if not answer.get("words"):
         return {"ok": False, "why": "no words quoted from the sheet"}
@@ -157,6 +171,15 @@ def validate(gap: str, answer: Mapping[str, Any], part: Mapping[str, Any]) -> Di
         if spread and max(length, width) < spread:
             return {"ok": False, "why": f"smaller than the part's own feature spread {spread:g} mm"}
         return {"ok": True, "value": {"length_mm": max(length, width), "width_mm": min(length, width)}}
+    if gap == "section_profile":
+        sec = answer.get("section_mm")
+        if not (isinstance(sec, list) and len(sec) == 3 and all(_num(v) for v in sec)):
+            return {"ok": False, "why": "the model found no profile"}
+        a, b = sorted(float(v) for v in sec)[1:]
+        pack = re.sub(r"\s+", "", str(answer.get("_pack_text") or "")).upper()
+        if pack and not re.search(rf"(?<!\d){a:g}X{b:g}(?!\d)|(?<!\d){b:g}X{a:g}(?!\d)", pack):
+            return {"ok": False, "why": f"{a:g}x{b:g} is printed nowhere in the pack"}
+        return {"ok": True, "value": {"section_mm": [float(v) for v in sec]}}
     if gap == "quantity":
         q = _num(answer.get("quantity"))
         if q is None or q != int(q):
@@ -193,6 +216,13 @@ def apply(gap: str, value: Any, part: Dict[str, Any], page: Any, words: Any) -> 
     elif gap == "quantity":
         if apply_field(part, "quantity", value, SOURCE, note=note):
             done.append("quantity")
+    elif gap == "section_profile":
+        t, a, b = sorted(value["section_mm"])
+        ss = dict(part.get("section_stock") or {})
+        ss.update({"a": a, "b": b, "t": t, "profile_source": SOURCE, "profile_provisional": False,
+                   "profile_words": str(words)[:80], "profile_page": page})
+        part["section_stock"] = ss                 # precedence: direct-write ok — a provisional profile the weldment lent, replaced by the piece's own
+        done.append("section_stock.profile")
     if done:
         part.setdefault("review_flags", []).append(
             f"{gap} filled with the model's help from page {page} ({str(words)[:60]!r}); checked against "
@@ -228,6 +258,8 @@ def run(summary: Dict[str, Any], call: Optional[Callable[[str], Optional[str]]] 
         pn = " ".join(str(part.get("part_number")).split()).upper()
         for gap in gaps_of(part):
             pages = _own_pages(part)
+            if gap == "section_profile":
+                pages = sorted(set(pages) | set(_parent_pages(parts, part)) | set(_assembly_pages(summary)))
             item: Dict[str, Any] = {"part": pn, "gap": gap, "pages": pages, "asked": False,
                                     "question": _QUESTION[gap], "answer": None, "validation": None, "effect": []}
             if why_not:
@@ -254,6 +286,9 @@ def run(summary: Dict[str, Any], call: Optional[Callable[[str], Optional[str]]] 
             except Exception:                                        # noqa: BLE001
                 answer = {}
             item["answer"] = answer
+            if answer and gap == "section_profile":
+                answer = dict(answer, _allowed_pages=pages,
+                              _pack_text=" ".join(_page_text(summary, p) for p in _all_pages(summary)))
             v = validate(gap, answer, part) if answer else {"ok": False, "why": "no JSON answer"}
             item["validation"] = v
             if v.get("ok"):
@@ -262,11 +297,114 @@ def run(summary: Dict[str, Any], call: Optional[Callable[[str], Optional[str]]] 
             else:
                 item["effect"] = [f"not used: {v.get('why')}; the gap stays open and named"]
             items.append(item)
+    items += _finding_gaps(summary, parts, why_not, call)
     rec = {"schema": SCHEMA, "items": items, "asked": sum(1 for i in items if i["asked"]),
            "filled": sum(1 for i in items if i.get("validation", {}) and (i.get("validation") or {}).get("ok")
                          and i["effect"] and not str(i["effect"][0]).startswith("validated, and")),
-           "open": [f"{i['part']}: {i['gap']}" for i in items
-                    if not ((i.get("validation") or {}).get("ok"))],
+           "open": [f"{i['part'] or 'page ' + str(i.get('pages'))}: {i['gap']}" for i in items
+                    if not ((i.get("validation") or {}).get("ok")) and not i.get("settled")],
            "why_not_asked": why_not}
     summary["gap_fill"] = rec
     return rec
+
+
+def _all_pages(summary: Mapping[str, Any]) -> List[int]:
+    return [p.get("page_number") for p in (summary.get("pages") or []) if isinstance(p, Mapping)
+            and isinstance(p.get("page_number"), int)]
+
+
+def _assembly_pages(summary: Mapping[str, Any]) -> List[int]:
+    return [p.get("page_number") for p in (summary.get("pages") or []) if isinstance(p, Mapping)
+            and str((p.get("page_role") or {}).get("primary_role") or "").lower() in ("assembly", "ga")]
+
+
+def _parent_pages(parts: List[Any], part: Mapping[str, Any]) -> List[int]:
+    par = " ".join(str(part.get("cut_list_member_of") or part.get("bom_parent") or "").split()).upper()
+    for q in parts:
+        if isinstance(q, Mapping) and " ".join(str(q.get("part_number") or "").split()).upper() == par:
+            return _own_pages(q)
+    return []
+
+
+def _finding_gaps(summary: Dict[str, Any], parts: List[Any], why_not: Optional[str],
+                  call: Optional[Callable[[str], Optional[str]]]) -> List[Dict[str, Any]]:
+    """GAPS THE READER'S OWN FINDINGS SHOW (reviewer, 9 Nov 2026: not only missing fields on parts
+    already made): a finding a part's record does not carry (an operation, a finish, a hole, a
+    thread), a finding no part was given that the pack does not settle, a parts-list purchase
+    with no record, and a detail sheet no part is bound to. A finding no part was given is asked
+    about (which listed part it applies to); the others are deterministic transfers, named for
+    the costing stage and the release, never asked."""
+    out: List[Dict[str, Any]] = []
+    findings = summary.get("reader_findings") if isinstance(summary.get("reader_findings"), Mapping) else {}
+    if not findings.get("items"):
+        return out
+    try:
+        import findings_trace as ft
+    except Exception:                                                # noqa: BLE001
+        return out
+    recs = {" ".join(str(p.get("part_number") or "").split()).upper(): p for p in parts if isinstance(p, Mapping)}
+    listed = sorted(recs)
+    for f in findings["items"]:
+        pn = " ".join(str(f.get("part") or "").split()).upper()
+        base = {"part": pn or None, "pages": [f.get("page")], "finding": f.get("id"), "kind": f.get("kind"),
+                "value": f.get("value"), "words": f.get("words"), "asked": False, "answer": None,
+                "validation": None, "effect": []}
+        if f.get("kind") == "bom_row":
+            if (f.get("value") or {}).get("purchase") and pn not in recs:
+                out.append(dict(base, gap="bought_in_without_record", question="",
+                                effect=["a purchase on the parts list with no record: it reaches no line"]))
+            continue
+        if pn:
+            if pn not in recs:
+                out.append(dict(base, gap="finding_on_unknown_part", question="",
+                                effect=[f"read for {pn}, which no record stands for"]))
+                continue
+            st = ft._record_stage(f, recs[pn], [q for q in recs.values()
+                                                 if " ".join(str(q.get("cut_list_member_of") or "").split()).upper() == pn])
+            if st.get("state") == "dropped" and f.get("kind") in ("operation", "finish", "hole", "thread", "countersink"):
+                out.append(dict(base, gap="finding_not_carried", question="",
+                                effect=[f"read on page {f.get('page')} and not on {pn}'s record: {st.get('note') or ''}"]))
+            continue
+        d = ft.disposition_unassigned(f, summary)
+        if d["verdict"] != "UNASSIGNED":
+            out.append(dict(base, gap="unassigned_finding", question="", settled=True,
+                            effect=[f"{d['verdict']}: {d['disposition']}"]))
+            continue
+        item = dict(base, gap="unassigned_finding", question=_QUESTION["unassigned_finding"])
+        if why_not:
+            item["effect"] = [f"not asked: {why_not}; {d['disposition']}"]
+            out.append(item)
+            continue
+        payload = (f"LISTED PARTS: {', '.join(listed)}\nNOTE (page {f.get('page')}): {f.get('words')}\n"
+                   f"QUESTION: {_QUESTION['unassigned_finding']}\n\n===== PAGE {f.get('page')} =====\n"
+                   f"{_page_text(summary, f.get('page'))[:12000]}\n")
+        item["asked"] = True
+        try:
+            raw = (call or _default_call)(payload)
+            from llm_full_extract import _parse
+            answer = _parse(raw or "") or {}
+        except Exception as exc:                                     # noqa: BLE001
+            item["effect"] = [f"the model could not be reached: {type(exc).__name__}: {exc}"]
+            out.append(item)
+            continue
+        item["answer"] = answer
+        got = " ".join(str(answer.get("part_number") or "").split()).upper()
+        if got in recs and answer.get("words"):
+            item["validation"] = {"ok": True, "value": got}
+            f["part"], f["assigned_by"] = got, SOURCE
+            item["effect"] = [f"given to {got} with the model's help ({str(answer.get('words'))[:60]!r}); source llm_assisted"]
+        else:
+            item["validation"] = {"ok": False, "why": "no listed part named, or no words quoted"}
+            item["effect"] = ["not used; the finding stays unassigned and open"]
+        out.append(item)
+    bound = {pg for p in parts if isinstance(p, Mapping) for pg in (p.get("pages") or [])}
+    for pg in summary.get("pages") or []:
+        if not isinstance(pg, Mapping):
+            continue
+        n = pg.get("page_number")
+        if (str((pg.get("page_role") or {}).get("primary_role") or "").lower() == "detail" and n not in bound
+                and not ft.is_assembly_sheet(pg)):
+            out.append({"part": None, "pages": [n], "gap": "page_without_part", "asked": False, "question": "",
+                        "answer": None, "validation": None,
+                        "effect": [f"page {n} is a detail sheet no part is bound to: its identity is unresolved"]})
+    return out

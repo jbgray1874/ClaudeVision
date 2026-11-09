@@ -524,6 +524,28 @@
   </section>
   </div>
 
+  <!-- ══ NEW DRAWING PACKS ON THE DESIGN SHARE (design sweep) ══════════════════════════════
+       Swept hourly on the estimating machine (src/design_sweep.py); new or changed pack folders
+       under the client folders are candidate jobs to discuss with design. Dismiss takes one off. -->
+  <section class="parity" id="designSweep">
+    <div class="sechead">
+      <div>
+        <h2>NEW DRAWING PACKS <b>//</b> CANDIDATE JOBS FOR DESIGN</h2>
+        <div class="sub" id="dsSub">New or changed pack folders under the design share's client folders</div>
+      </div>
+      <div class="acts"><span class="meta" id="dsRead">waiting for the first sweep…</span></div>
+    </div>
+    <div class="panel"><div id="dsList"><div class="empty">No sweep has reported yet.</div></div></div>
+  </section>
+
+  <!-- PARITY DRILL-DOWN: one filed comparison, line by line (control panel) -->
+  <div id="pdOverlay" hidden style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:60;overflow:auto;padding:28px 16px">
+    <div class="panel" style="max-width:1100px;margin:0 auto;padding:18px 20px">
+      <div class="ptitle"><span id="pdTitle"><b>Comparison</b></span><span class="r"><button class="fsbtn" type="button" id="pdClose">CLOSE</button></span></div>
+      <div id="pdBody"><div class="empty">reading…</div></div>
+    </div>
+  </div>
+
   <!-- ══ PARITY: THE AI ESTIMATE AGAINST THE MANUAL ONE (D-741) ══════════════════════════ -->
   <section class="parity" id="parity">
     <div class="sechead">
@@ -535,6 +557,19 @@
         <span class="meta" id="pRead">reading the parity folder…</span>
         <button class="fsbtn" id="pRefresh" type="button" title="Read the parity folder again now">↻ READ AGAIN</button>
         <a class="fsbtn" href="/estimating#pjCard" target="_blank" rel="noopener" style="text-decoration:none">PARITY BY JOB NUMBER ↗</a>
+      </div>
+    </div>
+    <!-- RE-ESTIMATE, THEN COMPARE: a fresh estimate of each job on the current build, from the
+         pack its last AI run used, at the same quantities; each comparison files when it finishes. -->
+    <div class="prow runrow">
+      <div class="panel runbox">
+        <div class="ptitle"><span><b>Re-estimate, then compare</b> · fresh AI run against the manual one</span><span class="r">runs a full estimate per job</span></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input id="rrJobs" placeholder="job numbers, e.g. 0358141 12677-01" style="flex:1;min-width:260px">
+          <select id="rrMethod"><option value="both">Full estimate</option><option value="targeted">Targeted</option><option value="deterministic">Drawing reader only</option></select>
+          <button class="fsbtn" type="button" id="rrGo">RE-ESTIMATE AND COMPARE</button>
+        </div>
+        <div id="rrOut" class="empty" style="margin-top:8px">Each job is re-run from the drawings its last AI estimate used. The comparisons appear under Parity runs as the estimates finish.</div>
       </div>
     </div>
     <!-- RUN PARITY FROM HERE (D-742): one job, a set of jobs or a period, and each one's
@@ -807,6 +842,28 @@ function render(){
   renderTicker(s.alerts || []);
   renderParity(s.parity);
   renderParityTasks(s.parity_tasks || []);
+  renderDesignSweep(s.design_sweep || {});
+}
+
+function renderDesignSweep(d){
+  const c = d.candidates || [];
+  if(d.state === "never"){ setText("dsRead", "no sweep yet"); $("dsList").innerHTML = `<div class="empty">${esc(d.why || "No sweep has reported yet.")}</div>`; return; }
+  const late = d.state === "late" ? " · LATE: the sweep has not reported on time" : "";
+  setText("dsRead", `swept ${fmtStamp((d.swept_at || "").replace("T", " ").replace("Z", ""))} · ${d.clients || 0} client folder(s), ${d.packs || 0} pack(s) · next ${(d.next_at || "").slice(11, 16)}${late}`);
+  setText("dsSub", d.baseline ? "First sweep: the packs already there are the baseline; new ones are flagged from the next sweep"
+                              : `Root ${d.root || ""} · candidates kept until dismissed or two weeks old`);
+  if(!c.length){ $("dsList").innerHTML = `<div class="empty">No new or changed drawing pack since the last look.${(d.errors || []).length ? " Errors: " + esc(d.errors.join("; ")) : ""}</div>`; return; }
+  $("dsList").innerHTML = `<table><tr><th>Flagged</th><th>Client</th><th>Pack folder</th><th>Job</th><th class="n">Files</th><th>Status</th><th>Estimated?</th><th></th></tr>`
+    + c.map((r, i) => `<tr><td class="t">${fmtStamp((r.flagged_at || "").replace("T", " ").replace("Z", ""))}</td>
+        <td class="c">${esc(r.client)}</td><td class="d" title="${esc(r.folder)}">${esc(r.name)}</td><td>${esc(r.job || "")}</td>
+        <td class="n">${r.files ?? ""}</td><td>${r.status === "new" ? "NEW" : "CHANGED"}</td>
+        <td>${r.estimated ? "an AI estimate is filed" : "not yet"}</td>
+        <td><button class="fsbtn" type="button" data-ds="${i}">dismiss</button></td></tr>`).join("") + "</table>";
+  document.querySelectorAll("[data-ds]").forEach(b => b.onclick = async () => {
+    const r = c[Number(b.dataset.ds)];
+    try { renderDesignSweep(await api("/api/estimate/design-sweep/dismiss", {folder: r.folder})); }
+    catch(e){ b.textContent = "could not dismiss"; b.title = e.message; }
+  });
 }
 
 function renderKpis(k, exp){
@@ -1437,13 +1494,54 @@ function renderParityRecent(rows, th){
   $("pRecent").innerHTML = `<table><tr><th>Filed</th><th>Drawing</th><th>Client</th><th>Outcome</th><th class="n">Variance</th><th class="n">AI</th><th class="n">Manual</th><th>Report</th></tr>`
     + rows.map(r => {
       const why = r.error ? r.error : r.quantity_note || "";
-      const links = [r.report_url ? `<a href="${esc(r.report_url)}" target="_blank" rel="noopener">report ↗</a>` : "",
+      const links = [r.folder ? `<a href="#" data-pd="${esc(r.folder)}">detail</a>` : "",
+                     r.report_url ? `<a href="${esc(r.report_url)}" target="_blank" rel="noopener">report ↗</a>` : "",
                      r.listen_url ? `<a href="${esc(r.listen_url)}" target="_blank" rel="noopener">listen</a>` : ""].filter(Boolean).join(" · ");
       return `<tr><td class="t">${fmtStamp(r.stamp)}</td><td class="d">${esc(r.drawing)}</td><td class="c" title="${esc(r.client || "")}">${esc(r.client || "")}</td>
         <td>${outcomeBadge(r.outcome)}${why ? `<span class="why">${esc(why)}</span>` : ""}</td>
         <td class="n">${pct(r.signed_pct, true)}</td><td class="n">${gbp(r.ai_unit)}</td><td class="n">${gbp(r.manual_unit)}</td><td>${links || "—"}</td></tr>`;
     }).join("") + "</table>";
 }
+
+const _pdLine = l => `<tr><td>${esc(l.kind || "")}</td><td>${esc(l.label || "")}</td><td class="n">${gbp(l.ai)}</td><td class="n">${gbp(l.manual)}</td><td class="n">${pct(l.pct, true)}</td><td>${esc(l.status || "")}</td><td>${esc(l.cell || "")}</td></tr>`;
+async function openParityDetail(folder){
+  $("pdOverlay").hidden = false; $("pdBody").innerHTML = '<div class="empty">reading…</div>';
+  try {
+    const d = await api("/api/estimate/parity/detail?folder=" + encodeURIComponent(folder));
+    const h = d.headline || {}, q = d.quantity || {}, m = d.match || {};
+    $("pdTitle").innerHTML = `<b>${esc(d.drawing || d.job || "")}</b> · ${esc(d.client || "")} · ${esc(fmtStamp(d.stamp || ""))}`;
+    const files = [["report", d.report_url], ["AI workbook", d.ai_url], ["manual sheet", d.manual_url], ["detail json", d.detail_json_url], ["listen", d.listen_url]]
+      .filter(x => x[1]).map(x => `<a href="${esc(x[1])}" target="_blank" rel="noopener">${x[0]}</a>`).join(" · ");
+    const lines = d.lines || [];
+    const diffs = (d.differences || []).map(x => `<li>${esc(typeof x === "string" ? x : JSON.stringify(x))}</li>`).join("");
+    $("pdBody").innerHTML = `
+      <table><tr><th>Outcome</th><th class="n">AI unit</th><th class="n">Manual unit</th><th class="n">Variance</th><th>Unit cost from</th></tr>
+        <tr><td>${outcomeBadge(d.outcome)}</td><td class="n">${gbp(q.ai_unit_at_manual_qty ?? h.ai_unit_cost_gbp)}</td><td class="n">${gbp(h.manual_unit_cost_gbp)}</td><td class="n">${pct(q.pct_at_manual_qty ?? h.pct_variance, true)}</td><td>${esc(h.unit_cost_source || "")}</td></tr></table>
+      <p class="empty">Matched: ${esc(m.how || "")} ${m.reason ? "· " + esc(m.reason) : ""} · quantities AI ${esc(q.ai ?? "")} / manual ${esc(q.manual ?? "")}${q.note ? " · " + esc(q.note) : ""}${(d.revision || {}).differs ? " · REVISIONS DIFFER" : ""}</p>
+      <h3 style="margin:14px 0 6px">Line by line <span class="empty">(${lines.length} line(s) from ${esc(d.lines_from || "the workbooks")})</span></h3>
+      ${lines.length ? `<table><tr><th>Kind</th><th>Line</th><th class="n">AI</th><th class="n">Manual</th><th class="n">Variance</th><th>Status</th><th>Cell</th></tr>${lines.map(_pdLine).join("")}</table>` : '<div class="empty">No line detail was filed with this comparison.</div>'}
+      ${diffs ? `<h3 style="margin:14px 0 6px">Largest differences</h3><ul>${diffs}</ul>` : ""}
+      ${d.error ? `<p class="empty">Error: ${esc(d.error)}</p>` : ""}
+      <p class="empty">${files || "no files linked"}</p>`;
+  } catch(e){ $("pdBody").innerHTML = `<div class="empty">Could not read the comparison: ${esc(e.message)}</div>`; }
+}
+document.addEventListener("click", ev => {
+  const a = ev.target.closest && ev.target.closest("[data-pd]");
+  if(a){ ev.preventDefault(); openParityDetail(a.dataset.pd); }
+});
+$("pdClose").onclick = () => { $("pdOverlay").hidden = true; };
+$("rrGo").onclick = async () => {
+  const jobs = ($("rrJobs").value || "").split(/[\s,;]+/).filter(Boolean);
+  if(!jobs.length){ $("rrOut").textContent = "Type one or more job numbers."; return; }
+  if(!confirm(`Run a fresh estimate of ${jobs.length} job(s) and compare each with its manual estimate?`)) return;
+  $("rrOut").textContent = "queueing…";
+  try {
+    const r = await api("/api/estimate/parity/rerun", {jobs, method: $("rrMethod").value});
+    $("rrOut").innerHTML = (r.results || []).map(x => x.queued
+      ? `<div>${esc(x.job)}: queued (${esc(x.client)} / ${esc(x.drawing)}, ${x.units} off${(x.breaks || []).length > 1 ? ", breaks " + x.breaks.join("/") : ""})</div>`
+      : `<div>${esc(x.job)}: not queued, ${esc(x.why || "")}</div>`).join("") + `<div class="empty">${esc(r.note || "")}</div>`;
+  } catch(e){ $("rrOut").textContent = "Not queued: " + e.message; }
+};
 
 function renderParityPeriods(rows, th){
   setText("pPeriodsN", rows.length ? `last ${rows.length}` : "");

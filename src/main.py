@@ -150,6 +150,45 @@ def parse_args() -> argparse.Namespace:
              "any run. Not an estimate to quote.",
     )
     parser.add_argument(
+        "--targeted",
+        action="store_true",
+        help="TARGETED MODEL HELP (SCRUM-194 requirement 3). The deterministic readers run "
+             "first; the whole-pack read, the vision BOM reader, the page vision pass and the DXF "
+             "interpretation are off, and the model is asked one question per gap on that part's "
+             "own pages (gap_fill). The same as SDI_LLM_MODE=targeted, for this run only.",
+    )
+    parser.add_argument(
+        "--solidworks-only",
+        action="store_true",
+        help="THE SOLIDWORKS MODELS AS THE READER. No language model reads the drawings (as "
+             "--deterministic-only); the SolidWorks analyser is driven on the pack's models and "
+             "the Document Manager stand-in is off, so what the run knows of the parts and "
+             "their geometry is SolidWorks' own. The PDF text is still read for the parts "
+             "list and title blocks. A pack with no models says so. Not an estimate to quote.",
+    )
+    parser.add_argument(
+        "--docmgr-only",
+        action="store_true",
+        help="THE SOLIDWORKS DOCUMENT MANAGER AS THE READER. No language model reads the "
+             "drawings; the COM analyser is not driven, and the Document Manager reads the "
+             "pack's models instead (needs SDI_SW_DOCMGR_KEY on this machine). The PDF text "
+             "is still read for the parts list and title blocks. Not an estimate to quote.",
+    )
+    parser.add_argument(
+        "--bom-routes-only",
+        action="store_true",
+        help="A PRE-RUN FOR ESTIMATING: read the pack and compile the routes exactly as an "
+             "estimate would, then stop before the workbook. Writes only the BOMs and Routes "
+             "(xlsx and page) and the record, with nothing priced shown. Combines with any "
+             "reader mode.",
+    )
+    parser.add_argument(
+        "--bom-routes-out",
+        type=str,
+        default=None,
+        help="Folder for --bom-routes-only's files (default: the engine's output folder).",
+    )
+    parser.add_argument(
         "--folder-as-job",
         action="store_true",
         help="Group all PDFs in each folder into one pooled BOM + single bay estimate (overrides config default).",
@@ -827,6 +866,53 @@ def main() -> None:
         print("   " + "=" * 68)
         print("")
 
+    # ── ONE READER MODE PER RUN, CHOSEN ON THE PAGE (run modes) ─────────────────────
+    _modes = [m for m, on in (("--llm-only", getattr(args, "llm_only", False)),
+                              ("--deterministic-only", getattr(args, "deterministic_only", False)),
+                              ("--targeted", getattr(args, "targeted", False)),
+                              ("--solidworks-only", getattr(args, "solidworks_only", False)),
+                              ("--docmgr-only", getattr(args, "docmgr_only", False))) if on]
+    if len(_modes) > 1 and set(_modes) != {"--deterministic-only"}:
+        raise SystemExit(f"{' and '.join(_modes)} ask different questions; pass one reader mode.")
+    if getattr(args, "targeted", False):
+        os.environ["SDI_LLM_MODE"] = "targeted"
+    if getattr(args, "solidworks_only", False) or getattr(args, "docmgr_only", False):
+        _dm = bool(getattr(args, "docmgr_only", False))
+        # No model reads the drawings (the deterministic-only switches), and the model reader
+        # is the one asked for and no other.
+        os.environ["SDI_DETERMINISTIC_ONLY"] = "1"
+        os.environ["SDI_LLM_FULL_EXTRACT"] = "0"
+        os.environ["SKIP_VISION_EXTRACTION"] = "1"
+        os.environ["SDI_DXF_LLM_INTERPRET"] = "0"
+        os.environ["SDI_APPLY_SOLIDWORKS"] = "1"
+        os.environ["SDI_SW_RUN_ANALYSER"] = "0" if _dm else "1"
+        os.environ["SDI_SW_DOCMGR"] = "1" if _dm else "0"
+        os.environ["SDI_READER_MODE"] = "docmgr" if _dm else "solidworks"
+        print("")
+        print("   " + "=" * 68)
+        print(f"   {'DOCUMENT MANAGER' if _dm else 'SOLIDWORKS'}-ONLY RUN. The pack's models are read by "
+              f"{'the SolidWorks Document Manager' if _dm else 'the SolidWorks analyser'} alone;")
+        print("   no language model reads the drawings and no cached answer is reused. The PDF")
+        print("   text is still read for the parts list and the title blocks. This measures")
+        print("   what the models give; it is not an estimate to quote.")
+        print("   " + "=" * 68)
+        print("")
+    if getattr(args, "bom_routes_only", False):
+        os.environ["SDI_BOM_ROUTES_ONLY"] = "1"
+
+    # ── SDI_LLM_MODE=targeted: THE MODEL IS ASKED ONLY ABOUT THE GAPS (SCRUM-194 req. 3) ──
+    if (not getattr(args, "deterministic_only", False)
+            and os.getenv("SDI_LLM_MODE", "").strip().lower() == "targeted"):
+        from run_readers import TARGETED_MODE_OFF as _tgt_off
+        print("")
+        print("   " + "=" * 68)
+        print("   TARGETED MODEL MODE. The deterministic readers run first; the model is then")
+        print("   asked one question per gap, on that part's own pages (gap fill). OFF:")
+        for _w in _tgt_off:
+            print(f"     - {_w}")
+        print("   " + "=" * 68)
+        print("")
+
     # ── --fresh-read: ASK THE MODEL AGAIN ───────────────────────────────────────────
     # SET AS ENVIRONMENT, like SDI_LLM_ONLY, because the two caches sit at opposite ends of
     # the pipeline -- one inside the per-page vision reader, one inside the whole-pack
@@ -1046,6 +1132,17 @@ def main() -> None:
         summary["llm_only"] = bool(getattr(args, "llm_only", False))
         # D-753: a saved run says it was read with no language model, for every reader after.
         summary["deterministic_only"] = bool(getattr(args, "deterministic_only", False))
+        try:
+            from run_readers import llm_mode as _llm_mode_rec
+            summary["llm_mode"] = _llm_mode_rec()
+        except Exception:                                            # noqa: BLE001
+            pass
+        summary["reader_mode"] = (os.getenv("SDI_READER_MODE") or (
+            "llm_only" if getattr(args, "llm_only", False) else
+            "deterministic" if getattr(args, "deterministic_only", False) else
+            "targeted" if summary.get("llm_mode") == "targeted" else "full"))
+        if getattr(args, "bom_routes_only", False):
+            summary["bom_routes_only"] = True
         _time_stage("enrichment_reader_provenance", True)
         summary["fresh_read"] = bool(getattr(args, "fresh_read", False))
         # WHICH MACHINE, WHICH RUNNER, WHICH BUILD — onto the run, for the book's first page
@@ -1386,6 +1483,23 @@ def main() -> None:
         if not getattr(args, "generate_ai_spreadsheet", False):
             _time_stage("enrichment_console_observations", False)
         _time_stage("post_scan_enrichment", False)
+        # ── THE PRE-RUN STOPS HERE: BOMs AND ROUTES, NO WORKBOOK (--bom-routes-only) ──
+        if getattr(args, "bom_routes_only", False):
+            try:
+                from bom_and_route_extract import write_both as _write_pre
+                _pre_out = Path(getattr(args, "bom_routes_out", None) or (OUTPUT_DIR / "estimates"))
+                _pre_out.mkdir(parents=True, exist_ok=True)
+                _pre = _write_pre(summary, _pre_out, job=str(scan_label or ""), want="both")
+                _rec_path = _pre_out / f"{Path(str(scan_label or 'job')).name}_pre_run_record.json"
+                _rec_path.write_text(json.dumps(summary, default=str), encoding="utf-8")
+                _files = [str(_pre[k]) for k in ("xlsx", "html") if _pre.get(k)] + [str(_rec_path)]
+                print(f"   -> PRE-RUN: {_pre.get('boms', 0)} BOM row(s), {_pre.get('routes', 0)} route "
+                      f"decision(s); no workbook, nothing priced shown", flush=True)
+                print("PACK_EXTRACT_OUTPUTS=" + json.dumps(_files), flush=True)
+            except Exception as _pre_err:                            # noqa: BLE001
+                print(f"   -> PRE-RUN FAILED: {type(_pre_err).__name__}: {_pre_err}", flush=True)
+                raise
+            continue
         _time_stage("populate_workbook", True)
         try:
             from wb_populate import populate_workbook

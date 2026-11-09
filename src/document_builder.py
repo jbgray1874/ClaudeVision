@@ -2917,6 +2917,114 @@ def cut_list_member_records(bom_rows: Any, parts: List[Dict[str, Any]]) -> List[
     return out
 
 
+_PIECE_LABEL = re.compile(r"(?<![\d.])(\d{2,5}(?:\.\d+)?)\s*(?:MM)?\s*(?:TUBE|LONG|LG)\b")
+_PIECE_PROFILE = re.compile(
+    r"(?<![\d.])(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*MM\s*"
+    r"(?:M\s*/?\s*S|S\s*/\s*S|MILD\s*STEEL|STAINLESS\s*STE[EL]{2})?\s*(?P<role>[A-Z]+(?:\s*[A-Z&]+){0,2})?",
+    re.IGNORECASE)
+
+
+def sheet_piece_member_records(parts: List[Dict[str, Any]], summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """EACH PIECE OF A WELDMENT KEEPS ITS OWN SECTION (SCRUM-194; reviewer, 9 Nov 2026).
+
+    A weldment whose sheets label several tube lengths ("1394 TUBE" on one sheet, "1170 TUBE" on
+    the next) was given one section and the lengths' sum: 2564 mm of the first profile. Unlike
+    sections then priced as one stock item. Here each labelled length becomes a member record of
+    its weldment, "<weldment>-CL<n>", as a parts table's several-section cut list already does
+    (D-548): its profile is the one printed on the same sheet, excluding a profile the sheet
+    names for another listed part (its role word is that part's description, "UPRIGHTS" for an
+    UPRIGHT). A length whose own sheet prints no profile of its own keeps the weldment's profile
+    PROVISIONALLY, said so on the piece, and the profile stays an open gap to confirm. Each
+    piece is counted once: a count the sheet does not print is asked, never invented. The
+    weldment keeps its welding and the work its sheets state; its stock is on its pieces."""
+    pages = {p.get("page_number"): p for p in (summary.get("pages") or []) if isinstance(p, dict)}
+    listed_desc = {}
+    for q in parts:
+        d = re.sub(r"[^A-Z]", "", str(q.get("description") or "").upper())
+        if len(d) >= 4:
+            listed_desc[d] = str(q.get("part_number") or "")
+    existing = {str(q.get("part_number") or "").upper() for q in parts}
+    out: List[Dict[str, Any]] = []
+    for part in list(parts):
+        ss = part.get("section_stock") if isinstance(part.get("section_stock"), dict) else {}
+        pieces = [float(v) for v in (ss.get("cut_lengths_mm") or []) if _safe_float(v)]
+        if not (ss.get("a") and len(pieces) > 1 and ss.get("length_source") == "tube_callouts"):
+            continue
+        pn = str(part.get("part_number") or "").strip()
+        own = [pg for pg in (part.get("pages") or []) if isinstance(pg, int)
+               and pg != part.get("bound_to_parts_list_page") and pg in pages]
+        found: List[Dict[str, Any]] = []
+        for pg in own:
+            text = str(pages[pg].get("pdfplumber_text") or pages[pg].get("normalized_text") or "")
+            up = text.upper()
+            profiles = []
+            for m in _PIECE_PROFILE.finditer(up):
+                role = re.sub(r"[^A-Z]", "", m.group("role") or "")
+                # The role word may come after a view mark ("30X30X2MM AA M/S UPRIGHTS"): a
+                # listed part's description standing anywhere in the words after the profile
+                # makes it that part's profile.
+                other = next((code for d, code in listed_desc.items()
+                              if code.upper() != pn.upper() and role and d in role), None)
+                if other:
+                    continue                    # the profile of another listed part
+                dims = [float(m.group(i)) for i in (1, 2, 3)]
+                profiles.append({"dims": dims, "words": m.group(0).strip()})
+            uniq = {tuple(sorted(pf["dims"])): pf for pf in profiles}
+            for m in _PIECE_LABEL.finditer(up):
+                length = float(m.group(1))
+                if length not in pieces or any(f["length_mm"] == length for f in found):
+                    continue
+                prof = next(iter(uniq.values())) if len(uniq) == 1 else None
+                found.append({"length_mm": length, "page": pg, "words": m.group(0).strip(),
+                              "profile": prof})
+        if len(found) < 2:
+            continue
+        base = {k: ss.get(k) for k in ("a", "b", "t")}
+        for k, piece in enumerate(sorted(found, key=lambda f: (f["page"], -f["length_mm"])), start=1):
+            code = f"{pn}-CL{k}"
+            if code.upper() in existing:
+                continue
+            rec = _empty_part_record(code, description=f"{piece['length_mm']:g} TUBE of {pn}", quantity=None)
+            _apply_field(rec, "quantity", 1, "drawing_deterministic")
+            prof = piece["profile"]
+            if prof:
+                t, a, b = sorted(prof["dims"])
+                stock = {"a": a, "b": b, "t": t, "profile_source": "same_sheet", "profile_words": prof["words"]}
+            else:
+                stock = dict(base, profile_source="weldment_provisional", profile_provisional=True)
+            stock.update({"length_mm": piece["length_mm"], "cut_lengths_mm": [piece["length_mm"]],
+                          "length_source": "tube_callout", "length_printed": piece["words"],
+                          "length_page": piece["page"], "detection_path": "canonical_profile",
+                          "source": "drawing_deterministic",
+                          "profile_form": "SHS" if abs(float(stock["a"]) - float(stock["b"])) < 1e-6 else "RHS"})
+            rec.update({"section_stock": stock, "page_roles": ["section"], "pages": [piece["page"]],
+                        "source": "cut_list_member", "identity_source": "cut_list_member",
+                        "is_bought_in": False, "stock_form": "tube", "cut_list_member_of": pn,
+                        "bom_parent": pn, "textual_operations": ["saw"],
+                        "pieces_counted_once": True})
+            rec.setdefault("operation_sources", {})["saw"] = "drawing_deterministic"
+            for _k in ("materials", "normalized_material", "surface_finishes", "normalized_finish"):
+                if part.get(_k) and not rec.get(_k):
+                    rec[_k] = part.get(_k)
+            rec["review_flags"] = [
+                f"piece of {pn}: '{piece['words']}' on page {piece['page']}, cut and charged by its own length "
+                f"and section; counted once, as the sheet prints no count for it"]
+            if not prof:
+                rec["review_flags"].append(
+                    f"no profile printed against '{piece['words']}' on page {piece['page']}: priced provisionally "
+                    f"at the weldment's {base['a']:g}x{base['b']:g}x{base['t']:g}, to confirm (an open gap, "
+                    f"never a reading)")
+            out.append(rec)
+            existing.add(code.upper())
+        part["section_stock_on_members"] = [r["part_number"] for r in out if r.get("cut_list_member_of") == pn]
+        part["section_stock_as_read"] = dict(ss)
+        part.pop("section_stock", None)
+        part.setdefault("review_flags", []).append(
+            f"its {len(found)} labelled tube lengths are pieces of their own, each with the section printed on "
+            f"its sheet: {', '.join(part['section_stock_on_members'])}; the weldment's stock is on them")
+    return out
+
+
 def bought_in_rows_without_records(bom_rows: Any, parts: List[Dict[str, Any]]
                                    ) -> List[Dict[str, Any]]:
     """A bought-in record for every table row no record already stands for.
@@ -3220,6 +3328,11 @@ def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
     parts = filtered
 
     parts = _suppress_pn_fragments(parts, summary)
+    # EACH PIECE OF A WELDMENT KEEPS ITS OWN SECTION (SCRUM-194): after the section reading and
+    # the filters, so the members are neither read as sections again nor filtered as fragments.
+    _sheet_pieces = sheet_piece_member_records(parts, summary)
+    if _sheet_pieces:
+        parts.extend(_sheet_pieces)
 
     observations: List[str] = []
     manual_review_items: List[Dict[str, Any]] = []

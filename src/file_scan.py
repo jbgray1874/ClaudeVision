@@ -968,7 +968,7 @@ def pdf_readings(pdf_path: Path) -> Dict[str, Any]:
     """
     skip_vision = os.getenv("SKIP_VISION_EXTRACTION", "").lower() in {"1", "true", "yes"}
     try:                                       # D-753: no vision pass on a deterministic-only run
-        from run_readers import run_was_deterministic_only as _det_only_vis
+        from run_readers import whole_reads_off as _det_only_vis     # targeted mode too
         skip_vision = skip_vision or _det_only_vis()
     except Exception:                                                   # noqa: BLE001
         pass
@@ -2803,6 +2803,16 @@ def pre_costing_passes(summary: Dict[str, Any]) -> None:
     # material, a sheet's material, a stated cut list), so a gap is a gap and a stated fact is on
     # the ledger. A material inherited from the document after costing is an inference, and the
     # gap it fills stays named here.
+    # THE HOLES, THREADS AND COUNTERSINKS EACH SHEET STATES, ON THEIR PART (SCRUM-194): from the
+    # reader's own findings, with count, page and words, and the work they ask for.
+    try:
+        import reader_findings as _rf2
+        _nf = _rf2.attach_stated_features(summary)
+        if _nf:
+            print(f"   [stated-features] {_nf} hole/thread/countersink callout(s) put on their parts "
+                  f"with their counts", flush=True)
+    except Exception as _sf_exc:                                      # noqa: BLE001
+        print(f"   [stated-features] not attached ({type(_sf_exc).__name__}: {_sf_exc})", flush=True)
     # THE DRAWING LEDGER (SCRUM-194 requirement 2): every fact the drawing's own text gave a
     # made part, captured once the deterministic build is done and before costing, to be held
     # to the calculated workbook after Excel as the LLM read's ledger is.
@@ -3866,11 +3876,15 @@ def _finalize_scan_summary(
     # D-753: no whole-pack read on a deterministic-only run, and so no cached one either:
     # extract_full_pack is where the cache is read, and it is not called.
     try:
-        from run_readers import run_was_deterministic_only as _det_only_llm
+        from run_readers import run_was_deterministic_only as _det_only_llm, llm_mode as _llm_mode
         if _det_only_llm():
             _llm_off = True
             print("   [llm-full-extract] OFF — deterministic-only run: no language model reads "
                   "the drawings and no cached read is applied", flush=True)
+        elif _llm_mode() == "targeted":
+            _llm_off = True
+            print("   [llm-full-extract] OFF — targeted mode: the model is asked only about the "
+                  "gaps the deterministic read leaves (gap fill)", flush=True)
     except Exception:                                                   # noqa: BLE001
         pass
     _llm_on = (_llm_flag in {"1", "true", "yes", "on"}

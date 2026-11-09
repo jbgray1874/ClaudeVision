@@ -280,6 +280,13 @@ class Run:
     # language model reads the drawings and no cached answer is replayed; a test of the
     # deterministic reader, never an estimate to quote.
     deterministic_only: bool = False
+    # THE READER MODE (run modes): "targeted" (main.py --targeted), "solidworks"
+    # (--solidworks-only), "docmgr" (--docmgr-only); "" for a full estimate. One per run, chosen
+    # on the page, never from the runner machine's .env.
+    reader_mode: str = ""
+    # A PRE-RUN FOR ESTIMATING (job_type "bom_routes", main.py --bom-routes-only): the pack read
+    # and the routes compiled, BOMs and Routes written, no workbook and nothing priced shown.
+    bom_routes_only: bool = False
     # THE INSTRUCTION WAS GIVEN AND NOT CARRIED OUT. Set when the engine's own command line
     # comes back on the log without a flag this run asked for -- either of them; see
     # _check_the_engine_was_told below. It forces the outcome to a failure whatever the runner
@@ -756,6 +763,8 @@ class EstimateRequest(BaseModel):
     # no branching. That is why it belongs here rather than on the batch endpoint, which has
     # to keep treating every file as a separate enquiry.
     method: str = "both"
+    # A PRE-RUN: BOMs and Routes only, stopped before the workbook (run modes). Any method.
+    bom_routes_only: bool = False
     # ASK THE MODEL AGAIN, rather than replaying what it said about this pack last time.
     # Only meaningful alongside an LLM read; harmless and ignored on an ordinary estimate,
     # which has three other readers and does not want its one reproducible source moving.
@@ -833,6 +842,27 @@ class SendRequest(BaseModel):
     # Which of the run's OWN deliverables to attach. Empty means all of them except the
     # customer quote, which is the same rule the automatic send follows.
     files: List[str] = []
+
+
+# ── RUN MODES: ONE PER RUN, CHOSEN ON THE PAGE ────────────────────────────────────────
+# "both"/"engine" a full estimate; "llm" the vision read alone; "deterministic" the drawing reader
+# alone (D-753); "targeted" the drawing reader first and the model asked only about the gaps
+# (SCRUM-194 requirement 3); "solidworks" and "docmgr" the pack's models read by one reader.
+READER_MODE_FLAG = {"targeted": "--targeted", "solidworks": "--solidworks-only",
+                    "docmgr": "--docmgr-only"}
+READER_MODE_SAYS = {
+    "targeted": "TARGETED: the drawing reader runs first; the whole-pack model read, the vision "
+                "BOM reader, the page vision pass and the DXF interpretation are OFF, and the model "
+                "is asked one question per gap on that part's own pages. Every ask is on the record.",
+    "solidworks": "SOLIDWORKS-ONLY: the pack's models are read by the SolidWorks analyser alone; no "
+                  "language model reads the drawings. A measurement of what the models give, not "
+                  "an estimate to quote.",
+    "docmgr": "DOCUMENT-MANAGER-ONLY: the pack's models are read by the SolidWorks Document Manager "
+              "alone; no language model reads the drawings and the COM analyser is not driven. A "
+              "measurement, not an estimate to quote.",
+}
+RUN_METHODS = {"both", "llm", "engine", "deterministic"} | set(READER_MODE_FLAG)
+BATCH_METHODS = {"both", "llm", "engine", "deterministic", "targeted"}
 
 
 class BatchRequest(BaseModel):
@@ -1019,6 +1049,173 @@ def runners(request: Request = None, x_sdi_key: Optional[str] = Header(default=N
 # JG, 7 Nov 2026: a full-screen page for the wall, live runs with red / amber / green, the
 # fleet of machines, and KPIs on run times and activity. One read of everything the service
 # holds, worked out by estimate_wall (pure, tested); the page only draws it.
+
+# ── NEW DRAWING PACKS ON THE DESIGN SHARE (design sweep) ─────────────────────────────────
+# src/design_sweep.py runs hourly on the estimating machine (which holds the share rights) and
+# posts its report here; the control panel shows the candidates and lets them be dismissed.
+def _design_sweep_file() -> Path:
+    return estimate_email.state_dir() / "design_sweep.json"
+
+
+def design_sweep_for_wall() -> Dict[str, Any]:
+    """The last sweep's report, dismissed candidates removed, with its age."""
+    try:
+        data = json.loads(_design_sweep_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"state": "never", "candidates": [],
+                "why": "no sweep has reported: start the design sweep on the estimating machine "
+                       "(tools/start/install-design-sweep-task.ps1)"}
+    rep = dict(data.get("report") or {})
+    gone = set(data.get("dismissed") or [])
+    rep["candidates"] = [c for c in (rep.get("candidates") or []) if c.get("folder") not in gone]
+    rep["dismissed"] = len(gone)
+    rep["received_at"] = data.get("received_at")
+    try:
+        age = time.time() - float(data.get("received_ts") or 0)
+        rep["age_s"] = int(age)
+        every = float(rep.get("every_minutes") or 60) * 60
+        rep["state"] = "late" if age > 2.5 * every else "ok"
+    except (TypeError, ValueError):
+        rep["state"] = "ok"
+    return rep
+
+
+@router.post("/design-sweep/report")
+def design_sweep_report(report: Dict[str, Any], x_sdi_key: Optional[str] = Header(default=None)):
+    """The sweep's report, kept as sent; the dismissals made on the panel are kept beside it."""
+    _check_key(x_sdi_key)
+    f = _design_sweep_file()
+    try:
+        old = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        old = {}
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"report": report or {}, "dismissed": list(old.get("dismissed") or []),
+                             "received_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                             "received_ts": time.time()}, indent=1), encoding="utf-8")
+    return {"ok": True, "candidates": len((report or {}).get("candidates") or [])}
+
+
+@router.get("/design-sweep")
+def design_sweep_get(x_sdi_key: Optional[str] = Header(default=None)):
+    _check_key(x_sdi_key)
+    return design_sweep_for_wall()
+
+
+class DesignSweepDismiss(BaseModel):
+    folder: str
+
+
+@router.post("/design-sweep/dismiss")
+def design_sweep_dismiss(req: DesignSweepDismiss, x_sdi_key: Optional[str] = Header(default=None)):
+    """Taken off the candidate list: discussed, not a job, or already in hand."""
+    _check_key(x_sdi_key)
+    f = _design_sweep_file()
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise HTTPException(404, "No sweep has reported yet.")
+    gone = list(data.get("dismissed") or [])
+    if req.folder not in gone:
+        gone.append(req.folder)
+    data["dismissed"] = gone[-5000:]
+    f.write_text(json.dumps(data, indent=1), encoding="utf-8")
+    return design_sweep_for_wall()
+
+
+# ── PARITY: ONE COMPARISON IN DETAIL, AND RE-ESTIMATE THEN COMPARE (control panel) ─────
+@router.get("/parity/detail")
+def parity_detail(folder: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """One filed comparison's own index (parity_index.json): its headline, the quantity note,
+    how the two sheets were matched, every cost / selling / commercial line AI against manual,
+    the differences, and links to the files filed with it. Only folders under the parity root."""
+    _check_key(x_sdi_key)
+    root = Path(_parity_env()["SDI_PARITY_ROOT"]).resolve()
+    try:
+        target = Path(folder).resolve()
+        target.relative_to(root)
+    except (ValueError, OSError):
+        raise HTTPException(403, "That folder is not a comparison under the parity root.")
+    idx = target / "parity_index.json"
+    try:
+        data = json.loads(idx.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise HTTPException(404, f"No parity_index.json in {target.name}.")
+    data.setdefault("folder", str(target))
+    return _report_links(data)
+
+
+class ParityRerunRequest(BaseModel):
+    jobs: List[str]
+    client: str = ""
+    method: str = "both"
+
+
+@router.post("/parity/rerun")
+def parity_rerun(req: ParityRerunRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """RE-ESTIMATE, THEN COMPARE. For each job: its newest AI run in AISheets gives the pack,
+    the client, the drawing and the quantities; the pack's drawings are copied out of the staged
+    folder (staging clears that folder, so it is never its own source), and a fresh estimate is
+    queued on the current build with compare-with-manual on. Each comparison is filed by the
+    runner when its estimate finishes and lands in the parity list like any other."""
+    _caller = _check_key(x_sdi_key)
+    jobs = [j.strip() for j in (req.jobs or []) if str(j or "").strip()][:50]
+    if not jobs:
+        raise HTTPException(400, "Name at least one job number.")
+    method = str(req.method or "both").strip().lower()
+    if method not in RUN_METHODS:
+        raise HTTPException(400, f"Unknown method {req.method!r}.")
+    out: List[Dict[str, Any]] = []
+    for job in jobs:
+        try:
+            # The same finder as Parity by job number, run as the engine's own CLI.
+            runs = _parity_job(["find", job[:80]] + (["--client", req.client[:80]] if req.client else []),
+                               timeout=120).get("ai") or []
+        except HTTPException as exc:
+            out.append({"job": job, "queued": False, "why": f"AISheets could not be read: {exc.detail}"})
+            continue
+        if not runs:
+            out.append({"job": job, "queued": False,
+                        "why": "no AI estimate of this job is filed, so there is no pack to re-run from"})
+            continue
+        last = runs[0]
+        try:
+            rec = json.loads(Path(last.get("record") or last["summary"]).read_text(encoding="utf-8"))
+        except (OSError, ValueError, KeyError):
+            rec = {}
+        staged = [Path(str(x)) for x in (rec.get("staged_inputs") or []) if str(x or "").strip()]
+        staged = [x for x in staged if x.is_file()]
+        if not staged:
+            out.append({"job": job, "queued": False,
+                        "why": "its last run's record names no drawing that is still there"})
+            continue
+        import shutil
+        hold = estimate_email.state_dir() / "parity_rerun" / f"{re.sub(r'[^0-9A-Za-z-]', '', job)[:40]}_{uuid.uuid4().hex[:6]}"
+        hold.mkdir(parents=True, exist_ok=True)
+        files = []
+        for f in staged:
+            dest = hold / f.name
+            shutil.copy2(f, dest)
+            files.append(str(dest))
+        breaks = sorted({int(r.get("quantity")) for r in ((rec.get("quantity_sweep") or {}).get("rows") or [])
+                         if isinstance(r, dict) and str(r.get("quantity") or "").isdigit()})
+        units = int(last.get("units") or (breaks[0] if breaks else 1))
+        ereq = EstimateRequest(client=last["client"], drawing_number=last["drawing"], units=units,
+                               quantity_breaks=[q for q in breaks if q != units],
+                               files=files, method=method, compare_with_manual=True,
+                               enquiry_brief=str(rec.get("enquiry_brief") or ""))
+        try:
+            started = start(ereq, x_sdi_key=x_sdi_key)
+        except HTTPException as exc:
+            out.append({"job": job, "queued": False, "why": str(exc.detail)})
+            continue
+        out.append({"job": job, "queued": True, "run_id": (started or {}).get("run_id"),
+                    "client": last["client"], "drawing": last["drawing"], "units": units,
+                    "breaks": breaks, "from_run": last.get("run_folder")})
+    return {"requested_by": _caller, "results": out,
+            "queued": sum(1 for r in out if r.get("queued")),
+            "note": "each comparison is filed when its estimate finishes; it appears under Parity runs"}
+
 @router.get("/wall")
 def wall(x_sdi_key: Optional[str] = Header(default=None)):
     _check_key(x_sdi_key)
@@ -1054,6 +1251,7 @@ def wall(x_sdi_key: Optional[str] = Header(default=None)):
     tasks = parity_tasks_for_wall()
     snap["parity_tasks"] = tasks
     snap["parity"] = parity_for_wall(force=_parity_moved(tasks))
+    snap["design_sweep"] = design_sweep_for_wall()
     # THE VOICE THE PAGES WILL USE (D-744), so falling back to the device's voice is seen.
     voice = speech_status()
     snap["speech"] = voice
@@ -1424,6 +1622,8 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         "llm_only": bool(run.llm_only),
         "fresh_read": bool(run.fresh_read),
         "deterministic_only": bool(getattr(run, "deterministic_only", False)),
+        "reader_mode": str(getattr(run, "reader_mode", "") or ""),
+        "bom_routes_only": bool(getattr(run, "bom_routes_only", False)),
         "job_type": run.job_type,
         # WHAT WAS SUBMITTED (D-604), for the engine to compare with what it receives.
         "submitted_scope": dict(run.submitted_scope),
@@ -1582,7 +1782,10 @@ def _check_the_engine_was_told(run: "Run", text: str) -> None:
     wanted = [f for f, asked in (("--llm-only", run.llm_only),
                                  ("--fresh-read", run.fresh_read),
                                  ("--deterministic-only",
-                                  getattr(run, "deterministic_only", False))) if asked]
+                                  getattr(run, "deterministic_only", False)),
+                                 (READER_MODE_FLAG.get(getattr(run, "reader_mode", "") or "", ""),
+                                  bool(getattr(run, "reader_mode", ""))),
+                                 ("--bom-routes-only", getattr(run, "bom_routes_only", False))) if asked]
     if not wanted or run.instruction_refused:
         return
     missing = [f for f in wanted if f not in line]
@@ -1599,6 +1802,12 @@ def _check_the_engine_was_told(run: "Run", text: str) -> None:
         "--fresh-read": "the LLM caches were used, so the model was never asked — the run "
                         "replays the answer held for this pack and would be reported as a "
                         "fresh reading of it",
+        "--targeted": "the whole-pack model reads ran, so the run cannot show what the targeted "
+                      "gap fill alone supplies",
+        "--solidworks-only": "the run was not limited to the SolidWorks reader",
+        "--docmgr-only": "the run was not limited to the Document Manager reader",
+        "--bom-routes-only": "the run went on to build and price a workbook instead of stopping "
+                             "at the BOMs and Routes",
         "--deterministic-only": "the language-model readers ran or their cached answers were "
                                 "applied, so the run could not show what the drawing reader "
                                 "supplies on its own (SCRUM-194)",
@@ -2543,9 +2752,19 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     method = str(req.method or "both").strip().lower()
     # "deterministic" (D-753): the full engine with no language model reading the drawings and
     # no cached answer replayed — the SCRUM-194 reader test. Queued like "engine".
-    if method not in {"both", "llm", "engine", "deterministic"}:
-        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm, "
-                                 f"engine or deterministic.")
+    if method not in RUN_METHODS:
+        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use "
+                                 f"{', '.join(sorted(RUN_METHODS))}.")
+    # A MODE THAT NEEDS A READER NO CONNECTED RUNNER HAS IS REFUSED BEFORE STAGING.
+    with _LOCK:
+        _caps = [set(r.capabilities or []) for r in _online_runners()]
+    if method == "docmgr" and _caps and not any("dm_extract" in c for c in _caps):
+        raise HTTPException(503, "No connected runner holds the Document Manager licence key, so a "
+                                 "Document-Manager-only run cannot read the models. Add "
+                                 "SDI_SW_DOCMGR_KEY to the runner machine's .env and restart the runner.")
+    if req.bom_routes_only and _caps and not any("bom_routes" in c for c in _caps):
+        raise HTTPException(503, "The connected runner cannot run a BOMs & routes pre-run yet: restart "
+                                 "it on the current build (.\\tools\\start\\restart-runner.ps1).")
     if req.concept_document and method != "llm":
         raise HTTPException(400, "Client-document costing requires the LLM read method.")
     _ref_docs = [Path(str(f)).name for f in (req.reference_documents or [])
@@ -2827,8 +3046,11 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                   manual_workbook=manual_wb, queued_at=queued_at,
                   compare_with_manual=bool(req.compare_with_manual) and not manual_wb,
                   llm_only=(method == "llm"),
-                  fresh_read=bool(req.fresh_read) and method != "deterministic",
+                  fresh_read=bool(req.fresh_read) and method not in ("deterministic", "solidworks", "docmgr"),
                   deterministic_only=(method == "deterministic"),
+                  reader_mode=method if method in READER_MODE_FLAG else "",
+                  bom_routes_only=bool(req.bom_routes_only),
+                  job_type="bom_routes" if req.bom_routes_only else "",
                   email_to=_email_to, email_quote=bool(req.email_quote),
                   requested_by=_caller)
         # NOT QUEUED YET (D-607). A run in _RUNS can be claimed, and a runner polling between
@@ -2856,6 +3078,12 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                  "the DXF flat patterns and the SolidWorks extract are all OFF. This is a "
                  "MEASUREMENT of the model, not an estimate, and its total must not be "
                  "quoted or compared with a normal run's.")
+    if getattr(run, "reader_mode", ""):
+        run.line(READER_MODE_SAYS[run.reader_mode])
+    if getattr(run, "bom_routes_only", False):
+        run.line("PRE-RUN: the pack is read and the routes compiled as an estimate would, then "
+                 "the run stops before the workbook. You get the BOMs and Routes (xlsx and page) "
+                 "and the record; nothing priced is shown.")
     if getattr(run, "deterministic_only", False):
         run.line("DETERMINISTIC-ONLY: no language model reads the drawings and no cached "
                  "answer from one is reused (whole-pack read, vision BOM reader, page vision, "
@@ -4279,16 +4507,16 @@ def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
     # doing that and then refusing the run over a typo in one word leaves the estimator's
     # job folder rewritten for nothing.
     method = str(req.method or "both").strip().lower()
-    if method not in {"both", "llm", "engine"}:
-        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm or "
-                                 f"engine.")
+    if method not in BATCH_METHODS:
+        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use "
+                                 f"{', '.join(sorted(BATCH_METHODS))}.")
     if not req.files:
         raise HTTPException(400, "Add the drawings to estimate.")
 
     method = str(req.method or "both").strip().lower()
-    if method not in {"both", "llm", "engine"}:
-        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm or "
-                                 f"engine.")
+    if method not in BATCH_METHODS:
+        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use "
+                                 f"{', '.join(sorted(BATCH_METHODS))}.")
     root = Path(req.output_root) if req.output_root else OUTPUT_ROOT
     batch_id = uuid.uuid4().hex[:12]
     queued_at = time.time()
@@ -4340,7 +4568,9 @@ def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
                       units=int(req.units), job_folder=str(Path(raw).parent),
                       output_path=str(out), queued_at=queued_at,
                       pdf_path=str(path), batch_id=batch_id,
-                      llm_only=(method == "llm"))
+                      llm_only=(method == "llm"),
+                      deterministic_only=(method == "deterministic"),
+                      reader_mode=method if method in READER_MODE_FLAG else "")
             # ITS SCOPE AS SUBMITTED, like a single run's (D-607): a batch run takes no brief
             # and no reference document, and its book compares what arrived with that.
             run.submitted_scope = submitted_scope(run, method, None, "none", [])

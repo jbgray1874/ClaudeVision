@@ -148,7 +148,7 @@ def test_the_runner_runs_the_extract_never_main_and_files_what_it_names(tmp_path
     log = ["noise",
            "PACK_EXTRACT_OUTPUTS=" + json.dumps([str(f), str(tmp_path / "missing.json")])]
     assert runner.pack_extract_outputs(log) == [{"name": "a.xlsx", "path": str(f)}]
-    assert set(runner.RUNNER_CAPABILITIES) == {"sw_extract", "xai_extract"}
+    assert set(runner.RUNNER_CAPABILITIES) == {"sw_extract", "xai_extract", "bom_routes"}
     src = (ROOT / "tools" / "runner" / "sdi_estimate_runner.py").read_text(encoding="utf-8")
     # Sent through runner_capabilities() since D-703, which adds "no_models" only to a
     # runner that can read no models; the pack-extract types are always in it.

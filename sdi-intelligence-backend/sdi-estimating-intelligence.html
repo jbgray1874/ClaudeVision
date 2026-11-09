@@ -674,20 +674,33 @@
         <p class="note" id="runManualWhy" hidden></p>
       </div>
 
-      <!-- THE DRAWING READER ON ITS OWN (D-753, SCRUM-194). A test, not an estimate: no
-           language model reads the drawings and no cached answer is replayed, so the run shows
-           what the deterministic reader supplies by itself. Off by default. -->
-      <label style="display:flex;gap:9px;align-items:center;margin:8px 0;cursor:pointer;text-transform:none;font-family:var(--body);letter-spacing:normal;font-size:inherit">
-        <input id="detOnly" type="checkbox"> <span class="note" style="margin:0"><b>Drawing
-        reader test only, no AI read.</b> No language model reads the drawings and no
-        earlier AI reading is reused. Tests what the drawing reader finds on its own. Not an
-        estimate to quote.</span></label>
+      <!-- ONE READER MODE PER RUN (run modes). Chosen here, never from the runner machine's
+           .env, and said on the run log and the record. Every mode but "Full estimate" is a
+           measurement or a test and its total is not a quote. -->
+      <label class="note" style="display:block;margin:8px 0 4px"><b>Reader mode</b></label>
+      <select id="runMode" style="width:100%;margin-bottom:6px">
+        <option value="">Full estimate: every reader, then the model where they leave gaps</option>
+        <option value="targeted">Targeted: drawing reader first, the model asked only about the gaps</option>
+        <option value="deterministic">Drawing reader only: no AI read (test, not a quote)</option>
+        <option value="solidworks">SolidWorks only: the pack's models through SolidWorks (test, not a quote)</option>
+        <option value="docmgr">Document Manager only: the pack's models through the Document Manager (test, not a quote)</option>
+        <option value="llm">LLM read only: the vision model alone (measurement, not a quote)</option>
+      </select>
+      <p class="note" id="runModeNote" style="margin:0 0 8px">Every reader runs: the BOM reader,
+         DXF flat patterns and SolidWorks where the pack has them, and the model where they do not.</p>
 
       <!-- TWO ESTIMATING BOOKS, SO THE BUTTON HAS TO SAY WHICH ONE. Every rate behind this
            button is a UK rate: UDEF plain stock, UK labour, UK finishing. An estimate for
            work placed in China is a different set of numbers, and the two must not be told
            apart by remembering which one the unlabelled button was. -->
       <button class="btn-run" id="run" disabled>SDI (UK) Intelligence Estimator</button>
+      <!-- A PRE-RUN FOR ESTIMATING (run modes): the same read and route compile as an estimate,
+           in the reader mode chosen above, stopped before the workbook. -->
+      <button class="btn-run btn-measure" id="bPreRun" disabled
+              title="Reads the pack and compiles the routes, then stops: BOMs and Routes only, nothing priced">
+        BOMs &amp; routes pre-run: read and route only, nothing priced</button>
+      <p class="note" style="margin:-4px 0 10px">The BOMs and Routes (spreadsheet and page) for an
+         estimator to check before a full run, in the reader mode above. No workbook; nothing priced is shown.</p>
 
       <!-- LLM-ONLY: A MEASUREMENT, AND IT HAS TO LOOK LIKE ONE.
            UNDER THE PACK ESTIMATOR, WHICH IS THE BUTTON IT IS AN ALTERNATIVE TO. Same job,
@@ -2258,6 +2271,7 @@ function refresh(){
   destPath.innerHTML = show ? show : '<span class="pending">Enter a client and drawing number</span>';
 
   runBtn.disabled = running || missing.length > 0;
+  if($("bPreRun")) $("bPreRun").disabled = runBtn.disabled;
   /* THE SAME GATE AS THE PACK ESTIMATOR, because it is the same job, the same Drawings
      panel and the same endpoint — only the reader differs. Gating it separately is how one
      button becomes pressable in a state the other has already refused. `running` covers
@@ -3672,7 +3686,18 @@ $("release").onclick = async () => {
   }
 };
 
+const RUN_MODE_NOTE = {
+  "": "Every reader runs: the BOM reader, DXF flat patterns and SolidWorks where the pack has them, and the model where they do not.",
+  "targeted": "The drawing reader runs first. The whole-pack model read, the vision BOM reader, page vision and DXF interpretation are off; the model is asked one question per gap, on that part's own pages, and every ask is on the record.",
+  "deterministic": "No language model reads the drawings and no earlier AI reading is reused. Tests what the drawing reader finds on its own. Not an estimate to quote.",
+  "solidworks": "The pack's models are read by the SolidWorks analyser alone; no language model. The PDF text is still read for the parts list and title blocks. Not an estimate to quote.",
+  "docmgr": "The pack's models are read by the SolidWorks Document Manager alone; no language model, no COM analyser. Needs the Document Manager key on the runner. Not an estimate to quote.",
+  "llm": "The vision model reads the pack alone: no deterministic BOM reader, DXF or SolidWorks. It produces a total; do not quote it or compare it with a normal run's."};
+$("runMode").onchange = () => { $("runModeNote").textContent = RUN_MODE_NOTE[$("runMode").value] || ""; };
+$("bPreRun").onclick = () => { if($("bPreRun").disabled) return; window._preRunNext = true;
+  runBtn.onclick(); };
 runBtn.onclick = async () => {
+  const _preRun = !!window._preRunNext; window._preRunNext = false;
   if(running || runBtn.disabled) return;
   /* THE SCOPE, SHOWN BEFORE IT IS SENT (D-604). The HPP 01:12 run of 31 Oct went out as
      Samsung / TG_Standalone with no brief and no reference document. Why is not known (old
@@ -3694,8 +3719,9 @@ runBtn.onclick = async () => {
               + "  REFERENCE/STANDARDS: " + (_refNames.join(", ") || "(none)") + "\n"
               + "  ENQUIRY BRIEF: " + (_bLen ? _bLen + " chars" : "(none)") + "\n"
               + "  DELIVERY: " + ($("delivRequired").checked ? "required" : "not required") + "\n\n"
-              + "Every reader runs: the BOM reader, DXF flat patterns and SolidWorks where the "
-              + "pack has them, and the vision read where it does not.\n\nRun it?")) return; }
+              + "READER MODE: " + ($("runMode").selectedOptions[0] || {}).text + "\n"
+              + (_preRun ? "PRE-RUN: BOMs and routes only, no workbook, nothing priced.\n" : "")
+              + "\n" + (RUN_MODE_NOTE[$("runMode").value] || "") + "\n\nRun it?")) return; }
   /* AN EMPTY BRIEF BOX IS A DECISION, NOT A DEFAULT (D-473, D-604): the service removes the
      brief an earlier run filed, so an emptied box changes what the vision read is told. */
   if(!($("enquiryBrief").value || "").trim()
@@ -3727,7 +3753,9 @@ runBtn.onclick = async () => {
     files: drawings.filter(d => !d.is_dir).map(d => d.path),
     output_root: OUTPUT_ROOT,
     // D-753: the drawing reader on its own, when ticked; otherwise the method stays the default.
-    method: (document.getElementById("detOnly") || {}).checked ? "deterministic" : undefined,
+    // Run modes: the reader mode chosen on the page; empty is a full estimate.
+    method: ($("runMode").value || undefined),
+    bom_routes_only: _preRun,
     deliverables: true,                   // --deliverables, always
     // The optional parity partner. null means no comparison was asked for and the run is
     // exactly as it was before this existed.

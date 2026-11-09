@@ -372,7 +372,8 @@ def engine_command(engine_root: Path, engine_python: Path, job: Path,
                    quantity_breaks: Optional[List[int]] = None,
                    manual_workbook: Optional[Path] = None,
                    llm_only: bool = False, fresh_read: bool = False,
-                   product: str = "", deterministic_only: bool = False) -> List[str]:
+                   product: str = "", deterministic_only: bool = False,
+                   reader_mode: str = "", bom_routes_out: Optional[Path] = None) -> List[str]:
     """Exactly what a person would type. --deliverables is not optional: the page
     promises a complete set every time, so it is not a flag the caller can forget.
 
@@ -429,7 +430,17 @@ def engine_command(engine_root: Path, engine_python: Path, job: Path,
         # THE DRAWING READER ON ITS OWN (D-753). No language model reads the drawings and no
         # cached answer from one is replayed: the SCRUM-194 test, never an estimate to quote.
         ["--deterministic-only"] if deterministic_only else []
+    ) + (
+        # ONE READER MODE PER RUN, CHOSEN ON THE PAGE (run modes): never from this machine's .env.
+        [READER_MODE_FLAG[reader_mode]] if reader_mode in READER_MODE_FLAG else []
+    ) + (
+        # A PRE-RUN: the BOMs and Routes, then stop before the workbook.
+        ["--bom-routes-only", "--bom-routes-out", str(bom_routes_out)] if bom_routes_out else []
     )
+
+
+READER_MODE_FLAG = {"targeted": "--targeted", "solidworks": "--solidworks-only",
+                    "docmgr": "--docmgr-only"}
 
 
 # ── one runner per machine, advisory ─────────────────────────────────────────
@@ -851,7 +862,7 @@ _SERVICE_COMMIT: Dict[str, str] = {}
 # every claim. "sw_extract": the SolidWorks analyser on the pack, organised; "xai_extract": the
 # whole-document xAI read on the pack's PDFs, exactly as returned and laid out as tables.
 # "dm_extract" (D-737) is added by runner_capabilities() only where the Document Manager key is.
-RUNNER_CAPABILITIES = ("sw_extract", "xai_extract")
+RUNNER_CAPABILITIES = ("sw_extract", "xai_extract", "bom_routes")
 
 
 # ── SEVERAL RUNS ON ONE DESKTOP (SCRUM-183 phase 2, D-731) ────────────────────────────
@@ -1447,7 +1458,10 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
     # A PACK EXTRACT IS NOT AN ESTIMATE (D-640): no template, no workbook check, nothing
     # filed to the briefs or parity areas. One command, and exactly the files it names; the
     # launch, the lease, the console and Stop are the estimate's own.
-    extract_job = str(job.get("job_type") or "") in PACK_EXTRACT_KIND
+    # A PRE-RUN (job_type bom_routes) files like an extract: the files its PACK_EXTRACT_OUTPUTS
+    # line names, no template, no workbook check.
+    pre_run = str(job.get("job_type") or "") == "bom_routes"
+    extract_job = str(job.get("job_type") or "") in PACK_EXTRACT_KIND or pre_run
 
     tpl = workbook_template()
     if not extract_job and not Path(tpl).is_file():
@@ -1468,8 +1482,10 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
                          llm_only=bool(job.get("llm_only")),
                          fresh_read=bool(job.get("fresh_read")),
                          product=str(job.get("drawing_number") or ""),
-                         deterministic_only=bool(job.get("deterministic_only")))
-    if extract_job:
+                         deterministic_only=bool(job.get("deterministic_only")),
+                         reader_mode=str(job.get("reader_mode") or ""),
+                         bom_routes_out=Path(str(job["output_path"])) if pre_run else None)
+    if extract_job and not pre_run:
         cmd = pack_extract_command(engine_root, engine_python, job)
     say("$ " + " ".join(f'"{c}"' if " " in c else c for c in cmd))
     flush(force=True)
@@ -1526,7 +1542,7 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
         filed = pack_extract_outputs(log)
         if code != 0 or not filed:
             _finish(requests, base, headers, run_id, runner_id, "error",
-                    f"The pack extract exited with code {code} and wrote "
+                    f"The {'pre-run' if pre_run else 'pack extract'} exited with code {code} and wrote "
                     f"{len(filed)} file(s) — the log above says why.", log, filed)
             return
         _finish(requests, base, headers, run_id, runner_id, "done", "", log, filed)

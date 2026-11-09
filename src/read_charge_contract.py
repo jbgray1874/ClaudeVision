@@ -997,7 +997,11 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
             return
         if ruled(item):
             return
-        if what == "folds":
+        if what.startswith("thread"):
+            work_state(item, "tapping", pn)
+        elif what == "countersink":
+            work_state(item, "countersinking", pn)
+        elif what == "folds":
             work_state(item, "folding", pn)
         elif what == "banded edges":
             work_state(item, "edge_banding", pn)
@@ -1029,7 +1033,10 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                  int(fcc.number(c.get("count")) or 0))
                 for c in (rec.get("concept_cutout_dims") or []) if isinstance(c, Mapping)
                 and str(c.get("what") or "").lower().startswith("hole")]
-        held += [(fcc.number(d) or 0, 0) for d in (rec.get("hole_sizes_mm") or [])]
+        held += [(fcc.number(f.get("diameter_mm")) or 0, int(fcc.number(f.get("count")) or 0))
+                 for f in (rec.get("stated_features") or []) if isinstance(f, Mapping) and f.get("kind") == "hole"]
+        if not any(n for _d, n in held):
+            held += [(fcc.number(d) or 0, 0) for d in (rec.get("hole_sizes_mm") or [])]
         size = f"Ø{dia:g}" if dia else "the"
         match = [h for h in held if not dia or abs(h[0] - dia) <= 0.25]
         if not match:
