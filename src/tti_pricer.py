@@ -411,10 +411,17 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         a, _, b = args.rows.partition("-")
         rows = (int(a), int(b or a))
     data = read_rows(sheet, cols, rows, args.sheet_name)
-    design = Path(os.getenv("SDI_TTI_DESIGN_ROOT") or DEFAULT_DESIGN)
-    proto = Path(os.getenv("SDI_TTI_PROTOTYPE_ROOT") or DEFAULT_PROTOTYPE)
+    from drive_map import to_unc
+    design = Path(to_unc(os.getenv("SDI_TTI_DESIGN_ROOT") or DEFAULT_DESIGN))
+    proto = Path(to_unc(os.getenv("SDI_TTI_PROTOTYPE_ROOT") or DEFAULT_PROTOTYPE))
     _FILES.clear()
     _MTIME.clear()
+    if not args.dry_run and not design.is_dir() and not proto.is_dir():
+        # Every row would fall to an LLM estimate for want of a readable share, not of drawings.
+        raise SystemExit(f"Neither drawing area can be read from here ({design}; {proto}), so every row "
+                         f"would be priced without its drawings. Nothing was queued or written. Set "
+                         f"SDI_DRIVE_MAP (W=\\\\server\\share) or the two SDI_TTI_*_ROOT settings, and run "
+                         f"--dry-run until rows show their folders.")
     listings, source = area_listings(design, proto)
     out_root = inputs_root() / re.sub(r"[^\w .-]", "_", sheet.stem)
     report: Dict[str, Any] = {"sheet": str(sheet), "tab": data["sheet"], "header_row": data["header_row"],

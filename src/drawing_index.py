@@ -45,11 +45,15 @@ SKIP = re.compile(r"\b(archive|archived|old|superseded|backup|back up|obsolete|r
                   re.IGNORECASE)
 DEFAULT_ROOTS = r"W:\Design\Customers April 08 Onwards|W:\Prototype"
 
+sys.path.insert(0, str(HERE))
+from drive_map import to_unc  # noqa: E402  (W:\ as its network path where the letter is not mapped)
+
 
 def settings(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     e = env if env is not None else os.environ
     return {
-        "roots": [Path(r.strip()) for r in (e.get("SDI_DRAWING_INDEX_ROOTS") or DEFAULT_ROOTS).split("|") if r.strip()],
+        "roots": [Path(to_unc(r.strip(), e)) for r in (e.get("SDI_DRAWING_INDEX_ROOTS") or DEFAULT_ROOTS).split("|")
+                  if r.strip()],
         "path": Path(e.get("SDI_DRAWING_INDEX") or (HERE.parent / "output" / "drawing_index" / "index.json.gz")),
         "depth": max(1, int(e.get("SDI_DRAWING_INDEX_DEPTH") or 10)),
         "max_hours": float(e.get("SDI_DRAWING_INDEX_MAX_HOURS") or 26),

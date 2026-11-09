@@ -293,3 +293,13 @@ def test_a_job_folder_named_by_job_number_is_used_when_no_file_carries_the_drawi
     assert f["match"] == "job folder" and f["folder"] == str(job / "Technical")
     assert [Path(x).name for x in f["files"]] == ["GA sheet.pdf"]
     assert tp.find_drawings("TTI-10234", listings)["match"] == "drawing number", "a named drawing still wins"
+
+
+def test_nothing_is_priced_when_neither_drawing_area_can_be_read(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)
+    monkeypatch.setenv("SDI_TTI_DESIGN_ROOT", str(tmp_path / "gone1"))
+    monkeypatch.setenv("SDI_TTI_PROTOTYPE_ROOT", str(tmp_path / "gone2"))
+    portal = FakePortal()
+    with pytest.raises(SystemExit) as exc:
+        tp.run_batch(_args(sheet), portal=portal, status_path=None, sleep=lambda s: None)
+    assert "Nothing was queued or written" in str(exc.value) and portal.started == []
