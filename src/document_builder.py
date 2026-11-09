@@ -1212,7 +1212,25 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                     # One detail sheet is enough, whatever else the part is bound to: the
                     # cross rail is listed on the support sheet and drawn on its own, and the
                     # text path across both read 120 and then 304 from the notes block.
+                    # THE LENGTH THE PART'S OWN SHEET CALLS OVERALL (D-761). 0358141's upright
+                    # M4 prints "1383 O/A" on its own sheet (the PDF text: "1383 O A"); the
+                    # text read took 111.85, a slot's position, and M4 was cut at 112 mm. A
+                    # single overall figure on the part's one detail sheet, at least twice the
+                    # section's side, is its length; the printed words are kept beside it.
+                    _oa_done = False
                     if len(_detail_pages) == 1:
+                        _oa_text = str(page_lookup[_detail_pages[0]].get("text") or "").upper()
+                        _oa = {float(v) for v in re.findall(
+                            r"(?<![\d.])(\d{2,5}(?:\.\d+)?)\s*O\s*/?\s*A(?![A-Z])", _oa_text)}
+                        _side_oa = max(float(_sec.get("a") or 0), float(_sec.get("b") or 0))
+                        if len(_oa) == 1 and next(iter(_oa)) >= _side_oa * 2 > 0:
+                            _len_oa = next(iter(_oa))
+                            if _sec.get("length_mm") is None or abs(float(_sec.get("length_mm")) - _len_oa) > 1.0:
+                                _sec = dict(_sec, length_mm=_len_oa, length_source="detail_sheet_overall",
+                                            length_from_text=_sec.get("length_mm"),
+                                            length_printed=f"{_len_oa:g} O/A")
+                            _oa_done = True
+                    if len(_detail_pages) == 1 and not _oa_done:
                         try:
                             from detail_page_geometry import read_sheet_figures as _figs
                             _fig = _figs(page_lookup[_detail_pages[0]].get("page") or {})

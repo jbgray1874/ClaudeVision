@@ -2101,8 +2101,8 @@ _OPERATION_CUE_WORDS: Dict[str, tuple] = {
     "welding": ("WELD", "TIG", "MIG"),
     "dress_welds": ("DRESS",),
     "wet_spray": ("WET SPRAY", "SPRAY PAINT", "LACQUER", "PAINT"),
-    "tapping": ("TAPPED", "TAP ", "M TAP"),
-    "countersinking": ("COUNTERSINK", "CSK", "C'SINK"),
+    "tapping": ("TAPPED", "TAP ", "M TAP", "X0.5", "X 0.5", "X0.7", "X 0.7", "X0.8", "X 0.8", "X1.0", "X 1.0", "X1.25", "X 1.25", "X1.5", "X 1.5", "X1.75", "X 1.75", "X2.0", "X 2.0"),
+    "countersinking": ("COUNTERSINK", "CSK", "C'SINK", "X 90", "X90", "X 82", "X82", "X 100", "X100", "X 120", "X120"),
     "deburring": ("DEBURR", "SHARP CORNER", "SHARP EDGE", "REMOVE ANY SHARP"),
     "diamond_polish": ("DIAMOND POLISH", "MATT POLISH", "MIRROR POLISH", "FLAME POLISH",
                        "EDGE POLISH", "POLISH"),
@@ -2185,9 +2185,12 @@ def build_textual_manufacturing_summary(
     process_notes = extract_process_notes(notes_source)
     page_material = " ".join(title_block.get("materials", []))
     finishes = list(title_block.get("surface_finishes") or [])
+    # AN ANGLE IS NOT A FOLD, AT PAGE LEVEL AS AT PART LEVEL (D-511, closed off by D-762).
+    # The text rule stopped taking a bare angle for a fold; this flag still did, and 0358141's
+    # flat 3 mm rub strips, whose only angle is the countersink's "6.3 X 90.00°", were routed
+    # through folding on a one-fold allowance. A fold needs fold values or a counted fold.
     has_fold_geometry = bool(
         feature_cues.get("fold_values_mm")
-        or feature_cues.get("angles_deg")
         or feature_cues.get("fold_count_textual")
     )
     # THE STANDING SPECIFICATION IS NOT A ROUTE CUE, AT PAGE LEVEL AS AT PART LEVEL (D-438).

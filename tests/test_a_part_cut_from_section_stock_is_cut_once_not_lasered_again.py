@@ -53,7 +53,9 @@ def _part(pn, ops, **extra):
 def test_a_stock_part_already_cut_to_length_is_not_lasered_as_well(evidence, cut):
     d = _decisions(_part("J-01", ["laser_cutting", cut], **evidence))
     assert d[cut]["status"] == rc.REQUIRED, "the cut itself stands"
-    assert d["laser_cutting"]["status"] == rc.NOT_APPLICABLE
+    # Since D-762 a section part takes no laser from the sheet default at all, so there may
+    # be no laser decision to rule out; either way it is not lasered.
+    assert d.get("laser_cutting") is None or d["laser_cutting"]["status"] == rc.NOT_APPLICABLE
     assert "a second time" in d["laser_cutting"]["reason"] or \
         "cut from a stock length" in d["laser_cutting"]["reason"] or \
         "cut by the tube process" in d["laser_cutting"]["reason"]
@@ -134,7 +136,9 @@ def test_the_outer_frame_is_cut_once_on_the_tube_cut_its_route_names(_no_catalog
     assert "Cut to length on the tube cut" in part["section_costing_adjustment"]["note"]
     d = _decisions(part)
     assert d["tube_cut"]["status"] == rc.REQUIRED
-    assert d["laser_cutting"]["status"] == rc.NOT_APPLICABLE
+    # Since D-762 a section part takes no laser from the sheet default at all, so there may
+    # be no laser decision to rule out; either way it is not lasered.
+    assert d.get("laser_cutting") is None or d["laser_cutting"]["status"] == rc.NOT_APPLICABLE
     cuts = [op for op, x in d.items() if op in ("tube_cut", "saw", "laser_cutting", "guillotine")
             and x["status"] == rc.REQUIRED]
     assert cuts == ["tube_cut"], cuts
@@ -148,7 +152,9 @@ def test_the_cross_bar_is_sawn_once_and_not_lasered(_no_catalogue):
     E.estimate_part(part, job_quantity=1)
     d = _decisions(part)
     assert d["saw"]["status"] == rc.REQUIRED
-    assert d["laser_cutting"]["status"] == rc.NOT_APPLICABLE
+    # Since D-762 a section part takes no laser from the sheet default at all, so there may
+    # be no laser decision to rule out; either way it is not lasered.
+    assert d.get("laser_cutting") is None or d["laser_cutting"]["status"] == rc.NOT_APPLICABLE
 
 
 def test_the_arm_read_as_round_bar_is_not_lasered(_no_catalogue):
@@ -156,6 +162,8 @@ def test_the_arm_read_as_round_bar_is_not_lasered(_no_catalogue):
                  hole_sizes_mm=["5"], overall_length_mm=153.1, weights=["0.02KG"])
     E.estimate_part(part, job_quantity=1)
     d = _decisions(part)
-    assert d["laser_cutting"]["status"] == rc.NOT_APPLICABLE
+    # Since D-762 a section part takes no laser from the sheet default at all, so there may
+    # be no laser decision to rule out; either way it is not lasered.
+    assert d.get("laser_cutting") is None or d["laser_cutting"]["status"] == rc.NOT_APPLICABLE
     assert "wire" in d["laser_cutting"]["reason"]
     assert d["saw"]["status"] == rc.REQUIRED, "a bar cut from stock is cut (D-586)"

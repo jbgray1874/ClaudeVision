@@ -303,8 +303,14 @@ FLAT_PATTERN_PATTERN = r"\bFLAT\s+PATTERN\b"
 SLOT_PATTERN = r"\bSLOT\b"
 LASER_PATTERN = r"\bLASER\b"
 WELD_PATTERN = r"\bWELD(?:ED|ING)?\b"
-TAP_PATTERN = r"\bTAP(?:PED|PING)?\b"
-CSK_PATTERN = r"\b(?:CSK|COUNTERSINK(?:ING)?)\b"
+# A THREAD CALLOUT WITH ITS PITCH IS A TAPPED HOLE (D-762): "(9x) M3x0.5", "M8 x 1.25".
+# A bolt's length is not a pitch ("M3 x 10mm", "M8 x 22"): the pitch is a decimal under 10.
+TAP_PATTERN = r"\bTAP(?:PED|PING)?\b|\bM\d{1,2}\s*[xX]\s*\d\.\d{1,2}\b(?!\s*MM)"
+# A COUNTERSINK ANGLE IS A COUNTERSINK (D-762): "6.3 X 90.00°" after a THRU hole, as the
+# drafting font prints the symbol. "CSK" in a fastener's name ("M3 x 10mm S/S CSK BOLT")
+# is the bolt's head style, not work on the part that lists it.
+CSK_PATTERN = (r"\b(?:CSK|COUNTERSINK(?:ING)?)\b(?!\s*(?:BOLT|SCREW|SET\s*SCREW|RIVET|HEAD)S?\b)"
+               r"|\d+(?:\.\d+)?\s*[xX]\s*(?:82|90|100|120)(?:\.0+)?\s*(?:°|DEG\b)")
 DRILL_PATTERN = r"\bDRILL(?:ED|ING)?\b"
 PUNCH_PATTERN = r"\bPUNCH(?:ED|ING)?\b"
 DEBURR_PATTERN = r"\bDEBURR\b"
