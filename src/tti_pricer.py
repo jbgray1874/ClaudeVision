@@ -48,6 +48,32 @@ DRAWING_EXT = {".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step",
 SKIP = re.compile(r"\b(archive|archived|superseded|old|backup|obsolete)\b", re.IGNORECASE)
 DEFAULT_DESIGN = r"W:\Design\Customers April 08 Onwards\TTI"
 DEFAULT_PROTOTYPE = r"W:\Prototype\TTi"
+HEADER = re.compile(r"^\s*(drawing|dwg)\s*(number|no\.?|num|#|ref(erence)?)?\s*$", re.IGNORECASE)
+_REF = re.compile(r"(?<![0-9A-Za-z])(?:[A-Za-z]{1,4}-)?\d{3,}[A-Za-z]?(?:-[A-Za-z0-9]+)*")
+
+
+def drawing_ref(cell: str) -> str:
+    """The drawing number in a cell that may say more: "12535-00-GA REV A (LARGER GRAPHICS)" is
+    12535-00-GA, "7438 AS BASE" is 7438, "N/A" is nothing."""
+    m = _REF.search(str(cell or ""))
+    return m.group(0).upper() if m else ""
+
+
+def job_folders(ref: str, listings: List[Tuple[str, List[Path]]], limit: int = 3) -> List[str]:
+    """Where a drawing that was not found might be: folders naming its job number. Reported, never
+    priced from, so a naming difference can be seen and fixed rather than guessed at."""
+    job = re.search(r"\d{3,}", ref or "")
+    if not job:
+        return []
+    pat = re.compile(r"(?<![0-9])" + job.group(0) + r"(?![0-9])")
+    out: List[str] = []
+    for _area, folders in listings:
+        for f in folders:
+            if pat.search(f.name):
+                out.append(str(f))
+                if len(out) >= limit:
+                    return out
+    return out
 
 
 def col_index(letter: str) -> int:
@@ -66,11 +92,20 @@ def read_rows(sheet: Path, cols: Dict[str, str], rows: Optional[Tuple[int, int]]
     wb = openpyxl.load_workbook(sheet, data_only=True)
     ws = wb[sheet_name] if sheet_name else wb.active
     dcol = col_index(cols["drawing"])
+    # THE HEADER IS THE CELL THAT NAMES THE COLUMN, not the first one mentioning drawings: a
+    # title row above it ("... drawings ...") was taken for the header once, and the real header
+    # row then priced as a job called "Drawing Number" (9 Nov 2026 dry run).
     header_row = None
     for r in range(1, min(ws.max_row, 20) + 1):
-        if re.search(r"draw", str(ws.cell(r, dcol).value or ""), re.IGNORECASE):
+        if HEADER.match(str(ws.cell(r, dcol).value or "")):
             header_row = r
             break
+    if header_row is None:
+        for r in range(1, min(ws.max_row, 20) + 1):
+            v = str(ws.cell(r, dcol).value or "")
+            if re.search(r"draw|dwg", v, re.IGNORECASE) and len(v) <= 40:
+                header_row = r
+                break
     if header_row is None:
         raise SystemExit(f"No header naming the drawing number in column {cols['drawing']} in the "
                          f"first 20 rows of {sheet.name} ({ws.title}). Pass --col-drawing.")
@@ -95,6 +130,8 @@ def read_rows(sheet: Path, cols: Dict[str, str], rows: Optional[Tuple[int, int]]
     first, last = rows if rows else (header_row + 1, ws.max_row)
     for r in range(max(first, header_row + 1), min(last, ws.max_row) + 1):
         drawing = str(ws.cell(r, dcol).value or "").strip()
+        if HEADER.match(drawing):
+            continue                                        # a repeated header row is not a job
         notes = str(ws.cell(r, col_index(cols["notes"])).value or "").strip()
         desc = str(ws.cell(r, desc_c).value or "").strip() if desc_c else ""
         if not (drawing or notes or desc or pics.get(r)):
@@ -103,7 +140,7 @@ def read_rows(sheet: Path, cols: Dict[str, str], rows: Optional[Tuple[int, int]]
             qty = int(float(ws.cell(r, qty_c).value)) if qty_c and ws.cell(r, qty_c).value else 1
         except (TypeError, ValueError):
             qty = 1
-        out.append({"row": r, "drawing": drawing, "notes": notes, "description": desc,
+        out.append({"row": r, "drawing": drawing_ref(drawing), "drawing_cell": drawing, "notes": notes, "description": desc,
                     "quantity": max(1, qty), "pictures": pics.get(r, []),
                     "cost_before": ws.cell(r, col_index(cols["cost"])).value})
     return {"sheet": ws.title, "header_row": header_row,
@@ -244,7 +281,9 @@ class SheetWriter:
 def brief_for(r: Dict[str, Any]) -> str:
     parts = [f"TTI job, sheet row {r['row']}."]
     if r.get("drawing"):
-        parts.append(f"Drawing number {r['drawing']}.")
+        cell = str(r.get("drawing_cell") or "")
+        extra = f" (the sheet says: {cell})" if cell and cell.upper() != r["drawing"] else ""
+        parts.append(f"Drawing number {r['drawing']}{extra}.")
     if r.get("description"):
         parts.append(f"Description: {r['description']}.")
     if r.get("notes"):
@@ -310,7 +349,9 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                               "header": data["header"], "started": datetime.now().isoformat(timespec="seconds"),
                               "dry_run": bool(args.dry_run), "method": args.method,
                               "roots": {"design": str(design), "design_readable": design.is_dir(),
-                                        "prototype": str(proto), "prototype_readable": proto.is_dir()},
+                                        "design_folders": len(listings[0][1]),
+                                        "prototype": str(proto), "prototype_readable": proto.is_dir(),
+                                        "prototype_folders": len(listings[1][1])},
                               "rows": []}
 
     def save() -> None:
@@ -319,16 +360,38 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             status_path.write_text(json.dumps(report, indent=1, default=str), encoding="utf-8")
 
     writer = None if args.dry_run else SheetWriter(sheet, args.sheet_name or "", args.col_cost)
+    priced: Dict[Tuple[str, int], Dict[str, Any]] = {}
     for r in data["rows"]:
         found = find_drawings(r["drawing"], listings) if r["drawing"] else {}
-        item = {"row": r["row"], "drawing": r["drawing"], "quantity": r["quantity"],
+        item = {"row": r["row"], "drawing": r["drawing"], "drawing_cell": r.get("drawing_cell", r["drawing"]),
+                "quantity": r["quantity"],
                 "kind": "full estimate" if found else "LLM estimate (no drawings found)",
                 "found": {k: v for k, v in found.items() if k != "files"} if found else None,
                 "files": len(found.get("files") or []) if found else 0,
                 "thumbnails": len(r["pictures"]), "cost_before": r["cost_before"], "state": "planned"}
+        if not found and r["drawing"]:
+            item["job_folders"] = job_folders(r["drawing"], listings)
         report["rows"].append(item)
         save()
+        # THE SAME DRAWING AT THE SAME QUANTITY IS PRICED ONCE PER BATCH; later rows take its cost.
+        same = priced.get((r["drawing"], r["quantity"])) if r["drawing"] else None
+        if same is not None:
+            item.update(state="same as row %d" % same["row"], same_as_row=same["row"])
+            if args.dry_run or same.get("unit_cost") is None:
+                save()
+                continue
         if args.dry_run:
+            if r["drawing"]:
+                priced[(r["drawing"], r["quantity"])] = item
+            continue
+        if same is not None:
+            item["unit_cost"] = same["unit_cost"]
+            try:
+                writer.write(r["row"], same["unit_cost"])
+                item["written"] = f"{args.col_cost}{r['row']} = {same['unit_cost']}"
+            except OSError as exc:
+                item["why"] = f"{args.col_cost}{r['row']} could not be written ({exc})"
+            save()
             continue
         name = re.sub(r"[^\w .-]", "_", r["drawing"] or f"row{r['row']}")
         inputs = copy_inputs(found.get("files") or [], [] if found else r["pictures"], out_root / f"row{r['row']}_{name}")
@@ -350,6 +413,8 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         st = wait_for(portal, item["run_id"], sleep=sleep)
         cost = unit_cost_of(st, r["quantity"])
         item.update(state=str(st.get("status")), unit_cost=cost, output=st.get("output_path") or st.get("output"))
+        if r["drawing"]:
+            priced[(r["drawing"], r["quantity"])] = item
         if cost is not None and str(st.get("status")) == "done":
             try:
                 writer.write(r["row"], cost)
@@ -400,11 +465,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         portal = ler.Portal(args.server, args.api_key, timeout=120)
     status = Path(args.status_file) if args.status_file else (ROOT / "output" / "tti" / "last_tti_run.json")
     rep = run_batch(args, portal, status)
+    ro = rep["roots"]
+    for k in ("design", "prototype"):
+        state = f"{ro[k + '_folders']} folder(s)" if ro[k + "_readable"] else "NOT READABLE from this window"
+        print(f"{k:<10} {ro[k]}  {state}", flush=True)
+    print(f"header row {rep['header_row']} ({rep['header'].get('drawing')}); {len(rep['rows'])} job row(s)", flush=True)
+    found = 0
     for it in rep["rows"]:
-        where = (it.get("found") or {}).get("folder") or "no drawings found"
-        print(f"row {it['row']:>4}  {it['drawing'] or '(none)':<20} {it['kind']:<34} {it['state']:<10} "
+        where = (it.get("found") or {}).get("folder")
+        found += bool(where)
+        if not where:
+            near = it.get("job_folders") or []
+            where = ("not found; job folder(s): " + " | ".join(near)) if near else "no drawings found"
+        cell = it.get("drawing_cell") or ""
+        shown = it["drawing"] or "(none)"
+        if cell and cell.upper() != it["drawing"]:
+            shown += f" [{cell[:30]}]"
+        print(f"row {it['row']:>4}  {shown:<28} {it['kind']:<34} {it['state']:<12} "
               f"{it.get('unit_cost', '') if it.get('unit_cost') is not None else ''}  {where}", flush=True)
-    print(f"status file: {status}", flush=True)
+    print(f"{found} of {len(rep['rows'])} row(s) have drawings; status file: {status}", flush=True)
     return 0
 
 
