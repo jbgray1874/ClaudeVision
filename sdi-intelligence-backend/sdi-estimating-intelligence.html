@@ -921,6 +921,31 @@
       <div id="selfOut" class="sub" style="margin-top:8px;font-size:13px"></div>
     </section>
 
+    <!-- ══ TTI PRICER (JG, 9 Nov 2026) ════════════════════════════════
+         One TTI job per row of a tracker sheet. Drawings found under the design and prototype
+         areas get a full estimate; a row with none gets an LLM estimate from its notes and
+         thumbnails. Each unit cost goes in the AICost column; the workings file as usual. -->
+    <section class="card" id="ttiCard">
+      <h2>TTI pricer</h2>
+      <p class="sub" style="margin:0 0 10px">Prices every row of a TTI tracker. The drawing number
+        (column <b>L</b>) is looked for under <b>W:\Design\Customers April 08 Onwards\TTI</b>, then
+        <b>W:\Prototype\TTi</b>, preferring a <b>Technical</b> folder and the newest drawings. Found:
+        a full estimate. Not found: an LLM estimate from the notes (column <b>G</b>) and the thumbnails
+        (columns <b>I</b>, <b>J</b>), labelled so. The unit cost is written to column <b>P (AICost)</b>,
+        replacing any earlier figure; the detailed workings file to the usual folders, client TTI.
+        Run <b>Find drawings only</b> first: it changes nothing.</p>
+      <label class="note" style="display:block;margin:4px 0">Tracker workbook (full path)</label>
+      <input id="ttiSheet" style="width:100%" value="C:\Users\james.gray\Documents\Downloads\TRACKER - MILWAUKEE AMSTERDAM CONFERENCE 2027.xlsx">
+      <div style="display:flex;gap:8px;margin:8px 0;flex-wrap:wrap">
+        <input id="ttiRows" placeholder="rows, e.g. 5-12 (blank: all)" style="flex:1;min-width:160px">
+        <select id="ttiMethod"><option value="both">Full estimate</option><option value="targeted">Targeted</option><option value="deterministic">Drawing reader only (test)</option></select>
+      </div>
+      <button class="btn-run btn-measure" id="ttiFind" type="button">Find drawings only (changes nothing)</button>
+      <button class="btn-run" id="ttiGo" type="button">Price the sheet and fill AICost</button>
+      <p class="note" id="ttiStatus"></p>
+      <div id="ttiOut" class="sub" style="margin-top:8px;font-size:13px"></div>
+    </section>
+
     <!-- ══ DRAWINGS ═════════════════════════════════════════════════ -->
     <section class="card">
       <h2>Drawings</h2>
@@ -3596,6 +3621,34 @@ $("release").onclick = async () => {
   }
 };
 
+/* TTI PRICER: start the batch in the service, then read its status file back every 10 s. */
+let ttiTimer = null;
+const ttiEsc = t => String(t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+function ttiRender(st){
+  const rows = st.rows || [];
+  $("ttiStatus").textContent = (st.dry_run ? "Find drawings only" : "Pricing") + ` · ${rows.length} row(s)`
+    + (st.finished ? " · finished " + st.finished.slice(11, 16) : st.state === "starting" ? " · starting" : " · working")
+    + (st.roots && !st.roots.design_readable ? " · DESIGN AREA NOT READABLE FROM THIS SERVICE: " + st.roots.design : "");
+  $("ttiOut").innerHTML = rows.length ? `<table class="tbl"><tr><th>Row</th><th>Drawing</th><th>Estimate</th><th>Drawings found in</th><th>State</th><th>AICost</th></tr>`
+    + rows.map(r => `<tr><td>${r.row}</td><td>${ttiEsc(r.drawing || "")}</td><td>${ttiEsc(r.kind || "")}</td>
+        <td title="${ttiEsc((r.found || {}).folder || "")}">${ttiEsc(((r.found || {}).folder || "").split("\\").slice(-3).join("\\") || "—")}${r.files ? " (" + r.files + " file(s))" : ""}${r.thumbnails ? " · " + r.thumbnails + " thumbnail(s)" : ""}</td>
+        <td>${ttiEsc(r.state || "")}${r.why ? " · " + ttiEsc(r.why) : ""}</td><td>${r.unit_cost != null ? "£" + Number(r.unit_cost).toFixed(2) : ""}</td></tr>`).join("") + "</table>"
+    : `<pre style="white-space:pre-wrap">${ttiEsc(st.log_tail || "")}</pre>`;
+  if(st.finished && ttiTimer){ clearInterval(ttiTimer); ttiTimer = null; }
+}
+async function ttiStart(dry){
+  if(!dry && !confirm("Price every chosen row and write each unit cost into column P (AICost) of the sheet?\n\nClose the workbook in Excel first.")) return;
+  $("ttiStatus").textContent = "starting…"; $("ttiOut").innerHTML = "";
+  const r = await api("/api/estimate/tti/run", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({sheet: $("ttiSheet").value.trim(), rows: $("ttiRows").value.trim(), method: $("ttiMethod").value, dry_run: !!dry})});
+  const j = await r.json().catch(() => ({}));
+  if(!r.ok){ $("ttiStatus").textContent = "Not started: " + (j.detail || r.status); return; }
+  const poll = async () => { const s = await api(j.status_url); if(s.ok) ttiRender(await s.json()); };
+  if(ttiTimer) clearInterval(ttiTimer);
+  ttiTimer = setInterval(poll, 10000); setTimeout(poll, 1500);
+}
+$("ttiFind").onclick = () => ttiStart(true);
+$("ttiGo").onclick = () => ttiStart(false);
 const RUN_MODE_NOTE = {
   "": "Every reader runs: the BOM reader, DXF flat patterns and SolidWorks where the pack has them, and the model where they do not.",
   "targeted": "The drawing reader runs first. The whole-pack model read, the vision BOM reader, page vision and DXF interpretation are off; the model is asked one question per gap, on that part's own pages, and every ask is on the record.",

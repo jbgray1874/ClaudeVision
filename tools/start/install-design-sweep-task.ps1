@@ -6,7 +6,7 @@
         .\tools\start\install-design-sweep-task.ps1 -Remove
 
     WHAT IT RUNS. src\design_sweep.py: every SDI_DESIGN_SWEEP_MINUTES (60) it walks the client
-    folders under SDI_DESIGN_SWEEP_ROOT (W:\ unless set), finds the drawing-pack folders and
+    folders under SDI_DESIGN_SWEEP_ROOT (W:\Design\Customers April 08 Onwards unless set), finds the drawing-pack folders and
     reports the new or changed ones to the portal, which shows them on the control panel under
     NEW DRAWING PACKS. The first sweep records what is already there and flags nothing.
 
@@ -51,8 +51,8 @@ $log = Join-Path $Root "output\design_sweep\sweep.log"
 $envFile = Join-Path $Root ".env"
 $hasRoot = (Test-Path $envFile) -and (Select-String -Path $envFile -Pattern '^\s*SDI_DESIGN_SWEEP_ROOT\s*=' -Quiet)
 if (-not $hasRoot) {
-    Write-Host "SDI_DESIGN_SWEEP_ROOT is not in $envFile, so the sweep reads W:\ ." -ForegroundColor Yellow
-    Write-Host "If the client folders sit lower down, add for example:  SDI_DESIGN_SWEEP_ROOT=W:\Clients" -ForegroundColor Yellow
+    Write-Host "SDI_DESIGN_SWEEP_ROOT is not in $envFile, so the sweep reads W:\Design\Customers April 08 Onwards ." -ForegroundColor Yellow
+    Write-Host "If the client folders move, add for example:  SDI_DESIGN_SWEEP_ROOT=W:\Design\<the folder above the clients>" -ForegroundColor Yellow
 }
 
 $action = New-ScheduledTaskAction -Execute $python `

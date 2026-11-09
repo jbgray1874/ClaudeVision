@@ -1177,7 +1177,9 @@ def parity_rerun(req: ParityRerunRequest, x_sdi_key: Optional[str] = Header(defa
                         "why": "its last run's record names no drawing that is still there"})
             continue
         import shutil
-        hold = estimate_email.state_dir() / "parity_rerun" / f"{re.sub(r'[^0-9A-Za-z-]', '', job)[:40]}_{uuid.uuid4().hex[:6]}"
+        # HELD UNDER THE STAGING SHARE: start() reads only folders inside SDI_FILE_ROOTS, which
+        # the staging root is in; this service's own state folder is not.
+        hold = _held_dir("parity_rerun") / f"{re.sub(r'[^0-9A-Za-z-]', '', job)[:40]}_{uuid.uuid4().hex[:6]}"
         hold.mkdir(parents=True, exist_ok=True)
         files = []
         for f in staged:
@@ -1202,6 +1204,92 @@ def parity_rerun(req: ParityRerunRequest, x_sdi_key: Optional[str] = Header(defa
     return {"requested_by": _caller, "results": out,
             "queued": sum(1 for r in out if r.get("queued")),
             "note": "each comparison is filed when its estimate finishes; it appears under Parity runs"}
+
+
+# ── TTI PRICER (JG, 9 Nov 2026) ──────────────────────────────────────────────────────────
+# src/tti_pricer.py prices each row of a TTI tracker sheet: the drawings found under the design
+# and prototype areas get a full estimate, a row with none gets an LLM estimate from its notes and
+# thumbnails, and each unit cost is written to the sheet's AICost column. Started here, in the
+# background, against this service; its status file is read back by the page.
+_TTI_TASKS: Dict[str, Dict[str, Any]] = {}
+
+
+class TTIRequest(BaseModel):
+    sheet: str
+    rows: str = ""
+    method: str = "both"
+    dry_run: bool = True
+    sheet_name: str = ""
+
+
+def _tti_status_file(tid: str) -> Path:
+    return estimate_email.state_dir() / "tti" / f"{tid}.json"
+
+
+def _held_dir(kind: str) -> Path:
+    """Inputs this service gathers for a run it starts itself (a parity re-estimate, a TTI row):
+    under the staging share, so start() may read them, and never in a client/job folder that
+    staging clears. `_held` is never a client name."""
+    root = staging.staging_root()
+    if not str(root):
+        raise HTTPException(503, "No staging folder is configured (SDI_STAGING_ROOT), so there is "
+                                 "nowhere this service may read the gathered drawings from.")
+    return root / "_held" / kind
+
+
+@router.post("/tti/run")
+def tti_run(req: TTIRequest, request: Request, x_sdi_key: Optional[str] = Header(default=None)):
+    _check_key(x_sdi_key)
+    _engine_ready()
+    sheet = Path(str(req.sheet or "").strip().strip('"'))
+    if sheet.suffix.lower() not in (".xlsx", ".xlsm") or not sheet.is_file():
+        raise HTTPException(400, f"No workbook at {sheet} that this service can read. Check the path, "
+                                 f"and that the file is saved as .xlsx.")
+    if req.method not in ("both", "targeted", "deterministic", "llm"):
+        raise HTTPException(400, f"Unknown method {req.method!r}.")
+    if req.rows and not re.fullmatch(r"\d+(-\d+)?", req.rows.strip()):
+        raise HTTPException(400, "Rows are a sheet row or a range, e.g. 5-12.")
+    tid = uuid.uuid4().hex[:8]
+    status = _tti_status_file(tid)
+    status.parent.mkdir(parents=True, exist_ok=True)
+    status.write_text(json.dumps({"state": "starting", "rows": []}), encoding="utf-8")
+    server = str(request.base_url).rstrip("/")
+    args = [_ENGINE_PYTHON, str(_REPO_ROOT / "src" / "tti_pricer.py"), "--sheet", str(sheet),
+            "--method", req.method, "--server", server, "--status-file", str(status)]
+    if req.rows:
+        args += ["--rows", req.rows.strip()]
+    if req.sheet_name:
+        args += ["--sheet-name", req.sheet_name]
+    if req.dry_run:
+        args.append("--dry-run")
+    env = dict(os.environ)
+    if x_sdi_key:
+        env["SDI_API_KEY"] = x_sdi_key
+    # The drawings and thumbnails each row is priced from are copied where start() may read them.
+    if not env.get("SDI_TTI_INPUTS", "").strip():
+        env["SDI_TTI_INPUTS"] = str(_held_dir("tti"))
+    log = status.with_suffix(".log")
+    with open(log, "w", encoding="utf-8") as fh:
+        subprocess.Popen(args, stdout=fh, stderr=subprocess.STDOUT, env=env, cwd=str(_REPO_ROOT))
+    _TTI_TASKS[tid] = {"sheet": str(sheet), "dry_run": req.dry_run, "started_at": time.time()}
+    return {"task_id": tid, "status_url": f"/api/estimate/tti/{tid}", "dry_run": req.dry_run}
+
+
+@router.get("/tti/{tid}")
+def tti_status(tid: str, x_sdi_key: Optional[str] = Header(default=None)):
+    _check_key(x_sdi_key)
+    if not re.fullmatch(r"[0-9a-f]{8}", tid or ""):
+        raise HTTPException(400, "Bad task id.")
+    f = _tti_status_file(tid)
+    try:
+        body = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise HTTPException(404, "No such TTI task.")
+    try:
+        body["log_tail"] = f.with_suffix(".log").read_text(encoding="utf-8", errors="replace")[-3000:]
+    except OSError:
+        body["log_tail"] = ""
+    return body
 
 @router.get("/wall")
 def wall(x_sdi_key: Optional[str] = Header(default=None)):
