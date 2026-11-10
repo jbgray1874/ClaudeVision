@@ -82,7 +82,7 @@ def load(path: Path) -> Optional[Dict[str, Any]]:
 
 def save(path: Path, index: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     with gzip.open(tmp, "wt", encoding="utf-8") as fh:
         json.dump(index, fh, separators=(",", ":"))
     os.replace(tmp, path)
@@ -108,6 +108,18 @@ def _list(folder: Path) -> Optional[Dict[str, Any]]:
     return {"dirs": sorted(dirs), "files": sorted(files)}
 
 
+def lock_path(index_path: Path) -> Path:
+    return index_path.with_name("full_listing.lock")
+
+
+def full_listing_running(index_path: Path, max_hours: float = 16.0) -> bool:
+    """True while a full listing holds the lock (and has not been at it longer than any could)."""
+    try:
+        return time.time() - lock_path(index_path).stat().st_mtime < max_hours * 3600
+    except OSError:
+        return False
+
+
 def refresh(roots: List[Path], path: Path, depth: int = 10, full: bool = False,
             full_days: float = 0.0, now: Optional[float] = None,
             progress: Optional[Any] = None, every: int = 2000, recent_days: float = 90.0,
@@ -120,6 +132,29 @@ def refresh(roots: List[Path], path: Path, depth: int = 10, full: bool = False,
     index unchecked; the resolver re-lists a chosen job's folders live, so nothing is priced on
     a stale listing, and a full listing (--full, overnight) catches the rest."""
     now = now if now is not None else time.time()
+    if not full and full_listing_running(path):
+        # THE FULL LISTING IS RUNNING (overnight, ~10 hours): it writes the index when it ends, so a
+        # quick refresh now would only race it. The index as it stands is reported instead.
+        current = load(path) or {}
+        out = summary(current) if current else {"built_at": "", "folders": 0, "drawings": 0, "roots": {}, "last": {}}
+        out["skipped"] = "a full listing is running"
+        return out
+    lock = lock_path(path)
+    if full:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text(f"{os.getpid()} {datetime.now().isoformat(timespec='seconds')}\n", encoding="utf-8")
+    try:
+        return _refresh(roots, path, depth, full, full_days, now, progress, every, recent_days, top_levels)
+    finally:
+        if full:
+            try:
+                lock.unlink()
+            except OSError:
+                pass
+
+
+def _refresh(roots: List[Path], path: Path, depth: int, full: bool, full_days: float, now: float,
+             progress: Optional[Any], every: int, recent_days: float, top_levels: int) -> Dict[str, Any]:
     old = load(path) or {}
     old_folders: Dict[str, Any] = old.get("folders") or {}
     if not full and full_days and old.get("full_at") and now - float(old["full_at"]) > full_days * 86400:
@@ -198,7 +233,7 @@ def build_db(index: Dict[str, Any], db: Path) -> int:
     sys.path.insert(0, str(HERE))
     from pack_resolver import drawing_id
     db.parent.mkdir(parents=True, exist_ok=True)
-    tmp = db.with_name(db.name + ".tmp")
+    tmp = db.with_name(f"{db.name}.{os.getpid()}.tmp")
     if tmp.exists():
         tmp.unlink()
     con = sqlite3.connect(str(tmp))
@@ -351,9 +386,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--build", action="store_true")
     ap.add_argument("--full", action="store_true")
     ap.add_argument("--find", default="", help="list indexed drawings whose path names this text")
+    ap.add_argument("--log", default="", help="append the output to this file (the scheduled full listing)")
     ap.add_argument("--convert", action="store_true",
                     help="build the lookup database (index.sqlite) from the existing index, without listing the share")
     args = ap.parse_args(argv)
+    if args.log:
+        Path(args.log).parent.mkdir(parents=True, exist_ok=True)
+        sys.stdout = open(args.log, "a", encoding="utf-8", buffering=1)
+        print(f"\n[drawing-index] {datetime.now().isoformat(timespec='seconds')} "
+              f"{'full listing' if args.full else 'refresh'} started", flush=True)
     sys.path.insert(0, str(HERE))
     try:
         import config  # noqa: F401  (loads .env)
@@ -365,6 +406,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     progress=lambda line: print(line, flush=True), recent_days=cfg["recent_days"])
         for r, v in s["roots"].items():
             print(f"{r}  {'readable' if v.get('readable') else 'NOT READABLE from this window'}", flush=True)
+        if s.get("skipped"):
+            print(f"Not refreshed: {s['skipped']} (it writes the index when it ends).", flush=True)
+            return 0
         last = s["last"]
         print(f"{s['folders']} folder(s), {s['drawings']} drawing file(s); listed {last.get('listed')}, "
               f"reused {last.get('reused')}, dormant (not checked) {last.get('dormant', 0)}, unreadable "

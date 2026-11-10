@@ -42,6 +42,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -258,6 +259,12 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             lookup: Optional[Callable[[str], List[FileRow]]] = None) -> Dict[str, Any]:
     """The pack for one drawing number, from the index's folders: chosen, proved and explained."""
     rank = area_rank or _default_area_rank()
+    _reads = {"n": 0}
+    _inner = read_text
+
+    def read_text(path: Path) -> str:                                    # noqa: F811  (counted)
+        _reads["n"] += 1
+        return _inner(path)
     drawing = str(drawing or "").strip().upper()
     now = now or datetime.now()
     manifest: Dict[str, Any] = {"schema": SCHEMA, "drawing": drawing, "client": client,
@@ -271,13 +278,22 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
         return manifest
 
     # 1. CANDIDATES: folders holding a file named for the drawing itself (the GA, any format).
-    cands = []
+    #    A GA's PDF is read (over the network, seconds each) only where it could be chosen: the
+    #    first search area's current copies, or the archive copies when nothing current exists.
+    found = []
     for folder, files, archive in folders:
         own = [f for f in files if _same(drawing_id(f[0].name), drawing)]
-        if not own:
-            continue
+        if own:
+            found.append((folder, own, archive))
+    current = [x for x in found if not x[2]]
+    pool = current or found
+    first_area = min((rank(x[0]) for x in pool), default=0)
+    readable = {str(x[0]) for x in pool if rank(x[0]) == first_area}
+    cands = []
+    for folder, own, archive in found:
         pdfs = [f for f in own if f[0].suffix.lower() == ".pdf"]
-        seen = read_drawing(max(pdfs, key=lambda f: f[2])[0], drawing, read_text) if pdfs else \
+        seen = read_drawing(max(pdfs, key=lambda f: f[2])[0], drawing, read_text) \
+            if pdfs and str(folder) in readable else \
             {"read": False, "carries_number": False, "revision": "", "references": []}
         name_rev = ""
         for f in own:
@@ -426,6 +442,7 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             manifest["assumptions"].append("referenced drawing(s) not found, to be priced as labelled "
                                            "allowances: " + ", ".join(manifest["missing"]))
     manifest["reason"] = _reason(best, live, manifest)
+    manifest["pdfs_read"] = _reads["n"]
     return manifest
 
 
@@ -510,9 +527,14 @@ def folders_for(drawing: str, live: bool = True
     source = f"lookup database built {datetime.fromtimestamp(meta['built_at']).isoformat(timespec='minutes')}" + \
         ("" if time_ok else " (STALE)")
     if live:
-        own = sorted({folder for folder, files, _a in rows if any(_same(drawing_id(f[0].name), drawing) for f in files)},
-                     key=lambda p: len(p.parts))
+        holders = [(folder, a) for folder, files, a in rows
+                   if any(_same(drawing_id(f[0].name), drawing) for f in files)]
+        current = [f for f, a in holders if not a] or [f for f, _a in holders]
+        rank = _default_area_rank()
+        first = min((rank(f) for f in current), default=0)
+        own = sorted({f for f in current if rank(f) == first}, key=lambda p: len(p.parts))
         relisted = []
+        t0 = time.time()
         for ga_folder in own:
             top = ga_folder.parent
             if any(top == r or r in top.parents for r in relisted):
@@ -523,7 +545,7 @@ def folders_for(drawing: str, live: bool = True
             rows = [r for r in rows if not (r[0] == top or top in r[0].parents)] + now_rows
             relisted.append(top)
         if relisted:
-            source += f"; {len(relisted)} folder(s) around the GA re-listed now"
+            source += f"; {len(relisted)} folder(s) around the GA re-listed now in {round(time.time() - t0, 1)} s"
     return rows, source, (lambda did: di.db_lookup(db, did))
 
 
@@ -554,7 +576,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.json:
         print(json.dumps(m, indent=1))
         return 0 if m["price_ok"] else 2
-    print(f"{m['drawing']}  {m['status'].upper()}  ({source})")
+    print(f"{m['drawing']}  {m['status'].upper()}  ({source}; {m.get('pdfs_read', 0)} drawing PDF(s) read)")
     for c in m["candidates"]:
         print(f"  candidate  {'ARCHIVE ' if c['archive'] else ''}{c['folder']}  rev {c['revision'] or '?'}"
               f"{' (' + c['revision_from'] + ')' if c['revision_from'] else ''}"
