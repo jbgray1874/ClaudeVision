@@ -32,8 +32,9 @@ param(
     [string] $Root = "",
     # BOTH SERVICES ON THIS MACHINE, LIKE THE RUNNER (D-644): the watcher reports to every
     # one on the list, so the switch works from whichever the page or the phone reached.
-    # Add another (e.g. SDI-APP01's 8071) with -Server "http://localhost:8072,http://...".
-    [string] $Server   = $(if ($env:SDI_SERVER) { $env:SDI_SERVER } else { "http://localhost:8072,http://localhost:8071" }),
+    # 8071 FIRST: jobs are queued on the first service on the list, and the wall people watch
+    # is 8071's, so a Self-Running job shows there. Add another with -Server "a,b,...".
+    [string] $Server   = $(if ($env:SDI_SERVER) { $env:SDI_SERVER } else { "http://localhost:8071,http://localhost:8072" }),
     [string] $TaskName = "SDI AI Estimate Self-Running",
     [string] $OldTask  = "SDI Live Enquiry Runner",
     [switch] $Remove
