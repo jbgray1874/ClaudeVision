@@ -858,8 +858,14 @@ function render(){
 /* THE FILES IN A NEW DRAWING PACK (JG, 10 Nov 2026): "some sort of a file explorer view of the
    files in the new design folders". Listed by the sweep, which has the rights on the share; shown
    folder by folder, drawing files marked, newest change first within each folder. */
-function openFiles(r){
-  const files = ((r && r.listing) || {}).files || [], more = ((r && r.listing) || {}).more || 0;
+async function openFiles(c){
+  $("filesTitle").textContent = `${c.client} · ${c.name} · reading the list…`;
+  $("filesBody").innerHTML = ""; $("filesModal").hidden = false;
+  let r;
+  try{ r = await api("/api/estimate/design-sweep/files?folder=" + encodeURIComponent(c.folder)); }
+  catch(e){ $("filesTitle").textContent = `${c.client} · ${c.name}: ${e.message}`; return; }
+  r = {...c, ...r};
+  const files = r.files || [], more = r.more || 0;
   const by = {};
   files.forEach(f => { const i = f.path.lastIndexOf("/"); const dir = i < 0 ? "" : f.path.slice(0, i);
                        (by[dir] = by[dir] || []).push({...f, name: i < 0 ? f.path : f.path.slice(i + 1)}); });
@@ -869,7 +875,6 @@ function openFiles(r){
       `<div style="padding-left:18px;${f.drawing ? "" : "color:var(--ink-3)"}">${f.drawing ? "▣" : "·"} ${esc(f.name)} <span style="color:var(--ink-3)">· ${kb(f.size)} · ${esc(String(f.modified).replace("T", " ").slice(0, 16))}</span></div>`).join("")).join("");
   $("filesTitle").textContent = `${r.client} · ${r.name} · ${files.length}${more ? " of " + (files.length + more) : ""} files · ${r.folder}`;
   $("filesBody").innerHTML = html + (more ? `<div class="empty">+ ${more} more not listed</div>` : "");
-  $("filesModal").hidden = false;
 }
 function closeFiles(){ $("filesModal").hidden = true; }
 document.addEventListener("click", e => { if(e.target && e.target.id === "filesModal") closeFiles(); });
@@ -890,7 +895,7 @@ function renderDesignSweep(d){
         <td class="c">${esc(r.client)}</td><td class="d" title="${esc(r.folder)}">${esc(r.name)}</td><td>${esc(r.job || "")}</td>
         <td class="n">${r.files ?? ""}</td><td>${r.status === "new" ? "NEW" : "CHANGED"}</td>
         <td>${r.estimated ? "an AI estimate is filed" : "not yet"}</td>
-        <td>${(r.listing && (r.listing.files || []).length) ? `<button class="fsbtn" type="button" data-dsfiles="${i}">files ▸</button> ` : ""}<button class="fsbtn" type="button" data-ds="${i}">dismiss</button></td></tr>`).join("") + "</table>";
+        <td>${r.listed ? `<button class="fsbtn" type="button" data-dsfiles="${i}">files ▸</button> ` : ""}<button class="fsbtn" type="button" data-ds="${i}">dismiss</button></td></tr>`).join("") + "</table>";
   document.querySelectorAll("[data-dsfiles]").forEach(b => b.onclick = () => openFiles(c[Number(b.dataset.dsfiles)]));
   document.querySelectorAll("[data-ds]").forEach(b => b.onclick = async () => {
     const r = c[Number(b.dataset.ds)];

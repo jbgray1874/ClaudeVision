@@ -269,4 +269,29 @@ def test_the_sweep_lists_each_new_packs_files_and_grid_control_shows_them(tmp_pa
     assert [f["path"] for f in got["files"]] == ["Technical/12181-00-GA.pdf", "Technical/notes.txt"]
     assert got["files"][0]["drawing"] and not got["files"][1]["drawing"]
     assert '"listing": listing(Path(p["folder"]))' in (ROOT / "src" / "design_sweep.py").read_text()
-    assert 'data-dsfiles="${i}">files ▸</button>' in WALL and "function openFiles(r)" in WALL
+    assert 'data-dsfiles="${i}">files ▸</button>' in WALL and "async function openFiles(c)" in WALL
+    assert '"/api/estimate/design-sweep/files?folder="' in WALL
+
+
+def test_grid_control_carries_only_the_count_and_fetches_a_packs_files_when_asked(er):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(er.router)
+    tc = TestClient(app)
+    key = getattr(er.config, "API_KEY", "") or ""
+    if key:
+        tc.headers.update({"X-SDI-Key": key})
+    folder = r"\\sdi-dc01\CAD\Design\Customers April 08 Onwards\TTI\12181 - Sander"
+    files = [{"path": f"Technical/{i}.pdf", "size": 10, "modified": "2026-11-10T10:00:00Z",
+              "drawing": True} for i in range(3)]
+    r = tc.post("/api/estimate/design-sweep/report", json={
+        "swept_at": "2026-11-10T10:00:00Z", "every_minutes": 60, "candidates": [
+            {"folder": folder, "client": "TTI", "name": "12181 - Sander", "status": "new",
+             "files": 3, "listing": {"files": files, "more": 0}}]})
+    assert r.status_code == 200
+    ds = er.design_sweep_for_wall()
+    assert ds["candidates"][0]["listed"] == 3 and "listing" not in ds["candidates"][0]
+    got = tc.get("/api/estimate/design-sweep/files", params={"folder": folder}).json()
+    assert [f["path"] for f in got["files"]] == ["Technical/0.pdf", "Technical/1.pdf", "Technical/2.pdf"]
+    assert tc.get("/api/estimate/design-sweep/files", params={"folder": "C:/x"}).status_code == 404

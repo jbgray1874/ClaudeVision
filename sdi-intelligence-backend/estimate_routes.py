@@ -1118,7 +1118,11 @@ def design_sweep_for_wall() -> Dict[str, Any]:
                        "(tools/start/install-design-sweep-task.ps1)"}
     rep = dict(data.get("report") or {})
     gone = set(data.get("dismissed") or [])
-    rep["candidates"] = [c for c in (rep.get("candidates") or []) if c.get("folder") not in gone]
+    # THE FILE LISTS STAY HERE (JG, 10 Nov 2026): Grid Control refreshes every 4 s, so each
+    # candidate carries only how many files were listed; "files" asks for one list.
+    rep["candidates"] = [{**{k: v for k, v in c.items() if k != "listing"},
+                          "listed": len(((c.get("listing") or {}).get("files")) or [])}
+                         for c in (rep.get("candidates") or []) if c.get("folder") not in gone]
     rep["dismissed"] = len(gone)
     rep["received_at"] = data.get("received_at")
     try:
@@ -1129,6 +1133,21 @@ def design_sweep_for_wall() -> Dict[str, Any]:
     except (TypeError, ValueError):
         rep["state"] = "ok"
     return rep
+
+
+@router.get("/design-sweep/files")
+def design_sweep_files(folder: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """The files the last sweep listed in one candidate pack, for Grid Control's file view."""
+    _check_key(x_sdi_key)
+    try:
+        data = json.loads(_design_sweep_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise HTTPException(404, "No sweep has reported yet.")
+    for c in (data.get("report") or {}).get("candidates") or []:
+        if c.get("folder") == folder:
+            return {"folder": folder, "client": c.get("client"), "name": c.get("name"),
+                    **(c.get("listing") or {"files": [], "more": 0})}
+    raise HTTPException(404, "That folder is not a candidate in the last sweep.")
 
 
 @router.post("/design-sweep/report")
