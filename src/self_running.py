@@ -483,8 +483,12 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
                  if a.get("status") in {"queued", "running"} and a.get("run_id")]
         if _live:
             current["run_id"] = _live[-1]["run_id"]
+            # QUEUED IS NOT RUNNING (JG, 10 Nov 2026): the card said "Running 11896-08-02-GA"
+            # while it waited in the queue behind three others. The run's own state goes too.
+            current["state"] = _live[-1].get("status") or ""
         else:
             current.pop("run_id", None)
+            current.pop("state", None)
         return report("running", f"{current.get('drawing')} ({current.get('customer')})",
                       counts=tally, current=dict(current), recent=recent_runs(ledger),
                       last_cycle_at=read_at, workbook=str(s["workbook"]))
@@ -555,7 +559,24 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
     tried: set = set()
     ran: List[Dict[str, Any]] = []
     at_once = max(1, int(getattr(config, "SELF_RUNNING_AT_ONCE", 1) or 1))
-    while at_once > 1:
+    # ITS OWN JOBS STILL ON THE PORTAL COUNT AGAINST THE LIMIT (JG, 10 Nov 2026). A watcher
+    # restarted by a task reinstall or a service restart saw its queued job as "running",
+    # passed over it, and queued the next ready row: four of its jobs sat in the queue at
+    # once, one per restart. Each one still open is picked up here and waited on like a job
+    # this process queued, so the limit holds across restarts.
+    by_key = {ler.job_key(d.row): d for d in decisions}
+    adopted: List[Any] = []
+    for _key, _job in (ledger.get("jobs") or {}).items():
+        for _a in _job.get("attempts") or []:
+            if (_a.get("status") in {"queued", "running"} and _a.get("run_id")
+                    and _key in by_key):
+                adopted.append((by_key[_key], _a))
+    use_flight = at_once > 1 or bool(adopted)
+
+    def _home(attempt: Dict[str, Any]) -> ler.Portal:
+        return ler._asked_in_turn(attempt, portal, others)[0]
+
+    while use_flight:
         # MORE THAN ONE AT ONCE (SDI_SELF_RUNNING_AT_ONCE): the same rules as one at a time
         # (the switch asked before each is queued, each row tried once a cycle, the sheet read
         # again after each finishes), with up to `at_once` jobs queued together.
@@ -564,6 +585,12 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
         clock = _wait.get("clock", time.time)
         in_flight: List[List[Any]] = []          # [decision, attempt, deadline]
         stop_filling = False
+        for d, a in adopted:
+            tried.add(ler.job_key(d.row))
+            in_flight.append([d, a, clock() + config.LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES * 60])
+            say(f"   {d.row.drawing}: still {a.get('status')} on the portal as run "
+                f"{a.get('run_id')} (queued {a.get('queued_at')}); waiting for it before "
+                f"queueing more")
 
         def _show(d: ler.Decision) -> None:
             current.clear()
@@ -617,7 +644,7 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
             ended = False
             for item in list(in_flight):
                 d, attempt, deadline = item
-                if ler.poll_once(attempt, portal, ledger, s["ledger"], say=say):
+                if ler.poll_once(attempt, _home(attempt), ledger, s["ledger"], say=say):
                     in_flight.remove(item)
                     ran.append(attempt)
                     price = attempt.get("engine_price_gbp")
@@ -644,7 +671,7 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
                     say(f"   (the sheet could not be read again: {type(exc).__name__}: {exc}; "
                         f"carrying on with the last read)")
         break
-    while at_once == 1:
+    while not use_flight:
         ready = [d for d in decisions
                  if d.status == "ready" and ler.job_key(d.row) not in tried]
         if not ready:
