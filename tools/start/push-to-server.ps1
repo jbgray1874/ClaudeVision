@@ -90,7 +90,8 @@ param(
         "src/section_profile.py",
         "src/finish_rules.py",
         "src/xai_models.py",
-        "src/claude_fallback.py"
+        "src/claude_fallback.py",
+        "src/openai_fallback.py"
     ),
 
     # Everything tracked. Here for the day the server's job changes; not the default,

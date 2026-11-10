@@ -220,6 +220,9 @@ local blank, then to `config.HOURLY_RATES_GBP`, which carries the 2027 card.
 | `SDI_CLAUDE_MODEL` | The Claude model for that fallback. Default **claude-opus-5-5** |
 | `SDI_CLAUDE_EFFORT` | Its effort: `low`, `medium`, `high`, `xhigh` or `max`. Default **medium** |
 | `SDI_LLM_FALLBACK` | `off` keeps Claude out with the key still set. Default on wherever the key is |
+| `OPENAI_API_KEY` | OpenAI stands in as the reader, as Claude does, when xAI stays busy or has no key (`src/openai_fallback.py`). Never printed or written |
+| `SDI_OPENAI_MODEL` | The OpenAI model for that fallback. Default **gpt-5**; any chat model the account has |
+| `SDI_LLM_FALLBACK_ORDER` | Which fallbacks are tried, in order, among those with a key. Default **claude,openai** |
 | `SDI_RUNNER_EXTRACT_ONLY` | *(runner)* `1`: this runner takes pack extracts only, never an estimate (a machine with no Excel). A Windows machine without Excel says so by itself; `0` overrides that |
 | `SKIP_VISION_EXTRACTION=1` | Skip page-image vision pass (faster) |
 | `SCAN_DEBUG=1` | Per-part timing and source diagnostics |

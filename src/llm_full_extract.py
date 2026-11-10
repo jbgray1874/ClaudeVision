@@ -610,23 +610,59 @@ def _call_llm(user_content: str, model: str,
 LAST_ANSWERED_BY = ""
 
 
-def _claude_available() -> bool:
+_FALLBACKS = {"claude": "claude_fallback", "openai": "openai_fallback"}
+
+
+def _fallback_order() -> List[str]:
+    raw = os.getenv("SDI_LLM_FALLBACK_ORDER") or "claude,openai"
+    return [x.strip().lower() for x in raw.split(",") if x.strip().lower() in _FALLBACKS]
+
+
+def _fallbacks_ready() -> List[Any]:
     try:
         import claude_fallback                                       # noqa: PLC0415
-        return claude_fallback.available()
+        import openai_fallback                                       # noqa: PLC0415
     except Exception:                                                # noqa: BLE001
-        return False
+        return []
+    mods = {"claude": claude_fallback, "openai": openai_fallback}
+    out = []
+    for name in _fallback_order():
+        try:
+            mod = mods[name]
+            if mod.available():
+                out.append((name, mod))
+        except Exception:                                            # noqa: BLE001
+            continue
+    return out
+
+
+def _claude_available() -> bool:
+    """Is any fallback reader ready (Claude or OpenAI, by its key)? Kept under its first name."""
+    return bool(_fallbacks_ready())
 
 
 def _ask_claude(system: str, user_content: str, why: str) -> Optional[str]:
-    import claude_fallback                                           # noqa: PLC0415
+    """Ask the fallbacks in order (SDI_LLM_FALLBACK_ORDER, default claude,openai); the first that
+    answers is the read, and it is said who answered. Each failure is said and the next is tried;
+    when every one fails the last error is raised, as a busy xAI was before."""
     global LAST_ANSWERED_BY
-    print(f"   [llm-fallback] {why}: asking Claude ({claude_fallback.model()}) the same "
-          f"question instead", flush=True)
-    text = claude_fallback.ask(system, user_content)
-    LAST_ANSWERED_BY = f"claude:{claude_fallback.model()}"
-    print(f"   [llm-fallback] Claude answered ({len(text or '')} characters)", flush=True)
-    return text
+    last: Optional[BaseException] = None
+    for name, mod in _fallbacks_ready():
+        print(f"   [llm-fallback] {why}: asking {name} ({mod.model()}) the same question instead",
+              flush=True)
+        try:
+            text = mod.ask(system, user_content)
+        except Exception as exc:                                     # noqa: BLE001
+            print(f"   [llm-fallback] {name} did not answer ({type(exc).__name__}: "
+                  f"{str(exc)[:160]})", flush=True)
+            last = exc
+            continue
+        LAST_ANSWERED_BY = f"{name}:{mod.model()}"
+        print(f"   [llm-fallback] {name} answered ({len(text or '')} characters)", flush=True)
+        return text
+    if last is not None:
+        raise last
+    raise RuntimeError("no fallback reader is ready")
 
 
 def extract_full_job(pdf_path: str | Path, model: str = DEFAULT_MODEL) -> Dict[str, Any]:
