@@ -111,6 +111,34 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(self.server.calls, [])
         self.assertEqual(SI.pictures_in(self.server.root / "all_img_index.npz"), 5)
 
+    def test_a_job_list_that_cant_be_read_on_k_is_checked_on_the_copy(self):
+        """10 Nov 2026: "new build NOT copied - the job list on K: doesn't match the index (269,278 pictures)". Both
+        held 269,278: K: is \\\\sdi-dc01\\shareddata$\\..., SQLite refuses the file://sdi-dc01/... address that makes,
+        and the count read 0. Unreadable from here, the job list is checked on the copy on the server instead."""
+        make_build(self.k, 6, 6, NEW)
+        real = SI.rows_in
+        SI.rows_in = lambda db: 0 if str(db).startswith(str(self.k)) else real(db)
+        try:
+            rep = self.server.refresh(self.k)
+        finally:
+            SI.rows_in = real
+        self.assertEqual(rep["action"], "copied", rep)
+        self.assertEqual(SI.rows_in(self.server.root / "brief_lite" / "projects.db"), 6)
+
+    def test_a_mismatch_found_only_on_the_copy_still_swaps_nothing(self):
+        make_build(self.k, 6, 5, NEW)
+        real = SI.rows_in
+        SI.rows_in = lambda db: 0 if str(db).startswith(str(self.k)) else real(db)
+        try:
+            rep = self.server.refresh(self.k)
+        finally:
+            SI.rows_in = real
+        self.assertEqual(rep["action"], "failed")
+        self.assertIn("5 job-list rows, 6 expected", rep["detail"])
+        self.assertEqual(self.server.calls, [])                       # SDI Live never stopped
+        self.assertEqual(SI.pictures_in(self.server.root / "all_img_index.npz"), 5)
+        self.assertFalse(list(self.server.root.rglob("*.incoming")))
+
     def test_a_build_still_arriving_waits_for_tomorrow(self):
         make_build(self.k, 6, 6, NEW, old=False)
         self.assertEqual(self.server.refresh(self.k)["action"], "waiting")

@@ -145,8 +145,13 @@ def refresh(server: Path, k_dir: Path, get: Callable, service: Callable, sc: Cal
     if not n:
         rep.update(action="skipped", detail="the index on K: won't open - a half-finished copy?")
         return rep
-    if rows_in(db) != n:
-        rep.update(action="skipped", detail=f"the job list on K: doesn't match the index ({n:,} pictures) - not one build")
+    # 10 Nov 2026: a matching build (269,278 and 269,278) was turned away as "doesn't match". K: is a \\server\share
+    # path, and SQLite refuses the file://server/... address it makes, so the count read 0. The job list is checked
+    # here only when it can be read from here; it is always checked again below, on the copy on this server.
+    k_rows = rows_in(db)
+    if k_rows and k_rows != n:
+        rep.update(action="skipped", detail=f"the job list on K: doesn't match the index ({k_rows:,} rows, "
+                                            f"{n:,} pictures) - not one build")
         return rep
     need = 2 * (npz.stat().st_size + db.stat().st_size) / 1e9 + SPARE_GB
     space = free(str(server))
@@ -165,10 +170,12 @@ def refresh(server: Path, k_dir: Path, get: Callable, service: Callable, sc: Cal
             p.unlink(missing_ok=True)
         rep.update(action="failed", detail=f"copying from K: failed ({exc})")
         return rep
-    if pictures_in(in_npz) != n or rows_in(in_db) != n:
+    got_pics, got_rows = pictures_in(in_npz), rows_in(in_db)
+    if got_pics != n or got_rows != n:
         for p in (in_npz, in_db):
             p.unlink(missing_ok=True)
-        rep.update(action="failed", detail="the copies didn't check out - nothing swapped")
+        rep.update(action="failed", detail=f"the copies didn't check out ({got_pics:,} pictures, {got_rows:,} job-list "
+                                           f"rows, {n:,} expected) - not one build, nothing swapped")
         return rep
 
     # Keep what is there now; only the newest automatic backups are kept.
