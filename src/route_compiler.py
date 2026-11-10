@@ -2759,6 +2759,51 @@ def build_part_graph(
             _rooted = [c for c in _candidates if c in top_ids]
             if len(_rooted) == 1:
                 _candidates = _rooted
+        # A SHEET NAMED BY NUMBER AND TITLE THAT GROUPS ANOTHER ROOT'S PARTS IS NOT THE PRODUCT
+        # (JG, 10 Nov 2026, 6364-01). The run was asked for "6364-01". The model's "6364-01 Base
+        # Asm" names it by the number-and-title rule (D-398); the GA, 6364-01-000, does not, so
+        # the base was costed as the product and the GA, with the bin, legs, rails, panel,
+        # castors and every fixing, was set aside as "detail": £195 for a voting unit. The base
+        # assembly's only part is on the GA's own list. So where the one candidate was matched by
+        # its title (not by its number alone), and another root numbered under the declared
+        # number already reaches every part that candidate holds, the candidate is a grouping of
+        # that root's parts, and that root is the product. Said on the record; nothing guessed:
+        # the containing root must reach ALL of the candidate's parts.
+        _grouped_by = ""
+        if len(_candidates) == 1:
+            from product_identity import is_under_the_numbering, _key as _pi_key2
+            _c0 = _candidates[0]
+            if _pi_key2(_c0) != _pi_key2(_declared):
+                def _below(n: str) -> Set[str]:
+                    out: Set[str] = set()
+                    stack = list((children.get(n) or {}).keys())
+                    while stack:
+                        x = stack.pop()
+                        if x not in out:
+                            out.add(x)
+                            stack.extend((children.get(x) or {}).keys())
+                    return out
+                _held = _below(_c0)
+                if _held:
+                    _holders = [t for t in top_ids if t and t != _c0
+                                and is_under_the_numbering(_declared, t)
+                                and _held <= _below(t)]
+                    if len(_holders) == 1:
+                        _grouped_by = _holders[0]
+                        _product_issues.append({
+                            "code": "product_is_the_root_that_holds_its_parts",
+                            "declared": _declared,
+                            "product": _grouped_by,
+                            "set_aside_as_product": _c0,
+                            "detail": (f"{_c0!r} names {_declared!r} by its title, but every part "
+                                       f"it holds ({', '.join(sorted(_held)[:6])}) is also on "
+                                       f"{_grouped_by}, the drawing numbered under "
+                                       f"{_declared!r}. {_c0} is a grouping of {_grouped_by}'s "
+                                       f"parts, so {_grouped_by} is the product."),
+                        })
+                        print(f"   [graph] {_c0!r} groups parts of {_grouped_by}; the product is "
+                              f"{_grouped_by} (declared {_declared!r})", flush=True)
+                        _candidates = [_grouped_by]
         # THE JOB NUMBER ON ITS OWN NAMES THE JOB'S TOP ASSEMBLY. 12173 Card Spinner, 29 Sep
         # 2026: "it is 02 but we need to be able to run against the top level 12173", and "it
         # needs to accept a job number without needing a version number and work out from
@@ -2820,51 +2865,6 @@ def build_part_graph(
             if len(_ref_roots) == 1:
                 _ref_top = _ref_roots[0]
                 _candidates = _ref_roots
-        # A SHEET NAMED BY NUMBER AND TITLE THAT GROUPS ANOTHER ROOT'S PARTS IS NOT THE PRODUCT
-        # (JG, 10 Nov 2026, 6364-01). The run was asked for "6364-01". The model's "6364-01 Base
-        # Asm" names it by the number-and-title rule (D-398); the GA, 6364-01-000, does not, so
-        # the base was costed as the product and the GA, with the bin, legs, rails, panel,
-        # castors and every fixing, was set aside as "detail": £195 for a voting unit. The base
-        # assembly's only part is on the GA's own list. So where the one candidate was matched by
-        # its title (not by its number alone), and another root numbered under the declared
-        # number already reaches every part that candidate holds, the candidate is a grouping of
-        # that root's parts, and that root is the product. Said on the record; nothing guessed:
-        # the containing root must reach ALL of the candidate's parts.
-        _grouped_by = ""
-        if len(_candidates) == 1:
-            from product_identity import is_under_the_numbering, _key as _pi_key2
-            _c0 = _candidates[0]
-            if _pi_key2(_c0) != _pi_key2(_declared):
-                def _below(n: str) -> Set[str]:
-                    out: Set[str] = set()
-                    stack = list((children.get(n) or {}).keys())
-                    while stack:
-                        x = stack.pop()
-                        if x not in out:
-                            out.add(x)
-                            stack.extend((children.get(x) or {}).keys())
-                    return out
-                _held = _below(_c0)
-                if _held:
-                    _holders = [t for t in top_ids if t and t != _c0
-                                and is_under_the_numbering(_declared, t)
-                                and _held <= _below(t)]
-                    if len(_holders) == 1:
-                        _grouped_by = _holders[0]
-                        _product_issues.append({
-                            "code": "product_is_the_root_that_holds_its_parts",
-                            "declared": _declared,
-                            "product": _grouped_by,
-                            "set_aside_as_product": _c0,
-                            "detail": (f"{_c0!r} names {_declared!r} by its title, but every part "
-                                       f"it holds ({', '.join(sorted(_held)[:6])}) is also on "
-                                       f"{_grouped_by}, the drawing numbered under "
-                                       f"{_declared!r}. {_c0} is a grouping of {_grouped_by}'s "
-                                       f"parts, so {_grouped_by} is the product."),
-                        })
-                        print(f"   [graph] {_c0!r} groups parts of {_grouped_by}; the product is "
-                              f"{_grouped_by} (declared {_declared!r})", flush=True)
-                        _candidates = [_grouped_by]
         if len(_candidates) == 1:
             product_root = _candidates[0]
             if _ref_top:

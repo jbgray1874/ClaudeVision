@@ -214,6 +214,12 @@ local blank, then to `config.HOURLY_RATES_GBP`, which carries the 2027 card.
 | `SDI_APPLY_DRAWING_FACTS=1` | Apply deterministic drawing-fact overlay |
 | `SDI_LLM_FULL_EXTRACT=1` | Whole-document LLM extract (default-on when `XAI_API_KEY` present) |
 | `SDI_XAI_MODEL` / `SDI_XAI_VISION_MODEL` / `SDI_XAI_IMAGE_MODEL` | The Grok models (D-612): text, the drawing reads (the text model unless set apart) and the quote's picture. Defaults in `src/config.py`: **grok-4.7** and **grok-imagine-image-2.0**. `python src\xai_models.py` checks the account has them |
+| `SDI_XAI_RETRY_SECONDS` | The waits before each new try when xAI is busy (a capacity 429, a rate limit, a timeout, a server error), comma-separated seconds. Default **20,60,120**: four tries over about three and a half minutes, each wait one `[xai-wait]` line that Grid Control shows. `0` tries once |
+| `ANTHROPIC_API_KEY` | Claude stands in as the reader when xAI stays busy after its retries, or when no `XAI_API_KEY` is set (`src/claude_fallback.py`): the same question, and the read says Claude answered it. Never printed or written |
+| `SDI_CLAUDE_MODEL` | The Claude model for that fallback. Default **claude-opus-5-5** |
+| `SDI_CLAUDE_EFFORT` | Its effort: `low`, `medium`, `high`, `xhigh` or `max`. Default **medium** |
+| `SDI_LLM_FALLBACK` | `off` keeps Claude out with the key still set. Default on wherever the key is |
+| `SDI_RUNNER_EXTRACT_ONLY` | *(runner)* `1`: this runner takes pack extracts only, never an estimate (a machine with no Excel). A Windows machine without Excel says so by itself; `0` overrides that |
 | `SKIP_VISION_EXTRACTION=1` | Skip page-image vision pass (faster) |
 | `SCAN_DEBUG=1` | Per-part timing and source diagnostics |
 | `VISION_RENDER_DPI` | Page render DPI for vision/OCR (default **300**, was 144) |
