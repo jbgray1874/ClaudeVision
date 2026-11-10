@@ -121,7 +121,7 @@ def apply(parts: List[Dict[str, Any]], pages: Iterable[Dict[str, Any]]) -> List[
         pn = p.get("part_number") or "?"
         if core:
             p["finished_thickness_mm"] = float(t)
-            p["normalized_thickness_mm"] = core["core_mm"]
+            p["normalized_thickness_mm"] = core["core_mm"]  # precedence: direct-write ok — the measured finished thickness is kept as finished_thickness_mm; the priced board is the core derived from it, not a competing reading
             p["applied_finish_faces"] = core["faces"]
             p["laminated_construction"] = {
                 **core, "finished_mm": float(t), "finish": finish, "provisional": True,
