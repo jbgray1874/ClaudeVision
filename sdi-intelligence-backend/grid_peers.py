@@ -29,6 +29,9 @@ from typing import Any, Dict, List, Optional, Tuple
 SERVICE_ID = uuid.uuid4().hex
 DEFAULT_PEERS = "http://localhost:8071,http://localhost:8072"
 _CACHE_SECONDS = 3.0
+# A SERVICE THAT DOES NOT ANSWER IS ASKED AGAIN ONLY EVERY 20 s, so one that is down (the server
+# switched off, a laptop asleep) costs the wall one wait of a couple of seconds, not every refresh.
+_DOWN_SECONDS = 20.0
 _TIMEOUT = 2.5
 _cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 _lock = threading.Lock()
@@ -45,30 +48,49 @@ def peers() -> List[str]:
     return out
 
 
-def _key() -> str:
-    """The key the other services take: SDI_GRID_PEER_KEY where they hold a different one
-    (the server's own .env), else this service's own key."""
-    if os.getenv("SDI_GRID_PEER_KEY"):
-        return os.environ["SDI_GRID_PEER_KEY"]
+def _keys() -> List[str]:
+    """The keys tried on another service, in turn: this service's own (the two on the laptop
+    share one .env), then SDI_GRID_PEER_KEY for one that holds a different key (the server's own
+    .env). A 401 with the first is answered with the second."""
+    own = ""
     try:
         import config                                               # noqa: PLC0415
-        return str(getattr(config, "API_KEY", "") or os.getenv("SDI_API_KEY") or "")
+        own = str(getattr(config, "API_KEY", "") or "")
     except Exception:                                               # noqa: BLE001
-        return os.getenv("SDI_API_KEY") or ""
+        pass
+    own = own or os.getenv("SDI_API_KEY") or ""
+    out = [own]
+    if os.getenv("SDI_GRID_PEER_KEY") and os.environ["SDI_GRID_PEER_KEY"] != own:
+        out.append(os.environ["SDI_GRID_PEER_KEY"])
+    return out
+
+
+def _send(url: str, body: Optional[Dict[str, Any]], opener, timeout: float) -> Dict[str, Any]:
+    keys = _keys()
+    for i, key in enumerate(keys):
+        headers = {"X-SDI-Key": key}
+        data = None
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+            data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="POST" if body is not None else "GET",
+                                     headers=headers)
+        try:
+            with (opener or urllib.request.urlopen)(req, timeout=timeout) as r:
+                return json.loads(r.read().decode("utf-8") or "{}")
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401 and i + 1 < len(keys):
+                continue
+            raise
+    return {}
 
 
 def _get(url: str, opener=None) -> Dict[str, Any]:
-    req = urllib.request.Request(url, headers={"X-SDI-Key": _key()})
-    with (opener or urllib.request.urlopen)(req, timeout=_TIMEOUT) as r:
-        return json.loads(r.read().decode("utf-8"))
+    return _send(url, None, opener, _TIMEOUT)
 
 
 def _post(url: str, body: Dict[str, Any], opener=None) -> Dict[str, Any]:
-    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST",
-                                 headers={"X-SDI-Key": _key(),
-                                          "Content-Type": "application/json"})
-    with (opener or urllib.request.urlopen)(req, timeout=10) as r:
-        return json.loads(r.read().decode("utf-8") or "{}")
+    return _send(url, body, opener, 10)
 
 
 def _label(url: str) -> str:
@@ -95,7 +117,8 @@ def read_peer(peer: str, opener=None, now: Optional[float] = None) -> Optional[D
     now = time.time() if now is None else now
     with _lock:
         hit = _cache.get(peer)
-        if hit and now - hit[0] < _CACHE_SECONDS:
+        if hit and now - hit[0] < (_CACHE_SECONDS if (hit[1] is None or hit[1].get("ok"))
+                                   else _DOWN_SECONDS):
             return hit[1]
     try:
         snap = _get(peer + "/api/estimate/wall?local=1", opener)
@@ -121,7 +144,15 @@ def merge(snap: Dict[str, Any], opener=None) -> Dict[str, Any]:
     """This service's wall with the rest of the grid added: `grid` (one entry per other
     service), and their Grid Runners added to `fleet` where this service has not heard from
     them itself."""
-    others = [x for x in (read_peer(p, opener) for p in peers()) if x is not None]
+    # ALL AT ONCE, so two services that do not answer cost one wait, not two.
+    from concurrent.futures import ThreadPoolExecutor              # noqa: PLC0415
+    ps = peers()
+    if not ps:
+        snap["grid"] = []
+        return snap
+    with ThreadPoolExecutor(max_workers=min(8, len(ps))) as pool:
+        got = list(pool.map(lambda p: read_peer(p, opener), ps))
+    others = [x for x in got if x is not None]
     snap["grid"] = others
     known = {str(f.get("runner_id") or "") for f in snap.get("fleet") or []}
     for g in others:

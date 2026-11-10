@@ -216,3 +216,57 @@ def test_a_ghost_run_is_freed_when_its_runner_beats_for_another_service_and_a_li
     assert "working on another service's job" in er._RUNS["g1"].error
     assert er._RUNS["l1"].status == "running", "another runner's run is untouched"
     assert er._RUNS["f1"].status == "running", "a run with progress in the last two minutes is kept"
+
+
+def test_a_service_holding_a_different_key_is_asked_again_with_the_grid_key(gp, monkeypatch):
+    """The server keeps its own .env: a 401 with this service's key is answered with
+    SDI_GRID_PEER_KEY."""
+    import urllib.error
+    monkeypatch.setenv("SDI_API_KEY", "laptop-key")
+    monkeypatch.setenv("SDI_GRID_PEER_KEY", "server-key")
+    monkeypatch.setenv("SDI_GRID_PEERS", "http://10.0.0.5:8071")
+    monkeypatch.setitem(sys.modules, "config", type(sys)("config"))    # restored after
+    seen = []
+
+    def op(req, timeout=0):
+        k = req.get_header("X-sdi-key")
+        seen.append(k)
+        if k != "server-key":
+            raise urllib.error.HTTPError(req.full_url, 401, "no", {}, None)
+        return _Resp(json.dumps(_peer_wall("srv")).encode())
+    snap = {"fleet": []}
+    gp.merge(snap, op)
+    assert seen == ["laptop-key", "server-key"] and snap["grid"][0]["ok"]
+
+
+def test_a_service_that_is_down_is_not_asked_on_every_refresh(gp, monkeypatch):
+    monkeypatch.setenv("SDI_GRID_PEERS", "http://10.0.0.5:8071")
+    calls = []
+
+    def op(req, timeout=0):
+        calls.append(1)
+        raise OSError("refused")
+    gp.read_peer("http://10.0.0.5:8071", op, now=1000.0)
+    gp.read_peer("http://10.0.0.5:8071", op, now=1010.0)
+    assert len(calls) == 1, "down: asked again after 20 s, not every 3 s"
+    gp.read_peer("http://10.0.0.5:8071", op, now=1025.0)
+    assert len(calls) == 2
+
+
+def test_the_sweep_lists_each_new_packs_files_and_grid_control_shows_them(tmp_path):
+    sys.path.insert(0, str(ROOT / "src"))
+    try:
+        import design_sweep as ds
+    finally:
+        sys.path.remove(str(ROOT / "src"))
+    pack = tmp_path / "TTI" / "12181 - Sander" / "Technical"
+    pack.mkdir(parents=True)
+    (pack / "12181-00-GA.pdf").write_text("ga")
+    (pack / "notes.txt").write_text("n")
+    (pack / "Archive").mkdir()
+    (pack / "Archive" / "old.pdf").write_text("o")
+    got = ds.listing(tmp_path / "TTI" / "12181 - Sander")
+    assert [f["path"] for f in got["files"]] == ["Technical/12181-00-GA.pdf", "Technical/notes.txt"]
+    assert got["files"][0]["drawing"] and not got["files"][1]["drawing"]
+    assert '"listing": listing(Path(p["folder"]))' in (ROOT / "src" / "design_sweep.py").read_text()
+    assert 'data-dsfiles="${i}">files ▸</button>' in WALL and "function openFiles(r)" in WALL

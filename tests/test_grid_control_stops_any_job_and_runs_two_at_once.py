@@ -279,6 +279,7 @@ def test_a_runner_heard_only_mid_job_is_named_by_its_machine():
 def test_every_queued_or_running_job_has_its_own_stop_on_the_estimating_page():
     assert "data-self-stop='\" + selfEsc(r.run_id)" in PAGE
     assert '(r.status === "queued" || r.status === "running") && r.run_id' in PAGE
+    assert 'selfStopHtml(r) + "</li>"' in PAGE
     assert 'await api("/api/estimate/grid/stop", {method:"POST"' in PAGE, "a job on the other service"
     assert '["running","queued or running"]' in PAGE
     assert "Also on this machine: the service on port" in PAGE and "Use one portal" not in PAGE

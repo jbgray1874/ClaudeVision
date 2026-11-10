@@ -744,6 +744,11 @@
 <div class="ticker"><span class="tag">ALERTS</span><span style="overflow:hidden;flex:1"><span class="run still" id="ticker">—</span></span>
   <span class="foot" id="foot"></span></div>
 <div class="tip" id="tip"></div>
+<div class="modal" id="filesModal" hidden role="dialog" aria-label="Files in the drawing pack">
+  <div class="mbox"><div class="mhead"><span id="filesTitle"></span>
+    <button class="fsbtn" type="button" id="filesClose">✕ CLOSE (Esc)</button></div>
+    <div class="term mterm" id="filesBody"></div></div>
+</div>
 <div class="modal" id="logModal" hidden role="dialog" aria-label="Run log">
   <div class="mbox"><div class="mhead"><span id="logTitle"></span>
     <button class="fsbtn" type="button" id="logClose">✕ CLOSE (Esc)</button></div>
@@ -850,6 +855,25 @@ function render(){
   renderDesignSweep(s.design_sweep || {});
 }
 
+/* THE FILES IN A NEW DRAWING PACK (JG, 10 Nov 2026): "some sort of a file explorer view of the
+   files in the new design folders". Listed by the sweep, which has the rights on the share; shown
+   folder by folder, drawing files marked, newest change first within each folder. */
+function openFiles(r){
+  const files = ((r && r.listing) || {}).files || [], more = ((r && r.listing) || {}).more || 0;
+  const by = {};
+  files.forEach(f => { const i = f.path.lastIndexOf("/"); const dir = i < 0 ? "" : f.path.slice(0, i);
+                       (by[dir] = by[dir] || []).push({...f, name: i < 0 ? f.path : f.path.slice(i + 1)}); });
+  const kb = n => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+  const html = Object.keys(by).sort().map(dir => `<div style="margin:8px 0 2px;color:var(--accent)">📁 ${esc(dir || r.name)}</div>`
+    + by[dir].sort((a, b) => String(b.modified).localeCompare(String(a.modified))).map(f =>
+      `<div style="padding-left:18px;${f.drawing ? "" : "color:var(--ink-3)"}">${f.drawing ? "▣" : "·"} ${esc(f.name)} <span style="color:var(--ink-3)">· ${kb(f.size)} · ${esc(String(f.modified).replace("T", " ").slice(0, 16))}</span></div>`).join("")).join("");
+  $("filesTitle").textContent = `${r.client} · ${r.name} · ${files.length}${more ? " of " + (files.length + more) : ""} files · ${r.folder}`;
+  $("filesBody").innerHTML = html + (more ? `<div class="empty">+ ${more} more not listed</div>` : "");
+  $("filesModal").hidden = false;
+}
+function closeFiles(){ $("filesModal").hidden = true; }
+document.addEventListener("click", e => { if(e.target && e.target.id === "filesModal") closeFiles(); });
+document.addEventListener("keydown", e => { if(e.key === "Escape") closeFiles(); });
 function renderDesignSweep(d){
   const c = d.candidates || [];
   if(d.state === "never"){ setText("dsRead", "no sweep yet"); $("dsList").innerHTML = `<div class="empty">${esc(d.why || "No sweep has reported yet.")}</div>`; return; }
@@ -866,7 +890,8 @@ function renderDesignSweep(d){
         <td class="c">${esc(r.client)}</td><td class="d" title="${esc(r.folder)}">${esc(r.name)}</td><td>${esc(r.job || "")}</td>
         <td class="n">${r.files ?? ""}</td><td>${r.status === "new" ? "NEW" : "CHANGED"}</td>
         <td>${r.estimated ? "an AI estimate is filed" : "not yet"}</td>
-        <td><button class="fsbtn" type="button" data-ds="${i}">dismiss</button></td></tr>`).join("") + "</table>";
+        <td>${(r.listing && (r.listing.files || []).length) ? `<button class="fsbtn" type="button" data-dsfiles="${i}">files ▸</button> ` : ""}<button class="fsbtn" type="button" data-ds="${i}">dismiss</button></td></tr>`).join("") + "</table>";
+  document.querySelectorAll("[data-dsfiles]").forEach(b => b.onclick = () => openFiles(c[Number(b.dataset.dsfiles)]));
   document.querySelectorAll("[data-ds]").forEach(b => b.onclick = async () => {
     const r = c[Number(b.dataset.ds)];
     try { renderDesignSweep(await api("/api/estimate/design-sweep/dismiss", {folder: r.folder})); }
@@ -1032,6 +1057,7 @@ document.addEventListener("click", e => {
   if(e.target === $("logModal")) closeLog();
 });
 $("logClose").addEventListener("click", closeLog);
+$("filesClose").addEventListener("click", closeFiles);
 document.addEventListener("keydown", e => { if(e.key === "Escape" && logRun) closeLog(); });
 
 /* A MACHINE'S CPU AND MEMORY (D-743): one bar each, the running estimates, SolidWorks, Excel
