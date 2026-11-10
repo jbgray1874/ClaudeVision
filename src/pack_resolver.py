@@ -223,9 +223,40 @@ def _pick_revision(files: List[FileRow]) -> Tuple[List[FileRow], str, List[str],
     return chosen, best, [r for r in revs if r != best], notes
 
 
+def _default_area_rank() -> Callable[[Path], int]:
+    """Search areas in the drawing index's own order: the design customers folder first, then
+    Prototype (JG: Prototype is for drawings not in design). A folder under neither ranks last."""
+    try:
+        sys.path.insert(0, str(HERE))
+        import drawing_index as di
+        roots = [str(r) for r in di.settings()["roots"]]
+    except Exception:                                                    # noqa: BLE001
+        roots = []
+
+    def rank(folder: Path) -> int:
+        for i, r in enumerate(roots):
+            if di._under(str(folder), r):
+                return i
+        return len(roots)
+    return rank
+
+
+def _looks_drawing(ref: str) -> bool:
+    """A referenced number that is a drawing, not a dimension pair (2400-1200): three parts or more,
+    or a last part with a letter in it."""
+    parts = ref.split("-")
+    return len(parts) >= 3 or bool(re.search(r"[A-Z]", parts[-1]))
+
+
+def _is_assembly(did: str) -> bool:
+    return bool(_ASSEMBLY.match(did.split("-")[-1]))
+
+
 def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
-            read_text: Callable[[Path], str] = read_pdf_text, now: Optional[datetime] = None) -> Dict[str, Any]:
+            read_text: Callable[[Path], str] = read_pdf_text, now: Optional[datetime] = None,
+            area_rank: Optional[Callable[[Path], int]] = None) -> Dict[str, Any]:
     """The pack for one drawing number, from the index's folders: chosen, proved and explained."""
+    rank = area_rank or _default_area_rank()
     drawing = str(drawing or "").strip().upper()
     now = now or datetime.now()
     manifest: Dict[str, Any] = {"schema": SCHEMA, "drawing": drawing, "client": client,
@@ -271,6 +302,14 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
     live = [c for c in cands if not c["archive"]] or cands
     if live is cands and all(c["archive"] for c in cands):
         manifest["assumptions"].append("only archive copies exist; the latest of them is used and said")
+    # THE FIRST SEARCH AREA WINS (JG, 10 Nov): design, then Prototype, which is for drawings not in
+    # design. A copy in a later area is noted, never compared, so it can never make a conflict.
+    first = min(rank(Path(c["folder"])) for c in live)
+    for c in live:
+        if rank(Path(c["folder"])) != first:
+            manifest["assumptions"].append(f"{c['folder']} also holds {drawing} (revision {c['revision'] or '?'}) "
+                                           f"in a later search area; the first area's copy is used")
+    live = [c for c in live if rank(Path(c["folder"])) == first]
 
     def better(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
         if a["carries_number"] != b["carries_number"]:
@@ -302,43 +341,67 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
     manifest["revision"] = best["revision"]
     manifest["revision_from"] = best["revision_from"]
 
-    # 3. MEMBERS: the family's files in the chosen folder and below it, and the job's other folders
-    #    when the GA references a child that is not there; referenced shared-library parts anywhere.
+    # 3. MEMBERS: the family's files in the chosen folder and below it; then every reference the GA
+    #    makes, FOLLOWED THROUGH EACH SUB-ASSEMBLY'S OWN DRAWING (11896-01-00-GA -> 11896-01-01-GA ->
+    #    its parts), found in the job's folders of the same search area when not under the chosen
+    #    one; shared-library parts anywhere. Each member's parent is the drawing that references it.
     root = Path(best["folder"])
+    area = rank(root)
     near = [f for folder, files, archive in folders if not archive and (folder == root or root in folder.parents)
             for f in files]
-    refs = set(best["references"])
-    fam_refs = {r for r in refs if in_family(r, drawing)}
-    lib_refs = {r for r in refs if not in_family(r, drawing) and re.search(r"\d{4,}", r)}
-    groups = _members(near, drawing, also=lib_refs)
-    missing_fam = fam_refs - set(groups)
-    if missing_fam:
-        job = re.match(r"\s*(\d{3,})", drawing)
-        wider = [f for folder, files, archive in folders if not archive and job and job.group(1) in str(folder)
-                 for f in files]
-        for k, v in _members(wider, drawing).items():
-            if k in missing_fam:
-                groups[k] = v
-    for r in sorted(lib_refs - set(groups)):
-        hit = [f for folder, files, archive in folders if not archive for f in files
-               if _same(drawing_id(f[0].name), r)]
-        if hit:
-            groups[r] = hit
-            manifest["library"].append(r)
+    job = re.match(r"\s*(\d{3,})", drawing)
+    wider_rows = [f for folder, files, archive in folders
+                  if not archive and job and job.group(1) in str(folder) and rank(folder) == area for f in files]
+    wider: Optional[Dict[str, List[FileRow]]] = None
+    groups = _members(near, drawing)
+    refs_of: Dict[str, set] = {drawing: set(best["references"])}
+    parent_of: Dict[str, str] = {}
+    all_refs: set = set()
+    queue = [drawing] + sorted(d for d in groups if _is_assembly(d) and not _same(d, drawing))
+    done: set = set()
+    while queue:
+        a = queue.pop(0)
+        if a in done:
+            continue
+        done.add(a)
+        if a not in refs_of:
+            pdfs = [f for f in groups.get(a, []) if f[0].suffix.lower() == ".pdf"]
+            refs_of[a] = set(read_drawing(max(pdfs, key=lambda f: f[2])[0], a, read_text)["references"]) \
+                if pdfs else set()
+        for x in sorted(refs_of[a]):
+            if _same(x, a) or _same(x, drawing) or not _looks_drawing(x):
+                continue
+            all_refs.add(x)
+            parent_of.setdefault(x, a)
+            if x not in groups:
+                if in_family(x, drawing):
+                    if wider is None:
+                        wider = _members(wider_rows, drawing)
+                    if x in wider:
+                        groups[x] = wider[x]
+                else:
+                    hit = [f for folder, files, archive in folders if not archive for f in files
+                           if _same(drawing_id(f[0].name), x)]
+                    if hit:
+                        groups[x] = hit
+                        manifest["library"].append(x)
+            if x in groups and _is_assembly(x) and x not in done:
+                queue.append(x)
+    refs = all_refs
 
     ids = set(groups)
     for did in sorted(ids):
         chosen, rev, superseded, notes = _pick_revision(groups[did])
         manifest["members"].append({
             "drawing": did, "revision": rev, "superseded_revisions": superseded,
-            "parent": _parent(did, ids, drawing),
+            "parent": parent_of.get(did) or _parent(did, ids, drawing),
             "referenced_by_ga": did in refs or _same(did, drawing),
             "files": [{"path": str(p), "format": p.suffix.lower().lstrip("."), "size": s,
                        "modified": datetime.fromtimestamp(m).isoformat(timespec="minutes"),
                        "fingerprint": fingerprint(p, s, m)} for p, s, m in sorted(chosen)]})
         manifest["conflicts"] += [f"{did}: {n}" for n in notes if "claim revision" in n]
         manifest["assumptions"] += [f"{did}: {n}" for n in notes if "claim revision" not in n]
-    manifest["missing"] = sorted((fam_refs | lib_refs) - ids)
+    manifest["missing"] = sorted(refs - ids)
     if refs:
         manifest["unreferenced"] = sorted(d for d in ids if d not in refs and not _same(d, drawing))
 

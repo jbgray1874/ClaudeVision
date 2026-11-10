@@ -36,10 +36,15 @@ def _pack(base: Path, rev: str = "E", archive: bool = False, size: int = 100, mt
     return (base, files, archive)
 
 
-def _text(rev: str = "E", refs=("11896-01-01-GA", "11896-01-01-01M", "11896-01-01-02M", "11896-01-02-01G")):
+def _text(rev: str = "E", refs=("11896-01-01-GA", "11896-01-02-01G"),
+          sub_refs=("11896-01-01-01M", "11896-01-01-02M")):
+    """The top GA references its sub-assembly and a part; the sub-assembly's OWN drawing references
+    its parts, so they are only found by following it (SCRUM-199 acceptance 2)."""
     def read(path: Path) -> str:
-        if GA in path.name:
+        if path.name.startswith(GA):
             return f"DRAWING No {GA}  TITLE GENERIC WORKSTATION WALL UNIT  REV {rev}\nREV A REV B\n" + "\n".join(refs)
+        if path.name.startswith("11896-01-01-GA"):
+            return "DRAWING No 11896-01-01-GA FRAME REV E\n" + "\n".join(sub_refs)
         return ""
     return read
 
@@ -85,15 +90,16 @@ def test_a_referenced_child_with_no_file_stays_visible_and_the_pack_is_priced_pr
     m = pr.resolve(GA, [_pack(tmp_path / "11896-01-00-GA")], read_text=read)
     assert m["missing"] == ["11896-01-03-01M"] and m["price_ok"]
     assert any("labelled allowances" in a for a in m["assumptions"])
-    assert "11896-01-01-01M" in m["unreferenced"], "a family file the GA does not reference is kept and flagged"
+    assert "11896-01-02-01G" in m["unreferenced"], "a family file no drawing references is kept and flagged"
 
 
 def test_a_shared_library_part_the_ga_references_is_found_outside_the_job(tmp_path):
     lib = tmp_path / "Library" / "Fixings"
-    read = _text(refs=("11896-01-01-GA", "40012-00-07B"))
+    read = _text(refs=("11896-01-01-GA", "40012-00-07B", "2400-1200"))
     m = pr.resolve(GA, [_pack(tmp_path / "11896-01-00-GA"), (lib, [_f(lib, "40012-00-07B_Bracket_RevA.pdf")], False)],
                    read_text=read)
     assert m["library"] == ["40012-00-07B"] and "40012-00-07B" not in m["missing"]
+    assert "2400-1200" not in m["missing"], "a dimension pair is not a drawing reference"
 
 
 def test_a_name_only_match_is_provisional_and_says_why(tmp_path):
@@ -228,3 +234,31 @@ def test_find_shows_the_pack_and_use_keeps_it(service, monkeypatch):
     assert use["stored"]["state"] == "new" and len(use["usable_files"]) == 3
     assert all(f.startswith(str(tmp / "LiveEnquiry" / "TTI" / GA)) for f in use["usable_files"])
     assert tc.post("/api/estimate/pack/find", json={"drawing": "x"}).status_code == 400
+
+
+def test_children_are_followed_through_sub_assemblies_in_other_folders_of_the_job(tmp_path):
+    job = tmp_path / "TTi" / "11896 - Winnenden Training Centre [401646]" / "11896-Technical"
+    gas = job / "11896-01 - Generic Workstation Wall Frame" / "11896-01-00 - GAs"
+    frame = job / "11896-01 - Generic Workstation Wall Frame" / "11896-01-01 - Frame"
+    rows = [(gas, [_f(gas, f"{GA}_Generic Workstation Wall Unit_RevE.pdf"), _f(gas, f"{GA}.SLDASM")], False),
+            (frame, [_f(frame, "11896-01-01-GA_Frame_RevE.pdf"), _f(frame, "11896-01-01-01M.SLDPRT"),
+                     _f(frame, "11896-01-01-01M_60x30x1.5mm ERW BS_RevE.IGS"), _f(frame, "11896-01-01-02M_1.2mm MS_RevE.DXF"),
+                     _f(frame, "11896-01-01-02M.SLDPRT")], False)]
+    m = pr.resolve(GA, rows, read_text=_text(refs=("11896-01-01-GA",)))
+    by = {x["drawing"]: x for x in m["members"]}
+    assert set(by) == {GA, "11896-01-01-GA", "11896-01-01-01M", "11896-01-01-02M"}
+    assert by["11896-01-01-01M"]["parent"] == "11896-01-01-GA" and by["11896-01-01-GA"]["parent"] == GA
+    assert m["missing"] == []
+
+
+def test_the_design_area_wins_and_a_prototype_copy_is_never_a_conflict(tmp_path):
+    design = _pack(tmp_path / "CAD" / "Design" / "TTi" / "11896-01-00 - GAs", size=100)
+    proto = _pack(tmp_path / "CAD" / "Prototype" / "TTi" / "11896-01-00 - GAs", size=999)
+    def rank(folder: Path) -> int:
+        return 1 if "Prototype" in str(folder) else 0
+    m = pr.resolve(GA, [proto, design], read_text=_text(), area_rank=rank)
+    assert m["status"] != "ambiguous" and m["price_ok"] and not m["conflicts"]
+    assert "Design" in m["selected_folder"]
+    assert any("later search area" in a for a in m["assumptions"])
+    alone = pr.resolve(GA, [proto], read_text=_text(), area_rank=rank)
+    assert "Prototype" in alone["selected_folder"], "Prototype is used when design has nothing"
