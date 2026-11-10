@@ -434,11 +434,12 @@ def write_back_pending(workbook: Path, ledger: Dict[str, Any],
 # ── ONE CYCLE ────────────────────────────────────────────────────────────────────────
 def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool = False,
           say: Callable[[str], None] = print, collector: Any = None,
-          wait: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+          wait: Optional[Dict[str, Any]] = None,
+          others: Sequence[ler.Portal] = ()) -> Dict[str, Any]:
     """Read, collect, run. Returns what it did, for the log and the last beat."""
     ledger = ler.load_ledger(s["ledger"])
     if not dry_run:
-        ler.refresh_open_runs(ledger, portal)
+        ler.refresh_open_runs(ledger, portal, others)
         # A YES THAT COULD NOT BE WRITTEN LAST TIME IS TRIED FIRST (D-608a), before the sheet
         # is read, so a row it reaches reads YES and is not asked.
         write_back_pending(Path(s["workbook"]), ledger, say=say)
@@ -553,7 +554,97 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
                                            "poll_seconds": JOB_POLL_SECONDS}
     tried: set = set()
     ran: List[Dict[str, Any]] = []
-    while True:
+    at_once = max(1, int(getattr(config, "SELF_RUNNING_AT_ONCE", 1) or 1))
+    while at_once > 1:
+        # MORE THAN ONE AT ONCE (SDI_SELF_RUNNING_AT_ONCE): the same rules as one at a time
+        # (the switch asked before each is queued, each row tried once a cycle, the sheet read
+        # again after each finishes), with up to `at_once` jobs queued together.
+        sleep_fn = _wait.get("sleep", time.sleep)
+        poll_s = _wait.get("poll_seconds", JOB_POLL_SECONDS)
+        clock = _wait.get("clock", time.time)
+        in_flight: List[List[Any]] = []          # [decision, attempt, deadline]
+        stop_filling = False
+
+        def _show(d: ler.Decision) -> None:
+            current.clear()
+            current.update(customer=d.row.customer, drawing=d.row.drawing,
+                           quantities=list(d.quantities), since=ler._now(),
+                           also=[f"{x[0].row.drawing} ({x[0].row.customer})"
+                                 for x in in_flight if x[0] is not d])
+            current_key["key"] = ler.job_key(d.row)
+
+        while True:
+            while len(in_flight) < at_once and not stop_filling and not switched_off:
+                ready = [d for d in decisions
+                         if d.status == "ready" and ler.job_key(d.row) not in tried]
+                if not ready:
+                    break
+                nxt = ready[0]
+                tried.add(ler.job_key(nxt.row))
+                if not before_each(nxt):
+                    say("   stopped: AI Estimate Self-Running was switched off on the portal")
+                    break
+                try:
+                    attempt = ler.queue_one(nxt, portal, ledger, s["ledger"], say=say,
+                                            email_to=email_to)
+                except ler.PortalError as exc:
+                    if exc.status in (0, 503):
+                        say(f"   stopped: {exc.message}")
+                        stop_filling = True
+                        break
+                    if exc.status == 409:
+                        say(f"   {nxt.row.drawing}: already queued or running on the portal "
+                            f"— left to it")
+                        continue
+                    job = ledger["jobs"].setdefault(ler.job_key(nxt.row), {
+                        "customer": nxt.row.customer, "drawing": nxt.row.drawing,
+                        "attempts": []})
+                    job["attempts"].append({
+                        "queued_at": ler._now(), "finished_at": ler._now(), "status": "error",
+                        "row": nxt.row.row, "folder": str(nxt.located.folder),
+                        "fingerprint": nxt.fingerprint, "quantities": list(nxt.quantities),
+                        "error": f"the portal refused it: {exc.message}"})
+                    ler.save_ledger(s["ledger"], ledger)
+                    say(f"   {nxt.row.drawing}: the portal refused it — {exc.message}")
+                    continue
+                in_flight.append([nxt, attempt,
+                                  clock() + config.LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES * 60])
+                _show(nxt)
+                switch.beat(_running())
+            if not in_flight:
+                break
+            sleep_fn(poll_s)
+            ended = False
+            for item in list(in_flight):
+                d, attempt, deadline = item
+                if ler.poll_once(attempt, portal, ledger, s["ledger"], say=say):
+                    in_flight.remove(item)
+                    ran.append(attempt)
+                    price = attempt.get("engine_price_gbp")
+                    say(f"   {d.row.drawing}: {attempt['status']}"
+                        + (f" — £{price:,.2f} a unit at {d.quantities[0]} off" if price else "")
+                        + (f" — {attempt.get('error')}" if attempt.get("error") else ""))
+                    after_each(d, attempt)
+                    ended = True
+                elif clock() > deadline:
+                    in_flight.remove(item)
+                    ran.append(attempt)
+                    say(f"   {d.row.drawing} has run past "
+                        f"{config.LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES} min; not waiting on it any "
+                        f"longer this cycle (the portal keeps it)")
+                    stop_filling = True
+            ler._touch_lock(s["ledger"])
+            if in_flight:
+                _show(in_flight[0][0])
+            if ended and not stop_filling and not switched_off:
+                try:
+                    sources = ler._sources(s["root"])
+                    decisions = ler.plan(ler.read_sheet(s["workbook"]), sources, ledger)
+                except Exception as exc:                              # noqa: BLE001
+                    say(f"   (the sheet could not be read again: {type(exc).__name__}: {exc}; "
+                        f"carrying on with the last read)")
+        break
+    while at_once == 1:
         ready = [d for d in decisions
                  if d.status == "ready" and ler.job_key(d.row) not in tried]
         if not ready:
@@ -638,7 +729,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             pressed = bool(switch.last.get("run_now"))
             if on and (pressed or time.time() >= next_cycle):
                 try:
-                    done = cycle(s, portal, switch)
+                    done = cycle(s, portal, switch, others=portals)
                     msg = (f"read the sheet: {', '.join(f'{v} {k}' for k, v in sorted(done['counts'].items()))}"
                            f"; collected {sum(1 for c in done['collected'] if c.get('status') == 'copied')}"
                            f" pack(s); ran {len(done['ran'])}")
