@@ -61,6 +61,9 @@ _REF = re.compile(r"(?<![0-9A-Za-z])((?:[A-Za-z]{1,4}-)?\d{3,}[A-Za-z]?(?:-[A-Za
 _REV_NAME = re.compile(r"(?:^|[_\s\-.])REV(?:ISION)?[_\s\-]?([A-Z]{1,2}|\d{1,2}|P\d{1,2})(?=$|[_\s\-.()\[\]])",
                        re.IGNORECASE)
 _REV_TEXT = re.compile(r"\bREV(?:ISION)?\.?\s*[:\-]?\s*([A-Z]{1,2}|\d{1,2}|P\d{1,2})\b")
+# A REVISION TABLE'S COLUMN HEADINGS ARE NOT REVISIONS (JG, 10 Nov 2026): 12736-00-01's table reads
+# "ZONE REV. CN REASON DATE", and CN, the change-note column, was taken as the GA's revision.
+_REV_HEADINGS = {"CN", "ECN", "ECO", "DCN", "CR", "ZONE", "BY", "NO", "DATE", "DESC", "REASON"}
 _ASSEMBLY = re.compile(r"^(GA|SA|ASSY|ASM)\d*$", re.IGNORECASE)
 
 
@@ -180,11 +183,19 @@ def read_drawing(path: Path, drawing: str, read_text: Callable[[Path], str] = re
     text = read_text(path) if path.suffix.lower() == ".pdf" else ""
     flat = re.sub(r"\s+", "", text).upper()
     carries = bool(text) and re.sub(r"[\s_]", "", drawing).upper() in flat
-    revs = [r for r in _REV_TEXT.findall(text.upper()) if revision_rank(r)]
+    up = text.upper()
+    revs = [r for r in _REV_TEXT.findall(up) if revision_rank(r) and r not in _REV_HEADINGS]
     best = ""
     for r in revs:
         if not best or later(r, best):
             best = r
+    # THE TITLE BLOCK'S OWN REVISION BEATS ANY OTHER: the drawing number with its revision after
+    # it ("12736-00-01 B"), as the DWG NO. / REVISION boxes print side by side.
+    _num = re.escape(drawing.upper()).replace(r"\-", r"[-_ ]?")
+    _tb = [m.group(1) for m in re.finditer(r"(?<![0-9A-Z])" + _num + r"\s+([A-Z]{1,2}|P\d{1,2})(?![0-9A-Z])", up)
+           if revision_rank(m.group(1)) and m.group(1) not in _REV_HEADINGS]
+    if _tb:
+        best = max(_tb, key=lambda r: revision_rank(r) or ("", 0))
     refs = sorted({m.upper() for m in _REF.findall(text.upper())} - {drawing.upper()})
     return {"read": bool(text), "carries_number": carries, "revision": best, "references": refs}
 

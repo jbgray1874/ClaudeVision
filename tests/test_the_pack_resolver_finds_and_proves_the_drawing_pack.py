@@ -289,3 +289,12 @@ def test_a_customer_item_number_in_front_does_not_hide_the_drawing_number():
     assert pr.drawing_id("12424-02-GA_revC 0359681.dxf") == "12424-02-GA"
     assert pr.drawing_id("12739 Stand.pdf") == "12739", "a bare number alone is still the number"
     assert pr.drawing_id("0359829 Smart Shirt Table.pdf") == "0359829"
+
+
+def test_a_revision_table_heading_is_not_the_revision_and_the_title_block_value_wins():
+    """12736-00-01: "ZONE REV. CN REASON DATE" and the title block "... 12736-00-01 B". CN, the
+    change-note column heading, was read as the GA's revision (JG, 10 Nov 2026)."""
+    text = ("REVISIONS\nZONE REV. CN REASON DATE APPROVED ON APPROVED BY\n"
+            "DWG NO. REVISION:\nSANDER DEMO ASSY TTI 12736-00-01 B\n1 12736-01-GA FRAME 1")
+    got = pr.read_drawing(Path("x.pdf"), "12736-00-01", read_text=lambda p: text)
+    assert got["revision"] == "B" and got["carries_number"]
