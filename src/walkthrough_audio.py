@@ -93,7 +93,17 @@ def _azure_speak(words: str, wav: Path, post: Optional[Callable[[str], bytes]] =
         wav.write_bytes(data)
         return True, voice
     except Exception as exc:                                         # noqa: BLE001
-        return False, f"Azure could not speak it ({type(exc).__name__})"
+        # THE REASON, NOT ONLY ITS KIND (JG, 10 Nov 2026: "the AI voice is still unchanged").
+        # Every walkthrough that day was the Windows voice and nothing said why: the HTTP
+        # status and Azure's own words, or the network error, are what someone can act on.
+        code = getattr(exc, "code", None)
+        said = ""
+        try:
+            said = exc.read().decode("utf-8", "replace").strip()[:200]  # type: ignore[attr-defined]
+        except Exception:                                            # noqa: BLE001
+            said = str(getattr(exc, "reason", "") or exc)[:200]
+        return False, (f"Azure could not speak it ({type(exc).__name__}"
+                       + (f" {code}" if code else "") + (f": {said}" if said else "") + ")")
 
 
 def paths_for(workbook: Path) -> Tuple[Path, Path]:
@@ -139,4 +149,29 @@ def write_walkthrough(words: str, workbook: Path, *,
         size = wav.stat().st_size
     except OSError:
         return False, f"{txt.name} written; the speech synthesiser produced no sound file"
-    return True, f"{wav.name} ({size / 1024 / 1024:.1f} MB) and {txt.name}"
+    return True, (f"{wav.name} ({size / 1024 / 1024:.1f} MB, the Windows voice"
+                  + (f"; {azure_said.strip()}" if azure_said else "") + f") and {txt.name}")
+
+
+def check(say: Callable[[str], None] = print) -> bool:
+    """`python src\\walkthrough_audio.py --check`: one short sentence through Azure, as an
+    estimate's walkthrough would be spoken, and what happened. Key values are never printed."""
+    try:
+        import config                                                # noqa: F401  loads .env
+    except Exception:                                                # noqa: BLE001
+        pass
+    say(f"SDI_WALKTHROUGH_VOICE = {os.getenv('SDI_WALKTHROUGH_VOICE', '') or '(not set)'}")
+    say(f"SDI_SPEECH_REGION     = {os.getenv('SDI_SPEECH_REGION', '') or '(not set)'}")
+    say(f"SDI_SPEECH_VOICE      = {os.getenv('SDI_SPEECH_VOICE', '') or '(default en-GB-SoniaNeural)'}")
+    say(f"SDI_SPEECH_KEY        = {'set' if os.getenv('SDI_SPEECH_KEY', '').strip() else '(not set)'}")
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        ok, said = _azure_speak("This is the SDI estimate walkthrough voice.", Path(tmp) / "t.wav")
+    say(("AZURE OK: " if ok else "AZURE FAILED: ") + said)
+    return ok
+
+
+if __name__ == "__main__":
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    raise SystemExit(0 if check() else 1)
