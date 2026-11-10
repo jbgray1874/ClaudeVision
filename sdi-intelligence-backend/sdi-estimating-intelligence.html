@@ -5155,7 +5155,9 @@ function renderSelf(v){
   const parts = SELF_LABELS.filter(([k]) => c[k]).map(([k, l]) => c[k] + " " + l);
   let html = parts.length
     ? "<div><b>The sheet:</b> " + selfEsc(parts.join(" · "))
-      + (w.last_cycle_at ? " — read " + selfEsc(w.last_cycle_at) : "") + "</div>" : "";
+      + (w.last_cycle_at ? " — read " + selfEsc(w.last_cycle_at) : "")
+      + (w.workbook ? "<div class='note' style='margin:2px 0 0'>from " + selfEsc(w.workbook) + "</div>" : "")
+      + "</div>" : "";
   const recent = w.recent || [];
   if(recent.length){
     html += "<div style='margin-top:6px'><b>Latest runs:</b></div><ul style='margin:4px 0 0 18px'>"

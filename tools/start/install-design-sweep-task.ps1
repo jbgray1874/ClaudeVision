@@ -19,7 +19,8 @@
 [CmdletBinding()]
 param(
     [string] $Root = "",
-    [string] $Server   = $(if ($env:SDI_SERVER) { $env:SDI_SERVER } else { "http://localhost:8072" }),
+    # Reported to every service on the list, 8071 first, so the 8071 control panel shows new packs.
+    [string] $Server   = $(if ($env:SDI_SERVER) { $env:SDI_SERVER } else { "http://localhost:8071,http://localhost:8072" }),
     [string] $TaskName = "SDI Design Share Sweep",
     [switch] $Remove
 )

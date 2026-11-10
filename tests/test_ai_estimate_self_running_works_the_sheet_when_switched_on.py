@@ -660,3 +660,13 @@ def test_reinstalling_the_watcher_restarts_it_with_its_new_settings():
     assert '"live_enquiry.lock"' in ps and "Get-Process -Id ([int]$holder)" in ps
     assert "reporting to|did not answer" in ps
     assert all(ord(c) < 128 for c in ps)
+
+
+def test_the_installers_queue_on_8071_first_so_the_jobs_show_on_the_wall_people_watch():
+    """Jobs are queued on the first service listed; the wall people watch is 8071's (JG, 10 Nov 2026)."""
+    here = Path(__file__).resolve().parents[1] / "tools" / "start"
+    for name in ("install-self-running-task.ps1", "install-design-sweep-task.ps1"):
+        ps1 = (here / name).read_text(encoding="utf-8")
+        assert '"http://localhost:8071,http://localhost:8072"' in ps1, name
+        assert "localhost:8072,http://localhost:8071" not in ps1, name
+        assert all(ord(c) < 128 for c in ps1), name
