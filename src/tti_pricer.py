@@ -127,6 +127,9 @@ def read_rows(sheet: Path, cols: Dict[str, str], rows: Optional[Tuple[int, int]]
                 return c
         return None
     desc_c = find("description", "item", "job")
+    # THE LATEST FEEDBACK (JG, 10 Nov 2026): "quantity reduced from 5 to 3", "drawings existing
+    # from Rome". A column headed Feedback is part of the job's brief, beside the Notes.
+    fb_c = find("feedback")
     # THE NUMBER OF UNITS (JG, 10 Nov 2026: "column N Quantity"). --col-qty names the column;
     # without it the header that says Qty / Quantity is used.
     qty_c = col_index(cols["qty"]) if cols.get("qty") else find("qty", "quantity")
@@ -146,6 +149,7 @@ def read_rows(sheet: Path, cols: Dict[str, str], rows: Optional[Tuple[int, int]]
             continue                                        # a repeated header row is not a job
         notes = str(ws.cell(r, col_index(cols["notes"])).value or "").strip()
         desc = str(ws.cell(r, desc_c).value or "").strip() if desc_c else ""
+        feedback = str(ws.cell(r, fb_c).value or "").strip() if fb_c else ""
         if not (drawing or notes or desc or pics.get(r)):
             continue
         try:
@@ -153,6 +157,7 @@ def read_rows(sheet: Path, cols: Dict[str, str], rows: Optional[Tuple[int, int]]
         except (TypeError, ValueError):
             qty = 1
         out.append({"row": r, "drawing": drawing_ref(drawing), "drawing_cell": drawing, "notes": notes, "description": desc,
+                    "feedback": feedback,
                     "quantity": max(1, qty), "pictures": pics.get(r, []),
                     "cost_before": ws.cell(r, col_index(cols["cost"])).value})
     return {"sheet": ws.title, "header_row": header_row,
@@ -387,6 +392,8 @@ def brief_for(r: Dict[str, Any]) -> str:
         parts.append(f"Description: {r['description']}.")
     if r.get("notes"):
         parts.append(f"Notes: {r['notes']}.")
+    if r.get("feedback"):
+        parts.append(f"Latest feedback: {r['feedback']}.")
     parts.append(f"Quantity: {r['quantity']}.")
     return " ".join(parts)
 
@@ -553,6 +560,14 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         if not found and r["drawing"]:
             item["job_folders"] = job_folders(r["drawing"], listings)
         report["rows"].append(item)
+        # ONLY THE ROWS WITH A DRAWING NUMBER (JG, 10 Nov 2026): "in effect the same as a normal
+        # run: the client, the number of units, the drawing pack, the description". The rest are
+        # listed, not priced.
+        if getattr(args, "drawings_only", False) and not r["drawing"]:
+            item.update(state="skipped", kind="not priced (no drawing number)",
+                        why="no drawing number on the row; --drawings-only")
+            save()
+            continue
         save()
         # THE SAME DRAWING AT THE SAME QUANTITY IS PRICED ONCE PER BATCH; later rows take its cost.
         same = priced.get((r["drawing"], r["quantity"])) if r["drawing"] else None
@@ -643,6 +658,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--col-notes", default="G")
     ap.add_argument("--col-thumbs", default="I,J")
     ap.add_argument("--col-cost", default="P")
+    ap.add_argument("--drawings-only", action="store_true",
+                    help="price only the rows that carry a drawing number; the rest are listed, not priced")
     ap.add_argument("--col-qty", default="", help="the number of units, e.g. N; default the column headed Qty / Quantity")
     ap.add_argument("--dry-run", action="store_true", help="find the drawings and say what would run; nothing queued or written")
     ap.add_argument("--server", default=os.getenv("SDI_SERVER", "http://localhost:8072"))

@@ -14,6 +14,7 @@ pandas          # tabular data handling
 python-dotenv   # load configuration from .env (imported as `dotenv`)
 requests        # web / LLM price-lookup calls
 Pillow          # image handling (imported as `PIL`)
+anthropic       # Claude, the reader when xAI is busy or has no key (src/claude_fallback.py)
 openai          # xAI is OpenAI-compatible; the client the VISION BOM reader calls Grok
                 # through (_bom_vision_reader.call_vision_llm). Undeclared until now, so
                 # a machine without it read every BOM with one reader instead of two and
