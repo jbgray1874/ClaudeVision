@@ -133,3 +133,28 @@ def test_claude_is_asked_streamed_with_the_refusal_fallback_and_a_refusal_is_not
     assert "temperature" not in seen
     with pytest.raises(RuntimeError):
         cf.ask("sys", "q", client=_client("refusal"))
+
+
+def test_an_older_sdk_without_the_fallback_parameter_still_reads():
+    calls = []
+
+    class _Stream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get_final_message(self):
+            return types.SimpleNamespace(stop_reason="end_turn", stop_details=None, content=[
+                types.SimpleNamespace(type="text", text="old sdk read")])
+
+    def stream(**kw):
+        calls.append(sorted(kw))
+        if "fallbacks" in kw:
+            raise TypeError("stream() got an unexpected keyword argument 'fallbacks'")
+        return _Stream()
+    client = types.SimpleNamespace(beta=types.SimpleNamespace(
+        messages=types.SimpleNamespace(stream=stream)))
+    assert cf.ask("sys", "q", client=client) == "old sdk read"
+    assert "fallbacks" in calls[0] and "fallbacks" not in calls[1] and "output_config" in calls[1]

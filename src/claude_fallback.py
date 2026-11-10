@@ -53,18 +53,27 @@ def ask(system: str, user_content: str, max_tokens: int = 64000,
         client: Optional[object] = None) -> str:
     """Claude's text answer to the one question. Streamed, so a long transcription is not cut
     off by an HTTP timeout; the SDK retries rate limits and server errors itself."""
-    import anthropic  # noqa: PLC0415
-    client = client or anthropic.Anthropic()
-    with client.beta.messages.stream(
-        model=model(),
-        max_tokens=max_tokens,
-        system=system,
-        messages=[{"role": "user", "content": user_content}],
-        output_config={"effort": effort()},
-        betas=[_FALLBACK_BETA],
-        fallbacks="default",
-    ) as stream:
-        message = stream.get_final_message()
+    if client is None:
+        import anthropic  # noqa: PLC0415
+        client = anthropic.Anthropic()
+    base = {"model": model(), "max_tokens": max_tokens, "system": system,
+            "messages": [{"role": "user", "content": user_content}]}
+    # AN OLDER SDK (the laptop had 0.97) may not know the refusal fallback or effort yet: the call
+    # is made with all of it, then without the fallback, then plain, so an old package still reads.
+    message = None
+    for extra in ({"output_config": {"effort": effort()}, "betas": [_FALLBACK_BETA],
+                   "fallbacks": "default"},
+                  {"output_config": {"effort": effort()}},
+                  {}):
+        try:
+            with client.beta.messages.stream(**base, **extra) as stream:
+                message = stream.get_final_message()
+            break
+        except TypeError:
+            continue
+    if message is None:
+        raise RuntimeError("the installed anthropic package could not make the call; "
+                           "upgrade it: python -m pip install --upgrade anthropic")
     if message.stop_reason == "refusal":
         raise RuntimeError(f"Claude declined the request ({getattr(message, 'stop_details', None)})")
     return "".join(block.text for block in message.content if block.type == "text")

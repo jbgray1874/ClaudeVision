@@ -2672,6 +2672,15 @@ def pre_costing_passes(summary: Dict[str, Any]) -> None:
     # 3 mm mild steel. A material that arrives after the price is a note, not a material.
     _inherit_sheet_material_to_parts(summary["manufacturing_writeup"]["parts"],
                                      summary.get("pages") or [])
+    # A LAMINATED BOARD IS ITS CORE PLUS ITS LAMINATE (JG, 10 Nov 2026, 12674-01-GA): the GA's
+    # FINISH reaches the board parts that state none, and a finished thickness that is a stock
+    # board plus laminate is priced as that core with the laminate on its faces.
+    try:
+        import laminated_board as _lb
+        for _line in _lb.apply(summary["manufacturing_writeup"]["parts"], summary.get("pages") or []):
+            print(f"   [laminate] {_line}", flush=True)
+    except Exception as _lb_exc:                                    # noqa: BLE001
+        print(f"   [laminate] not read ({type(_lb_exc).__name__}: {_lb_exc})", flush=True)
     # AND A WIRE PART'S GAUGE AND OUTLINE (D-437), read off the same sheets, before the
     # costing reaches for a default gauge and an assumed length.
     try:
