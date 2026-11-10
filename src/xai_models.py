@@ -109,6 +109,90 @@ def note_exception(exc: BaseException, model: str) -> bool:
     return note_refusal(model, status if isinstance(status, int) else None, str(exc))
 
 
+# ── XAI BUSY IS A WAIT, NOT AN ANSWER (JG, 10 Nov 2026) ────────────────────────────────────
+# 12674-01-GA's whole-pack read met "429 ... resource-exhausted ... The model is currently at
+# capacity due to high demand" once, gave up, and the run went on as if the drawings held nothing
+# more. A capacity refusal, a rate limit, a timeout or a server error is xAI being busy, so the
+# call is made again after a wait (SDI_XAI_RETRY_SECONDS, default 20,60,120: four tries over about
+# three and a half minutes). Each wait is one line on the console that Grid Control reads:
+#
+#   [xai-wait] capacity (HTTP 429) on the drawing read: try 1 of 4 failed; next try in 60 s,
+#   20 s waited so far
+#
+# and the outcome is said too: recovered on try N, or given up with the reason, so the run's
+# other readers' findings stand and the LLM read is marked as not done rather than as empty. A
+# refusal that waiting cannot cure (a bad key, a model this account lacks) is not retried.
+XAI_WAIT_TAG = "[xai-wait]"
+
+
+def busy_kind(exc: BaseException) -> str:
+    """"capacity", "rate limit", "timeout" or "server error" when xAI is busy; "" otherwise."""
+    status = getattr(exc, "status_code", None)
+    text = f"{type(exc).__name__} {exc}".lower()
+    if status == 429 or " 429" in text or "error code: 429" in text:
+        return ("capacity" if any(w in text for w in ("capacity", "resource-exhausted",
+                                                      "resource_exhausted", "high demand"))
+                else "rate limit")
+    if "timeout" in text or "timed out" in text:
+        return "timeout"
+    if isinstance(status, int) and status >= 500 or any(
+            w in text for w in ("502", "503", "504", "overloaded", "connection error",
+                                "connection reset", "apiconnectionerror")):
+        return "server error"
+    return ""
+
+
+def retry_waits() -> List[float]:
+    raw = _env("SDI_XAI_RETRY_SECONDS")
+    if raw.lower() in {"0", "none", "off"}:
+        return []
+    out: List[float] = []
+    for x in (raw or "20,60,120").split(","):
+        try:
+            v = float(x.strip())
+        except ValueError:
+            continue
+        if v >= 0:
+            out.append(v)
+    return out
+
+
+def call_with_retry(fn: Any, model: str, what: str = "the drawing read",
+                    sleep: Any = None, say: Any = None) -> Any:
+    """fn() again after each wait while xAI is busy; the last error is raised when it stays so."""
+    import time as _time
+    sleep = _time.sleep if sleep is None else sleep
+    say = (lambda m: print(m, flush=True)) if say is None else say
+    waits = retry_waits()
+    tries = len(waits) + 1
+    waited = 0.0
+    for n in range(1, tries + 1):
+        try:
+            out = fn()
+        except Exception as exc:                                     # noqa: BLE001
+            kind = busy_kind(exc)
+            if not kind or note_exception(exc, model):
+                raise
+            status = getattr(exc, "status_code", None)
+            label = f"{kind}{f' (HTTP {status})' if isinstance(status, int) else ''}"
+            if n >= tries:
+                say(f"   {XAI_WAIT_TAG} gave up on {what} after {tries} tries and {waited:g} s: "
+                    f"xAI {label}. The other readers' findings stand; this read is NOT done "
+                    f"and is said so on the book.")
+                raise
+            w = waits[n - 1]
+            say(f"   {XAI_WAIT_TAG} {label} on {what}: try {n} of {tries} failed; next try in "
+                f"{w:g} s, {waited:g} s waited so far")
+            sleep(w)
+            waited += w
+            continue
+        if n > 1:
+            say(f"   {XAI_WAIT_TAG} recovered on {what}: try {n} of {tries} answered after "
+                f"{waited:g} s of waiting")
+        return out
+    return None
+
+
 def where_from(env_names: Tuple[str, ...]) -> str:
     name = next((n for n in env_names if os.environ.get(n, "").strip()), "")
     return f".env or shell ({name})" if name else "config.py default"

@@ -85,6 +85,14 @@ def col_index(letter: str) -> int:
     return n
 
 
+def _col_letter(n: int) -> str:
+    out = ""
+    while n:
+        n, r = divmod(n - 1, 26)
+        out = chr(65 + r) + out
+    return out
+
+
 # ── reading the sheet ───────────────────────────────────────────────────────────────────
 
 def read_rows(sheet: Path, cols: Dict[str, str], rows: Optional[Tuple[int, int]] = None,
@@ -119,7 +127,12 @@ def read_rows(sheet: Path, cols: Dict[str, str], rows: Optional[Tuple[int, int]]
                 return c
         return None
     desc_c = find("description", "item", "job")
-    qty_c = find("qty", "quantity")
+    # THE LATEST FEEDBACK (JG, 10 Nov 2026): "quantity reduced from 5 to 3", "drawings existing
+    # from Rome". A column headed Feedback is part of the job's brief, beside the Notes.
+    fb_c = find("feedback")
+    # THE NUMBER OF UNITS (JG, 10 Nov 2026: "column N Quantity"). --col-qty names the column;
+    # without it the header that says Qty / Quantity is used.
+    qty_c = col_index(cols["qty"]) if cols.get("qty") else find("qty", "quantity")
     pics: Dict[int, List[Any]] = {}
     for img in getattr(ws, "_images", []) or []:
         try:
@@ -136,6 +149,7 @@ def read_rows(sheet: Path, cols: Dict[str, str], rows: Optional[Tuple[int, int]]
             continue                                        # a repeated header row is not a job
         notes = str(ws.cell(r, col_index(cols["notes"])).value or "").strip()
         desc = str(ws.cell(r, desc_c).value or "").strip() if desc_c else ""
+        feedback = str(ws.cell(r, fb_c).value or "").strip() if fb_c else ""
         if not (drawing or notes or desc or pics.get(r)):
             continue
         try:
@@ -143,11 +157,13 @@ def read_rows(sheet: Path, cols: Dict[str, str], rows: Optional[Tuple[int, int]]
         except (TypeError, ValueError):
             qty = 1
         out.append({"row": r, "drawing": drawing_ref(drawing), "drawing_cell": drawing, "notes": notes, "description": desc,
+                    "feedback": feedback,
                     "quantity": max(1, qty), "pictures": pics.get(r, []),
                     "cost_before": ws.cell(r, col_index(cols["cost"])).value})
     return {"sheet": ws.title, "header_row": header_row,
             "header": {"description": heads.get(desc_c) if desc_c else None,
                        "quantity": heads.get(qty_c) if qty_c else None,
+                       "quantity_column": _col_letter(qty_c) if qty_c else None,
                        "drawing": heads.get(dcol), "cost": heads.get(col_index(cols["cost"]))},
             "rows": out}
 
@@ -376,6 +392,8 @@ def brief_for(r: Dict[str, Any]) -> str:
         parts.append(f"Description: {r['description']}.")
     if r.get("notes"):
         parts.append(f"Notes: {r['notes']}.")
+    if r.get("feedback"):
+        parts.append(f"Latest feedback: {r['feedback']}.")
     parts.append(f"Quantity: {r['quantity']}.")
     return " ".join(parts)
 
@@ -476,7 +494,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
               sleep: Callable[[float], None] = time.sleep) -> Dict[str, Any]:
     sheet = Path(args.sheet)
     cols = {"drawing": args.col_drawing, "notes": args.col_notes, "thumbs": args.col_thumbs.split(","),
-            "cost": args.col_cost}
+            "cost": args.col_cost, "qty": getattr(args, "col_qty", "") or ""}
     rows = None
     if args.rows:
         a, _, b = args.rows.partition("-")
@@ -542,6 +560,14 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         if not found and r["drawing"]:
             item["job_folders"] = job_folders(r["drawing"], listings)
         report["rows"].append(item)
+        # ONLY THE ROWS WITH A DRAWING NUMBER (JG, 10 Nov 2026): "in effect the same as a normal
+        # run: the client, the number of units, the drawing pack, the description". The rest are
+        # listed, not priced.
+        if getattr(args, "drawings_only", False) and not r["drawing"]:
+            item.update(state="skipped", kind="not priced (no drawing number)",
+                        why="no drawing number on the row; --drawings-only")
+            save()
+            continue
         save()
         # THE SAME DRAWING AT THE SAME QUANTITY IS PRICED ONCE PER BATCH; later rows take its cost.
         same = priced.get((r["drawing"], r["quantity"])) if r["drawing"] else None
@@ -632,6 +658,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--col-notes", default="G")
     ap.add_argument("--col-thumbs", default="I,J")
     ap.add_argument("--col-cost", default="P")
+    ap.add_argument("--drawings-only", action="store_true",
+                    help="price only the rows that carry a drawing number; the rest are listed, not priced")
+    ap.add_argument("--col-qty", default="", help="the number of units, e.g. N; default the column headed Qty / Quantity")
     ap.add_argument("--dry-run", action="store_true", help="find the drawings and say what would run; nothing queued or written")
     ap.add_argument("--server", default=os.getenv("SDI_SERVER", "http://localhost:8072"))
     ap.add_argument("--api-key", default=os.getenv("SDI_API_KEY", ""))
@@ -658,6 +687,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"{k:<10} {ro[k]}  {state}", flush=True)
     print(f"folders from: {ro.get('source')}", flush=True)
     print(f"header row {rep['header_row']} ({rep['header'].get('drawing')}); {len(rep['rows'])} job row(s)", flush=True)
+    _qh = rep["header"]
+    print(f"units from column {_qh.get('quantity_column') or '-'} ({_qh.get('quantity') or 'none found: every row priced at 1'})",
+          flush=True)
     found = 0
     for it in rep["rows"]:
         where = (it.get("found") or {}).get("folder")
@@ -669,7 +701,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         shown = it["drawing"] or "(none)"
         if cell and cell.upper() != it["drawing"]:
             shown += f" [{cell[:30]}]"
-        print(f"row {it['row']:>4}  {shown:<28} {it['kind']:<34} {it['state']:<12} "
+        print(f"row {it['row']:>4}  {shown:<28} x{it.get('quantity', 1):<5} {it['kind']:<34} {it['state']:<12} "
               f"{it.get('unit_cost', '') if it.get('unit_cost') is not None else ''}  {where}", flush=True)
         if it.get("pack"):
             print(f"{'':<11}{it['pack']}", flush=True)

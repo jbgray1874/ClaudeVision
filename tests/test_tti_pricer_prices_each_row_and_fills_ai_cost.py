@@ -330,3 +330,45 @@ def test_a_priced_rows_pack_is_kept_in_live_enquiry_and_reused_next_time(tmp_pat
     portal = FakePortal()
     tp.run_batch(_args(sheet, rows="3"), portal=portal, status_path=None, sleep=lambda s: None)
     assert "Drawing pack provisional:" in portal.started[0]["enquiry_brief"], "the pack's assumptions travel with the job"
+
+
+def test_the_number_of_units_comes_from_the_column_named_and_is_shown(tmp_path):
+    """JG, 10 Nov 2026: the number of units is column N, headed Quantity. A sheet that also has a
+    column whose header mentions a quantity earlier on is read from the column named."""
+    p = tmp_path / "T.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["C1"], ws["G1"], ws["L1"], ws["N1"], ws["P1"] = "Qty per pallet", "Notes", "Drawing Number", \
+        "Quantity", "AICost"
+    ws["C2"], ws["G2"], ws["L2"], ws["N2"] = 40, "x", "12345-01-GA", 7
+    wb.save(p)
+    cols = {"drawing": "L", "notes": "G", "thumbs": ["I", "J"], "cost": "P"}
+    assert tp.read_rows(p, cols)["rows"][0]["quantity"] == 40, "the first Qty header, unnamed"
+    got = tp.read_rows(p, dict(cols, qty="N"))
+    assert got["rows"][0]["quantity"] == 7
+    assert got["header"]["quantity_column"] == "N" and got["header"]["quantity"] == "Quantity"
+    assert tp.build_parser().parse_args(["--sheet", "x", "--col-qty", "N"]).col_qty == "N"
+
+
+def test_drawings_only_prices_the_rows_with_a_drawing_and_lists_the_rest(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)
+    _areas(tmp_path, monkeypatch)
+    portal = FakePortal()
+    rep = tp.run_batch(_args(sheet, drawings_only=True), portal=portal, status_path=None,
+                       sleep=lambda s: None)
+    rows = {r["row"]: r for r in rep["rows"]}
+    assert rows[6]["state"] == "skipped" and "no drawing number" in rows[6]["why"]
+    assert all(b["drawing_number"] != "TTI-row6" for b in portal.started)
+
+
+def test_the_latest_feedback_goes_into_the_brief(tmp_path):
+    p = tmp_path / "T.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["G1"], ws["H1"], ws["L1"], ws["N1"], ws["Q1"] = "Notes", "Latest Feedback", \
+        "Drawing Number", "Quantity", "AI Cost"
+    ws["G2"], ws["H2"], ws["L2"], ws["N2"] = "benches", "quantity reduced from 5 to 3", "12345-00-GA", 3
+    wb.save(p)
+    r = tp.read_rows(p, {"drawing": "L", "notes": "G", "thumbs": ["I", "J"], "cost": "Q"})["rows"][0]
+    assert r["feedback"] == "quantity reduced from 5 to 3"
+    assert "Latest feedback: quantity reduced from 5 to 3." in tp.brief_for(r)

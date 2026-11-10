@@ -1129,6 +1129,35 @@ def report_gate(requests, servers: List[str], headers: Dict[str, str], runner_id
             pass
 
 
+def excel_installed() -> Optional[bool]:
+    """Is a desktop Excel registered on this machine? None where it cannot be told (not Windows)."""
+    if os.name != "nt":
+        return None
+    try:
+        import winreg                                              # noqa: PLC0415
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, r"Excel.Application\CLSID"))
+        return True
+    except OSError:
+        return False
+    except Exception:                                              # noqa: BLE001
+        return None
+
+
+def extract_only() -> Tuple[bool, str]:
+    """(this runner takes pack extracts only, why). JG, 10 Nov 2026: the server has no Excel, and
+    every estimate is written and recalculated in Excel, so a runner there would claim estimates
+    it cannot finish. SDI_RUNNER_EXTRACT_ONLY=1 says so; a Windows machine with no Excel says so
+    by itself; SDI_RUNNER_EXTRACT_ONLY=0 overrides the detection."""
+    v = str(os.getenv("SDI_RUNNER_EXTRACT_ONLY", "")).strip().lower()
+    if v in {"1", "true", "yes", "on"}:
+        return True, "SDI_RUNNER_EXTRACT_ONLY=1"
+    if v in {"0", "false", "no", "off"}:
+        return False, ""
+    if excel_installed() is False:
+        return True, "no Excel on this machine"
+    return False, ""
+
+
 def runner_capabilities() -> List[str]:
     """What this runner tells the service on every claim. "no_models" (D-703, SCRUM-183): it
     will not drive SolidWorks (SDI_SW_RUN_ANALYSER=0) and has no Document Manager backup
@@ -1152,6 +1181,12 @@ def runner_capabilities() -> List[str]:
            and _key)
     if _off and not _dm:
         caps.append("no_models")
+    # AN EXTRACT-ONLY RUNNER (the server without Excel): it says so, and offers only the pack
+    # extracts that need no workbook: the xAI read, the Document Manager read where the key is,
+    # and the SolidWorks read only where SolidWorks runs here.
+    if extract_only()[0]:
+        caps = ["extract_only", "xai_extract"] + (["dm_extract"] if _key else []) \
+            + ([] if _off else ["sw_extract"]) + (["no_models"] if "no_models" in caps else [])
     return caps
 PACK_EXTRACT_KIND = {"sw_extract": "sw", "xai_extract": "xai", "dm_extract": "dm"}
 

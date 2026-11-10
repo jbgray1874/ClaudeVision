@@ -571,13 +571,17 @@ def _call_llm(user_content: str, model: str,
     """One TEXT chat call (xAI OpenAI-compatible). `user_content` is the COMPLETE user message —
     prompt and payload both — because a caller whose prompt gets something else stapled in
     front of it is not in control of what it asked."""
+    global LAST_ANSWERED_BY
+    LAST_ANSWERED_BY = model
     api_key = os.environ.get("XAI_API_KEY")
     if not api_key:
+        if _claude_available():
+            return _ask_claude(system, user_content, "no XAI_API_KEY is set")
         raise RuntimeError("XAI_API_KEY not set (C:\\ClaudeVision\\.env or $env:XAI_API_KEY).")
     from openai import OpenAI  # xAI is OpenAI-compatible
     client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-    try:
-        resp = client.chat.completions.create(
+    def _once():
+        return client.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": system},
@@ -585,10 +589,44 @@ def _call_llm(user_content: str, model: str,
             ],
             temperature=0,
         )
+    # BUSY IS WAITED FOR (10 Nov 2026): a capacity 429, a rate limit, a timeout or a server error
+    # is tried again after a wait, each wait said; any other error is said once and raised.
+    try:
+        resp = xai_models.call_with_retry(
+            _once, model, what=("the drawing read" if system == SYSTEM_TRANSCRIBE
+                                else "a targeted question"))
     except Exception as exc:                                         # noqa: BLE001
+        # CLAUDE WHEN XAI STAYS BUSY (10 Nov 2026): the same question, asked of Claude, and said.
+        if xai_models.busy_kind(exc) and _claude_available():
+            return _ask_claude(system, user_content,
+                               f"xAI stayed busy ({xai_models.busy_kind(exc)})")
         xai_models.note_exception(exc, model)                        # said once, then raised
         raise
     return resp.choices[0].message.content
+
+
+# WHO ANSWERED THE LAST CALL: the xAI model, or "claude:<model>" when Claude stood in. The read
+# carries it (`_answered_by`), so a book never presents Claude's reading as Grok's.
+LAST_ANSWERED_BY = ""
+
+
+def _claude_available() -> bool:
+    try:
+        import claude_fallback                                       # noqa: PLC0415
+        return claude_fallback.available()
+    except Exception:                                                # noqa: BLE001
+        return False
+
+
+def _ask_claude(system: str, user_content: str, why: str) -> Optional[str]:
+    import claude_fallback                                           # noqa: PLC0415
+    global LAST_ANSWERED_BY
+    print(f"   [llm-fallback] {why}: asking Claude ({claude_fallback.model()}) the same "
+          f"question instead", flush=True)
+    text = claude_fallback.ask(system, user_content)
+    LAST_ANSWERED_BY = f"claude:{claude_fallback.model()}"
+    print(f"   [llm-fallback] Claude answered ({len(text or '')} characters)", flush=True)
+    return text
 
 
 def extract_full_job(pdf_path: str | Path, model: str = DEFAULT_MODEL) -> Dict[str, Any]:
@@ -721,6 +759,7 @@ def _transcribe(ctx: str, model: str = DEFAULT_MODEL) -> Dict[str, Any]:
         result["error"] = "LLM response was not parseable JSON"
         result["raw"] = (raw or "")[:2000]
         return result
+    obj["_answered_by"] = LAST_ANSWERED_BY or model
     _cache_write(_key, {**obj, "_raw_full": raw or ""})
     obj["_raw_full_words"] = raw or ""
     return obj

@@ -169,6 +169,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"\n  {'part':24} {'what':22} {'SolidWorks':>14} {'Doc Manager':>14}")
         for pn, what, a, b in r["differ"]:
             print(f"  {pn[:24]:24} {what[:22]:22} {_show(a)[:14]:>14} {_show(b)[:14]:>14}")
+    # WHAT THE DOCUMENT MANAGER LEFT OUT, AND WHY (10 Nov 2026): a component its assembly's own
+    # drawing does not list is not counted; said here so a difference it removes is visible.
+    for rec in dm.values():
+        for x in rec.get("excluded_components") or []:
+            print(f"  Document Manager left out of {rec.get('title')}: {x.get('part_number')} "
+                  f"x{_show(x.get('qty'))} ({x.get('reason')})")
     saved = {}
     for pn, what in r["not_saved"]:
         saved.setdefault(what, []).append(pn)

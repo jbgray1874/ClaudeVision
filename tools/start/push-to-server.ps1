@@ -89,7 +89,8 @@ param(
         "src/edge_banding.py",
         "src/section_profile.py",
         "src/finish_rules.py",
-        "src/xai_models.py"
+        "src/xai_models.py",
+        "src/claude_fallback.py"
     ),
 
     # Everything tracked. Here for the day the server's job changes; not the default,
