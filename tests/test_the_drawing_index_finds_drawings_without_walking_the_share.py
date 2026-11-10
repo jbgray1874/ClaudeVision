@@ -98,3 +98,56 @@ def test_the_sweep_refreshes_the_index_and_the_wall_says_so():
     assert "di.refresh(icfg[\"roots\"]" in SWEEP and "--no-index" in SWEEP
     assert "drawing index ${ix.folders} folders" in WALL
     assert '"All systems normal"' in WALL_PY and "nominal" not in WALL_PY.lower()
+
+
+# ── the lookup database and the quick refresh (10 Nov: 230,053 folders, ~10 hours to list) ──
+
+import pack_resolver as pr  # noqa: E402
+
+
+def test_an_existing_index_converts_to_the_lookup_database_without_listing_the_share(tmp_path):
+    w = _share(tmp_path)
+    p = tmp_path / "ix.json.gz"
+    di.refresh([w], p)
+    db = di.db_path(p)
+    assert db.name == "ix.sqlite" and db.exists(), "a build writes the database too"
+    db.unlink()
+    n = di.build_db(di.load(p), db)
+    assert n == 3 and di.db_meta(db)["built_at"] > 0
+    rows = di.db_rows_for(db, "12181-00-GA")
+    assert any(f.name == "12181-00-GA.pdf" for _p, files, _a in rows for f, _s, _m in files)
+    assert {r[0].name for r in rows} >= {"Technical", "12181 - Sander Application Demo [Rome 2026]"}, \
+        "the job's other folders come too"
+    assert [f.name for f, _s, _m in di.db_lookup(db, "12181-00-GA")] == ["12181-00-GA.pdf"]
+    assert di.db_lookup(db, "0123") == []
+
+
+def test_the_quick_refresh_checks_the_top_levels_and_recent_folders_only(tmp_path):
+    w = _share(tmp_path)
+    p = tmp_path / "ix.json.gz"
+    di.refresh([w], p)
+    tech = w / "TTI" / "12181 - Sander Application Demo [Rome 2026]" / "Technical"
+    old = time.time() - 200 * 86400
+    os.utime(tech, (old, old))
+    di.refresh([w], p, full=True)                       # the index now knows Technical as dormant
+    (tech / "12181-00-GA3.pdf").write_text("new")
+    os.utime(tech, (old, old))                          # a change the folder's date does not show
+    quick = di.refresh([w], p, recent_days=90, top_levels=2)
+    assert quick["last"].get("dormant", 0) >= 1 and quick["drawings"] == 3, "a dormant folder is not re-checked"
+    full = di.refresh([w], p, full=True)
+    assert full["drawings"] == 4, "the full listing catches it"
+
+
+def test_the_folder_around_the_ga_is_relisted_live_so_a_new_file_is_never_missed(tmp_path, monkeypatch):
+    w = _share(tmp_path)
+    p = tmp_path / "ix.json.gz"
+    monkeypatch.setenv("SDI_DRAWING_INDEX", str(p))
+    monkeypatch.setenv("SDI_DRAWING_INDEX_ROOTS", str(w))
+    di.refresh([w], p)
+    tech = w / "TTI" / "12181 - Sander Application Demo [Rome 2026]" / "Technical"
+    (tech / "12181-01-01M_Panel_RevA.DXF").write_text("added after the index")
+    rows, source, lookup = pr.folders_for("12181-00-GA")
+    names = {f.name for _p, files, _a in rows for f, _s, _m in files}
+    assert "12181-01-01M_Panel_RevA.DXF" in names and "re-listed now" in source
+    stale, _s, _l = pr.folders_for("12181-00-GA", live=False)
+    assert "12181-01-01M_Panel_RevA.DXF" not in {f.name for _p, files, _a in stale for f, _s, _m in files}

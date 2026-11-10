@@ -178,6 +178,7 @@ def list_folders(root: Path, depth: int = 7) -> List[Path]:
 
 _FILES: Dict[str, List[Path]] = {}
 _MTIME: Dict[str, float] = {}
+_DB_ROWS: List[bool] = []          # non-empty while the batch reads from the lookup database
 _SIZE: Dict[str, int] = {}
 
 
@@ -208,21 +209,24 @@ def area_listings(design: Path, proto: Path) -> Tuple[List[Tuple[str, List[Path]
         sys.path.insert(0, str(HERE))
         import drawing_index as di
         cfg = di.settings()
-        idx = di.load(cfg["path"])
+        db = di.db_path(cfg["path"])
+        if not db.exists() and cfg["path"].exists():
+            di.build_db(di.load(cfg["path"]) or {}, db)          # once, from the index already built
+        idx = di.db_meta(db) if db.exists() else None
     except Exception:                                                    # noqa: BLE001
-        idx, cfg, di = None, None, None
+        idx, cfg, di, db = None, None, None, None
     if idx and di.is_fresh(idx, cfg["max_hours"]) and di.covers(idx, design) and di.covers(idx, proto):
         out = []
         for area, root in (("design", design), ("prototype", proto)):
             folders = []
-            for folder, files in di.folders_under(idx, root):
+            for folder, files in di.db_folders_under(db, root):
                 folders.append(folder)
                 _FILES[str(folder)] = sorted(f for f, _s, _m in files)
                 for f, s, m in files:
                     _MTIME[str(f)] = m
                     _SIZE[str(f)] = s
             out.append((area, folders))
-        return out, f"drawing index built {di.summary(idx)['built_at']}"
+        return out, f"drawing index built {datetime.fromtimestamp(idx['built_at']).isoformat(timespec='minutes')}"
     why = ("no drawing index" if not idx else "the drawing index is stale" if not di.is_fresh(idx, cfg["max_hours"])
            else "the drawing index does not cover these folders")
     return [("design", list_folders(design)), ("prototype", list_folders(proto))], f"walked live ({why})"
@@ -411,6 +415,19 @@ def pack_for(drawing: str, listings: List[Tuple[str, List[Path]]], client: str
     named for the drawing, so the job-folder fallback can say what it found instead."""
     import pack_resolver as pr
     folders = [(f, area) for area, fs in listings for f in fs]
+    if _DB_ROWS:
+        # THE LOOKUP DATABASE: the drawing's own and its job's folders, the GA's surroundings
+        # re-listed now, and shared-library parts found anywhere: the page's and Self-Running's way.
+        rows, _src, lookup = pr.folders_for(drawing)
+        m = pr.resolve(drawing, rows, client=client, lookup=lookup)
+        if m["status"] == "not found":
+            return {}, None
+        area = "prototype" if "prototype" in str(m.get("selected_folder") or "").lower() else "design"
+        files = [f["path"] for x in m["members"] for f in x["files"]]
+        return ({"area": area, "match": "pack", "folder": m.get("selected_folder"), "files": files,
+                 "technical": "technical" in str(m.get("selected_folder") or "").lower(), "newest": "",
+                 "other_folders": [c["folder"] for c in m["candidates"] if c["folder"] != m.get("selected_folder")][:5]},
+                m)
     own = [f for f, _a in folders if any(pr._same(pr.drawing_id(x.name), drawing) for x in drawings_in(f))]
     if not own:
         return {}, None
@@ -478,6 +495,9 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                          f"SDI_DRIVE_MAP (W=\\\\server\\share) or the two SDI_TTI_*_ROOT settings, and run "
                          f"--dry-run until rows show their folders.")
     listings, source = area_listings(design, proto)
+    _DB_ROWS.clear()
+    if source.startswith("drawing index"):
+        _DB_ROWS.append(True)
     out_root = inputs_root() / re.sub(r"[^\w .-]", "_", sheet.stem)
     report: Dict[str, Any] = {"sheet": str(sheet), "tab": data["sheet"], "header_row": data["header_row"],
                               "header": data["header"], "started": datetime.now().isoformat(timespec="seconds"),

@@ -254,7 +254,8 @@ def _is_assembly(did: str) -> bool:
 
 def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             read_text: Callable[[Path], str] = read_pdf_text, now: Optional[datetime] = None,
-            area_rank: Optional[Callable[[Path], int]] = None) -> Dict[str, Any]:
+            area_rank: Optional[Callable[[Path], int]] = None,
+            lookup: Optional[Callable[[str], List[FileRow]]] = None) -> Dict[str, Any]:
     """The pack for one drawing number, from the index's folders: chosen, proved and explained."""
     rank = area_rank or _default_area_rank()
     drawing = str(drawing or "").strip().upper()
@@ -380,8 +381,8 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                     if x in wider:
                         groups[x] = wider[x]
                 else:
-                    hit = [f for folder, files, archive in folders if not archive for f in files
-                           if _same(drawing_id(f[0].name), x)]
+                    hit = lookup(x) if lookup else [f for folder, files, archive in folders if not archive
+                                                     for f in files if _same(drawing_id(f[0].name), x)]
                     if hit:
                         groups[x] = hit
                         manifest["library"].append(x)
@@ -488,11 +489,50 @@ def folders_from_index(roots: Optional[List[Path]] = None) -> Tuple[List[FolderR
     return value
 
 
+def folders_for(drawing: str, live: bool = True
+                ) -> Tuple[List[FolderRow], str, Optional[Callable[[str], List[FileRow]]]]:
+    """The folders one drawing's pack can come from, from the lookup database (made from the
+    index on first use if needed), with the folder around each candidate GA RE-LISTED NOW, so a
+    pack is never chosen from a stale listing; and a lookup for shared-library parts."""
+    sys.path.insert(0, str(HERE))
+    import drawing_index as di
+    cfg = di.settings()
+    db = di.db_path(cfg["path"])
+    if not db.exists():
+        idx = di.load(cfg["path"])
+        if not idx:
+            return [], f"no drawing index at {cfg['path']}; run src/drawing_index.py --build", None
+        print(f"[pack] making the lookup database from {cfg['path']} (once)", file=sys.stderr, flush=True)
+        di.build_db(idx, db)
+    rows = di.db_rows_for(db, drawing)
+    meta = di.db_meta(db)
+    time_ok = (datetime.now().timestamp() - meta["built_at"]) <= cfg["max_hours"] * 3600
+    source = f"lookup database built {datetime.fromtimestamp(meta['built_at']).isoformat(timespec='minutes')}" + \
+        ("" if time_ok else " (STALE)")
+    if live:
+        own = sorted({folder for folder, files, _a in rows if any(_same(drawing_id(f[0].name), drawing) for f in files)},
+                     key=lambda p: len(p.parts))
+        relisted = []
+        for ga_folder in own:
+            top = ga_folder.parent
+            if any(top == r or r in top.parents for r in relisted):
+                continue
+            now_rows = di.live_rows(top, depth=6)
+            if now_rows is None:
+                continue
+            rows = [r for r in rows if not (r[0] == top or top in r[0].parents)] + now_rows
+            relisted.append(top)
+        if relisted:
+            source += f"; {len(relisted)} folder(s) around the GA re-listed now"
+    return rows, source, (lambda did: di.db_lookup(db, did))
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--drawing", required=True)
     ap.add_argument("--client", default="")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--no-live", action="store_true", help="use the index's listing only; do not re-list the GA's folder")
     ap.add_argument("--store", action="store_true",
                     help="keep the pack in Live Enquiry\\<client>\\<drawing> (src/pack_store.py) when it may be priced")
     args = ap.parse_args(argv)
@@ -503,8 +543,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             import config  # noqa: F401  (loads .env)
         except Exception:                                                # noqa: BLE001
             pass
-        folders, source = folders_from_index()
-        m = resolve(args.drawing, folders, args.client)
+        folders, source, lookup = folders_for(args.drawing, live=not args.no_live)
+        m = resolve(args.drawing, folders, args.client, lookup=lookup)
         m["source"] = source
         if args.store and m["price_ok"]:
             import pack_store as ps
