@@ -116,6 +116,37 @@ def fingerprint(folder: Path, limit: int = 500) -> Dict[str, Any]:
             "newest": newest}
 
 
+LISTING_LIMIT = 300
+
+
+def listing(folder: Path, limit: int = LISTING_LIMIT, depth: int = 4) -> Dict[str, Any]:
+    """Every file in a candidate pack, for Grid Control's file view (JG, 10 Nov 2026: "some sort
+    of a file explorer view of the files in the new design folders"). Read here because the
+    sweep has the user's rights on the share and the service has none. Relative path, size,
+    modified time and whether it is a drawing file; at most `limit`, the rest counted."""
+    out: List[Dict[str, Any]] = []
+    more = 0
+    try:
+        for p in sorted(folder.rglob("*")):
+            try:
+                rel = p.relative_to(folder)
+                if len(rel.parts) > depth or any(SKIP_WORDS.search(x) for x in rel.parts[:-1]):
+                    continue
+                if not p.is_file():
+                    continue
+                if len(out) >= limit:
+                    more += 1
+                    continue
+                st = p.stat()
+                out.append({"path": rel.as_posix(), "size": st.st_size, "modified": _iso(st.st_mtime),
+                            "drawing": p.suffix.lower() in DRAWING_EXT})
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return {"files": out, "more": more}
+
+
 def find_packs(root: Path, depth: int = 3) -> Iterable[Dict[str, Any]]:
     """Every pack folder under every client folder."""
     try:
@@ -207,7 +238,8 @@ def sweep(cfg: Dict[str, Any], ledger: Dict[str, Any], now: Optional[float] = No
                                "status": p["status"], "files": p.get("files"),
                                "flagged_at": _iso(float(p["flagged_at"])),
                                "first_seen": _iso(float(p["first_seen"])),
-                               "estimated": bool(p.get("job") and p["job"] in est)})
+                               "estimated": bool(p.get("job") and p["job"] in est),
+                               "listing": listing(Path(p["folder"]))})
     candidates.sort(key=lambda c: c["flagged_at"], reverse=True)
     return {"schema": SCHEMA, "swept_at": _iso(now), "root": str(cfg["root"]), "every_minutes": cfg["minutes"],
             "next_at": _iso(now + cfg["minutes"] * 60), "baseline": first, "clients": len(clients),

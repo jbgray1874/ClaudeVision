@@ -185,3 +185,188 @@ def test_grid_control_names_the_fleet_and_shows_the_check_and_the_rest_of_the_gr
     assert "renderQueue(s.queue || [], s.grid || [])" in WALL
     assert '"/api/estimate/grid/stop", {service: b.dataset.service, run_id: id}' in WALL
     assert "running on ${esc(g.label)}" in WALL and "queued on ${esc(g.label)}" in WALL
+
+
+def test_a_ghost_run_is_freed_when_its_runner_beats_for_another_service_and_a_live_one_is_not(er):
+    """8072, 10 Nov 10:22: 11896-08-01-GA restored "running" after a restart while its runner
+    worked 8071's copy; it held RUN 1 with nothing working on it."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(er.router)
+    tc = TestClient(app)
+    key = getattr(er.config, "API_KEY", "") or ""
+    if key:
+        tc.headers.update({"X-SDI-Key": key})
+    now = time.time()
+    rid = "DESKTOP-GFAAP80-90faa0001"
+    ghost = er.Run(run_id="g1", client="TTI", drawing_number="11896-08-01-GA", status="running", units=1, job_folder="x", output_path="y")
+    ghost.runner, ghost.started_at, ghost.claimed_by_process = rid, now - 3600, "p1"
+    ghost.lease_until = now - 600 + er.LEASE_SECONDS            # last progress 10 min ago
+    live = er.Run(run_id="l1", client="TTI", drawing_number="X", status="running", units=1, job_folder="x", output_path="y")
+    live.runner, live.started_at, live.claimed_by_process = rid + "-s2", now - 3600, "p2"
+    live.lease_until = now - 600 + er.LEASE_SECONDS
+    fresh = er.Run(run_id="f1", client="TTI", drawing_number="Y", status="running", units=1, job_folder="x", output_path="y")
+    fresh.runner, fresh.started_at, fresh.claimed_by_process = rid, now - 30, "p1"
+    fresh.lease_until = now + er.LEASE_SECONDS
+    er._RUNS.update({"g1": ghost, "l1": live, "f1": fresh})
+    tc.post("/api/estimate/runner/heartbeat", json={"runner_id": rid, "hostname": "DESKTOP-GFAAP80",
+                                                     "process": "p1", "build": ""})
+    assert er._RUNS["g1"].status == "error"
+    assert "working on another service's job" in er._RUNS["g1"].error
+    assert er._RUNS["l1"].status == "running", "another runner's run is untouched"
+    assert er._RUNS["f1"].status == "running", "a run with progress in the last two minutes is kept"
+
+
+def test_a_service_holding_a_different_key_is_asked_again_with_the_grid_key(gp, monkeypatch):
+    """The server keeps its own .env: a 401 with this service's key is answered with
+    SDI_GRID_PEER_KEY."""
+    import urllib.error
+    monkeypatch.setenv("SDI_API_KEY", "laptop-key")
+    monkeypatch.setenv("SDI_GRID_PEER_KEY", "server-key")
+    monkeypatch.setenv("SDI_GRID_PEERS", "http://10.0.0.5:8071")
+    monkeypatch.setitem(sys.modules, "config", type(sys)("config"))    # restored after
+    seen = []
+
+    def op(req, timeout=0):
+        k = req.get_header("X-sdi-key")
+        seen.append(k)
+        if k != "server-key":
+            raise urllib.error.HTTPError(req.full_url, 401, "no", {}, None)
+        return _Resp(json.dumps(_peer_wall("srv")).encode())
+    snap = {"fleet": []}
+    gp.merge(snap, op)
+    assert seen == ["laptop-key", "server-key"] and snap["grid"][0]["ok"]
+
+
+def test_a_service_that_is_down_is_not_asked_on_every_refresh(gp, monkeypatch):
+    monkeypatch.setenv("SDI_GRID_PEERS", "http://10.0.0.5:8071")
+    calls = []
+
+    def op(req, timeout=0):
+        calls.append(1)
+        raise OSError("refused")
+    gp.read_peer("http://10.0.0.5:8071", op, now=1000.0)
+    gp.read_peer("http://10.0.0.5:8071", op, now=1010.0)
+    assert len(calls) == 1, "down: asked again after 20 s, not every 3 s"
+    gp.read_peer("http://10.0.0.5:8071", op, now=1025.0)
+    assert len(calls) == 2
+
+
+def test_the_sweep_lists_each_new_packs_files_and_grid_control_shows_them(tmp_path):
+    sys.path.insert(0, str(ROOT / "src"))
+    try:
+        import design_sweep as ds
+    finally:
+        sys.path.remove(str(ROOT / "src"))
+    pack = tmp_path / "TTI" / "12181 - Sander" / "Technical"
+    pack.mkdir(parents=True)
+    (pack / "12181-00-GA.pdf").write_text("ga")
+    (pack / "notes.txt").write_text("n")
+    (pack / "Archive").mkdir()
+    (pack / "Archive" / "old.pdf").write_text("o")
+    got = ds.listing(tmp_path / "TTI" / "12181 - Sander")
+    assert [f["path"] for f in got["files"]] == ["Technical/12181-00-GA.pdf", "Technical/notes.txt"]
+    assert got["files"][0]["drawing"] and not got["files"][1]["drawing"]
+    assert '"listing": listing(Path(p["folder"]))' in (ROOT / "src" / "design_sweep.py").read_text()
+    assert 'data-dsfiles="${i}">files ▸</button>' in WALL and "async function openFiles(c)" in WALL
+    assert '"/api/estimate/design-sweep/files?folder="' in WALL
+
+
+def test_grid_control_carries_only_the_count_and_fetches_a_packs_files_when_asked(er):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(er.router)
+    tc = TestClient(app)
+    key = getattr(er.config, "API_KEY", "") or ""
+    if key:
+        tc.headers.update({"X-SDI-Key": key})
+    folder = r"\\sdi-dc01\CAD\Design\Customers April 08 Onwards\TTI\12181 - Sander"
+    files = [{"path": f"Technical/{i}.pdf", "size": 10, "modified": "2026-11-10T10:00:00Z",
+              "drawing": True} for i in range(3)]
+    r = tc.post("/api/estimate/design-sweep/report", json={
+        "swept_at": "2026-11-10T10:00:00Z", "every_minutes": 60, "candidates": [
+            {"folder": folder, "client": "TTI", "name": "12181 - Sander", "status": "new",
+             "files": 3, "listing": {"files": files, "more": 0}}]})
+    assert r.status_code == 200
+    ds = er.design_sweep_for_wall()
+    assert ds["candidates"][0]["listed"] == 3 and "listing" not in ds["candidates"][0]
+    got = tc.get("/api/estimate/design-sweep/files", params={"folder": folder}).json()
+    assert [f["path"] for f in got["files"]] == ["Technical/0.pdf", "Technical/1.pdf", "Technical/2.pdf"]
+    assert tc.get("/api/estimate/design-sweep/files", params={"folder": "C:/x"}).status_code == 404
+
+
+# ── a walkthrough on another service, relayed (the phone reaches the server) ─────────────
+def test_a_walkthrough_this_service_does_not_hold_is_fetched_from_the_grid_once(er, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import grid_peers
+    app = FastAPI()
+    app.include_router(er.router)
+    tc = TestClient(app)
+    key = getattr(er.config, "API_KEY", "") or ""
+    if key:
+        tc.headers.update({"X-SDI-Key": key})
+    asked = []
+
+    def relay(path, body=None, opener=None):
+        asked.append((path, body))
+        if path.endswith("/file/X_walkthrough.wav"):
+            return (b"RIFF....WAVE", "audio/wav", 'attachment; filename="X_walkthrough.wav"')
+        if path.endswith("/ask"):
+            return (json.dumps({"status": "ok", "answer": "42"}).encode(), "application/json", "")
+        return (json.dumps({"client": "TTI", "drawing_number": "11896-08-01-GA"}).encode(),
+                "application/json", "")
+    monkeypatch.setattr(grid_peers, "relay", relay)
+    tok = "s4ybQC-L0tx_w9wpCvlPSXFy"
+    assert tc.get(f"/api/estimate/walkthrough/{tok}").json()["drawing_number"] == "11896-08-01-GA"
+    w = tc.get(f"/api/estimate/walkthrough/{tok}/file/X_walkthrough.wav")
+    assert w.status_code == 200 and w.content.startswith(b"RIFF") and "audio" in w.headers["content-type"]
+    assert tc.post(f"/api/estimate/walkthrough/{tok}/ask", json={"question": "why"}).json()["answer"] == "42"
+    # a request that was itself relayed is never passed on again
+    n = len(asked)
+    r = tc.get(f"/api/estimate/walkthrough/{tok}", headers={grid_peers.RELAY_HEADER: "1"})
+    assert r.status_code == 404 and len(asked) == n
+    # and nothing but a well-formed token travels
+    assert tc.get("/api/estimate/walkthrough/..%2f..%2fetc").status_code == 404 and len(asked) == n
+
+
+def test_relay_asks_each_service_until_one_has_it(gp, monkeypatch):
+    import urllib.error
+    monkeypatch.setenv("SDI_GRID_PEERS", "http://localhost:8071,http://localhost:8072")
+    seen = []
+
+    class R(_Resp):
+        headers = {"Content-Type": "audio/wav", "Content-Disposition": "attachment"}
+
+    def op(req, timeout=0):
+        seen.append((req.full_url, req.get_header("X-sdi-grid-relay")))
+        if "8071" in req.full_url:
+            raise urllib.error.HTTPError(req.full_url, 404, "no", {}, None)
+        return R(b"RIFFdata")
+    got = gp.relay("/api/estimate/walkthrough/abcdefghijklmnop/file/a.wav", opener=op)
+    assert got[0] == b"RIFFdata" and got[1] == "audio/wav"
+    assert [u.split("/api")[0] for u, _ in seen] == ["http://localhost:8071", "http://localhost:8072"]
+    assert all(h == "1" for _u, h in seen), "every relayed request says so"
+
+
+def test_a_relayed_quote_not_released_is_held_to_the_portal_as_a_local_one_is(er, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import grid_peers
+    app = FastAPI()
+    app.include_router(er.router)
+    tc = TestClient(app)
+    key = getattr(er.config, "API_KEY", "") or ""
+    if key:
+        tc.headers.update({"X-SDI-Key": key})
+    monkeypatch.setattr(grid_peers, "relay", lambda path, body=None, opener=None:
+                        (b"<html><body>quote</body></html>", "text/html",
+                         'attachment; filename="J_quote.html"'))
+    monkeypatch.setattr(er.quote_release, "looks_like_a_quote", lambda p: True)
+    monkeypatch.setattr(er.quote_release, "may_go_to_a_customer", lambda p: False)
+    r = tc.get("/api/estimate/walkthrough/s4ybQC-L0tx_w9wpCvlPSXFy/file/J_quote.html")
+    assert r.headers["x-sdi-quote-release"] == "portal"
+    assert r.headers["content-disposition"].startswith("inline")
+    assert "sandbox" in r.headers["content-security-policy"]

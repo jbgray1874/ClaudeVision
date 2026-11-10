@@ -2553,13 +2553,20 @@ async function checkRunners(){
        strands work. Said plainly, with what to do. */
     const others = d.other_local_services || [];
     if(others.length){
-      runnerBox.style.borderLeftColor = "var(--bad)";
+      /* TWO SERVICES ARE ONE GRID NOW (JG, 10 Nov 2026): each keeps its own queue, and Grid
+         Control on either shows both, with Stop on every job. Said as a fact, not an alarm;
+         red only when the other one is on a different build. */
       const esc = t => String(t).replace(/&/g,"&amp;").replace(/</g,"&lt;");
-      runnerText.innerHTML += `<div style="color:var(--bad);margin-top:4px"><b>A second `
-        + `portal is running on this machine</b> (port ${others.map(o => esc(o.port)
-            + (o.commit ? `, ${esc(o.commit)}` : "")).join("; ")}). Jobs started there `
-        + `queue separately from this one. Use one portal: stop the other service `
-        + `between jobs.</div>`;
+      const mine = String(d.service_commit || "").slice(0, 7);
+      const differ = others.filter(o => o.commit && mine && !String(o.commit).startsWith(mine));
+      if(differ.length) runnerBox.style.borderLeftColor = "var(--bad)";
+      runnerText.innerHTML += `<div style="${differ.length ? "color:var(--bad);" : ""}margin-top:4px">`
+        + `Also on this machine: the service on port ${others.map(o => esc(o.port)
+            + (o.commit ? ` (${esc(o.commit)})` : "")).join("; ")}. It keeps its own queue; `
+        + `<a href="/estimating/wall" target="_blank" rel="noopener">Grid Control</a> shows both, `
+        + `with Stop on every job.`
+        + (differ.length ? ` <b>It is on a different build: restart it so both run the same code.</b>` : "")
+        + `</div>`;
     }
   }catch(e){
     runnersOnline = 0;
@@ -5091,7 +5098,7 @@ checkDm();
    the watcher's, on the estimating machine. The page shows what the watcher last said and
    when, and refreshes every 20 seconds so a running job can be followed from here. */
 const selfRunBtn = $("selfRun"), selfStopBtn = $("selfStop"), selfJobBtn = $("selfJobStop");
-const SELF_LABELS = [["ready","ready to run"],["running","running"],
+const SELF_LABELS = [["ready","ready to run"],["running","queued or running"],
   ["waiting","waiting for drawings"],["held","held — a person must act"],["failed","failed"],
   ["done","done"],["not_asked","not asked (AI CHECK is not YES)"]];
 function selfEsc(s){
@@ -5112,8 +5119,8 @@ function selfStatusLine(v){
           ? (cur.state === "queued" ? "Queued " : "Running ") + cur.drawing + " (" + (cur.customer || "") + ")"
             + (cur.since ? " since " + cur.since : "")
             + (cur.state === "queued" ? ", waiting for a free Grid Runner." : ".")
-            + ((cur.also || []).length ? " Also running " + cur.also.join(", ")
-               + ": stop it from Grid Control." : "")
+            + ((cur.also || []).length ? " Also on the grid: " + cur.also.join(", ")
+               + ". Each has its own Stop under Latest runs." : "")
           : (w.message || w.phase || "Waiting for the watcher."));
   }
   return "Switched off" + (v.switched_off_at ? " at " + v.switched_off_at : "") + ". "
@@ -5170,7 +5177,7 @@ function renderSelf(v){
            ? " — " + selfEsc(pricesText(r.quantity_prices, r.unit_gbp, (r.quantities || [])[0])) : "")
         + (r.walkthrough_url ? " — <a href='" + selfEsc(r.walkthrough_url)
            + "' target='_blank' rel='noopener'>walkthrough</a>" : "")
-        + (r.error ? " — " + selfEsc(String(r.error).slice(0, 160)) : "") + "</li>").join("")
+        + (r.error ? " — " + selfEsc(String(r.error).slice(0, 160)) : "") + selfStopHtml(r) + "</li>").join("")
       + "</ul>";
   }
   $("selfOut").innerHTML = html;
@@ -5178,6 +5185,14 @@ function renderSelf(v){
 /* THE PRICE AT EVERY QUANTITY THE RUN PRICED (D-610): "1 off £538.06 · 5 off £401.20 ·
    10 off £377.00", not one unit price for a run asked for three. One quantity, or a run filed
    before the quantities were reported, reads as before. */
+/* A Stop for each queued or running job in Latest runs (JG, 10 Nov 2026). */
+function selfStopHtml(r){
+  if(!((r.status === "queued" || r.status === "running") && r.run_id)) return "";
+  return " <button type='button' class='btn-stop' style='padding:1px 8px;font-size:12px;width:auto;display:inline-block'"
+    + " data-self-stop='" + selfEsc(r.run_id) + "' data-server='" + selfEsc(r.server || "")
+    + "' data-name='" + selfEsc(r.drawing) + "'"
+    + (selfStopped[r.run_id] ? " disabled>Stopping…" : ">Stop") + "</button>";
+}
 function pricesText(prices, unit, units){
   const money = v => "£" + Number(v).toLocaleString("en-GB",
                                                    {minimumFractionDigits: 2, maximumFractionDigits: 2});
@@ -5236,6 +5251,38 @@ selfStopBtn.onclick = () => {
 /* STOP MEANS THE SAME HERE AS ON A RUN THIS TAB STARTED: abandoned in the service, and the
    runner told to end the engine on its next heartbeat. Self-running stays on; switch it off
    as well if nothing more should be queued. */
+/* STOP ANY ONE OF THEM, HERE (JG, 10 Nov 2026): "we also need the jobs to be killed
+   individually from either grid control or from the main estimating page". Every queued or
+   running job in Latest runs has its own Stop. A job on this service is stopped here; one the
+   watcher queued on another service of the grid is stopped there, through this one. */
+function sameService(server){
+  if(!server) return true;
+  try{ return new URL(server).port === location.port && ["localhost","127.0.0.1",location.hostname]
+         .includes(new URL(server).hostname); }catch(e){ return true; }
+}
+$("selfOut").addEventListener("click", async e => {
+  const b = e.target.closest && e.target.closest("[data-self-stop]");
+  if(!b || b.disabled) return;
+  const id = b.dataset.selfStop, server = b.dataset.server || "";
+  if(!confirm("Stop " + (b.dataset.name || id) + "?\n\nThe run is abandoned and its Grid Runner "
+            + "ends the engine. It is held on the sheet until it is marked Re-Run.")) return;
+  b.disabled = true; b.textContent = "Stopping…";
+  try{
+    const r = sameService(server)
+      ? await api("/api/estimate/" + encodeURIComponent(id) + "/abandon", {method:"POST"})
+      : await api("/api/estimate/grid/stop", {method:"POST", headers:{"Content-Type":"application/json"},
+                  body: JSON.stringify({service: server, run_id: id})});
+    const j = await r.json().catch(() => ({}));
+    if(r.ok || r.status === 409){
+      selfStopped[id] = new Date().toLocaleTimeString("en-GB");
+      refreshSelf(); quickSelf(); return;
+    }
+    $("selfStatus").textContent = "Could not stop " + (b.dataset.name || id) + ": " + detailText(j, r, "refused");
+  }catch(err){
+    $("selfStatus").textContent = "Could not stop " + (b.dataset.name || id) + " — " + err.message;
+  }
+  b.disabled = false; b.textContent = "Stop";
+});
 selfJobBtn.onclick = async () => {
   const id = selfJobBtn.dataset.runId;
   if(!id || selfJobBtn.disabled) return;

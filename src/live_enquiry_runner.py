@@ -887,6 +887,9 @@ class Portal:
     def status(self, run_id: str) -> Dict[str, Any]:
         return self._call("GET", f"/api/estimate/{run_id}")
 
+    def abandon(self, run_id: str) -> Dict[str, Any]:
+        return self._call("POST", f"/api/estimate/{run_id}/abandon", {})
+
     def recipients(self) -> List[str]:
         """The page's saved "Email the finished estimate to" list (D-609): the addresses its
         box is pre-filled with, saved by its "Save as the default list" button."""

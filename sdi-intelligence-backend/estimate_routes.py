@@ -588,6 +588,44 @@ def _release_runs_orphaned_by_a_restart(runner_id: str, process: str) -> None:
             _keep(run)
 
 
+def _host_of(runner_id: str) -> str:
+    """The machine name in a runner id ("DESKTOP-GFAAP80-90faa0001-s2" -> "DESKTOP-GFAAP80"),
+    for a runner this service has only heard from mid-job, which does not say its name."""
+    m = re.match(r"^(.+?)-[0-9a-fA-F]{8,}(?:-s\d+)?$", str(runner_id or ""))
+    return m.group(1) if m else ""
+
+
+def _release_runs_its_runner_has_left(runner_id: str, now: float) -> None:
+    """Fail a run of this service that its runner is plainly not working on.
+
+    A GHOST HELD RUN 1 ON 8072 (JG, 10 Nov 2026). The runner finished or dropped 11896-08-01-GA
+    while 8072 was restarting, so its report never landed; 8072 restored the run "running" with
+    its claim, and the same runner went on to work a job for 8071. A runner says it is busy
+    for ANOTHER service only through /runner/heartbeat, so a heartbeat from the runner a run
+    here is claimed by means nothing is working on that run. Held to runs that have also had
+    no progress for two minutes, so a beat crossing a fresh claim on the wire frees nothing."""
+    for run in _RUNS.values():
+        if run.status != "running" or run.runner != runner_id:
+            continue
+        last = max(float(run.lease_until or 0) - LEASE_SECONDS, float(run.started_at or 0),
+                   float(run.last_line_at or 0))
+        if now - last < 120:
+            continue
+        run.status = "error"
+        run.error = (f"Its Grid Runner ({runner_id}) is working on another service's job, so "
+                     f"nothing is working on this one; its finish report was probably lost "
+                     f"while this service restarted. If the engine finished, its book is in "
+                     f"the engine's output\\estimates folder on that machine; otherwise run "
+                     f"the job again.")
+        run.line(run.error)
+        run.finished_at = now
+        run.lease_until = 0.0
+        r = _RUNNERS.get(runner_id)
+        if r is not None and r.run_id == run.run_id:
+            r.run_id = ""
+        _keep(run)
+
+
 def _online_runners() -> List[Runner]:
     return [r for r in _RUNNERS.values() if r.online]
 
@@ -1059,7 +1097,10 @@ def runners(request: Request = None, x_sdi_key: Optional[str] = Header(default=N
         _own = int(request.url.port) if request is not None and request.url.port else None
     except Exception:                                                # noqa: BLE001
         _own = None
+    import sys as _sys_c
     return {"other_local_services": _other_local_services(_own),
+            # THIS SERVICE'S BUILD, so the page can say when the other one differs.
+            "service_commit": str(getattr(_sys_c.modules.get("app"), "SDI_COMMIT", "") or ""),
             "runners": listed, "online": len(online), "queued": queued,
             "busy": sum(1 for r in online if r.get("running")),
             # HOW MANY THE SERVICE MAY RUN AT ONCE (D-732), so the page can say a second or
@@ -1090,7 +1131,11 @@ def design_sweep_for_wall() -> Dict[str, Any]:
                        "(tools/start/install-design-sweep-task.ps1)"}
     rep = dict(data.get("report") or {})
     gone = set(data.get("dismissed") or [])
-    rep["candidates"] = [c for c in (rep.get("candidates") or []) if c.get("folder") not in gone]
+    # THE FILE LISTS STAY HERE (JG, 10 Nov 2026): Grid Control refreshes every 4 s, so each
+    # candidate carries only how many files were listed; "files" asks for one list.
+    rep["candidates"] = [{**{k: v for k, v in c.items() if k != "listing"},
+                          "listed": len(((c.get("listing") or {}).get("files")) or [])}
+                         for c in (rep.get("candidates") or []) if c.get("folder") not in gone]
     rep["dismissed"] = len(gone)
     rep["received_at"] = data.get("received_at")
     try:
@@ -1101,6 +1146,21 @@ def design_sweep_for_wall() -> Dict[str, Any]:
     except (TypeError, ValueError):
         rep["state"] = "ok"
     return rep
+
+
+@router.get("/design-sweep/files")
+def design_sweep_files(folder: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """The files the last sweep listed in one candidate pack, for Grid Control's file view."""
+    _check_key(x_sdi_key)
+    try:
+        data = json.loads(_design_sweep_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise HTTPException(404, "No sweep has reported yet.")
+    for c in (data.get("report") or {}).get("candidates") or []:
+        if c.get("folder") == folder:
+            return {"folder": folder, "client": c.get("client"), "name": c.get("name"),
+                    **(c.get("listing") or {"files": [], "more": 0})}
+    raise HTTPException(404, "That folder is not a candidate in the last sweep.")
 
 
 @router.post("/design-sweep/report")
@@ -1707,6 +1767,7 @@ def heartbeat(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)
     now = time.time()
     with _LOCK:
         _release_runs_orphaned_by_a_restart(req.runner_id, req.process)
+        _release_runs_its_runner_has_left(req.runner_id, now)
         runner = _RUNNERS.setdefault(req.runner_id, Runner(runner_id=req.runner_id))
         runner.hostname = req.hostname or runner.hostname
         runner.last_seen = now
@@ -2069,6 +2130,11 @@ def progress(run_id: str, req: ProgressRequest,
         r = _RUNNERS.setdefault(req.runner_id, Runner(runner_id=req.runner_id))
         r.last_seen = now
         r.run_id = run.run_id
+        # ITS MACHINE BY NAME (JG, 10 Nov 2026): after a restart of this service a runner mid-job
+        # is heard only here, which does not carry its name, so Grid Control listed it by its
+        # raw id, not as the Laptop, and showed the Laptop as a second, planned runner.
+        if not r.hostname:
+            r.hostname = _host_of(req.runner_id)
         _note_compute(r, req.compute, now)
         if now - _last_progress_save.get(run_id, 0.0) >= _PROGRESS_SAVE_SECONDS:
             _last_progress_save[run_id] = now
@@ -3492,16 +3558,65 @@ def _walkthrough_or_404(token: str) -> Dict[str, Any]:
     return rec
 
 
+def _relayed(request: Optional[Request], path: str,
+             body: Optional[Dict[str, Any]] = None) -> Optional[Tuple[bytes, str, str]]:
+    """A walkthrough this service does not hold, from another service on the grid; never a
+    request that was itself relayed here."""
+    import grid_peers
+    if request is not None and request.headers.get(grid_peers.RELAY_HEADER):
+        return None
+    if estimate_walkthrough.load_token_ok(path):
+        return grid_peers.relay(path, body)
+    return None
+
+
 @router.get("/walkthrough/{token}")
-def walkthrough_view(token: str, x_sdi_key: Optional[str] = Header(default=None)):
+def walkthrough_view(token: str, request: Request = None,
+                     x_sdi_key: Optional[str] = Header(default=None)):
     _check_key(x_sdi_key)
+    if estimate_walkthrough.load(token) is None:
+        got = _relayed(request, f"/api/estimate/walkthrough/{token}")
+        if got is not None:
+            return Response(content=got[0], media_type=got[1] or "application/json")
     return estimate_walkthrough.public_view(_walkthrough_or_404(token))
 
 
+def _walkthrough_file_relayed(request: Optional[Request], token: str,
+                              name: str) -> Optional[Response]:
+    """One of a walkthrough's files from the service that holds it, when this one does not.
+    THE SAME RELEASE GATE AS A LOCAL FILE (D-645): a quotation is checked here as well as there,
+    from its own declaration, and one not released goes inline, sandboxed and marked
+    portal, never as a download."""
+    if estimate_walkthrough.load(token) is not None:
+        return None
+    got = _relayed(request, f"/api/estimate/walkthrough/{token}/file/{urllib.parse.quote(name)}")
+    if got is None:
+        return None
+    content, media, disposition = got
+    if quote_release.looks_like_a_quote(Path(name)):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            held = Path(tmp) / Path(name).name
+            held.write_bytes(content)
+            released = quote_release.may_go_to_a_customer(held)
+        if not released:
+            return Response(content=content, media_type=media,
+                            headers={"Content-Disposition": f'inline; filename="{Path(name).name}"',
+                                     "X-SDI-Quote-Release": "portal",
+                                     "Content-Security-Policy":
+                                         "sandbox allow-downloads allow-popups"})
+    return Response(content=content, media_type=media,
+                    headers={"Content-Disposition": disposition} if disposition else {})
+
+
 @router.get("/walkthrough/{token}/file/{name}")
-def walkthrough_file(token: str, name: str, x_sdi_key: Optional[str] = Header(default=None)):
+def walkthrough_file(token: str, name: str, request: Request = None,
+                     x_sdi_key: Optional[str] = Header(default=None)):
     """One of the run's own files, by name, as listed in its record; nothing else."""
     _check_key(x_sdi_key)
+    relayed = _walkthrough_file_relayed(request, token, name)
+    if relayed is not None:
+        return relayed
     path = estimate_walkthrough.file_for(_walkthrough_or_404(token), name)
     if path is None:
         raise HTTPException(404, f"{name!r} is not one of this estimate's files, or it has "
@@ -3525,11 +3640,19 @@ class AskRequest(BaseModel):
 
 
 @router.post("/walkthrough/{token}/ask")
-def walkthrough_ask(token: str, req: AskRequest,
+def walkthrough_ask(token: str, req: AskRequest, request: Request = None,
                     x_sdi_key: Optional[str] = Header(default=None)):
     """A question about the estimate, answered from its own record by the engine
     (src/estimate_qa.py), in its own interpreter like the other engine calls here."""
     _check_key(x_sdi_key)
+    if estimate_walkthrough.load(token) is None:
+        got = _relayed(request, f"/api/estimate/walkthrough/{token}/ask",
+                       {"question": req.question})
+        if got is not None:
+            try:
+                return json.loads(got[0].decode("utf-8"))
+            except ValueError:
+                pass
     rec = _walkthrough_or_404(token)
     question = str(req.question or "").strip()[:1000]
     if not question:

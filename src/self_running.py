@@ -98,6 +98,9 @@ def recent_runs(ledger: Dict[str, Any], limit: int = RECENT_RUNS_SHOWN,
                         "quantities": a.get("quantities"),
                         "quantity_prices": a.get("quantity_prices") or [],
                         "walkthrough_url": a.get("walkthrough_url") or "",
+                        # SO THE PAGE CAN STOP ANY ONE OF THEM (JG, 10 Nov 2026), on the
+                        # service it was queued on.
+                        "run_id": a.get("run_id") or "", "server": a.get("server") or "",
                         "output": a.get("output_path") or "", "error": a.get("error") or ""})
     out.sort(key=lambda r: str(r.get("queued_at") or ""), reverse=True)
     return out[:limit]
@@ -567,10 +570,31 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
     by_key = {ler.job_key(d.row): d for d in decisions}
     adopted: List[Any] = []
     for _key, _job in (ledger.get("jobs") or {}).items():
-        for _a in _job.get("attempts") or []:
-            if (_a.get("status") in {"queued", "running"} and _a.get("run_id")
-                    and _key in by_key):
-                adopted.append((by_key[_key], _a))
+        _open = [_a for _a in _job.get("attempts") or []
+                 if _a.get("status") in {"queued", "running"} and _a.get("run_id")]
+        # ONE COPY OF A JOB ON THE GRID (JG, 10 Nov 2026): 11896-04-00-GA ran on 8071 while a
+        # second copy, queued by an earlier watcher on 8072, waited to run it again. The
+        # newest copy is kept; an older one still only QUEUED is withdrawn from its service.
+        # One already running is left to finish: stopping it is a person's call.
+        for _old in _open[:-1]:
+            if _old.get("status") != "queued":
+                continue
+            try:
+                ler._asked_in_turn(_old, portal, others)[0].abandon(_old["run_id"])
+                _old.update(status="error", finished_at=ler._now(), withdrawn=True,
+                            error=f"withdrawn: a second copy of this job was queued as run "
+                                  f"{_open[-1].get('run_id')}")
+                say(f"   {_job.get('drawing')}: withdrew queued copy {_old['run_id']}; run "
+                    f"{_open[-1].get('run_id')} is the one kept")
+            except Exception as exc:                              # noqa: BLE001
+                say(f"   {_job.get('drawing')}: could not withdraw queued copy "
+                    f"{_old['run_id']}: {getattr(exc, 'message', exc)}")
+        _open = [_a for _a in _open if _a.get("status") in {"queued", "running"}]
+        if _open and _key in by_key:
+            adopted += [(by_key[_key], _a) for _a in _open]
+    if any(a.get("withdrawn") for _j in (ledger.get("jobs") or {}).values()
+           for a in _j.get("attempts") or []):
+        ler.save_ledger(s["ledger"], ledger)
     use_flight = at_once > 1 or bool(adopted)
 
     def _home(attempt: Dict[str, Any]) -> ler.Portal:
@@ -596,7 +620,8 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
             current.clear()
             current.update(customer=d.row.customer, drawing=d.row.drawing,
                            quantities=list(d.quantities), since=ler._now(),
-                           also=[f"{x[0].row.drawing} ({x[0].row.customer})"
+                           also=[f"{x[0].row.drawing} ({x[0].row.customer}, "
+                                 f"{x[1].get('status') or 'queued'})"
                                  for x in in_flight if x[0] is not d])
             current_key["key"] = ler.job_key(d.row)
 
