@@ -436,8 +436,8 @@
            SDI Drawing Search Intelligence →</a></p>
     </div>
     <a class="cp-btn" href="/estimating/wall" target="_blank" rel="noopener"
-       title="The control panel: every run live, who has the SolidWorks licence and who is waiting, the fleet, finish windows and the KPIs. Full screen for a wall monitor.">
-      <span class="dot"></span>Control panel ↗</a>
+       title="Grid Control: every run live, who has the SolidWorks licence and who is waiting, the fleet, finish windows and the KPIs. Full screen for a wall monitor.">
+      <span class="dot"></span>Grid Control ↗</a>
     <div class="viewctl">
       <button type="button" id="theme-btn" class="vc-btn" aria-pressed="false" title="Switch between light and dark">
         <svg class="ic-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
@@ -619,7 +619,7 @@
         <!-- THE WALL MONITOR (D-737): every run, the fleet and the KPIs, full screen. -->
         <a href="/estimating/wall" target="_blank" rel="noopener"
            style="float:right;font-size:12px;color:var(--brand);text-decoration:none;margin-top:-18px"
-           title="Live runs, the fleet of runners and the run-time KPIs, full screen, for a wall monitor.">Control panel ↗</a>
+           title="Grid Control: live runs, the Grid Runners and the run-time KPIs, full screen, for a wall monitor. Any job can be stopped from it.">Grid Control ↗</a>
         <div class="p" id="runnerText"><span class="pending">Checking…</span></div>
         <div class="runpanes" id="runPanes" hidden></div>
         <p class="note">Estimates are executed on a machine with SOLIDWORKS and Excel. This service
@@ -5111,6 +5111,8 @@ function selfStatusLine(v){
       + (w.phase === "running" && cur.drawing
           ? "Running " + cur.drawing + " (" + (cur.customer || "") + ")"
             + (cur.since ? " since " + cur.since : "") + "."
+            + ((cur.also || []).length ? " Also running " + cur.also.join(", ")
+               + ": stop it from Grid Control." : "")
           : (w.message || w.phase || "Waiting for the watcher."));
   }
   return "Switched off" + (v.switched_off_at ? " at " + v.switched_off_at : "") + ". "

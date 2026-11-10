@@ -5721,6 +5721,11 @@ LIVE_ENQUIRY_POLL_MINUTES = int(os.getenv("SDI_LIVE_ENQUIRY_POLL_MINUTES", "15")
 # How long one estimate may take before the runner stops waiting on it. The run is not
 # abandoned — the portal keeps it — the runner just stops queueing behind it this cycle.
 LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES = int(os.getenv("SDI_LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES", "240"))
+# HOW MANY SELF-RUNNING JOBS ARE QUEUED AT ONCE (JG, 10 Nov 2026: "test out running a second job
+# automatically"). 1 queues a job and waits for it, as before. 2 keeps two queued, so a second
+# Grid Runner (install-runner-slot.ps1 -Slot 2, SDI_MAX_CONCURRENT_RUNS=2 on the service) takes
+# the second while the first runs; each finished job makes room for the next ready row.
+SELF_RUNNING_AT_ONCE = max(1, int(os.getenv("SDI_SELF_RUNNING_AT_ONCE", "1") or 1))
 # A failed run is tried this many times in all, then waits for `retry` from a person.
 LIVE_ENQUIRY_MAX_ATTEMPTS = int(os.getenv("SDI_LIVE_ENQUIRY_MAX_ATTEMPTS", "1"))
 # Who the portal e-mails a finished estimate to. Empty: filed, sent to nobody — every book is

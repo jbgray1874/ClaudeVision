@@ -758,6 +758,14 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
     if rerun_due and last.get("status") in {"done", "error"}:
         d.reason = "Re-Run asked for on the sheet"
         return d
+    # A STOP MEANS STOP (JG, 10 Nov 2026). A person who stops a job, from the estimating page
+    # or Grid Control, has decided; queueing it again as "attempt 2" a minute later undid
+    # that. Held until the sheet says Re-Run or somebody types `retry`.
+    if last.get("status") == "error" and stopped_by_hand(last) and not job.get("retry"):
+        d.status, d.reason = "held", (f"stopped by hand at {last.get('finished_at') or '?'} — "
+                                      f"mark it Re-Run on the sheet, or `retry {row.drawing}`, "
+                                      f"to run it again")
+        return d
     if same and last.get("status") == "done":
         if row.completed_column and last.get("sheet_marked"):
             # RESET BY A PERSON (D-608a): this run's YES reached the sheet, and the cell now
@@ -950,7 +958,16 @@ def request_body(d: Decision, email_to: Optional[Sequence[str]] = None) -> Dict[
     }
 
 
+def stopped_by_hand(attempt: Dict[str, Any]) -> bool:
+    """True for a run a person stopped. A service older than the flag still says so in the
+    error it writes on a stop, so that is read as well."""
+    return bool(attempt.get("stopped_by_hand")) or str(attempt.get("error") or "").startswith(
+        ("Released by hand", "Released with the rest of this enquiry"))
+
+
 def _attempt_from(snapshot: Dict[str, Any], attempt: Dict[str, Any]) -> Dict[str, Any]:
+    if snapshot.get("stopped_by_hand"):
+        attempt["stopped_by_hand"] = True
     attempt.update({
         "status": snapshot.get("status") or attempt.get("status"),
         "error": snapshot.get("error") or "",
@@ -968,19 +985,41 @@ def _attempt_from(snapshot: Dict[str, Any], attempt: Dict[str, Any]) -> Dict[str
     return attempt
 
 
-def refresh_open_runs(ledger: Dict[str, Any], portal: Portal) -> None:
+def _asked_in_turn(attempt: Dict[str, Any], portal: Portal,
+                   others: Sequence[Portal] = ()) -> List[Portal]:
+    """The services to ask about a run: the one it was queued on first, then the rest."""
+    every = [portal] + [p for p in others if p is not portal]
+    home = str(attempt.get("server") or "").rstrip("/")
+    first = [p for p in every if getattr(p, "server", "") == home]
+    return first + [p for p in every if p not in first]
+
+
+def refresh_open_runs(ledger: Dict[str, Any], portal: Portal,
+                      others: Sequence[Portal] = ()) -> None:
     """A run left queued or running by an earlier cycle (or an earlier process) is asked about
-    before anything new is decided, so the ledger never acts on a stale 'running'."""
+    before anything new is decided, so the ledger never acts on a stale 'running'.
+
+    ASKED WHERE IT WAS QUEUED (JG, 10 Nov 2026). 11896-02-01-GA was queued on 8072; the watcher
+    was reinstalled with 8071 first, asked 8071, was told "no such run", and wrote the job off
+    as "the portal no longer knows this run" while 8072 still had it. The service a run was
+    queued on is recorded with it and asked first; it is lost only when no service knows it."""
     for job in ledger["jobs"].values():
         for attempt in job.get("attempts") or []:
             if attempt.get("status") not in {"queued", "running"}:
                 continue
-            try:
-                _attempt_from(portal.status(attempt["run_id"]), attempt)
-            except PortalError as exc:
-                if exc.status == 404:
-                    attempt.update(status="error", finished_at=_now(),
-                                   error="the portal no longer knows this run (restarted?)")
+            lost = True
+            for p in _asked_in_turn(attempt, portal, others):
+                try:
+                    _attempt_from(p.status(attempt["run_id"]), attempt)
+                    attempt.setdefault("server", getattr(p, "server", ""))
+                    lost = False
+                    break
+                except PortalError as exc:
+                    if exc.status != 404:
+                        lost = False          # did not answer: not evidence it is gone
+            if lost:
+                attempt.update(status="error", finished_at=_now(),
+                               error="no service on the list knows this run (restarted?)")
 
 
 def run_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: Path,
@@ -990,6 +1029,42 @@ def run_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: Pa
             email_to: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """Queue one row and wait for it to finish. The attempt is in the ledger from the moment it
     is queued, so a runner stopped mid-wait finds it again on the next start."""
+    attempt = queue_one(d, portal, ledger, ledger_path, say=say, email_to=email_to)
+    deadline = clock() + config.LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES * 60
+    while True:
+        sleep(poll_seconds)
+        if poll_once(attempt, portal, ledger, ledger_path, say=say):
+            return attempt
+        _touch_lock(ledger_path)
+        if clock() > deadline:
+            say(f"   {d.row.drawing} has run past {config.LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES} "
+                f"min; not waiting on it any longer this cycle (the portal keeps it)")
+            return attempt
+
+
+def poll_once(attempt: Dict[str, Any], portal: Portal, ledger: Dict[str, Any],
+              ledger_path: Path, say: Callable[[str], None] = print) -> bool:
+    """Ask the service once how a queued run is going; True once it has ended."""
+    try:
+        snap = portal.status(attempt["run_id"])
+    except PortalError as exc:
+        if exc.status == 404:
+            attempt.update(status="error", finished_at=_now(),
+                           error="the portal no longer knows this run (restarted?)")
+            save_ledger(ledger_path, ledger)
+            return True
+        say(f"   (portal did not answer: {exc.message}; still waiting)")
+        snap = {}
+    if snap:
+        _attempt_from(snap, attempt)
+        save_ledger(ledger_path, ledger)
+    return attempt["status"] in {"done", "error"}
+
+
+def queue_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: Path,
+              say: Callable[[str], None] = print,
+              email_to: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+    """Queue one row and record it in the ledger; does not wait. Refused: nothing recorded."""
     attempt: Dict[str, Any] = {
         "queued_at": _now(), "status": "queued", "row": d.row.row,
         "folder": str(d.located.folder), "fingerprint": d.fingerprint,
@@ -1003,6 +1078,7 @@ def run_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: Pa
     job = ledger["jobs"].setdefault(job_key(d.row), {
         "customer": d.row.customer, "drawing": d.row.drawing, "attempts": []})
     attempt["run_id"] = started.get("run_id")
+    attempt["server"] = getattr(portal, "server", "")
     attempt["output_path"] = started.get("output_path")
     job["attempts"].append(attempt)
     job.pop("retry", None)
@@ -1023,29 +1099,7 @@ def run_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: Pa
         elif not _used:
             say(f"   row {d.row.row} names no estimator e-mail address, so only the saved list "
                 f"hears about it")
-    deadline = clock() + config.LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES * 60
-    while True:
-        sleep(poll_seconds)
-        try:
-            snap = portal.status(attempt["run_id"])
-        except PortalError as exc:
-            if exc.status == 404:
-                attempt.update(status="error", finished_at=_now(),
-                               error="the portal no longer knows this run (restarted?)")
-                save_ledger(ledger_path, ledger)
-                return attempt
-            say(f"   (portal did not answer: {exc.message}; still waiting)")
-            snap = {}
-        if snap:
-            _attempt_from(snap, attempt)
-            save_ledger(ledger_path, ledger)
-        if attempt["status"] in {"done", "error"}:
-            return attempt
-        _touch_lock(ledger_path)
-        if clock() > deadline:
-            say(f"   {d.row.drawing} has run past {config.LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES} "
-                f"min; not waiting on it any longer this cycle (the portal keeps it)")
-            return attempt
+    return attempt
 
 
 def run_ready(decisions: Sequence[Decision], portal: Portal, ledger: Dict[str, Any],

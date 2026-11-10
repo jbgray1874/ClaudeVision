@@ -313,6 +313,10 @@ class Run:
     # already been given up on. The runner cannot be interrupted from here, so it is TOLD, on
     # the heartbeat it already sends, and it does the killing at its end.
     cancel_requested: bool = False
+    # A PERSON STOPPED IT (JG, 10 Nov 2026), from the estimating page or Grid Control, as against
+    # a run that failed. Self-Running reads it and holds the job on its sheet instead of
+    # queueing it again as "attempt 2": a stop means stop until somebody marks it Re-Run.
+    stopped_by_hand: bool = False
     # WHO GETS THIS ONE, decided when the job was queued and not when it finished. A person
     # saw the box, and what they left in it is what happens; empty means nobody, so an engine
     # test does not land in an estimator's inbox at two in the morning.
@@ -385,6 +389,7 @@ class Run:
             "requested_by": self.requested_by,
             "submitted_scope": dict(self.submitted_scope),
             "job_type": self.job_type,
+            "stopped_by_hand": self.stopped_by_hand,
             "queued_at": self.queued_at, "started_at": self.started_at,
             "finished_at": self.finished_at,
             "seconds": round((self.finished_at or time.time()) - ref, 1),
@@ -4849,6 +4854,7 @@ def batch_abandon(batch_id: str, x_sdi_key: Optional[str] = Header(default=None)
             # learned to end the engine; this is the same act, ninety-nine times over, and
             # it had no reason to mean less.
             run.cancel_requested = True
+            run.stopped_by_hand = True
             run.status = "error"
             run.error = ("Released with the rest of this enquiry. "
                          + ("It had not started." if was == "queued" else
@@ -4894,6 +4900,7 @@ def abandon(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
         # which is also true of a run this runner genuinely lost, and only this says a person
         # asked for it to stop.
         run.cancel_requested = True
+        run.stopped_by_hand = True
         run.status = "error"
         run.error = ("Released by hand from the page. The queue is free; if the runner was "
                      "in fact still working, its result will be refused when it reports.")

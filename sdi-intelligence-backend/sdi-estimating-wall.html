@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Estimating Wall</title>
+<title>Grid Control</title>
 <!--
   THE ESTIMATING WALL (D-737). JG, 7 Nov 2026: "build the full-screen page for the wall monitor
   ... something SUPER impressive and techie ... runtime stats, KPIs around run times, monitoring
@@ -133,6 +133,11 @@
   .lane.red{border-color:rgba(208,59,59,.7);box-shadow:inset 0 0 40px rgba(208,59,59,.12)}
   .lanehead{display:flex;justify-content:space-between;align-items:center;gap:8px}
   .slotname{font-family:var(--mono);font-size:11px;letter-spacing:.22em;color:var(--ink-3)}
+  .lanectl{display:flex;align-items:center;gap:8px}
+  .stopjob{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;cursor:pointer;
+    color:var(--ink);background:transparent;border:1px solid var(--line-hi);border-radius:4px;padding:2px 8px}
+  .stopjob:hover{border-color:currentColor}
+  .stopjob[disabled]{opacity:.55;cursor:default}
   .badge{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;
          letter-spacing:.1em;text-transform:uppercase;padding:4px 9px;border-radius:999px;
          border:1px solid var(--line-hi);color:var(--ink);white-space:nowrap}
@@ -258,7 +263,7 @@
   .use i{width:8px;height:8px;border-radius:2px}
   .use b{font-weight:600}
   .queue{padding:10px 12px;overflow:hidden;display:flex;flex-direction:column;gap:6px}
-  .qrow{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:8px;align-items:center;
+  .qrow{display:grid;grid-template-columns:22px minmax(0,1fr) auto auto;gap:8px;align-items:center;
         font-size:12.5px;padding:6px 8px;border-radius:7px;background:var(--panel-2);border:1px solid var(--line)}
   .qrow .n{font-family:var(--mono);color:var(--accent);font-size:11px}
   .qrow .t{font-family:var(--mono);color:var(--ink-2);font-size:11px}
@@ -464,7 +469,7 @@
       <svg class="sdi-word mark-word" viewBox="0 0 950 169" role="img" aria-label="we.are.sdi" fill="currentColor"><path d="M158.915 36.7773L135.389 114.85C133.118 122.35 130.447 133.08 129.137 138.467C127.991 133.14 125.689 122.658 123.777 115.372L103.183 36.7773H80.9663L59.639 115.365C57.7134 122.531 55.2616 133.193 54.0544 138.537C52.7665 133.175 50.1337 122.393 48.0313 114.866L25.7238 36.7773H2.41797L42.8867 164.183H64.817L86.1457 87.545C88.1938 80.2145 90.5008 70.1606 91.6815 64.8782C92.7926 70.1676 94.9785 80.2145 97.0252 87.5408L118.11 164.183H139.793L181.494 36.7773H158.915Z"/><path d="M198.247 89.3881C201.717 65.0993 215.393 51.2041 235.907 51.2041C257.026 51.2041 269.942 65.1035 271.475 89.3881H198.247ZM235.907 33.6262C200.848 33.6262 175.402 61.7925 175.402 100.602C175.402 140.036 200.782 167.576 237.122 167.576C266.097 167.576 286.107 151.905 292.022 124.58L292.29 123.331H271.037L270.838 124.105C266.638 140.412 254.981 149.03 237.122 149.03C214.607 149.03 199.568 132.667 197.679 106.238H294.716V105.207C294.716 61.0546 272.181 33.6262 235.907 33.6262Z"/><path d="M423.094 99.3426V116.845C423.094 129.476 413.093 149.514 386.253 149.514C374.763 149.514 361.066 146.034 361.066 129.453C361.066 111.983 374.55 109.012 395.107 106.475C405.222 105.353 416.174 102.542 423.094 99.3426ZM442.876 145.211V75.1457C442.876 48.0778 427.173 34.3525 396.207 34.3525C365.325 34.3525 345.882 50.5756 344.199 77.7479L344.132 78.8422H365.115L365.189 77.8927C366.611 59.6855 376.543 51.2036 396.449 51.2036C413.721 51.2036 422.85 58.4756 422.85 72.2358C422.85 84.7721 413.6 87.9131 394.162 89.8791C365.81 92.711 338.128 98.1354 338.128 129.937C338.128 152.214 355.493 166.609 382.369 166.609C399.062 166.609 412.196 160.665 422.446 148.455C422.81 156.828 424.039 161.374 426.552 163.882L426.853 164.184H447.488V161.874L447.029 161.569C445.354 160.452 442.876 154.482 442.876 145.211Z"/><path d="M544.015 89.3881C547.485 65.0993 561.162 51.2041 581.676 51.2041C602.794 51.2041 615.711 65.1035 617.244 89.3881H544.015ZM581.676 33.6262C546.616 33.6262 521.17 61.7925 521.17 100.602C521.17 140.036 546.551 167.576 582.89 167.576C611.865 167.576 631.875 151.905 637.79 124.58L638.059 123.331H616.805L616.606 124.105C612.407 140.412 600.749 149.03 582.89 149.03C560.375 149.03 545.337 132.667 543.447 106.238H640.484V105.207C640.484 61.0546 617.95 33.6262 581.676 33.6262Z"/><path d="M851.701 149.272C829.697 149.272 816.561 131.258 816.561 101.086C816.561 71.215 829.932 52.6584 851.46 52.6584C875.53 52.6584 890.484 71.215 890.484 101.086C890.484 143.012 866.185 149.272 851.701 149.272ZM889.27 52.9591C880.17 40.7959 866.17 33.8678 850.487 33.8678C816.91 33.8678 794.351 60.7839 794.351 100.843C794.351 141.529 816.576 167.82 850.973 167.82C867.235 167.82 879.136 162.367 889.27 150.196V164.182H910.994V0.13501H889.27V52.9591Z"/><path d="M927.143 164.182H948.867V36.7761H927.143V164.182Z"/><path d="M927.143 21.2634H948.867V0.135254H927.143V21.2634Z"/><path d="M743.393 88.1957C721.16 83.7055 710.475 80.996 710.475 68.5976C710.475 57.8517 719.302 51.688 734.692 51.688C752.847 51.688 761.398 58.5214 763.285 74.5371L763.393 75.4463H785.617L785.479 74.2949C782.352 48.0054 764.958 34.1101 735.178 34.1101C706.259 34.1101 688.993 47.3649 688.993 69.568C688.993 98.3525 713.23 103.337 736.664 108.156C761.031 113.28 768.617 116.918 768.617 129.693C768.617 142.319 758.639 149.272 740.518 149.272C719.615 149.272 708.61 141.227 705.884 123.957L705.746 123.087H683.493L683.602 124.216C686.301 152.334 706.342 167.819 740.032 167.819C771.687 167.819 790.585 153.204 790.585 128.724C790.585 97.7135 765.514 92.6566 743.393 88.1957Z"/><path d="M525.691 57.6969V37.1089L525.044 36.8513C522.561 35.86 520.488 35.3225 516.649 35.3225C502.335 35.3225 488.734 42.983 479.81 55.9426V36.7775H458.086V164.183H479.81V93.5711C479.81 69.2586 497.61 56.5371 515.193 56.5371C519.064 56.5371 520.872 56.7877 523.607 57.6969H525.691Z"/><path class="d" d="M304.438 145.847H322.879V164.158H304.438V145.847Z"/><path class="d" d="M650.643 145.691H669.084V164.002H650.643V145.691Z"/></svg>
       <div>
         <h1>SDI INTELLIGENCE <b>//</b> LIVE ESTIMATING</h1>
-        <div class="sub">LIVE OPERATIONS WALL</div>
+        <div class="sub">GRID CONTROL</div>
       </div>
     </div>
     <div class="banner grey" id="banner"><span class="ico">○</span><span id="bannerText">Connecting…</span></div>
@@ -488,7 +493,7 @@
     <div class="lanes" id="lanes"></div>
     <div class="side">
       <div class="panel">
-        <div class="ptitle"><span><b>SDI Grid</b></span><span class="r" id="fleetCount"></span></div>
+        <div class="ptitle"><span><b>SDI Grid · Grid Runners</b></span><span class="r" id="fleetCount"></span></div>
         <div class="fleet" id="fleet"></div>
       </div>
       <div class="panel">
@@ -941,7 +946,7 @@ function renderLanes(s){
         `<div class="${j < r.stage_index ? "done" : j === r.stage_index ? "now" : ""}">${esc(name)}</div>`).join("");
       const tail = r.log_tail || [];
       html.push(`<div class="panel lane ${r.rag}" data-start="${r.started_at || 0}">
-        <div class="lanehead"><span class="slotname">RUN ${i + 1} · ${esc(r.runner || "")}</span>${badge(r.rag, WORD[r.rag])}</div>
+        <div class="lanehead"><span class="slotname">RUN ${i + 1} · ${esc(r.runner || "")}</span><span class="lanectl">${stopBtn(r)}${badge(r.rag, WORD[r.rag])}</span></div>
         <div class="job">
           <div class="ring">${ring(frac == null ? 0 : frac, r.rag)}
             <div class="pct"><b>${frac == null ? "—" : Math.round(frac * 100) + "%"}</b><span>OF USUAL</span></div></div>
@@ -994,6 +999,28 @@ function renderLog(){
   b.innerHTML = logLines(r.log_tail || [], true);
   if(end) b.scrollTop = b.scrollHeight;
 }
+/* STOP ANY JOB FROM GRID CONTROL (JG, 10 Nov 2026): "be able to stop individual jobs whether they
+   are set off as individual jobs or started from the AI self running and also be able to stop
+   jobs through the Grid Control". The same stop as the estimating page: the service abandons
+   the run, and the runner is told to end the engine on its next heartbeat. A job Self-Running
+   queued is held on its sheet after this, not queued again, until somebody marks it Re-Run. */
+const stopping = {};
+function stopBtn(r){
+  if(!r || !r.run_id) return "";
+  const id = esc(r.run_id), sent = stopping[r.run_id];
+  return `<button class="stopjob" type="button" data-stop-job="${id}" data-name="${esc(r.drawing_number || r.run_id)}"${sent ? " disabled" : ""}
+    title="Stop this job: the run is abandoned and its Grid Runner ends the engine">${sent ? "Stopping…" : "Stop"}</button>`;
+}
+document.addEventListener("click", async e => {
+  const b = e.target.closest && e.target.closest("[data-stop-job]");
+  if(!b || b.disabled) return;
+  const id = b.dataset.stopJob;
+  if(!confirm(`Stop ${b.dataset.name}?\n\nThe run is abandoned and its Grid Runner ends the engine. `
+              + "A job from AI Self-Running is not queued again until it is marked Re-Run.")) return;
+  stopping[id] = true; b.disabled = true; b.textContent = "Stopping…";
+  try{ await api("/api/estimate/" + encodeURIComponent(id) + "/abandon", {}); }
+  catch(err){ delete stopping[id]; b.disabled = false; b.textContent = "Stop"; alert("Not stopped: " + err.message); }
+});
 function openLog(id){ logRun = id; $("logBody").innerHTML = ""; $("logModal").hidden = false; renderLog(); }
 function closeLog(){ logRun = null; $("logModal").hidden = true; }
 document.addEventListener("click", e => {
@@ -1048,7 +1075,7 @@ function renderFleet(fleet, compute){
   const shown = new Set();
   const up = fleet.filter(f => f.online).length;
   $("fleetCount").textContent = `${up} of ${fleet.length} online`;
-  if(!fleet.length){ $("fleet").innerHTML = `<div class="empty">No runner has checked in with this service${serviceHost ? " on " + esc(serviceHost) : ""}. Each service keeps its own queue: a run started on another machine's service shows on that service's control panel, not here.</div>`; return; }
+  if(!fleet.length){ $("fleet").innerHTML = `<div class="empty">No Grid Runner has checked in with this service${serviceHost ? " on " + esc(serviceHost) : ""}. Each service keeps its own queue: a run started on another machine's service shows on that service's Grid Control, not here.</div>`; return; }
   const capName = {sw_extract:"SW", xai_extract:"xAI", dm_extract:"DM", desktop_token:"TURN"};
   $("fleet").innerHTML = fleet.map(f => {
     const caps = (f.capabilities || []).filter(c => capName[c]).map(c => `<span class="chip">${capName[c]}</span>`).join("");
@@ -1075,7 +1102,7 @@ function renderQueue(q){
   const n = nowS();
   $("queue").innerHTML = q.slice(0, 6).map((r, i) => `<div class="qrow"><span class="n">#${i + 1}</span>
       <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")}</span></span>
-      <span class="t">${r.start_at ? "starts ~" + fmtClock(r.start_at) + " · done ~" + fmtClock(r.finish_at) : "waiting " + fmtDur(n - (r.queued_at || n))}</span></div>`).join("")
+      <span class="t">${r.start_at ? "starts ~" + fmtClock(r.start_at) + " · done ~" + fmtClock(r.finish_at) : "waiting " + fmtDur(n - (r.queued_at || n))}</span>${stopBtn(r)}</div>`).join("")
     + (q.length > 6 ? `<div class="empty">+ ${q.length - 6} more</div>` : "");
 }
 

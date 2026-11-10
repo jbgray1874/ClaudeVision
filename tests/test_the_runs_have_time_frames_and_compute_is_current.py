@@ -165,4 +165,4 @@ def test_the_panel_says_which_machine_its_service_is_on(client):
     page = WALL.read_text(encoding="utf-8")
     assert 'serviceHost = s.service_host || "";' in page
     assert '(serviceHost ? " on " + serviceHost : "")' in page
-    assert "Each service keeps its own queue: a run started on another machine's service shows on that service's control panel, not here." in page
+    assert "Each service keeps its own queue: a run started on another machine's service shows on that service's Grid Control, not here." in page
