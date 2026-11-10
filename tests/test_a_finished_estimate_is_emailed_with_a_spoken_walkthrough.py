@@ -350,7 +350,7 @@ def test_azure_failing_falls_back_and_is_said_not_hidden(tmp_path, monkeypatch):
         raise OSError("no route to Azure")
     ok, said = wa.write_walkthrough("Words.", xlsx, post=broken, windows=False)
     assert ok is False
-    assert "Azure could not speak it (OSError)" in said
+    assert "Azure could not speak it (OSError: no route to Azure)" in said
     assert "no Windows speech synthesiser" in said
     assert (tmp_path / "12678_walkthrough.txt").is_file()
 
@@ -366,3 +366,36 @@ def test_without_the_switch_nothing_goes_to_azure(tmp_path, monkeypatch):
         return b"RIFF" + b"0" * 2000
     ok, said = wa.write_walkthrough("Words.", tmp_path / "x.xlsx", post=post, windows=False)
     assert called == [] and ok is False and "no Windows speech synthesiser" in said
+
+
+def test_when_the_windows_voice_stands_in_the_log_says_why_azure_did_not(tmp_path, monkeypatch):
+    """JG, 10 Nov 2026: "the AI voice is still unchanged". Four walkthroughs that day read
+    "X.wav (4.5 MB) and X.txt": the Windows voice, with nothing saying why Azure was not."""
+    import io
+    import urllib.error
+    import walkthrough_audio as wa
+    monkeypatch.setenv("SDI_WALKTHROUGH_VOICE", "azure")
+    monkeypatch.setenv("SDI_SPEECH_KEY", "k")
+    monkeypatch.setenv("SDI_SPEECH_REGION", "uksouth")
+
+    def refuse(ssml):
+        raise urllib.error.HTTPError("https://uksouth.tts", 401, "Unauthorized", {},
+                                     io.BytesIO(b"Access denied due to invalid subscription key"))
+    book = tmp_path / "J.xlsx"
+
+    def windows(cmd, env=None, **kw):
+        Path(env["SDI_WALKTHROUGH_WAV"]).write_bytes(b"RIFF" + b"0" * 5000)
+    ok, said = wa.write_walkthrough("Some words.", book, post=refuse, windows=True, run=windows)
+    assert ok and "the Windows voice" in said
+    assert "Azure could not speak it (HTTPError 401: Access denied due to invalid subscription key)" in said
+
+
+def test_the_voice_can_be_checked_in_one_command_without_printing_the_key(monkeypatch, capsys):
+    import walkthrough_audio as wa
+    monkeypatch.setenv("SDI_SPEECH_KEY", "secret-value")
+    monkeypatch.setenv("SDI_SPEECH_REGION", "uksouth")
+    monkeypatch.setattr(wa, "_azure_speak", lambda words, wav, post=None: (False, "Azure could not speak it (URLError: proxy)"))
+    assert wa.check() is False
+    out = capsys.readouterr().out
+    assert "AZURE FAILED: Azure could not speak it (URLError: proxy)" in out
+    assert "SDI_SPEECH_KEY        = set" in out and "secret-value" not in out
