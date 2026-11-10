@@ -279,7 +279,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 icfg = di.settings()
                 report["index"] = di.refresh(icfg["roots"], icfg["path"], icfg["depth"], full_days=icfg["full_days"],
                                              recent_days=icfg["recent_days"])
-                last = report["index"]["last"]
+                if report["index"].get("skipped"):
+                    print(f"[design-sweep] drawing index not refreshed: {report['index']['skipped']}", flush=True)
+                last = report["index"].get("last") or {}
                 print(f"[design-sweep] drawing index: {report['index']['folders']} folder(s), "
                       f"{report['index']['drawings']} drawing(s); listed {last.get('listed')}, reused "
                       f"{last.get('reused')} in {last.get('seconds')} s", flush=True)

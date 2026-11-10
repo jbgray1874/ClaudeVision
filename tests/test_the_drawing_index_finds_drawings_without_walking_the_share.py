@@ -151,3 +151,24 @@ def test_the_folder_around_the_ga_is_relisted_live_so_a_new_file_is_never_missed
     assert "12181-01-01M_Panel_RevA.DXF" in names and "re-listed now" in source
     stale, _s, _l = pr.folders_for("12181-00-GA", live=False)
     assert "12181-01-01M_Panel_RevA.DXF" not in {f.name for _p, files, _a in stale for f, _s, _m in files}
+
+
+def test_a_quick_refresh_stands_aside_while_the_full_listing_runs(tmp_path):
+    w = _share(tmp_path)
+    p = tmp_path / "ix.json.gz"
+    di.refresh([w], p)
+    di.lock_path(p).write_text("1234 running")
+    assert di.full_listing_running(p)
+    s = di.refresh([w], p)
+    assert s["skipped"] == "a full listing is running" and s["drawings"] == 3
+    di.lock_path(p).unlink()
+    full = di.refresh([w], p, full=True)
+    assert not di.lock_path(p).exists(), "the full listing removes its lock when it ends"
+    assert full["last"]["full"] is True
+
+
+def test_the_weekly_full_listing_task_runs_the_full_build_overnight():
+    ps1 = (ROOT / "tools" / "start" / "install-drawing-index-task.ps1").read_text(encoding="utf-8")
+    assert "--build --full --log" in ps1 and '[string] $Day = "Saturday"' in ps1 and '[string] $At = "19:00"' in ps1
+    assert "-StartWhenAvailable" in ps1 and "[switch] $Daily" in ps1
+    assert all(ord(c) < 128 for c in ps1), "ASCII only, like the other scripts"

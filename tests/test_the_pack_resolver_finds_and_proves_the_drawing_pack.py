@@ -262,3 +262,20 @@ def test_the_design_area_wins_and_a_prototype_copy_is_never_a_conflict(tmp_path)
     assert any("later search area" in a for a in m["assumptions"])
     alone = pr.resolve(GA, [proto], read_text=_text(), area_rank=rank)
     assert "Prototype" in alone["selected_folder"], "Prototype is used when design has nothing"
+
+
+def test_only_a_ga_that_could_be_chosen_is_read(tmp_path):
+    design = _pack(tmp_path / "CAD" / "Design" / "TTi" / "11896-01-00 - GAs")
+    proto = _pack(tmp_path / "CAD" / "Prototype" / "TTi" / "11896-01-00 - GAs")
+    arch = _pack(tmp_path / "CAD" / "Design" / "TTi" / "Archive" / "11896-01-00 - GAs", rev="D", archive=True)
+    read = []
+    base = _text()
+
+    def counting(path: Path) -> str:
+        read.append(str(path))
+        return base(path)
+    m = pr.resolve(GA, [proto, arch, design], read_text=counting,
+                   area_rank=lambda f: 1 if "Prototype" in str(f) else 0)
+    ga_reads = [p for p in read if Path(p).name.startswith(GA)]
+    assert len(ga_reads) == 1 and "Design" in ga_reads[0] and "Archive" not in ga_reads[0]
+    assert "Design" in m["selected_folder"]
