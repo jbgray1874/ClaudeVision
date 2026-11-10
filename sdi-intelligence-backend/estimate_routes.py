@@ -1239,6 +1239,48 @@ def _tti_status_file(tid: str) -> Path:
     return estimate_email.state_dir() / "tti" / f"{tid}.json"
 
 
+class PackFindRequest(BaseModel):
+    drawing: str
+    client: str = ""
+    store: bool = False
+
+
+@router.post("/pack/find")
+def pack_find(req: PackFindRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """THE DRAWING PACK FOR A DRAWING NUMBER (SCRUM-199/203), through the one shared resolver the
+    tracker pricer and Self-Running use: candidates from the design share's drawing index, the GA
+    proved by its own text, the members, revisions and status, and why. store=True also keeps it
+    in Live Enquiry\\<client>\\<drawing> (re-used if unchanged, a new version if changed) and
+    returns the kept copies, which is what the run is then given. Run as the engine's own CLI, so
+    this service never imports the engine."""
+    _check_key(x_sdi_key)
+    _engine_ready()
+    drawing = str(req.drawing or "").strip()
+    client = str(req.client or "").strip()
+    if not re.fullmatch(r"[\w .\-]{3,80}", drawing):
+        raise HTTPException(400, "Type the drawing number, e.g. 11896-01-00-GA.")
+    if client and not re.fullmatch(r"[\w .&'\-]{1,80}", client):
+        raise HTTPException(400, "That client name has characters a folder cannot hold.")
+    args = [_ENGINE_PYTHON, str(_REPO_ROOT / "src" / "pack_resolver.py"), "--drawing", drawing,
+            "--client", client, "--json"] + (["--store"] if req.store else [])
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=900, cwd=str(_REPO_ROOT))
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "Finding the pack took longer than 15 minutes; is the drawing index built?")
+    try:
+        data = json.loads(proc.stdout or "{}")
+    except ValueError:
+        data = {}
+    if proc.returncode not in (0, 2) or not data:
+        raise HTTPException(502, "The pack resolver did not answer: " + (proc.stderr or proc.stdout or "")[-600:])
+    if data.get("stored_files"):
+        data["usable_files"] = [f for f in data["stored_files"] if _within_a_root(f)]
+        if len(data["usable_files"]) < len(data["stored_files"]):
+            data["usable_note"] = ("The pack was kept outside the shares this service may read; add its "
+                                   "folder to SDI_FILE_ROOTS.")
+    return data
+
+
 def _held_dir(kind: str) -> Path:
     """Inputs this service gathers for a run it starts itself (a parity re-estimate, a TTI row):
     under the staging share, so start() may read them, and never in a client/job folder that

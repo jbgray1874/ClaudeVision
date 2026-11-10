@@ -397,10 +397,20 @@ def _reason(best: Dict[str, Any], live: List[Dict[str, Any]], m: Dict[str, Any])
 
 # ── the index as folders ─────────────────────────────────────────────────────────────────
 
+_CACHE: Dict[str, Any] = {}
+
+
 def folders_from_index(roots: Optional[List[Path]] = None) -> Tuple[List[FolderRow], str]:
+    """The index as folder rows, read once per index file: Self-Running asks for every row."""
     sys.path.insert(0, str(HERE))
     import drawing_index as di
     cfg = di.settings()
+    try:
+        stamp = (str(cfg["path"]), cfg["path"].stat().st_mtime)
+    except OSError:
+        stamp = None
+    if stamp and _CACHE.get("stamp") == stamp:
+        return _CACHE["value"]
     idx = di.load(cfg["path"])
     if not idx:
         return [], f"no drawing index at {cfg['path']}; run src/drawing_index.py --build"
@@ -409,7 +419,10 @@ def folders_from_index(roots: Optional[List[Path]] = None) -> Tuple[List[FolderR
         p = Path(k)
         out.append((p, [(p / n, int(s), float(m)) for n, s, m in v.get("files") or []], di.is_archive(k)))
     fresh = di.is_fresh(idx, cfg["max_hours"])
-    return out, f"drawing index built {di.summary(idx)['built_at']}" + ("" if fresh else " (STALE)")
+    value = (out, f"drawing index built {di.summary(idx)['built_at']}" + ("" if fresh else " (STALE)"))
+    if stamp:
+        _CACHE.update(stamp=stamp, value=value)
+    return value
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -417,15 +430,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--drawing", required=True)
     ap.add_argument("--client", default="")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--store", action="store_true",
+                    help="keep the pack in Live Enquiry\\<client>\\<drawing> (src/pack_store.py) when it may be priced")
     args = ap.parse_args(argv)
     sys.path.insert(0, str(HERE))
-    try:
-        import config  # noqa: F401  (loads .env)
-    except Exception:                                                    # noqa: BLE001
-        pass
-    folders, source = folders_from_index()
-    m = resolve(args.drawing, folders, args.client)
-    m["source"] = source
+    import contextlib
+    with contextlib.redirect_stdout(sys.stderr):                         # --json output stays pure JSON
+        try:
+            import config  # noqa: F401  (loads .env)
+        except Exception:                                                # noqa: BLE001
+            pass
+        folders, source = folders_from_index()
+        m = resolve(args.drawing, folders, args.client)
+        m["source"] = source
+        if args.store and m["price_ok"]:
+            import pack_store as ps
+            kept = ps.store(m, args.client)
+            m["stored"] = kept
+            m["stored_files"] = ps.stored_files(kept, m)
     if args.json:
         print(json.dumps(m, indent=1))
         return 0 if m["price_ok"] else 2
@@ -445,6 +467,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  {k}: " + "; ".join(m[k]))
     if m["question"]:
         print(f"  ASK: {m['question']}")
+    if m.get("stored"):
+        print(f"  kept: {m['stored']['state']} -> {m['stored']['folder']}")
     return 0 if m["price_ok"] else 2
 
 

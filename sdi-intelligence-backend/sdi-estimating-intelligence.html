@@ -1019,11 +1019,17 @@
              behaviour this button had before — because a machine without the API set up still
              needs a way to add a job folder. -->
         <button id="addFolder" title="Ask Document Manager to extract this project's drawing pack.">Extract DesignDrawingPack</button>
+        <!-- FIND THE PACK FROM THE DRAWING NUMBER (SCRUM-199/203): the design share's index, the GA
+             read for its number, revision and references, the family's drawings in every format.
+             Nothing is added until "Use this pack", unless "add as soon as found" is ticked. -->
+        <button id="findPack" class="btn-run btn-measure" title="Find this drawing number's pack on the design share">Find drawing pack</button>
         <button id="addFiles">Add drawing files…</button>
         <!-- THE SHARE, WHEN THE BUTTON ABOVE IS TALKING TO DOCUMENT MANAGER. Adding a whole job
              folder off the share is what that button used to do, and it is still wanted: not
              every job goes through DM, and DM is not always up. -->
         <button id="addShareFolder">Add job folder…</button>
+        <label class="note" style="display:inline-flex;gap:6px;align-items:center;margin:0">
+          <input type="checkbox" id="packAuto"> add the pack as soon as it is found</label>
         <!-- THE SECOND SOURCE. Files that came out of Document Manager via the DM extract
              tool. Both buttons feed the SAME list and merge by name, so a DM copy replaces the
              folder copy of the same drawing and leaves the rest alone. Removing one is the
@@ -2915,6 +2921,60 @@ dAll.onclick = () => {
   });
   pickRender(); refreshAddAll();
 };
+
+/* ══ FIND DRAWING PACK (SCRUM-199/203) ══════════════════════════════════════════════════
+   One resolver for the page, Self-Running and the tracker pricer. Find shows the pack and its
+   status; Use keeps it in Live Enquiry\<client>\<drawing> (re-used if unchanged, a new version
+   beside it if changed) and adds the kept copies to the drawings, like any other source. */
+function packEsc(t){ return String(t ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function packPanel(){
+  let el = document.getElementById("packOut");
+  if(!el){
+    el = document.createElement("div");
+    el.id = "packOut"; el.className = "sub"; el.style.cssText = "margin:10px 0;font-size:13px";
+    $("findPack").parentElement.insertAdjacentElement("afterend", el);
+  }
+  return el;
+}
+async function findPack(useIt){
+  const out = packPanel();
+  const client = ($("client").value || "").trim(), dwg = ($("drawing").value || "").trim();
+  if(!dwg){ out.textContent = "Type the drawing number first, then Find drawing pack."; return; }
+  out.textContent = useIt ? "Finding and keeping the pack…" : "Finding the pack on the design share…";
+  let r, m;
+  try {
+    r = await api("/api/estimate/pack/find", {method:"POST", headers:{"Content-Type":"application/json"},
+                  body: JSON.stringify({client, drawing: dwg, store: !!useIt})});
+    m = await r.json().catch(() => ({}));
+  } catch(e){ out.textContent = "Could not ask the service: " + e.message; return; }
+  if(!r.ok){ out.textContent = "Not found: " + (m.detail || r.status); return; }
+  const tone = m.status === "verified" ? "var(--ok, #3a8)" : m.status === "provisional" ? "var(--warn, #c90)" : "var(--bad, #c44)";
+  const members = (m.members || []).map(x => `<tr><td>${packEsc(x.drawing)}</td><td>${packEsc(x.revision || "-")}</td>
+      <td>${packEsc(x.parent || "(top)")}</td><td>${packEsc([...new Set((x.files || []).map(f => f.format))].join(", "))}</td>
+      <td>${(x.superseded_revisions || []).length ? "superseded " + packEsc(x.superseded_revisions.join(",")) : ""}</td></tr>`).join("");
+  const list = (k, label) => (m[k] || []).length ? `<div><b>${label}:</b> ${packEsc(m[k].join("; "))}</div>` : "";
+  out.innerHTML = `<div><b style="color:${tone}">${packEsc((m.status || "").toUpperCase())}</b> · ${packEsc(m.drawing)}
+      ${m.revision ? " · revision " + packEsc(m.revision) + " (" + packEsc(m.revision_from) + ")" : ""} · ${(m.members || []).length} drawing(s)
+      <span class="note">· ${packEsc(m.source || "")}</span></div>
+    ${m.reason ? `<div class="note">${packEsc(m.reason)}</div>` : ""}
+    ${(m.candidates || []).length > 1 ? `<div class="note">Candidates: ${m.candidates.map(c => packEsc((c.archive ? "ARCHIVE " : "") + c.folder + " rev " + (c.revision || "?"))).join(" | ")}</div>` : ""}
+    ${members ? `<table class="tbl" style="margin-top:6px"><tr><th>Drawing</th><th>Rev</th><th>Under</th><th>Formats</th><th></th></tr>${members}</table>` : ""}
+    ${list("missing", "Missing (priced as labelled allowances)")}${list("conflicts", "Conflicts")}${list("assumptions", "Assumptions")}
+    ${m.question ? `<div><b>Ask:</b> ${packEsc(m.question)}</div>` : ""}
+    ${m.stored ? `<div class="note">Kept: ${packEsc(m.stored.state)} → ${packEsc(m.stored.folder)}</div>` : ""}
+    ${m.usable_note ? `<div><b>${packEsc(m.usable_note)}</b></div>` : ""}
+    ${!useIt && m.price_ok ? '<button type="button" id="usePack" class="btn-run">Use this pack</button>' : ""}`;
+  const use = document.getElementById("usePack");
+  if(use) use.onclick = () => findPack(true);
+  if(useIt){
+    const files = m.usable_files || [];
+    files.forEach(p => { if(!drawings.some(d => d.path === p)) drawings.push({path: p, name: p.split("\\").pop(), is_dir: false, source: "pack"}); });
+    renderFiles(); refresh();
+  } else if(m.price_ok && $("packAuto").checked){
+    findPack(true);
+  }
+}
+$("findPack").onclick = () => findPack(false);
 
 dChoose.onclick = () => {
   if(mode==="folder" && cwd){

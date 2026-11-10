@@ -459,3 +459,49 @@ def test_the_windowless_task_logs_to_a_file(tmp_path, monkeypatch):
         sys.stdout.flush()
         sys.stdout, sys.stderr = saved
     assert "live enquiry runner" in log.read_text(encoding="utf-8")
+
+
+# ── the design share, through the shared pack resolver (SCRUM-203) ─────────────────────
+def _design(tmp_path: Path, rev: str = "E", body: str = "x"):
+    d = tmp_path / "CAD" / "Design" / "Customers April 08 Onwards" / "M&S" / "12517-00-GA" / "Technical"
+    d.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for name in ("12517-00-GA.SLDASM", f"12517-00-GA_Unit_Rev{rev}.pdf", f"12517-01-01M_Panel_Rev{rev}.DXF"):
+        p = d / name
+        p.write_text(body + name)
+        st = p.stat()
+        rows.append((p, st.st_size, st.st_mtime))
+    return [(d, rows, False)]
+
+
+def test_self_running_takes_the_pack_from_the_design_share_and_keeps_it_in_live_enquiry(root, ledger, tmp_path):
+    rows = L.rows_from_table(_table(_line("M&S", "12517-00-GA", "5 off")))
+    design = _design(tmp_path)
+    src = L.DesignShare(root, folders=lambda: design)
+    got = src.find(rows[0])
+    assert got.status == "found" and got.source == "design share" and "provisional pack" in got.reason
+    assert got.folder.parent.name == "M&S" and got.folder.name == "12517-00-GA"
+    assert sorted(p.name for p in got.files if p.suffix != ".json") == [
+        "12517-00-GA.SLDASM", "12517-00-GA_Unit_RevE.pdf", "12517-01-01M_Panel_RevE.DXF"]
+    again = src.find(rows[0])
+    assert again.folder == got.folder and "unchanged" in again.reason, "an unchanged pack is used as it is"
+    changed = _design(tmp_path, body="revised ")
+    later = L.DesignShare(root, folders=lambda: changed).find(rows[0])
+    assert later.folder.name == "12517-00-GA v2" and "changed" in later.reason
+
+
+def test_nothing_on_the_design_share_leaves_the_hand_dropped_pack_to_the_share(root, ledger, tmp_path):
+    rows = L.rows_from_table(_table(_line("M&S", "8188-08", "5 off")))
+    _pack(root, "M&S", "8188-08", "ga.pdf")
+    d = L.locate(rows[0], [L.DesignShare(root, folders=lambda: _design(tmp_path)), L.LiveEnquiryShare(root)])
+    assert d.status == "found" and d.source == "Live Enquiry share"
+    other = L.rows_from_table(_table(_line("M&S", "9000-01", "5 off")))
+    w = L.locate(other[0], [L.DesignShare(root, folders=lambda: []), L.LiveEnquiryShare(root)])
+    assert w.status == "waiting" and w.source == "Live Enquiry share", "no index: the share's own reason stands"
+
+
+def test_the_production_share_is_never_a_source():
+    src = (ROOT / "src" / "live_enquiry_runner.py").read_text(encoding="utf-8") if "ROOT" in globals() else \
+        (Path(__file__).resolve().parents[1] / "src" / "live_enquiry_runner.py").read_text(encoding="utf-8")
+    body = src[src.index("def _sources("):src.index("def scan(")]
+    assert "DesignShare(root)" in body and "Production" not in body

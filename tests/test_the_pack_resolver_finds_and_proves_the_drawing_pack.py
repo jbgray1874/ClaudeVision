@@ -166,3 +166,65 @@ def test_a_folder_filled_by_hand_is_reused_when_its_files_match(tmp_path):
 def test_the_store_root_is_the_live_enquiry_folder_by_its_network_path():
     assert str(ps.store_root({})) == r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\Live Enquiry"
     assert str(ps.store_root({"AI_ENQUIRY_DEST": r"K:\x"})) == r"\\sdi-dc01\shareddata$\Shared\x"
+
+
+# ── the estimating page's Find drawing pack, end to end through the service ─────────────
+
+import pytest  # noqa: E402
+
+ROUTES = (ROOT / "sdi-intelligence-backend" / "estimate_routes.py").read_text(encoding="utf-8")
+PAGE = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-intelligence.html").read_text(encoding="utf-8")
+
+
+def test_the_page_finds_a_pack_and_adds_the_kept_copies():
+    assert '@router.post("/pack/find")' in ROUTES and '"--store"' in ROUTES
+    assert 'id="findPack"' in PAGE and '"/api/estimate/pack/find"' in PAGE and 'id="packAuto"' in PAGE
+    assert 'source: "pack"' in PAGE, "kept copies join the same drawings list as every other source"
+
+
+@pytest.fixture
+def service(tmp_path, monkeypatch):
+    pytest.importorskip("fastapi", reason="fastapi not installed")
+    monkeypatch.setenv("SDI_STATE_DIR", str(tmp_path / "state"))
+    clash = ("config", "estimate_routes", "log_filters", "hr_routes", "docmgr",
+             "self_running_switch", "estimate_email", "staging", "estimate_history")
+    saved = {n: sys.modules.pop(n) for n in clash if n in sys.modules}
+    backend = str(ROOT / "sdi-intelligence-backend")
+    sys.path.insert(0, backend)
+    try:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        import estimate_routes as er
+        monkeypatch.setattr(er, "_ENGINE_PYTHON", sys.executable)
+        monkeypatch.setattr(er.config, "FILE_ROOTS", [str(tmp_path)])
+        app = FastAPI()
+        app.include_router(er.router)
+        tc = TestClient(app)
+        key = getattr(er.config, "API_KEY", "") or ""
+        if key:
+            tc.headers.update({"X-SDI-Key": key})
+        yield tc, tmp_path
+    except Exception as exc:                                            # noqa: BLE001
+        pytest.skip(f"backend not importable here: {exc}")
+    finally:
+        sys.path.remove(backend)
+        for n in clash:
+            sys.modules.pop(n, None)
+        sys.modules.update(saved)
+
+
+def test_find_shows_the_pack_and_use_keeps_it(service, monkeypatch):
+    import drawing_index as di
+    tc, tmp = service
+    share = tmp / "CAD" / "Design" / "Customers April 08 Onwards"
+    _real_pack(share / "TTI" / "11896-01-00-GA")
+    monkeypatch.setenv("SDI_DRAWING_INDEX", str(tmp / "ix.json.gz"))
+    monkeypatch.setenv("SDI_DRAWING_INDEX_ROOTS", str(share))
+    monkeypatch.setenv("SDI_PACK_STORE", str(tmp / "LiveEnquiry"))
+    di.refresh([share], tmp / "ix.json.gz")
+    look = tc.post("/api/estimate/pack/find", json={"drawing": GA, "client": "TTI"}).json()
+    assert look["status"] == "provisional" and look["price_ok"] and "stored" not in look
+    use = tc.post("/api/estimate/pack/find", json={"drawing": GA, "client": "TTI", "store": True}).json()
+    assert use["stored"]["state"] == "new" and len(use["usable_files"]) == 3
+    assert all(f.startswith(str(tmp / "LiveEnquiry" / "TTI" / GA)) for f in use["usable_files"])
+    assert tc.post("/api/estimate/pack/find", json={"drawing": "x"}).status_code == 400

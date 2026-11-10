@@ -42,11 +42,13 @@ A ROW THAT CANNOT RUN SAYS WHY, AND WHO MOVES IT:
                 folder, or new quantities, makes it ready again
     failed      the last run failed; `retry` lets it go again
 
-WHERE THE DRAWINGS COME FROM is a list of sources, tried in order. Today it is the Live Enquiry
-share. The design area, through the endpoint James will provide (SDI_DESIGN_AREA_ENDPOINT),
-becomes the second: a row whose folder is missing asks it for the pack. Until that endpoint
-exists the source says so and finds nothing. (src/live_enquiry_collector.py is the earlier,
-provisional search of W:\\Production; it copies drawings and runs nothing.)
+WHERE THE DRAWINGS COME FROM is a list of sources, tried in order. FIRST THE DESIGN SHARE
+(SCRUM-203): the row's drawing number resolved by the shared pack resolver from the design
+area's index, and the pack kept in the Live Enquiry share, re-used if unchanged, a new folder if
+changed. Then the Live Enquiry share itself, for a pack dropped there by hand. The design area's
+endpoint (SDI_DESIGN_AREA_ENDPOINT) stays a placeholder. The production share is never a source:
+it is a hand-made copy of design. (src/live_enquiry_collector.py, the earlier search of it,
+copies drawings and runs nothing.)
 
 Settings: src/config.py, LIVE_ENQUIRY_* — the workbook path (SDI_LIVE_ENQUIRY_WORKBOOK), the
 root, the vocabularies. The portal is SDI_SERVER and SDI_API_KEY, the runner's own names.
@@ -500,6 +502,51 @@ class LiveEnquiryShare:
         return Located("found", f"{len(drawings)} drawing(s) in {folder.name}{old_layout}",
                        folder=folder, client_folder_name=client_name, files=files,
                        source=self.name)
+
+
+class DesignShare:
+    """THE DESIGN SHARE, THROUGH THE SHARED PACK RESOLVER (SCRUM-199/203, JG 9 Nov 2026).
+
+    Packs come from the design area (\\\\sdi-dc01\\CAD\\Design\\Customers April 08 Onwards, then
+    Prototype), never the production share, which is a hand-made copy holding PDFs and sometimes
+    DXFs. The row's drawing number is resolved exactly as the estimating page and the tracker
+    pricer resolve it (src/pack_resolver.py), and the pack is kept in the Live Enquiry share's
+    <customer>\\<drawing> (src/pack_store.py): an unchanged pack is used as it is, a changed one
+    gets a new folder beside the old, so the ledger sees new drawings and the row is ready again.
+    An ambiguous pack holds the row with the question to answer. With nothing to search, or no
+    file named for the drawing, it has no say, and the Live Enquiry share's own reason stands."""
+    name = "design share"
+
+    def __init__(self, root: Path, folders: Optional[Callable[[], Any]] = None):
+        self.root = Path(root)
+        self._folders = folders
+
+    def _load(self) -> Tuple[List[Any], str]:
+        if self._folders is not None:
+            return self._folders(), "given"
+        import pack_resolver as pr
+        return pr.folders_from_index()
+
+    def find(self, row: EnquiryRow) -> Optional[Located]:
+        import pack_resolver as pr
+        import pack_store as ps
+        if not str(row.drawing or "").strip():
+            return None
+        folders, _source = self._load()
+        if not folders:
+            return None             # nothing to search: the share's own reason is the useful one
+        m = pr.resolve(row.drawing, folders, client=row.customer)
+        if m["status"] == "not found":
+            return None             # not on design: the share is asked, and its reason stands
+        if not m["price_ok"]:
+            return Located("held", f"design share: {m['question']}", source=self.name)
+        named = customer_folders(_subfolders(self.root), row.customer) if self.root.is_dir() else []
+        client = named[0].name if len(named) == 1 else row.customer
+        kept = ps.store(m, client, root=self.root)
+        folder = Path(kept["folder"])
+        return Located("found", f"{m['status']} pack from the design share: {len(m['members'])} drawing(s), "
+                                f"revision {m.get('revision') or 'not read'}; {kept['state']} in {folder.name}",
+                       folder=folder, client_folder_name=client, files=pack_files(folder), source=self.name)
 
 
 class DesignArea:
@@ -1156,7 +1203,12 @@ def _settings(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 def _sources(root: Path) -> List[Any]:
-    return [LiveEnquiryShare(root), DesignArea(config.DESIGN_AREA_ENDPOINT)]
+    # THE DESIGN SHARE FIRST (SCRUM-203): it keeps the Live Enquiry folder current with the
+    # design area. The share second, for a pack an estimator dropped by hand that design does not
+    # hold. SDI_DESIGN_SHARE_SOURCE=0 turns the design share off and leaves the share alone.
+    first = [] if str(os.getenv("SDI_DESIGN_SHARE_SOURCE", "1")).strip().lower() in {"0", "off", "false", "no"} \
+        else [DesignShare(root)]
+    return first + [LiveEnquiryShare(root), DesignArea(config.DESIGN_AREA_ENDPOINT)]
 
 
 def scan(s: Dict[str, Any], ledger: Dict[str, Any]) -> List[Decision]:
