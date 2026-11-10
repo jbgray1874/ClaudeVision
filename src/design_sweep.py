@@ -73,6 +73,8 @@ def settings(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         "keep_days": max(1, int(e.get("SDI_DESIGN_SWEEP_KEEP_DAYS") or 14)),
         "ledger": Path(e.get("SDI_DESIGN_SWEEP_LEDGER") or (here / "output" / "design_sweep" / "ledger.json")),
         "estimates": Path(e.get("SDI_ESTIMATE_OUTPUT_ROOT") or ""),
+        "show_changed": str(e.get("SDI_DESIGN_SWEEP_SHOW_CHANGED") or "").strip().lower()
+                        in ("1", "true", "yes", "on"),
     }
 
 
@@ -222,8 +224,15 @@ def sweep(cfg: Dict[str, Any], ledger: Dict[str, Any], now: Optional[float] = No
         else:
             old.update(last_seen=now, client=f["client"], name=f["name"], job=f["job"])
             if fp["sha1"] != old.get("fingerprint"):
+                # A NEW JOB'S FOLDER IS MADE BEFORE ITS DRAWINGS ARRIVE (JG, 10 Nov 2026: "we need
+                # to find NEW folders, not changes"). A folder that held no drawings when last
+                # seen and holds some now is a new pack, not a changed one.
+                became = "new" if not int(old.get("files") or 0) else "changed"
+                if old.get("status") == "new" and old.get("flagged_at"):
+                    became = "new"                 # still the new pack it was flagged as
                 old.update(fingerprint=fp["sha1"], files=fp["files"], newest=fp["newest"],
-                           status="changed", flagged_at=now)
+                           status=became, flagged_at=now if became != old.get("status")
+                           or not old.get("flagged_at") else old["flagged_at"])
     for key, p in packs.items():
         p["present"] = key in seen
     ledger["sweeps"] = int(ledger.get("sweeps") or 0) + 1
@@ -231,8 +240,21 @@ def sweep(cfg: Dict[str, Any], ledger: Dict[str, Any], now: Optional[float] = No
         ledger["baseline_at"] = now
     keep = cfg["keep_days"] * 86400
     candidates = []
+    # A FOLDER MADE AFTER THE FIRST SWEEP IS NEW, whatever the sweep saw of it first (a folder
+    # created empty just before a sweep, then filled, was recorded "changed"). Its creation time
+    # on the share says so; looked at only for packs marked changed.
+    base_at = float(ledger.get("baseline_at") or 0)
     for key, p in packs.items():
-        if p.get("status") in ("new", "changed") and p.get("present") and p.get("flagged_at") \
+        if p.get("status") == "changed" and p.get("present") and base_at:
+            try:
+                if base_at < os.stat(p["folder"]).st_ctime <= now:
+                    p["status"] = "new"
+            except OSError:
+                pass
+    # NEW FOLDERS ONLY, UNLESS ASKED (SDI_DESIGN_SWEEP_SHOW_CHANGED=1 lists changed packs too).
+    shown = ("new", "changed") if cfg.get("show_changed") else ("new",)
+    for key, p in packs.items():
+        if p.get("status") in shown and p.get("present") and p.get("flagged_at") \
                 and now - float(p["flagged_at"]) <= keep:
             candidates.append({"folder": p["folder"], "client": p["client"], "name": p["name"], "job": p["job"],
                                "status": p["status"], "files": p.get("files"),
