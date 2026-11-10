@@ -509,6 +509,49 @@ def _prop(props: Dict[str, str], *aliases: str) -> str:
 # The material aliases a designer may type into a custom property, in priority order.
 _MATERIAL_PROP_ALIASES = ("Material", "Material Description", "Material Spec", "Spec", "Grade")
 
+# ── A TYPED MATERIAL MUST READ AS A MATERIAL (JG, 10 Nov 2026) ───────────────────────────
+# 12674-01-07J carried "SHELF" in its Material property: what the part IS, typed into the box
+# for what it is MADE OF. A typed property ranks as the designer's spec, so "SHELF" outranked
+# the applied MDF and reached the estimate as a material nobody can price. A typed value is
+# therefore taken only when it reads as a material: a base material word, a grade, or a
+# board/finish word. What does not is said and not used; the applied material, or the drawing,
+# decides. Self-contained (the analyser runs without the engine's lexicon on its path) and
+# deliberately broad: a real but unusual material that is missed here falls to the drawing,
+# which outranks the model anyway; a part name taken as a material does not.
+_MATERIAL_WORDS = frozenset("""
+    STEEL STAINLESS INOX MILD GALV GALVANISED GALVANIZED ZINTEC ELECTROZINC CRCA HRPO CR4 DC01
+    DC04 S275 S355 CORTEN IRON CAST ALUMINIUM ALUMINUM ALLOY ALU BRASS BRONZE COPPER ZINC
+    TITANIUM CHROME NICKEL TIN LEAD PEWTER WIRE MESH
+    MDF MFMDF MFC HPL LAMINATE LAMINATED MELAMINE FORMICA VENEER VENEERED PLY PLYWOOD BIRCH OAK
+    ASH BEECH WALNUT MAPLE PINE SPRUCE CHERRY TEAK SAPELE IROKO BAMBOO CORK TIMBER WOOD WOODEN
+    HARDWOOD SOFTWOOD CHIPBOARD PARTICLEBOARD HARDBOARD OSB BLOCKBOARD VALCHROMAT CONTIBOARD
+    ACRYLIC PERSPEX PLEXIGLAS PMMA PETG PET PVC UPVC FOAMEX FOREX DIBOND ABS POLYCARBONATE
+    POLYPROPYLENE POLYETHYLENE POLYSTYRENE POLYURETHANE HDPE LDPE HIPS PP PE PS PC PU POM
+    ACETAL DELRIN NYLON PTFE PEEK PLASTIC PLASTICS RESIN EPOXY GRP FIBREGLASS FIBERGLASS
+    CARBON SILICONE RUBBER NEOPRENE EPDM NITRILE FOAM FELT FABRIC TEXTILE LEATHER VINYL
+    GLASS MIRROR TOUGHENED LAMINATED CERAMIC PORCELAIN STONE MARBLE GRANITE QUARTZ SLATE
+    CONCRETE TERRAZZO CORIAN SOLID SURFACE KRION HIMACS CARD CARDBOARD PAPER CORRUGATED
+    MAGNETIC MAGNET
+""".split())
+_MATERIAL_GRADE_RE = re.compile(
+    r"\b(?:[1-7]\d{3}|30[1-9]|31[0-9]|32[0-9]|4[0-4]\d)(?:L|T\d+)?\b"   # 304, 316L, 6082, 5251
+    r"|\bS[23]\d{2}\b|\bDC0\d\b|\bEN\s?\d+\w*\b|\b1\.4\d{3}\b|\bT\d\b")   # S275, DC01, EN1A, 1.4301
+_NOT_A_MATERIAL_RE = re.compile(r"<\s*not\s+specified\s*>", re.IGNORECASE)
+
+
+def reads_as_material(text: Any) -> bool:
+    """Does this typed text name a material? A base word, a board or finish word, or a grade."""
+    s = _safe_str(text)
+    if not s or _NOT_A_MATERIAL_RE.search(s):
+        return False
+    up = s.upper()
+    tokens = set(re.findall(r"[A-Z0-9]+", up))
+    if tokens & _MATERIAL_WORDS:
+        return True
+    if any(len(t) > 4 and t.startswith("POLY") for t in tokens):
+        return True
+    return bool(_MATERIAL_GRADE_RE.search(up))
+
 # Hollow-section words a weldment cut-list member description carries. A frame's tube lives ONLY
 # in the weldment cut list — the analyser reads the sheet-metal keys and never these, so the
 # tube frame arrived at the estimate empty. Gated on a keyword so a plain part is not read as a
@@ -607,8 +650,10 @@ def _material_and_source(props: Dict[str, str], applied: str) -> Tuple[str, str]
     decision is verified in tests without a SolidWorks seat, even though the COM calls that
     fill props/applied upstream cannot be."""
     custom = _prop(props, *_MATERIAL_PROP_ALIASES)
-    if custom:
+    if custom and reads_as_material(custom):
         return custom, "custom_property"
+    # A typed value that names no material ("SHELF") is not the spec: the applied material,
+    # or nothing, and the caller says what was set aside.
     applied = _safe_str(applied)
     if applied:
         return applied, "applied_library"
@@ -1242,6 +1287,10 @@ def sheet_metal_signals(doc, allow_flatten: Optional[bool] = None) -> RouteSigna
     # Split the material from its provenance: a typed custom property is the spec (strongest),
     # the library-applied material is the appearance default (must not overrule the drawing).
     sig.material, sig.material_source = _material_and_source(props, _applied)
+    _typed = _prop(props, *_MATERIAL_PROP_ALIASES)
+    if _typed and not reads_as_material(_typed):
+        sig.notes.append(f"typed material {_typed!r} names no material — not used"
+                         + (f"; the applied {sig.material!r} stands" if sig.material else ""))
     _thk = _prop(props, "Thickness", "Sheet Thickness", "Gauge", "Material Thickness")
     if _thk:
         try:
@@ -1724,151 +1773,149 @@ def assembly_edges(doc) -> List[Dict[str, Any]]:
     return _ASSEMBLY_EDGES.get(id(doc), [])
 
 
-def _collect_from_table(t, lines: List[BomLine]) -> None:
-    """Read one table annotation's rows into BomLines. Shared by both discovery paths so
-    they cannot drift apart in what they accept."""
-    try:
-        rows = int(t.RowCount)
-        cols = int(t.ColumnCount)
-    except Exception:
-        return
-    headers = []
-    for col in range(cols):
-        try:
-            headers.append(_table_text(t, 0, col).lower())
-        except Exception:
-            headers.append("")
-    idx_pn = next((i for i, h in enumerate(headers)
-                   if "part" in h or "item" in h or h == "no"), 0)
-    idx_qty = next((i for i, h in enumerate(headers)
-                    if "qty" in h or "qnty" in h or "quantity" in h), None)
-    idx_desc = next((i for i, h in enumerate(headers) if "desc" in h), None)
-    for r in range(1, rows):
-        try:
-            pn = _table_text(t, r, idx_pn)
-            if not pn:
-                continue
-            qty = 1.0
-            if idx_qty is not None:
-                try:
-                    qty = float(_table_text(t, r, idx_qty).replace(",", ""))
-                except Exception:
-                    qty = 1.0
-            desc = _table_text(t, r, idx_desc) if idx_desc is not None else ""
-            lines.append(BomLine(part_number=pn, description=desc, qty=qty,
-                                 source="drawing_bom"))
-        except Exception:
+def _header_index(headers: List[str], *tests) -> Optional[int]:
+    for test in tests:
+        for i, h in enumerate(headers):
+            if test(h):
+                return i
+    return None
+
+
+def bom_lines_from_rows(rows: List[List[str]]) -> List[BomLine]:
+    """BOM lines from a table's rows, header first, or nothing when the table is not BOM-shaped.
+
+    THE SHAPE DECIDES, NOT THE TABLE TYPE (JG, 10 Nov 2026). Kept only when the header names a
+    part column AND a quantity column, so a revision block (REV / DESCRIPTION / DATE) or a
+    general note table is never read as a parts list. The PART NUMBER column is preferred over
+    ITEM NO.: an item number is a balloon, not a part. Shared with the Document Manager reader
+    (sw_docmgr_analyse.bom_from_table_rows) so the two read a drawing's table the same way."""
+    if not rows or len(rows) < 2:
+        return []
+    headers = [_safe_str(h).lower() for h in rows[0]]
+    idx_pn = _header_index(headers,
+                           lambda h: "part" in h and "desc" not in h,
+                           lambda h: "drawing" in h or "dwg" in h,
+                           lambda h: "item" in h,
+                           lambda h: h.rstrip(". :") == "no")
+    idx_qty = _header_index(headers, lambda h: "qty" in h or "qnty" in h or "quantity" in h)
+    if idx_pn is None or idx_qty is None:
+        return []
+    idx_desc = _header_index(headers, lambda h: "desc" in h)
+    lines: List[BomLine] = []
+    for row in rows[1:]:
+        pn = _safe_str(row[idx_pn]) if idx_pn < len(row) else ""
+        if not pn:
             continue
+        qty = 1.0
+        try:
+            qty = float(_safe_str(row[idx_qty]).replace(",", "")) if idx_qty < len(row) else 1.0
+        except ValueError:
+            qty = 1.0
+        desc = _safe_str(row[idx_desc]) if idx_desc is not None and idx_desc < len(row) else ""
+        lines.append(BomLine(part_number=pn, description=desc, qty=qty, source="drawing_bom"))
+    return lines
+
+
+def _table_grid(t) -> List[List[str]]:
+    """Every cell of one table annotation as rows of text, header row first."""
+    try:
+        rows = int(_get0(t, "RowCount"))
+        cols = int(_get0(t, "ColumnCount"))
+    except Exception:
+        return []
+    grid: List[List[str]] = []
+    for r in range(rows):
+        row = []
+        for c in range(cols):
+            try:
+                row.append(_table_text(t, r, c))
+            except Exception:
+                row.append("")
+        grid.append(row)
+    return grid
+
+
+def _collect_from_table(t, lines: List[BomLine]) -> None:
+    """Read one table annotation's rows into BomLines, when it is BOM-shaped. Shared by every
+    discovery path so they cannot drift apart in what they accept."""
+    lines.extend(bom_lines_from_rows(_table_grid(t)))
 
 
 def drawing_bom_tables(doc) -> List[BomLine]:
-    """Extract BOM table annotations from a drawing. Best-effort: the table API varies by
-    SW version — VERIFY on one known .slddrw (e.g. 12120's GA) before trusting it."""
+    """The parts lists saved on a drawing, from every sheet.
+
+    12674-01-GA (10 Nov 2026): the Document Manager read all nine rows of the GA's parts list
+    and this reader returned none. Two causes, both fixed here. The tables were filtered on
+    swTableAnnotationType_e 3, which is the REVISION table, so the parts list (2) was the one
+    table skipped; the shape of the table now decides (bom_lines_from_rows). And the views were
+    asked late-bound only, so a build that answers GetViews / GetTableAnnotations through
+    IDrawingDoc / IView alone gave nothing; both forms are tried. A table found on more than one
+    path is read once."""
     lines: List[BomLine] = []
-    visited = 0
+    seen: set = set()
 
-    def _tables_everywhere():
-        """Every table annotation on the drawing, not just those hanging off the views of
-        the ACTIVE SHEET.
+    def _views(obj, iface: str):
+        for o in (obj, _wrap(obj, iface)):
+            try:
+                v = o.GetViews()
+            except Exception:
+                v = _get0(o, "GetViews")
+            if v:
+                return v
+        return None
 
-        GetFirstView/GetNextView walks one sheet, and on these drawings the BOM is not
-        there — both .SLDDRW records came back with zero rows and zero errors, which reads
-        as "this drawing has no BOM" rather than "we looked in one place". Three sources
-        are collected: the document's own table annotations, every view returned by
-        GetViews() across all sheets, and the per-sheet walk as a fallback.
-        """
-        out = []
-        for _name in ("GetTableAnnotations", "GetTableAnnotationCount"):
-            if _name == "GetTableAnnotations":
-                try:
-                    for t in (_get0(doc, "GetTableAnnotations") or []):
-                        out.append(t)
-                except Exception:
-                    pass
-        # GetViews() returns an array per sheet — [[sheet1 views], [sheet2 views], ...] —
-        # so every sheet's tables are reachable, not only the active one.
+    def _tables_of(obj, iface: str):
+        for o in (obj, _wrap(obj, iface)):
+            try:
+                ts = _get0(o, "GetTableAnnotations")
+            except Exception:
+                ts = None
+            if ts:
+                return list(ts)
+        return []
+
+    def _take(t) -> None:
+        key = id(t)
         try:
-            sheets = doc.GetViews()
-            for _sheet in (sheets or []):
-                for _v in (_sheet or []):
-                    try:
-                        for t in (_get0(_v, "GetTableAnnotations") or []):
-                            out.append(t)
-                    except Exception:
-                        continue
+            key = (_safe_str(_get0(t, "Title")) or "", int(_get0(t, "RowCount")),
+                   int(_get0(t, "ColumnCount")), _table_text(t, 0, 0), _table_text(t, 1, 0))
         except Exception:
             pass
-        return out
+        if key in seen:
+            return
+        seen.add(key)
+        _collect_from_table(t, lines)
 
     try:
-        for t in _tables_everywhere():
-            try:
-                _tt = _get0(t, "Type")
-                # swTableAnnotationType_e: 3 = swTableAnnotation_BillOfMaterials. Where the
-                # type is readable, take BOM tables only — a revision block and a general
-                # note table have rows and columns too, and reading them as a BOM invents
-                # part numbers out of revision letters.
-                if _tt is not None and int(_tt) not in (3,):
-                    continue
-            except Exception:
-                pass
-            _collect_from_table(t, lines)
-        if lines:
-            lines.sort(key=lambda x: x.part_number.lower())
-            return lines
+        for t in _tables_of(doc, "IDrawingDoc"):
+            _take(t)
     except Exception:
         pass
-
+    # GetViews() returns an array per sheet ([[sheet 1 views], [sheet 2 views], ...]); the first
+    # view of each sheet is the sheet itself, which is where a parts list usually hangs.
+    try:
+        for sheet in (_views(doc, "IDrawingDoc") or []):
+            for v in (sheet or []):
+                try:
+                    for t in _tables_of(v, "IView"):
+                        _take(t)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    # The active sheet, walked view by view: what a build that answers neither of the above
+    # still gives.
     try:
         v = _get0(doc, "GetFirstView")
-        while v is not None and visited < 50:
+        visited = 0
+        while v is not None and visited < 200:
             visited += 1
-            tables = _get0(v, "GetTableAnnotations")
-            if tables:
-                for t in tables:
-                    try:
-                        rows = int(t.RowCount)
-                        cols = int(t.ColumnCount)
-                        headers = []
-                        for col in range(cols):
-                            try:
-                                headers.append(_table_text(t, 0, col).lower())
-                            except Exception:
-                                headers.append("")
-                        idx_pn = next(
-                            (i for i, h in enumerate(headers) if "part" in h or "item" in h or "no" == h),
-                            0,
-                        )
-                        idx_qty = next(
-                            (i for i, h in enumerate(headers) if "qty" in h or "qnty" in h or "quantity" in h),
-                            None,
-                        )
-                        idx_desc = next(
-                            (i for i, h in enumerate(headers) if "desc" in h),
-                            None,
-                        )
-                        for r in range(1, rows):
-                            try:
-                                pn = _table_text(t, r, idx_pn)
-                                if not pn:
-                                    continue
-                                qty = 1.0
-                                if idx_qty is not None:
-                                    try:
-                                        qty = float(_table_text(t, r, idx_qty).replace(",", ""))
-                                    except Exception:
-                                        qty = 1.0
-                                desc = _table_text(t, r, idx_desc) if idx_desc is not None else ""
-                                lines.append(
-                                    BomLine(part_number=pn, description=desc, qty=qty, source="drawing_bom")
-                                )
-                            except Exception:
-                                continue
-                    except Exception:
-                        continue
+            for t in _tables_of(v, "IView"):
+                _take(t)
             v = _get0(v, "GetNextView")
     except Exception:
         pass
+    lines.sort(key=lambda x: x.part_number.lower())
     return lines
 
 

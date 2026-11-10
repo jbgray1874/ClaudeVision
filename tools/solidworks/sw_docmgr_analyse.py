@@ -612,6 +612,10 @@ def component_info(comp) -> Dict[str, Any]:
     except (TypeError, ValueError):
         doc_type = None
     suppressed = _get(comp, "IsSuppressed", _COMP_IFACES)
+    # EXCLUDED FROM THE PARTS LIST, where the library says so. UNVERIFIED member name: a
+    # release that does not answer leaves it unknown, and the drawing's own parts list decides
+    # instead (reconcile_with_drawings).
+    excluded = _get(comp, "ExcludeFromBOM", _COMP_IFACES)
     _path = _str(_get(comp, "PathName", _COMP_IFACES))
     _t(f"component {type(comp).__name__}: name={name!r} path={'set' if _path else 'EMPTY'} "
        f"suppressed={suppressed!r}")
@@ -621,6 +625,9 @@ def component_info(comp) -> Dict[str, Any]:
         "config": _str(_get(comp, "ConfigurationName", _COMP_IFACES)),
         "doc_type": doc_type,
         "suppressed": bool(suppressed) if suppressed is not None else False,
+        "excluded_from_bom": excluded is True or (isinstance(excluded, int)
+                                                  and not isinstance(excluded, bool)
+                                                  and excluded == 1),
     }
 
 
@@ -996,6 +1003,14 @@ def signals_from_saved(title: str, props: Dict[str, Dict[str, str]],
         notes.append(f"material property '{m_name}' holds an unevaluated link ({m_val}) — not "
                      f"read as a material")
         m_val = ""
+    if m_val and "sw-material" not in m_link.lower() and not _nat.reads_as_material(m_val):
+        # A TYPED VALUE THAT NAMES NO MATERIAL (JG, 10 Nov 2026): 12674-01-07J's Material
+        # property said "SHELF", what the part is rather than what it is made of, and it was
+        # taken as the designer's spec. It is set aside, said, and the cut list's material (or
+        # the drawing) decides.
+        notes.append(f"material property '{m_name}' says {m_val!r}, which names no material "
+                     f"— not used")
+        m_val, m_link = "", ""
     if not m_val:
         # The cut list's MATERIAL is a property SolidWorks generates LINKED to SW-Material, so
         # with no link information it is taken as the applied material — the lower-ranked of
@@ -1080,46 +1095,14 @@ def signals_from_saved(title: str, props: Dict[str, Dict[str, str]],
     return out
 
 
-def _header_index(headers: List[str], *tests) -> Optional[int]:
-    for test in tests:
-        for i, h in enumerate(headers):
-            if test(h):
-                return i
-    return None
-
-
 def bom_from_table_rows(rows: List[List[str]]) -> List[_nat.BomLine]:
-    """BOM lines from a table's rows, header first — or nothing when the table is not BOM-shaped.
+    """BOM lines from a table's rows, header first, or nothing when the table is not BOM-shaped.
 
-    Kept only when the header names a part column AND a quantity column: the table-type number
-    this reader asks for is unverified, so the shape is what keeps a revision block out. The
-    PART NUMBER column is preferred over ITEM NO. — an item number is a balloon, not a part."""
-    if not rows or len(rows) < 2:
-        return []
-    headers = [_str(h).lower() for h in rows[0]]
-    idx_pn = _header_index(headers,
-                           lambda h: "part" in h and "desc" not in h,
-                           lambda h: "drawing" in h or "dwg" in h,
-                           lambda h: "item" in h,
-                           lambda h: h == "no")
-    idx_qty = _header_index(headers, lambda h: "qty" in h or "qnty" in h or "quantity" in h)
-    if idx_pn is None or idx_qty is None:
-        return []
-    idx_desc = _header_index(headers, lambda h: "desc" in h)
-    lines: List[_nat.BomLine] = []
-    for row in rows[1:]:
-        pn = _str(row[idx_pn]) if idx_pn < len(row) else ""
-        if not pn:
-            continue
-        qty = 1.0
-        try:
-            qty = float(_str(row[idx_qty]).replace(",", "")) if idx_qty < len(row) else 1.0
-        except ValueError:
-            qty = 1.0
-        desc = _str(row[idx_desc]) if idx_desc is not None and idx_desc < len(row) else ""
-        lines.append(_nat.BomLine(part_number=pn, description=desc, qty=qty,
-                                  source="drawing_bom"))
-    return lines
+    The same reading as the SolidWorks extractor's (sw_native_analyse.bom_lines_from_rows): kept
+    only when the header names a part column AND a quantity column, the table-type number this
+    reader asks for being unverified, so the shape is what keeps a revision block out. The PART
+    NUMBER column is preferred over ITEM NO.: an item number is a balloon, not a part."""
+    return _nat.bom_lines_from_rows(rows)
 
 
 def _basename(p: str) -> str:
@@ -1261,6 +1244,10 @@ def walk_assembly(app, top_doc, top_path: str, cfg_name: str
         for info in components:
             if info.get("suppressed"):
                 continue
+            if info.get("excluded_from_bom"):
+                notes.append(f"component {_stem(info.get('path') or '') or info.get('name')}: "
+                             f"excluded from the parts list in the model — not counted")
+                continue
             stored = info.get("path") or ""
             title = _stem(stored) if stored else _nat._clean_pn(
                 _str(info.get("name")).split("/")[-1])
@@ -1400,6 +1387,109 @@ def analyse_file(app, path: str) -> Dict[str, Any]:
     finally:
         close_document(doc)
     return rec
+
+
+# ── THE DRAWING'S PARTS LIST DECIDES WHAT THE MODEL COUNTS (JG, 10 Nov 2026) ─────────────
+# 12674-01-GA: the GA assembly holds 24 of 12424-02-GA, another job's assembly placed in the
+# model for show, and 6 plinth feet; neither file is in the pack. SolidWorks suppresses a
+# component whose file it cannot find, so it counted neither; this reader counts what was saved,
+# so it counted both. The GA drawing's own parts list names the feet (a Hafele catalogue part)
+# and not 12424-02-GA. Neither "missing file" nor "found file" is the rule: the released parts
+# list is. So where an assembly's drawing is in the same read and carries a parts list that the
+# model can be matched to, a component that the list names nowhere, and that neither sits under
+# a listed assembly nor holds a listed part, is not counted; it is said, with its quantity, in
+# the record's "excluded_components". Where the list cannot be matched to the model (a balloon-
+# number-only list, another assembly's list) nothing is excluded and that is said too.
+_CODE_RE = re.compile(r"\d[\d.\-/ ]*\d")
+
+
+def _identity_keys(*texts: Any) -> set:
+    """What a parts-list row or a model component can be recognised by: each text squeezed to
+    letters and digits, and every catalogue-style number in it (five digits or more) as digits."""
+    keys: set = set()
+    for t in texts:
+        s = _str(t).upper()
+        if not s:
+            continue
+        sq = re.sub(r"[^A-Z0-9]", "", s)
+        if len(sq) >= 3:
+            keys.add(sq)
+        for m in _CODE_RE.finditer(s):
+            digits = re.sub(r"\D", "", m.group())
+            if len(digits) >= 5:
+                keys.add("#" + digits)
+    return keys
+
+
+def _line_keys(line: Dict[str, Any]) -> set:
+    props = line.get("custom_props") or {}
+    return _identity_keys(line.get("part_number"), line.get("description"),
+                          _stem(line.get("file_path") or ""),
+                          _nat._prop(props, "Part Number", "PartNo", "Part No", "Number"))
+
+
+def reconcile_with_drawings(records: List[Dict[str, Any]]) -> None:
+    """Hold every assembly read to its own drawing's parts list, in place (see above)."""
+    drawings = [r for r in records if r.get("doctype") == SW_DRW and r.get("bom")]
+    for rec in records:
+        if rec.get("doctype") != SW_ASM or not rec.get("bom"):
+            continue
+        title = _str(rec.get("title")).upper()
+        asm_name = _basename(rec.get("path") or "").upper()
+        mine = [d for d in drawings
+                if _str(d.get("title")).upper() == title
+                or any(_basename(x).upper() == asm_name
+                       for x in (d.get("external_references") or []))]
+        if not mine:
+            continue
+        rows = [ln for d in mine for ln in (d.get("bom") or [])]
+        row_keys = [_identity_keys(ln.get("part_number"), ln.get("description")) for ln in rows]
+        lines = rec["bom"]
+        matched = {i for i, ln in enumerate(lines)
+                   if any(_line_keys(ln) & k for k in row_keys)}
+        rows_found = sum(1 for k in row_keys if any(_line_keys(ln) & k for ln in lines))
+        _dname = _basename(mine[0].get("path") or "") or "its drawing"
+        if rows_found < max(2, (len(rows) + 1) // 2):
+            rec["notes"].append(f"{_dname}'s parts list could not be matched to this assembly "
+                                f"({rows_found} of {len(rows)} row(s) found in the model) — "
+                                f"every component counted")
+            continue
+        # A listed assembly keeps everything under it; a listed part keeps every assembly above.
+        pn = [_str(ln.get("part_number")) for ln in lines]
+        kids: Dict[str, set] = {}
+        for e in rec.get("assembly_edges") or []:
+            kids.setdefault(_str(e.get("parent")), set()).add(_str(e.get("child")))
+        parents: Dict[str, set] = {}
+        for p_, cs in kids.items():
+            for c in cs:
+                parents.setdefault(c, set()).add(p_)
+        listed = {pn[i] for i in matched}
+
+        def _reach(start: set, step: Dict[str, set]) -> set:
+            out, todo = set(), list(start)
+            while todo:
+                for nxt in step.get(todo.pop(), set()) - {""}:
+                    if nxt not in out:
+                        out.add(nxt)
+                        todo.append(nxt)
+            return out
+
+        keep = listed | _reach(listed, kids) | _reach(listed, parents)
+        gone = [ln for ln in lines if _str(ln.get("part_number")) not in keep]
+        if not gone:
+            continue
+        gone_pn = {_str(ln.get("part_number")) for ln in gone}
+        rec["bom"] = [ln for ln in lines if _str(ln.get("part_number")) in keep]
+        rec["assembly_edges"] = [e for e in rec.get("assembly_edges") or []
+                                 if _str(e.get("child")) not in gone_pn
+                                 and _str(e.get("parent")) not in gone_pn]
+        rec["excluded_components"] = [
+            {"part_number": ln.get("part_number"), "qty": ln.get("qty"),
+             "reason": f"not on {_dname}'s parts list, and not under or above anything it lists"}
+            for ln in gone]
+        rec["notes"].append(
+            f"{len(gone)} component(s) not on {_dname}'s parts list and not counted: "
+            + ", ".join(f"{ln.get('part_number')} x{ln.get('qty'):g}" for ln in gone))
 
 
 def build_payload(records: List[Dict[str, Any]], target: str, fp_before: str, fp_after: str,
@@ -1613,6 +1703,11 @@ def main(argv: Optional[Sequence[str]] = None, *, class_factory=None) -> int:
             say(f"  trace: {line}")
         _TRACE = None
     fp_after = _nat._fingerprint_native_files(target)
+    reconcile_with_drawings(records)
+    for r in records:
+        for x in r.get("excluded_components") or []:
+            say(f"[parts list] {r.get('title')}: {x['part_number']} x{x['qty']:g} not counted "
+                f"— {x['reason']}")
     payload = build_payload(records, target, fp_before, fp_after, docmgr_version(app))
     if only:
         # Which files this read was asked for, so a later run can tell a top-up of the same

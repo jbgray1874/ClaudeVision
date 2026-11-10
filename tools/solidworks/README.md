@@ -127,6 +127,18 @@ quantity that disagrees. A value the file never saved is counted as *not saved*,
 difference. It refuses (exit 2) when either read has no file read successfully: two empty
 extracts agree on everything and prove nothing (D-710a). It writes nothing.
 
+**The drawing's parts list decides what an assembly counts (10 Nov 2026).** Where an
+assembly's own drawing is in the same read and carries a parts list the model can be matched to,
+the Document Manager does not count a component the list names nowhere, unless it sits under a
+listed assembly or holds a listed part. 12674-01-GA held 24 of another job's assembly, placed in
+the model for show; the GA's parts list does not name it, so it is left out and said
+(`excluded_components` in the record, a `[parts list]` line on the console, and a "left out"
+line in `compare_extracts.py`). A list that cannot be matched to the model excludes nothing and
+says so. A typed Material property must read as a material, in both readers: "SHELF" is set
+aside and the applied material, or the drawing, decides. The SolidWorks reader now reads a
+drawing's parts list by the table's columns (a part column and a quantity column) on every
+sheet; it used to keep only table type 3, the revision table.
+
 **Is this machine ready?** `tools\start\check-runner-host.ps1` prints whether SolidWorks and the
 Document Manager are registered, whether Excel is installed, and the names (never the values) of
 the settings above. Read-only.
