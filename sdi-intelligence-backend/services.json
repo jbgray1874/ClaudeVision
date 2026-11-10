@@ -1075,6 +1075,20 @@
         }
       ],
       "next": "Ship-It from the phone is deliberately not here: a deploy copies code from the laptop, and a phone that could do it would be a remote code-change button. Anything further is designed and agreed before it is built, as the restart was."
+    },
+    {
+      "id": "testing",
+      "name": "SDI Test Walkthroughs",
+      "status": "For testers",
+      "cls": "c-plan",
+      "category": "Apps",
+      "app_category": "Meta",
+      "surface": "app",
+      "app_url": "guide-testing.html",
+      "desc": "Step-by-step tests for every app in this portal, and ten talk-through scenes for SDI Live. Tick each step as it passes; this device remembers your ticks.",
+      "requires": "Steps flagged amber change something real (a tracker cell, InVentry, a draft, a file, an email); red ones start a real estimate. Each says how to keep it to test data.",
+      "detail": "Worked out from what each page actually calls, not from memory: who can use each app, what each step should do, and what to send when it doesn't. Used by AI / Software and Systems before an app is handed to the people who use it.",
+      "phase": "9 Nov 2026"
     }
   ]
 }

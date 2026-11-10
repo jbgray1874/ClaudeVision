@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0c0c0b">
+<title>SDI Intelligence Test Walkthroughs</title>
+<!-- 10 Nov 2026 (James: "put it on the app portal .. i don't like stray web pages"): the test walkthroughs for
+     every app and the ten talk-through scenes for SDI Live, on the portal behind the same sign-in as the apps. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* Layout: one reading column; a sticky bar with overall progress, app chips that jump to each app,
+     then one panel per app whose steps are tick rows. The we.are.sdi look of the portal itself: dark only. */
+  :root{
+    --bg:#0c0c0b; --panel:#141412; --panel-2:#1a1a17; --line:#2b2b26; --line-soft:#21211d;
+    --ink:#f2f2ea; --muted:#b6b6a7; --dim:#8f8f84;
+    --brand:#F6D946; --ok:#4ec97f; --warn:#e8a33d; --bad:#ff6b6b;
+    --disp:'Outfit','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --body:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
+    --r:10px;
+    color-scheme:dark;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--ink);font:15px/1.55 var(--body);-webkit-font-smoothing:antialiased;
+    padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+    padding-block:0 48px;overflow-wrap:anywhere}
+  body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
+  .col{max-width:860px;margin:0 auto}
+  a{color:var(--brand)}
+  code{font-family:var(--mono);font-size:12.5px;background:var(--panel-2);padding:1px 5px;border-radius:4px;color:var(--brand)}
+  :focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+
+  .top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:rgba(12,12,11,.94);
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line);
+    margin:0 calc(-1 * max(16px,env(safe-area-inset-left,0px)));padding:12px max(16px,env(safe-area-inset-right,0px)) 12px max(16px,env(safe-area-inset-left,0px))}
+  .top .col{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .wm{font-family:var(--disp);font-weight:500;font-size:21px;letter-spacing:-.02em}
+  .wm i{font-style:normal;color:var(--brand)}
+  .pipe{width:1px;height:18px;background:var(--line)}
+  .lbl{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.22em;color:var(--brand);text-transform:uppercase}
+  .overall{margin-left:auto;display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .bar{width:110px;height:4px;border-radius:2px;background:var(--line);overflow:hidden}
+  .bar b{display:block;height:100%;width:0;background:var(--brand);transition:width .25s}
+
+  header.intro{padding:28px 0 6px}
+  .eyebrow{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:10.5px;letter-spacing:.22em;
+    text-transform:uppercase;color:var(--muted)}
+  .eyebrow::before{content:"";width:26px;height:2px;background:var(--brand);flex:none}
+  h1{font-family:var(--disp);font-weight:600;font-size:clamp(28px,6.4vw,40px);line-height:1.1;letter-spacing:-.015em;
+    margin:12px 0 10px;text-wrap:balance}
+  .intro p{color:var(--muted);max-width:62ch;margin:0 0 10px}
+  .key{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 4px}
+
+  .chip{font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;padding:3px 8px;
+    border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+  .chip.w{color:var(--warn);border-color:rgba(232,163,61,.4);background:rgba(232,163,61,.08)}
+  .chip.run{color:var(--bad);border-color:rgba(255,107,107,.4);background:rgba(255,107,107,.08)}
+  .chip.chk{color:var(--muted)}
+
+  nav.apps{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 6px}
+  nav.apps a{display:inline-flex;align-items:center;gap:8px;text-decoration:none;color:var(--ink);font-family:var(--disp);
+    font-weight:500;font-size:14px;padding:7px 14px;border:1px solid var(--line);border-radius:999px;background:var(--panel)}
+  nav.apps a:hover{border-color:var(--muted)}
+  nav.apps a small{font-family:var(--mono);font-size:10px;color:var(--dim)}
+  nav.apps a.done{border-color:rgba(78,201,127,.45)}
+  nav.apps a.done small{color:var(--ok)}
+
+  .safety{position:relative;background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.35);border-radius:var(--r);
+    padding:16px 16px 14px;margin:18px 0 0}
+  .safety h2{font-family:var(--mono);font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--warn);margin:0 0 8px;font-weight:600}
+  .safety ul{margin:0;padding-left:18px;color:var(--muted)}
+  .safety li{margin:4px 0}
+  .safety b{color:var(--ink)}
+
+  section.app{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+    margin:26px 0 0;scroll-margin-top:84px}
+  section.app::before{content:"";position:absolute;top:-1px;left:16px;width:30px;height:2px;background:var(--brand)}
+  .ah{padding:18px 16px 4px;display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
+  .ah h2{font-family:var(--disp);font-weight:600;font-size:22px;letter-spacing:-.01em;margin:0}
+  .ah .count{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--dim)}
+  .ah .count.all{color:var(--ok)}
+  .meta{padding:6px 16px 4px;display:grid;gap:6px}
+  .meta div{font-size:13.5px;color:var(--muted)}
+  .meta b{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);font-weight:500;
+    display:inline-block;min-width:72px}
+  .care{margin:10px 16px 2px;padding:10px 12px;border-left:2px solid var(--warn);background:rgba(232,163,61,.05);
+    font-size:13.5px;color:var(--muted);border-radius:0 6px 6px 0}
+
+  ol.steps{list-style:none;margin:12px 0 0;padding:0;border-top:1px solid var(--line-soft)}
+  ol.steps li{border-bottom:1px solid var(--line-soft)}
+  ol.steps label{display:grid;grid-template-columns:28px 22px minmax(0,1fr);gap:10px;padding:13px 16px;cursor:pointer;align-items:start}
+  ol.steps label:hover{background:var(--panel-2)}
+  ol.steps input{appearance:none;-webkit-appearance:none;width:20px;height:20px;margin:1px 0 0;border:1.5px solid #686860;
+    border-radius:6px;background:var(--bg);display:grid;place-items:center;cursor:pointer}
+  ol.steps input:checked{background:var(--brand);border-color:var(--brand)}
+  ol.steps input:checked::after{content:"";width:9px;height:5px;border:2px solid #000;border-top:0;border-right:0;transform:rotate(-45deg) translate(1px,-1px)}
+  .n{font-family:var(--mono);font-size:11px;color:var(--dim);padding-top:3px;font-variant-numeric:tabular-nums}
+  .do{font-weight:600;color:var(--ink)}
+  .ex{color:var(--muted);font-size:14px;margin-top:3px}
+  .ex::before{content:"→ ";color:var(--brand)}
+  .flags{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
+  li.ticked .do,li.ticked .ex{color:var(--dim)}
+  li.ticked .do{text-decoration:line-through;text-decoration-color:var(--dim)}
+  body.hide-done li.ticked{display:none}
+
+  .foot{padding:14px 16px 16px;display:grid;gap:8px}
+  .foot div{font-size:13.5px;color:var(--muted)}
+  .foot b{color:var(--ink)}
+
+  .tools{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:22px 0 0}
+  button{font:600 14px var(--disp);border-radius:999px;padding:9px 18px;cursor:pointer;border:1px solid var(--line);
+    background:transparent;color:var(--ink)}
+  button:hover{border-color:var(--muted)}
+  button.danger{color:var(--bad);border-color:rgba(255,107,107,.4)}
+  .confirm{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13.5px;color:var(--muted)}
+  .confirm button.yes{background:var(--bad);border-color:var(--bad);color:#000}
+  .note{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:30px;line-height:1.7}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+  /* The portal's own header: the official wordmark (two dots in SDI yellow) and the way back, as on every app page. */
+  .sdi-word{display:inline-block;height:1em;width:auto;vertical-align:-.12em;color:var(--ink)}
+  .sdi-word .d{fill:var(--brand)}
+  .top a.home{display:inline-flex;align-items:center;text-decoration:none}
+  .top a.home .sdi-word{height:22px}
+  .backrow{margin-top:8px}
+  .back{display:inline-flex;align-items:center;gap:7px;color:var(--muted);text-decoration:none;font-size:14px}
+  .back:hover{color:var(--ink)}
+  .back svg{width:17px;height:17px}
+  .col{overflow-x:clip}
+</style>
+</head>
+<body>
+<div class="top"><div class="col">
+  <a class="home" href="./" aria-label="All apps"><svg class="sdi-word" viewBox="0 0 950 169" role="img" aria-label="we.are.sdi" fill="currentColor"><path d="M158.915 36.7773L135.389 114.85C133.118 122.35 130.447 133.08 129.137 138.467C127.991 133.14 125.689 122.658 123.777 115.372L103.183 36.7773H80.9663L59.639 115.365C57.7134 122.531 55.2616 133.193 54.0544 138.537C52.7665 133.175 50.1337 122.393 48.0313 114.866L25.7238 36.7773H2.41797L42.8867 164.183H64.817L86.1457 87.545C88.1938 80.2145 90.5008 70.1606 91.6815 64.8782C92.7926 70.1676 94.9785 80.2145 97.0252 87.5408L118.11 164.183H139.793L181.494 36.7773H158.915Z"/><path d="M198.247 89.3881C201.717 65.0993 215.393 51.2041 235.907 51.2041C257.026 51.2041 269.942 65.1035 271.475 89.3881H198.247ZM235.907 33.6262C200.848 33.6262 175.402 61.7925 175.402 100.602C175.402 140.036 200.782 167.576 237.122 167.576C266.097 167.576 286.107 151.905 292.022 124.58L292.29 123.331H271.037L270.838 124.105C266.638 140.412 254.981 149.03 237.122 149.03C214.607 149.03 199.568 132.667 197.679 106.238H294.716V105.207C294.716 61.0546 272.181 33.6262 235.907 33.6262Z"/><path d="M423.094 99.3426V116.845C423.094 129.476 413.093 149.514 386.253 149.514C374.763 149.514 361.066 146.034 361.066 129.453C361.066 111.983 374.55 109.012 395.107 106.475C405.222 105.353 416.174 102.542 423.094 99.3426ZM442.876 145.211V75.1457C442.876 48.0778 427.173 34.3525 396.207 34.3525C365.325 34.3525 345.882 50.5756 344.199 77.7479L344.132 78.8422H365.115L365.189 77.8927C366.611 59.6855 376.543 51.2036 396.449 51.2036C413.721 51.2036 422.85 58.4756 422.85 72.2358C422.85 84.7721 413.6 87.9131 394.162 89.8791C365.81 92.711 338.128 98.1354 338.128 129.937C338.128 152.214 355.493 166.609 382.369 166.609C399.062 166.609 412.196 160.665 422.446 148.455C422.81 156.828 424.039 161.374 426.552 163.882L426.853 164.184H447.488V161.874L447.029 161.569C445.354 160.452 442.876 154.482 442.876 145.211Z"/><path d="M544.015 89.3881C547.485 65.0993 561.162 51.2041 581.676 51.2041C602.794 51.2041 615.711 65.1035 617.244 89.3881H544.015ZM581.676 33.6262C546.616 33.6262 521.17 61.7925 521.17 100.602C521.17 140.036 546.551 167.576 582.89 167.576C611.865 167.576 631.875 151.905 637.79 124.58L638.059 123.331H616.805L616.606 124.105C612.407 140.412 600.749 149.03 582.89 149.03C560.375 149.03 545.337 132.667 543.447 106.238H640.484V105.207C640.484 61.0546 617.95 33.6262 581.676 33.6262Z"/><path d="M851.701 149.272C829.697 149.272 816.561 131.258 816.561 101.086C816.561 71.215 829.932 52.6584 851.46 52.6584C875.53 52.6584 890.484 71.215 890.484 101.086C890.484 143.012 866.185 149.272 851.701 149.272ZM889.27 52.9591C880.17 40.7959 866.17 33.8678 850.487 33.8678C816.91 33.8678 794.351 60.7839 794.351 100.843C794.351 141.529 816.576 167.82 850.973 167.82C867.235 167.82 879.136 162.367 889.27 150.196V164.182H910.994V0.13501H889.27V52.9591Z"/><path d="M927.143 164.182H948.867V36.7761H927.143V164.182Z"/><path d="M927.143 21.2634H948.867V0.135254H927.143V21.2634Z"/><path d="M743.393 88.1957C721.16 83.7055 710.475 80.996 710.475 68.5976C710.475 57.8517 719.302 51.688 734.692 51.688C752.847 51.688 761.398 58.5214 763.285 74.5371L763.393 75.4463H785.617L785.479 74.2949C782.352 48.0054 764.958 34.1101 735.178 34.1101C706.259 34.1101 688.993 47.3649 688.993 69.568C688.993 98.3525 713.23 103.337 736.664 108.156C761.031 113.28 768.617 116.918 768.617 129.693C768.617 142.319 758.639 149.272 740.518 149.272C719.615 149.272 708.61 141.227 705.884 123.957L705.746 123.087H683.493L683.602 124.216C686.301 152.334 706.342 167.819 740.032 167.819C771.687 167.819 790.585 153.204 790.585 128.724C790.585 97.7135 765.514 92.6566 743.393 88.1957Z"/><path d="M525.691 57.6969V37.1089L525.044 36.8513C522.561 35.86 520.488 35.3225 516.649 35.3225C502.335 35.3225 488.734 42.983 479.81 55.9426V36.7775H458.086V164.183H479.81V93.5711C479.81 69.2586 497.61 56.5371 515.193 56.5371C519.064 56.5371 520.872 56.7877 523.607 57.6969H525.691Z"/><path class="d" d="M304.438 145.847H322.879V164.158H304.438V145.847Z"/><path class="d" d="M650.643 145.691H669.084V164.002H650.643V145.691Z"/></svg></a><span class="pipe" aria-hidden="true"></span><span class="lbl">Testing</span>
+  <span class="overall"><span id="overallTxt">0 of 0</span><span class="bar"><b id="overallBar"></b></span></span>
+</div><div class="col backrow"><a class="back" href="./"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>All apps</a></div></div>
+
+<div class="col">
+  <header class="intro">
+    <div class="eyebrow">SDI Intelligence · 9 Nov 2026</div>
+    <h1>Test every app, start to finish</h1>
+    <p>One walkthrough per app, worked out from what each page actually calls. Tick each step as it passes; this phone remembers your ticks. Note the time and what you did for anything that doesn't behave as described.</p>
+    <p>Open each app from <a href="./">the app portal</a>, signed in with your own SDI account, on your phone and at a desk.</p>
+    <div class="key"><span class="chip w">Writes or sends</span><span class="chip run">Real estimate run</span><span class="chip chk">Check: behaviour not certain</span></div>
+  </header>
+
+  <div class="safety" role="note">
+    <h2>Before you start</h2>
+    <ul>
+      <li><b>Deploy first</b>, from the laptop on the VPN, with nothing running on the operations wall: <code>Ship-It.ps1</code> then <code>Update-SameDay.ps1 -Branch claude/inspiring-planck-8juriz</code>. Both fetch their own code; no git pull by hand.</li>
+      <li><b>Red steps start a real estimate</b>: a runner slot, the SolidWorks licence and model time. Only when the wall shows a free slot and no SCRUM-194 acceptance run is going.</li>
+      <li><b>Amber steps change something real</b>: a cell in the tracker, InVentry's on-site list, a draft in Outlook, files on the share, or an email. Each says what, and how to keep it to test data.</li>
+      <li><b>Never restart the service</b> (Remote Control) while an estimate is running.</li>
+    </ul>
+  </div>
+
+  <nav class="apps" id="apps" aria-label="Apps"></nav>
+  <div id="list"></div>
+
+  <div class="tools">
+    <button type="button" id="hideDone" aria-pressed="false">Hide ticked steps</button>
+    <button type="button" class="danger" id="reset">Clear all ticks</button>
+    <span class="confirm" id="confirm" hidden>Clear every tick on this phone? <button type="button" class="yes" id="resetYes">Clear them</button><button type="button" id="resetNo">Keep them</button></span>
+  </div>
+  <p class="note">Walkthroughs written from the pages' own code and the routes they call (SCRUM-195). Ticks are kept on this device only.</p>
+</div>
+
+<script>
+const APPS = [
+ {id:"scenes", name:"Ten scenes to talk through", who:"You, then Muhammad, Jack, Matt and Charlotte, each signed in as themselves.",
+  where:"SDI Live on the phone app (the tile, or the home-screen icon) and on the web portal at a desk, as marked. Start each with + New chat and talk as you would to a client.",
+  steps:[
+   ["1 · After the store visit (phone, Talk live, parked). Boots want a counter unit for No7 serums: 400 high, 300 wide, 250 deep, black acrylic, navy lit header, 200 units, in store 20 November, both packs. Draw it, make the header lit, finalise it, build the brief PDF.","It greets you by name, reads the size back in order, makes A then B, the GA and client sheet, and shows the PDF on the call screen. Nothing asked twice."],
+   ["2 · The client keeps changing their mind (web portal, Talk live). Tesco gondola end for Milwaukee M18: 1600 high, then \"actually 1800\"; \"make it red, not black\"; \"go back to A but with oak shelves\"; \"no, 150 units, not 100\".","The newest answer wins every time. The oak version is made from A. The Brief panel matches the last thing you said."],
+   ["3 · Like the one we did before (phone). M&S food hall FSDU: \"did we do anything like this for M&S?\", pick a past job, talk colours for a minute, \"go back to the job we discussed\", then \"actually, let's do something new\".","Real job numbers, each read back before it's followed. It knows which job \"the one we discussed\" is, and drops it at once when told."],
+   ["4 · Money and dates the way people say them (phone, walking). Lindt Christmas counter display: \"about five grand all in\", \"a grand a unit tops\", \"in store end of January\", \"artwork in about six weeks\", \"they're collecting it themselves\".","£5,000 · £1,000 per unit · 31 Jan · the right date. It never asks about delivery, and the PDF says collection."],
+   ["5 · On a noisy show floor (phone, radio or TV on, or a busy office). Ryobi bay: keep briefing while someone else talks; hold the orb if it's very noisy; talk over the voice; pause mid-sentence.","It answers only you and shows Noisy room; stops the moment you talk; never cuts in while you're mid-sentence."],
+   ["6 · Interrupted (phone). Superdrug wall bay: mid-brief take a call or lock the phone, switch to WhatsApp, aeroplane mode for 10 seconds, pull to refresh, then \"where were we?\".","Back in the same chat with nothing lost; it carries on with only what it still needs."],
+   ["7 · The client sent a PDF and a photo (web portal, typing). The Perfume Shop: paperclip the client's PDF brief, then a competitor's photo, \"something like this but in their colours\"; use the suggested answer buttons.","It reads the sizes and details from the PDF, asks only what's missing, and the render follows the photo."],
+   ["8 · Studio questions first (web portal, Talk live). Fanatics shirt wall: \"let's do the internal questions first\", answer them, \"back to the render\", draw it, \"build the brief PDF now\", then change the quantity.","It switches order when asked, the PDF lists what's still missing, and the late change is recorded."],
+   ["9 · A director's quick look (phone). Open yesterday's chat in someone else's space: \"where are we on this?\", \"where's the brief?\", \"make the header bigger\"; then + New chat.","It greets you, not the owner; summarises the brief; makes a new option; and the new chat is in your own space."],
+   ["10 · Two clients, two devices (web portal, then phone). Start a Harrods brief at the desk and leave mid-way; carry on from the sidebar on your phone; then \"different client now: Dove, a counter display\".","The same chat on the phone with everything in it; Dove starts a new brief by itself; both are saved separately in the sidebar."]
+  ],
+  pass:"Each scene ends with everything said in the Brief panel, nothing asked twice, and the right person greeted.",
+  wrong:"The time, the chat name and what you said, then send me <code>Check-SameDay-Call.ps1 -Lines 150</code>."},
+
+ {id:"portal", name:"App portal", who:"Anyone with an SDI account who is assigned to the SDI Intelligence app in Entra.",
+  where:"/app/ on your phone, then on a desktop.",
+  steps:[
+   ["Open the app portal on your phone.","The we.are.sdi wordmark with INTELLIGENCE in yellow, \"Experiences. Designed & Made.\", and your name with \"sign out\" under the search box."],
+   ["Try to drag the page left and right.","It doesn't move sideways."],
+   ["Type \"live\" in Search apps, then clear it.","Only SDI Live shows; clearing brings every app back."],
+   ["Tap the middle of an app's card, not its button.","That app's detail page; \"All apps\" brings you back to the list."],
+   ["Open each app with its yellow Open button, then come back.","Every app is in the same look: wordmark, the app's name in yellow, pill buttons. Each has a way back to the portal, except Estimating in your pocket, where you use the browser's Back."],
+   ["Repeat on a desktop.","The header and the cards share one left edge; cards sit two across."]
+  ],
+  pass:"Every app opens and comes back, and all of them look like one family.",
+  wrong:"A screenshot of the page with the address bar showing."},
+
+ {id:"sdilive", name:"SDI Live", who:"Anyone signed in with their SDI account. It opens in your own name.",
+  where:"The SDI Live tile, or https://sdiintelligence-sdidisplays.msappproxy.net/sameday/ . Start each script with + New chat.",
+  steps:[
+   ["Who you are: on your PC open http://10.0.0.5:8071/sameday/ ; open one of Andy's chats and press Talk live; then press + New chat.","It jumps to the https address and says Hi James. The voice greets you, not Andy, and the brief stays in Andy's space. The new chat is under James Gray."],
+   ["Script 1, full brief by voice on the phone: \"Hi, it's Boots, they want a counter unit for No7 serums\" · \"Both packs please\" · \"About 400 high, 300 wide, 250 deep, black acrylic, navy header\" · \"Something new, draw it\" · \"Make the header lit\" · \"B's the one, finalise it\" · the internal questions · \"Build the brief PDF\" · \"Where's the brief?\"","Size read back in that order; Option A in about a minute; B made with A kept; GA and client sheet; the PDF appears on the call screen and opens on the phone. Nothing asked twice; everything in the Brief panel."],
+   ["Script 2, any order (PC): \"Deadline's the 4th of December, 150 units, budget eight grand\" · \"It's for Tesco, a gondola end for Milwaukee drills\" · \"Let's do the studio questions first\" · \"Actually make that 200 units\" · \"Actually 1800 high, not 1600\" · \"Back to the render\".","It never re-asks the deadline, quantity or budget. The Brief panel shows 200 and 1800. It carries on with the render where it left off."],
+   ["Script 3, numbers as people say them: \"five grand\" · \"a grand a unit\" · \"twelve and a half thousand\" · \"next Friday\" · \"end of January\" · \"in about six weeks\" · \"job one two one four eight\" · in one breath \"budget five grand, client's collecting, and Dave's the contact\".","£5,000 · £1,000 per unit · £12,500 · the right dates · 12148 read back to you · all three saved, or it asks again for just the one it missed."],
+   ["Script 4, a collection: give a brief, then \"The client's collecting it from us\", and carry on to the end and build the PDF.","It never asks for a delivery address, delivery restrictions or warehousing. The PDF's delivery section says collection."],
+   ["Script 5, past work: \"What have we done for Boots before?\" · \"Check our history for gondola ends\" · \"Tell me about job 12148\" · a minute on something else, then \"Go back to the job we discussed\" · \"Something new, forget that one\".","Real job numbers with what and when. \"Do you mean 12148, Rollershutter Forecourt Bunker?\" It knows which job \"the one we discussed\" is, and drops it at once when told."],
+   ["Script 6, options and Stop (PC): get Option A, \"Make the header bigger\" · \"Go back to A and make the shelves oak\" · \"Something completely different\" · press ■ Stop while one draws · \"C's the one, finalise it\".","B, then C made from A (not B), then a whole new design. Stop stops cleanly. GA and client sheet for C; everything under Images and Sheets & PDFs."],
+   ["Script 7, noise (phone): radio or TV on, keep briefing; hold the orb if very noisy; talk over it; \"It needs... um... a lit header and four shelves\"; Pause, talk to someone, Pause again.","It answers you, not them, and \"Noisy room\" appears. Holding the orb, it hears only you. It stops at once when you talk, waits out the pause, and carries on after Pause."],
+   ["Script 8, real life on the phone, mid-brief: pull to refresh · lock for 30 seconds · switch to WhatsApp for a minute · scroll right up during a call · aeroplane mode for 10 seconds · add to home screen and open from the icon.","It always comes back to the same chat with nothing lost; the icon opens SDI Live signed in as you."],
+   ["Script 9, files: paperclip a photo of a sketch on the phone (\"use this\") · a client PDF brief on the PC · a competitor photo, \"something like this but in our colours\".","It reads each one, picks up sizes and details, asks only what's missing, and the render follows the photo."],
+   ["Script 10, others: ask Muhammad or Jack to open it on their own phone; then on the PC give a short typed brief with the red arrow and the suggested answer buttons.","They see their own name and their own space. Typing gives one short reply and one question each time."]
+  ],
+  pass:"Nothing asked twice, the newest answer always wins, nothing lost on the phone, and it always knows who you are.",
+  wrong:"The time, the chat name and what you said, then send me <code>Check-SameDay-Call.ps1 -Lines 150</code>."},
+
+ {id:"amcrm", name:"AM CRM", who:"Anyone signed in can open it. SDI_VOICECRM_OWNERS decides whose rows you see; changes need SDI_VOICECRM_WRITE=yes, SDI_VOICECRM_APPROVED_BY filled in, and your sign-in in SDI_VOICECRM_WRITERS.",
+  where:"The SDI Intelligence AM CRM tile. Phone first, then repeat the first four steps and the safe change on a laptop.",
+  care:"Before you start, add a test row in Excel (ACCOUNT \"TEST – AM CRM check\", AM Owner = your initials). Only ever say yes on that row: a yes writes a real cell, with no undo button.",
+  steps:[
+   ["Open it.","Wordmark with AM CRM in yellow and \"‹ All apps\"; the yellow mic in a bar along the bottom."],
+   ["Read the badges under the title.","Excel workbook · Connected · SSO on · Owner = your initials (or All records) · Writes on, confirmed & journalled (or Read-only) · Voice brain ready. The footer names the workbook."],
+   ["Scroll the records.","Your rows only, each with account, business unit, row number and \"More\"; a line saying how many are hidden as someone else's."],
+   ["Type \"What's due this week?\" and press Send.","Your message on the right, \"thinking…\", then a CRM answer, also spoken. Read only."],
+   ["Tap the mic, allow it, ask \"What's overdue?\" and pause.","Rising notes, the mic turns red, \"Listening…\"; then the answer, and it listens again. Talking over it stops it. \"that's all\" ends it."],
+   ["Safe change: \"Set the next steps on the TEST row to check from James\", then tap No — cancel.","It reads the change back and asks if that's right; No gives \"Okay — nothing was changed.\""],
+   ["Two changes in one sentence on the TEST row, then say \"no\".","\"2 changes on …: …; …. Is that right?\" Nothing changes."],
+   ["On the TEST row only: propose the change again and tap Yes — write it.","\"✓ Updated NEXT STEPS on TEST…\", then \"Written and journalled.\" In Excel, only that one cell changed.","w"],
+   ["Ask to change AM Owner on the TEST row.","\"I can't change AM Owner from here…\". A formula column says it's calculated and can't be typed over.","chk"],
+   ["Tap Show today's review.","The subject line, \"emails go to your address\", and the review text. Read only."],
+   ["Tap Email it now (writers only).","\"Sent to your address.\" It arrives in your inbox.","w"],
+   ["Tap ▶ Listen to my briefing.","The briefing is read aloud, then it listens."],
+   ["Tap Show recent activity (writers only).","Today's saved, declined and not-saved counts, with your test changes labelled."],
+   ["Parked: tap 🚗 Drive, ask a question, ask for a change and say \"no\", then Exit.","Full-screen big text; big Yes/No buttons for a change; Exit returns to the normal screen."],
+   ["User guide → each contents link → Back to the app → All apps.","Each goes where it says; All apps opens the portal on AM CRM's page."],
+   ["Ask a colleague not on the writers list to try a change.","A Read-only badge and \"I can't make changes…\"."]
+  ],
+  pass:"Only the TEST row's cell changed in Excel, Recent activity lists every attempt, the email arrived, and every link works.",
+  wrong:"A screenshot, the Voice diagnostics text under the box, the time, and the output of <code>deploy\\Check-AMCRM-Live.ps1</code>."},
+
+ {id:"tti", name:"TTI Despatch", who:"Customer Services people in SDI_TTI_OIDS, with SDI_TTI_ENABLED=yes, and their own SharePoint access to Sue's plan (and the TTi Projects site for the tracker).",
+  where:"The TTI Despatch tile. Once on a phone, once on a laptop.",
+  care:"It changes nothing: it only reads the plan, the tracker and the folder index, and never sends email. Don't edit the tracker in SharePoint while testing.",
+  steps:[
+   ["Open it.","Wordmark with TTI DESPATCH in yellow, App portal and User guide; \"Leaving on a day\" selected and today's answer loading."],
+   ["Read the box and the cards.","How many lines and pallets leave today (green edge if all read, red if some couldn't be); each card has order, part, lorry date, sheet and row. Check one against the workbook. The footer says when the plan was saved."],
+   ["Tap Tomorrow, then This week.","The next working day (Monday on a Friday); then Monday to Friday, each with lines and pallets or \"nothing planned\"."],
+   ["Pick a date, tap What is leaving that day?; then clear the date and tap again.","That day's answer; then \"Pick a day first.\""],
+   ["Open the two fold-outs at the bottom.","The lines with a date it can't read, and the lines with no date yet."],
+   ["Search all weeks: a real order number, then 99999, then an empty box.","Matches with sheet and row; \"Nothing in any of the weekly sheets matches…\"; \"Type something to search for.\""],
+   ["Chase list; change the days to 3 and click away.","Loads by itself with headings and counts; reloads for 3 days."],
+   ["Overdue, no departure → Which were never updated?","Lines tagged \"N days overdue\", or a green \"No line has…\"."],
+   ["Morning summary → Copy as text.","Today's summary as it would be emailed; \"Copied. Paste it into an email.\" (paste only into a draft to yourself)."],
+   ["Data quality → Check the workbook.","Cells to fix with sheet and row; duplicates and corrected month spellings if any."],
+   ["Project tracker: type a name in the filter, then Refresh.","Liam's tracker row by row, narrowing as you type; Refresh re-reads it."],
+   ["On a tracker row: Open a drawing; Find in TTi files on a folder.","The drawing opens in a new tab (or downloads); the files tab opens searching that folder."],
+   ["Find TTi files: a job number such as 402426 → Find files → Open a PDF → Copy path.","Results with the full W:\\ path, size and date; the PDF opens, on a phone too; the button changes to \"Copied\"."],
+   ["Have someone signed in but not on the list open it.","A page explaining why, with Sign in and App portal. (This one page is still in the old look, drawn by the server.)","chk"],
+   ["User guide → contents links → Back to TTI Despatch → All apps; then App portal from the app.","Each goes where it says."],
+   ["On the phone, check the edges.","Nothing runs off the right; the tabs wrap as pills."]
+  ],
+  pass:"Every tab answers with sheet and row, the footer says when the plan was saved, and nothing in the workbook, tracker or folders changed.",
+  wrong:"A screenshot showing the status box and the footer, which tab, which account and which device; <code>/api/me</code> shows who you're signed in as."},
+
+ {id:"hr", name:"HRInventry", who:"Only people whose sign-in is in SDI_HR_APP_USERS. Personal data.",
+  where:"The HRInventry Anywhere tile. Every step on the desktop, then the roll call steps again on your phone.",
+  care:"Update InVentry really signs staff in or out on the fire roll call; there is no practice mode. Ticking the roll call is shared with every phone, saved, written to K:\\IT\\HRSystemsOutput\\Roll calls and put in the next morning email. Tell HR before practising, and never during a real drill. Nothing ever changes BrightHR.",
+  steps:[
+   ["Open it.","Wordmark with HRINVENTRY in yellow and your name; \"‹ All apps\" and User guide; five tabs (two rows on a phone)."],
+   ["Press Check who's clocked in (read only).","The buttons grey out and Latest shows RUNNING; after 1 to 4 minutes, DONE with two figures and the clocked-in list. Anyone in over 20 hours is orange."],
+   ["While it runs, close and reopen the page, or open it on your phone.","It still shows the run, then the result."],
+   ["Group by manager, then reload.","One section per manager with \"n people\"; the device remembers the choice."],
+   ["Forgotten clock-outs tab.","People in for over 20 hours, longest first; or \"Nobody…\"."],
+   ["Data issues → Run the data check (read only).","\"n to fix\" or \"all clear\", with five sections."],
+   ["Press Update InVentry, then Cancel.","The question explains what it does; Cancel runs nothing and adds nothing to History."],
+   ["At a quiet time: clock yourself in on Blip, then Update InVentry → OK.","After 1 to 4 minutes: the four figures, the signed-in and signed-out lists, any not matched, and what InVentry now shows. Reception shows you signed in as BRIGHTHR SYNC. Don't repeat it as a test.","w"],
+   ["History → Refresh.","Your check and update, with who ran them and who changed."],
+   ["Roll call tab (read only until you tick).","Everyone on site and clocked in, each saying where from; \"0 of n accounted for\"; Saved roll calls beside or below."],
+   ["Tell HR first. Start a new roll call → OK; open it on the phone too; tick yourself on the desktop; untick.","Every tick clears everywhere. Within about 5 seconds the phone shows your tick, who ticked and when. Saved permanently from the first tick; the spreadsheet appears on K: within seconds.","w"],
+   ["Tick \"Show only people not yet accounted for\".","Ticked people disappear."],
+   ["Phone: flight mode, tick someone, flight mode off.","\"1 tick(s) not saved yet…\" while offline; it saves when the signal is back.","chk"],
+   ["Saved roll calls → your practice one.","Date, present and absent, who ticked whom and when, the spreadsheet path; Back returns to the live roll call."],
+   ["Open …/app/hr-inventry.html#roll (the morning email's link).","It opens straight on the Roll call."],
+   ["User guide → contents links → Back to the app → All apps; then ‹ All apps from the app.","Each goes where it says."]
+  ],
+  pass:"Your check, update and practice roll call appear in History and Saved roll calls, reception matches \"InVentry now shows on site\", and the practice spreadsheet is on K:.",
+  wrong:"A screenshot and the time, plus the last 50 lines of <code>C:\\SDIIntelligence\\hr\\snapshots\\hr_pipeline.log</code> from the server."},
+
+ {id:"pocket", name:"Estimating in your pocket", who:"Looking (Ask, Running, Folders) is open to anyone signed in. Starting a run from outside, the self-running switch and Parity are for the named estimators in SDI_ESTIMATOR_OIDS.",
+  where:"The SDI Estimating Intelligence tile on a phone, or /app/estimating-pocket.html .",
+  care:"The Parity tab may say Not Found on the server until the estimating branch is merged. Never press Switch on or Switch off for AI Estimate Self-Running on live: switching on queues every unworked job.",
+  steps:[
+   ["Open it on your phone, then on a desktop.","\"we.are.sdi | ESTIMATING / IN YOUR POCKET\", Full screen →, and five tabs at the bottom; on a desktop, one centred column."],
+   ["Ask: a client, then a job.","The price per unit with its workbook cell, the material, labour and other split, parts and operations, and release status. A held job shows an amber note."],
+   ["Tap \"What did this come out at?\", then type your own question and Ask; try Speak.","\"Reading the filed record…\", then an answer saying where it came from. Spoken words go into the box first. Listen reads an answer aloud."],
+   ["Open a job folder with no saved estimate.","\"No estimate record is filed in this folder…\""],
+   ["Running tab → Refresh.","What's running (yellow), finished (green with the price) and failed (red with why), or \"Nothing is running…\"."],
+   ["Read the AI Estimate Self-Running status. Don't press either switch.","Who switched it on or off, and whether the office watcher is connected."],
+   ["Folders: Live enquiries, Estimates, Completed briefs.","The list changes; drawings and reports open in a new tab; workbooks download; SolidWorks files are greyed \"at a desk\"."],
+   ["In a Live enquiries job with drawings, tap Estimate this pack →.","Start opens with that pack chosen. Nothing has started."],
+   ["Start → From a drawing pack: untick every drawing, tap Start it.","\"Tick at least one drawing.\" Nothing sent."],
+   ["Ask a non-estimator to tap Start it.","It refuses: starting a run from outside is limited to named people."],
+   ["As a named estimator, a small known pack → Start it.","\"Started. Run r-…\"; it appears on Running, later green with the price, and the workbook arrives by email.","run"],
+   ["From a written brief: try an empty customer, no number, a very short brief, letters in \"Also price at\".","Each refuses with its own message; nothing is sent."],
+   ["A proper written brief → Start it.","\"Queued. Run …\", the book marked provisional.","run"],
+   ["Parity: a job number → Find both estimates.","The manual sheet and the AI runs, or Not Found on the server for now. Compare and file writes a comparison to the parity folder.","chk"],
+   ["Tap Full screen →, then Back.","The desk estimating screen; Back returns."],
+   ["Switch the phone between light and dark mode.","The page stays dark and looks the same."]
+  ],
+  pass:"Every tab reads correctly with its sources, the checks refuse without sending, and a real run shows on Running and arrives by email.",
+  wrong:"A screenshot, the exact red message, the time and the run number; for a failed run, its log on /estimating?full=1 ."},
+
+ {id:"remote", name:"Remote Control", who:"Named people in SDI_OPS_OIDS, with Microsoft sign-in and MFA. SDI_OPS_ENABLED=yes; the Restart button only with SDI_OPS_RESTART=yes.",
+  where:"The SDI Remote Control Intelligence tile.",
+  care:"Restart ends the live service for everyone for about half a minute. Only with nothing on the operations wall and no SCRUM-194 run going.",
+  steps:[
+   ["Open it.","Wordmark with REMOTE CONTROL INTELLIGENCE in yellow and App portal; \"The service, from your phone\"."],
+   ["Wait a moment.","\"Service up, commit …\", with Running commit, Up for and Host."],
+   ["Read Apps mounted, Settings present and Shares.","Green for mounted, set and reachable; red otherwise. Setting values are never shown."],
+   ["Change Last 40 lines to Last 100.","The log reloads with up to 100 lines."],
+   ["Type ERROR in the filter and press Enter; clear it.","Only matching lines with a count; then all of them again."],
+   ["Refresh.","Everything reloads; Up for goes up."],
+   ["Can this person use AM CRM: a name without the @.","\"Type the whole address, with the @.\""],
+   ["Then a colleague's full sign-in address.","What they see, whether they can change records, and the two gates this page can't see."],
+   ["Type \"restar\" and tap Restart now.","Nothing happens."],
+   ["Only with the wall clear: type restart, tap Restart now.","\"Asking it to restart…\", \"Restarting — waiting…\", then \"Back up after N seconds\"; Up for shows seconds.","w"],
+   ["Tap Restart again straight away.","It refuses: it restarted N seconds ago."],
+   ["Tap App portal.","Back to /app/."]
+  ],
+  pass:"Every panel fills with the right colours, the filter and person check work, and a restart comes back within two minutes.",
+  wrong:"A screenshot of the status line, and the log filtered on <code>[ops]</code>."},
+
+ {id:"private", name:"Private Assistant", who:"You only (SDI_PRIVATE_OWNER_ID), with its own Microsoft sign-in. Drafts need SDI_PRIVATE_DRAFTS=yes; otherwise the simpler read-only page.",
+  where:"The SDI Private Assistant tile.",
+  care:"It never sends email. Review and Confirm save an unsent draft in your Outlook Drafts (delete test drafts after). Save for estimating writes files to the share: use a test client such as TEST SCRUM-195 and remove that folder afterwards.",
+  steps:[
+   ["Open it and pick your account.","\"Email, with you in control.\" with \"Private to James Gray\"."],
+   ["Search the mailbox.","\"N messages. Searched the last seven days\" in green; the newest opens on the right."],
+   ["Change to Yesterday; then From anyone, Unread only, With attachments.","It searches again each time and says what it searched."],
+   ["Type in Filter loaded messages.","The list narrows without searching again; \"No messages match this filter\" if none."],
+   ["Tap a message.","The preview, Open in Outlook, what it says, what it asks for, what you still need to fill in (amber), and a suggested reply."],
+   ["Type a steer such as \"say yes but push it to the 18th\" → Suggest again.","The wording is replaced."],
+   ["A message with attachments: tap one.","It downloads rather than opening."],
+   ["Save for estimating with the client left blank.","It asks for a client and job number."],
+   ["With client TEST SCRUM-195, save.","\"Saved N drawings to Live Enquiry › client › job\" and Estimate it →. Don't press Run in estimating.","w"],
+   ["Edit the reply → Review draft → Confirm · save to Drafts.","\"Confirm the exact draft\" with To, Subject and text; then \"Saved to Outlook Drafts. Not sent.\" Delete it afterwards.","w"],
+   ["Wait over 15 minutes on a reviewed draft, then Confirm.","\"Proposal expired…\"."],
+   ["New email: To and what you want to say → Draft it → Review → Confirm.","A subject and message written for you, saved as one unsent draft. A bad address is refused at Review.","w"],
+   ["Reconnect Microsoft, then Sign out.","Sign-in and back; Sign out returns you to the portal."]
+  ],
+  pass:"Every search says what it searched, each reply ends as one unsent draft in Outlook, and nothing is ever sent.",
+  wrong:"A screenshot of the status line, and the Remote Control log filtered on <code>private-email</code>."},
+
+ {id:"brief", name:"Brief to Book", who:"Anyone signed in can open it. Starting a run from outside needs SDI_ESTIMATOR_OIDS.",
+  where:"The SDI Intelligence Brief to Book tile.",
+  care:"Run the estimate starts a real estimate run. Use a made-up customer and number (TEST SCRUM-195, T195-01), never a live job: a run clears that customer and number's staged pack folder. The book is provisional and goes to no customer.",
+  steps:[
+   ["Open it.","The Brief to Book header and title, The enquiry form, and the amber \"What this is, and is not\" panel."],
+   ["Run the estimate with the form empty.","The browser asks you to fill in the required boxes; nothing starts."],
+   ["Ask a non-estimator to try from outside the office.","Red text: starting a run is limited to named people."],
+   ["Put not-an-email in \"Send the finished book to\" and Run.","\"These are not email addresses…\" before anything starts. Then clear it."],
+   ["With a free slot on the wall: TEST SCRUM-195, T195-01, quantity 20, also 50, 100, the example brief → Run the estimate.","QUEUED, then RUNNING (amber) with the log updating every few seconds.","run"],
+   ["In a second tab, run the same customer and number.","It refuses: already running."],
+   ["When it finishes.","DONE (green); the workbook, the AI Explanation and the quote download, all marked provisional."],
+   ["Another brief, then All apps.","A fresh blank form; then back to the portal."]
+  ],
+  pass:"One run goes from queued to done, the three files download as provisional, and the bad-address and duplicate-run refusals appear.",
+  wrong:"The run id from \"Run …\", a screenshot of the run panel's log, and the time. Ask an estimator to remove the TEST SCRUM-195 folder afterwards."}
+];
+
+const KEY = "sdi-walkthrough-ticks-v1";
+let ticks = {};
+try { ticks = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { ticks = {}; }
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(ticks)); } catch (e) {} };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+const FLAG = {w:'<span class="chip w">Writes or sends</span>', run:'<span class="chip run">Real estimate run</span>', chk:'<span class="chip chk">Check</span>'};
+
+function render() {
+  const list = document.getElementById("list");
+  list.innerHTML = APPS.map(a => `
+    <section class="app" id="${a.id}" aria-labelledby="h-${a.id}">
+      <div class="ah"><h2 id="h-${a.id}">${esc(a.name)}</h2><span class="count" id="c-${a.id}"></span></div>
+      <div class="meta"><div><b>Who</b> ${esc(a.who)}</div><div><b>Where</b> ${esc(a.where)}</div></div>
+      ${a.care ? `<div class="care">${esc(a.care)}</div>` : ""}
+      <ol class="steps">${a.steps.map((s, i) => {
+        const id = a.id + "-" + (i + 1);
+        return `<li data-id="${id}"><label for="${id}"><input type="checkbox" id="${id}"><span class="n">${String(i + 1).padStart(2, "0")}</span>
+          <span><span class="do">${esc(s[0])}</span><div class="ex">${esc(s[1])}</div>${s[2] ? `<div class="flags">${FLAG[s[2]]}</div>` : ""}</span></label></li>`;
+      }).join("")}</ol>
+      <div class="foot"><div><b>Passes if</b> ${esc(a.pass)}</div><div><b>If something's wrong</b> ${a.wrong}</div></div>
+    </section>`).join("");
+  list.querySelectorAll("li[data-id]").forEach(li => {
+    const box = li.querySelector("input");
+    box.checked = !!ticks[li.dataset.id];
+    li.classList.toggle("ticked", box.checked);
+    box.addEventListener("change", () => {
+      if (box.checked) ticks[li.dataset.id] = 1; else delete ticks[li.dataset.id];
+      li.classList.toggle("ticked", box.checked); save(); counts();
+    });
+  });
+  counts();
+}
+
+function counts() {
+  let all = 0, done = 0;
+  const nav = APPS.map(a => {
+    const n = a.steps.length, d = a.steps.filter((_, i) => ticks[a.id + "-" + (i + 1)]).length;
+    all += n; done += d;
+    const c = document.getElementById("c-" + a.id);
+    if (c) { c.textContent = d + " of " + n; c.classList.toggle("all", d === n); }
+    return `<a href="#${a.id}" class="${d === n ? "done" : ""}">${esc(a.name)} <small>${d}/${n}</small></a>`;
+  }).join("");
+  document.getElementById("apps").innerHTML = nav;
+  document.getElementById("overallTxt").textContent = done + " of " + all + " steps";
+  document.getElementById("overallBar").style.width = (all ? 100 * done / all : 0) + "%";
+}
+
+const hide = document.getElementById("hideDone");
+try { if (localStorage.getItem(KEY + "-hide") === "1") { document.body.classList.add("hide-done"); hide.setAttribute("aria-pressed", "true"); hide.textContent = "Show ticked steps"; } } catch (e) {}
+hide.addEventListener("click", () => {
+  const on = document.body.classList.toggle("hide-done");
+  hide.setAttribute("aria-pressed", on ? "true" : "false");
+  hide.textContent = on ? "Show ticked steps" : "Hide ticked steps";
+  try { localStorage.setItem(KEY + "-hide", on ? "1" : "0"); } catch (e) {}
+});
+const conf = document.getElementById("confirm");
+document.getElementById("reset").addEventListener("click", () => { conf.hidden = false; });
+document.getElementById("resetNo").addEventListener("click", () => { conf.hidden = true; });
+document.getElementById("resetYes").addEventListener("click", () => { ticks = {}; save(); conf.hidden = true; render(); });
+
+render();
+if (location.hash) { const el = document.getElementById(location.hash.slice(1)); if (el) el.scrollIntoView(); }
+</script>
+</body>
+</html>

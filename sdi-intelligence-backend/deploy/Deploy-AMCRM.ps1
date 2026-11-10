@@ -86,6 +86,8 @@ $Files = @(
     "appportal/hr-inventry.html",
     "appportal/guide-hr-inventry.html",
     "appportal/brief-estimate.html",
+    # The test walkthroughs, on the portal rather than a stray page - 10 Nov.
+    "appportal/guide-testing.html",
     "sdi_ops_routes.py",
     "appportal/sdi-remote-control.html",
     "private-email-readonly.html",

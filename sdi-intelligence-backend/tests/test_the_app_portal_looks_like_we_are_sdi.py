@@ -68,5 +68,34 @@ class EveryAppPageReachesTheServerTests(unittest.TestCase):
                 self.assertIn(f'"appportal/{page.name}"', listed)
 
 
+class TheTestWalkthroughsAreOnThePortalTests(unittest.TestCase):
+    """10 Nov 2026 (James: "put it on the app portal .. i don't like stray web pages"). The walkthroughs for every app
+    and the ten SDI Live scenes are a page of the portal, behind the same sign-in, opened from its own tile."""
+    PAGE = (APP / "guide-testing.html").read_text(encoding="utf-8")
+
+    def test_a_tile_opens_it_and_it_leads_back(self):
+        import json
+        svc = [s for s in json.loads((APP.parent / "services.json").read_text(encoding="utf-8"))["services"]
+               if s["id"] == "testing"]
+        self.assertEqual(len(svc), 1)
+        self.assertEqual((svc[0]["app_url"], svc[0]["surface"]), ("guide-testing.html", "app"))
+        self.assertIn('href="./"', self.PAGE)
+        self.assertNotIn("claude.ai", self.PAGE)                              # nothing pointing at a stray copy
+
+    def test_every_app_and_the_ten_scenes_are_there(self):
+        for app in ("App portal", "SDI Live", "AM CRM", "TTI Despatch", "HRInventry", "Estimating in your pocket",
+                    "Remote Control", "Private Assistant", "Brief to Book", "Ten scenes to talk through"):
+            with self.subTest(app=app):
+                self.assertIn(f'name:"{app}"', self.PAGE)
+        scenes = self.PAGE.split('id:"scenes"', 1)[1].split("pass:", 1)[0]
+        self.assertEqual(scenes.count('["'), 10)
+
+    def test_in_the_portals_look(self):
+        self.assertEqual(self.PAGE.count('<path class="d"'), 2)               # the wordmark, its two yellow dots
+        self.assertIn("--brand:#F6D946", self.PAGE)
+        self.assertIn("family=Outfit", self.PAGE)
+        self.assertIn("color-scheme:dark", self.PAGE)
+
+
 if __name__ == "__main__":
     unittest.main()
