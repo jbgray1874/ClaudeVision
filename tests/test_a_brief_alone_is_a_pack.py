@@ -119,7 +119,9 @@ def test_a_brief_with_no_drawings_queues_an_llm_only_run(er):
     assert run.llm_only is True and run.requested_by == "briefsite"
     assert run.quantity_breaks == [50, 100] and run.units == 20
     folder = Path(run.job_folder)
-    assert sorted(p.name for p in folder.iterdir()) == ["ENQUIRY_BRIEF.png", "ENQUIRY_BRIEF.txt"]
+    # the brief's page, the brief, and (10 Nov 2026) the marker that has the run say its stage
+    assert sorted(p.name for p in folder.iterdir()) == ["ENQUIRY_BRIEF.png", "ENQUIRY_BRIEF.txt",
+                                                         "PARTNER_API_RUN.json"]
     assert "1.2 mm mild steel" in (folder / "ENQUIRY_BRIEF.txt").read_text(encoding="utf-8")
     assert any("BRIEF ONLY" in line for line in run.log)
     assert any("briefsite site" in line for line in run.log)
@@ -149,7 +151,7 @@ def test_a_finished_runs_files_are_fetched_by_run_id_and_name_only(er, tmp_path)
     book = tmp_path / "0359962_20261006_1407.xlsx"
     book.write_bytes(b"PK\x03\x04 a workbook")
     run = er.Run(run_id="r9", client="M&S", drawing_number="0359962", units=20,
-                 job_folder="J", output_path="O")
+                 job_folder="J", output_path="O", requested_by="briefsite")
     run.status = "running"
     run.deliverables = [{"name": book.name, "path": str(book)}]
     er._RUNS["r9"] = run
@@ -188,7 +190,7 @@ def test_an_unreleased_quotation_is_never_handed_to_a_site(er, tmp_path, monkeyp
     quote = tmp_path / "0359962_quote.html"
     quote.write_text("<html>quotation</html>", encoding="utf-8")
     run = er.Run(run_id="r10", client="M&S", drawing_number="0359962", units=20,
-                 job_folder="J", output_path="O")
+                 job_folder="J", output_path="O", requested_by="briefsite")
     run.status = "done"
     run.deliverables = [{"name": quote.name, "path": str(quote)}]
     er._RUNS["r10"] = run
@@ -199,3 +201,97 @@ def test_an_unreleased_quotation_is_never_handed_to_a_site(er, tmp_path, monkeyp
     assert exc.value.status_code == 403
     monkeypatch.setattr(er.quote_release, "may_go_to_a_customer", lambda p: True)
     assert Path(er.deliverable("r10", quote.name, x_sdi_key="site-key").path) == quote
+
+
+# ── 10 Nov 2026: Brief to Book made ready for its first live run, and for SDI Live's key ─────
+
+def _site_run(er, run_id, site, status="done", tmp_path=None):
+    run = er.Run(run_id=run_id, client="M&S", drawing_number="0359962", units=20,
+                 job_folder="J", output_path="O", requested_by=site)
+    run.status = status
+    if tmp_path is not None:
+        book = tmp_path / f"{run_id}.xlsx"
+        book.write_bytes(b"PK\x03\x04 a workbook")
+        run.deliverables = [{"name": book.name, "path": str(book)}]
+    er._RUNS[run_id] = run
+    return run
+
+
+def test_a_site_sees_only_its_own_runs(er, tmp_path, monkeypatch):
+    """A site's key listed every run and fetched any run's book: another site's, or the portal's."""
+    from fastapi import HTTPException
+    monkeypatch.setattr(er.config, "PARTNER_KEYS", {"briefsite": "site-key", "other": "other-key"},
+                        raising=False)
+    _site_run(er, "aaaaaaaaaaaa", "briefsite", tmp_path=tmp_path)
+    _site_run(er, "bbbbbbbbbbbb", "other", tmp_path=tmp_path)
+    _site_run(er, "cccccccccccc", "", tmp_path=tmp_path)                 # the portal's own run
+    assert [r["run_id"] for r in er.recent(x_sdi_key="site-key")["runs"]] == ["aaaaaaaaaaaa"]
+    assert er.status("aaaaaaaaaaaa", x_sdi_key="site-key")["run_id"] == "aaaaaaaaaaaa"
+    for rid in ("bbbbbbbbbbbb", "cccccccccccc"):
+        for call in (lambda: er.status(rid, x_sdi_key="site-key"),
+                     lambda: er.run_summary(rid, x_sdi_key="site-key"),
+                     lambda: er.deliverable(rid, f"{rid}.xlsx", x_sdi_key="site-key")):
+            with pytest.raises(HTTPException) as exc:
+                call()
+            assert exc.value.status_code == 404
+    # the portal still sees every run
+    assert len(er.recent(x_sdi_key="portal-key")["runs"]) == 3
+    assert er.status("bbbbbbbbbbbb", x_sdi_key="portal-key")["run_id"] == "bbbbbbbbbbbb"
+
+
+def test_a_sites_key_does_nothing_but_brief_runs(er):
+    """Release, override, batch, the self-running switch, who quotes go to: not for a site."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(er.router)
+    c = TestClient(app)
+    site, portal = {"X-SDI-Key": "site-key"}, {"X-SDI-Key": "portal-key"}
+    for method, path in (("GET", "/api/estimate/runners"), ("GET", "/api/estimate/recipients"),
+                         ("GET", "/api/estimate/self-running"), ("POST", "/api/estimate/release"),
+                         ("POST", "/api/estimate/self-running/start"), ("POST", "/api/estimate"),
+                         ("POST", "/api/estimate/batch"), ("POST", "/api/estimate/aaaaaaaaaaaa/abandon"),
+                         ("POST", "/api/estimate/aaaaaaaaaaaa/email")):
+        r = c.request(method, path, headers=site, json={})
+        assert r.status_code == 403, (method, path, r.status_code)
+        assert "partner site" in r.json()["detail"]
+    assert c.get("/api/estimate", headers=site).status_code == 200
+    assert c.get("/api/estimate/aaaaaaaaaaaa", headers=site).status_code == 404   # none yet
+    assert c.get("/api/estimate/runners", headers=portal).status_code == 200      # portal untouched
+    r = c.post("/api/estimate/brief", headers=site, json={
+        "client": "M&S", "reference": "0359962", "units": 1,
+        "brief": "A floor-standing gondola end, 1.2 mm mild steel, powder coated black."})
+    assert r.status_code == 200, r.text
+
+
+def test_a_brief_too_long_or_too_short_is_said_not_cut(er):
+    from fastapi import HTTPException
+    for brief, says in (("x" * 4001, "4,001 characters"), ("a ticket holder", "too short")):
+        with pytest.raises(HTTPException) as exc:
+            er.start_from_brief(er.BriefRequest(client="M&S", reference="0359962", units=1,
+                                                brief=brief), x_sdi_key="site-key")
+        assert exc.value.status_code == 400 and says in exc.value.detail
+    assert not er._RUNS                                                   # nothing was queued
+
+
+def test_a_brief_carries_its_delivery_postcode(er):
+    out = er.start_from_brief(er.BriefRequest(
+        client="M&S", reference="0359962", units=20, delivery_postcode=" le19  1wp ",
+        brief="20 off half-A4 landscape ticket holders in 1.2 mm mild steel, RAL 7021"),
+        x_sdi_key="site-key")
+    folder = Path(er._RUNS[out["run_id"]].job_folder)
+    import json
+    assert json.loads((folder / "DELIVERY_DECLARED.json").read_text(encoding="utf-8"))["postcode"] == "LE19 1WP"
+
+
+def test_the_page_asks_for_the_facts_and_shows_the_figure():
+    html = (ROOT / "sdi-intelligence-backend" / "appportal" / "brief-estimate.html").read_text(encoding="utf-8")
+    for box in ('id="h"', 'id="w"', 'id="d"', 'id="material"', 'id="finish"', 'id="print"', 'id="fixings"',
+                'id="lighting"', 'id="load"', 'id="packing"', 'id="postcode"'):
+        assert box in html, box
+    assert "delivery_postcode:" in html                       # the postcode goes as its own field
+    assert "of '+MAX.toLocaleString()+' characters" in html   # the length is shown, never cut
+    assert "fetch('../api/me'" in html                        # the book is e-mailed to whoever ran it
+    assert "'/summary'" in html and "unit_cost_gbp" in html   # the figure, and the stage while it runs
+    assert "?run='" in html                                   # a reload finds the run again
+    assert "Not a past job's" in html                         # the run clears the reference's folder

@@ -5,18 +5,20 @@ Intelligence and show the resulting costing workbook. Written 6 October 2026 (D-
 
 ## Where the service is
 
-| Stage | Base URL | Notes |
-|---|---|---|
-| Now | `http://<estimating laptop>:8072` | James's laptop runs the service and the runner. The laptop must be on, in the office, with the runner started. |
-| From 2 November 2026 | `http://<SDI Intelligence server>:8071` | The Windows VM on the new server. Same endpoints, same payloads; only the host changes. |
-
-Ask James for the hostname and for your site's key.
+The service runs on the SDI Intelligence server, `http://<SDI Intelligence server>:8071`, with
+the estimating runner beside it. (Until 2 November 2026 it ran on James's laptop at port 8072;
+the endpoints and payloads are the same.) Ask James for the hostname and for your site's key.
 
 ## Authentication
 
 Every request carries the header `X-SDI-Key: <your key>`. Your site has its own key
-(`SDI_PARTNER_KEYS` on the service), never the portal's. A partner key opens the estimating
-endpoints and the catalogue only; the file browser and the database stay closed to it.
+(`SDI_PARTNER_KEYS` on the service), never the portal's.
+
+A site's key does exactly what this document describes and nothing else (10 November 2026):
+`POST /api/estimate/brief` (and `/api/estimate/llm`), and `GET` on its own runs, their summary
+and their files. Every other estimating endpoint answers `403`, and a run another site (or the
+portal) queued answers `404`, as if it did not exist. The file browser and the database stay
+closed to it.
 
 The service answers cross-origin requests only from origins listed in `SDI_ALLOWED_ORIGINS`.
 Give James your site's origin (scheme, host, port) so it is added. If your site calls the
@@ -35,15 +37,34 @@ X-SDI-Key: <your key>
   "units": 20,
   "quantity_breaks": [50, 100],
   "brief": "20 off half-A4 landscape ticket holders. 1.2 mm mild steel, 212 x 150 face with a 120 x 170 base, powder coated RAL 7021 black grey. 400 micron printed card insert 210 x 148.5. Four clear self-adhesive bumpers on the base.",
-  "email_to": "tim.wilkes@wearesdi.com; dave.wright@wearesdi.com"
+  "email_to": "tim.wilkes@wearesdi.com; dave.wright@wearesdi.com",
+  "delivery_postcode": "LE19 1WP"
 }
 ```
 
 Fields: `client` and `reference` name the folder the job is filed under (letters, digits, dashes
-and spaces survive; anything else is dropped). `units` is the quantity the estimate is run at;
-`quantity_breaks` are the other quantities to price on the same workbook (optional, up to twelve).
-`brief` is up to 4,000 characters; one construction, not alternatives. `email_to` is optional:
-absent, the book is filed and not sent.
+and spaces survive; anything else is dropped). Use the new enquiry's own number: the run clears
+that reference's working folder, so a past job's number would overwrite its staging. `units` is
+the quantity the estimate is run at; `quantity_breaks` are the other quantities to price on the
+same workbook (optional, up to twelve). `brief` is 40 to 4,000 characters; one construction, not
+alternatives. A brief outside that is refused with a `400` that says why, never cut. `email_to`
+is optional: absent, the book is filed and not sent. `delivery_postcode` is optional: where it
+goes, filed as the run's delivery declaration.
+
+Every fact the brief states outranks the model's guess, so a brief with labelled lines costs
+firmer than prose. The portal's app joins its boxes into the brief like this:
+
+```
+A floor-standing gondola end with three shelves and a printed header.
+Overall size: 1800 mm high x 1330 mm wide x 450 mm deep.
+Materials and thicknesses: 1.2 mm mild steel; 18 mm MDF shelves.
+Finish and colour: Powder coated RAL 9005.
+Print and graphics: Printed header 1330 x 300, 3 mm foamex.
+Fixings and assembly: Flat-packed, four levelling feet.
+Lighting: None.
+Load: 15 kg a shelf.
+Packing: Individually boxed, palletised.
+```
 
 Response, immediately:
 
@@ -55,9 +76,9 @@ Response, immediately:
 `enquiry_brief` must read `filed`. Any other value means the brief did not reach the job folder
 and the run will read nothing; treat it as a failure and show the message.
 
-Errors: `400` with a `detail` sentence (empty brief, bad quantity, bad e-mail address);
-`401` wrong key; `409` the same client and reference is already running (the message names the
-run to wait for); `503` no runner is connected, so nothing can run the job.
+Errors: `400` with a `detail` sentence (empty, too short or too long a brief, bad quantity, bad
+e-mail address); `401` wrong key; `409` the same client and reference is already running (the
+message names the run to wait for); `503` no runner is connected, so nothing can run the job.
 
 ## 2. Follow the run
 
@@ -73,6 +94,16 @@ takes a few minutes; a run that waits behind another job on the one runner takes
 job. If the service restarts, the run id is forgotten (`404`): the files, if filed, are on the
 share at `output_path`.
 
+```
+GET /api/estimate/{run_id}/summary
+X-SDI-Key: <your key>
+```
+
+The run reduced to what a page shows: `stage` (`queued`, `starting`, `reading`, `checking` ...
+`done`) with `stages` and their elapsed seconds while it runs; once done, `unit_cost_gbp` (the
+provisional figure a unit), `caution` (the sentence to show beside it), and `summary_html`,
+`workbook_xlsx` and `report_html` as download paths.
+
 ## 3. Fetch the book
 
 ```
@@ -81,7 +112,7 @@ X-SDI-Key: <your key>
 ```
 
 `name` is one of the names in `deliverables`. The workbook is the `.xlsx`, the report the
-`_report.html`, the covering note the `.txt` or `.md` the runner lists. The service serves only
+`_report.html`, the covering note the `.html` with `covering` in its name. The service serves only
 the files the runner filed for that run; a name it did not file is `404`, and a run that is not
 `done` is `409`.
 
@@ -103,12 +134,13 @@ lists what the brief fixed, what the model assumed, and what an estimator must r
 ## In the portal
 
 The same run is available as an app at `/app/brief-estimate.html` (the app portal, signed in),
-which posts to the same endpoint and shows the same log and files.
+which posts to the same endpoint and shows the same stage, figure and files, and e-mails the
+book to whoever ran it.
 
 ## Worked example in JavaScript
 
 ```js
-const BASE = "http://laptop:8072", KEY = "…";
+const BASE = "http://<SDI Intelligence server>:8071", KEY = "…";
 const h = {"Content-Type": "application/json", "X-SDI-Key": KEY};
 const q = await fetch(`${BASE}/api/estimate/brief`, {method: "POST", headers: h, body: JSON.stringify(payload)});
 const {run_id, enquiry_brief} = await q.json();

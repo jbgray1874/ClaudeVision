@@ -57,7 +57,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
@@ -153,6 +153,47 @@ def _check_key(x_sdi_key: Optional[str]) -> str:
         if x_sdi_key and x_sdi_key == _key:
             return str(_name)
     raise HTTPException(status_code=401, detail="Invalid or missing X-SDI-Key")
+
+
+# ── A PARTNER SITE SEES ITS OWN RUNS, AND DOES NOTHING ELSE (10 Nov 2026) ────────────────────
+# A partner key passed _check_key on every estimating endpoint, so a site given one for Brief to
+# Book could list every run, fetch another site's book, and call the estimator verbs (release,
+# override, batch, the self-running switch). Brief to Book is about to be wired to SDI Live
+# under a key of its own, so the key is held to what the API document gives a site: queue a run
+# from a brief (or an image), follow it, and fetch its files. The portal and the runner are
+# untouched: neither presents a partner key.
+_RUN_ID = r"[0-9a-f]{12}"
+_PARTNER_GET = re.compile(rf"/api/estimate(/{_RUN_ID}(/summary|/deliverables/[^/]+)?)?")
+_PARTNER_POST = ("/api/estimate/brief", "/api/estimate/llm")
+
+
+def _partner_of(x_sdi_key: Optional[str]) -> str:
+    """The partner site this key belongs to, or "" (the portal, the runner, or no key)."""
+    if not x_sdi_key or (config.API_KEY and x_sdi_key == config.API_KEY):
+        return ""
+    return next((str(n) for n, k in (getattr(config, "PARTNER_KEYS", None) or {}).items()
+                 if k and x_sdi_key == k), "")
+
+
+def _partner_scope(request: Request, x_sdi_key: Optional[str] = Header(default=None)) -> None:
+    if not _partner_of(x_sdi_key):
+        return
+    path = request.url.path.rstrip("/") or "/"
+    if request.method == "POST" and path in _PARTNER_POST:
+        return
+    if request.method in ("GET", "HEAD") and _PARTNER_GET.fullmatch(path):
+        return
+    raise HTTPException(403, "A partner site's key queues a run from a brief, follows its own "
+                             "runs and fetches their files - nothing else.")
+
+
+def _not_theirs(run: Any, x_sdi_key: Optional[str]) -> bool:
+    """True when a partner asks after a run another site (or the portal) queued."""
+    who = _partner_of(x_sdi_key)
+    return bool(who) and str(getattr(run, "requested_by", "") or "") != who
+
+
+router.dependencies.append(Depends(_partner_scope))
 
 
 # ── path safety ──────────────────────────────────────────────────────────────
@@ -1666,6 +1707,11 @@ class BriefRequest(BaseModel):
     quantity_breaks: List[int] = []
     email_to: Optional[str] = None
     fresh_read: bool = False
+    # 10 Nov 2026: where it goes, as the estimating page and /llm already take it (D-524).
+    delivery_postcode: str = ""
+
+
+_BRIEF_MIN_CHARS = 40
 
 
 @router.post("/brief")
@@ -1673,13 +1719,29 @@ def start_from_brief(req: BriefRequest, x_sdi_key: Optional[str] = Header(defaul
     """Queue an LLM-only run from a brief alone. The same run as the page's LLM-only
     method with the brief box filled and nothing attached; the book reaches the estimators
     named in `email_to` and is fetched by run id from /{run_id}/deliverables/{name}."""
-    if not str(req.brief or "").strip():
+    brief = str(req.brief or "").strip()
+    if not brief:
         raise HTTPException(400, "The brief is empty. Describe the product: what it is, its "
                                  "sizes, materials, finish and how many.")
+    # 10 Nov 2026: a brief over the limit was cut at 4,000 characters without a word, and a few
+    # words were costed as a product. Both are said now, before anything is staged.
+    if len(brief) > _BRIEF_MAX_CHARS:
+        raise HTTPException(400, f"The brief is {len(brief):,} characters; the most a run reads is "
+                                 f"{_BRIEF_MAX_CHARS:,}. Shorten it - the sizes, materials, finish "
+                                 f"and counts matter most.")
+    if len(brief) < _BRIEF_MIN_CHARS:
+        raise HTTPException(400, "That brief is too short to cost. Say what it is, its overall "
+                                 "size, what it is made of and its finish.")
+    postcode = " ".join(str(req.delivery_postcode or "").split()).upper()[:16]
+    # partner_api: the run reports its stage and where its time went (D-529) - the page shows
+    # "reading / pricing / filing" rather than a log. It changes nothing that is costed.
     return start(EstimateRequest(client=req.client, drawing_number=req.reference,
                                  units=req.units, quantity_breaks=list(req.quantity_breaks),
-                                 method="llm", enquiry_brief=req.brief, email_to=req.email_to,
-                                 fresh_read=bool(req.fresh_read)),
+                                 method="llm", enquiry_brief=brief, email_to=req.email_to,
+                                 fresh_read=bool(req.fresh_read),
+                                 delivery=({"requested": True, "postcode": postcode}
+                                           if postcode else None),
+                                 partner_api=True),
                  x_sdi_key=x_sdi_key)
 
 
@@ -2214,7 +2276,7 @@ def run_summary(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
         run = _RUNS.get(run_id)
         items = list(run.deliverables) if run is not None else []
         log = list(run.log) if run is not None else []
-    if run is None:
+    if run is None or _not_theirs(run, x_sdi_key):
         raise HTTPException(404, "No such run. The service may have restarted.")
     stage, stages, timing = _partner_progress(run.status, log)
     delivs = []
@@ -3187,7 +3249,7 @@ def status(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
     with _LOCK:
         _expire_dead_claims()
         run = _RUNS.get(run_id)
-    if run is None:
+    if run is None or _not_theirs(run, x_sdi_key):
         raise HTTPException(404, "No such run. The service may have restarted.")
     return run.as_json()
 
@@ -3203,7 +3265,7 @@ def deliverable(run_id: str, name: str, x_sdi_key: Optional[str] = Header(defaul
     with _LOCK:
         run = _RUNS.get(run_id)
         items = list(run.deliverables) if run is not None else []
-    if run is None:
+    if run is None or _not_theirs(run, x_sdi_key):
         raise HTTPException(404, "No such run. The service may have restarted.")
     if run.status != "done":
         raise HTTPException(409, f"The run is {run.status}; its deliverables are filed when "
@@ -3235,7 +3297,8 @@ def recent(x_sdi_key: Optional[str] = Header(default=None), limit: int = 25):
     _check_key(x_sdi_key)
     with _LOCK:
         _expire_dead_claims()
-        runs = sorted(_RUNS.values(), key=lambda r: r.queued_at, reverse=True)[:limit]
+        runs = sorted((r for r in _RUNS.values() if not _not_theirs(r, x_sdi_key)),
+                      key=lambda r: r.queued_at, reverse=True)[:limit]
         out = [{k: v for k, v in r.as_json().items() if k != "log"} for r in runs]
     return {"runs": out}
 
