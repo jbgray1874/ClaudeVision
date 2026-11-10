@@ -43,7 +43,7 @@ def test_packs_are_found_under_client_folders_only(tmp_path):
 
 def test_the_first_sweep_is_the_baseline_and_new_or_changed_packs_are_flagged_after(tmp_path):
     w = _share(tmp_path)
-    cfg = ds.settings({"SDI_DESIGN_SWEEP_ROOT": str(w)})
+    cfg = ds.settings({"SDI_DESIGN_SWEEP_ROOT": str(w), "SDI_DESIGN_SWEEP_SHOW_CHANGED": "1"})
     led = ds.load_ledger(tmp_path / "none.json")
     r1 = ds.sweep(cfg, led, now=1000.0, estimated=set())
     assert r1["baseline"] and r1["packs"] == 2 and r1["candidates"] == []
@@ -159,3 +159,39 @@ def test_a_comparison_folder_is_read_only_under_the_parity_root(service):
     outside = tmp / "elsewhere"
     outside.mkdir()
     assert tc.get("/api/estimate/parity/detail", params={"folder": str(outside)}).status_code == 403
+
+
+def test_only_new_folders_are_listed_and_a_folder_filled_after_the_first_look_is_new(tmp_path):
+    """JG, 10 Nov 2026: "we need to find NEW folders, not changes". A new job's folder is made
+    before its drawings arrive, so the first look saw it empty and later read it as changed."""
+    w = _share(tmp_path)
+    (w / "TTi").mkdir()
+    (w / "TTi/12784 - Bolt Demo").mkdir()                       # made, still empty
+    (w / "TTi/12784 - Bolt Demo/notes.txt").write_text("brief")
+    cfg = ds.settings({"SDI_DESIGN_SWEEP_ROOT": str(w)})
+    led = ds.load_ledger(tmp_path / "l.json")
+    ds.sweep(cfg, led, now=1000.0, estimated=set())
+    (w / "TTi/12784 - Bolt Demo/12784-00-GA.pdf").write_text("ga")    # its first drawing
+    (w / "M&S/0358141 Pantheon/c.pdf").write_text("y")                 # a change to a pack
+    r = ds.sweep(cfg, led, now=2000.0, estimated=set())
+    assert [(c["name"], c["status"]) for c in r["candidates"]] == [("12784 - Bolt Demo", "new")]
+    assert ds.settings({"SDI_DESIGN_SWEEP_SHOW_CHANGED": "1"})["show_changed"] is True
+
+
+def test_a_pack_whose_folders_have_not_changed_is_not_listed_again(tmp_path, monkeypatch):
+    """The sweep listed every file of 9,855 packs each pass and ran every three hours, not hourly."""
+    w = _share(tmp_path)
+    cfg = ds.settings({"SDI_DESIGN_SWEEP_ROOT": str(w)})
+    led = ds.load_ledger(tmp_path / "l.json")
+    ds.sweep(cfg, led, now=1000.0, estimated=set())
+    listed = []
+    real = ds.Path.rglob
+    monkeypatch.setattr(ds.Path, "rglob", lambda self, pat: listed.append(self.name) or real(self, pat))
+    ds.sweep(cfg, led, now=2000.0, estimated=set())
+    assert listed == [], "no folder changed: nothing listed"
+    import os, time
+    pan = w / "M&S/0358141 Pantheon"
+    (pan / "z.pdf").write_text("new")
+    os.utime(pan, (time.time() + 10, time.time() + 10))
+    ds.sweep(cfg, led, now=3000.0, estimated=set())
+    assert listed == ["0358141 Pantheon"]

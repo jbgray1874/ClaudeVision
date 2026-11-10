@@ -73,6 +73,8 @@ def settings(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         "keep_days": max(1, int(e.get("SDI_DESIGN_SWEEP_KEEP_DAYS") or 14)),
         "ledger": Path(e.get("SDI_DESIGN_SWEEP_LEDGER") or (here / "output" / "design_sweep" / "ledger.json")),
         "estimates": Path(e.get("SDI_ESTIMATE_OUTPUT_ROOT") or ""),
+        "show_changed": str(e.get("SDI_DESIGN_SWEEP_SHOW_CHANGED") or "").strip().lower()
+                        in ("1", "true", "yes", "on"),
     }
 
 
@@ -196,6 +198,22 @@ def load_ledger(path: Path) -> Dict[str, Any]:
     return {"schema": SCHEMA, "packs": {}, "sweeps": 0, "baseline_at": None}
 
 
+def folder_signature(folder: Path) -> str:
+    """The modified times of a pack folder and the folders inside it (two levels, as the
+    fingerprint reads). Adding, removing or renaming a file changes its folder's time, so an
+    unchanged signature means no new or removed drawing, and the files need not be listed."""
+    parts: List[str] = []
+    try:
+        parts.append(f".:{folder.stat().st_mtime_ns}")
+        for sub in sorted(p for p in folder.iterdir() if p.is_dir()):
+            parts.append(f"{sub.name}:{sub.stat().st_mtime_ns}")
+            for sub2 in sorted(q for q in sub.iterdir() if q.is_dir()):
+                parts.append(f"{sub.name}/{sub2.name}:{sub2.stat().st_mtime_ns}")
+    except OSError:
+        return ""
+    return "|".join(parts)
+
+
 def sweep(cfg: Dict[str, Any], ledger: Dict[str, Any], now: Optional[float] = None,
           walker=find_packs, fingerprinter=fingerprint, estimated: Optional[Set[str]] = None) -> Dict[str, Any]:
     """One sweep: update the ledger in place and return the report for the panel."""
@@ -214,16 +232,31 @@ def sweep(cfg: Dict[str, Any], ledger: Dict[str, Any], now: Optional[float] = No
         key = os.path.normcase(f["folder"])
         seen.add(key)
         clients.add(f["client"])
-        fp = fingerprinter(Path(f["folder"]))
         old = packs.get(key)
+        # FOLDERS UNCHANGED, FILES NOT LISTED AGAIN (JG, 10 Nov 2026: the hourly sweep ran every
+        # three hours, listing every file of 9,855 packs on the share each time). A pack whose
+        # folder signature is what it was keeps its fingerprint; only the rest are listed.
+        sig = folder_signature(Path(f["folder"])) if fingerprinter is fingerprint else ""
+        if old is not None and sig and old.get("dirsig") == sig and old.get("fingerprint"):
+            fp = {"sha1": old["fingerprint"], "files": old.get("files") or 0,
+                  "newest": old.get("newest") or 0.0}
+        else:
+            fp = fingerprinter(Path(f["folder"]))
         if old is None:
-            packs[key] = dict(f, first_seen=now, last_seen=now, fingerprint=fp["sha1"], files=fp["files"],
+            packs[key] = dict(f, first_seen=now, last_seen=now, fingerprint=fp["sha1"], files=fp["files"], dirsig=sig,
                               newest=fp["newest"], status="baseline" if first else "new", flagged_at=None if first else now)
         else:
-            old.update(last_seen=now, client=f["client"], name=f["name"], job=f["job"])
+            old.update(last_seen=now, client=f["client"], name=f["name"], job=f["job"], dirsig=sig)
             if fp["sha1"] != old.get("fingerprint"):
+                # A NEW JOB'S FOLDER IS MADE BEFORE ITS DRAWINGS ARRIVE (JG, 10 Nov 2026: "we need
+                # to find NEW folders, not changes"). A folder that held no drawings when last
+                # seen and holds some now is a new pack, not a changed one.
+                became = "new" if not int(old.get("files") or 0) else "changed"
+                if old.get("status") == "new" and old.get("flagged_at"):
+                    became = "new"                 # still the new pack it was flagged as
                 old.update(fingerprint=fp["sha1"], files=fp["files"], newest=fp["newest"],
-                           status="changed", flagged_at=now)
+                           status=became, flagged_at=now if became != old.get("status")
+                           or not old.get("flagged_at") else old["flagged_at"])
     for key, p in packs.items():
         p["present"] = key in seen
     ledger["sweeps"] = int(ledger.get("sweeps") or 0) + 1
@@ -231,8 +264,21 @@ def sweep(cfg: Dict[str, Any], ledger: Dict[str, Any], now: Optional[float] = No
         ledger["baseline_at"] = now
     keep = cfg["keep_days"] * 86400
     candidates = []
+    # A FOLDER MADE AFTER THE FIRST SWEEP IS NEW, whatever the sweep saw of it first (a folder
+    # created empty just before a sweep, then filled, was recorded "changed"). Its creation time
+    # on the share says so; looked at only for packs marked changed.
+    base_at = float(ledger.get("baseline_at") or 0)
     for key, p in packs.items():
-        if p.get("status") in ("new", "changed") and p.get("present") and p.get("flagged_at") \
+        if p.get("status") == "changed" and p.get("present") and base_at:
+            try:
+                if base_at < os.stat(p["folder"]).st_ctime <= now:
+                    p["status"] = "new"
+            except OSError:
+                pass
+    # NEW FOLDERS ONLY, UNLESS ASKED (SDI_DESIGN_SWEEP_SHOW_CHANGED=1 lists changed packs too).
+    shown = ("new", "changed") if cfg.get("show_changed") else ("new",)
+    for key, p in packs.items():
+        if p.get("status") in shown and p.get("present") and p.get("flagged_at") \
                 and now - float(p["flagged_at"]) <= keep:
             candidates.append({"folder": p["folder"], "client": p["client"], "name": p["name"], "job": p["job"],
                                "status": p["status"], "files": p.get("files"),

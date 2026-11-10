@@ -228,6 +228,12 @@ def db_path(index_path: Path) -> Path:
     return index_path.with_name(name + ".sqlite")
 
 
+# THE RULE THAT READS A DRAWING NUMBER FROM A FILE NAME, BY VERSION. Each file's number is worked
+# out once, when the database is made; a database made under an older rule is made again on its
+# first use (2: a customer's item number in front, "0359829_12674-01-GA_...PDF", JG 10 Nov 2026).
+DID_RULE = "2"
+
+
 def build_db(index: Dict[str, Any], db: Path) -> int:
     import sqlite3
     sys.path.insert(0, str(HERE))
@@ -251,7 +257,8 @@ def build_db(index: Dict[str, Any], db: Path) -> int:
         con.execute("CREATE INDEX files_folder ON files(folder)")
         con.executemany("INSERT INTO meta VALUES (?,?)",
                         [("built_at", str(index.get("built_at") or 0)),
-                         ("roots", json.dumps(index.get("roots") or {}))])
+                         ("roots", json.dumps(index.get("roots") or {})),
+                         ("did_rule", DID_RULE)])
         con.commit()
     finally:
         con.close()
@@ -266,7 +273,8 @@ def db_meta(db: Path) -> Dict[str, Any]:
         meta = dict(con.execute("SELECT k, v FROM meta").fetchall())
     finally:
         con.close()
-    return {"built_at": float(meta.get("built_at") or 0), "roots": json.loads(meta.get("roots") or "{}")}
+    return {"built_at": float(meta.get("built_at") or 0), "roots": json.loads(meta.get("roots") or "{}"),
+            "did_rule": str(meta.get("did_rule") or "1")}
 
 
 def _rows(con: Any, ids: Iterable[int]) -> List[Tuple[Path, List[Tuple[Path, int, float]], bool]]:

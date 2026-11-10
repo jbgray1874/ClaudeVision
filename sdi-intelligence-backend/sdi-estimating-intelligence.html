@@ -5170,6 +5170,7 @@ function renderSelf(v){
       + "</div>" : "";
   const recent = w.recent || [];
   if(recent.length){
+    selfRerunSeen = new Set();
     html += "<div style='margin-top:6px'><b>Latest runs:</b></div><ul style='margin:4px 0 0 18px'>"
       + recent.map(r => "<li>" + selfEsc(r.drawing) + " (" + selfEsc(r.customer) + ") — "
         + selfEsc(r.status)
@@ -5185,8 +5186,18 @@ function renderSelf(v){
 /* THE PRICE AT EVERY QUANTITY THE RUN PRICED (D-610): "1 off £538.06 · 5 off £401.20 ·
    10 off £377.00", not one unit price for a run asked for three. One quantity, or a run filed
    before the quantities were reported, reads as before. */
-/* A Stop for each queued or running job in Latest runs (JG, 10 Nov 2026). */
+/* A Stop for each queued or running job in Latest runs (JG, 10 Nov 2026), and a Re-run on the
+   newest attempt of a job that ended without an estimate ("in case the live enquiry folder has
+   been re populated manually"). */
+let selfRerunSeen = new Set();
 function selfStopHtml(r){
+  if(r.status === "error" && !selfRerunSeen.has(r.drawing)){
+    selfRerunSeen.add(r.drawing);
+    return " <button type='button' class='btn-run' style='padding:1px 8px;font-size:12px;width:auto;display:inline-block'"
+      + " data-self-rerun='" + selfEsc(r.drawing) + "' data-customer='" + selfEsc(r.customer || "") + "'"
+      + (selfReruns[r.drawing] ? " disabled>Re-run asked " + selfEsc(selfReruns[r.drawing]) : ">Re-run") + "</button>";
+  }
+  if(r.status === "queued" || r.status === "running" || r.status === "done") selfRerunSeen.add(r.drawing);
   if(!((r.status === "queued" || r.status === "running") && r.run_id)) return "";
   return " <button type='button' class='btn-stop' style='padding:1px 8px;font-size:12px;width:auto;display:inline-block'"
     + " data-self-stop='" + selfEsc(r.run_id) + "' data-server='" + selfEsc(r.server || "")
@@ -5260,7 +5271,24 @@ function sameService(server){
   try{ return new URL(server).port === location.port && ["localhost","127.0.0.1",location.hostname]
          .includes(new URL(server).hostname); }catch(e){ return true; }
 }
+const selfReruns = {};
 $("selfOut").addEventListener("click", async e => {
+  const rr = e.target.closest && e.target.closest("[data-self-rerun]");
+  if(rr && !rr.disabled){
+    const drawing = rr.dataset.selfRerun;
+    if(!confirm("Run " + drawing + " again?\n\nSelf-Running reads the sheet and the Live Enquiry "
+              + "folder again within about 15 seconds and queues it.")) return;
+    rr.disabled = true; rr.textContent = "Asking…";
+    try{
+      const r = await api("/api/estimate/self-running/rerun", {method:"POST", headers:{"Content-Type":"application/json"},
+                          body: JSON.stringify({drawing, customer: rr.dataset.customer || ""})});
+      const j = await r.json().catch(() => ({}));
+      if(!r.ok) throw new Error(detailText(j, r, "refused"));
+      selfReruns[drawing] = new Date().toLocaleTimeString("en-GB");
+      refreshSelf(); quickSelf();
+    }catch(err){ rr.disabled = false; rr.textContent = "Re-run"; $("selfStatus").textContent = "Could not ask for a re-run: " + err.message; }
+    return;
+  }
   const b = e.target.closest && e.target.closest("[data-self-stop]");
   if(!b || b.disabled) return;
   const id = b.dataset.selfStop, server = b.dataset.server || "";

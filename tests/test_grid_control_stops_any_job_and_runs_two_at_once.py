@@ -287,3 +287,45 @@ def test_every_queued_or_running_job_has_its_own_stop_on_the_estimating_page():
         {"status": "queued", "run_id": "r9", "server": "http://localhost:8072",
          "queued_at": "2026-11-10T10:00:00"}]}}})
     assert rr[0]["run_id"] == "r9" and rr[0]["server"] == "http://localhost:8072"
+
+
+# ── Re-run from the page (JG, 10 Nov 2026) ─────────────────────────────────────────────
+def test_re_run_pressed_on_a_page_reaches_the_watcher_once_and_runs_the_row_again(share, monkeypatch, tmp_path):
+    monkeypatch.setenv("SDI_STATE_DIR", str(tmp_path / "state"))
+    sys.modules.pop("self_running_switch", None)
+    import self_running_switch as sw
+    sw.rerun("0360001", "M&S", by="page")
+    assert sw.view()["rerun_pending"][0]["drawing"] == "0360001"
+    first = sw.heartbeat({"phase": "idle"})
+    assert [r["drawing"] for r in first["rerun"]] == ["0360001"]
+    assert sw.heartbeat({"phase": "idle"})["rerun"] == [], "delivered once"
+    # the watcher: a row that failed is run again on the next read
+    rows = [_row(5, "0360001")]
+    monkeypatch.setattr(ler, "read_sheet", lambda path, sheet="": rows)
+    monkeypatch.setattr(config, "LIVE_ENQUIRY_MAX_ATTEMPTS", 1)
+
+    class Broken(Portal):
+        def status(self, run_id):
+            return {"status": "error", "error": "The engine exited with code 2."}
+    sr.cycle(dict(share), Broken(), Switch(), say=lambda s: None, wait=_wait())
+    ledger = ler.load_ledger(share["ledger"])
+    assert ler.plan(rows, ler._sources(share["root"]), ledger)[0].status == "failed"
+
+    class Pressed(Switch):
+        def __init__(self):
+            super().__init__()
+            self.reruns = list(first["rerun"])
+
+        def take_reruns(self):
+            got, self.reruns = self.reruns, []
+            return got
+    again = Portal()
+    said = []
+    sr.cycle(dict(share), again, Pressed(), say=said.append, wait=_wait())
+    assert again.started == ["0360001"] and any("Re-run asked for on the page" in s for s in said)
+
+
+def test_a_failed_job_has_a_re_run_button_and_the_service_takes_it():
+    assert "data-self-rerun='\" + selfEsc(r.drawing)" in PAGE
+    assert '"/api/estimate/self-running/rerun"' in PAGE
+    assert '@router.post("/self-running/rerun")' in ROUTES

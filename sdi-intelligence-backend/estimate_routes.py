@@ -2572,6 +2572,26 @@ def self_running_stop(req: SelfRunningSwitch, request: Request,
     return self_running_switch.switch(False, by=req.by or who)
 
 
+class SelfRunningRerun(BaseModel):
+    drawing: str
+    customer: str = ""
+    by: str = ""
+
+
+@router.post("/self-running/rerun")
+def self_running_rerun(req: SelfRunningRerun, request: Request,
+                       x_sdi_key: Optional[str] = Header(default=None)):
+    """Run one Self-Running job again: the watcher takes it on its next beat."""
+    _check_key(x_sdi_key)
+    home = _self_running_home(request)
+    if home:
+        return _self_running_at_home(home, "POST", "/rerun", req.dict())
+    try:
+        return self_running_switch.rerun(req.drawing, req.customer, by=req.by)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @router.post("/self-running/heartbeat")
 def self_running_heartbeat(report: Dict[str, Any], request: Request,
                            x_sdi_key: Optional[str] = Header(default=None)):

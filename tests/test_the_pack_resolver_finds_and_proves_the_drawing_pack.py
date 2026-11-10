@@ -279,3 +279,13 @@ def test_only_a_ga_that_could_be_chosen_is_read(tmp_path):
     ga_reads = [p for p in read if Path(p).name.startswith(GA)]
     assert len(ga_reads) == 1 and "Design" in ga_reads[0] and "Archive" not in ga_reads[0]
     assert "Design" in m["selected_folder"]
+
+
+def test_a_customer_item_number_in_front_does_not_hide_the_drawing_number():
+    """JG, 10 Nov 2026: 12674-01-GA's GA PDF is "0359829_12674-01-GA_Smart Shirt Table_revB.PDF"
+    (M&S item 0359829). Read as drawing "0359829" it was left out of the pack, and the pack
+    reached the engine with no drawing to price from."""
+    assert pr.drawing_id("0359829_12674-01-GA_Smart Shirt Table_revB.PDF") == "12674-01-GA"
+    assert pr.drawing_id("12424-02-GA_revC 0359681.dxf") == "12424-02-GA"
+    assert pr.drawing_id("12739 Stand.pdf") == "12739", "a bare number alone is still the number"
+    assert pr.drawing_id("0359829 Smart Shirt Table.pdf") == "0359829"
