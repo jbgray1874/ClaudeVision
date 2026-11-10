@@ -470,15 +470,22 @@ def pack_for(drawing: str, listings: List[Tuple[str, List[Path]]], client: str
 def pack_line(m: Dict[str, Any]) -> str:
     """One line for the screen: the pack's status, size and revision, and why."""
     bits = [f"{m['status']} pack: {len(m['members'])} drawing(s), revision {m.get('revision') or 'not read'}"]
+    if m.get("identity") == "verified":
+        bits.append("GA identity verified from its title block")
+    elif m.get("identity"):
+        bits.append("GA named by its file name only")
     if m.get("missing"):
         _miss = [str(x.get("drawing") if isinstance(x, dict) else x) for x in m["missing"]]
-        bits.append(f"{len(_miss)} referenced drawing(s) not in the pack: {', '.join(_miss[:8])}")
+        bits.append(f"INCOMPLETE: {len(_miss)} made part(s) referenced with no drawing: {', '.join(_miss[:8])}")
     elif m.get("members"):
         _unread = any("text was not read" in str(a) for a in (m.get("assumptions") or []))
         bits.append("the GA's own text was not read, so its references are unchecked" if _unread
-                    else "every drawing the GA references is in the pack")
+                    else "every made part the GA references has a drawing")
     if m.get("conflicts"):
         bits.append("CONFLICT: " + m["conflicts"][0])
+    if m.get("bought_in_unmatched"):
+        bits.append("bought-in, no drawing needed, price from catalogue or a labelled allowance: "
+                    + ", ".join(map(str, m["bought_in_unmatched"][:8])))
     if m.get("question"):
         bits.append("ASK: " + m["question"])
     return "; ".join(bits)
@@ -719,8 +726,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         _st[k] = _st.get(k, 0) + 1
     print(f"{found} of {len(rep['rows'])} row(s) have drawings: "
           + ", ".join(f"{n} {k}" for k, n in sorted(_st.items()))
-          + ". Verified: the GA's own number and revision were read from it; provisional: matched "
-            "by file name; ambiguous: asked, not priced. "
+          + ". Verified: the GA's number and revision read from its title block, every part it "
+            "references has a drawing and nothing bought is left to price; provisional: any of those "
+            "not yet true, priced with the gaps listed; ambiguous: asked, not priced. "
           f"status file: {status}", flush=True)
     return 0
 

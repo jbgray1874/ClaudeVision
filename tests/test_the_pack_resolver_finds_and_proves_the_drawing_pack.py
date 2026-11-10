@@ -298,3 +298,50 @@ def test_a_revision_table_heading_is_not_the_revision_and_the_title_block_value_
             "DWG NO. REVISION:\nSANDER DEMO ASSY TTI 12736-00-01 B\n1 12736-01-GA FRAME 1")
     got = pr.read_drawing(Path("x.pdf"), "12736-00-01", read_text=lambda p: text)
     assert got["revision"] == "B" and got["carries_number"]
+
+
+# ── identity and completeness are two facts (10 Nov 2026 review of 12736-00-01) ───────────
+
+def test_a_ga_proved_by_its_title_block_with_a_made_part_missing_is_a_provisional_pack(tmp_path):
+    read = _text(refs=("11896-01-01-GA", "11896-01-03-01M"))
+    m = pr.resolve(GA, [_pack(tmp_path / "11896-01-00-GA")], read_text=read)
+    assert m["identity"] == "verified" and m["complete"] is False and m["status"] == "provisional"
+    assert any("identity is verified" in a and "incomplete" in a for a in m["assumptions"])
+
+
+def test_a_bought_item_is_not_a_missing_drawing_but_keeps_the_pack_provisional(tmp_path):
+    read = _text(refs=("11896-01-01-GA", "11896-01-02-01G", "11896-01-04X"))
+    m = pr.resolve(GA, [_pack(tmp_path / "11896-01-00-GA")], read_text=read)
+    assert m["missing"] == [] and m["bought_in_unmatched"] == ["11896-01-04X"]
+    assert m["identity"] == "verified" and m["complete"] is True and m["status"] == "provisional"
+    assert any("bought-in" in a and "11896-01-04X" in a for a in m["assumptions"])
+
+
+def test_a_complete_pack_with_nothing_bought_left_is_verified(tmp_path):
+    m = pr.resolve(GA, [_pack(tmp_path / "11896-01-00-GA")], read_text=_text())
+    assert m["identity"] == "verified" and m["complete"] is True and m["status"] == "verified"
+
+
+def test_a_suppliers_code_is_not_read_as_a_drawing_from_its_middle():
+    found = pr._REF.findall("CASTOR  ROSS: 50-360-R-FP  x4   12736-01-02M  part/123-45-A  v1.360-R-FP")
+    assert found == ["12736-01-02M"]
+
+
+def test_a_drawing_two_sub_assemblies_call_for_keeps_both_parents(tmp_path):
+    base = tmp_path / "11896-01-00-GA"
+    folder, files, archive = _pack(base)
+    files = files + [_f(base, "11896-01-02-GA_Header_RevE.pdf")]
+
+    def read(path: Path) -> str:
+        if path.name.startswith(GA):
+            return f"DRAWING No {GA} REV E\n11896-01-01-GA\n11896-01-02-GA"
+        if path.name.startswith("11896-01-01-GA"):
+            return "DRAWING No 11896-01-01-GA REV E\n11896-01-01-01M\n11896-01-01-02M"
+        if path.name.startswith("11896-01-02-GA"):
+            return "DRAWING No 11896-01-02-GA REV E\n11896-01-01-02M"
+        return ""
+    m = pr.resolve(GA, [(folder, files, archive)], read_text=read)
+    by = {x["drawing"]: x for x in m["members"]}
+    assert len([x for x in m["members"] if x["drawing"] == "11896-01-01-02M"]) == 1, "one file, listed once"
+    assert by["11896-01-01-02M"]["parents"] == ["11896-01-01-GA", "11896-01-02-GA"], "both occurrences kept"
+    assert by["11896-01-01-01M"]["parents"] == ["11896-01-01-GA"]

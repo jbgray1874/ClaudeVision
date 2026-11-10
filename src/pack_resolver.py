@@ -57,7 +57,9 @@ FileRow = Tuple[Path, int, float]
 FolderRow = Tuple[Path, List[FileRow], bool]
 
 _ID = re.compile(r"^\s*((?:[A-Za-z]{1,4}-)?\d{3,}[A-Za-z]?(?:-[A-Za-z0-9]+)*)")
-_REF = re.compile(r"(?<![0-9A-Za-z])((?:[A-Za-z]{1,4}-)?\d{3,}[A-Za-z]?(?:-[A-Za-z0-9]+)+)")
+# A drawing reference starts a token: never partway through a supplier's code ("ROSS: 50-360-R-FP"
+# read "360-R-FP" as a drawing, 10 Nov 2026).
+_REF = re.compile(r"(?<![0-9A-Za-z\-/.:])((?:[A-Za-z]{1,4}-)?\d{3,}[A-Za-z]?(?:-[A-Za-z0-9]+)+)")
 _REV_NAME = re.compile(r"(?:^|[_\s\-.])REV(?:ISION)?[_\s\-]?([A-Z]{1,2}|\d{1,2}|P\d{1,2})(?=$|[_\s\-.()\[\]])",
                        re.IGNORECASE)
 _REV_TEXT = re.compile(r"\bREV(?:ISION)?\.?\s*[:\-]?\s*([A-Z]{1,2}|\d{1,2}|P\d{1,2})\b")
@@ -311,7 +313,7 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
     manifest: Dict[str, Any] = {"schema": SCHEMA, "drawing": drawing, "client": client,
                                 "resolved_at": now.isoformat(timespec="seconds"), "family": family_prefix(drawing),
                                 "status": "not found", "price_ok": False, "candidates": [], "members": [],
-                                "missing": [], "unreferenced": [], "library": [], "conflicts": [],
+                                "missing": [], "bought_in_unmatched": [], "unreferenced": [], "library": [], "conflicts": [],
                                 "assumptions": [], "question": ""}
     pat = _token(drawing)
     if not pat:
@@ -414,6 +416,10 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
     groups = _members(near, drawing)
     refs_of: Dict[str, set] = {drawing: set(best["references"])}
     parent_of: Dict[str, str] = {}
+    # EVERY PARENT IS KEPT (10 Nov 2026 review): a drawing two sub-assemblies reference is one file
+    # in the pack but two occurrences in the build. The pack lists the file once; "parents" names
+    # each drawing that calls for it, and the quantities stay with the BOM the estimate reads.
+    parents_of: Dict[str, List[str]] = {}
     all_refs: set = set()
     queue = [drawing] + sorted(d for d in groups if _is_assembly(d) and not _same(d, drawing))
     done: set = set()
@@ -431,6 +437,8 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                 continue
             all_refs.add(x)
             parent_of.setdefault(x, a)
+            if a not in parents_of.setdefault(x, []):
+                parents_of[x].append(a)
             if x not in groups:
                 if in_family(x, drawing):
                     if wider is None:
@@ -442,7 +450,9 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                                                      for f in files if _same(drawing_id(f[0].name), x)]
                     if hit:
                         groups[x] = hit
-                        manifest["library"].append(x)
+                        # THE JOB'S OWN PART IN A SIBLING FOLDER IS NOT A LIBRARY PART.
+                        if not (job and str(x).startswith(job.group(1))):
+                            manifest["library"].append(x)
             if x in groups and _is_assembly(x) and x not in done:
                 queue.append(x)
     refs = all_refs
@@ -453,13 +463,26 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
         manifest["members"].append({
             "drawing": did, "revision": rev, "superseded_revisions": superseded,
             "parent": parent_of.get(did) or _parent(did, ids, drawing),
+            "parents": list(parents_of.get(did) or ([parent_of.get(did) or _parent(did, ids, drawing)]
+                                                   if not _same(did, drawing) else [])),
             "referenced_by_ga": did in refs or _same(did, drawing),
             "files": [{"path": str(p), "format": p.suffix.lower().lstrip("."), "size": s,
                        "modified": datetime.fromtimestamp(m).isoformat(timespec="minutes"),
                        "fingerprint": fingerprint(p, s, m)} for p, s, m in sorted(chosen)]})
         manifest["conflicts"] += [f"{did}: {n}" for n in notes if "claim revision" in n]
         manifest["assumptions"] += [f"{did}: {n}" for n in notes if "claim revision" not in n]
-    manifest["missing"] = sorted(refs - ids)
+    # A MISSING REFERENCE IS A MADE PART WITHOUT ITS DRAWING, OR A BOUGHT ITEM THAT NEEDS NONE
+    # (JG, 10 Nov 2026): 12736-01-04X, "EU INTERNAL DOOR ... SDI TO SOURCE", is bought, by SDI's
+    # X suffix, and needs a catalogue match, not a drawing. Only a missing MADE part leaves the
+    # pack incomplete.
+    _gone = sorted(refs - ids)
+    try:
+        import part_code_conventions as _pcc
+        _bought = [x for x in _gone if _pcc.purchased_suffix(x) or _pcc.is_supplier_article(x)]
+    except Exception:                                                    # noqa: BLE001
+        _bought = []
+    manifest["bought_in_unmatched"] = _bought
+    manifest["missing"] = [x for x in _gone if x not in _bought]
     if refs:
         manifest["unreferenced"] = sorted(d for d in ids if d not in refs and not _same(d, drawing))
 
@@ -470,7 +493,23 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
         manifest["question"] = ("Which copy is the issued one? " + "; ".join(manifest["conflicts"][:3]))
     else:
         proved = best["carries_number"] and best["revision_from"] == "drawing" and not best["archive"]
-        manifest["status"] = "verified" if proved else "provisional"
+        # IDENTITY AND COMPLETENESS ARE TWO FACTS (10 Nov 2026 review): a GA proved by its own
+        # title block with made parts missing is not a verified PACK. "verified" needs both.
+        manifest["identity"] = "verified" if proved else "named"
+        manifest["complete"] = not manifest["missing"]
+        # A bought item still to be priced keeps the pack provisional too: its cost is a catalogue
+        # match or a labelled allowance, not yet a fact.
+        manifest["status"] = ("verified" if proved and manifest["complete"]
+                              and not manifest["bought_in_unmatched"] else "provisional")
+        if proved and not manifest["complete"]:
+            manifest["assumptions"].append(
+                f"the GA's identity is verified from its own title block, but the pack is "
+                f"incomplete: {len(manifest['missing'])} made part(s) it references have no "
+                f"drawing")
+        if manifest.get("bought_in_unmatched"):
+            manifest["assumptions"].append(
+                "bought-in, no drawing needed, to be priced from the catalogue or as a labelled "
+                "allowance: " + ", ".join(manifest["bought_in_unmatched"]))
         manifest["price_ok"] = True
         if not best["carries_number"]:
             manifest["assumptions"].append("the GA was matched by its file name; its own text was not read")
@@ -631,8 +670,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         fm = ", ".join(sorted({f["format"] for f in x["files"]}))
         print(f"  member  {x['drawing']:<22} rev {x['revision'] or '-':<3} under {x['parent'] or '(top)':<20} {fm}"
               + (f"  superseded {','.join(x['superseded_revisions'])}" if x["superseded_revisions"] else ""))
-    for k in ("missing", "unreferenced", "library", "conflicts", "assumptions"):
-        if m[k]:
+    if m.get("identity"):
+        print(f"  GA identity {m['identity']}; drawings "
+              f"{'complete' if m.get('complete') else 'INCOMPLETE'}"
+              + (f"; {len(m['bought_in_unmatched'])} bought-in item(s) to price"
+                 if m.get("bought_in_unmatched") else ""))
+    for x in m["members"]:
+        if len(x.get("parents") or []) > 1:
+            print(f"  shared  {x['drawing']} is called for by {', '.join(x['parents'])}")
+    for k in ("missing", "bought_in_unmatched", "unreferenced", "library", "conflicts", "assumptions"):
+        if m.get(k):
             print(f"  {k}: " + "; ".join(m[k]))
     if m["question"]:
         print(f"  ASK: {m['question']}")

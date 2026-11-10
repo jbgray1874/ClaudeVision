@@ -377,7 +377,17 @@ def test_the_latest_feedback_goes_into_the_brief(tmp_path):
 def test_the_pack_line_names_what_the_pack_lacks_or_that_its_references_were_unchecked():
     m = {"status": "provisional", "members": [1], "revision": "B", "missing": [{"drawing": "X-01M"}],
          "assumptions": []}
-    assert "not in the pack: X-01M" in tp.pack_line(m)
+    assert "no drawing: X-01M" in tp.pack_line(m) and "INCOMPLETE" in tp.pack_line(m)
     m = {"status": "provisional", "members": [1], "revision": "B", "missing": [],
          "assumptions": ["the GA was matched by its file name; its own text was not read"]}
     assert "references are unchecked" in tp.pack_line(m)
+
+
+def test_the_pack_line_separates_the_ga_identity_from_the_pack_and_lists_bought_items():
+    m = {"status": "provisional", "identity": "verified", "complete": True, "members": [1] * 16,
+         "revision": "B", "missing": [], "bought_in_unmatched": ["12736-01-04X"], "assumptions": []}
+    line = tp.pack_line(m)
+    assert line.startswith("provisional pack: 16 drawing(s), revision B")
+    assert "GA identity verified from its title block" in line
+    assert "bought-in, no drawing needed" in line and "12736-01-04X" in line
+    assert "verified pack" not in line
