@@ -538,6 +538,69 @@ def last_result(runs: Sequence[Mapping[str, Any]], drawing: Any, client: Any,
 
 
 # ── THE ONE ANSWER ───────────────────────────────────────────────────────────────────────
+# ── WHAT A RUN IS DOING, AND HOW COMPLETE A FINISHED ONE IS (JG, 10 Nov 2026) ─────────────
+# "Please update Grid Control so each run shows what it is doing or waiting for ... Separate
+# execution status from estimate quality ... A finished workbook with missing parts or zero-priced
+# required lines must not appear simply green as Completed."
+_DOING = {"Staged": "starting", "Models": "reading the models (SolidWorks)",
+          "Drawings": "reading the drawings (PDF text, xAI)", "Route": "building the route",
+          "Pricing": "pricing", "Workbook": "writing the workbook (Excel)", "Filed": "filing"}
+_XAI_NEXT = re.compile(r"\[xai-wait\]\s+(.+?) on (.+?): try (\d+) of (\d+) failed; next try in "
+                       r"([\d.]+) s, ([\d.]+) s waited", re.I)
+_XAI_DONE = re.compile(r"\[xai-wait\]\s+(recovered|gave up)", re.I)
+
+
+def doing(run: Mapping[str, Any], now: float) -> Dict[str, Any]:
+    """{what, detail, waiting, next_try_at}: what a running run is doing or waiting for, from its
+    own console. A wait for SolidWorks or for xAI is named with its numbers; otherwise the stage
+    it has reached. `fresh` says whether the console has said anything lately: a run whose
+    process is alive but which has printed nothing is not the same as one that is working."""
+    log = [str(x) for x in (run.get("log") or [])]
+    last_at = float(run.get("last_line_at") or 0) or float(run.get("started_at") or now)
+    silent = max(0.0, now - last_at)
+    out: Dict[str, Any] = {"what": "", "detail": "", "waiting": False, "next_try_at": None,
+                           "silent_s": round(silent, 1),
+                           "fresh": silent < thresholds()["silent_after_s"] / 4}
+    if run.get("sw_wait_since") and not run.get("sw_turn_at"):
+        out.update(what="waiting for SolidWorks", waiting=True,
+                   detail=holder_from_log(log) or "another run has it")
+        return out
+    for i in range(len(log) - 1, max(-1, len(log) - 40), -1):
+        if _XAI_DONE.search(log[i]):
+            break
+        m = _XAI_NEXT.search(log[i])
+        if m:
+            kind, what, n, of, w, waited = m.groups()
+            # the wait line is the newest thing the run said: the countdown runs from it
+            nxt = (last_at + float(w)) if i == len(log) - 1 else None
+            out.update(what="waiting for xAI", waiting=True, next_try_at=nxt,
+                       detail=f"{kind} on {what}: try {n} of {of} failed, "
+                              f"{float(waited) + (float(w) if nxt is None else 0):g} s waited")
+            return out
+    _i, name = stage_of(log)
+    out["what"] = _DOING.get(name, "starting")
+    return out
+
+
+def quality(run: Mapping[str, Any]) -> Dict[str, Any]:
+    """{state, label, rag} for a FINISHED estimate, from the engine's own review tally: complete,
+    provisional, missing costs, or not reviewed. Execution ("finished") is said separately."""
+    if outcome(run) != "done" or not is_estimate(run):
+        return {"state": "", "label": "", "rag": GREY}
+    t = run.get("review") if isinstance(run.get("review"), Mapping) else None
+    if not t:
+        return {"state": "not reviewed", "label": "Finished: no review tally", "rag": AMBER}
+    miss, prov = int(t.get("missing") or 0), int(t.get("provisional") or 0)
+    if miss:
+        return {"state": "missing costs", "rag": RED,
+                "label": f"Finished: {miss} missing cost{'s' if miss != 1 else ''}"
+                         + (f", {prov} provisional" if prov else "")}
+    if prov or int(t.get("total") or 0):
+        return {"state": "provisional", "rag": AMBER,
+                "label": f"Finished: provisional, {int(t.get('total') or 0)} open"}
+    return {"state": "complete", "label": "Estimate complete", "rag": GREEN}
+
+
 def _summary(r: Mapping[str, Any]) -> Dict[str, Any]:
     return {"run_id": r.get("run_id"), "drawing_number": r.get("drawing_number"),
             "client": r.get("client"), "job_type": r.get("job_type") or "",
@@ -753,7 +816,7 @@ def history_view(runs: Sequence[Mapping[str, Any]], now: Optional[float] = None,
         rows.append({**_summary(r), "units": r.get("units"),
                      "quantity_prices": list(r.get("quantity_prices") or [])[:8],
                      "evidence": ev["label"], "evidence_caution": ev["caution"],
-                     "open_items": open_items(r),
+                     "open_items": open_items(r), "quality": quality(r),
                      "sw_waited_s": r.get("sw_waited_s") or 0.0,
                      "walkthrough_url": r.get("walkthrough_url") or "",
                      "requested_by": r.get("requested_by") or ""})
@@ -814,7 +877,7 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
                      "last_result": last_result(runs, r.get("drawing_number"), r.get("client")),
                      "sw_turn_at": r.get("sw_turn_at") or 0.0,
                      "sw_wait_since": r.get("sw_wait_since") or 0.0,
-                     "stage_index": idx, "stage": name,
+                     "stage_index": idx, "stage": name, "doing": doing(r, now),
                      "silent_s": round(now - (float(r.get("last_line_at") or 0) or started), 1),
                      "log_tail": [str(x) for x in (r.get("log") or [])][-tail_lines:]})
 
@@ -866,7 +929,7 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
                                                (window or {}).get("mid_s") or exp, extract_s)}
     queue = [{**_summary(r), "start_at": (when.get(r.get("run_id")) or {}).get("start_at"),
               "finish_at": (when.get(r.get("run_id")) or {}).get("finish_at")} for r in queued]
-    recent = [{**_summary(r), "open_items": open_items(r)} for r in sorted(
+    recent = [{**_summary(r), "open_items": open_items(r), "quality": quality(r)} for r in sorted(
         (r for r in runs if outcome(r) in ("done", "failed", "stopped")),
         key=lambda r: r.get("finished_at") or 0, reverse=True)[:12]]
 

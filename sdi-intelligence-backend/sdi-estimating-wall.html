@@ -963,6 +963,23 @@ function keepScroll(sel){
     t.scrollTop = !k || k.end ? t.scrollHeight : k.top;
   });
 }
+// WHAT THE RUN IS DOING OR WAITING FOR (10 Nov 2026): SolidWorks, xAI with its retry countdown,
+// or the stage it has reached; and whether the console has said anything lately, so a live
+// process printing nothing is not read as work.
+function doingLine(d){
+  if(!d || !d.what) return "";
+  const left = d.next_try_at ? Math.max(0, Math.round(d.next_try_at - Date.now() / 1000)) : null;
+  const tail = left != null ? ` · next try in ${left} s` : "";
+  const quiet = d.fresh ? "" : ` · <span style="color:var(--ink-3)">no new console line for ${fmtDur(d.silent_s)}: process alive, nothing reported</span>`;
+  return `<div class="why"><b>${d.waiting ? "Waiting: " : "Now: "}${esc(d.what)}</b>${d.detail ? " · " + esc(d.detail) : ""}${tail}${quiet}</div>`;
+}
+// FINISHED IS NOT THE SAME AS COMPLETE (10 Nov 2026): a finished estimate says what its review
+// tally says, missing costs in red and provisional in amber.
+function qualityWord(r){
+  const q = r.quality;
+  if(r.outcome !== "done" || !q || !q.state) return null;
+  return q;
+}
 function renderLanes(s){
   const live = s.live || [], k = s.kpis, html = [];
   const restore = keepScroll(".lanes .term[data-run]");
@@ -986,6 +1003,7 @@ function renderLanes(s){
             <div class="elapsed" data-elapsed><span>${fmtDur(r.elapsed_s)}</span><small>${exp ? "usual " + fmtDur(exp) : "no history yet"}</small></div>
           </div>
         </div>
+        ${doingLine(r.doing)}
         <div class="why">${esc(r.rag_reason || "")}${r.silent_s > 60 ? " · last log line " + fmtDur(r.silent_s) + " ago" : ""}</div>
         ${extract ? "" : `<div class="facts">
           <span>Finish <b>${r.eta_lo_at ? fmtClock(r.eta_lo_at) + "–" + fmtClock(r.eta_hi_at) : "—"}</b>${r.overdue_s > 0 ? ` <span style="color:var(--ink-2)">· past its window by ${fmtDur(r.overdue_s)}</span>` : r.eta_at ? ` <span style="color:var(--ink-3)">· likely ${fmtClock(r.eta_at)}</span>` : ` <span style="color:var(--ink-3)">· no history yet</span>`}</span>
@@ -1285,7 +1303,7 @@ function renderRecent(rows){
       <td class="t">${r.finished_at ? fmtClock(r.finished_at) : ""}</td>
       <td class="d">${esc(r.drawing_number)}</td>
       <td class="c">${esc(r.client || "")}${r.job_type ? " · extract" : ""}${openItems(r.open_items)}</td>
-      <td class="o"><span class="o-${r.outcome}">${icon[r.outcome] || "·"}</span> <span class="lbl">${word[r.outcome] || esc(r.outcome)}</span></td>
+      <td class="o">${qualityWord(r) ? badge(r.quality.rag, r.quality.state === "complete" ? "Complete" : r.quality.state === "missing costs" ? "Missing costs" : r.quality.state === "provisional" ? "Provisional" : "Not reviewed") : `<span class="o-${r.outcome}">${icon[r.outcome] || "·"}</span> <span class="lbl">${word[r.outcome] || esc(r.outcome)}</span>`}</td>
       <td class="s">${fmtDur(r.seconds)}</td></tr>`).join("");
 }
 
@@ -2001,7 +2019,8 @@ function renderHRuns(){
   if(!keep.length){ $("hRuns").innerHTML = '<div class="empty">No run matches.</div>'; return; }
   $("hRuns").innerHTML = `<table><tr><th>Finished</th><th>Drawing</th><th>Client</th><th class="n">Qty</th><th>Outcome</th><th class="n">Time</th><th class="n">Unit cost</th><th>Machine</th><th>Models</th><th>Open</th></tr>`
     + keep.map(r => {
-      const [rag, word] = OUTW[r.outcome] || ["grey", r.outcome], oi = r.open_items;
+      let [rag, word] = OUTW[r.outcome] || ["grey", r.outcome]; const oi = r.open_items;
+      if(qualityWord(r)){ rag = r.quality.rag; word = r.quality.label; }
       const open = oi ? (oi.total ? `${oi.total} open` : "nothing open") : "—";
       const when = r.finished_at ? `${dayLabel(r.finished_at)} ${fmtClock(r.finished_at)}` : "";
       let h = `<tr class="click" data-run="${esc(r.run_id)}"><td class="t">${when}</td><td class="d">${esc(r.drawing_number || "")}${r.job_type ? ' <span style="color:var(--ink-3)">· extract</span>' : ""}</td><td class="c">${esc(r.client || "")}</td><td class="n">${r.units ?? ""}</td><td>${badge(rag, word)}</td><td class="n">${fmtDur(r.seconds)}</td><td class="n">${gbp(r.engine_price_gbp)}</td><td class="t">${esc(String(r.runner || "").replace(/-[0-9a-f]{6,}(-s\d+)?$/, ""))}</td><td class="c" title="${esc(r.evidence)}">${r.evidence_caution ? "▲ " : ""}${esc(r.evidence)}</td><td class="t">${esc(open)}</td></tr>`;

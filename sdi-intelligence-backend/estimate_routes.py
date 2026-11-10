@@ -1795,12 +1795,22 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
 
         _can = set(req.capabilities or [])
         _no_models = "no_models" in _can
+        # AN EXTRACT-ONLY RUNNER NEVER TAKES AN ESTIMATE (10 Nov 2026): it has no Excel, and an
+        # estimate is written and recalculated in Excel. It takes the pack extracts it names.
+        _extract_only = "extract_only" in _can
         queued = sorted((r for r in _RUNS.values()
                          if r.status == "queued" and r.wants_engine
+                         and not (_extract_only and not r.job_type)
                          and (not r.job_type or r.job_type in _can)
                          and not (_no_models and _needs_model_reader(r.job_folder))),
                         key=lambda r: r.queued_at)
         if not queued:
+            _estimates = [r for r in _RUNS.values() if r.status == "queued" and r.wants_engine
+                          and not r.job_type]
+            if _extract_only and _estimates:
+                return {"run": None, "reason": (
+                    f"{len(_estimates)} estimate(s) queued; this runner takes pack extracts "
+                    f"only (no Excel here), so a runner with Excel takes them")}
             _for_models = [r for r in _RUNS.values() if r.status == "queued" and r.wants_engine
                            and _no_models and _needs_model_reader(r.job_folder)]
             if _for_models:

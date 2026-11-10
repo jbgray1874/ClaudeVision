@@ -576,8 +576,8 @@ def _call_llm(user_content: str, model: str,
         raise RuntimeError("XAI_API_KEY not set (C:\\ClaudeVision\\.env or $env:XAI_API_KEY).")
     from openai import OpenAI  # xAI is OpenAI-compatible
     client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-    try:
-        resp = client.chat.completions.create(
+    def _once():
+        return client.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": system},
@@ -585,6 +585,12 @@ def _call_llm(user_content: str, model: str,
             ],
             temperature=0,
         )
+    # BUSY IS WAITED FOR (10 Nov 2026): a capacity 429, a rate limit, a timeout or a server error
+    # is tried again after a wait, each wait said; any other error is said once and raised.
+    try:
+        resp = xai_models.call_with_retry(
+            _once, model, what=("the drawing read" if system == SYSTEM_TRANSCRIBE
+                                else "a targeted question"))
     except Exception as exc:                                         # noqa: BLE001
         xai_models.note_exception(exc, model)                        # said once, then raised
         raise
