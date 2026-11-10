@@ -198,6 +198,22 @@ def load_ledger(path: Path) -> Dict[str, Any]:
     return {"schema": SCHEMA, "packs": {}, "sweeps": 0, "baseline_at": None}
 
 
+def folder_signature(folder: Path) -> str:
+    """The modified times of a pack folder and the folders inside it (two levels, as the
+    fingerprint reads). Adding, removing or renaming a file changes its folder's time, so an
+    unchanged signature means no new or removed drawing, and the files need not be listed."""
+    parts: List[str] = []
+    try:
+        parts.append(f".:{folder.stat().st_mtime_ns}")
+        for sub in sorted(p for p in folder.iterdir() if p.is_dir()):
+            parts.append(f"{sub.name}:{sub.stat().st_mtime_ns}")
+            for sub2 in sorted(q for q in sub.iterdir() if q.is_dir()):
+                parts.append(f"{sub.name}/{sub2.name}:{sub2.stat().st_mtime_ns}")
+    except OSError:
+        return ""
+    return "|".join(parts)
+
+
 def sweep(cfg: Dict[str, Any], ledger: Dict[str, Any], now: Optional[float] = None,
           walker=find_packs, fingerprinter=fingerprint, estimated: Optional[Set[str]] = None) -> Dict[str, Any]:
     """One sweep: update the ledger in place and return the report for the panel."""
@@ -216,13 +232,21 @@ def sweep(cfg: Dict[str, Any], ledger: Dict[str, Any], now: Optional[float] = No
         key = os.path.normcase(f["folder"])
         seen.add(key)
         clients.add(f["client"])
-        fp = fingerprinter(Path(f["folder"]))
         old = packs.get(key)
+        # FOLDERS UNCHANGED, FILES NOT LISTED AGAIN (JG, 10 Nov 2026: the hourly sweep ran every
+        # three hours, listing every file of 9,855 packs on the share each time). A pack whose
+        # folder signature is what it was keeps its fingerprint; only the rest are listed.
+        sig = folder_signature(Path(f["folder"])) if fingerprinter is fingerprint else ""
+        if old is not None and sig and old.get("dirsig") == sig and old.get("fingerprint"):
+            fp = {"sha1": old["fingerprint"], "files": old.get("files") or 0,
+                  "newest": old.get("newest") or 0.0}
+        else:
+            fp = fingerprinter(Path(f["folder"]))
         if old is None:
-            packs[key] = dict(f, first_seen=now, last_seen=now, fingerprint=fp["sha1"], files=fp["files"],
+            packs[key] = dict(f, first_seen=now, last_seen=now, fingerprint=fp["sha1"], files=fp["files"], dirsig=sig,
                               newest=fp["newest"], status="baseline" if first else "new", flagged_at=None if first else now)
         else:
-            old.update(last_seen=now, client=f["client"], name=f["name"], job=f["job"])
+            old.update(last_seen=now, client=f["client"], name=f["name"], job=f["job"], dirsig=sig)
             if fp["sha1"] != old.get("fingerprint"):
                 # A NEW JOB'S FOLDER IS MADE BEFORE ITS DRAWINGS ARRIVE (JG, 10 Nov 2026: "we need
                 # to find NEW folders, not changes"). A folder that held no drawings when last

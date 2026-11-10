@@ -89,6 +89,7 @@ def view(now: Optional[float] = None) -> Dict[str, Any]:
         "switched_off_at": state.get("switched_off_at"),
         "switched_by": state.get("switched_by") or "",
         "run_now_pending": bool(state.get("run_now")),
+        "rerun_pending": list(state.get("rerun") or []),
         "watcher": watcher,
         "stale_after_seconds": STALE_SECONDS,
     }
@@ -117,6 +118,25 @@ def switch(on: bool, by: str = "") -> Dict[str, Any]:
         else:
             state["switched_off_at"] = _now_iso()
             state["run_now"] = False
+        _save(state)
+    return view()
+
+
+def rerun(drawing: str, customer: str = "", by: str = "") -> Dict[str, Any]:
+    """RE-RUN ONE JOB FROM THE PAGE (JG, 10 Nov 2026: "where a job is not running and in a
+    failed state, we should allow a re run button in case the live enquiry folder has been re
+    populated manually"). Kept until the watcher's next beat takes it, then delivered once,
+    like a press of the switch; the watcher reads the sheet at once and runs that row again."""
+    drawing = str(drawing or "").strip()
+    if not drawing:
+        raise ValueError("Say which drawing to run again.")
+    with _LOCK:
+        state = _load()
+        asked = [r for r in state.get("rerun") or []
+                 if str(r.get("drawing")).upper() != drawing.upper()]
+        asked.append({"drawing": drawing, "customer": str(customer or "").strip(),
+                      "by": by, "at": _now_iso()})
+        state["rerun"] = asked[-50:]
         _save(state)
     return view()
 
@@ -159,9 +179,11 @@ def heartbeat(report: Dict[str, Any], now: Optional[float] = None) -> Dict[str, 
         state["watcher"] = watcher
         run_now = bool(state.get("run_now")) and bool(state.get("enabled"))
         state["run_now"] = False
+        reruns = list(state.get("rerun") or [])
+        state["rerun"] = []
         _save(state)
         enabled = bool(state.get("enabled"))
-    return {"enabled": enabled, "run_now": run_now,
+    return {"enabled": enabled, "run_now": run_now, "rerun": reruns,
             "toggled_epoch": float(state.get("toggled_epoch") or 0.0),
             "switched_by": state.get("switched_by") or "",
             "switched_on_at": state.get("switched_on_at"),

@@ -67,10 +67,24 @@ _ASSEMBLY = re.compile(r"^(GA|SA|ASSY|ASM)\d*$", re.IGNORECASE)
 # ── identities and revisions ─────────────────────────────────────────────────────────────
 
 def drawing_id(name: str) -> str:
-    """The drawing number a file name opens with: "11896-01-01-02M_1.2mm MS_RevE" is 11896-01-01-02M."""
-    head = re.split(r"[_\s]", Path(str(name)).stem.strip(), maxsplit=1)[0]
-    m = _ID.match(head)
-    return m.group(1).upper() if m else ""
+    """The drawing number a file name opens with: "11896-01-01-02M_1.2mm MS_RevE" is 11896-01-01-02M.
+
+    A CUSTOMER'S ITEM NUMBER IN FRONT (JG, 10 Nov 2026): "0359829_12674-01-GA_Smart Shirt
+    Table_revB.PDF" is M&S item 0359829 and SDI drawing 12674-01-GA. Read by its first token it
+    was drawing "0359829", so the GA PDF, the one file the engine prices from, was left out of
+    the pack. A name that opens with a bare number (no dash) and carries a dashed drawing number
+    after it is that drawing."""
+    tokens = [x for x in re.split(r"[_\s]+", Path(str(name)).stem.strip()) if x]
+    if not tokens:
+        return ""
+    m = _ID.match(tokens[0])
+    first = m.group(1).upper() if m else ""
+    if first and "-" not in first:
+        for tok in tokens[1:]:
+            n = _ID.match(tok)
+            if n and "-" in n.group(1) and re.match(r"\d", n.group(1)):
+                return n.group(1).upper()
+    return first
 
 
 def _same(a: str, b: str) -> bool:
@@ -515,11 +529,14 @@ def folders_for(drawing: str, live: bool = True
     import drawing_index as di
     cfg = di.settings()
     db = di.db_path(cfg["path"])
-    if not db.exists():
+    stale_rule = db.exists() and di.db_meta(db).get("did_rule") != di.DID_RULE
+    if not db.exists() or stale_rule:
         idx = di.load(cfg["path"])
         if not idx:
             return [], f"no drawing index at {cfg['path']}; run src/drawing_index.py --build", None
-        print(f"[pack] making the lookup database from {cfg['path']} (once)", file=sys.stderr, flush=True)
+        print(f"[pack] making the lookup database from {cfg['path']} "
+              f"({'its drawing numbers were read by an older rule' if stale_rule else 'once'})",
+              file=sys.stderr, flush=True)
         di.build_db(idx, db)
     rows = di.db_rows_for(db, drawing)
     meta = di.db_meta(db)

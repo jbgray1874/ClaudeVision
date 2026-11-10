@@ -176,3 +176,22 @@ def test_only_new_folders_are_listed_and_a_folder_filled_after_the_first_look_is
     r = ds.sweep(cfg, led, now=2000.0, estimated=set())
     assert [(c["name"], c["status"]) for c in r["candidates"]] == [("12784 - Bolt Demo", "new")]
     assert ds.settings({"SDI_DESIGN_SWEEP_SHOW_CHANGED": "1"})["show_changed"] is True
+
+
+def test_a_pack_whose_folders_have_not_changed_is_not_listed_again(tmp_path, monkeypatch):
+    """The sweep listed every file of 9,855 packs each pass and ran every three hours, not hourly."""
+    w = _share(tmp_path)
+    cfg = ds.settings({"SDI_DESIGN_SWEEP_ROOT": str(w)})
+    led = ds.load_ledger(tmp_path / "l.json")
+    ds.sweep(cfg, led, now=1000.0, estimated=set())
+    listed = []
+    real = ds.Path.rglob
+    monkeypatch.setattr(ds.Path, "rglob", lambda self, pat: listed.append(self.name) or real(self, pat))
+    ds.sweep(cfg, led, now=2000.0, estimated=set())
+    assert listed == [], "no folder changed: nothing listed"
+    import os, time
+    pan = w / "M&S/0358141 Pantheon"
+    (pan / "z.pdf").write_text("new")
+    os.utime(pan, (time.time() + 10, time.time() + 10))
+    ds.sweep(cfg, led, now=3000.0, estimated=set())
+    assert listed == ["0358141 Pantheon"]

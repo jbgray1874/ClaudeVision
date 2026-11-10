@@ -128,6 +128,7 @@ class Switch:
         self.say = say
         self.last: Dict[str, Any] = {}
         self._quiet: set = set()
+        self.reruns: List[Dict[str, Any]] = []          # Re-run pressed on a page, not yet taken
 
     def beat(self, rep: Dict[str, Any]) -> bool:
         heard: List[Any] = []
@@ -144,6 +145,8 @@ class Switch:
         if not answers:
             self.last = {}
             return False
+        for a in answers:
+            self.reruns += [r for r in (a.get("rerun") or []) if isinstance(r, dict)]
         newest = max(answers, key=lambda a: float(a.get("toggled_epoch") or 0.0))
         on = bool(newest.get("enabled"))
         self.last = {**newest, "enabled": on,
@@ -151,6 +154,10 @@ class Switch:
                                            for a in answers)}
         self._pass_on(rep, heard, newest)
         return on
+
+    def take_reruns(self) -> List[Dict[str, Any]]:
+        got, self.reruns = self.reruns, []
+        return got
 
     def _pass_on(self, rep: Dict[str, Any], heard: List[Any], newest: Dict[str, Any]) -> None:
         """ONE SWITCH ON EVERY SCREEN (D-650). A service whose own press is older than the one
@@ -435,6 +442,26 @@ def write_back_pending(workbook: Path, ledger: Dict[str, Any],
 
 
 # ── ONE CYCLE ────────────────────────────────────────────────────────────────────────
+def apply_reruns(ledger: Dict[str, Any], asked: List[Dict[str, Any]],
+                 say: Callable[[str], None] = print) -> List[str]:
+    """Re-run pressed on a page: the job's row is run again on this read, whatever its last
+    run's ending (failed, refused, stopped by hand), as typing `retry` does."""
+    done = []
+    for r in asked:
+        want = str(r.get("drawing") or "").strip().upper()
+        cust = str(r.get("customer") or "").strip().upper()
+        for job in (ledger.get("jobs") or {}).values():
+            if str(job.get("drawing") or "").strip().upper() != want:
+                continue
+            if cust and str(job.get("customer") or "").strip().upper() != cust:
+                continue
+            job["retry"] = True
+            done.append(want)
+            say(f"   {job.get('drawing')} ({job.get('customer')}): Re-run asked for on the page"
+                + (f" by {r.get('by')}" if r.get("by") else ""))
+    return done
+
+
 def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool = False,
           say: Callable[[str], None] = print, collector: Any = None,
           wait: Optional[Dict[str, Any]] = None,
@@ -443,6 +470,7 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
     ledger = ler.load_ledger(s["ledger"])
     if not dry_run:
         ler.refresh_open_runs(ledger, portal, others)
+        apply_reruns(ledger, getattr(switch, "take_reruns", lambda: [])(), say=say)
         # A YES THAT COULD NOT BE WRITTEN LAST TIME IS TRIED FIRST (D-608a), before the sheet
         # is read, so a row it reaches reads YES and is not asked.
         write_back_pending(Path(s["workbook"]), ledger, say=say)
@@ -778,7 +806,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             on = switch.beat(report("idle", "waiting for the next read of the sheet"
                                     if next_cycle else "started; waiting for the switch"))
             ler._touch_lock(s["ledger"])
-            pressed = bool(switch.last.get("run_now"))
+            pressed = bool(switch.last.get("run_now")) or bool(getattr(switch, "reruns", []))
             if on and (pressed or time.time() >= next_cycle):
                 try:
                     done = cycle(s, portal, switch, others=portals)

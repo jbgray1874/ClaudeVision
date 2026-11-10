@@ -172,3 +172,24 @@ def test_the_weekly_full_listing_task_runs_the_full_build_overnight():
     assert "--build --full --log" in ps1 and '[string] $Day = "Saturday"' in ps1 and '[string] $At = "19:00"' in ps1
     assert "-StartWhenAvailable" in ps1 and "[switch] $Daily" in ps1
     assert all(ord(c) < 128 for c in ps1), "ASCII only, like the other scripts"
+
+
+def test_a_lookup_database_made_under_an_older_number_rule_is_made_again(tmp_path, monkeypatch):
+    w = _share(tmp_path)
+    (w / "TTI" / "12181 - Sander Application Demo [Rome 2026]" / "Technical" /
+     "0359829_12181-00-GA2_revB.pdf").write_text("ga")
+    p = tmp_path / "ix.json.gz"
+    monkeypatch.setenv("SDI_DRAWING_INDEX", str(p))
+    monkeypatch.setenv("SDI_DRAWING_INDEX_ROOTS", str(w))
+    di.refresh([w], p)
+    db = di.db_path(p)
+    import sqlite3
+    con = sqlite3.connect(str(db))
+    con.execute("UPDATE meta SET v='1' WHERE k='did_rule'")
+    con.execute("UPDATE files SET did='0359829' WHERE name LIKE '0359829_%'")
+    con.commit()
+    con.close()
+    assert di.db_meta(db)["did_rule"] == "1"
+    pr.folders_for("12181-00-GA2", live=False)
+    assert di.db_meta(db)["did_rule"] == di.DID_RULE
+    assert [f.name for f, _s, _m in di.db_lookup(db, "12181-00-GA2")] == ["0359829_12181-00-GA2_revB.pdf"]
