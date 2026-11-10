@@ -456,8 +456,10 @@ def test_a_row_made_ready_during_a_job_runs_in_the_same_cycle(share, monkeypatch
         reads["n"] += 1
         rows = [_row(6, "0360001")]
         if reads["n"] > 1:                      # the line was added while 0360001 ran
-            (share["root"] / "M&S" / "0360002").mkdir(parents=True, exist_ok=True)
-            (share["root"] / "M&S" / "0360002" / "0360002-GA.pdf").write_bytes(b"%PDF-1.4")
+            ga = share["root"] / "M&S" / "0360002" / "0360002-GA.pdf"
+            if not ga.exists():                 # dropped once: a rewrite on every read can
+                ga.parent.mkdir(parents=True, exist_ok=True)   # cross a second and read as
+                ga.write_bytes(b"%PDF-1.4")                     # a new revision of the pack
             rows.append(_row(7, "0360002"))
         return rows
     monkeypatch.setattr(ler, "read_sheet", _read)
