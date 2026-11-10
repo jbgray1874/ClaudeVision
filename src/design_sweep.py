@@ -277,7 +277,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             try:
                 import drawing_index as di
                 icfg = di.settings()
-                report["index"] = di.refresh(icfg["roots"], icfg["path"], icfg["depth"], full_days=icfg["full_days"])
+                report["index"] = di.refresh(icfg["roots"], icfg["path"], icfg["depth"], full_days=icfg["full_days"],
+                                             recent_days=icfg["recent_days"])
                 last = report["index"]["last"]
                 print(f"[design-sweep] drawing index: {report['index']['folders']} folder(s), "
                       f"{report['index']['drawings']} drawing(s); listed {last.get('listed')}, reused "

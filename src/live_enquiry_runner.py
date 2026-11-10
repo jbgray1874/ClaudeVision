@@ -521,21 +521,18 @@ class DesignShare:
         self.root = Path(root)
         self._folders = folders
 
-    def _load(self) -> Tuple[List[Any], str]:
-        if self._folders is not None:
-            return self._folders(), "given"
-        import pack_resolver as pr
-        return pr.folders_from_index()
-
     def find(self, row: EnquiryRow) -> Optional[Located]:
         import pack_resolver as pr
         import pack_store as ps
         if not str(row.drawing or "").strip():
             return None
-        folders, _source = self._load()
+        if self._folders is not None:
+            folders, lookup = self._folders(), None
+        else:
+            folders, _source, lookup = pr.folders_for(row.drawing)
         if not folders:
             return None             # nothing to search: the share's own reason is the useful one
-        m = pr.resolve(row.drawing, folders, client=row.customer)
+        m = pr.resolve(row.drawing, folders, client=row.customer, lookup=lookup)
         if m["status"] == "not found":
             return None             # not on design: the share is asked, and its reason stands
         if not m["price_ok"]:
