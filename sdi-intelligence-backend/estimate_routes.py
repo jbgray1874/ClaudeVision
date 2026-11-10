@@ -3545,16 +3545,40 @@ def _walkthrough_or_404(token: str) -> Dict[str, Any]:
     return rec
 
 
+def _relayed(request: Optional[Request], path: str,
+             body: Optional[Dict[str, Any]] = None) -> Optional[Tuple[bytes, str, str]]:
+    """A walkthrough this service does not hold, from another service on the grid; never a
+    request that was itself relayed here."""
+    import grid_peers
+    if request is not None and request.headers.get(grid_peers.RELAY_HEADER):
+        return None
+    if estimate_walkthrough.load_token_ok(path):
+        return grid_peers.relay(path, body)
+    return None
+
+
 @router.get("/walkthrough/{token}")
-def walkthrough_view(token: str, x_sdi_key: Optional[str] = Header(default=None)):
+def walkthrough_view(token: str, request: Request = None,
+                     x_sdi_key: Optional[str] = Header(default=None)):
     _check_key(x_sdi_key)
+    if estimate_walkthrough.load(token) is None:
+        got = _relayed(request, f"/api/estimate/walkthrough/{token}")
+        if got is not None:
+            return Response(content=got[0], media_type=got[1] or "application/json")
     return estimate_walkthrough.public_view(_walkthrough_or_404(token))
 
 
 @router.get("/walkthrough/{token}/file/{name}")
-def walkthrough_file(token: str, name: str, x_sdi_key: Optional[str] = Header(default=None)):
+def walkthrough_file(token: str, name: str, request: Request = None,
+                     x_sdi_key: Optional[str] = Header(default=None)):
     """One of the run's own files, by name, as listed in its record; nothing else."""
     _check_key(x_sdi_key)
+    if estimate_walkthrough.load(token) is None:
+        got = _relayed(request, f"/api/estimate/walkthrough/{token}/file/"
+                                f"{urllib.parse.quote(name)}")
+        if got is not None:
+            heads = {"Content-Disposition": got[2]} if got[2] else {}
+            return Response(content=got[0], media_type=got[1], headers=heads)
     path = estimate_walkthrough.file_for(_walkthrough_or_404(token), name)
     if path is None:
         raise HTTPException(404, f"{name!r} is not one of this estimate's files, or it has "
@@ -3578,11 +3602,19 @@ class AskRequest(BaseModel):
 
 
 @router.post("/walkthrough/{token}/ask")
-def walkthrough_ask(token: str, req: AskRequest,
+def walkthrough_ask(token: str, req: AskRequest, request: Request = None,
                     x_sdi_key: Optional[str] = Header(default=None)):
     """A question about the estimate, answered from its own record by the engine
     (src/estimate_qa.py), in its own interpreter like the other engine calls here."""
     _check_key(x_sdi_key)
+    if estimate_walkthrough.load(token) is None:
+        got = _relayed(request, f"/api/estimate/walkthrough/{token}/ask",
+                       {"question": req.question})
+        if got is not None:
+            try:
+                return json.loads(got[0].decode("utf-8"))
+            except ValueError:
+                pass
     rec = _walkthrough_or_404(token)
     question = str(req.question or "").strip()[:1000]
     if not question:

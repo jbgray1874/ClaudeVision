@@ -295,3 +295,57 @@ def test_grid_control_carries_only_the_count_and_fetches_a_packs_files_when_aske
     got = tc.get("/api/estimate/design-sweep/files", params={"folder": folder}).json()
     assert [f["path"] for f in got["files"]] == ["Technical/0.pdf", "Technical/1.pdf", "Technical/2.pdf"]
     assert tc.get("/api/estimate/design-sweep/files", params={"folder": "C:/x"}).status_code == 404
+
+
+# ── a walkthrough on another service, relayed (the phone reaches the server) ─────────────
+def test_a_walkthrough_this_service_does_not_hold_is_fetched_from_the_grid_once(er, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import grid_peers
+    app = FastAPI()
+    app.include_router(er.router)
+    tc = TestClient(app)
+    key = getattr(er.config, "API_KEY", "") or ""
+    if key:
+        tc.headers.update({"X-SDI-Key": key})
+    asked = []
+
+    def relay(path, body=None, opener=None):
+        asked.append((path, body))
+        if path.endswith("/file/X_walkthrough.wav"):
+            return (b"RIFF....WAVE", "audio/wav", 'attachment; filename="X_walkthrough.wav"')
+        if path.endswith("/ask"):
+            return (json.dumps({"status": "ok", "answer": "42"}).encode(), "application/json", "")
+        return (json.dumps({"client": "TTI", "drawing_number": "11896-08-01-GA"}).encode(),
+                "application/json", "")
+    monkeypatch.setattr(grid_peers, "relay", relay)
+    tok = "s4ybQC-L0tx_w9wpCvlPSXFy"
+    assert tc.get(f"/api/estimate/walkthrough/{tok}").json()["drawing_number"] == "11896-08-01-GA"
+    w = tc.get(f"/api/estimate/walkthrough/{tok}/file/X_walkthrough.wav")
+    assert w.status_code == 200 and w.content.startswith(b"RIFF") and "audio" in w.headers["content-type"]
+    assert tc.post(f"/api/estimate/walkthrough/{tok}/ask", json={"question": "why"}).json()["answer"] == "42"
+    # a request that was itself relayed is never passed on again
+    n = len(asked)
+    r = tc.get(f"/api/estimate/walkthrough/{tok}", headers={grid_peers.RELAY_HEADER: "1"})
+    assert r.status_code == 404 and len(asked) == n
+    # and nothing but a well-formed token travels
+    assert tc.get("/api/estimate/walkthrough/..%2f..%2fetc").status_code == 404 and len(asked) == n
+
+
+def test_relay_asks_each_service_until_one_has_it(gp, monkeypatch):
+    import urllib.error
+    monkeypatch.setenv("SDI_GRID_PEERS", "http://localhost:8071,http://localhost:8072")
+    seen = []
+
+    class R(_Resp):
+        headers = {"Content-Type": "audio/wav", "Content-Disposition": "attachment"}
+
+    def op(req, timeout=0):
+        seen.append((req.full_url, req.get_header("X-sdi-grid-relay")))
+        if "8071" in req.full_url:
+            raise urllib.error.HTTPError(req.full_url, 404, "no", {}, None)
+        return R(b"RIFFdata")
+    got = gp.relay("/api/estimate/walkthrough/abcdefghijklmnop/file/a.wav", opener=op)
+    assert got[0] == b"RIFFdata" and got[1] == "audio/wav"
+    assert [u.split("/api")[0] for u, _ in seen] == ["http://localhost:8071", "http://localhost:8072"]
+    assert all(h == "1" for _u, h in seen), "every relayed request says so"

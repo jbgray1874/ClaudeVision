@@ -98,6 +98,12 @@ def make(run: Dict[str, Any], deliverables: List[Dict[str, str]]) -> Optional[st
     return token
 
 
+def load_token_ok(path: str) -> bool:
+    """True when a relayed walkthrough path names a well-formed token (nothing else travels)."""
+    m = re.match(r"^/api/estimate/walkthrough/([^/]+)(?:/|$)", str(path or ""))
+    return bool(m and _TOKEN.match(m.group(1)))
+
+
 def load(token: str) -> Optional[Dict[str, Any]]:
     if not _TOKEN.match(str(token or "")):
         return None

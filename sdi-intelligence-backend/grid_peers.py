@@ -173,3 +173,39 @@ def stop_on(service: str, run_id: str, opener=None) -> Dict[str, Any]:
     if service not in peers():
         raise ValueError("That service is not on this grid (SDI_GRID_PEERS).")
     return _post(f"{service}/api/estimate/{run_id}/abandon", {}, opener)
+
+
+# ── A WALKTHROUGH ON ANOTHER SERVICE, RELAYED (JG, 10 Nov 2026) ───────────────────────────
+# "when i look at the phone app. the walkthrough link doesn't work and the .wav file isn't
+# available". A walkthrough is recorded by the service that ran the estimate, on that machine's
+# disk; the phone reaches the server, which has never seen it. A service asked for a walkthrough
+# it does not hold asks the others on the grid, once: the relayed request carries RELAY_HEADER,
+# and a service never relays a request that already carries it.
+RELAY_HEADER = "X-SDI-Grid-Relay"
+
+
+def relay(path: str, body: Optional[Dict[str, Any]] = None,
+          opener=None) -> Optional[Tuple[bytes, str, str]]:
+    """(content, content type, content disposition) from the first other service that has it,
+    or None. GET, or POST with a JSON body."""
+    for peer in peers():
+        for key in _keys():
+            headers = {"X-SDI-Key": key, RELAY_HEADER: "1"}
+            data = None
+            if body is not None:
+                headers["Content-Type"] = "application/json"
+                data = json.dumps(body).encode("utf-8")
+            req = urllib.request.Request(peer + path, data=data, headers=headers,
+                                         method="POST" if body is not None else "GET")
+            try:
+                with (opener or urllib.request.urlopen)(req, timeout=150 if body else 30) as r:
+                    hdrs = getattr(r, "headers", {}) or {}
+                    return (r.read(), hdrs.get("Content-Type") or "application/octet-stream",
+                            hdrs.get("Content-Disposition") or "")
+            except urllib.error.HTTPError as exc:
+                if exc.code == 401:
+                    continue                        # try the grid key
+                break                               # 404 there too: the next service
+            except Exception:                                       # noqa: BLE001
+                break
+    return None
