@@ -526,6 +526,17 @@ class DesignShare:
         import pack_store as ps
         if not str(row.drawing or "").strip():
             return None
+        # A PACK A PERSON PUT IN THE LIVE ENQUIRY FOLDER WINS (JG, 10 Nov 2026). 12674-01-GA had
+        # its full pack, PDF included, in Live Enquiry\M&S\12674-01-GA; this source resolved a
+        # DXF-only pack from the design area, saw it differ, filed it beside as "12674-01-GA v2"
+        # and the run priced that, and was refused. A folder for the drawing that this source did
+        # not make (no pack manifest in it) is the estimator's: the share takes it as it is.
+        share = LiveEnquiryShare(self.root).find(row) if self.root.is_dir() else None
+        if share is not None and share.folder is not None and share.status == "found" \
+                and not (Path(share.folder) / ps.MANIFEST).exists():
+            return None
+        if share is not None and share.status == "held" and " fit " in str(share.reason):
+            return None             # two folders for the drawing: the share's question stands
         if self._folders is not None:
             folders, lookup = self._folders(), None
         else:
@@ -537,6 +548,14 @@ class DesignShare:
             return None             # not on design: the share is asked, and its reason stands
         if not m["price_ok"]:
             return Located("held", f"design share: {m['question']}", source=self.name)
+        # NEVER A PACK WITH NO DRAWING. The engine prices from the drawings; a DXF-only pack is
+        # refused by it ("NOTHING WILL BE ESTIMATED"), so it is not filed or queued.
+        _kinds = {Path(str(f.get("path") or "")).suffix.lower() for f in ps._files_of(m)}
+        if not (_kinds & DRAWING_SUFFIXES):
+            return Located("held", f"design share: the pack found for {row.drawing} has no PDF "
+                                   f"drawing, only {', '.join(sorted(k for k in _kinds if k)) or 'no files'}"
+                                   f" — put the GA PDF in the Live Enquiry folder "
+                                   f"{row.customer}\\{row.drawing}", source=self.name)
         named = customer_folders(_subfolders(self.root), row.customer) if self.root.is_dir() else []
         client = named[0].name if len(named) == 1 else row.customer
         kept = ps.store(m, client, root=self.root)

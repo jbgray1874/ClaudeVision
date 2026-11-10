@@ -110,6 +110,13 @@ def store(manifest: Dict[str, Any], client: str, root: Optional[Path] = None,
     if versions:
         last_n, last = versions[-1]
         diff = compare(wanted, _saved_prints(last))
+        # A FOLDER A PERSON MADE IS NEVER SUPERSEDED (JG, 10 Nov 2026): one with no manifest of
+        # ours that differs from the design pack is the estimator's pack; it is used as it is
+        # and nothing is filed beside it (12674-01-GA v2 held a lone DXF beside the full pack).
+        if any(diff.values()) and not (last / MANIFEST).exists() \
+                and any(p.is_file() for p in last.iterdir()):
+            return {"state": "kept by hand", "folder": str(last), "version": last_n,
+                    "changes": diff}
         if not any(diff.values()):
             result = {"state": "unchanged", "folder": str(last), "version": last_n, "changes": diff}
             if not (last / MANIFEST).exists():

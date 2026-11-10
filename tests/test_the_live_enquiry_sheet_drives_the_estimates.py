@@ -554,3 +554,31 @@ def test_the_checkout_build_is_read_from_git_without_git(tmp_path):
     (g / "refs" / "heads" / "main").write_text("0123456789abcdef0123\n")
     L._BUILD_CACHE.clear()
     assert L.checkout_build(tmp_path) == "0123456789ab"
+
+
+def test_an_estimators_own_pack_wins_over_the_design_share_and_nothing_is_filed_beside_it(root, ledger, tmp_path):
+    """12674-01-GA, 10 Nov: the full pack (PDF included) was in Live Enquiry\\M&S\\12674-01-GA;
+    the design share's DXF-only pack was filed beside it as "12674-01-GA v2" and priced."""
+    _pack(root, "M&S", "12674-01-GA", "12674-01-GA.pdf", "12674-01-GA.dxf")
+    rows = L.rows_from_table(_table(_line("M&S", "12674-01-GA", "1 off")))
+    asked = []
+    src = L.DesignShare(root, folders=lambda: asked.append(1) or [])
+    got = {d.row.drawing: d for d in L.plan(rows, [src, L.LiveEnquiryShare(root)], ledger)}["12674-01-GA"]
+    assert got.status == "ready" and got.located.folder == root / "M&S" / "12674-01-GA"
+    assert not asked, "the design share is not even asked"
+    assert not (root / "M&S" / "12674-01-GA v2").exists()
+
+
+def test_a_design_pack_with_no_drawing_is_held_not_filed(root, ledger, monkeypatch, tmp_path):
+    import pack_resolver as pr
+    dxf = tmp_path / "W" / "M&S" / "12424-02-GA_revC.dxf"
+    dxf.parent.mkdir(parents=True)
+    dxf.write_text("0\nSECTION")
+    monkeypatch.setattr(pr, "resolve", lambda *a, **k: {
+        "status": "provisional", "price_ok": True, "drawing": "12424-02-GA",
+        "members": [{"files": [{"path": str(dxf), "fingerprint": "x"}]}], "question": ""})
+    rows = L.rows_from_table(_table(_line("M&S", "12424-02-GA", "1 off")))
+    src = L.DesignShare(root, folders=lambda: [(dxf.parent, [(dxf, 1, 1.0)], False)])
+    got = {d.row.drawing: d for d in L.plan(rows, [src, L.LiveEnquiryShare(root)], ledger)}["12424-02-GA"]
+    assert got.status == "held" and "no PDF drawing, only .dxf" in got.reason
+    assert not (root / "M&S").exists() or not any((root / "M&S").iterdir()), "nothing filed"
