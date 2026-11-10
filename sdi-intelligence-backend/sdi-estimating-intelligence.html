@@ -5109,8 +5109,9 @@ function selfStatusLine(v){
     const cur = w.current || {};
     return "Switched on" + (v.switched_on_at ? " at " + v.switched_on_at : "") + ". "
       + (w.phase === "running" && cur.drawing
-          ? "Running " + cur.drawing + " (" + (cur.customer || "") + ")"
-            + (cur.since ? " since " + cur.since : "") + "."
+          ? (cur.state === "queued" ? "Queued " : "Running ") + cur.drawing + " (" + (cur.customer || "") + ")"
+            + (cur.since ? " since " + cur.since : "")
+            + (cur.state === "queued" ? ", waiting for a free Grid Runner." : ".")
             + ((cur.also || []).length ? " Also running " + cur.also.join(", ")
                + ": stop it from Grid Control." : "")
           : (w.message || w.phase || "Waiting for the watcher."));

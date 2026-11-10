@@ -810,7 +810,9 @@ def main() -> int:
         # A SECOND OR THIRD RUN ON THIS DESKTOP (D-731) is claimed only while the machine has
         # the room for it. Slot 1, the machine's own runner, is never held back.
         _ok, _measured = slot_may_claim(a.slot)
+        note_gate(a.slot, _ok, _measured)
         if not _ok:
+            report_gate(requests, servers, headers, runner_id, _process, _build)
             complained["__compute__"] = _say_once(
                 complained.get("__compute__"), "compute",
                 f"slot {a.slot}: not the room for one more run on this desktop: {_measured}",
@@ -1099,6 +1101,34 @@ def slot_may_claim(slot: int) -> Tuple[bool, str]:
     return compute_headroom()
 
 
+# THE LAST COMPUTE CHECK, SENT WITH EVERY CLAIM AND BEAT (JG, 10 Nov 2026): "we also need to be
+# able to see that it's at least tried to check for compute resources on the second grid
+# runner". A slot held back by the check used to sleep and tell nobody, so Grid Control showed
+# it offline with no reason. Now each check (when, what was measured, took work or held) goes
+# to every service on the list, and a held slot still checks in.
+_GATE: Dict[str, Any] = {}
+
+
+def note_gate(slot: int, ok: bool, measured: str, at: Optional[float] = None) -> Dict[str, Any]:
+    _GATE.clear()
+    _GATE.update({"slot": int(slot or 1), "ok": bool(ok), "measured": str(measured)[:300],
+                  "at": round(time.time() if at is None else at, 1)})
+    return dict(_GATE)
+
+
+def report_gate(requests, servers: List[str], headers: Dict[str, str], runner_id: str,
+                process: str, build: str) -> None:
+    """A held slot's check-in: /runner/heartbeat (never a claim), carrying the check."""
+    for server in servers:
+        try:
+            requests.post(f"{server}/api/estimate/runner/heartbeat", json={
+                "runner_id": runner_id, "hostname": platform.node(), "process": process,
+                "build": build, "compute": compute_now(), "gate": dict(_GATE)},
+                headers=headers, timeout=10)
+        except Exception:                            # noqa: BLE001 — a beat, not a job
+            pass
+
+
 def runner_capabilities() -> List[str]:
     """What this runner tells the service on every claim. "no_models" (D-703, SCRUM-183): it
     will not drive SolidWorks (SDI_SW_RUN_ANALYSER=0) and has no Document Manager backup
@@ -1153,7 +1183,9 @@ def _ask_for_work(requests, server: str, headers: Dict[str, str], runner_id: str
             # would build a full main.py estimate for it.
             "capabilities": runner_capabilities(),
             # WHAT THIS MACHINE IS USING (D-743), for the wall.
-            "compute": compute_now()},
+            "compute": compute_now(),
+            # AND THE LAST COMPUTE CHECK BEFORE THIS CLAIM (JG, 10 Nov 2026).
+            "gate": dict(_GATE) or None},
             headers=headers, timeout=20)
     except Exception as exc:                       # noqa: BLE001 — keep polling
         # SAY IT ONCE. A runner that cannot reach the server prints a line a

@@ -188,7 +188,7 @@ def test_two_at_once_still_obeys_the_switch(share, monkeypatch):
 # ── the pages ─────────────────────────────────────────────────────────────────────────
 def test_grid_control_names_and_a_stop_on_every_running_and_queued_job():
     assert "<title>Grid Control</title>" in WALL and '<div class="sub">GRID CONTROL</div>' in WALL
-    assert "<b>SDI Grid · Grid Runners</b>" in WALL and "Fleet · runners" not in WALL
+    assert "<b>Fleet Grid Runners</b>" in WALL and "Fleet · runners" not in WALL
     assert "${stopBtn(r)}${badge(r.rag, WORD[r.rag])}" in WALL, "on each running lane"
     assert 'waiting " + fmtDur(n - (r.queued_at || n))}</span>${stopBtn(r)}' in WALL, "on the queue"
     assert '"/api/estimate/" + encodeURIComponent(id) + "/abandon"' in WALL
@@ -197,3 +197,29 @@ def test_grid_control_names_and_a_stop_on_every_running_and_queued_job():
 
 def test_the_self_running_card_names_the_second_job():
     assert '" Also running " + cur.also.join(", ")' in PAGE
+
+
+# ── a restarted watcher counts the jobs it already queued (JG, 10 Nov 2026) ─────────────
+def test_a_restarted_watcher_waits_on_its_queued_jobs_before_queueing_more(share, monkeypatch):
+    """Four of its jobs sat in the queue at once, one per restart of the watcher."""
+    monkeypatch.setattr(config, "SELF_RUNNING_AT_ONCE", 1)
+    rows = [_row(5, "0360001"), _row(6, "0360002"), _row(7, "0360003")]
+    monkeypatch.setattr(ler, "read_sheet", lambda path, sheet="": rows)
+    first = Portal(polls=99)                        # queued, and still queued when it stops
+    ledger = ler.load_ledger(share["ledger"])
+    d = ler.plan(rows[:1], ler._sources(share["root"]), ledger)[0]
+    ler.queue_one(d, first, ledger, share["ledger"], say=lambda s: None)
+    ler.save_ledger(share["ledger"], ledger)
+    # the watcher restarts; the service still has r1 and finishes it after a few polls
+    second = Portal(polls=3)
+    second.asked["r1"] = 0
+    said = []
+    sr.cycle(dict(share), second, Switch(), say=said.append, wait=_wait())
+    assert any("on the portal as run r1" in s and "waiting for it" in s for s in said)
+    assert second.started == ["0360002", "0360003"], "nothing more until r1 had finished"
+    assert second.most_at_once <= 1
+
+
+def test_the_card_says_queued_until_a_grid_runner_takes_it():
+    assert '(cur.state === "queued" ? "Queued " : "Running ")' in PAGE
+    assert '", waiting for a free Grid Runner."' in PAGE
