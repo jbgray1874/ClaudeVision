@@ -3234,7 +3234,8 @@ def material_has_a_rate(material) -> bool:
 #
 #   APPLIED_FINISH_RATES_GBP_PER_M2 = {"VINYL_REEDED": 14.50, "UV_COAT": 6.00}
 #
-APPLIED_FINISH_RATES_GBP_PER_M2: dict = {}
+# LAMINATE: £18.00 per m² of laminated face (JG, 10 Nov 2026, the walnut laminate of 12674-01-GA).
+APPLIED_FINISH_RATES_GBP_PER_M2: dict = {"LAMINATE": 18.00}
 
 
 ACRYLIC_PRICE_GBP_PER_M2 = {

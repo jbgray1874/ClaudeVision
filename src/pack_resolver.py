@@ -150,9 +150,25 @@ def later(a: str, b: str) -> Optional[bool]:
 
 # ── reading a drawing ────────────────────────────────────────────────────────────────────
 
+_NO_PDF_READER_SAID = []
+
+
 def read_pdf_text(path: Path, pages: int = 6) -> str:
+    # A PYTHON WITHOUT PDFPLUMBER READS NO DRAWING, AND SAYS SO (JG, 10 Nov 2026). Run with the
+    # system Python instead of the engine's .venv, every GA came back "its own text was not
+    # read" with nothing to say why, and its references (12736-00-01's parts table) went
+    # unfollowed. It is said once, loudly, with the interpreter to use.
     try:
         import pdfplumber
+    except ImportError:
+        if not _NO_PDF_READER_SAID:
+            _NO_PDF_READER_SAID.append(1)
+            print(f"   [pack] pdfplumber is not installed in this Python ({sys.executable}): no "
+                  f"drawing's text can be read, so numbers, revisions and the GA's parts list go "
+                  f"unread. Run with the engine's own Python: .\\.venv\\Scripts\\python.exe",
+                  flush=True)
+        return ""
+    try:
         with pdfplumber.open(str(path)) as pdf:
             return "\n".join((p.extract_text() or "") for p in pdf.pages[:pages])
     except Exception:                                                    # noqa: BLE001
