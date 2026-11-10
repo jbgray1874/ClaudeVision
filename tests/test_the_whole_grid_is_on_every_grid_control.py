@@ -185,3 +185,34 @@ def test_grid_control_names_the_fleet_and_shows_the_check_and_the_rest_of_the_gr
     assert "renderQueue(s.queue || [], s.grid || [])" in WALL
     assert '"/api/estimate/grid/stop", {service: b.dataset.service, run_id: id}' in WALL
     assert "running on ${esc(g.label)}" in WALL and "queued on ${esc(g.label)}" in WALL
+
+
+def test_a_ghost_run_is_freed_when_its_runner_beats_for_another_service_and_a_live_one_is_not(er):
+    """8072, 10 Nov 10:22: 11896-08-01-GA restored "running" after a restart while its runner
+    worked 8071's copy; it held RUN 1 with nothing working on it."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(er.router)
+    tc = TestClient(app)
+    key = getattr(er.config, "API_KEY", "") or ""
+    if key:
+        tc.headers.update({"X-SDI-Key": key})
+    now = time.time()
+    rid = "DESKTOP-GFAAP80-90faa0001"
+    ghost = er.Run(run_id="g1", client="TTI", drawing_number="11896-08-01-GA", status="running", units=1, job_folder="x", output_path="y")
+    ghost.runner, ghost.started_at, ghost.claimed_by_process = rid, now - 3600, "p1"
+    ghost.lease_until = now - 600 + er.LEASE_SECONDS            # last progress 10 min ago
+    live = er.Run(run_id="l1", client="TTI", drawing_number="X", status="running", units=1, job_folder="x", output_path="y")
+    live.runner, live.started_at, live.claimed_by_process = rid + "-s2", now - 3600, "p2"
+    live.lease_until = now - 600 + er.LEASE_SECONDS
+    fresh = er.Run(run_id="f1", client="TTI", drawing_number="Y", status="running", units=1, job_folder="x", output_path="y")
+    fresh.runner, fresh.started_at, fresh.claimed_by_process = rid, now - 30, "p1"
+    fresh.lease_until = now + er.LEASE_SECONDS
+    er._RUNS.update({"g1": ghost, "l1": live, "f1": fresh})
+    tc.post("/api/estimate/runner/heartbeat", json={"runner_id": rid, "hostname": "DESKTOP-GFAAP80",
+                                                     "process": "p1", "build": ""})
+    assert er._RUNS["g1"].status == "error"
+    assert "working on another service's job" in er._RUNS["g1"].error
+    assert er._RUNS["l1"].status == "running", "another runner's run is untouched"
+    assert er._RUNS["f1"].status == "running", "a run with progress in the last two minutes is kept"

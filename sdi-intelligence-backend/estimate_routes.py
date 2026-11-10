@@ -575,6 +575,44 @@ def _release_runs_orphaned_by_a_restart(runner_id: str, process: str) -> None:
             _keep(run)
 
 
+def _host_of(runner_id: str) -> str:
+    """The machine name in a runner id ("DESKTOP-GFAAP80-90faa0001-s2" -> "DESKTOP-GFAAP80"),
+    for a runner this service has only heard from mid-job, which does not say its name."""
+    m = re.match(r"^(.+?)-[0-9a-fA-F]{8,}(?:-s\d+)?$", str(runner_id or ""))
+    return m.group(1) if m else ""
+
+
+def _release_runs_its_runner_has_left(runner_id: str, now: float) -> None:
+    """Fail a run of this service that its runner is plainly not working on.
+
+    A GHOST HELD RUN 1 ON 8072 (JG, 10 Nov 2026). The runner finished or dropped 11896-08-01-GA
+    while 8072 was restarting, so its report never landed; 8072 restored the run "running" with
+    its claim, and the same runner went on to work a job for 8071. A runner says it is busy
+    for ANOTHER service only through /runner/heartbeat, so a heartbeat from the runner a run
+    here is claimed by means nothing is working on that run. Held to runs that have also had
+    no progress for two minutes, so a beat crossing a fresh claim on the wire frees nothing."""
+    for run in _RUNS.values():
+        if run.status != "running" or run.runner != runner_id:
+            continue
+        last = max(float(run.lease_until or 0) - LEASE_SECONDS, float(run.started_at or 0),
+                   float(run.last_line_at or 0))
+        if now - last < 120:
+            continue
+        run.status = "error"
+        run.error = (f"Its Grid Runner ({runner_id}) is working on another service's job, so "
+                     f"nothing is working on this one; its finish report was probably lost "
+                     f"while this service restarted. If the engine finished, its book is in "
+                     f"the engine's output\\estimates folder on that machine; otherwise run "
+                     f"the job again.")
+        run.line(run.error)
+        run.finished_at = now
+        run.lease_until = 0.0
+        r = _RUNNERS.get(runner_id)
+        if r is not None and r.run_id == run.run_id:
+            r.run_id = ""
+        _keep(run)
+
+
 def _online_runners() -> List[Runner]:
     return [r for r in _RUNNERS.values() if r.online]
 
@@ -1046,7 +1084,10 @@ def runners(request: Request = None, x_sdi_key: Optional[str] = Header(default=N
         _own = int(request.url.port) if request is not None and request.url.port else None
     except Exception:                                                # noqa: BLE001
         _own = None
+    import sys as _sys_c
     return {"other_local_services": _other_local_services(_own),
+            # THIS SERVICE'S BUILD, so the page can say when the other one differs.
+            "service_commit": str(getattr(_sys_c.modules.get("app"), "SDI_COMMIT", "") or ""),
             "runners": listed, "online": len(online), "queued": queued,
             "busy": sum(1 for r in online if r.get("running")),
             # HOW MANY THE SERVICE MAY RUN AT ONCE (D-732), so the page can say a second or
@@ -1694,6 +1735,7 @@ def heartbeat(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)
     now = time.time()
     with _LOCK:
         _release_runs_orphaned_by_a_restart(req.runner_id, req.process)
+        _release_runs_its_runner_has_left(req.runner_id, now)
         runner = _RUNNERS.setdefault(req.runner_id, Runner(runner_id=req.runner_id))
         runner.hostname = req.hostname or runner.hostname
         runner.last_seen = now
@@ -2056,6 +2098,11 @@ def progress(run_id: str, req: ProgressRequest,
         r = _RUNNERS.setdefault(req.runner_id, Runner(runner_id=req.runner_id))
         r.last_seen = now
         r.run_id = run.run_id
+        # ITS MACHINE BY NAME (JG, 10 Nov 2026): after a restart of this service a runner mid-job
+        # is heard only here, which does not carry its name, so Grid Control listed it by its
+        # raw id, not as the Laptop, and showed the Laptop as a second, planned runner.
+        if not r.hostname:
+            r.hostname = _host_of(req.runner_id)
         _note_compute(r, req.compute, now)
         if now - _last_progress_save.get(run_id, 0.0) >= _PROGRESS_SAVE_SECONDS:
             _last_progress_save[run_id] = now

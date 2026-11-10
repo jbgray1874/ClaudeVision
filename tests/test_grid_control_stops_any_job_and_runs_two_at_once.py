@@ -196,7 +196,7 @@ def test_grid_control_names_and_a_stop_on_every_running_and_queued_job():
 
 
 def test_the_self_running_card_names_the_second_job():
-    assert '" Also running " + cur.also.join(", ")' in PAGE
+    assert '" Also on the grid: " + cur.also.join(", ")' in PAGE
 
 
 # ── a restarted watcher counts the jobs it already queued (JG, 10 Nov 2026) ─────────────
@@ -223,3 +223,66 @@ def test_a_restarted_watcher_waits_on_its_queued_jobs_before_queueing_more(share
 def test_the_card_says_queued_until_a_grid_runner_takes_it():
     assert '(cur.state === "queued" ? "Queued " : "Running ")' in PAGE
     assert '", waiting for a free Grid Runner."' in PAGE
+
+
+# ── 10 Nov 10:22: duplicate copies, ghosts, a Stop on every job ───────────────────────
+def test_an_older_queued_copy_of_a_job_is_withdrawn_and_the_newest_kept(share, monkeypatch):
+    """11896-04-00-GA ran on 8071 while an earlier copy waited on 8072 to run it again."""
+    monkeypatch.setattr(config, "SELF_RUNNING_AT_ONCE", 1)
+    rows = [_row(5, "0360001")]
+    monkeypatch.setattr(ler, "read_sheet", lambda path, sheet="": rows)
+    p8072, p8071 = Portal("http://localhost:8072", polls=99), Portal("http://localhost:8071", polls=2)
+    ledger = ler.load_ledger(share["ledger"])
+    d = ler.plan(rows, ler._sources(share["root"]), ledger)[0]
+    ler.queue_one(d, p8072, ledger, share["ledger"], say=lambda s: None)     # r1 on 8072
+    ler.queue_one(d, p8071, ledger, share["ledger"], say=lambda s: None)     # r1 on 8071
+    ledger["jobs"][ler.job_key(rows[0])]["attempts"][1]["run_id"] = "n1"
+    p8071.asked["n1"] = p8071.asked.pop("r1")
+    ler.save_ledger(share["ledger"], ledger)
+    withdrawn = []
+    p8072.status = lambda rid: {"status": "queued"}          # still waiting on 8072
+    p8072.abandon = lambda rid: withdrawn.append(rid) or {"ok": True}
+    said = []
+    sr.cycle(dict(share), p8071, Switch(), say=said.append, wait=_wait(), others=[p8071, p8072])
+    assert withdrawn == ["r1"], "the older copy is withdrawn from the service it is on"
+    a = ler.load_ledger(share["ledger"])["jobs"][ler.job_key(rows[0])]["attempts"]
+    assert a[0]["withdrawn"] and a[0]["status"] == "error" and a[1]["status"] == "done"
+    assert any("withdrew queued copy r1" in s for s in said)
+
+
+def test_the_portal_client_can_stop_a_run():
+    src = (ROOT / "src" / "live_enquiry_runner.py").read_text(encoding="utf-8")
+    assert 'return self._call("POST", f"/api/estimate/{run_id}/abandon", {})' in src
+
+
+def test_a_run_its_runner_has_left_is_freed_when_that_runner_beats_for_another_service():
+    assert "_release_runs_its_runner_has_left(req.runner_id, now)" in ROUTES
+    assert "if now - last < 120:" in ROUTES, "never a run with progress in the last two minutes"
+
+
+def test_a_runner_heard_only_mid_job_is_named_by_its_machine():
+    import importlib
+    sys.path.insert(0, str(ROOT / "sdi-intelligence-backend"))
+    try:
+        src = ROUTES
+        assert "r.hostname = _host_of(req.runner_id)" in src
+        import re
+        m = re.search(r're\.match\(r"(.+?)", str\(runner_id', src)
+        pat = re.compile(m.group(1))
+        assert pat.match("DESKTOP-GFAAP80-90faa0001").group(1) == "DESKTOP-GFAAP80"
+        assert pat.match("DESKTOP-GFAAP80-90faa0001-s2").group(1) == "DESKTOP-GFAAP80"
+        assert pat.match("laptop") is None
+    finally:
+        sys.path.remove(str(ROOT / "sdi-intelligence-backend"))
+
+
+def test_every_queued_or_running_job_has_its_own_stop_on_the_estimating_page():
+    assert "data-self-stop='\" + selfEsc(r.run_id)" in PAGE
+    assert '(r.status === "queued" || r.status === "running") && r.run_id' in PAGE
+    assert 'await api("/api/estimate/grid/stop", {method:"POST"' in PAGE, "a job on the other service"
+    assert '["running","queued or running"]' in PAGE
+    assert "Also on this machine: the service on port" in PAGE and "Use one portal" not in PAGE
+    rr = sr.recent_runs({"jobs": {"k": {"customer": "TTI", "drawing": "X", "attempts": [
+        {"status": "queued", "run_id": "r9", "server": "http://localhost:8072",
+         "queued_at": "2026-11-10T10:00:00"}]}}})
+    assert rr[0]["run_id"] == "r9" and rr[0]["server"] == "http://localhost:8072"
