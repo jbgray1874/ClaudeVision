@@ -44,6 +44,7 @@ def _fake_openai(monkeypatch, exc=None, text="xai answer"):
 def claude(monkeypatch):
     asked = []
     monkeypatch.setenv("SDI_XAI_RETRY_SECONDS", "0")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(cf, "available", lambda: True)
     monkeypatch.setattr(cf, "ask", lambda system, user, **kw: asked.append((system, user)) or
                         "claude answer")
@@ -57,7 +58,7 @@ def test_xai_busy_after_its_retries_is_answered_by_claude_and_said(monkeypatch, 
     assert claude == [("sys", "the question")], "the same question, system prompt and all"
     assert lfe.LAST_ANSWERED_BY == f"claude:{cf.model()}"
     out = capsys.readouterr().out
-    assert "xAI stayed busy (capacity): asking Claude" in out
+    assert "xAI stayed busy (capacity): asking claude" in out
 
 
 def test_no_xai_key_is_answered_by_claude(monkeypatch, claude):
@@ -87,6 +88,7 @@ def test_without_claude_a_busy_xai_is_raised_as_before(monkeypatch):
     monkeypatch.setenv("XAI_API_KEY", "x")
     monkeypatch.setenv("SDI_XAI_RETRY_SECONDS", "0")
     monkeypatch.setattr(cf, "available", lambda: False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     _fake_openai(monkeypatch, exc=Busy())
     with pytest.raises(Busy):
         lfe._call_llm("q", "grok-4.7")
@@ -158,3 +160,53 @@ def test_an_older_sdk_without_the_fallback_parameter_still_reads():
         messages=types.SimpleNamespace(stream=stream)))
     assert cf.ask("sys", "q", client=client) == "old sdk read"
     assert "fallbacks" in calls[0] and "fallbacks" not in calls[1] and "output_config" in calls[1]
+
+
+# ── OpenAI, beside Claude ─────────────────────────────────────────────────────────────
+
+import openai_fallback as of                                       # noqa: E402
+
+
+def test_with_only_an_openai_key_openai_answers_and_is_named(monkeypatch, capsys):
+    monkeypatch.setenv("XAI_API_KEY", "x")
+    monkeypatch.setenv("SDI_XAI_RETRY_SECONDS", "0")
+    monkeypatch.setattr(cf, "available", lambda: False)
+    monkeypatch.setattr(of, "available", lambda: True)
+    monkeypatch.setattr(of, "ask", lambda system, user, **kw: "openai answer")
+    _fake_openai(monkeypatch, exc=Busy())
+    assert lfe._call_llm("q", "grok-4.7") == "openai answer"
+    assert lfe.LAST_ANSWERED_BY == f"openai:{of.model()}"
+    assert "asking openai" in capsys.readouterr().out
+
+
+def test_claude_failing_hands_on_to_openai(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "x")
+    monkeypatch.setenv("SDI_XAI_RETRY_SECONDS", "0")
+    monkeypatch.setattr(cf, "available", lambda: True)
+    monkeypatch.setattr(cf, "ask", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no credit")))
+    monkeypatch.setattr(of, "available", lambda: True)
+    monkeypatch.setattr(of, "ask", lambda system, user, **kw: "openai answer")
+    _fake_openai(monkeypatch, exc=Busy())
+    assert lfe._call_llm("q", "grok-4.7") == "openai answer"
+
+
+def test_the_order_can_put_openai_first(monkeypatch):
+    monkeypatch.setenv("SDI_LLM_FALLBACK_ORDER", "openai,claude")
+    assert lfe._fallback_order() == ["openai", "claude"]
+
+
+def test_openai_is_asked_with_the_system_prompt_and_no_temperature(monkeypatch):
+    seen = {}
+
+    def create(**kw):
+        seen.update(kw)
+        msg = types.SimpleNamespace(content="the read")
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg,
+                                                                    finish_reason="stop")])
+    client = types.SimpleNamespace(chat=types.SimpleNamespace(
+        completions=types.SimpleNamespace(create=create)))
+    assert of.ask("sys", "q", client=client) == "the read"
+    assert seen["messages"][0] == {"role": "system", "content": "sys"}
+    assert "temperature" not in seen and seen["model"] == "gpt-5"
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert not of.available()
