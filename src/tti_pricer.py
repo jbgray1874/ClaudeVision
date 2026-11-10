@@ -471,7 +471,12 @@ def pack_line(m: Dict[str, Any]) -> str:
     """One line for the screen: the pack's status, size and revision, and why."""
     bits = [f"{m['status']} pack: {len(m['members'])} drawing(s), revision {m.get('revision') or 'not read'}"]
     if m.get("missing"):
-        bits.append(f"{len(m['missing'])} referenced drawing(s) missing")
+        _miss = [str(x.get("drawing") if isinstance(x, dict) else x) for x in m["missing"]]
+        bits.append(f"{len(_miss)} referenced drawing(s) not in the pack: {', '.join(_miss[:8])}")
+    elif m.get("members"):
+        _unread = any("text was not read" in str(a) for a in (m.get("assumptions") or []))
+        bits.append("the GA's own text was not read, so its references are unchecked" if _unread
+                    else "every drawing the GA references is in the pack")
     if m.get("conflicts"):
         bits.append("CONFLICT: " + m["conflicts"][0])
     if m.get("question"):
@@ -690,6 +695,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     _qh = rep["header"]
     print(f"units from column {_qh.get('quantity_column') or '-'} ({_qh.get('quantity') or 'none found: every row priced at 1'})",
           flush=True)
+    print(f"unit cost written to column {args.col_cost.upper()} ({_qh.get('cost') or 'no header'})"
+          + (" — dry run: nothing is written" if args.dry_run else ""), flush=True)
     found = 0
     for it in rep["rows"]:
         where = (it.get("found") or {}).get("folder")
@@ -705,8 +712,15 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"{it.get('unit_cost', '') if it.get('unit_cost') is not None else ''}  {where}", flush=True)
         if it.get("pack"):
             print(f"{'':<11}{it['pack']}", flush=True)
-    print(f"{found} of {len(rep['rows'])} row(s) have candidate drawings; none is a verified pack yet "
-          f"(drawing number, revision and references are not read until the pack resolver, SCRUM-199). "
+    _st: Dict[str, int] = {}
+    for it in rep["rows"]:
+        k = it.get("pack_status") or ("skipped" if it.get("state") == "skipped" else
+                                      "job folder only" if it.get("found") else "no drawings")
+        _st[k] = _st.get(k, 0) + 1
+    print(f"{found} of {len(rep['rows'])} row(s) have drawings: "
+          + ", ".join(f"{n} {k}" for k, n in sorted(_st.items()))
+          + ". Verified: the GA's own number and revision were read from it; provisional: matched "
+            "by file name; ambiguous: asked, not priced. "
           f"status file: {status}", flush=True)
     return 0
 
