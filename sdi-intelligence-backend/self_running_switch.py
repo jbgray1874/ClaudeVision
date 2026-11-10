@@ -150,7 +150,7 @@ def heartbeat(report: Dict[str, Any], now: Optional[float] = None) -> Dict[str, 
                    if k not in ("seen_epoch", "obeyed")}
         # Keep the last cycle's tallies and runs across the short beats that do not carry them.
         previous = state.get("watcher") or {}
-        for keep in ("counts", "recent", "last_cycle_at", "next_cycle_at"):
+        for keep in ("counts", "recent", "last_cycle_at", "next_cycle_at", "workbook"):
             if keep not in watcher and keep in previous:
                 watcher[keep] = previous[keep]
         watcher["seen_epoch"] = now

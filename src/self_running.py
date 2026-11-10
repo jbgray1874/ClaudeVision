@@ -446,6 +446,10 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
     sources = ler._sources(s["root"])
     switch.beat(report("reading the sheet", str(s["workbook"])))
     decisions = ler.plan(ler.read_sheet(s["workbook"]), sources, ledger)
+    # WHEN AND WHERE THE SHEET WAS READ, ON EVERY BEAT OF THIS CYCLE (JG, 10 Nov): the page said
+    # "read 2026-11-03" through a whole day of runs, because the time only moved when a cycle
+    # finished. The counts shown are this read's, so the time and the file shown are too.
+    read_at = ler._now()
     # NOT FROM PRODUCTION UNLESS ASKED (D-608): the packs are looked for under the Live
     # Enquiry root only, until the extraction endpoint is ready.
     collected = (collect_missing_packs(decisions, s["root"], ledger, dry_run=dry_run, say=say,
@@ -462,7 +466,7 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
     ler.write_status(decisions, s["ledger"])
     ler.print_plan(decisions, say=say)
     tally = counts(decisions)
-    out = {"counts": tally, "collected": collected, "extracted": extracted, "ran": []}
+    out = {"counts": tally, "collected": collected, "extracted": extracted, "ran": [], "read_at": read_at}
     if dry_run:
         return out
 
@@ -481,7 +485,8 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
         else:
             current.pop("run_id", None)
         return report("running", f"{current.get('drawing')} ({current.get('customer')})",
-                      counts=tally, current=dict(current), recent=recent_runs(ledger))
+                      counts=tally, current=dict(current), recent=recent_runs(ledger),
+                      last_cycle_at=read_at, workbook=str(s["workbook"]))
 
     switched_off: List[bool] = []
 
@@ -641,7 +646,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     nxt = datetime.now() + timedelta(minutes=config.LIVE_ENQUIRY_POLL_MINUTES)
                     switch.beat(report("waiting", msg, counts=done["counts"],
                                        recent=done.get("recent") or [],
-                                       last_cycle_at=ler._now(),
+                                       last_cycle_at=done.get("read_at") or ler._now(),
+                                       workbook=str(s["workbook"]),
                                        next_cycle_at=nxt.isoformat(timespec="seconds")))
                 except SystemExit:
                     raise
