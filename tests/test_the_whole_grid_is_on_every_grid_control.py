@@ -349,3 +349,24 @@ def test_relay_asks_each_service_until_one_has_it(gp, monkeypatch):
     assert got[0] == b"RIFFdata" and got[1] == "audio/wav"
     assert [u.split("/api")[0] for u, _ in seen] == ["http://localhost:8071", "http://localhost:8072"]
     assert all(h == "1" for _u, h in seen), "every relayed request says so"
+
+
+def test_a_relayed_quote_not_released_is_held_to_the_portal_as_a_local_one_is(er, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import grid_peers
+    app = FastAPI()
+    app.include_router(er.router)
+    tc = TestClient(app)
+    key = getattr(er.config, "API_KEY", "") or ""
+    if key:
+        tc.headers.update({"X-SDI-Key": key})
+    monkeypatch.setattr(grid_peers, "relay", lambda path, body=None, opener=None:
+                        (b"<html><body>quote</body></html>", "text/html",
+                         'attachment; filename="J_quote.html"'))
+    monkeypatch.setattr(er.quote_release, "looks_like_a_quote", lambda p: True)
+    monkeypatch.setattr(er.quote_release, "may_go_to_a_customer", lambda p: False)
+    r = tc.get("/api/estimate/walkthrough/s4ybQC-L0tx_w9wpCvlPSXFy/file/J_quote.html")
+    assert r.headers["x-sdi-quote-release"] == "portal"
+    assert r.headers["content-disposition"].startswith("inline")
+    assert "sandbox" in r.headers["content-security-policy"]

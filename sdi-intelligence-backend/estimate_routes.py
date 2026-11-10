@@ -3568,17 +3568,42 @@ def walkthrough_view(token: str, request: Request = None,
     return estimate_walkthrough.public_view(_walkthrough_or_404(token))
 
 
+def _walkthrough_file_relayed(request: Optional[Request], token: str,
+                              name: str) -> Optional[Response]:
+    """One of a walkthrough's files from the service that holds it, when this one does not.
+    THE SAME RELEASE GATE AS A LOCAL FILE (D-645): a quotation is checked here as well as there,
+    from its own declaration, and one not released goes inline, sandboxed and marked
+    portal, never as a download."""
+    if estimate_walkthrough.load(token) is not None:
+        return None
+    got = _relayed(request, f"/api/estimate/walkthrough/{token}/file/{urllib.parse.quote(name)}")
+    if got is None:
+        return None
+    content, media, disposition = got
+    if quote_release.looks_like_a_quote(Path(name)):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            held = Path(tmp) / Path(name).name
+            held.write_bytes(content)
+            released = quote_release.may_go_to_a_customer(held)
+        if not released:
+            return Response(content=content, media_type=media,
+                            headers={"Content-Disposition": f'inline; filename="{Path(name).name}"',
+                                     "X-SDI-Quote-Release": "portal",
+                                     "Content-Security-Policy":
+                                         "sandbox allow-downloads allow-popups"})
+    return Response(content=content, media_type=media,
+                    headers={"Content-Disposition": disposition} if disposition else {})
+
+
 @router.get("/walkthrough/{token}/file/{name}")
 def walkthrough_file(token: str, name: str, request: Request = None,
                      x_sdi_key: Optional[str] = Header(default=None)):
     """One of the run's own files, by name, as listed in its record; nothing else."""
     _check_key(x_sdi_key)
-    if estimate_walkthrough.load(token) is None:
-        got = _relayed(request, f"/api/estimate/walkthrough/{token}/file/"
-                                f"{urllib.parse.quote(name)}")
-        if got is not None:
-            heads = {"Content-Disposition": got[2]} if got[2] else {}
-            return Response(content=got[0], media_type=got[1], headers=heads)
+    relayed = _walkthrough_file_relayed(request, token, name)
+    if relayed is not None:
+        return relayed
     path = estimate_walkthrough.file_for(_walkthrough_or_404(token), name)
     if path is None:
         raise HTTPException(404, f"{name!r} is not one of this estimate's files, or it has "
