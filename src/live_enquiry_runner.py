@@ -685,6 +685,65 @@ def _not_one_drawing(drawing: str) -> str:
     return ""
 
 
+# A RUN LOST TO A RESTART IS RUN AGAIN (JG, 10 Nov 2026: "the process needs to circle back and
+# check the live enquiry s/sheet and if it's not set to AICompleted yes, they should run"). These
+# endings say nothing about the job: the machine or a service was restarted under it, or its
+# report was lost. Such a run does not count as a try; the row is queued again on the next read.
+INTERRUPTED = ("was restarted while this job was running", "no longer knows this run",
+               "no service on the list knows this run", "stopped responding",
+               "is working on another service's job", "Its Grid Runner")
+
+# WHAT THE ENGINE PRICES FROM: a drawing (PDF) or a render of one. A pack holding only DXFs or
+# models was queued on 10 Nov (12674-01-GA, 12674-02-GA, 12424-02-GA: a lone DXF) and refused by
+# the engine with "NOTHING WILL BE ESTIMATED"; it is held here instead, saying what is missing.
+DRAWING_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+
+
+def interrupted(attempt: Dict[str, Any]) -> bool:
+    err = str(attempt.get("error") or "")
+    return attempt.get("status") == "error" and any(w in err for w in INTERRUPTED)
+
+
+_BUILD_CACHE: Dict[str, Any] = {}
+
+
+def checkout_build(root: Optional[Path] = None) -> str:
+    """The commit this checkout is on, read from .git (no git needed); "" when unknown.
+    A run the engine refused is tried again once a sync brings a different build."""
+    root = Path(root) if root else Path(__file__).resolve().parents[1]
+    now = time.time()
+    hit = _BUILD_CACHE.get(str(root))
+    if hit and now - hit[0] < 60:
+        return hit[1]
+    sha = ""
+    try:
+        git = root / ".git"
+        if git.is_file():                         # a worktree: "gitdir: <path>"
+            git = Path(git.read_text(encoding="utf-8").split(":", 1)[1].strip())
+        head = (git / "HEAD").read_text(encoding="utf-8").strip()
+        if head.startswith("ref:"):
+            ref = head.split(":", 1)[1].strip()
+            common = git
+            if (git / "commondir").is_file():
+                common = (git / (git / "commondir").read_text(encoding="utf-8").strip()).resolve()
+            for base in (git, common):
+                f = base / ref
+                if f.is_file():
+                    sha = f.read_text(encoding="utf-8").strip()
+                    break
+            if not sha and (common / "packed-refs").is_file():
+                for line in (common / "packed-refs").read_text(encoding="utf-8").splitlines():
+                    if line.endswith(" " + ref):
+                        sha = line.split(" ", 1)[0]
+                        break
+        else:
+            sha = head
+    except (OSError, IndexError):
+        sha = ""
+    _BUILD_CACHE[str(root)] = (now, sha[:12])
+    return sha[:12]
+
+
 def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
            seen: Optional[Dict[str, int]] = None) -> Decision:
     if row.ai_check.strip().upper() not in {w.upper() for w in config.LIVE_ENQUIRY_ASKED}:
@@ -727,6 +786,13 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
                                      f"{job.get('baselined_at')})", located=located)
     if located.status != "found":
         return Decision(row, located.status, located.reason, located=located)
+    if located.files and not any(Path(f).suffix.lower() in DRAWING_SUFFIXES
+                                 for f in located.files):
+        kinds = ", ".join(sorted({Path(f).suffix.lower() or Path(f).name
+                                  for f in located.files}))
+        return Decision(row, "held", f"the pack in {located.folder} has no PDF drawing, only "
+                                     f"{kinds} — the engine prices from the drawings: put the "
+                                     f"GA PDF there", located=located)
     if (not attempts and job.get("baseline") == fingerprint(located.files)
             and not _rerun_baseline):
         return Decision(row, "done", f"run by hand before the runner (baselined "
@@ -783,8 +849,19 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
         d.reason = ("the pack has changed since the last run"
                     if last.get("fingerprint") != fp else "the quantities have changed")
         return d
+    if interrupted(last):
+        d.reason = (f"its last run was cut off, not refused ({(last.get('error') or '')[:90]}); "
+                    f"running it again")
+        return d
+    _now_build = checkout_build()
+    if (last.get("status") == "error" and last.get("build") and _now_build
+            and last["build"] != _now_build):
+        d.reason = (f"the engine has been updated since its last run was refused "
+                    f"({last['build'][:7]} → {_now_build[:7]}); running it again")
+        return d
     tries = sum(1 for a in attempts if a.get("fingerprint") == fp
-                and list(a.get("quantities") or []) == qty and a.get("status") != "done")
+                and list(a.get("quantities") or []) == qty and a.get("status") != "done"
+                and not interrupted(a))
     if job.get("retry") or tries < config.LIVE_ENQUIRY_MAX_ATTEMPTS:
         d.reason = "retry asked for" if job.get("retry") else f"attempt {tries + 1}"
         return d
@@ -1082,6 +1159,7 @@ def queue_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: 
         "customer": d.row.customer, "drawing": d.row.drawing, "attempts": []})
     attempt["run_id"] = started.get("run_id")
     attempt["server"] = getattr(portal, "server", "")
+    attempt["build"] = checkout_build()
     attempt["output_path"] = started.get("output_path")
     job["attempts"].append(attempt)
     job.pop("retry", None)

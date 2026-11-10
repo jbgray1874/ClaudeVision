@@ -505,3 +505,52 @@ def test_the_production_share_is_never_a_source():
         (Path(__file__).resolve().parents[1] / "src" / "live_enquiry_runner.py").read_text(encoding="utf-8")
     body = src[src.index("def _sources("):src.index("def scan(")]
     assert "DesignShare(root)" in body and "Production" not in body
+
+
+# ── 10 Nov 2026: a run cut off by a restart runs again; a refused one after a sync; a pack
+#    with no drawing is held, not queued ─────────────────────────────────────────────────
+def test_a_run_cut_off_by_a_restart_is_queued_again_without_counting_as_a_try(root, tmp_path, ledger, monkeypatch):
+    monkeypatch.setattr(config, "LIVE_ENQUIRY_MAX_ATTEMPTS", 1)
+    _pack(root, "Tesco", "6364-01", "6364-01.pdf")
+    rows = L.rows_from_table(_table(_line("Tesco", "6364-01", "40 off")))
+    portal = FakePortal()
+    portal.status = lambda rid: {"status": "error", "error": (
+        "The runner on DESKTOP-GFAAP80-90faa0001-s2 was restarted while this job was running "
+        "(pid 61084 replaced by pid 497)")}
+    L.run_ready(L.plan(rows, [L.LiveEnquiryShare(root)], ledger), portal, ledger,
+                tmp_path / "l.json", say=lambda s: None, **_wait())
+    d = _decide(rows, root, ledger)["6364-01"]
+    assert d.status == "ready" and "cut off, not refused" in d.reason
+
+
+def test_a_run_the_engine_refused_is_tried_again_once_a_sync_brings_another_build(root, tmp_path, ledger, monkeypatch):
+    monkeypatch.setattr(config, "LIVE_ENQUIRY_MAX_ATTEMPTS", 1)
+    _pack(root, "M&S", "12340-01M", "a.pdf")
+    rows = L.rows_from_table(_table(_line("M&S", "12340-01M", "40 off")))
+    portal = FakePortal()
+    portal.status = lambda rid: {"status": "error", "error": "The engine exited with code 2."}
+    monkeypatch.setattr(L, "checkout_build", lambda root=None: "aaaaaaa11111")
+    L.run_ready(L.plan(rows, [L.LiveEnquiryShare(root)], ledger), portal, ledger,
+                tmp_path / "l.json", say=lambda s: None, **_wait())
+    assert _decide(rows, root, ledger)["12340-01M"].status == "failed", "same build: not again"
+    monkeypatch.setattr(L, "checkout_build", lambda root=None: "bbbbbbb22222")
+    d = _decide(rows, root, ledger)["12340-01M"]
+    assert d.status == "ready" and "engine has been updated" in d.reason
+
+
+def test_a_pack_with_no_drawing_is_held_saying_what_is_missing(root, ledger):
+    d = root / "M&S" / "12674-01-GA"
+    d.mkdir(parents=True)
+    (d / "12674-01-GA.dxf").write_bytes(b"0\nSECTION")
+    rows = L.rows_from_table(_table(_line("M&S", "12674-01-GA", "1 off")))
+    got = _decide(rows, root, ledger)["12674-01-GA"]
+    assert got.status == "held" and "no PDF drawing, only .dxf" in got.reason
+
+
+def test_the_checkout_build_is_read_from_git_without_git(tmp_path):
+    g = tmp_path / ".git"
+    (g / "refs" / "heads").mkdir(parents=True)
+    (g / "HEAD").write_text("ref: refs/heads/main\n")
+    (g / "refs" / "heads" / "main").write_text("0123456789abcdef0123\n")
+    L._BUILD_CACHE.clear()
+    assert L.checkout_build(tmp_path) == "0123456789ab"
