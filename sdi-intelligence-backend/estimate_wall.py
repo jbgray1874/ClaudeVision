@@ -310,8 +310,13 @@ def runner_rag(runner: Mapping[str, Any], service_commit: str = "",
     if service_commit and build and not (build.startswith(service_commit[:7])
                                          or service_commit.startswith(build[:7])):
         return AMBER, f"on build {build[:7]}, the service is on {service_commit[:7]}"
+    gate = runner.get("gate") or {}
+    if gate and not gate.get("ok") and not runner.get("run_id"):
+        return AMBER, f"holding: not the room for one more run ({gate.get('measured') or '?'})"
     if seen > th["runner_quiet_after_s"] and not runner.get("run_id"):
         return AMBER, f"quiet for {seen:.0f} s"
+    if runner.get("busy_elsewhere") and not runner.get("run_id"):
+        return GREEN, "working for another service on the grid"
     return GREEN, ("working" if runner.get("run_id") else "ready")
 
 
@@ -826,6 +831,7 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
                       "build": str(rn.get("build") or "")[:12],
                       "capabilities": list(rn.get("capabilities") or []),
                       "rag": rag, "rag_reason": why,
+                      "gate": dict(rn.get("gate") or {}) or None,
                       "job": (_summary(job) if job and outcome(job) == "running" else None)})
     # A SECOND RUNNER ON ONE DESKTOP IS THAT DESKTOP'S SLOT (SCRUM-183): its runner id ends -sN.
     def _slot(f: Dict[str, Any]) -> str:

@@ -420,6 +420,10 @@ class Runner:
     # minutes of CPU and memory for the wall's trace. Measured by the runner, never guessed.
     compute: Dict[str, Any] = field(default_factory=dict)
     compute_history: List[List[float]] = field(default_factory=list)
+    # ITS LAST COMPUTE CHECK (JG, 10 Nov 2026): slot, when, what was measured, and whether it
+    # left room for a run. Sent by a slot 2 or more on every claim, and on a check-in while
+    # the check holds it back, so Grid Control can show that it checked.
+    gate: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def online(self) -> bool:
@@ -449,7 +453,8 @@ class Runner:
                 # that actually named themselves.
                 "process_count": len(live) or None,
                 "conflict": len(self.live_processes(RUNNER_CONFLICT_SECONDS)) > 1,
-                "busy_elsewhere": bool(self.busy_elsewhere and self.online)}
+                "busy_elsewhere": bool(self.busy_elsewhere and self.online),
+                "gate": dict(self.gate)}
 
 
 _RUNS: Dict[str, Run] = {}
@@ -883,6 +888,19 @@ class ClaimRequest(BaseModel):
     capabilities: List[str] = []
     # WHAT ITS MACHINE IS USING (D-743); absent from a runner that predates it.
     compute: Optional[Dict[str, Any]] = None
+    # ITS LAST COMPUTE CHECK (slot 2 or more); absent from a runner that predates it.
+    gate: Optional[Dict[str, Any]] = None
+
+
+def _note_gate(runner: "Runner", gate: Any, now: float) -> None:
+    if not isinstance(gate, dict) or not gate:
+        return
+    try:
+        runner.gate = {"slot": int(gate.get("slot") or 1), "ok": bool(gate.get("ok")),
+                       "measured": str(gate.get("measured") or "")[:300],
+                       "at": float(gate.get("at") or now), "received_at": now}
+    except (TypeError, ValueError):
+        return
 
 
 class ProgressRequest(BaseModel):
@@ -1339,7 +1357,9 @@ def tti_status(tid: str, x_sdi_key: Optional[str] = Header(default=None)):
     return body
 
 @router.get("/wall")
-def wall(x_sdi_key: Optional[str] = Header(default=None)):
+def wall(local: bool = False, x_sdi_key: Optional[str] = Header(default=None)):
+    """Grid Control's picture. local=1 is this service alone: what another service on the
+    grid asks for, so the two never ask each other back."""
     _check_key(x_sdi_key)
     import sys as _sys
     import estimate_wall
@@ -1380,7 +1400,37 @@ def wall(x_sdi_key: Optional[str] = Header(default=None)):
     if not voice.get("speech_tts") and voice.get("speech_reason"):
         snap["alerts"] = list(snap.get("alerts") or []) + [
             "Voice: the pages are using the device's own voice: " + voice["speech_reason"]]
+    # THE WHOLE GRID (JG, 10 Nov 2026): the other services' jobs, queue and Grid Runners.
+    import grid_peers
+    snap["grid_service_id"] = grid_peers.SERVICE_ID
+    if not local:
+        try:
+            grid_peers.merge(snap)
+        except Exception as exc:                                    # noqa: BLE001
+            snap["grid"] = [{"service": "", "label": "grid", "ok": False,
+                             "error": f"{type(exc).__name__}: {exc}", "live": [],
+                             "queue": [], "fleet": []}]
     return snap
+
+
+class GridStopRequest(BaseModel):
+    service: str
+    run_id: str
+
+
+@router.post("/grid/stop")
+def grid_stop(req: GridStopRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Stop a job that is on ANOTHER service of the grid, from this one's Grid Control. The
+    same stop as that service's own page; only a service on SDI_GRID_PEERS is asked."""
+    _check_key(x_sdi_key)
+    import grid_peers
+    try:
+        return grid_peers.stop_on(req.service, req.run_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:                                        # noqa: BLE001
+        raise HTTPException(502, f"{req.service} did not take the stop: "
+                                 f"{type(exc).__name__}: {exc}")
 
 
 # ── HISTORY ON THE WALL (D-744) ──────────────────────────────────────────────────────────
@@ -1651,8 +1701,10 @@ def heartbeat(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)
             runner.processes[req.process] = now
         if req.build:
             runner.build = req.build
-        runner.busy_elsewhere = True
+        # A SLOT HELD BACK BY ITS COMPUTE CHECK is checking in, not busy for another service.
+        runner.busy_elsewhere = not (req.gate and not req.gate.get("ok"))
         _note_compute(runner, req.compute, now)
+        _note_gate(runner, req.gate, now)
     return {"ok": True}
 
 
@@ -1674,6 +1726,7 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         runner.capabilities = list(req.capabilities or [])
         runner.busy_elsewhere = False
         _note_compute(runner, req.compute, now)
+        _note_gate(runner, req.gate, now)
 
         _refused = _claim_refused_because(req.runner_id, req.hostname, req.capabilities)
         if _refused:

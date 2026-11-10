@@ -493,7 +493,7 @@
     <div class="lanes" id="lanes"></div>
     <div class="side">
       <div class="panel">
-        <div class="ptitle"><span><b>SDI Grid · Grid Runners</b></span><span class="r" id="fleetCount"></span></div>
+        <div class="ptitle"><span><b>Fleet Grid Runners</b></span><span class="r" id="fleetCount"></span></div>
         <div class="fleet" id="fleet"></div>
       </div>
       <div class="panel">
@@ -501,7 +501,7 @@
         <div class="sw" id="sw"></div>
       </div>
       <div class="panel">
-        <div class="ptitle"><span><b>Queue</b></span><span class="r" id="queueCount"></span></div>
+        <div class="ptitle"><span><b>Queue · whole grid</b></span><span class="r" id="queueCount"></span></div>
         <div class="queue" id="queue"></div>
       </div>
     </div>
@@ -839,7 +839,7 @@ function render(){
   renderLanes(s);
   serviceHost = s.service_host || "";
   renderFleet(s.fleet || [], s.compute || []);
-  renderQueue(s.queue || []);
+  renderQueue(s.queue || [], s.grid || []);
   renderSolidWorks(s.solidworks || [], s.sw_wait_limit_s);
   renderTrend(s.series.run_times || [], s.kpis);
   renderActivity(s.series.activity_24h || []);
@@ -1005,10 +1005,10 @@ function renderLog(){
    the run, and the runner is told to end the engine on its next heartbeat. A job Self-Running
    queued is held on its sheet after this, not queued again, until somebody marks it Re-Run. */
 const stopping = {};
-function stopBtn(r){
+function stopBtn(r, service){
   if(!r || !r.run_id) return "";
   const id = esc(r.run_id), sent = stopping[r.run_id];
-  return `<button class="stopjob" type="button" data-stop-job="${id}" data-name="${esc(r.drawing_number || r.run_id)}"${sent ? " disabled" : ""}
+  return `<button class="stopjob" type="button" data-stop-job="${id}" data-service="${esc(service || "")}" data-name="${esc(r.drawing_number || r.run_id)}"${sent ? " disabled" : ""}
     title="Stop this job: the run is abandoned and its Grid Runner ends the engine">${sent ? "Stopping…" : "Stop"}</button>`;
 }
 document.addEventListener("click", async e => {
@@ -1018,7 +1018,10 @@ document.addEventListener("click", async e => {
   if(!confirm(`Stop ${b.dataset.name}?\n\nThe run is abandoned and its Grid Runner ends the engine. `
               + "A job from AI Self-Running is not queued again until it is marked Re-Run.")) return;
   stopping[id] = true; b.disabled = true; b.textContent = "Stopping…";
-  try{ await api("/api/estimate/" + encodeURIComponent(id) + "/abandon", {}); }
+  try{
+    if(b.dataset.service) await api("/api/estimate/grid/stop", {service: b.dataset.service, run_id: id});
+    else await api("/api/estimate/" + encodeURIComponent(id) + "/abandon", {});
+  }
   catch(err){ delete stopping[id]; b.disabled = false; b.textContent = "Stop"; alert("Not stopped: " + err.message); }
 });
 function openLog(id){ logRun = id; $("logBody").innerHTML = ""; $("logModal").hidden = false; renderLog(); }
@@ -1069,6 +1072,15 @@ function machineCompute(m, now){
   </div>`;
 }
 let serviceHost = "";
+/* THE SECOND GRID RUNNER'S COMPUTE CHECK, SHOWN (JG, 10 Nov 2026): "we also need to be able to see
+   that it's at least tried to check for compute resources on the second grid runner". Each check
+   says when, what it measured, and whether it left room for a run or held the slot back. */
+function gateLine(g){
+  if(!g || (g.slot || 1) < 2) return "";
+  const when = g.at ? fmtClock(g.at) : "?";
+  return `<div class="meta gate">Compute check, slot ${esc(g.slot)}, at <b>${when}</b>: ${esc(g.measured || "")} → `
+    + (g.ok ? "<b>room for a run</b>, asking for work" : "<b>holding</b>, not the room for one more run") + "</div>";
+}
 function renderFleet(fleet, compute){
   compute = compute || [];
   const byHost = {}; compute.forEach(m => { byHost[String(m.host).toUpperCase()] = m; });
@@ -1087,6 +1099,7 @@ function renderFleet(fleet, compute){
     return `<div class="node ${f.rag}${f.planned ? " planned" : ""}">
       <span class="hb"></span><span class="nm">${esc(f.label)}</span><span class="chips">${caps}</span>${badge(f.rag, f.rag === "green" ? (f.job ? "Working" : "Ready") : WORD[f.rag])}
       <div class="meta">${esc(f.label !== f.hostname ? f.hostname + " · " : "")}${esc(f.rag_reason)}${job}${seen ? " · " + seen : ""}${f.build ? " · build <b>" + esc(f.build.slice(0, 7)) + "</b>" : ""}</div>
+      ${gateLine(f.gate)}
       ${machineCompute(m, nowS())}
     </div>`;
   }).join("") + (compute.some(m => m.connected) ? `<div class="clegend">
@@ -1096,14 +1109,33 @@ function renderFleet(fleet, compute){
       <span style="color:var(--ink-3)">trace: <span style="color:#F6D946">━</span> CPU <span style="color:#a3b6c4">┅</span> memory</span></div>` : "");
 }
 
-function renderQueue(q){
-  $("queueCount").textContent = q.length ? `${q.length} waiting` : "empty";
-  if(!q.length){ $("queue").innerHTML = '<div class="empty">Nothing waiting. A new estimate starts as soon as it is queued.</div>'; return; }
+/* THE REST OF THE GRID (JG, 10 Nov 2026): "whether it's on local machine and on port 8071 or 8072,
+   the control grid still needs to see it". The other services' running jobs and queue, each named
+   by its service, each with Stop (sent to that service through this one). */
+function gridRows(grid){
+  const n = nowS(), out = [];
+  (grid || []).forEach(g => {
+    if(!g.ok){ out.push(`<div class="qrow"><span class="n">↔</span><span><b>${esc(g.label)}</b> <span style="color:var(--ink-2)">${esc(g.error || "not answering")}</span></span><span></span><span></span></div>`); return; }
+    (g.live || []).forEach(r => out.push(`<div class="qrow"><span class="n">▶</span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number || r.run_id)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")} · running on ${esc(g.label)}${r.runner ? " · " + esc(r.runner) : ""}</span></span>
+      <span class="t">${fmtDur(r.elapsed_s)}${r.silent_s > 300 ? " · silent " + fmtDur(r.silent_s) : ""}</span>${stopBtn(r, g.service)}</div>`));
+    (g.queue || []).forEach(r => out.push(`<div class="qrow"><span class="n">·</span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number || r.run_id)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")} · queued on ${esc(g.label)}</span></span>
+      <span class="t">waiting ${fmtDur(n - (r.queued_at || n))}</span>${stopBtn(r, g.service)}</div>`));
+  });
+  return out;
+}
+function renderQueue(q, grid){
+  const others = gridRows(grid);
+  $("queueCount").textContent = (q.length ? `${q.length} waiting here` : "none here")
+    + ((grid || []).length ? ` · ${(grid || []).map(g => g.label).join(", ")} too` : "");
+  if(!q.length && !others.length){ $("queue").innerHTML = '<div class="empty">Nothing waiting. A new estimate starts as soon as it is queued.</div>'; return; }
+  if(!q.length){ $("queue").innerHTML = others.join(""); return; }
   const n = nowS();
   $("queue").innerHTML = q.slice(0, 6).map((r, i) => `<div class="qrow"><span class="n">#${i + 1}</span>
       <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")}</span></span>
       <span class="t">${r.start_at ? "starts ~" + fmtClock(r.start_at) + " · done ~" + fmtClock(r.finish_at) : "waiting " + fmtDur(n - (r.queued_at || n))}</span>${stopBtn(r)}</div>`).join("")
-    + (q.length > 6 ? `<div class="empty">+ ${q.length - 6} more</div>` : "");
+    + (q.length > 6 ? `<div class="empty">+ ${q.length - 6} more</div>` : "") + others.join("");
 }
 
 /* ── THE DESKTOP'S SOLIDWORKS: who has the licence, since when, and who waits (D-738) ── */

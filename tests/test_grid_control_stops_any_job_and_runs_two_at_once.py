@@ -188,7 +188,7 @@ def test_two_at_once_still_obeys_the_switch(share, monkeypatch):
 # ── the pages ─────────────────────────────────────────────────────────────────────────
 def test_grid_control_names_and_a_stop_on_every_running_and_queued_job():
     assert "<title>Grid Control</title>" in WALL and '<div class="sub">GRID CONTROL</div>' in WALL
-    assert "<b>SDI Grid · Grid Runners</b>" in WALL and "Fleet · runners" not in WALL
+    assert "<b>Fleet Grid Runners</b>" in WALL and "Fleet · runners" not in WALL
     assert "${stopBtn(r)}${badge(r.rag, WORD[r.rag])}" in WALL, "on each running lane"
     assert 'waiting " + fmtDur(n - (r.queued_at || n))}</span>${stopBtn(r)}' in WALL, "on the queue"
     assert '"/api/estimate/" + encodeURIComponent(id) + "/abandon"' in WALL
