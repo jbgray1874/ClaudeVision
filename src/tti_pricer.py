@@ -719,6 +719,10 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"{it.get('unit_cost', '') if it.get('unit_cost') is not None else ''}  {where}", flush=True)
         if it.get("pack"):
             print(f"{'':<11}{it['pack']}", flush=True)
+        if it.get("why") and it.get("state") not in ("planned", "skipped"):
+            # WHY A ROW WAS NOT PRICED IS SAID ON SCREEN (JG, 11 Nov 2026: row 7 showed "not
+            # queued" and nothing else; the reason was only in the status file).
+            print(f"{'':<11}why: {it['why']}", flush=True)
     _st: Dict[str, int] = {}
     for it in rep["rows"]:
         k = it.get("pack_status") or ("skipped" if it.get("state") == "skipped" else
