@@ -218,6 +218,24 @@ Document, Supplier, **Company**, Site, Accounting Date, Currency, GBP Amount, ..
 - Company in column D, as BICY (C01). Document and Source Document swapped as BICY: 454 repeated
   values take -2, -3. The blanks Acuity filled with BLANK are already filled from the document
   reference (the 317 above), so none reach X3 blank.
+- **Lines, not suffixes (Ethan / Jim, 11 Nov, Run 4) – supersedes the -2, -3 above for BISY.**
+  Document (B) is the Access document number (5 and six digits), never one we made up. Rows that
+  share an Access number (same supplier, currency, terms, type) are lines 1, 2, 3 of that one
+  document (Line, column R), written next to each other; header GBP Amount and Transaction Amount
+  carry the document total; each line keeps its own line amount (column X). 4 Nov data: 193
+  documents became multi-line (415 rows now lines 2+, up to 18 lines); 1,641 documents; line total
+  unchanged. A "Lines" tab lists every one. `LINES=0` rebuilds the old layout (proved identical to
+  the file sent). **BICY is not changed:** its Document is the customer order number, and repeats
+  there are different invoices, not lines.
+  - **The catch, put to Ethan:** the "lines" of one Access number are separate supplier invoices
+    (5028370: six supplier refs, 6 Aug–21 Sep, due 30 Oct and 29 Nov). X3 keeps the header of
+    line 1 only: one supplier ref, one source date, one due date. 134 documents differ in source
+    date, 56 in due date.
+- **No Access document number (259 items, £1,332,793.58, 4 Nov):** Document = the supplier ref
+  (B = N). With SDI Finance (Claire) to explain: `deliver/Finance_BISY_blank_Access_document_numbers.xlsx`.
+  Many look like deposits / prepayments against POs ("PO5029719DEP"), direct-debit and card
+  items, keyed straight into the purchase ledger. Confirm in Access with
+  `rebuild/sql/check_bisy_document_numbers.sql`. They stay as they are until Finance answers.
 - **Built by `scripts/build_bicy_bisy.py`** from the BICX / BISX files that `populate_guides.py`
   makes. It deletes CURLED, inserts Company at D, swaps B and N, updates the Mapping, Guide and
   Notes tabs, reads every row back, and writes the `;` load file (rule 1c). Rows and values are
@@ -845,6 +863,11 @@ There is no data dictionary for Access; everything below was found by querying t
 - **Keep superseded files out of reach:** move them to a `superseded_<date>` folder so they can't be attached by mistake.
 - **E-mails go in the chat, ready to paste** – not in .md files (James, 5 Nov).
 - **Lists that name customers or suppliers stay inside SDI.** Send one attachment per team (Purchasing, Customer Service, Finance) with only their items.
+- **Never invent a key Acuity will reconcile against** (Ethan, 11 Nov). The -2, -3 suffixes on BISY made
+  documents that don't exist in Access. Use the source system's numbers; where one is missing,
+  ask (rule 1d), don't make one up.
+- **A rule that merges rows must check what the merge loses** – header fields that differ between
+  the rows (dates, references) go to the first row only. Say so before sending.
 - **Tell the user plainly what wasn't rebuilt or what's missing** (rules 1d and 1e) – never leave a stale file in a "current" set unannounced.
 
 
@@ -1624,3 +1647,41 @@ Not data migration, but tracked here so nothing is forgotten. Everything is in J
 **Still missing:**
 - Replies from Sales, Estimating, Design and the rest of Finance to the 7 Oct request for reports / spreadsheets.
 - Possibly Selina's earlier list (19 Oct: "on the list I sent through").
+
+### 19.11 BISY document numbers and lines (Ethan / Jim, 11 Nov 16:24)
+
+**Ethan's two points:**
+1. **Blank Access document number.** Where Access has no document number, the build put the supplier's reference
+   in Document (B), so B = Source Document (N). Document should be the Access number (starts with 5).
+   Confirm they really are blank in Access; give Claire a handful to explain, or to find the real numbers.
+   Then decide how to treat them. **SDI to action (Claire).**
+2. **Suffixes.** -2, -3 aren't needed. Rows of the same invoice should be Line 1, 2, 3 (column R)
+   under the same Document. Otherwise X3 can't be reconciled to Access (5028370 has 6 lines in Access). Only Access
+   numbers, none of our own. **Ours to fix.**
+
+**Done (11 Nov):**
+- `scripts/build_bicy_bisy.py` now numbers the lines (`LINES=1`, the default, so every future run does it).
+  `ONLY=YA004BISY` rebuilds just that file.
+- Rebuilt from the 4 Nov evening run, as before:
+  ```
+  MIG_BASE=<scratch>/runs/2026-11-04-pm/work SRC_DIR=<scratch>/runs/2026-11-04-pm/work/out_mapped \
+  OUT_DIR=<scratch>/Ethan_fixes_2026-11-11_BISY ONLY=YA004BISY python3 scripts/build_bicy_bisy.py
+  ```
+- Results: 2,056 rows; 1,641 documents; 193 documents with more than one line (415 rows moved to lines 2+);
+  259 rows with no Access number left as they were. The line total is unchanged (£7,295,217.75, all
+  2,056 rows). Every other cell is the same, as the read-back checks show. The file is in `Ethan_fixes_2026-11-11_BISY/`
+  (xlsx + `;` txt, with a "Lines" tab).
+- `deliver/Finance_BISY_blank_Access_document_numbers.xlsx` for Claire: 259 items, £1.33m;
+  tabs Read me, Examples (8, the largest per supplier), All items (yellow fill-in column), By
+  supplier. The biggest suppliers: WHT500 28, OPT500 20, FED503 18. The sheet names suppliers, so
+  it stays inside SDI.
+- `rebuild/sql/check_bisy_document_numbers.sql` (read-only) for James: query 1 should return about 259
+  rows of PL_TRANSACTIONS with every column; query 2 should return the 6 rows of 5028370.
+
+**Asked of Ethan / Jim:**
+- **Lost header detail.** On a multi-line document X3 keeps line 1's supplier ref, source date and due date.
+  Should each line's supplier ref go in the line comment (column W)? Or should a document split where due
+  dates differ?
+- **Header amount.** We assumed it is the document total on every line. Is that right?
+
+**Open:** Claire's answer on the 259; then James to run the SQL above, then a decision with Jim on their numbers.
