@@ -456,6 +456,10 @@ def apply_reruns(ledger: Dict[str, Any], asked: List[Dict[str, Any]],
             if cust and str(job.get("customer") or "").strip().upper() != cust:
                 continue
             job["retry"] = True
+            # ONCE, OUTRANKING AI CHECK AND AICompleted (JG, 11 Nov 2026): taken by the next
+            # read that finds the row on the sheet, cleared when queued (or when the row has gone).
+            job["page_rerun"] = r.get("at") or time.time()
+            job.pop("page_rerun_refused", None)
             done.append(want)
             say(f"   {job.get('drawing')} ({job.get('customer')}): Re-run asked for on the page"
                 + (f" by {r.get('by')}" if r.get("by") else ""))
@@ -478,6 +482,13 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
     sources = ler._sources(s["root"])
     switch.beat(report("reading the sheet", str(s["workbook"])))
     decisions = ler.plan(ler.read_sheet(s["workbook"]), sources, ledger)
+    # A PAGE RE-RUN FOR A ROW THAT HAS LEFT THE SHEET IS SAID, ONCE (JG, 11 Nov 2026: "otherwise I
+    # need to manually re-run"), on the log and the page's beat, and then forgotten.
+    for _job in (ledger.get("jobs") or {}).values():
+        _why = _job.pop("page_rerun_refused", None)
+        if _why:
+            say(f"   Re-run NOT taken: {_why}")
+            switch.beat(report("re-run not taken", _why))
     # WHEN AND WHERE THE SHEET WAS READ, ON EVERY BEAT OF THIS CYCLE (JG, 10 Nov): the page said
     # "read 2026-11-03" through a whole day of runs, because the time only moved when a cycle
     # finished. The counts shown are this read's, so the time and the file shown are too.

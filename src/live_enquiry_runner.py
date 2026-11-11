@@ -765,20 +765,30 @@ def checkout_build(root: Optional[Path] = None) -> str:
 
 def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
            seen: Optional[Dict[str, int]] = None) -> Decision:
-    if row.ai_check.strip().upper() not in {w.upper() for w in config.LIVE_ENQUIRY_ASKED}:
+    # RE-RUN PRESSED ON THE PAGE (JG, 11 Nov 2026): "it will attempt to re run as long as the
+    # liveenquiry sheet still has entries for them. If it does and even if the AIcompleted says
+    # yes, it re runs." A person pressing Re-run outranks AI CHECK and AICompleted for one run;
+    # the row must still be on the sheet, with a quantity.
+    page_rerun = bool(((ledger.get("jobs") or {}).get(job_key(row)) or {}).get("page_rerun"))
+    if not page_rerun and row.ai_check.strip().upper() not in {w.upper() for w in config.LIVE_ENQUIRY_ASKED}:
         return Decision(row, "not_asked", f"AI CHECK is '{row.ai_check or 'blank'}'")
     # THE AI LIVE ENQUIRY SHEET'S RULE (D-608): YES, a QTY, and AICompleted NO, N or Re-Run.
-    rerun = False
+    rerun = page_rerun
     if row.completed_column:
         said = completed_word(row.ai_completed)
-        if said not in config.LIVE_ENQUIRY_RUN_WHEN_COMPLETED:
+        if page_rerun:
+            if not parse_quantities(row.quantities):
+                return Decision(row, "held", "Re-run asked for on the page, but the row has no "
+                                             "QTY — put the quantities in the QTY column")
+        elif said not in config.LIVE_ENQUIRY_RUN_WHEN_COMPLETED:
             return Decision(row, "not_asked",
                             f"AICompleted is '{row.ai_completed or 'blank'}' — NO, N or Re-Run "
                             f"runs it")
-        if not parse_quantities(row.quantities):
+        elif not parse_quantities(row.quantities):
             return Decision(row, "held", "no QTY on the sheet — put the quantities in the QTY "
                                          "column")
-        rerun = said in config.LIVE_ENQUIRY_RERUN
+        else:
+            rerun = said in config.LIVE_ENQUIRY_RERUN
     note = _hold_note(row.notes)
     if note:
         return Decision(row, "held", f"the row's note says '{note}'")
@@ -799,7 +809,7 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
     # existed read "done" before Re-Run was ever looked at, so typing Re-Run on its row did
     # nothing. A person asking for it on the sheet is the stronger instruction; it runs once
     # per marking, as Re-Run does everywhere else.
-    _rerun_baseline = rerun and not job.get("rerun_taken")
+    _rerun_baseline = page_rerun or (rerun and not job.get("rerun_taken"))
     if not attempts and job.get("baseline") == "*" and not _rerun_baseline:
         return Decision(row, "done", f"run by hand before the runner (baselined "
                                      f"{job.get('baselined_at')})", located=located)
@@ -829,7 +839,7 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
     # RE-RUN RUNS ONCE PER MARKING (D-608). Until AICompleted is written back the cell still
     # says Re-Run after the run; the ledger remembers it was taken, and forgets when the cell
     # is seen saying anything else (plan()), so marking it Re-Run again runs it again.
-    rerun_due = rerun and not job.get("rerun_taken")
+    rerun_due = page_rerun or (rerun and not job.get("rerun_taken"))
     if not last:
         if job.get("baseline"):
             d.reason = ("Re-Run asked for on the sheet (it was baselined as estimated by hand)"
@@ -841,7 +851,7 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
                                         f"{last.get('queued_at')}"
         return d
     if rerun_due and last.get("status") in {"done", "error"}:
-        d.reason = "Re-Run asked for on the sheet"
+        d.reason = "Re-run asked for on the page" if page_rerun else "Re-Run asked for on the sheet"
         return d
     # A STOP MEANS STOP (JG, 10 Nov 2026). A person who stops a job, from the estimating page
     # or Grid Control, has decided; queueing it again as "attempt 2" a minute later undid
@@ -933,6 +943,14 @@ def plan(rows: Sequence[EnquiryRow], sources: Sequence[Any],
         if r.completed_column and completed_word(r.ai_completed) not in config.LIVE_ENQUIRY_RERUN:
             (ledger.get("jobs", {}).get(job_key(r)) or {}).pop("rerun_taken", None)
     decisions = [decide(r, sources, ledger, seen) for r in rows]
+    on_sheet = {job_key(r) for r in rows}
+    for _k, _job in (ledger.get("jobs") or {}).items():
+        if _job.get("page_rerun") and _k not in on_sheet:
+            _job.pop("page_rerun", None)
+            _job["page_rerun_refused"] = (
+                f"{_job.get('drawing')} ({_job.get('customer')}) is no longer on the Live Enquiry "
+                f"sheet, so the page's Re-run was not taken: run it again by hand from the "
+                f"estimating page")
     if any(r.completed_column for r in rows):
         # THE AI LIVE ENQUIRY SHEET RUNS FROM THE TOP (D-608): ready rows in the sheet's order.
         return sorted(decisions, key=lambda d: (d.status != "ready", d.row.row))
@@ -1182,7 +1200,8 @@ def queue_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: 
     attempt["output_path"] = started.get("output_path")
     job["attempts"].append(attempt)
     job.pop("retry", None)
-    if d.rerun:
+    job.pop("page_rerun", None)                   # the page's Re-run is answered: once
+    if d.rerun and completed_word(d.row.ai_completed) in config.LIVE_ENQUIRY_RERUN:
         job["rerun_taken"] = True                 # this Re-Run has been answered (D-608)
     save_ledger(ledger_path, ledger)
     say(f"   queued {d.row.drawing} ({d.row.customer}) at {'/'.join(map(str, d.quantities))} "
