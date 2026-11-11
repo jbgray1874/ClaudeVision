@@ -83,7 +83,9 @@ def test_another_services_jobs_queue_and_runners_join_this_grid_control(gp, monk
     assert [g["label"] for g in snap["grid"]] == ["localhost:8072"], "a service never counts itself"
     g = snap["grid"][0]
     assert g["ok"] and g["live"][0]["drawing_number"] == "11896-02-01-GA"
-    assert "log_tail" not in g["live"][0], "only what Grid Control shows travels"
+    # 11 Nov 2026: a job running on another service is a full run tile on every Grid Control,
+    # so its stage and log travel with it.
+    assert g["live"][0]["log_tail"] == ["x"] * 80
     assert g["queue"][0]["run_id"] == "p2"
     slot2 = [f for f in snap["fleet"] if f.get("runner_id") == "laptop-s2"][0]
     assert slot2["via"] == "localhost:8072" and "via localhost:8072" in slot2["label"]

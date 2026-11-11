@@ -189,7 +189,7 @@ def test_two_at_once_still_obeys_the_switch(share, monkeypatch):
 def test_grid_control_names_and_a_stop_on_every_running_and_queued_job():
     assert "<title>Grid Control</title>" in WALL and '<div class="sub">GRID CONTROL</div>' in WALL
     assert "<b>Fleet Grid Runners</b>" in WALL and "Fleet · runners" not in WALL
-    assert "${stopBtn(r)}${badge(r.rag, WORD[r.rag])}" in WALL, "on each running lane"
+    assert "${stopBtn(r, r._service)}${badge(r.rag, WORD[r.rag])}" in WALL, "on each running lane, on any service"
     assert 'waiting " + fmtDur(n - (r.queued_at || n))}</span>${stopBtn(r)}' in WALL, "on the queue"
     assert '"/api/estimate/" + encodeURIComponent(id) + "/abandon"' in WALL
     assert ">Grid Control ↗</a>" in PAGE and ">Control panel ↗</a>" not in PAGE
@@ -382,5 +382,6 @@ def test_a_page_re_run_for_a_row_no_longer_on_the_sheet_is_said_not_run(share, m
 
 
 def test_every_finished_job_has_a_re_run_button():
-    assert 'if((r.status === "error" || r.status === "done") && !selfRerunSeen.has(r.drawing)){' in PAGE
+    # However it ended, and per customer's drawing (11 Nov 2026): not only "done" and "error".
+    assert "if(!live && !selfRerunSeen.has(key)){" in PAGE
     assert "whatever AICompleted" in PAGE

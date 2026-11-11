@@ -324,6 +324,12 @@ class Run:
     requested_by: str = ""
     # WHERE IT CAME FROM, in words for Grid Control: see job_source().
     source: str = ""
+    # WHAT THE RUNNER THAT CLAIMED IT SAID IT CAN DO (11 Nov 2026). Kept on the run, which
+    # survives a restart of this service; the runner registry does not. After the 17:55
+    # restart the laptop's runner, mid-job, came back through its progress posts with no
+    # capabilities, so the second slot was told "one desktop drives one SolidWorks and one
+    # estimate" and sat idle beside a queued job.
+    runner_capabilities: List[str] = field(default_factory=list)
     lease_until: float = 0.0
     # WHICH RUNNER PROCESS CLAIMED IT (D-369). The runner's id is the machine's (host and
     # network card), so a runner restarted mid-job comes back under the same id; only the
@@ -427,6 +433,9 @@ class Runner:
     # left room for a run. Sent by a slot 2 or more on every claim, and on a check-in while
     # the check holds it back, so Grid Control can show that it checked.
     gate: Dict[str, Any] = field(default_factory=dict)
+    # WHY ITS LAST CLAIM WAS HANDED NOTHING WHILE WORK WAS QUEUED; empty when it took work or
+    # nothing was queued. See _note_held.
+    held: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def online(self) -> bool:
@@ -457,7 +466,7 @@ class Runner:
                 "process_count": len(live) or None,
                 "conflict": len(self.live_processes(RUNNER_CONFLICT_SECONDS)) > 1,
                 "busy_elsewhere": bool(self.busy_elsewhere and self.online),
-                "gate": dict(self.gate)}
+                "gate": dict(self.gate), "held": dict(self.held)}
 
 
 _RUNS: Dict[str, Run] = {}
@@ -687,7 +696,8 @@ def _claim_refused_because(runner_id: str, hostname: str,
             return "this runner already has a run in progress"
         other = _RUNNERS.get(str(r.runner or ""))
         if host and other is not None and str(other.hostname or "").strip().upper() == host:
-            if _mine_shares and "desktop_token" in set(other.capabilities or []):
+            _theirs = set(other.capabilities or []) or set(r.runner_capabilities or [])
+            if _mine_shares and "desktop_token" in _theirs:
                 continue
             return (f"another run is in progress on {hostname}: one desktop drives one "
                     f"SolidWorks and one estimate")
@@ -935,6 +945,15 @@ class ClaimRequest(BaseModel):
     compute: Optional[Dict[str, Any]] = None
     # ITS LAST COMPUTE CHECK (slot 2 or more); absent from a runner that predates it.
     gate: Optional[Dict[str, Any]] = None
+
+
+def _note_held(runner: "Runner", reason: str, now: float) -> None:
+    """Why this runner was handed nothing although work is queued (JG, 11 Nov 2026: "there is
+    only one grid runner working despite the second one being queued. why is it not picked
+    up"). The reason went back to the runner's own log and nowhere a person looks; Grid Control
+    now shows it on the runner's tile."""
+    queued = sum(1 for r in _RUNS.values() if r.status == "queued")
+    runner.held = {"reason": str(reason or "")[:300], "at": now, "queued": queued} if queued else {}
 
 
 def _note_gate(runner: "Runner", gate: Any, now: float) -> None:
@@ -1508,6 +1527,97 @@ class GridStopRequest(BaseModel):
     run_id: str
 
 
+# ── RE-RUN ANY FINISHED JOB (JG, 11 Nov 2026) ──────────────────────────────────────────────
+# "why do only some of the jobs have a re-run button against them ... the tti jobs and the ones
+# ran manually one by one don't even appear in the list". Re-Run was only on Self-Running's own
+# card. Every finished job on Grid Control now has one, whichever part of the estimator ran it:
+#   * a Self-Running job is handed back to Self-Running, which reads the Live Enquiry sheet and
+#     gathers the pack again (so drawings found since, and resolver fixes, are used);
+#   * any other job is queued again with what that run read: the same client, drawing, units,
+#     quantity breaks, method, brief and recipients, from a copy of the inputs it staged (staging
+#     clears the client/job folder, so the copy is taken first). A TTI row re-run here does not
+#     write the tracker: the pricer's --rows N --replace-costs does that, and the answer says so.
+_STAGE_MARKERS = {"CONCEPT_DOCUMENT.json", "REFERENCE_DOCUMENTS.json", "DELIVERY_DECLARED.json",
+                  "PARTNER_API_RUN.json", "ENQUIRY_BRIEF.txt"}
+
+
+def _rerun_method(run: "Run") -> str:
+    if run.llm_only:
+        return "llm"
+    if run.deterministic_only:
+        return "deterministic"
+    if run.reader_mode in READER_MODE_FLAG:
+        return run.reader_mode
+    return "both"
+
+
+class GridRerunRequest(BaseModel):
+    service: str
+    run_id: str
+
+
+@router.post("/grid/rerun")
+def grid_rerun(req: GridRerunRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Re-run a finished job held by ANOTHER service of the grid, from this one's Grid Control."""
+    _check_key(x_sdi_key)
+    import grid_peers
+    try:
+        return grid_peers.rerun_on(req.service, req.run_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.post("/{run_id}/rerun")
+def rerun(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """Queue a finished job again (see above). Returns how it was queued."""
+    _check_key(x_sdi_key)
+    with _LOCK:
+        run = _RUNS.get(run_id)
+        if run is None:
+            raise HTTPException(404, "That run is not on this service.")
+        if run.status in ("queued", "running"):
+            raise HTTPException(409, f"{run.drawing_number} is still {run.status}: stop it first, or let it finish.")
+        client, drawing, source = run.client, run.drawing_number, str(run.source or "")
+        folder = Path(str(run.job_folder or ""))
+        units, breaks = int(run.units), list(run.quantity_breaks or [])
+        method, email = _rerun_method(run), ", ".join(run.email_to or []) or None
+        bom_routes = bool(run.bom_routes_only)
+    if source == "Self-Running":
+        try:
+            out = self_running_switch.rerun(drawing, client, by="Grid Control")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return {"ok": True, "how": "self_running", "drawing": drawing,
+                "said": f"{drawing} handed back to Self-Running: it reads the Live Enquiry sheet and "
+                        f"gathers the pack again on its next beat", "self_running": out}
+    if not folder.is_dir():
+        raise HTTPException(409, f"The inputs {drawing} ran from are no longer at {folder}: start it "
+                                 f"again from the estimating page.")
+    import shutil
+    hold = _held_dir("rerun") / f"{safe_segment(drawing)[:40]}_{uuid.uuid4().hex[:6]}"
+    copied = 0
+    for p in sorted(folder.rglob("*")):
+        if p.is_file() and p.name not in _STAGE_MARKERS:
+            dest = hold / p.relative_to(folder)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, dest)
+            copied += 1
+    brief_path = folder / _BRIEF_FILENAME
+    brief = brief_path.read_text(encoding="utf-8", errors="replace") if brief_path.is_file() else ""
+    if not copied and not brief.strip():
+        raise HTTPException(409, f"{drawing}'s staged inputs are empty: start it again from the estimating page.")
+    req = EstimateRequest(client=client, drawing_number=drawing, units=units, quantity_breaks=breaks,
+                          job_folder=str(hold) if copied else None, method=method,
+                          enquiry_brief=brief or None, email_to=email, bom_routes_only=bom_routes,
+                          source=(source + " re-run").strip() if source else "Re-run")
+    started = start(req, x_sdi_key=x_sdi_key)
+    note = (" A TTI row re-run here does not write the tracker: run the pricer with --rows N "
+            "--replace-costs for that." if source == "TTI batch" else "")
+    return {"ok": True, "how": "queued", "drawing": drawing, "run_id": (started or {}).get("run_id"),
+            "said": f"{drawing} queued again with the {copied} input file(s) its last run read, "
+                    f"{units} off, method {method}.{note}"}
+
+
 @router.post("/grid/stop")
 def grid_stop(req: GridStopRequest, x_sdi_key: Optional[str] = Header(default=None)):
     """Stop a job that is on ANOTHER service of the grid, from this one's Grid Control. The
@@ -1821,6 +1931,7 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
 
         _refused = _claim_refused_because(req.runner_id, req.hostname, req.capabilities)
         if _refused:
+            _note_held(runner, _refused, now)
             return {"run": None, "reason": _refused}
 
         _can = set(req.capabilities or [])
@@ -1838,26 +1949,35 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
             _estimates = [r for r in _RUNS.values() if r.status == "queued" and r.wants_engine
                           and not r.job_type]
             if _extract_only and _estimates:
-                return {"run": None, "reason": (
+                _why = (
                     f"{len(_estimates)} estimate(s) queued; this runner takes pack extracts "
-                    f"only (no Excel here), so a runner with Excel takes them")}
+                    f"only (no Excel here), so a runner with Excel takes them")
+                _note_held(runner, _why, now)
+                return {"run": None, "reason": _why}
             _for_models = [r for r in _RUNS.values() if r.status == "queued" and r.wants_engine
                            and _no_models and _needs_model_reader(r.job_folder)]
             if _for_models:
-                return {"run": None, "reason": (
+                _why = (
                     f"{len(_for_models)} queued job(s) need a model reader (SolidWorks or "
-                    f"the Document Manager) and this runner has neither")}
+                    f"the Document Manager) and this runner has neither")
+                _note_held(runner, _why, now)
+                return {"run": None, "reason": _why}
             _waiting = [r for r in _RUNS.values() if r.status == "queued" and r.job_type
                         and r.job_type not in _can]
             if _waiting:
-                return {"run": None, "reason": (
+                _why = (
                     f"{len(_waiting)} pack extract(s) queued need a runner restarted on the "
-                    f"current build (this runner does not run {_waiting[0].job_type})")}
+                    f"current build (this runner does not run {_waiting[0].job_type})")
+                _note_held(runner, _why, now)
+                return {"run": None, "reason": _why}
+            runner.held = {}
             return {"run": None, "reason": "nothing queued"}
 
         run = queued[0]
         run.status = "running"
         run.runner = req.runner_id
+        run.runner_capabilities = list(req.capabilities or [])
+        runner.held = {}
         run.started_at = now
         # THE FINISH WINDOW, AS HISTORY PREDICTS IT AT THE START (D-739), kept so the wall can
         # measure how good its ETAs are against the runs that finish.
@@ -2157,6 +2277,8 @@ def progress(run_id: str, req: ProgressRequest,
         r = _RUNNERS.setdefault(req.runner_id, Runner(runner_id=req.runner_id))
         r.last_seen = now
         r.run_id = run.run_id
+        if not r.capabilities and run.runner_capabilities:
+            r.capabilities = list(run.runner_capabilities)
         # ITS MACHINE BY NAME (JG, 10 Nov 2026): after a restart of this service a runner mid-job
         # is heard only here, which does not carry its name, so Grid Control listed it by its
         # raw id, not as the Laptop, and showed the Laptop as a second, planned runner.

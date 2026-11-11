@@ -94,4 +94,87 @@ def test_the_pricer_saves_a_pulse_while_a_run_works():
 def test_the_wall_lists_a_job_once_and_points_self_running_at_it():
     page = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-wall.html").read_text()
     assert "SHOWN.has(r.run_id)" in page and "its job is on this list" in page
-    assert "run ${esc(String(r.run_id).slice(0, 8))}" in page
+    assert '" · run " + esc(String(r.run_id).slice(0, 8))' in page
+
+
+# ── Re-run on every finished job, whichever part of the estimator ran it (11 Nov 2026) ──
+
+import types  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture()
+def service(tmp_path, monkeypatch):
+    stub = types.ModuleType("config")
+    stub.API_KEY = ""
+    stub.FILE_ROOTS = [str(tmp_path)]
+    stub.STAGING_ROOT = str(tmp_path / "staged")
+    monkeypatch.setitem(sys.modules, "config", stub)
+    for name in list(sys.modules):
+        if name in ("staging", "estimate_routes"):
+            del sys.modules[name]
+    er = pytest.importorskip("estimate_routes")
+    er._RUNS.clear(); er._RUNNERS.clear()
+    (tmp_path / "job").mkdir()
+    (tmp_path / "job" / "ga.pdf").write_bytes(b"%PDF-1.4 a drawing")
+    (tmp_path / "job" / "part.dxf").write_text("0\nSECTION")
+    er.claim(er.ClaimRequest(runner_id="laptop", hostname="LAPTOP"))
+    return er, tmp_path
+
+
+def _finished(er, tmp_path, source="", **kw):
+    rid = er.start(er.EstimateRequest(client="TTI", drawing_number="12161-04-GA", units=4, quantity_breaks=[8],
+                                      job_folder=str(tmp_path / "job"), output_root=str(tmp_path / "share"),
+                                      source=source, **kw))["run_id"]
+    er._RUNS[rid].status = "done"
+    return rid
+
+
+def test_a_page_or_tti_job_is_queued_again_with_what_it_read(service):
+    er, tmp_path = service
+    first = _finished(er, tmp_path, source="tti", method="targeted")
+    out = er.rerun(first)
+    assert out["how"] == "queued" and out["run_id"] != first
+    again = er._RUNS[out["run_id"]]
+    assert (again.client, again.drawing_number, again.units, again.quantity_breaks) == ("TTI", "12161-04-GA", 4, [8])
+    assert again.reader_mode == "targeted" and again.source == "TTI batch re-run" and again.status == "queued"
+    assert sorted(p.name for p in Path(again.job_folder).iterdir() if p.suffix in (".pdf", ".dxf")) == ["ga.pdf", "part.dxf"]
+    assert "--replace-costs" in out["said"], "a TTI row re-run here does not write the tracker, and says so"
+
+
+def test_a_self_running_job_is_handed_back_to_self_running(service, monkeypatch):
+    er, tmp_path = service
+    first = _finished(er, tmp_path, source="self_running")
+    asked = []
+    monkeypatch.setattr(er.self_running_switch, "rerun", lambda d, c, by="": asked.append((d, c, by)) or {"ok": True})
+    out = er.rerun(first)
+    assert out["how"] == "self_running" and asked == [("12161-04-GA", "TTI", "Grid Control")]
+    assert len(er._RUNS) == 1, "nothing is queued here: Self-Running gathers the pack again itself"
+
+
+def test_a_job_still_queued_or_running_is_not_run_twice(service):
+    er, tmp_path = service
+    rid = _finished(er, tmp_path)
+    er._RUNS[rid].status = "running"
+    with pytest.raises(er.HTTPException) as exc:
+        er.rerun(rid)
+    assert exc.value.status_code == 409
+
+
+def test_the_wall_lists_every_services_finished_jobs_with_a_rerun_and_runs_as_tiles():
+    page = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-wall.html").read_text()
+    assert "function allRecent(s)" in page and "data-rerun-job" in page and "/api/estimate/grid/rerun" in page
+    assert "_label: g.label" in page and 'stopBtn(r, r._service)' in page
+    import grid_peers
+    snap = {"live": [{"run_id": "a", "log_tail": ["x"], "stage": "Costing"}],
+            "recent": [{"run_id": "b", "drawing_number": "D", "source": "Estimating page", "outcome": "done"}]}
+    t = grid_peers._trim("http://localhost:8072", snap)
+    assert t["live"][0]["log_tail"] == ["x"], "a job running on another service is shown whole"
+    assert t["recent"][0]["source"] == "Estimating page"
+
+
+def test_self_runnings_own_card_offers_rerun_however_a_job_ended():
+    page = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-intelligence.html").read_text()
+    assert 'const key = (r.customer || "") + "|" + r.drawing' in page
+    assert "if(!live && !selfRerunSeen.has(key))" in page

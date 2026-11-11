@@ -314,6 +314,9 @@ def runner_rag(runner: Mapping[str, Any], service_commit: str = "",
     gate = runner.get("gate") or {}
     if gate and not gate.get("ok") and not runner.get("run_id"):
         return AMBER, f"holding: not the room for one more run ({gate.get('measured') or '?'})"
+    held = runner.get("held") or {}
+    if held.get("reason") and held.get("queued") and not runner.get("run_id"):
+        return AMBER, (f"not taking the {held['queued']} queued job(s): {held['reason']}")
     if seen > th["runner_quiet_after_s"] and not runner.get("run_id"):
         return AMBER, f"quiet for {seen:.0f} s"
     if runner.get("busy_elsewhere") and not runner.get("run_id"):

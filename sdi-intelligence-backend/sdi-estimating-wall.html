@@ -227,6 +227,8 @@
   .node{border:1px solid var(--line);border-radius:9px;padding:6px 10px;background:var(--panel-2);
         display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:2px 9px;align-items:center}
   .node.planned .meta{display:none}
+  /* A runner that needs attention says why in full: its reason wraps, never an ellipsis. */
+  .node.amber .meta,.node.red .meta{white-space:normal;overflow:visible;text-overflow:clip}
   .node.red{border-color:rgba(208,59,59,.6)} .node.amber{border-color:rgba(250,178,25,.5)}
   .node.planned{border-style:dashed;opacity:.75}
   .node .hb{width:10px;height:10px;border-radius:50%;background:var(--grey)}
@@ -841,15 +843,21 @@ function render(){
   b.querySelector(".ico").textContent = ICON[s.banner_rag] || "○";
   $("bannerText").textContent = s.banner || "";
   renderKpis(s.kpis, s.expected_s);
+  // EVERY RUNNING JOB ON THE GRID IS A RUN TILE (11 Nov 2026): this service's and the other
+  // services', once each, so a job started anywhere shows the same on every Grid Control.
+  const mine = new Set((s.live || []).map(r => r.run_id));
+  (s.grid || []).forEach(g => (g.live || []).forEach(r => {
+    if(!mine.has(r.run_id)){ mine.add(r.run_id); s.live = (s.live || []).concat([Object.assign({}, r, {_service: g.service, _label: g.label})]); }
+  }));
+  LIVE = s.live || [];
   renderLanes(s);
   serviceHost = s.service_host || "";
   renderFleet(s.fleet || [], s.compute || []);
-  LIVE = s.live || [];
   renderQueue(s.queue || [], s.grid || [], s.intake || []);
   renderSolidWorks(s.solidworks || [], s.sw_wait_limit_s);
   renderTrend(s.series.run_times || [], s.kpis);
   renderActivity(s.series.activity_24h || []);
-  renderRecent(s.recent || []);
+  renderRecent(allRecent(s));
   renderTicker(s.alerts || []);
   renderParity(s.parity);
   renderParityTasks(s.parity_tasks || []);
@@ -994,7 +1002,7 @@ function renderLanes(s){
         `<div class="${j < r.stage_index ? "done" : j === r.stage_index ? "now" : ""}">${esc(name)}</div>`).join("");
       const tail = r.log_tail || [];
       html.push(`<div class="panel lane ${r.rag}" data-start="${r.started_at || 0}">
-        <div class="lanehead"><span class="slotname">RUN ${i + 1} · ${esc(r.runner || "")}</span><span class="lanectl">${stopBtn(r)}${badge(r.rag, WORD[r.rag])}</span></div>
+        <div class="lanehead"><span class="slotname">RUN ${i + 1} · ${esc(r.runner || "")}${r._label ? " · on " + esc(r._label) : ""}</span><span class="lanectl">${stopBtn(r, r._service)}${badge(r.rag, WORD[r.rag])}</span></div>
         <div class="job">
           <div class="ring">${ring(frac == null ? 0 : frac, r.rag)}
             <div class="pct"><b>${frac == null ? "—" : Math.round(frac * 100) + "%"}</b><span>OF USUAL</span></div></div>
@@ -1148,7 +1156,7 @@ function renderFleet(fleet, compute){
     if(m) shown.add(host);
     return `<div class="node ${f.rag}${f.planned ? " planned" : ""}">
       <span class="hb"></span><span class="nm">${esc(f.label)}</span><span class="chips">${caps}</span>${badge(f.rag, f.rag === "green" ? (f.job ? "Working" : "Ready") : WORD[f.rag])}
-      <div class="meta">${esc(f.label !== f.hostname ? f.hostname + " · " : "")}${esc(f.rag_reason)}${job}${seen ? " · " + seen : ""}${f.build ? " · build <b>" + esc(f.build.slice(0, 7)) + "</b>" : ""}</div>
+      <div class="meta" title="${esc(f.rag_reason)}">${esc(f.label !== f.hostname ? f.hostname + " · " : "")}${esc(f.rag_reason)}${job}${seen ? " · " + seen : ""}${f.build ? " · build <b>" + esc(f.build.slice(0, 7)) + "</b>" : ""}</div>
       ${gateLine(f.gate)}
       ${machineCompute(m, nowS())}
     </div>`;
@@ -1183,7 +1191,8 @@ function gridRows(grid){
 }
 // WHERE A JOB CAME FROM (11 Nov 2026): the estimating page, Self-Running or the TTI batch.
 function src(r){
-  return (r && r.source ? " · " + esc(r.source) : "") + (r && r.run_id ? ` · <span class="rid">run ${esc(String(r.run_id).slice(0, 8))}</span>` : "");
+  // Plain text, no element: the run tile's line is laid out as one piece of text.
+  return (r && r.source ? " · " + esc(r.source) : "") + (r && r.run_id ? " · run " + esc(String(r.run_id).slice(0, 8)) : "");
 }
 // WORK NOT YET IN THE QUEUE (11 Nov 2026): Self-Running reading the sheet or staging a pack,
 // and a TTI batch working through its rows. A queued or running job shows below with its source.
@@ -1327,19 +1336,52 @@ function openItems(o){
   return `<span class="oi" title="${esc(o.phrase || "")}">${esc(bits.join(" · ") || o.total + " open")}</span>`;
 }
 
+// EVERY FINISHED JOB ON THE GRID, ONCE (11 Nov 2026): this service's and the other services',
+// newest first, each with its source and a Re-run.
+function allRecent(s){
+  const seen = new Set(), out = [];
+  (s.recent || []).forEach(r => { if(!seen.has(r.run_id)){ seen.add(r.run_id); out.push(r); } });
+  (s.grid || []).forEach(g => (g.recent || []).forEach(r => {
+    if(!seen.has(r.run_id)){ seen.add(r.run_id); out.push(Object.assign({}, r, {_service: g.service, _label: g.label})); }
+  }));
+  return out.sort((a, b) => (b.finished_at || 0) - (a.finished_at || 0)).slice(0, 30);
+}
+const rerunning = {};
+function rerunBtn(r){
+  if(!r || !r.run_id) return "";
+  const id = esc(r.run_id), sent = rerunning[r.run_id];
+  return `<button class="stopjob" type="button" data-rerun-job="${id}" data-service="${esc(r._service || "")}" data-name="${esc(r.drawing_number || r.run_id)}" data-source="${esc(r.source || "")}"${sent ? " disabled" : ""}
+    title="Run this job again">${sent ? esc(sent) : "Re-run"}</button>`;
+}
+document.addEventListener("click", async e => {
+  const b = e.target.closest && e.target.closest("[data-rerun-job]");
+  if(!b || b.disabled) return;
+  const id = b.dataset.rerunJob, self = b.dataset.source === "Self-Running";
+  if(!confirm(`Re-run ${b.dataset.name}?\n\n` + (self
+      ? "Self-Running reads the Live Enquiry sheet and gathers the pack again on its next beat."
+      : "It is queued again with the same inputs, quantities and method as this run."))) return;
+  rerunning[id] = "Asking…"; b.disabled = true; b.textContent = "Asking…";
+  try{
+    const r = b.dataset.service ? await api("/api/estimate/grid/rerun", {service: b.dataset.service, run_id: id})
+                                : await api("/api/estimate/" + encodeURIComponent(id) + "/rerun", {});
+    const j = r && r.json ? await r.json().catch(() => ({})) : (r || {});
+    rerunning[id] = self ? "Asked" : "Queued"; b.textContent = rerunning[id];
+    if(j && j.said) b.title = j.said;
+  }catch(err){ delete rerunning[id]; b.disabled = false; b.textContent = "Re-run"; alert("Not re-run: " + err.message); }
+});
 function renderRecent(rows){
   $("recentCount").textContent = rows.length ? `last ${rows.length}` : "";
   if(!rows.length){ $("recent").innerHTML = '<tr><td class="c">Nothing has finished yet.</td></tr>'; return; }
   const word = {done:"Completed", failed:"Failed", stopped:"Stopped"};
   const icon = {done:"✓", failed:"✕", stopped:"■"};
   // Every run the service sends (12): the panel scrolls inside itself, nothing is cut off.
-  $("recent").innerHTML = '<colgroup><col style="width:52px"><col style="width:31%"><col>'
-    + '<col style="width:96px"><col style="width:58px"></colgroup>' + rows.map(r => `<tr>
+  $("recent").innerHTML = '<colgroup><col style="width:52px"><col style="width:27%"><col>'
+    + '<col style="width:96px"><col style="width:58px"><col style="width:66px"></colgroup>' + rows.map(r => `<tr>
       <td class="t">${r.finished_at ? fmtClock(r.finished_at) : ""}</td>
       <td class="d">${esc(r.drawing_number)}</td>
-      <td class="c">${esc(r.client || "")}${r.job_type ? " · extract" : ""}${src(r)}${openItems(r.open_items)}</td>
+      <td class="c">${esc(r.client || "")}${r.job_type ? " · extract" : ""}${src(r)}${r._label ? " · on " + esc(r._label) : ""}${openItems(r.open_items)}</td>
       <td class="o">${qualityWord(r) ? badge(r.quality.rag, r.quality.state === "complete" ? "Complete" : r.quality.state === "missing costs" ? "Missing costs" : r.quality.state === "provisional" ? "Provisional" : "Not reviewed") : `<span class="o-${r.outcome}">${icon[r.outcome] || "·"}</span> <span class="lbl">${word[r.outcome] || esc(r.outcome)}</span>`}</td>
-      <td class="s">${fmtDur(r.seconds)}</td></tr>`).join("");
+      <td class="s">${fmtDur(r.seconds)}</td><td class="rr">${rerunBtn(r)}</td></tr>`).join("");
 }
 
 function renderTicker(alerts){

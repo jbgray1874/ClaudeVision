@@ -5105,13 +5105,19 @@ function selfStopHtml(r){
      that are still visible ... as long as the liveenquiry sheet still has entries for them,
      even if the AIcompleted says yes, it re runs". Self-Running takes it once on its next read;
      a row no longer on the sheet is said, not run. */
-  if((r.status === "error" || r.status === "done") && !selfRerunSeen.has(r.drawing)){
-    selfRerunSeen.add(r.drawing);
+  /* WHATEVER WAY IT ENDED (JG, 11 Nov 2026: "some jobs from the ai self / auto run were not with
+     the re run button"): the button was offered only for "done" and "error", and was keyed by
+     the drawing alone, so a job that ended any other way, or shared a drawing number with
+     another customer's, had none. The newest attempt of each customer's drawing that is not
+     queued or running has it. */
+  const key = (r.customer || "") + "|" + r.drawing, live = r.status === "queued" || r.status === "running";
+  if(!live && !selfRerunSeen.has(key)){
+    selfRerunSeen.add(key);
     return " <button type='button' class='btn-run' style='padding:1px 8px;font-size:12px;width:auto;display:inline-block'"
       + " data-self-rerun='" + selfEsc(r.drawing) + "' data-customer='" + selfEsc(r.customer || "") + "'"
       + (selfReruns[r.drawing] ? " disabled>Re-run asked " + selfEsc(selfReruns[r.drawing]) : ">Re-run") + "</button>";
   }
-  if(r.status === "queued" || r.status === "running" || r.status === "done") selfRerunSeen.add(r.drawing);
+  selfRerunSeen.add(key);
   if(!((r.status === "queued" || r.status === "running") && r.run_id)) return "";
   return " <button type='button' class='btn-stop' style='padding:1px 8px;font-size:12px;width:auto;display:inline-block'"
     + " data-self-stop='" + selfEsc(r.run_id) + "' data-server='" + selfEsc(r.server || "")

@@ -98,16 +98,21 @@ def _label(url: str) -> str:
 
 
 def _trim(peer: str, snap: Dict[str, Any]) -> Dict[str, Any]:
-    keep_live = ("run_id", "drawing_number", "client", "runner", "rag", "rag_reason",
-                 "elapsed_s", "expected_s", "silent_s", "stage", "job_type", "started_at")
     keep_q = ("run_id", "drawing_number", "client", "queued_at", "start_at", "finish_at",
-              "job_type")
+              "job_type", "source")
+    # THE FINISHED JOBS TOO (11 Nov 2026): a job run on the other service was on no Grid
+    # Control's finished list but its own.
+    keep_r = ("run_id", "drawing_number", "client", "job_type", "source", "status", "outcome",
+              "finished_at", "seconds", "engine_price_gbp", "quality", "open_items")
     return {
         "service": peer, "label": _label(peer), "ok": True, "error": "",
         "host": snap.get("service_host") or "", "commit": snap.get("service_commit") or "",
         "max_runs": (snap.get("kpis") or {}).get("max_runs"),
-        "live": [{k: r.get(k) for k in keep_live} for r in snap.get("live") or []],
+        # THE RUNNING JOBS WHOLE (11 Nov 2026), so every Grid Control shows a job running on
+        # another service as a full run tile with its stage and log, not a line in the queue.
+        "live": [dict(r) for r in snap.get("live") or []],
         "queue": [{k: r.get(k) for k in keep_q} for r in snap.get("queue") or []],
+        "recent": [{k: r.get(k) for k in keep_r} for r in snap.get("recent") or []],
         "fleet": [dict(f) for f in snap.get("fleet") or [] if not f.get("planned")],
     }
 
@@ -173,6 +178,14 @@ def stop_on(service: str, run_id: str, opener=None) -> Dict[str, Any]:
     if service not in peers():
         raise ValueError("That service is not on this grid (SDI_GRID_PEERS).")
     return _post(f"{service}/api/estimate/{run_id}/abandon", {}, opener)
+
+
+def rerun_on(service: str, run_id: str, opener=None) -> Dict[str, Any]:
+    """Re-run a finished job on another service of the grid. Only a service on the list is asked."""
+    service = str(service or "").rstrip("/")
+    if service not in peers():
+        raise ValueError("That service is not on this grid (SDI_GRID_PEERS).")
+    return _post(f"{service}/api/estimate/{run_id}/rerun", {}, opener)
 
 
 # ── A WALKTHROUGH ON ANOTHER SERVICE, RELAYED (JG, 10 Nov 2026) ───────────────────────────
