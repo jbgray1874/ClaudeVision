@@ -180,6 +180,8 @@ def test_self_runnings_own_card_offers_rerun_however_a_job_ended():
     page = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-intelligence.html").read_text()
     assert 'const key = (r.customer || "") + "|" + r.drawing' in page
     assert "if(!live && !selfRerunSeen.has(key))" in page
+    assert 'selfRerunSeen = new Set(recent.filter(r => r.status === "queued" || r.status === "running")' in page
+    assert "selfRerunSeen.add(key)" not in page, "every finished line has the button, not one per drawing"
 
 
 def test_capacity_runner_state_and_queue_reason_count_the_whole_grid():

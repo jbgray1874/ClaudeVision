@@ -5080,7 +5080,9 @@ function renderSelf(v){
       + "</div>" : "";
   const recent = w.recent || [];
   if(recent.length){
-    selfRerunSeen = new Set();
+    // The jobs with an attempt queued or running now: those show Stop, and no Re-run.
+    selfRerunSeen = new Set(recent.filter(r => r.status === "queued" || r.status === "running")
+                                  .map(r => (r.customer || "") + "|" + r.drawing));
     html += "<div style='margin-top:6px'><b>Latest runs:</b></div><ul style='margin:4px 0 0 18px'>"
       + recent.map(r => "<li>" + selfEsc(r.drawing) + " (" + selfEsc(r.customer) + ") — "
         + selfEsc(r.status)
@@ -5111,13 +5113,15 @@ function selfStopHtml(r){
      another customer's, had none. The newest attempt of each customer's drawing that is not
      queued or running has it. */
   const key = (r.customer || "") + "|" + r.drawing, live = r.status === "queued" || r.status === "running";
+  /* ON EVERY FINISHED LINE (JG, 11 Nov 2026: "still plenty of jobs not re-runnable"): one button
+     per drawing left the older lines of a job looking as if they could not be run again. Every
+     finished line has it unless that job is queued or running now. It re-runs the JOB (the
+     sheet's row with today's pack), not that old attempt. */
   if(!live && !selfRerunSeen.has(key)){
-    selfRerunSeen.add(key);
     return " <button type='button' class='btn-run' style='padding:1px 8px;font-size:12px;width:auto;display:inline-block'"
       + " data-self-rerun='" + selfEsc(r.drawing) + "' data-customer='" + selfEsc(r.customer || "") + "'"
       + (selfReruns[r.drawing] ? " disabled>Re-run asked " + selfEsc(selfReruns[r.drawing]) : ">Re-run") + "</button>";
   }
-  selfRerunSeen.add(key);
   if(!((r.status === "queued" || r.status === "running") && r.run_id)) return "";
   return " <button type='button' class='btn-stop' style='padding:1px 8px;font-size:12px;width:auto;display:inline-block'"
     + " data-self-stop='" + selfEsc(r.run_id) + "' data-server='" + selfEsc(r.server || "")

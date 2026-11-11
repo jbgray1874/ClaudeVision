@@ -1694,15 +1694,29 @@ def unit_cost_from(summary: Dict[str, Any]) -> Optional[float]:
     return None
 
 
+def _price_jsons(deliverables: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """The JSON files to read a run's price from, THIS RUN'S OWN RECORD FIRST (11 Nov 2026).
+    Self-Running's card showed 6364-01 at 12674-01-GA's prices, and 12773-01-GA at 12674-01-GA's:
+    the price was read from the first .json in name order, and a file the previous job on this
+    checkout wrote late (its walkthrough, its filed note) is collected with the next run and
+    sorts first. The run's record is pinned beside its workbook as <workbook>_record.json after
+    the last write, so the newest such file is this run's; other JSON follows, newest first."""
+    def mtime(item: Dict[str, str]) -> float:
+        try:
+            return os.path.getmtime(item["path"])
+        except (OSError, KeyError, TypeError):
+            return 0.0
+    js = [i for i in (deliverables or []) if str(i.get("name") or "").lower().endswith(".json")]
+    return sorted(js, key=lambda i: (not str(i.get("name") or "").lower().endswith("_record.json"),
+                                     -mtime(i)))
+
+
 def _unit_cost_from_deliverables(deliverables: List[Dict[str, str]]) -> Optional[float]:
     """The summary among what was just filed. A miss is silent on purpose -- a run that
     produced no readable JSON is already reported by collect(), and saying it twice in
     different words helps nobody."""
     import json as _json
-    for item in deliverables or []:
-        name = str(item.get("name") or "")
-        if not name.lower().endswith(".json"):
-            continue
+    for item in _price_jsons(deliverables):
         try:
             with open(item["path"], "r", encoding="utf-8") as fh:
                 found = unit_cost_from(_json.load(fh))
@@ -1734,9 +1748,7 @@ def quantity_prices_from(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def _quantity_prices_from_deliverables(deliverables: List[Dict[str, str]]) -> List[Dict[str, Any]]:
     import json as _json
-    for item in deliverables or []:
-        if not str(item.get("name") or "").lower().endswith(".json"):
-            continue
+    for item in _price_jsons(deliverables):
         try:
             with open(item["path"], "r", encoding="utf-8") as fh:
                 found = quantity_prices_from(_json.load(fh))
