@@ -391,3 +391,17 @@ def test_the_pack_line_separates_the_ga_identity_from_the_pack_and_lists_bought_
     assert "GA identity verified from its title block" in line
     assert "bought-in, no drawing needed" in line and "12736-01-04X" in line
     assert "verified pack" not in line
+
+
+def test_a_row_that_could_not_be_queued_says_why_on_screen(tmp_path, monkeypatch, capsys):
+    import live_enquiry_runner as ler
+    monkeypatch.setattr(ler, "Portal", lambda *a, **k: object())
+    rep = {"roots": {"design": "D", "prototype": "P", "design_folders": 1, "prototype_folders": 1,
+                     "design_readable": True, "prototype_readable": True, "source": "walk"},
+           "header_row": 1, "header": {"drawing": "Drawing Number", "cost": "AI Cost"},
+           "rows": [{"row": 7, "drawing": "12736-00-01", "quantity": 1, "kind": "full estimate",
+                     "state": "not queued", "why": "the service at http://localhost:8071 refused the key",
+                     "found": {"folder": "X"}}]}
+    monkeypatch.setattr(tp, "run_batch", lambda *a, **k: rep)
+    tp.main(["--sheet", str(tmp_path / "s.xlsx"), "--status-file", str(tmp_path / "st.json")])
+    assert "why: the service at http://localhost:8071 refused the key" in capsys.readouterr().out
