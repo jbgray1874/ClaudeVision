@@ -89,6 +89,8 @@ STATUS_MEANING: Dict[str, str] = {
                   "this basis alone, and a person should rule on it",
     "not_applicable": "ruled out, with a reason — usually physically impossible on this stock "
                       "form, or already covered by another operation",
+    "ruled_out": "ruled out, with a reason — the costing or a person took this operation off "
+                 "the part; not charged",
     "refused": "actively refused by a gate, with a reason",
     "excluded": "removed from this part's scope",
 }

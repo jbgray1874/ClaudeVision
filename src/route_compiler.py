@@ -216,6 +216,9 @@ def _record_by_squashed_key(records: Mapping[str, Any], target_id: Any):
     return hits[0] if len(hits) == 1 else None
 
 
+_MODEL_FILE_TAIL = re.compile(r"(?<=[A-Z0-9])\.(?:SLDPRT|SLDASM|SLDDRW)\d*$")
+
+
 def clean_part_number(value: Any) -> str:
     """The canonical spelling of a part number, or "" when the code names no part.
 
@@ -231,6 +234,11 @@ def clean_part_number(value: Any) -> str:
     # linked lines were charged, the handles fell off the cabinet top. The drawing office
     # spaces hyphens as it likes; a code does not change for it.
     text = re.sub(r"\s*-\s*", "-", text)
+    # A MODEL FILE NAME IS THE PART (12773-01-GA, 11 Nov 2026). The bill printed
+    # "12773-03-203.SLDPRT1" where the hierarchy holds 12773-03-203, so the graph kept two
+    # parts: one priced at 2, and "12773-03-203 x4 on the bill, no line on the sheet". The
+    # file extension, and the copy number SolidWorks adds after it, are not part of the code.
+    text = _MODEL_FILE_TAIL.sub("", text)
     try:
         from part_identity import is_placeholder_identity
 
@@ -5051,6 +5059,20 @@ def _lowest_common_assembly(
     )
 
 
+_BOARD_RULED_OPS = frozenset({"deburring", "deburr", "hole_machining", "drilling", "drill"})
+
+
+def _board_ruling(record: Mapping[str, Any], raw_record: Mapping[str, Any], operation: str) -> str:
+    """The costing's reason for taking a deburr or a drilling off a board part, or ""."""
+    if clean_operation(operation) not in _BOARD_RULED_OPS:
+        return ""
+    for rec in (record, raw_record):
+        for key, why in ((rec or {}).get("operations_ruled_out") or {}).items():
+            if clean_operation(key) == clean_operation(operation):
+                return str(why or "not an operation on board")
+    return ""
+
+
 def _ruling_source(part: Mapping[str, Any], operation: str, reason: str) -> str:
     explicit = (part.get("operation_ruling_sources") or {}).get(operation)
     if explicit:
@@ -8654,6 +8676,16 @@ def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]],
                          f"and assembly, not {_d.operation} — this claim came from a "
                          f"document-level note transcribed onto the part, not from its "
                          f"own route")
+            _d.field_provenance["status"] = "family_gate_joinery"
+        elif _fam == JOINERY and _board_ruling(_rec, raw.get(_d.target_id) or {}, _d.operation):
+            # A BOARD'S DROPPED DEBURR AND DRILLING ARE NOT "REQUIRED" (12773-01-GA 19:39).
+            # The costing takes deburring off every board, and separate drilling off a routed
+            # one, and writes the ruling on the record; the sheet honours it and makes no row.
+            # The ruling ranks "unknown", so the read's own claim outvoted it and the route
+            # still said required: "charged, but no sheet row carries this decision id" on
+            # three MDF parts. The same material rule decides here, with the costing's reason.
+            _d.status = NOT_APPLICABLE
+            _d.reason = _board_ruling(_rec, raw.get(_d.target_id) or {}, _d.operation)
             _d.field_provenance["status"] = "family_gate_joinery"
         elif positive_only:
             continue
