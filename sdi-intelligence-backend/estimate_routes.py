@@ -322,6 +322,8 @@ class Run:
     email_result: Dict[str, Any] = field(default_factory=dict)
     # WHO ASKED (D-401): "" for the portal, else the partner site whose key queued the run.
     requested_by: str = ""
+    # WHERE IT CAME FROM, in words for Grid Control: see job_source().
+    source: str = ""
     lease_until: float = 0.0
     # WHICH RUNNER PROCESS CLAIMED IT (D-369). The runner's id is the machine's (host and
     # network card), so a runner restarted mid-job comes back under the same id; only the
@@ -384,6 +386,7 @@ class Run:
             "log": self.log, "deliverables": self.deliverables,
             "email_to": list(self.email_to), "email_result": dict(self.email_result),
             "requested_by": self.requested_by,
+            "source": self.source,
             "submitted_scope": dict(self.submitted_scope),
             "job_type": self.job_type,
             "stopped_by_hand": self.stopped_by_hand,
@@ -770,6 +773,10 @@ class EstimateRequest(BaseModel):
     client: str
     drawing_number: str
     units: int
+    # WHERE THE JOB CAME FROM (JG, 11 Nov 2026: "the grid runner views also need to pick up all
+    # jobs running through any part of the estimator"): "self_running", "tti", or empty for the
+    # estimating page. Shown on Grid Control beside the job.
+    source: str = ""
     # THE QUANTITIES THE ESTIMATE IS ALSO WANTED AT. The estimate is RUN at `units`; these
     # are recalculated from the finished workbook, which is what an estimator does by hand.
     # Empty means one sheet, exactly as before.
@@ -1309,6 +1316,23 @@ def _tti_status_file(tid: str) -> Path:
     return estimate_email.state_dir() / "tti" / f"{tid}.json"
 
 
+def _tti_reports(limit: int = 4) -> List[Dict[str, Any]]:
+    """The newest TTI batch reports: those this service started, and the laptop's own command-line
+    batch (output/tti/last_tti_run.json)."""
+    files = [p for p in (estimate_email.state_dir() / "tti").glob("*.json")] \
+        if (estimate_email.state_dir() / "tti").is_dir() else []
+    own = _REPO_ROOT / "output" / "tti" / "last_tti_run.json"
+    if own.is_file():
+        files.append(own)
+    out: List[Dict[str, Any]] = []
+    for p in sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)[:limit]:
+        try:
+            out.append(json.loads(p.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
+    return out
+
+
 class PackFindRequest(BaseModel):
     drawing: str
     client: str = ""
@@ -1460,6 +1484,12 @@ def wall(local: bool = False, x_sdi_key: Optional[str] = Header(default=None)):
     if not voice.get("speech_tts") and voice.get("speech_reason"):
         snap["alerts"] = list(snap.get("alerts") or []) + [
             "Voice: the pages are using the device's own voice: " + voice["speech_reason"]]
+    # WORK NOT YET QUEUED (11 Nov 2026): Self-Running reading or staging, a TTI batch's rows.
+    try:
+        snap["intake"] = estimate_wall.intake(self_running_switch.view(), _tti_reports(),
+                                              snap.get("now") or time.time())
+    except Exception as exc:                                        # noqa: BLE001
+        snap["intake"] = [{"from": "intake", "error": f"{type(exc).__name__}: {exc}"}]
     # THE WHOLE GRID (JG, 10 Nov 2026): the other services' jobs, queue and Grid Runners.
     import grid_peers
     snap["grid_service_id"] = grid_peers.SERVICE_ID
@@ -2987,8 +3017,23 @@ def start_from_brief(req: BriefRequest, x_sdi_key: Optional[str] = Header(defaul
     return start(EstimateRequest(client=req.client, drawing_number=req.reference,
                                  units=req.units, quantity_breaks=list(req.quantity_breaks),
                                  method="llm", enquiry_brief=req.brief, email_to=req.email_to,
-                                 fresh_read=bool(req.fresh_read)),
+                                 fresh_read=bool(req.fresh_read), source="brief"),
                  x_sdi_key=x_sdi_key)
+
+
+_SOURCES = {"self_running": "Self-Running", "tti": "TTI batch", "page": "Estimating page",
+            "brief": "Brief", "parity": "Parity"}
+
+
+def job_source(said: Any, caller: Any = "") -> str:
+    """The words Grid Control shows for where a job came from: a known entry point by its name,
+    a partner site by its key's name, else the estimating page."""
+    key = str(said or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if key in _SOURCES:
+        return _SOURCES[key]
+    if str(said or "").strip():
+        return str(said).strip()[:40]
+    return f"Partner: {caller}" if str(caller or "").strip() else "Estimating page"
 
 
 @router.post("")
@@ -3323,7 +3368,7 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                   bom_routes_only=bool(req.bom_routes_only),
                   job_type="bom_routes" if req.bom_routes_only else "",
                   email_to=_email_to, email_quote=bool(req.email_quote),
-                  requested_by=_caller)
+                  requested_by=_caller, source=job_source(req.source, _caller))
         # NOT QUEUED YET (D-607). A run in _RUNS can be claimed, and a runner polling between
         # here and the brief below would take a job whose brief was not yet filed and whose
         # scope was not yet recorded. It is queued once both are done.

@@ -1072,6 +1072,7 @@ def request_body(d: Decision, email_to: Optional[Sequence[str]] = None) -> Dict[
         "method": "both",
         "email_to": ", ".join(recipients_for(d, email_to)) or None,
         "email_quote": False,
+        "source": "self_running",
     }
 
 

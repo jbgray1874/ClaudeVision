@@ -182,7 +182,7 @@ def test_grid_control_names_the_fleet_and_shows_the_check_and_the_rest_of_the_gr
     assert "<b>Fleet Grid Runners</b>" in WALL and "Fleet · runners" not in WALL
     assert "Compute check, slot ${esc(g.slot)}, at <b>${when}</b>" in WALL
     assert "${gateLine(f.gate)}" in WALL
-    assert "renderQueue(s.queue || [], s.grid || [])" in WALL
+    assert "renderQueue(s.queue || [], s.grid || [], s.intake || [])" in WALL
     assert '"/api/estimate/grid/stop", {service: b.dataset.service, run_id: id}' in WALL
     assert "running on ${esc(g.label)}" in WALL and "queued on ${esc(g.label)}" in WALL
 

@@ -844,7 +844,7 @@ function render(){
   renderLanes(s);
   serviceHost = s.service_host || "";
   renderFleet(s.fleet || [], s.compute || []);
-  renderQueue(s.queue || [], s.grid || []);
+  renderQueue(s.queue || [], s.grid || [], s.intake || []);
   renderSolidWorks(s.solidworks || [], s.sw_wait_limit_s);
   renderTrend(s.series.run_times || [], s.kpis);
   renderActivity(s.series.activity_24h || []);
@@ -999,7 +999,7 @@ function renderLanes(s){
             <div class="pct"><b>${frac == null ? "—" : Math.round(frac * 100) + "%"}</b><span>OF USUAL</span></div></div>
           <div class="jobtext">
             <div class="dn">${esc(r.drawing_number || r.run_id)}</div>
-            <div class="cl">${esc(r.client || "")}${extract ? " · " + esc(r.job_type.replace("_", " ")) : ""}</div>
+            <div class="cl">${esc(r.client || "")}${extract ? " · " + esc(r.job_type.replace("_", " ")) : ""}${src(r)}</div>
             <div class="elapsed" data-elapsed><span>${fmtDur(r.elapsed_s)}</span><small>${exp ? "usual " + fmtDur(exp) : "no history yet"}</small></div>
           </div>
         </div>
@@ -1166,23 +1166,38 @@ function gridRows(grid){
   (grid || []).forEach(g => {
     if(!g.ok){ out.push(`<div class="qrow"><span class="n">↔</span><span><b>${esc(g.label)}</b> <span style="color:var(--ink-2)">${esc(g.error || "not answering")}</span></span><span></span><span></span></div>`); return; }
     (g.live || []).forEach(r => out.push(`<div class="qrow"><span class="n">▶</span>
-      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number || r.run_id)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")} · running on ${esc(g.label)}${r.runner ? " · " + esc(r.runner) : ""}</span></span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number || r.run_id)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")}${src(r)} · running on ${esc(g.label)}${r.runner ? " · " + esc(r.runner) : ""}</span></span>
       <span class="t">${fmtDur(r.elapsed_s)}${r.silent_s > 300 ? " · silent " + fmtDur(r.silent_s) : ""}</span>${stopBtn(r, g.service)}</div>`));
     (g.queue || []).forEach(r => out.push(`<div class="qrow"><span class="n">·</span>
-      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number || r.run_id)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")} · queued on ${esc(g.label)}</span></span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number || r.run_id)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")}${src(r)} · queued on ${esc(g.label)}</span></span>
       <span class="t">waiting ${fmtDur(n - (r.queued_at || n))}</span>${stopBtn(r, g.service)}</div>`));
   });
   return out;
 }
-function renderQueue(q, grid){
-  const others = gridRows(grid);
+// WHERE A JOB CAME FROM (11 Nov 2026): the estimating page, Self-Running or the TTI batch.
+function src(r){ return r && r.source ? " · " + esc(r.source) : ""; }
+// WORK NOT YET IN THE QUEUE (11 Nov 2026): Self-Running reading the sheet or staging a pack,
+// and a TTI batch working through its rows. A queued or running job shows below with its source.
+function intakeRows(intake){
+  return (intake || []).map(x => {
+    if(x.error) return `<div class="qrow"><span class="n">⇢</span><span>${esc(x.error)}</span><span></span><span></span></div>`;
+    if(x.from === "Self-Running"){
+      const st = !x.connected ? "watcher not connected" : !x.on ? "switched off" : (x.phase || "connected");
+      return `<div class="qrow"><span class="n">⇢</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>Self-Running</b> <span style="color:var(--ink-2)">${esc(st)}${x.message ? " · " + esc(x.message) : ""}${x.state ? " · " + esc(x.state) : ""}</span></span><span class="t">${esc(x.host || "")}</span><span></span></div>`;
+    }
+    const by = x.by_state || {}, done = (by.done || 0), cur = (x.current || []).map(c => "row " + c.row + " " + (c.drawing || "")).join(", ");
+    return `<div class="qrow"><span class="n">⇢</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>TTI batch</b> <span style="color:var(--ink-2)">${esc(x.sheet || "")} · ${done} done of ${x.rows || 0} rows${cur ? " · now " + esc(cur) : ""}${x.finished ? " · finished " + esc(String(x.finished).slice(11, 16)) : ""}</span></span><span class="t"></span><span></span></div>`;
+  });
+}
+function renderQueue(q, grid, intake){
+  const others = intakeRows(intake).concat(gridRows(grid));
   $("queueCount").textContent = (q.length ? `${q.length} waiting here` : "none here")
     + ((grid || []).length ? ` · ${(grid || []).map(g => g.label).join(", ")} too` : "");
   if(!q.length && !others.length){ $("queue").innerHTML = '<div class="empty">Nothing waiting. A new estimate starts as soon as it is queued.</div>'; return; }
   if(!q.length){ $("queue").innerHTML = others.join(""); return; }
   const n = nowS();
   $("queue").innerHTML = q.slice(0, 6).map((r, i) => `<div class="qrow"><span class="n">#${i + 1}</span>
-      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")}</span></span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")}${src(r)}</span></span>
       <span class="t">${r.start_at ? "starts ~" + fmtClock(r.start_at) + " · done ~" + fmtClock(r.finish_at) : "waiting " + fmtDur(n - (r.queued_at || n))}</span>${stopBtn(r)}</div>`).join("")
     + (q.length > 6 ? `<div class="empty">+ ${q.length - 6} more</div>` : "") + others.join("");
 }
@@ -1302,7 +1317,7 @@ function renderRecent(rows){
     + '<col style="width:96px"><col style="width:58px"></colgroup>' + rows.map(r => `<tr>
       <td class="t">${r.finished_at ? fmtClock(r.finished_at) : ""}</td>
       <td class="d">${esc(r.drawing_number)}</td>
-      <td class="c">${esc(r.client || "")}${r.job_type ? " · extract" : ""}${openItems(r.open_items)}</td>
+      <td class="c">${esc(r.client || "")}${r.job_type ? " · extract" : ""}${src(r)}${openItems(r.open_items)}</td>
       <td class="o">${qualityWord(r) ? badge(r.quality.rag, r.quality.state === "complete" ? "Complete" : r.quality.state === "missing costs" ? "Missing costs" : r.quality.state === "provisional" ? "Provisional" : "Not reviewed") : `<span class="o-${r.outcome}">${icon[r.outcome] || "·"}</span> <span class="lbl">${word[r.outcome] || esc(r.outcome)}</span>`}</td>
       <td class="s">${fmtDur(r.seconds)}</td></tr>`).join("");
 }

@@ -925,6 +925,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             save()
             continue
         body = {"client": args.client, "drawing_number": r["drawing"] or f"TTI-row{r['row']}",
+                "source": "tti",
                 "units": r["quantity"], "files": inputs, "deliverables": True,
                 "quantity_breaks": sorted(q for q in qtys_of.get(r["drawing"] or "", []) if q != r["quantity"]),
                 "method": args.method if found else "llm",
