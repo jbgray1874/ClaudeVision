@@ -857,6 +857,30 @@ def history_view(runs: Sequence[Mapping[str, Any]], now: Optional[float] = None,
 # the wall whatever started it, with its source named. Before that, Self-Running is reading the
 # sheet or staging a pack, and a TTI batch is working through its rows: both are said here.
 TTI_RECENT_S = 3600.0
+# A batch whose status has not moved for this long is not shown as working: it saves a pulse
+# about every five minutes while a run works, so twenty minutes of silence means it stopped.
+TTI_STALE_S = 1200.0
+# EACH ROW'S STATE IN FIVE WORDS (SCRUM-271 review): a reused cost or a skipped row is not a
+# priced one, and a question is not a failure.
+TTI_KINDS = {
+    "priced": ("done",),
+    "reused": ("same as row", "same run as row", "has a cost"),
+    "needs decision": ("ask", "needs decision", "needs drawing", "held: lost worker", "outdated"),
+    "skipped": ("skipped",),
+    "failed": ("error", "failed", "not queued", "timeout", "cancelled", "abandoned"),
+    "in progress": ("running", "resumed", "planned"),
+}
+
+
+def tti_kind(item: Mapping[str, Any]) -> str:
+    st = str(item.get("state") or "").lower()
+    why = str(item.get("why") or "").lower()
+    if st == "done" and ("earlier batch" in why or item.get("same_run_as_row") or item.get("same_as_row")):
+        return "reused"
+    for kind, starts in TTI_KINDS.items():
+        if any(st.startswith(s) for s in starts):
+            return kind
+    return "other"
 
 
 def intake(self_running: Optional[Mapping[str, Any]], tti_reports: Sequence[Mapping[str, Any]],
@@ -878,15 +902,21 @@ def intake(self_running: Optional[Mapping[str, Any]], tti_reports: Sequence[Mapp
         finished = _iso_epoch(rep.get("finished"))
         if finished and now - finished > TTI_RECENT_S:
             continue
+        pulse = _iso_epoch(rep.get("updated")) or _iso_epoch(rep.get("started"))
+        stale = (not finished) and pulse is not None and now - pulse > TTI_STALE_S
+        if stale and now - pulse > TTI_RECENT_S:
+            continue
         rows = [x for x in (rep.get("rows") or []) if isinstance(x, Mapping)]
         by: Dict[str, int] = {}
         for x in rows:
-            st = str(x.get("state") or "")
-            by[st] = by.get(st, 0) + 1
-        current = [x for x in rows if str(x.get("state") or "") in ("running", "resumed")]
+            k = tti_kind(x)
+            by[k] = by.get(k, 0) + 1
+        current = [] if stale else [x for x in rows if str(x.get("state") or "") in ("running", "resumed")]
         out.append({"from": "TTI batch", "sheet": Path(str(rep.get("sheet") or "")).name,
                     "started": rep.get("started"), "finished": rep.get("finished"),
-                    "rows": len(rows), "by_state": by,
+                    "updated": rep.get("updated"),
+                    "state": "finished" if finished else "stopped" if stale else "working",
+                    "rows": len(rows), "by_kind": by,
                     "current": [{"row": x.get("row"), "drawing": x.get("drawing"),
                                  "run_id": x.get("run_id")} for x in current][:3]})
     return out

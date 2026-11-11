@@ -49,7 +49,7 @@ def test_self_running_and_a_tti_batch_are_shown_before_their_jobs_are_queued():
     out = ew.intake(sr, [tti, dry], now=0.0)
     assert [x["from"] for x in out] == ["Self-Running", "TTI batch"], "a dry run queues nothing"
     assert out[0]["phase"] == "staging the pack"
-    assert out[1]["by_state"]["done"] == 1 and out[1]["current"][0]["drawing"] == "12161-02-GA"
+    assert out[1]["by_kind"]["priced"] == 1 and out[1]["current"][0]["drawing"] == "12161-02-GA"
 
 
 def test_a_switched_off_unconnected_watcher_and_an_old_batch_are_not_shown():
@@ -60,3 +60,38 @@ def test_a_switched_off_unconnected_watcher_and_an_old_batch_are_not_shown():
 def test_the_wall_page_shows_the_source_and_the_intake():
     page = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-wall.html").read_text()
     assert "function src(r)" in page and "intakeRows(intake)" in page and "s.intake" in page
+
+
+# ── SCRUM-271 review: distinct states, stale work not shown as active, one line per job ──
+
+def test_tti_rows_are_priced_reused_decision_skipped_or_failed_not_all_done():
+    rows = [{"state": "done", "why": ""}, {"state": "done", "why": "priced and written by an earlier batch; not run again"},
+            {"state": "same as row 3"}, {"state": "same run as row 3"}, {"state": "has a cost"},
+            {"state": "ask"}, {"state": "needs drawing"}, {"state": "held: lost worker"},
+            {"state": "skipped"}, {"state": "error"}, {"state": "not queued"}, {"state": "running"}]
+    kinds = [ew.tti_kind(r) for r in rows]
+    assert kinds == ["priced", "reused", "reused", "reused", "reused", "needs decision", "needs decision",
+                     "needs decision", "skipped", "failed", "failed", "in progress"]
+
+
+def test_a_batch_that_stopped_saving_is_shown_stopped_not_working():
+    from datetime import datetime
+    t0 = datetime(2026, 11, 11, 16, 0).timestamp()
+    rep = {"sheet": "T.xlsx", "started": "2026-11-11T16:00:00", "updated": "2026-11-11T16:05:00",
+           "rows": [{"row": 7, "state": "running", "drawing": "X", "run_id": "r1"}]}
+    working = ew.intake(None, [rep], now=t0 + 600)[0]
+    assert working["state"] == "working" and working["current"]
+    stopped = ew.intake(None, [rep], now=t0 + 2400)[0]
+    assert stopped["state"] == "stopped" and not stopped["current"], "a stopped batch runs nothing"
+    assert ew.intake(None, [rep], now=t0 + 9000) == [], "and is dropped once it is an hour old"
+
+
+def test_the_pricer_saves_a_pulse_while_a_run_works():
+    src = (ROOT / "src" / "tti_pricer.py").read_text()
+    assert 'report["updated"]' in src and "sleep=_waiting" in src
+
+
+def test_the_wall_lists_a_job_once_and_points_self_running_at_it():
+    page = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-wall.html").read_text()
+    assert "SHOWN.has(r.run_id)" in page and "its job is on this list" in page
+    assert "run ${esc(String(r.run_id).slice(0, 8))}" in page

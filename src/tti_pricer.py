@@ -712,12 +712,24 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
     report["ledger"] = str(lpath) if lpath else None
 
     def save() -> None:
+        # THE BATCH'S PULSE (SCRUM-271 review): Grid Control calls a batch stopped when this has
+        # not moved for a while, so a killed batch is never shown as working for ever.
+        report["updated"] = datetime.now().isoformat(timespec="seconds")
         if status_path:
             status_path.parent.mkdir(parents=True, exist_ok=True)
             status_path.write_text(json.dumps(report, indent=1, default=str), encoding="utf-8")
         if not args.dry_run and lpath is not None:
             lpath.parent.mkdir(parents=True, exist_ok=True)
             lpath.write_text(json.dumps(ledger, indent=1, default=str), encoding="utf-8")
+
+    _pulse = {"at": 0.0}
+
+    def _waiting(seconds: float) -> None:
+        """Sleep while a run works, saving the status about every five minutes as a pulse."""
+        sleep(seconds)
+        if time.time() - _pulse["at"] >= 300:
+            _pulse["at"] = time.time()
+            save()
 
     def record(item: Dict[str, Any], r: Dict[str, Any], manifest: Optional[Dict[str, Any]]) -> None:
         """The row's line in the ledger: pack, run, workbook, cost, assumptions, write-back."""
@@ -961,7 +973,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                             resumed=f"run {_prev['run_id']} from an earlier batch is {_ps}; waited for, not resubmitted")
                 record(item, r, manifest)
                 save()
-                st = wait_for(portal, item["run_id"], sleep=sleep)
+                st = wait_for(portal, item["run_id"], sleep=_waiting)
             elif _ps == "done" and unit_cost_of(_pst, r["quantity"]) is not None:
                 item.update(run_id=_prev["run_id"], resumed=f"run {_prev['run_id']} from an earlier batch already finished; its result is used")
                 st = _pst
@@ -979,7 +991,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             item.update(state="running", run_id=started.get("run_id"))
             record(item, r, manifest)
             save()
-            st = wait_for(portal, item["run_id"], sleep=sleep)
+            st = wait_for(portal, item["run_id"], sleep=_waiting)
         cost = unit_cost_of(st, r["quantity"])
         item.update(state=str(st.get("status")), unit_cost=cost, output=st.get("output_path") or st.get("output"),
                     quality=st.get("quality") or None, review=st.get("review") or None)

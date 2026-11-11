@@ -844,6 +844,7 @@ function render(){
   renderLanes(s);
   serviceHost = s.service_host || "";
   renderFleet(s.fleet || [], s.compute || []);
+  LIVE = s.live || [];
   renderQueue(s.queue || [], s.grid || [], s.intake || []);
   renderSolidWorks(s.solidworks || [], s.sw_wait_limit_s);
   renderTrend(s.series.run_times || [], s.kpis);
@@ -1161,9 +1162,15 @@ function renderFleet(fleet, compute){
 /* THE REST OF THE GRID (JG, 10 Nov 2026): "whether it's on local machine and on port 8071 or 8072,
    the control grid still needs to see it". The other services' running jobs and queue, each named
    by its service, each with Stop (sent to that service through this one). */
+// ONE JOB, ONE LINE (SCRUM-271 review): a run already shown is never listed again, whichever
+// service also reports it.
+let SHOWN = new Set(), LIVE = [];
 function gridRows(grid){
   const n = nowS(), out = [];
   (grid || []).forEach(g => {
+    g = Object.assign({}, g, {live: (g.live || []).filter(r => !SHOWN.has(r.run_id)),
+                              queue: (g.queue || []).filter(r => !SHOWN.has(r.run_id))});
+    (g.live || []).concat(g.queue || []).forEach(r => SHOWN.add(r.run_id));
     if(!g.ok){ out.push(`<div class="qrow"><span class="n">↔</span><span><b>${esc(g.label)}</b> <span style="color:var(--ink-2)">${esc(g.error || "not answering")}</span></span><span></span><span></span></div>`); return; }
     (g.live || []).forEach(r => out.push(`<div class="qrow"><span class="n">▶</span>
       <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number || r.run_id)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")}${src(r)} · running on ${esc(g.label)}${r.runner ? " · " + esc(r.runner) : ""}</span></span>
@@ -1175,22 +1182,35 @@ function gridRows(grid){
   return out;
 }
 // WHERE A JOB CAME FROM (11 Nov 2026): the estimating page, Self-Running or the TTI batch.
-function src(r){ return r && r.source ? " · " + esc(r.source) : ""; }
+function src(r){
+  return (r && r.source ? " · " + esc(r.source) : "") + (r && r.run_id ? ` · <span class="rid">run ${esc(String(r.run_id).slice(0, 8))}</span>` : "");
+}
 // WORK NOT YET IN THE QUEUE (11 Nov 2026): Self-Running reading the sheet or staging a pack,
 // and a TTI batch working through its rows. A queued or running job shows below with its source.
 function intakeRows(intake){
   return (intake || []).map(x => {
     if(x.error) return `<div class="qrow"><span class="n">⇢</span><span>${esc(x.error)}</span><span></span><span></span></div>`;
     if(x.from === "Self-Running"){
+      // A stale beat is said as such, never as work in hand; a job it queued is shown once, below.
       const st = !x.connected ? "watcher not connected" : !x.on ? "switched off" : (x.phase || "connected");
-      return `<div class="qrow"><span class="n">⇢</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>Self-Running</b> <span style="color:var(--ink-2)">${esc(st)}${x.message ? " · " + esc(x.message) : ""}${x.state ? " · " + esc(x.state) : ""}</span></span><span class="t">${esc(x.host || "")}</span><span></span></div>`;
+      const queuedBelow = x.connected && x.run_id && SHOWN.has(x.run_id);
+      const said = !x.connected ? (x.message ? " · last said " + esc(x.message) : "")
+                 : queuedBelow ? ` · its job is on this list (run ${esc(String(x.run_id).slice(0, 8))})`
+                 : (x.message ? " · " + esc(x.message) : "");
+      return `<div class="qrow"><span class="n">⇢</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>Self-Running</b> <span style="color:var(--ink-2)">${esc(st)}${said}</span></span><span class="t">${esc(x.host || "")}</span><span></span></div>`;
     }
-    const by = x.by_state || {}, done = (by.done || 0), cur = (x.current || []).map(c => "row " + c.row + " " + (c.drawing || "")).join(", ");
-    return `<div class="qrow"><span class="n">⇢</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>TTI batch</b> <span style="color:var(--ink-2)">${esc(x.sheet || "")} · ${done} done of ${x.rows || 0} rows${cur ? " · now " + esc(cur) : ""}${x.finished ? " · finished " + esc(String(x.finished).slice(11, 16)) : ""}</span></span><span class="t"></span><span></span></div>`;
+    const k = x.by_kind || {}, parts = ["priced", "reused", "needs decision", "skipped", "failed", "in progress"]
+      .filter(w => k[w]).map(w => k[w] + " " + w).join(" · ");
+    const cur = (x.current || []).map(c => "row " + c.row + " " + (c.drawing || "")).join(", ");
+    const state = x.state === "stopped" ? `<b style="color:var(--amber, #c80)">stopped</b> (no update since ${esc(String(x.updated || "").slice(11, 16))})`
+                : x.state === "finished" ? "finished " + esc(String(x.finished).slice(11, 16)) : "working";
+    return `<div class="qrow"><span class="n">⇢</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>TTI batch</b> <span style="color:var(--ink-2)">${esc(x.sheet || "")} · ${state} · ${x.rows || 0} rows: ${esc(parts || "none yet")}${cur ? " · now " + esc(cur) : ""}</span></span><span class="t"></span><span></span></div>`;
   });
 }
 function renderQueue(q, grid, intake){
-  const others = intakeRows(intake).concat(gridRows(grid));
+  SHOWN = new Set((q || []).map(r => r.run_id).concat((LIVE || []).map(r => r.run_id)));
+  const gr = gridRows(grid);
+  const others = intakeRows(intake).concat(gr);
   $("queueCount").textContent = (q.length ? `${q.length} waiting here` : "none here")
     + ((grid || []).length ? ` · ${(grid || []).map(g => g.label).join(", ")} too` : "");
   if(!q.length && !others.length){ $("queue").innerHTML = '<div class="empty">Nothing waiting. A new estimate starts as soon as it is queued.</div>'; return; }
