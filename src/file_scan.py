@@ -2171,6 +2171,12 @@ def _inherit_document_material_to_parts(
         _desc_u = str(part.get("description") or "").upper()
         if _pn_u.startswith("VINYL-") or "DISPLAY BOARD" in _desc_u:
             continue
+        # A BOUGHT ITEM IS NOT MADE OF THE DRAWING'S MATERIAL (12674-01, 11 Nov 2026). The GA's
+        # TIMBER reached "HAFELE: 637.30.941", six plinth feet, and they were costed as sawn,
+        # glued, sprayed and routed timber parts. A supplier's article, an X-suffix purchase
+        # or a row flagged bought-in is priced as the thing bought, never as stock we cut.
+        if _a_suppliers_article(part):
+            continue
         existing = str(part.get("normalized_material") or "").strip()
         if existing and existing not in ("?", "", "None", "UNKNOWN"):
             continue
@@ -2660,6 +2666,100 @@ def _answers_file_for_order_qty(job_folder: Any, pdf_path: Any):
     return None
 
 
+def _a_suppliers_article(part: Dict[str, Any]) -> bool:
+    """A line the code itself names as bought: a supplier's article ("HAFELE: 637.30.941",
+    "ROSS: 50-360-R-BH10", a dotted article number) or an SDI X-suffix purchase. Narrow on
+    purpose: the job's minted adhesive, packaging and delivery lines are costed their own way."""
+    try:
+        import part_code_conventions as _pcc
+        pn = str(part.get("part_number") or "")
+        return bool(_pcc.is_supplier_article(pn) or _pcc.purchased_suffix(pn))
+    except Exception:                                                # noqa: BLE001
+        return False
+
+
+def release_inherited_material_from_bought_items(parts: List[Dict[str, Any]]) -> List[str]:
+    """Take the document's material back off each bought item that only inherited it. Returns
+    what was said, one line per item."""
+    said: List[str] = []
+    for p in parts or []:
+        if not isinstance(p, dict) or p.get("material_inherited_from") != "document_level":
+            continue
+        if not _a_suppliers_article(p):
+            continue
+        was = p.get("normalized_material") or (p.get("materials") or [""])[0]
+        for k in ("normalized_material", "normalized_material_source", "material_source"):
+            p.pop(k, None)
+        p["materials"] = []
+        p.pop("material_inherited_from", None)
+        p["material_released_from_document"] = str(was or "")
+        p.setdefault("flags", []).append(
+            f"bought in: the drawing's {was} is not this item's material — priced as the item "
+            f"bought, not as stock we cut")
+        said.append(f"{p.get('part_number')}: bought in — the drawing's {was} taken off it")
+    return said
+
+
+def doubt_a_lone_model_material(parts: List[Dict[str, Any]],
+                                document_analysis: Optional[Dict[str, Any]] = None) -> List[str]:
+    """A material only the MODEL gives, on a part the model measured nothing of, that disagrees
+    with every one of its siblings and with the drawing's own stated family, is not priced as
+    that material (12674-01, 11 Nov 2026).
+
+    12674-01-01J BASE: the model says "Steel" and yields no blank; the six other parts of
+    12674-01-101SA are MDF, the GA's title block says TIMBER, and the base stands on Hafele
+    plinth feet. It was costed as a steel part at £0.43. A template's default material is not a
+    specification: the material is taken off, the part is priced as a visible gap, and the
+    question says what each source states. Returns what was said."""
+    said: List[str] = []
+    da = document_analysis if isinstance(document_analysis, dict) else {}
+
+    def _key(v: Any) -> str:
+        return re.sub(r"\s+", "", str(v or "").split(" - ")[0]).upper()
+
+    parent_of = {_key(r.get("part_number")): _key(r.get("bom_parent"))
+                 for r in (da.get("bom_rows") or []) if isinstance(r, dict)}
+    stated = {_material_family(m) for m in ((da.get("title_block") or {}).get("materials") or [])}
+    stated.discard("")
+    made = [p for p in parts or [] if isinstance(p, dict) and p.get("normalized_material")
+            and not _a_suppliers_article(p) and not p.get("is_assembly_parent")]
+    for p in made:
+        if p.get("material_source") != "solidworks_applied_material" \
+                or not p.get("native_material_without_geometry") or p.get("material_stated"):
+            continue
+        fam = _material_family(p.get("normalized_material"))
+        par = parent_of.get(_key(p.get("part_number")), "")
+        sibs = [q for q in made if q is not p
+                and (not par or parent_of.get(_key(q.get("part_number")), "") == par)]
+        fams = {_material_family(q.get("normalized_material")) for q in sibs}
+        fams.discard("")
+        if not fam or len(sibs) < 2 or len(fams) != 1 or fam in fams:
+            continue
+        if stated and stated != fams:
+            continue
+        other = next(iter(fams))
+        was = p.get("normalized_material")
+        for k in ("normalized_material", "normalized_material_source", "material_source"):
+            p.pop(k, None)
+        p["materials"] = []
+        p["material_model_said"] = str(was)
+        q = (f"MATERIAL NOT STATED: {p.get('part_number')} {p.get('description') or ''}".strip()
+             + f" — the model says {was} but measured nothing of it, every other part beside it "
+               f"is {other}" + (f" and the drawing states {', '.join(sorted(stated))}"
+                                if stated else "")
+             + ", and no sheet in the pack draws it. Left without a material rather than costed as "
+             + f"{was}: say what it is made of and its size.")
+        # The model's own "material 'X' from the SolidWorks model" note goes: it now describes
+        # a material the part does not carry, and the question below says what it said.
+        p["review_flags"] = [f for f in (p.get("review_flags") or [])
+                             if not str(f).startswith(f"material '{was}' from the SolidWorks")]
+        p["review_flags"].append(q)
+        p.setdefault("flags", []).append(q)
+        said.append(f"{p.get('part_number')}: the model's {was} not used — every part beside it "
+                    f"is {other}; priced as a gap and asked")
+    return said
+
+
 def pre_costing_passes(summary: Dict[str, Any]) -> None:
     """The readings that must land on the part records before estimate_document prices them,
     in order (D-433, D-437, D-453, D-454, D-451, D-445, D-440). One function, called by the run
@@ -2672,6 +2772,16 @@ def pre_costing_passes(summary: Dict[str, Any]) -> None:
     # 3 mm mild steel. A material that arrives after the price is a note, not a material.
     _inherit_sheet_material_to_parts(summary["manufacturing_writeup"]["parts"],
                                      summary.get("pages") or [])
+    # A BOUGHT ITEM GIVES BACK A MATERIAL IT ONLY INHERITED (12674-01, 11 Nov 2026), on a saved
+    # record as on a new read: the GA's TIMBER on six Hafele plinth feet costed them as sawn,
+    # glued, sprayed and routed parts. Only a document-level material is taken back; one the
+    # item's own row or sheet states stays.
+    for _line in release_inherited_material_from_bought_items(
+            summary["manufacturing_writeup"]["parts"]):
+        print(f"   [bought-in] {_line}", flush=True)
+    for _line in doubt_a_lone_model_material(summary["manufacturing_writeup"]["parts"],
+                                             summary.get("document_analysis") or {}):
+        print(f"   [material] {_line}", flush=True)
     # A LAMINATED BOARD IS ITS CORE PLUS ITS LAMINATE (JG, 10 Nov 2026, 12674-01-GA): the GA's
     # FINISH reaches the board parts that state none, and a finished thickness that is a stock
     # board plus laminate is priced as that core with the laminate on its faces.

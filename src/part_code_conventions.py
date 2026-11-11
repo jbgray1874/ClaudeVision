@@ -242,8 +242,25 @@ def is_supplier_article(text: str) -> bool:
         return False
     if _DOTTED_ARTICLE.match(token):
         return True
+    if _MAKER_COLON_CODE.match(str(text or "").strip()) \
+            and _MAKER_COLON_CODE.match(str(text or "").strip()).group(1).strip().upper() \
+            not in _LABELS_BEFORE_A_COLON:
+        return True
     _pre = _LETTER_PREFIX.match(token)
     return bool(_pre and _pre.group(1).upper() in _refused_prefixes())
+
+
+# THE MAKER'S NAME, A COLON, THE MAKER'S CODE (12674-01, 11 Nov 2026). The parts list prints
+# "HAFELE: 637.30.941" for six plinth feet, and 6364-01 "ROSS: 50-360-R-BH10" and "McCue:
+# GGT-10-401": the colon is the drawing office naming a supplier. The dotted rule above read
+# "HAFELE 637.30.941" but not with the colon, so the feet took the drawing's TIMBER and were
+# costed as sawn, glued, sprayed and routed parts we make. A label before a colon ("DWG NO:",
+# "PART:") is not a maker.
+_MAKER_COLON_CODE = re.compile(r"^([A-Za-z][A-Za-z &.'\-]{1,30}?)\s*:\s*[A-Za-z0-9]", re.IGNORECASE)
+_LABELS_BEFORE_A_COLON = frozenset({
+    "DWG", "DWG NO", "DWG NO.", "DRG", "DRG NO", "DRAWING", "DRAWING NO", "DRAWING NUMBER",
+    "PART", "PART NO", "PART NUMBER", "ITEM", "ITEM NO", "REF", "CODE", "NO", "NUMBER", "REV",
+    "QTY", "MATERIAL", "FINISH", "COLOUR", "COLOR", "SIZE", "NOTE", "NOTES", "TITLE"})
 
 
 def is_standard_designation(text: str) -> bool:
