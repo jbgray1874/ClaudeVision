@@ -119,6 +119,7 @@ def service(tmp_path, monkeypatch):
     (tmp_path / "job").mkdir()
     (tmp_path / "job" / "ga.pdf").write_bytes(b"%PDF-1.4 a drawing")
     (tmp_path / "job" / "part.dxf").write_text("0\nSECTION")
+    (tmp_path / "job" / "DELIVERY_DECLARED.json").write_text('{"requested": true}')   # the last run's form
     er.claim(er.ClaimRequest(runner_id="laptop", hostname="LAPTOP"))
     return er, tmp_path
 
@@ -141,6 +142,7 @@ def test_a_page_or_tti_job_is_queued_again_with_what_it_read(service):
     assert again.reader_mode == "targeted" and again.source == "TTI batch re-run" and again.status == "queued"
     assert sorted(p.name for p in Path(again.job_folder).iterdir() if p.suffix in (".pdf", ".dxf")) == ["ga.pdf", "part.dxf"]
     assert "--replace-costs" in out["said"], "a TTI row re-run here does not write the tracker, and says so"
+    assert not (Path(again.job_folder) / "DELIVERY_DECLARED.json").exists(), "an old declaration is not carried over"
 
 
 def test_a_self_running_job_is_handed_back_to_self_running(service, monkeypatch):

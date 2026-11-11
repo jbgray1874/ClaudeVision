@@ -1537,8 +1537,10 @@ class GridStopRequest(BaseModel):
 #     quantity breaks, method, brief and recipients, from a copy of the inputs it staged (staging
 #     clears the client/job folder, so the copy is taken first). A TTI row re-run here does not
 #     write the tracker: the pricer's --rows N --replace-costs does that, and the answer says so.
-_STAGE_MARKERS = {"CONCEPT_DOCUMENT.json", "REFERENCE_DOCUMENTS.json", "DELIVERY_DECLARED.json",
-                  "PARTNER_API_RUN.json", "ENQUIRY_BRIEF.txt"}
+# THE RUN FORM'S OWN DECLARATIONS ARE NOT INPUTS: staging writes them afresh for every run (the
+# capital-lettered .json markers beside the drawings, and the brief's own file), so a re-run
+# never carries a declaration the new run did not make.
+_STAGE_MARKER = re.compile(r"[A-Z][A-Z_]+\.json|ENQUIRY_BRIEF\.txt")
 
 
 def _rerun_method(run: "Run") -> str:
@@ -1597,7 +1599,7 @@ def rerun(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
     hold = _held_dir("rerun") / f"{safe_segment(drawing)[:40]}_{uuid.uuid4().hex[:6]}"
     copied = 0
     for p in sorted(folder.rglob("*")):
-        if p.is_file() and p.name not in _STAGE_MARKERS:
+        if p.is_file() and not _STAGE_MARKER.fullmatch(p.name):
             dest = hold / p.relative_to(folder)
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(p, dest)
