@@ -34,6 +34,7 @@ folder is often 2D only (DXF/PDF) — the native models live elsewhere under the
 from __future__ import annotations
 import json
 import os
+import time
 from pathlib import Path
 import re
 import sys
@@ -233,6 +234,41 @@ class RouteSignals:
     feature_types: List[str] = field(default_factory=list)  # diagnostic: raw type names seen
 
 
+SAME_TITLE_OPEN = 65536          # swFileWithSameTitleAlreadyOpen
+
+
+def wait_for_a_held_title(open_again, find_open, tries: int = 0, wait_s: float = -1.0,
+                          sleep=None):
+    """(document or None, what happened). A file refused because another document of its
+    title is open is asked for again, `tries` times `wait_s` apart: the holder is usually the
+    other runner's read of its own copy, closed within seconds. `open_again()` gives
+    (document or None, error bits); `find_open()` gives the open document or None. Stops at
+    once on any refusal that is not the held title. SDI_SW_TITLE_RETRIES and
+    SDI_SW_TITLE_WAIT_S set the patience (default 12 tries, 5 s)."""
+    if tries <= 0:
+        try:
+            tries = int(os.environ.get("SDI_SW_TITLE_RETRIES") or 12)
+        except ValueError:
+            tries = 12
+    if wait_s < 0:
+        try:
+            wait_s = float(os.environ.get("SDI_SW_TITLE_WAIT_S") or 5.0)
+        except ValueError:
+            wait_s = 5.0
+    sleep = sleep or time.sleep
+    for n in range(1, tries + 1):
+        sleep(wait_s)
+        doc, errs = open_again()
+        if doc is not None:
+            return doc, f"opened on try {n + 1}, once the document holding its title was closed"
+        if not errs & SAME_TITLE_OPEN:
+            return None, f"asked again {n} time(s); the refusal changed to errs={errs}"
+        doc = find_open()
+        if doc is not None:
+            return doc, f"found open on try {n + 1} and read in place"
+    return None, f"asked again {tries} time(s) over {tries * wait_s:.0f}s; its title stayed held"
+
+
 class SolidWorksSession:
     def __init__(self, visible: bool = False):
         if not _COM_AVAILABLE:
@@ -324,6 +360,30 @@ class SolidWorksSession:
                     self._borrowed_titles.append(_safe_str(_get0(doc, "GetTitle")) or path)
                     self.last_open_borrowed = True
                     return doc, doctype
+                # THE TITLE IS HELD FOR A MOMENT, NOT FOR GOOD (12674-02-GA, 11 Nov 2026). Two
+                # runners take one SolidWorks in turn, and jobs that share panels hold copies
+                # of one file name in two pack folders. While the other run has its copy open,
+                # this one is refused and the other's document is not ours to find; it closes
+                # it as soon as that file is read. Both side panels of 12674-02-GA were lost
+                # this way and priced at nothing. Ask again for a short while before failing.
+                def _again():
+                    _e = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+                    _w = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+                    _d = self.sw.OpenDoc6(path, doctype, OPEN_OPTS, "", _e, _w)
+                    return _d, int(_e.value or 0)
+                doc, _how = wait_for_a_held_title(
+                    _again, lambda: self._get_open_document(path, []))
+                if doc is not None:
+                    print(f"[recovered] {os.path.basename(path)}: {_how}")
+                    _t = _safe_str(_get0(doc, "GetTitle"))
+                    if _how.startswith("opened"):
+                        if _t:
+                            self._open_titles.append(_t)
+                    else:
+                        self._borrowed_titles.append(_t or path)
+                        self.last_open_borrowed = True
+                    return doc, doctype
+                _trace.append(_how)
                 # Say what was tried. A bare "failed" told us nothing last time and cost a
                 # whole run to learn no more than that.
                 raise RuntimeError(
