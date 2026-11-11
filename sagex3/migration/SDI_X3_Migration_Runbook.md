@@ -1,6 +1,6 @@
 # SDI Displays – Access SupplyChain to Sage X3: migration runbook
 
-Last updated 5 November 2026, afternoon (Ethan's Run 3 fixes applied; files in `Ethan_fixes_2026-11-05`). Go-live run 31 Dec 2026; go-live 4 January 2027.
+Last updated 11 November 2026 (Run 4 results, SDI actions due Fri 13 Nov; integrations register; section 20 lists everything beyond the migration). Go-live run 31 Dec 2026; go-live 4 January 2027.
 **Start with section 19:** the current files, what was found on 4 Nov, and the open decisions.
 
 This is the record of how the migration files are built and every rule behind them, so each
@@ -834,6 +834,20 @@ There is no data dictionary for Access; everything below was found by querying t
 
 ## 11. Traps we hit – don't hit them again
 
+**Working lessons (5–11 Nov) – read before every run and every e-mail:**
+- **Every date you give someone, check the weekday.** On 11 Nov a deadline went out as "Friday 14 November"; Friday was the 13th. Run `python3 -c "import datetime;print(datetime.date(2026,11,13).strftime('%A'))"` before sending.
+- **A fixed replacement date goes stale.** Past required dates were moved to 6 Nov; by the reload on 11 Nov that date was itself in the past. The replacement date must be after the load day. Regenerate on the load day (`--required-date`), or use a date comfortably ahead (30 Nov for Run 4).
+- **"Only these files, nothing else" means exactly that** (James, 5 Nov). Holding back lines on PHANT products was an extra nobody asked for, and it was undone. Apply only the change asked for, then say what else you'd recommend, separately.
+- **Don't remove rows X3 will skip** (James, 5 Nov). The 116 route lines on bought-in products stay in the file; X3 skips them.
+- **When Ethan flags a rule on one file, check every file it applies to.** He found 2023 order dates on POs; the same 385 lines sat in the sales orders and were fixed in the same pass.
+- **Reconcile ledgers on a net basis** (invoices less credits and receipts / payments), excluding the accounts not in X3. Check journals' direction: CAP500's £22,500 journal is the only supplier difference (11 Nov).
+- **Prove "nothing else changed" cell by cell** before sending a regenerated file, and keep every moved value on a "Re-dated" / "Held back" tab.
+- **Keep superseded files out of reach:** move them to a `superseded_<date>` folder so they can't be attached by mistake.
+- **E-mails go in the chat, ready to paste** – not in .md files (James, 5 Nov).
+- **Lists that name customers or suppliers stay inside SDI.** Send one attachment per team (Purchasing, Customer Service, Finance) with only their items.
+- **Tell the user plainly what wasn't rebuilt or what's missing** (rules 1d and 1e) – never leave a stale file in a "current" set unannounced.
+
+
 - **Collation:** dbo tables are Latin1_General_BIN, the migration schema is CI_AS. Use
   `COLLATE DATABASE_DEFAULT` on every join, UNION and comparison across them.
 - **Encoding:** Access exports are DOS cp850. 0x9C is £, 0xF8 is °, 0x9D is Ø. Read and write
@@ -1570,3 +1584,43 @@ keeps the original date. The 6 Nov versions are in `Ethan_fixes_2026-11-05/super
 **Still open:**
 - **Customers:** XPOSCOD on TEC100, TEC105, UNI103, PER101; XSAT on DRE100, MAR101, PER101, TEC105. Acuity investigating with us. 14 countries appear only on these customers (PT, CA, SG, MY, TH, BR, PY, MC, MT, CY, IN, RO, TR, BM), which points at X3's country set-up (postcode format / mandatory region).
 - **Suppliers:** 11 with blank VAT / company number (10 FR, 1 ES). Finance to supply. GAL500, ICE500 and BUR500 have their FR VAT; they need the SIRET.
+
+### 19.10 SDI actions from Run 4 – due Friday 13 November
+
+Sent to all three teams in one e-mail on 11 Nov (one attachment per team, from `deliver/`):
+
+| Team | People | Attachment | Action | Then (migration) |
+|---|---|---|---|---|
+| Purchasing | Sam, Simon Foister | `Purchasing_2023_POs_to_review.xlsx` – 8 POs dated 2023 (17 lines, ≈£20k; Access PO numbers) | Close each PO that isn't open in Access; mark "Y" + note if still open | Next extract drops closed POs. Any still open keep the 01/01/2026 order date (`--order-floor`) |
+| Customer Service | Selina Kuddus, Debbie Freeth | `CustomerService_2023_SOs_to_review.xlsx` – 115 order refs dated 2023 (385 lines, ≈£216k) | Same: close in Access, or "Y" + note | Same. Our step, not Ethan's (same calendar issue as the POs) |
+| Finance | Ewa, Farhana Khan | `Finance_Suppliers_VAT_SIRET.xlsx` – 11 suppliers (10 FR, 1 ES) with two yellow fill-in columns | VAT number and SIRET / CIF; PLS500 has a GB number on a Spanish supplier; BAL500 tax treatment | Put the numbers into YA004BPS (`fix_suppliers.py`) and send to Ethan for the supplier reload |
+| Finance (question) | – | in the e-mail | CAP500 journal "SAVINGS" £22,500 (12 Oct): owed by SDI or to SDI? | Fixes the BISY reconciliation (also asked of Jim) |
+
+**Also open with Acuity:** BRW500 invoice 1209156 (£1,772.40) not in X3 (Ethan); the six customers' XPOSCOD / XSAT errors (joint session); CAP500 direction (Jim).
+**Reconciliation figures to repeat after the next load:** customers £6,853,365.26; suppliers £5,588,058.58 (with the items above).
+
+---
+
+## 20. The programme beyond the migration (integrations, reports, spreadsheets, UAT) – 10–11 Nov
+
+Not data migration, but tracked here so nothing is forgotten. Everything is in Jira under the SageX3 epic **SCRUM-40** and in the **programme register**: `deliver/SDI_SageX3_Programme_Register.xlsx` and `.html` (scratchpad). Both are built from `register/register_data.py`, so update that file and rerun `build_xlsx.py` / `build_html.py` to refresh them.
+
+| Area | Jira | What | Source |
+|---|---|---|---|
+| Opportunity → live project | SCRUM-208, 214–219 | Briefing creates an X3 opportunity; a win creates the project financial dimension (bespoke), written back; PDF attachment under SaaS is the big unknown | Marc's CRM minutes, 12 Oct |
+| Estimating port | SCRUM-209 | Estimating prices from X3 data (codes, costs, suppliers, work-centre rates) | James |
+| Estimating import | SCRUM-210, 242–244 | Dave Wright's IMPORT sheet: yellow cells (drawing / rev, BOM, wire, sheet, labour) → X3 product, BOM, route. Work centres match our map on all 30; OVEN unmapped, SALV to confirm. Test part "IMPORT" in X3 | Dave Wright, 23 Oct; James → Marc / Sergio, 28 Oct |
+| Works orders auto-created | SCRUM-211 | Confirmed order → works orders with BOM and route, job cards | James |
+| Live Orders | SCRUM-241, 245–249 | Production / warehouse schedule ("we can't function without it"): live WOs, material status, work-centre hours per week, WO suggestions flagging no BOM / route, exploded BOM with availability. "MCS" column to confirm | Dave Wright, 27 Oct; Rachael Smith |
+| Reports | SCRUM-212, 220–240 | 21 Access reports registered: 11 likely X3 standard, 8 need definition, 2 done by Jim (Tungsten EDI, YINVLIST) | Simon Foister, Debbie Freeth, Selina Kuddus, Farhana Khan, 13–20 Oct |
+| Spreadsheets | SCRUM-213, 252 | Working sheets read from / write to X3; self-refreshing Excel for AMs / PMs | James; Selina |
+| Customer Service UAT | SCRUM-250, 251–260 | Report list from Marc; AM / PM reports; project-code training; back-to-back training; "&" in codes (migration already drops it – keep Sage's block); global allocation; pro forma; dashboards; real data / history; documented processes | Selina Kuddus |
+
+**Sent / delivered:**
+- E-mail to Acuity (Marc, Jim, Sergio) on 11 Nov: every integration, report and spreadsheet need, numbered, asking for an owner and a date for each.
+- `deliver/charlotte/SDI_Data_Migration_File_Guide.html` and 14 sample screenshots: what each migrated file represents and every column explained. Rebuild with `register/build_guide.py`.
+- `SDI_SageX3_Status_Report_2026-11-10.html` (status report).
+
+**Still missing:**
+- Replies from Sales, Estimating, Design and the rest of Finance to the 7 Oct request for reports / spreadsheets.
+- Possibly Selina's earlier list (19 Oct: "on the list I sent through").
