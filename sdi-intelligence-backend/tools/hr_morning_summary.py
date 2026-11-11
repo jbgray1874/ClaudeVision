@@ -212,6 +212,12 @@ def compose(d: dict, link: str) -> tuple:
                 + (f" (not counting {forgot} forgotten clock-out{'' if forgot == 1 else 's'})" if forgot else "")),
                ("On InVentry's fire list", "InVentry did not answer" if d["on_inventry"] is None else
                 f"{d['on_inventry']}" + (f" ({d['at_reception']} signed in at reception)" if d["at_reception"] else ""))]
+    if d["on_inventry"] is not None and d["clocked_in"]:
+        # The evidence the two are in step: of everyone clocked in, how many
+        # InVentry's list has.
+        both = max(0, d["clocked_in"] - len(d["not_on_inventry"]))
+        figures.append(("In step", f"{both} of {d['clocked_in']} clocked in are on InVentry's list "
+                                   f"({round(both / d['clocked_in'] * 100)}%)"))
     if push and push.get("status") == "ok":
         figures.append(("InVentry updated", f"{len(push.get('signed_in_names') or [])} signed in, "
                                              f"{len(push.get('signed_out_names') or [])} signed out"))

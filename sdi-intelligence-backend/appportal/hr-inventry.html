@@ -160,6 +160,38 @@
   .path{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
 
   /* ── history and tables ── */
+  /* Today: the update at a glance. Chart colours are categorical slots 1 and 2,
+     validated on this surface (#141412): CVD dE 26.8, contrast >= 3:1. */
+  .v-series-1{--c:#3987e5} .v-series-2{--c:#d95926}
+  .live{display:flex;align-items:center;gap:9px;font-size:14px;color:var(--muted);margin:2px 0 12px}
+  .live i{width:10px;height:10px;border-radius:50%;background:var(--c,var(--dim));flex:0 0 auto}
+  .live.ok i{--c:var(--ok);box-shadow:0 0 0 0 rgba(78,201,127,.55);animation:pulse 2.4s infinite}
+  .live.warn i{--c:var(--warn)} .live.fail i{--c:var(--bad)}
+  .live b{color:var(--ink);font-weight:600}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(78,201,127,.55)}70%{box-shadow:0 0 0 9px rgba(78,201,127,0)}100%{box-shadow:0 0 0 0 rgba(78,201,127,0)}}
+  @media (prefers-reduced-motion:reduce){.live.ok i{animation:none}}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+  .kpi{background:var(--panel-2);border:1px solid var(--line-soft);border-radius:8px;padding:12px 14px}
+  .kpi span{display:block;font-size:12.5px;color:var(--muted)}
+  .kpi b{display:block;font-family:var(--disp);font-weight:600;font-size:34px;line-height:1.1;letter-spacing:-.01em;margin-top:4px}
+  .kpi small{display:block;font-size:12px;color:var(--dim);margin-top:2px}
+  .meter{height:8px;border-radius:999px;background:rgba(57,135,229,.18);overflow:hidden;margin-top:10px}
+  .meter span{display:block;height:100%;border-radius:999px;background:#3987e5;transition:width .6s ease}
+  .meter.done span{background:var(--ok)}
+  .chart{position:relative;margin-top:6px}
+  .chart svg{display:block;width:100%;overflow:visible}
+  .chart svg:focus{outline:2px solid var(--brand);outline-offset:4px;border-radius:2px}
+  .legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;color:var(--muted);margin:2px 0 6px}
+  .legend span{display:flex;align-items:center;gap:7px}
+  .legend i{width:16px;height:2px;border-radius:2px;background:var(--c)}
+  .legend b{color:var(--ink);font-weight:700}
+  .tip{position:absolute;pointer-events:none;background:var(--bg);border:1px solid var(--line);border-radius:var(--r);
+       padding:8px 10px;font-size:12.5px;white-space:nowrap;display:none;z-index:2}
+  .tip div{display:flex;align-items:center;gap:7px}
+  .tip i{width:12px;height:2px;border-radius:2px;background:var(--c)}
+  .tip b{color:var(--ink)} .tip span{color:var(--muted)} .tip .t{color:var(--dim);margin-bottom:4px}
+  details.tv{margin-top:8px} details.tv summary{cursor:pointer;color:var(--muted);font-size:13px}
+  details.tv table{margin-top:6px} details.tv td,details.tv th{font-variant-numeric:tabular-nums}
   .hist li{list-style:none;padding:9px 0;border-bottom:1px solid var(--line-soft);font-size:14px}
   .hist li small{display:block;font-family:var(--mono);font-size:11px;color:var(--dim)}
   table.t{width:100%;border-collapse:collapse;font-size:13.5px}
@@ -211,14 +243,31 @@
     </div>
 
     <div class="tabs" role="tablist">
-      <button class="tab on" data-v="latest">Latest</button>
+      <button class="tab on" data-v="today">Today</button>
+      <button class="tab" data-v="latest">Latest</button>
       <button class="tab" data-v="roll">Roll call</button>
       <button class="tab" data-v="issues">Data issues</button>
       <button class="tab" data-v="forgot">Forgotten clock-outs</button>
       <button class="tab" data-v="hist">History</button>
     </div>
 
-    <div class="view on" id="v-latest">
+    <div class="view on" id="v-today">
+      <div class="panel">
+        <h4>BrightHR and InVentry today</h4>
+        <div class="live" id="tdlive"><i></i><span>Reading BrightHR and InVentry…</span></div>
+        <div class="kpis" id="tdkpis"></div>
+        <div class="err" id="tderr"></div>
+      </div>
+      <div class="panel">
+        <h4>On site through the day</h4>
+        <div class="legend" id="tdlegend"></div>
+        <div class="chart" id="tdchart"></div>
+        <p class="muted" id="tdnote" style="margin-top:8px"></p>
+      </div>
+      <div class="panel" id="tdmissing"></div>
+    </div>
+
+    <div class="view" id="v-latest">
       <div class="panel" id="job" style="display:none">
         <h4><span id="jobtitle">Last run</span> <span class="chip c-off" id="chip"></span></h4>
         <p class="muted" id="meta"></p>
@@ -232,6 +281,7 @@
       <div>
       <div class="panel" id="rolllive">
         <h4>Fire roll call <span class="chip c-off" id="rollcount"></span></h4>
+        <div class="meter" id="rollmeter" role="img" aria-label="Accounted for"><span style="width:0"></span></div>
         <div class="btns"><button class="btn ghost" id="rollload">Refresh</button>
           <button class="btn ghost" id="rollnew">Start a new roll call</button>
           <button class="btn ghost" type="button" data-group>Group by manager</button></div>
@@ -326,6 +376,7 @@ document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{
   document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===b));
   document.querySelectorAll('.view').forEach(v=>v.classList.toggle('on',v.id==='v-'+b.dataset.v));
   if(b.dataset.v==='roll') loadRoll(); else clearTimeout(rollTimer);
+  if(b.dataset.v==='today') loadToday(); else clearTimeout(todayTimer);
   if(b.dataset.v==='hist') loadHistory();
   if(b.dataset.v==='forgot') renderForgotten();
 }));
@@ -452,6 +503,9 @@ function renderRoll(){
   const done=ROLL.people.filter(isTicked).length;
   $('rollcount').textContent=done+' of '+ROLL.count+' accounted for';
   $('rollcount').className='chip '+(ROLL.count&&done===ROLL.count?'c-ok':'c-warn');
+  const rm=$('rollmeter'); rm.classList.toggle('done', !!ROLL.count && done===ROLL.count);
+  rm.firstElementChild.style.width=(ROLL.count?Math.round(done/ROLL.count*100):0)+'%';
+  rm.setAttribute('aria-label', done+' of '+ROLL.count+' accounted for');
   const notes=['Updated '+when(ROLL.time)+'.'];
   if(ROLL.started) notes.push('Roll call started '+when(ROLL.started)+(ROLL.started_by?' by '+ROLL.started_by:'')+'.');
   if(ROLL.inventry_problem) notes.push(ROLL.inventry_problem);
@@ -557,6 +611,137 @@ $('runs').addEventListener('click',async e=>{
 });
 document.addEventListener('click',e=>{ if(e.target.closest('#rollback')) showLive(); });
 
+/* ── Today: is InVentry keeping up with BrightHR? ──
+   The figures come from the roll call (who BrightHR has clocked in now, and who
+   InVentry shows, forgotten clock-outs left out) and the chart from History:
+   each update records both counts, so two lines that meet are the evidence. */
+let todayTimer=null, TODAY=null;
+const SERIES=[{k:'bh',name:'Clocked in on BrightHR',cls:'v-series-1'},
+              {k:'inv',name:"On InVentry's fire list",cls:'v-series-2'}];
+function minsAgo(iso){ const h=ago(iso); return h===null?'':h<1/60?'just now':h<1?Math.round(h*60)+' min ago':Math.round(h)+' h ago'; }
+async function loadToday(){
+  clearTimeout(todayTimer); $('tderr').textContent='';
+  try{ const [roll,hist]=await Promise.all([call('/rollcall'), call('/history?n=200')]);
+       TODAY={roll, entries:hist.entries||[]}; renderToday(); }
+  catch(e){ if(!quiet(e)) $('tderr').textContent=msg(e); }
+  if($('v-today').classList.contains('on')) todayTimer=setTimeout(loadToday,60000);
+}
+function renderToday(){
+  if(!TODAY) return;
+  const ppl=TODAY.roll.people||[], invDown=!!TODAY.roll.inventry_problem;
+  const bh=ppl.filter(p=>p.brighthr), inv=ppl.filter(p=>p.inventry);
+  const both=bh.filter(p=>p.inventry), missing=bh.filter(p=>!p.inventry);
+  const reception=inv.filter(p=>p.inventry.by!=='sync').length;
+  const today=new Date().toDateString();
+  const todays=TODAY.entries.filter(e=>{ const t=Date.parse(e.time||''); return !isNaN(t)&&new Date(t).toDateString()===today; });
+  const updates=TODAY.entries.filter(e=>e.kind==='update'&&e.status==='ok');
+  const last=updates[0];
+  // ── live line ──
+  const lh=last?ago(last.time):null, live=$('tdlive');
+  live.className='live '+(lh!==null&&lh<0.25?'ok':lh!==null&&lh<24?'warn':'fail');
+  live.lastElementChild.innerHTML=lh!==null&&lh<0.25
+    ? '<b>Updating automatically.</b> Last update '+esc(when(last.time))+' ('+esc(minsAgo(last.time))+').'
+    : lh!==null ? '<b>Not updating automatically.</b> Last update '+esc(when(last.time))+' ('+esc(minsAgo(last.time))+').'
+    : '<b>InVentry is not being updated from BrightHR.</b> No update is recorded.';
+  // ── figures ──
+  const pct=bh.length?Math.round(both.length/bh.length*100):100;
+  const ins=todays.filter(e=>e.kind==='update').reduce((n,e)=>n+(e.signed_in||[]).length,0);
+  const outs=todays.filter(e=>e.kind==='update').reduce((n,e)=>n+(e.signed_out||[]).length,0);
+  $('tdkpis').innerHTML=
+      '<div class="kpi"><span>Clocked in on BrightHR</span><b>'+bh.length+'</b><small>'
+        +(TODAY.roll.forgotten_left_out?TODAY.roll.forgotten_left_out+' forgotten clock-outs left out':'now')+'</small></div>'
+    +'<div class="kpi"><span>On InVentry\'s fire list</span><b>'+(invDown?'?':inv.length)+'</b><small>'
+        +(invDown?'InVentry did not answer':reception?reception+' signed in at reception':'now')+'</small></div>'
+    +'<div class="kpi"><span>In step</span><b>'+(invDown?'?':pct+'%')+'</b><small>'
+        +(invDown?'':both.length+' of '+bh.length+' clocked in are on InVentry')+'</small>'
+        +(invDown?'':'<div class="meter'+(pct===100?' done':'')+'" role="img" aria-label="'+pct+' percent in step"><span style="width:'+pct+'%"></span></div>')+'</div>'
+    +'<div class="kpi"><span>Updated today</span><b>'+ins+'</b><small>signed in, '+outs+' signed out</small></div>';
+  // ── missing ──
+  const m=$('tdmissing');
+  if(invDown){ m.innerHTML='<h4>InVentry</h4><p class="muted">'+esc(TODAY.roll.inventry_problem)+'</p>'; }
+  else if(!missing.length){ m.innerHTML='<h4>Missing from InVentry\'s fire list (0)</h4><p>Everyone clocked in on BrightHR is on InVentry\'s list.</p>'; }
+  else { const show=missing.slice(0,12).map(p=>esc(p.name)).join(', ');
+    m.innerHTML='<h4>Missing from InVentry\'s fire list ('+missing.length+')</h4><p class="muted" style="margin-bottom:6px">Clocked in on BrightHR, '
+      +'not on InVentry\'s list. The Roll call includes them. '+(last&&lh<0.25?'If a name stays here, see Data issues: their InVentry record may need fixing.'
+      :'Update InVentry signs them in.')+'</p><p>'+show+(missing.length>12?' and '+(missing.length-12)+' more':'')+'</p>'; }
+  // ── chart: both counts at every update today ──
+  const pts=todays.filter(e=>(e.kind==='update'||e.kind==='dry run')&&e.brighthr_on_site!=null)
+    .map(e=>({t:Date.parse(e.time), bh:e.brighthr_on_site,
+              inv:e.inventry_on_site_after!=null?e.inventry_on_site_after:e.inventry_on_site_before}))
+    .filter(p=>p.inv!=null).sort((a,b)=>a.t-b.t);
+  $('tdlegend').innerHTML=SERIES.map((s,i)=>'<span class="'+s.cls+'"><i></i>'+esc(s.name)+' <b>'
+    +(i===0?bh.length:(invDown?'?':inv.length))+'</b></span>').join('');
+  drawChart(pts);
+  $('tdnote').textContent=pts.length
+    ? 'Each update records both counts. When InVentry is kept up to date, the two lines run together.'
+    : 'No updates yet today. Once the automatic update runs, this fills in every 5 minutes.';
+}
+function drawChart(pts){
+  const box=$('tdchart'); box.innerHTML='';
+  if(!pts.length) return;
+  const W=Math.max(280, box.clientWidth||600), H=220, L=36, R=12, T=10, B=26, pw=W-L-R, ph=H-T-B;
+  const t0=pts[0].t, t1=Math.max(pts[pts.length-1].t, t0+3600000);
+  const top=Math.max(10, ...pts.map(p=>Math.max(p.bh,p.inv)));
+  const step=[5,10,20,25,50,100,200].find(s=>top/s<=4)||Math.ceil(top/4);
+  const ymax=Math.ceil(top/step)*step;
+  const x=t=>L+(t-t0)/(t1-t0)*pw, y=v=>T+ph-(v/ymax)*ph;
+  const NS='http://www.w3.org/2000/svg';
+  const el2=(n,a,p)=>{ const e=document.createElementNS(NS,n); for(const k in a) e.setAttribute(k,a[k]); (p||svg).appendChild(e); return e; };
+  const svg=document.createElementNS(NS,'svg');
+  svg.setAttribute('viewBox','0 0 '+W+' '+H); svg.setAttribute('height',H); svg.setAttribute('tabindex','0');
+  svg.setAttribute('role','img');
+  svg.setAttribute('aria-label','On site through the day: clocked in on BrightHR and on InVentry\'s fire list, at each update. Use the arrow keys to step through, or open the table below.');
+  for(let v=0; v<=ymax; v+=step){
+    el2('line',{x1:L,x2:W-R,y1:y(v),y2:y(v),stroke:v?'var(--line-soft)':'var(--line)','stroke-width':1});
+    const tx=el2('text',{x:L-8,y:y(v)+4,'text-anchor':'end','font-size':11,fill:'var(--dim)','font-family':'var(--mono)'}); tx.textContent=v;
+  }
+  const hours=[]; for(let h=new Date(t0); h.getTime()<=t1; h=new Date(h.getTime()+3600000)){ const c=new Date(h); c.setMinutes(0,0,0); if(c.getTime()>=t0) hours.push(c.getTime()); }
+  const every=Math.ceil(hours.length/(W<480?4:8));
+  hours.forEach((h,i)=>{ if(i%every) return;
+    const tx=el2('text',{x:x(h),y:H-6,'text-anchor':'middle','font-size':11,fill:'var(--dim)','font-family':'var(--mono)'});
+    tx.textContent=new Date(h).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}); });
+  SERIES.forEach(s=>{
+    const g=el2('g',{class:s.cls});
+    el2('polyline',{points:pts.map(p=>x(p.t)+','+y(p[s.k])).join(' '),fill:'none',stroke:'var(--c)','stroke-width':2,
+                    'stroke-linejoin':'round','stroke-linecap':'round'},g);
+    const e=pts[pts.length-1];
+    el2('circle',{cx:x(e.t),cy:y(e[s.k]),r:4,fill:'var(--c)',stroke:'var(--panel)','stroke-width':2},g);
+  });
+  const cross=el2('line',{x1:0,x2:0,y1:T,y2:T+ph,stroke:'var(--dim)','stroke-width':1,visibility:'hidden'});
+  const dots=SERIES.map(s=>el2('circle',{r:4,fill:'var(--c)',stroke:'var(--panel)','stroke-width':2,visibility:'hidden',class:s.cls}));
+  box.appendChild(svg);
+  const tip=document.createElement('div'); tip.className='tip'; box.appendChild(tip);
+  let at=pts.length-1;
+  function show(i){ at=Math.max(0,Math.min(pts.length-1,i)); const p=pts[at], px=x(p.t);
+    cross.setAttribute('x1',px); cross.setAttribute('x2',px); cross.setAttribute('visibility','visible');
+    dots.forEach((d,j)=>{ d.setAttribute('cx',px); d.setAttribute('cy',y(p[SERIES[j].k])); d.setAttribute('visibility','visible'); });
+    tip.innerHTML=''; const t=document.createElement('div'); t.className='t';
+    t.textContent=new Date(p.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}); tip.appendChild(t);
+    SERIES.forEach(s=>{ const r=document.createElement('div'); r.className=s.cls; r.appendChild(document.createElement('i'));
+      const b=document.createElement('b'); b.textContent=p[s.k]; const n=document.createElement('span'); n.textContent=s.name;
+      r.append(b,n); tip.appendChild(r); });
+    tip.style.display='block';
+    const scale=box.clientWidth/W, left=px*scale+12;
+    tip.style.left=Math.min(left, box.clientWidth-tip.offsetWidth-4)+'px'; tip.style.top='8px'; }
+  function hide(){ cross.setAttribute('visibility','hidden'); dots.forEach(d=>d.setAttribute('visibility','hidden')); tip.style.display='none'; }
+  function nearest(clientX){ const r=svg.getBoundingClientRect(), t=t0+((clientX-r.left)/r.width*W-L)/pw*(t1-t0);
+    let best=0; pts.forEach((p,i)=>{ if(Math.abs(p.t-t)<Math.abs(pts[best].t-t)) best=i; }); return best; }
+  svg.addEventListener('pointermove',e=>show(nearest(e.clientX)));
+  svg.addEventListener('pointerleave',hide);
+  svg.addEventListener('focus',()=>show(at)); svg.addEventListener('blur',hide);
+  svg.addEventListener('keydown',e=>{ if(e.key==='ArrowLeft'){show(at-1);e.preventDefault();} if(e.key==='ArrowRight'){show(at+1);e.preventDefault();} });
+  // The table view: every value without hovering.
+  const d=document.createElement('details'); d.className='tv';
+  const sm=document.createElement('summary'); sm.textContent='Show as a table'; d.appendChild(sm);
+  const tb=document.createElement('table'); tb.className='t';
+  const hr=tb.insertRow(); ['Time',SERIES[0].name,SERIES[1].name].forEach(h=>{ const th=document.createElement('th'); th.textContent=h; hr.appendChild(th); });
+  pts.slice().reverse().forEach(p=>{ const r=tb.insertRow();
+    [new Date(p.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}), p.bh, p.inv].forEach(v=>{ r.insertCell().textContent=v; }); });
+  d.appendChild(tb); box.appendChild(d);
+}
+let resizeAt=null;
+window.addEventListener('resize',()=>{ clearTimeout(resizeAt); resizeAt=setTimeout(()=>{ if(TODAY&&$('v-today').classList.contains('on')) renderToday(); },200); });
+
 /* ── data issues ── */
 function table(title, cls, head, rows, explain){
   if(!rows.length) return '<div class="panel"><h4>'+esc(title)+' (0)</h4><p class="muted">None.</p></div>';
@@ -630,7 +815,8 @@ $('hload').addEventListener('click',loadHistory);
 let opened=false;                    // a link such as ...hr-inventry.html#roll opens that tab
 function apply(j){
   $('who').textContent=j.user||''; $('gate').style.display='none'; $('app').style.display='';
-  if(!opened){ opened=true; const t=document.querySelector('.tab[data-v="'+location.hash.slice(1)+'"]'); if(t) t.click(); }
+  if(!opened){ opened=true; const t=document.querySelector('.tab[data-v="'+location.hash.slice(1)+'"]');
+    if(t) t.click(); else loadToday(); }
   LAST=j.last||{}; RUNNING=j.running||null;
   renderLatest(); renderIssues();
   if($('v-forgot').classList.contains('on')) renderForgotten();
