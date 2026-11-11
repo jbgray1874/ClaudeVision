@@ -443,6 +443,10 @@ class Located:
     client_folder_name: str = ""
     files: List[Path] = field(default_factory=list)
     source: str = ""
+    # DRAWINGS THE PACK'S GA CALLS FOR THAT ITS FOLDER LACKS, found on the design share and sent
+    # with the folder (the service stages both into the run's one folder). Never copied into the
+    # estimator's own folder.
+    extra_files: List[Path] = field(default_factory=list)
 
 
 class LiveEnquiryShare:
@@ -534,7 +538,12 @@ class DesignShare:
         share = LiveEnquiryShare(self.root).find(row) if self.root.is_dir() else None
         if share is not None and share.folder is not None and share.status == "found" \
                 and not (Path(share.folder) / ps.MANIFEST).exists():
-            return None
+            # ...AND WHAT ITS GA CALLS FOR THAT THE FOLDER LACKS IS ADDED (JG, 11 Nov 2026).
+            # 12674-02-GA's folder held its own parts; the GA also calls for 12674-01-02J,
+            # -03J and -06J, the shared panels drawn under 12674-01, which were never looked
+            # for: two sides and a back at £0 and a top with no material. The folder stays as
+            # the estimator made it; the missing drawings travel with it.
+            return self._with_what_the_ga_calls_for(row, share)
         if share is not None and share.status == "held" and " fit " in str(share.reason):
             return None             # two folders for the drawing: the share's question stands
         if self._folders is not None:
@@ -563,6 +572,46 @@ class DesignShare:
         return Located("found", f"{m['status']} pack from the design share: {len(m['members'])} drawing(s), "
                                 f"revision {m.get('revision') or 'not read'}; {kept['state']} in {folder.name}",
                        folder=folder, client_folder_name=client, files=pack_files(folder), source=self.name)
+
+
+    def _with_what_the_ga_calls_for(self, row: EnquiryRow, share: Located) -> Optional[Located]:
+        import pack_resolver as pr
+        try:
+            if self._folders is not None:
+                folders, lookup = self._folders(), None
+            else:
+                folders, _source, lookup = pr.folders_for(row.drawing)
+            if not folders:
+                return None
+            m = pr.resolve(row.drawing, folders, client=row.customer, lookup=lookup)
+        except Exception:                                                # noqa: BLE001
+            return None             # the estimator's folder still stands as it is
+        if m.get("status") in ("not found",):
+            return None
+        held = set()
+        for f in share.files or pack_files(Path(share.folder)):
+            did = pr.drawing_id(Path(f).name)
+            if did:
+                held.add(re.sub(r"[\s_]", "", did).upper())
+        extra: List[Path] = []
+        added: List[str] = []
+        for mem in m.get("members") or []:
+            did = str(mem.get("drawing") or "")
+            if not did or not mem.get("referenced_by_ga") or pr._same(did, row.drawing):
+                continue
+            if re.sub(r"[\s_]", "", did).upper() in held:
+                continue
+            files = [Path(str(f["path"])) for f in mem.get("files") or [] if f.get("path")]
+            if files:
+                extra += files
+                added.append(did)
+        if not extra:
+            return None             # the folder already holds everything its GA calls for
+        return Located("found", f"{share.reason}; the GA also calls for {', '.join(added)}, not in the "
+                                f"folder: found on the design share and sent with it",
+                       folder=share.folder, client_folder_name=share.client_folder_name,
+                       files=list(share.files), source=f"{share.source} + design share",
+                       extra_files=extra)
 
 
 class DesignArea:
@@ -1067,7 +1116,7 @@ def request_body(d: Decision, email_to: Optional[Sequence[str]] = None) -> Dict[
         "units": d.quantities[0],
         "quantity_breaks": d.quantities[1:],
         "job_folder": str(d.located.folder),
-        "files": [],
+        "files": [str(p) for p in (getattr(d.located, "extra_files", None) or [])],
         "deliverables": True,
         "method": "both",
         "email_to": ", ".join(recipients_for(d, email_to)) or None,

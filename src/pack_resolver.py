@@ -96,6 +96,15 @@ def _same(a: str, b: str) -> bool:
     return re.sub(r"[\s_]", "", a).upper() == re.sub(r"[\s_]", "", b).upper()
 
 
+def _archive_path(path: Path) -> bool:
+    try:
+        sys.path.insert(0, str(HERE))
+        import drawing_index as di
+        return di.is_archive(str(path))
+    except Exception:                                                    # noqa: BLE001
+        return False
+
+
 def _segments(folder: str) -> List[str]:
     return [x.strip().lower() for x in re.split(r"[\\/]", str(folder)) if x.strip()]
 
@@ -541,6 +550,14 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                         wider = _members(wider_rows, drawing)
                     if x in wider:
                         groups[x] = wider[x]
+                    elif lookup:
+                        # A PART OF THE FAMILY NOT IN THE JOB'S FOLDERS OF THIS AREA (11 Nov 2026):
+                        # it was never looked for anywhere else, so a part kept in the other
+                        # search area, or in a folder not named for the job, left the pack as its
+                        # GA alone. It is looked up across the index, as a library part is.
+                        hit = [f for f in lookup(x) if not _archive_path(f[0])]
+                        if hit:
+                            groups[x] = hit
                 else:
                     hit = lookup(x) if lookup else [f for folder, files, archive in folders if not archive
                                                      for f in files if _same(drawing_id(f[0].name), x)]

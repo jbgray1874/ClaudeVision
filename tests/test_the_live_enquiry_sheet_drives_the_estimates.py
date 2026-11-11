@@ -565,8 +565,37 @@ def test_an_estimators_own_pack_wins_over_the_design_share_and_nothing_is_filed_
     src = L.DesignShare(root, folders=lambda: asked.append(1) or [])
     got = {d.row.drawing: d for d in L.plan(rows, [src, L.LiveEnquiryShare(root)], ledger)}["12674-01-GA"]
     assert got.status == "ready" and got.located.folder == root / "M&S" / "12674-01-GA"
-    assert not asked, "the design share is not even asked"
+    assert not got.located.extra_files, "the design share found nothing more to add"
     assert not (root / "M&S" / "12674-01-GA v2").exists()
+
+
+def test_what_the_ga_calls_for_that_the_estimators_folder_lacks_is_sent_with_it(root, ledger, monkeypatch, tmp_path):
+    """12674-02-GA, 11 Nov: the folder held its own parts; the GA also calls for the shared panels
+    12674-01-02J and -03J, drawn under 12674-01, which were never looked for (two sides and a back
+    at £0). They are found on the design share and sent with the folder, which stays untouched."""
+    import pack_resolver as pr
+    _pack(root, "M&S", "12674-02-GA", "0359829_12674-02-GA_revA.pdf", "12674-02-01J_revA.pdf")
+    w = tmp_path / "W" / "12674 - Shirt Table" / "12674-01"
+    w.mkdir(parents=True)
+    side, back = w / "12674-01-02J_revB.pdf", w / "12674-01-03J_revB.pdf"
+    side.write_text("%PDF"), back.write_text("%PDF")
+    monkeypatch.setattr(pr, "resolve", lambda *a, **k: {
+        "status": "verified", "price_ok": True, "drawing": "12674-02-GA", "question": "",
+        "members": [{"drawing": "12674-02-GA", "referenced_by_ga": True, "files": [{"path": "x/12674-02-GA.pdf"}]},
+                    {"drawing": "12674-02-01J", "referenced_by_ga": True, "files": [{"path": "x/12674-02-01J.pdf"}]},
+                    {"drawing": "12674-01-02J", "referenced_by_ga": True, "files": [{"path": str(side)}]},
+                    {"drawing": "12674-01-03J", "referenced_by_ga": True, "files": [{"path": str(back)}]},
+                    {"drawing": "12674-01-09J", "referenced_by_ga": False, "files": [{"path": "x/unused.pdf"}]}]})
+    rows = L.rows_from_table(_table(_line("M&S", "12674-02-GA", "1 off")))
+    src = L.DesignShare(root, folders=lambda: [(w, [(side, 1, 1.0), (back, 1, 1.0)], False)])
+    got = {d.row.drawing: d for d in L.plan(rows, [src, L.LiveEnquiryShare(root)], ledger)}["12674-02-GA"]
+    assert got.status == "ready" and got.located.folder == root / "M&S" / "12674-02-GA"
+    assert got.located.extra_files == [side, back], "only the referenced drawings the folder lacks"
+    assert "12674-01-02J, 12674-01-03J" in got.located.reason
+    body = L.request_body(got)
+    assert body["job_folder"] == str(root / "M&S" / "12674-02-GA") and body["files"] == [str(side), str(back)]
+    assert sorted(p.name for p in (root / "M&S" / "12674-02-GA").iterdir()) == [
+        "0359829_12674-02-GA_revA.pdf", "12674-02-01J_revA.pdf"], "the estimator's folder is not touched"
 
 
 def test_a_design_pack_with_no_drawing_is_held_not_filed(root, ledger, monkeypatch, tmp_path):

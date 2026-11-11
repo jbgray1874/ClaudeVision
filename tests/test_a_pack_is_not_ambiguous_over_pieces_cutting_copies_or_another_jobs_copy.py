@@ -116,3 +116,20 @@ def test_the_piece_reading_matches_the_engines():
     djm = importlib.import_module("drawing_job_merge")
     for n in names:
         assert pr.piece_number(n) == djm.member_number_from_filename(Path(n)), n
+
+
+def test_a_family_part_outside_the_jobs_folders_is_looked_up_across_the_index():
+    """11896-04-00-GA (11 Nov 2026): its pack came out as the GA alone; a part of its own family
+    that was not in the job's folders of the same area was never looked for anywhere else."""
+    tech = SHARE / "TTi" / "11896 - Training Centre" / "11896-Technical" / "11896-04-00-GA"
+    elsewhere = Path("/share/Prototype/TTi/Bays/11896-04-01")
+    part = (elsewhere / "11896-04-01-01M_1.5mm MS_RevG.DXF", 100, 1000.0)
+    old = (Path("/share/Prototype/TTi/Bays/OLD") / "11896-04-01-01M_RevA.DXF", 100, 900.0)
+    rows = [(tech, [_f(tech, "11896-04-00-GA_Starter Bay_RevG.pdf")], False)]
+    m = pr.resolve("11896-04-00-GA", rows, client="TTI",
+                   read_text=_read("11896-04-00-GA", ["11896-04-01-01M"]),
+                   lookup=lambda d: [part, old] if d == "11896-04-01-01M" else [])
+    by = {x["drawing"]: x for x in m["members"]}
+    assert "11896-04-01-01M" in by and not m["missing"]
+    assert [f["path"] for f in by["11896-04-01-01M"]["files"]] == [str(part[0])], "never an archive copy"
+    assert "11896-04-01-01M" not in m["library"], "the job's own part is not a library part"
