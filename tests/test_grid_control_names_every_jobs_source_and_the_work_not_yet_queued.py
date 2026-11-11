@@ -180,3 +180,19 @@ def test_self_runnings_own_card_offers_rerun_however_a_job_ended():
     page = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-intelligence.html").read_text()
     assert 'const key = (r.customer || "") + "|" + r.drawing' in page
     assert "if(!live && !selfRerunSeen.has(key))" in page
+
+
+def test_capacity_runner_state_and_queue_reason_count_the_whole_grid():
+    page = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-wall.html").read_text()
+    assert "function wholeGrid(s)" in page and "k.running = live.length" in page
+    assert "waiting for a runner: all are working" in page
+    assert page.index("wholeGrid(s);") < page.index("renderKpis(s.kpis, s.expected_s);", page.index("wholeGrid(s);"))
+
+
+def test_the_slot_installer_and_the_publish_stop_on_a_busy_runner():
+    slot = (ROOT / "tools" / "start" / "install-runner-slot.ps1").read_text()
+    assert slot.index("is in the middle of a job") < slot.index("Stop-ScheduledTask -TaskName $TaskName")
+    assert "Nothing has been stopped or changed." in slot and "[switch] $Force" in slot
+    pub = (ROOT / "tools" / "start" / "publish-and-restart.ps1").read_text()
+    assert pub.index("no runner on this machine is in the middle of a job") < pub.index("push the portal branch")
+    assert "STOPPED at:" in pub and "Nothing after it was run." in pub

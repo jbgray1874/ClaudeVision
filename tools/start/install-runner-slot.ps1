@@ -40,7 +40,9 @@ param(
     [string] $Root = "",
     [string] $SlotRoot = "",
     [string] $Server = "",
-    [switch] $Remove
+    [switch] $Remove,
+    # Go ahead although this slot's runner is in the middle of a job. That job is given up.
+    [switch] $Force
 )
 $ErrorActionPreference = "Stop"
 
@@ -67,6 +69,36 @@ Write-Host "Runner slot $Slot on $env:COMPUTERNAME" -ForegroundColor Cyan
 Write-Host "  main checkout  $Root"
 Write-Host "  slot checkout  $SlotRoot"
 Write-Host "  task           $TaskName"
+
+# NOT IN THE MIDDLE OF A JOB (11 Nov 2026). The publish ran this while slot 2 was 52 minutes
+# into 12748-01-GA: its task was stopped and its checkout moved under a running engine, with no
+# warning, although restart-runner.ps1 had just refused the same thing for the main runner.
+# The same question is asked here, before the task is stopped or any file is changed.
+$slotBusy = @()
+foreach ($svc in ($Server -split ",")) {
+    $svc = "$svc".Trim().TrimEnd("/")
+    if (-not $svc) { continue }
+    try { $seen = Invoke-RestMethod -Uri "$svc/api/estimate/runners" -TimeoutSec 5 } catch { continue }
+    foreach ($r in @($seen.runners)) {
+        $mine = ("$($r.hostname)" -ieq $env:COMPUTERNAME) -or ("$($r.runner_id)".StartsWith($env:COMPUTERNAME, "CurrentCultureIgnoreCase"))
+        if ($r.running -and $mine -and "$($r.runner_id)".EndsWith("-s$Slot")) {
+            $slotBusy += "$($r.running.drawing_number) for $($r.running.client), $($r.running.seconds)s in (service $svc)"
+        }
+    }
+}
+if ($slotBusy.Count -gt 0) {
+    Write-Host ""
+    Write-Host "  Slot $Slot's runner is in the middle of a job:" -ForegroundColor Yellow
+    foreach ($b in $slotBusy) { Write-Host "      $b" -ForegroundColor Yellow }
+    if (-not $Force) {
+        Write-Host "  Updating it now would stop its runner and change the files its engine is using." -ForegroundColor Red
+        Write-Host "  Wait until the portal shows the job filed, then run this again." -ForegroundColor Red
+        Write-Host "  (-Force goes ahead and gives the job up.)  Nothing has been stopped or changed." -ForegroundColor Green
+        Write-Host ""
+        exit 6
+    }
+    Write-Host "  -Force: going ahead. That job is given up." -ForegroundColor Red
+}
 
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($task) {

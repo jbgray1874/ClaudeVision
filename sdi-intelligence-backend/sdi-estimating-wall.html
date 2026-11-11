@@ -842,7 +842,6 @@ function render(){
   b.className = "banner " + s.banner_rag;
   b.querySelector(".ico").textContent = ICON[s.banner_rag] || "○";
   $("bannerText").textContent = s.banner || "";
-  renderKpis(s.kpis, s.expected_s);
   // EVERY RUNNING JOB ON THE GRID IS A RUN TILE (11 Nov 2026): this service's and the other
   // services', once each, so a job started anywhere shows the same on every Grid Control.
   const mine = new Set((s.live || []).map(r => r.run_id));
@@ -850,6 +849,8 @@ function render(){
     if(!mine.has(r.run_id)){ mine.add(r.run_id); s.live = (s.live || []).concat([Object.assign({}, r, {_service: g.service, _label: g.label})]); }
   }));
   LIVE = s.live || [];
+  wholeGrid(s);
+  renderKpis(s.kpis, s.expected_s);
   renderLanes(s);
   serviceHost = s.service_host || "";
   renderFleet(s.fleet || [], s.compute || []);
@@ -913,6 +914,36 @@ function renderDesignSweep(d){
   });
 }
 
+// CAPACITY, EACH RUNNER'S STATE AND THE QUEUE, COUNTED ACROSS THE WHOLE GRID (review of
+// SCRUM-271, 11 Nov 2026): with a job on each service the wall said capacity 1/2, Run 2 free and
+// slot 2 Ready. Each service counted its own runs only. A runner is working when any service on
+// the grid has a run of its; capacity counts every running job; a free runner is one with none.
+let GRID_FREE = null;
+function wholeGrid(s){
+  const live = s.live || [], k = s.kpis || {};
+  const byRunner = {};
+  live.forEach(r => { if(r.runner) byRunner[r.runner] = r; });
+  (s.fleet || []).forEach(f => {
+    const r = byRunner[f.runner_id];
+    if(r && !f.job){
+      f.job = r;
+      if(f.rag !== "red"){ f.rag = "green"; f.rag_reason = "working" + (r._label ? " for " + r._label : ""); }
+    }
+  });
+  (s.grid || []).forEach(g => { if(g.max_runs > (k.max_runs || 0)) k.max_runs = g.max_runs; });
+  k.running = live.length;
+  if(k.max_runs) k.utilisation_pct = Math.round(100 * Math.min(live.length, k.max_runs) / k.max_runs);
+  const real = (s.fleet || []).filter(f => f.online && !f.planned);
+  k.free_runners = real.filter(f => !f.job).length;
+  GRID_FREE = k.free_runners;
+  let waiting = (s.queue || []).length;
+  (s.grid || []).forEach(g => waiting += (g.queue || []).length);
+  k.queued_grid = waiting;
+}
+// WHY A QUEUED JOB IS WAITING, in words.
+function waitWhy(){
+  return GRID_FREE === 0 ? "waiting for a runner: all are working" : GRID_FREE == null ? "" : "a runner is free: starting";
+}
 function renderKpis(k, exp){
   const rate = k.success_rate_7d;
   const rateRag = rate == null ? "grey" : rate >= 90 ? "green" : rate >= 75 ? "amber" : "red";
@@ -1184,7 +1215,7 @@ function gridRows(grid){
       <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number || r.run_id)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")}${src(r)} · running on ${esc(g.label)}${r.runner ? " · " + esc(r.runner) : ""}</span></span>
       <span class="t">${fmtDur(r.elapsed_s)}${r.silent_s > 300 ? " · silent " + fmtDur(r.silent_s) : ""}</span>${stopBtn(r, g.service)}</div>`));
     (g.queue || []).forEach(r => out.push(`<div class="qrow"><span class="n">·</span>
-      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number || r.run_id)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")}${src(r)} · queued on ${esc(g.label)}</span></span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number || r.run_id)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")}${src(r)} · queued on ${esc(g.label)}${waitWhy() ? " · " + waitWhy() : ""}</span></span>
       <span class="t">waiting ${fmtDur(n - (r.queued_at || n))}</span>${stopBtn(r, g.service)}</div>`));
   });
   return out;
@@ -1226,7 +1257,7 @@ function renderQueue(q, grid, intake){
   if(!q.length){ $("queue").innerHTML = others.join(""); return; }
   const n = nowS();
   $("queue").innerHTML = q.slice(0, 6).map((r, i) => `<div class="qrow"><span class="n">#${i + 1}</span>
-      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")}${src(r)}</span></span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")}${src(r)}${waitWhy() ? " · " + waitWhy() : ""}</span></span>
       <span class="t">${r.start_at ? "starts ~" + fmtClock(r.start_at) + " · done ~" + fmtClock(r.finish_at) : "waiting " + fmtDur(n - (r.queued_at || n))}</span>${stopBtn(r)}</div>`).join("")
     + (q.length > 6 ? `<div class="empty">+ ${q.length - 6} more</div>` : "") + others.join("");
 }

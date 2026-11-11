@@ -965,7 +965,12 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         # result, or a changed pack, is submitted again.
         _prev = ledger.get(row_key(r)) or {}
         st = None
-        if _prev.get("run_id") and not changed_inputs(_prev.get("inputs"), item["inputs"]):
+        _wo = bool(getattr(args, "write_only", False))
+        _moved = changed_inputs(_prev.get("inputs"), item["inputs"])
+        if _wo and _moved and _prev.get("run_id"):
+            # Written as that run's cost, and said: the pack or brief has moved since.
+            item["outdated"] = _moved
+        if _prev.get("run_id") and (not _moved or _wo):
             try:
                 _pst = portal.status(_prev["run_id"]) or {}
             except Exception:                                            # noqa: BLE001
@@ -984,6 +989,12 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                 record(item, r, manifest)
                 save()
                 continue
+            if _ps and _ps not in _ENDED and getattr(args, "write_only", False):
+                item.update(state="still running", run_id=_prev["run_id"],
+                            why=f"run {_prev['run_id']} is {_ps}; --write-only waits for nothing: run it again when it has finished")
+                record(item, r, manifest)
+                save()
+                continue
             if _ps and _ps not in _ENDED:
                 item.update(state="resumed", run_id=_prev["run_id"],
                             resumed=f"run {_prev['run_id']} from an earlier batch is {_ps}; waited for, not resubmitted")
@@ -993,6 +1004,22 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             elif _ps == "done" and unit_cost_of(_pst, r["quantity"]) is not None:
                 item.update(run_id=_prev["run_id"], resumed=f"run {_prev['run_id']} from an earlier batch already finished; its result is used")
                 st = _pst
+        if st is None and _wo and _prev.get("unit_cost") is not None:
+            # THE SERVICE NO LONGER HOLDS THE RUN: the ledger's own record of it is the result.
+            st = {"status": "done", "run_id": _prev.get("run_id"), "output_path": _prev.get("workbook"),
+                  "quantity_prices": [{"quantity": r["quantity"], "unit_gbp": _prev["unit_cost"]}]}
+            item.update(run_id=_prev.get("run_id"), resumed=f"run {_prev.get('run_id')}'s cost from the batch ledger")
+        if st is None and getattr(args, "write_only", False):
+            # WRITE BACK, NEVER PRICE (11 Nov 2026 review: "recover row 18's cost from its existing
+            # completed run without allowing a new submission"). With no finished run on record
+            # for these same inputs there is nothing to write, and that is said.
+            _why_not = ("no run is on record for this row" if not _prev.get("run_id") else
+                        "its inputs have changed since it was priced: " + ", ".join(changed_inputs(_prev.get("inputs"), item["inputs"]) or ["unknown"])
+                        if changed_inputs(_prev.get("inputs"), item["inputs"]) else
+                        f"run {_prev.get('run_id')} gave no usable result")
+            item.update(state="nothing to write", why=f"{_why_not}; --write-only never starts an estimate")
+            save()
+            continue
         if st is None:
             try:
                 started = portal.start(body)
@@ -1072,6 +1099,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="also copy each finished row's spreadsheets and GA PDF here; 'none' to stop")
     ap.add_argument("--central-sheet", default=os.getenv("SDI_TTI_CENTRAL_SHEET", ""),
                     help="also write the AI Cost on this central workbook (its SharePoint address)")
+    ap.add_argument("--write-only", action="store_true",
+                    help="write back the cost of runs already finished (to the cost column, the central "
+                         "sheet and the conference folder); never start or wait for an estimate")
     ap.add_argument("--resubmit-lost", action="store_true",
                     help="submit again a row whose earlier run failed because its runner stopped "
                          "answering; only once that process is confirmed ended")
@@ -1081,6 +1111,19 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--api-key", default=os.getenv("SDI_API_KEY", ""))
     ap.add_argument("--status-file", default="")
     return ap
+
+
+def central_sheet_problem(value: Any) -> str:
+    """Why this is not a central sheet, or "" when it is one or is not set."""
+    v = str(value or "").strip()
+    if not v:
+        return ""
+    if re.match(r"https?://\S+$", v):
+        return "" if re.search(r"\.xls[xm]?(\?|$)", v, re.I) else \
+            "the address does not end in a workbook name (.xlsx): use File > Info > Copy path in desktop Excel"
+    if re.search(r"\.xls[xm]?$", v, re.I) and Path(v).is_file():
+        return ""
+    return f"it is neither an https address nor a workbook that exists: {v[:80]!r}"
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1093,6 +1136,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception:                                                    # noqa: BLE001
         pass
     args = build_parser().parse_args(argv)
+    # THE CENTRAL SHEET IS AN ADDRESS OR A FILE, CHECKED BEFORE ANYTHING RUNS (11 Nov 2026): the
+    # setting held the PowerShell lines that were meant to set it ("cd C:\ClaudeVision
+    # Add-Content .env ..."), and the batch would have handed that to Excel row after row.
+    _bad = central_sheet_problem(args.central_sheet)
+    if _bad:
+        print(f"central sheet: NOT VALID: {_bad}", flush=True)
+        if not args.dry_run:
+            raise SystemExit("Nothing was queued or written. Correct SDI_TTI_CENTRAL_SHEET in .env (the "
+                             "tracker's https address from Excel's File > Info > Copy path), or pass "
+                             "--central-sheet \"\" to run without it.")
+        args.central_sheet = ""
     portal = None
     if not args.dry_run:
         import live_enquiry_runner as ler

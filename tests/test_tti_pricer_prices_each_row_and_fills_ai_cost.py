@@ -675,3 +675,59 @@ def test_a_dry_run_says_which_rows_share_a_run_and_which_are_asked(tmp_path, mon
          "assumptions": [], "members": [], "conflicts": ["x"]}))
     rep = tp.run_batch(_args(p, dry_run=True), portal=None, status_path=None, sleep=lambda s: None)
     assert rep["rows"][0]["state"] == "ask", "an ambiguous pack is asked in a dry run too, not 'planned'"
+
+
+# ── write back, never price (11 Nov 2026 review of row 18) ──
+
+def _unwritten_row(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)
+    wb = openpyxl.load_workbook(sheet); wb.active["P3"] = None; wb.save(sheet)
+    _areas(tmp_path, monkeypatch)
+    monkeypatch.setattr(tp.shutil, "copy2", lambda *a, **k: None)
+    monkeypatch.setattr(tp.SheetWriter, "write",
+                        lambda self, row, value: (_ for _ in ()).throw(OSError("the workbook is open")))
+    first = _Portal()
+    rep = tp.run_batch(_args(sheet, rows="3"), portal=first, status_path=tmp_path / "s.json", sleep=lambda s: None)
+    assert rep["rows"][0]["unit_cost"] == 123.46 and not rep["rows"][0].get("written")
+    return sheet
+
+
+class _NeverStarts(FakePortal):
+    def start(self, body):
+        raise AssertionError("--write-only must never start an estimate")
+
+    def status(self, run_id):
+        return {}                                           # the service no longer holds the run
+
+
+def test_write_only_writes_the_saved_cost_and_never_starts_an_estimate(tmp_path, monkeypatch):
+    sheet = _unwritten_row(tmp_path, monkeypatch)
+    _quiet(monkeypatch)
+    rep = tp.run_batch(_args(sheet, rows="3", write_only=True), portal=_NeverStarts(),
+                       status_path=tmp_path / "s.json", sleep=lambda s: None)
+    (r,) = rep["rows"]
+    assert r["written"] == "P3 = 123.46" and "ledger" in r["resumed"]
+    assert openpyxl.load_workbook(sheet).active["P3"].value == 123.46
+
+
+def test_write_only_with_nothing_on_record_says_so_and_starts_nothing(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)
+    wb = openpyxl.load_workbook(sheet); wb.active["P3"] = None; wb.save(sheet)
+    _areas(tmp_path, monkeypatch)
+    _quiet(monkeypatch)
+    rep = tp.run_batch(_args(sheet, rows="3", write_only=True), portal=_NeverStarts(),
+                       status_path=tmp_path / "s.json", sleep=lambda s: None)
+    (r,) = rep["rows"]
+    assert r["state"] == "nothing to write" and "never starts an estimate" in r["why"]
+
+
+def test_the_central_sheet_setting_must_be_an_address_or_a_workbook(tmp_path):
+    bad = 'cd C:\\ClaudeVision Add-Content .env "SDI_TTI_CENTRAL_SHEET=$(Get-Clipboard)"'
+    assert "neither an https address" in tp.central_sheet_problem(bad)
+    assert tp.central_sheet_problem("https://x.sharepoint.com/sites/T/Shared Documents/TRACKER.xlsx".replace(" ", "%20")) == ""
+    assert "does not end in a workbook name" in tp.central_sheet_problem("https://x.sharepoint.com/:x:/r/sites/T/Doc.aspx?sourcedoc=1")
+    assert tp.central_sheet_problem("") == ""
+    f = tmp_path / "T.xlsx"; f.write_bytes(b"x")
+    assert tp.central_sheet_problem(str(f)) == ""
+    with pytest.raises(SystemExit, match="Nothing was queued or written"):
+        tp.main(["--sheet", str(f), "--central-sheet", bad])
