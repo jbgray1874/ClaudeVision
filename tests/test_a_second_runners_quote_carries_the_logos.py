@@ -30,3 +30,13 @@ def test_a_slot_with_its_own_logos_or_no_main_keeps_its_own(tmp_path):
     (tmp_path / "ClaudeVision" / "assets" / "customer_logos").mkdir(parents=True)
     (slot / "wearesdi.png").write_bytes(b"x")
     assert cq.logos_folder(tmp_path / "ClaudeVision-s2") == str(slot)
+
+
+def test_any_worktree_finds_the_main_checkouts_logos_whatever_it_is_called(tmp_path):
+    main = tmp_path / "ClaudeVision" / "assets" / "customer_logos"
+    main.mkdir(parents=True)
+    (main / "WeAreSDI.svg").write_text("<svg></svg>")
+    runner = tmp_path / "runner-three"
+    runner.mkdir()
+    (runner / ".git").write_text(f"gitdir: {tmp_path / 'ClaudeVision'}/.git/worktrees/runner-three\n")
+    assert cq.logos_folder(runner) == str(main)

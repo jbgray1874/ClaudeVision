@@ -55,11 +55,30 @@ def logos_folder(root: Path) -> str:
         has = any(f.suffix.lower() in (".svg", ".png", ".jpg", ".jpeg", ".webp") for f in own.iterdir())
     except OSError:
         has = False
+    if has:
+        return str(own)
+    # EVERY RUNNER, HOWEVER ITS CHECKOUT IS NAMED (reviewer, 11 Nov 2026). A git worktree's
+    # .git is a file naming the main checkout ("gitdir: <main>/.git/worktrees/<name>"): that
+    # is where the logos are, whatever the slot's folder is called. The "<main>-sN" name is
+    # the fallback for a slot that is a plain copy.
+    mains = []
+    try:
+        pointer = (Path(root) / ".git").read_text(encoding="utf-8", errors="replace")
+        g = re.search(r"gitdir:\s*(.+?)[\\/]\.git[\\/]worktrees[\\/]", pointer)
+        if g:
+            mains.append(Path(g.group(1).strip()))
+    except OSError:
+        pass
     m = re.fullmatch(r"(.+)-s\d+", Path(root).name)
-    if not has and m:
-        main = Path(root).with_name(m.group(1)) / "assets" / "customer_logos"
-        if main.is_dir():
-            return str(main)
+    if m:
+        mains.append(Path(root).with_name(m.group(1)))
+    for main_root in mains:
+        main = main_root / "assets" / "customer_logos"
+        try:
+            if any(f.suffix.lower() in (".svg", ".png", ".jpg", ".jpeg", ".webp") for f in main.iterdir()):
+                return str(main)
+        except OSError:
+            continue
     return str(own)
 
 
