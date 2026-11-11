@@ -5183,7 +5183,17 @@ def status(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
         run = _RUNS.get(run_id)
     if run is None:
         raise HTTPException(404, "No such run. The service may have restarted.")
-    return run.as_json()
+    # THE ESTIMATE'S OWN OPEN ITEMS TRAVEL WITH ITS STATUS (11 Nov 2026): a caller that writes a
+    # cost back (the TTI batch) must tell "finished" from "ready for an estimator", and only the
+    # engine's tally (missing costs, provisional figures, decisions) can say which.
+    d = run.as_json()
+    d["review"] = dict(run.review or {})
+    try:
+        import estimate_wall
+        d["quality"] = estimate_wall.quality(d)
+    except Exception:                                                # noqa: BLE001
+        d["quality"] = {}
+    return d
 
 
 @router.get("/{run_id}/deliverables/{name}")

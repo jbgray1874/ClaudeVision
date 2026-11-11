@@ -427,7 +427,10 @@ class _Portal(FakePortal):
 
 
 def _quiet(monkeypatch):
-    monkeypatch.setattr(tp.SheetWriter, "write", lambda self, row, value: None)
+    """Write into the test's own sheet with openpyxl (no Excel, no backup copy), so the
+    read-back check sees what was written."""
+    monkeypatch.setattr(tp.SheetWriter, "write", lambda self, row, value: self._openpyxl(row, value))
+    monkeypatch.setattr(tp.shutil, "copy2", lambda *a, **k: None)
 
 
 def test_a_cost_already_in_the_cell_is_kept_and_not_priced_again(tmp_path, monkeypatch):
@@ -521,3 +524,105 @@ def test_a_ga_and_its_ga2_are_two_scopes():
     assert not pr._same("12181-00-GA", "12181-00-GA2")
     assert tp.row_key({"row": 9, "drawing": "12181-00-GA", "quantity": 1}) != \
         tp.row_key({"row": 10, "drawing": "12181-00-GA2", "quantity": 1})
+
+
+# ── the 11 Nov 2026 review: inputs, lost workers, approval, the named tab, read-back ──────
+
+def _done_with(quality):
+    class P(_Portal):
+        def status(self, run_id):
+            st = super().status(run_id)
+            st["quality"] = quality
+            return st
+    return P()
+
+
+def test_a_cost_priced_from_other_inputs_is_kept_but_flagged_outdated(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)
+    _areas(tmp_path, monkeypatch)
+    _quiet(monkeypatch)
+    status = tmp_path / "s.json"
+    tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=_Portal(), status_path=status, sleep=lambda s: None)
+    portal = _Portal()
+    rep = tp.run_batch(_args(sheet, rows="3", method="targeted"), portal=portal, status_path=status, sleep=lambda s: None)
+    (r,) = rep["rows"]
+    assert portal.started == [] and r["state"] == "has a cost" and r["outdated"] == ["method"]
+    assert "POSSIBLY OUTDATED" in r["why"] and r["approval"].startswith("outdated")
+
+
+def test_a_restarted_batch_neither_submits_nor_writes_twice(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)
+    _areas(tmp_path, monkeypatch)
+    _quiet(monkeypatch)
+    status = tmp_path / "s.json"
+    first = _Portal()
+    tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=first, status_path=status, sleep=lambda s: None)
+    assert len(first.started) == 1
+    writes = []
+    monkeypatch.setattr(tp.SheetWriter, "write", lambda self, row, value: writes.append(row))
+    again = _Portal()
+    rep = tp.run_batch(_args(sheet, rows="3"), portal=again, status_path=status, sleep=lambda s: None)
+    assert again.started == [] and writes == [], "the cost in the cell is this batch's own: nothing again"
+    assert rep["rows"][0]["state"] == "done" and "earlier batch" in rep["rows"][0]["why"]
+
+
+def test_a_run_whose_worker_went_silent_is_held_not_resubmitted(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)
+    _areas(tmp_path, monkeypatch)
+    _quiet(monkeypatch)
+    status = tmp_path / "s.json"
+    monkeypatch.setattr(tp, "wait_for", lambda portal, run_id, sleep=None, **k: {"status": "timeout"})
+    tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=_Portal(status="running"),
+                 status_path=status, sleep=lambda s: None)
+
+    class Lost(_Portal):
+        def status(self, run_id):
+            return {"status": "error", "runner": "PC-s2",
+                    "error": "The runner (PC-s2) stopped responding 40334s into the run. Nothing was filed."}
+    lost = Lost()
+    rep = tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=lost, status_path=status, sleep=lambda s: None)
+    (r,) = rep["rows"]
+    assert lost.started == [] and r["state"] == "held: lost worker" and "--resubmit-lost" in r["why"]
+    again = Lost()
+    tp.run_batch(_args(sheet, rows="3", replace_costs=True, resubmit_lost=True), portal=again,
+                 status_path=status, sleep=lambda s: None)
+    assert len(again.started) == 1, "submitted once a person says the old worker is gone"
+
+
+def test_ready_for_approval_needs_a_clean_estimate_not_only_a_verified_pack(tmp_path, monkeypatch):
+    item = {"state": "done", "unit_cost": 10.0, "written": "Q7 = 10.0", "write_check": ""}
+    verified = {"status": "verified", "missing": [], "bought_in_unmatched": []}
+    assert tp.approval_of(dict(item, quality={"state": "complete"}), verified) == "ready for estimator approval"
+    a = tp.approval_of(dict(item, quality={"state": "missing costs", "label": "Finished: 2 missing costs"}), verified)
+    assert a.startswith("provisional") and "2 missing costs" in a
+    a = tp.approval_of(dict(item, quality={}), verified)
+    assert a.startswith("provisional") and "no review tally" in a
+    b = tp.approval_of(dict(item, quality={"state": "complete"}),
+                       {"status": "provisional", "missing": [], "bought_in_unmatched": ["12736-01-04X"]})
+    assert b.startswith("provisional") and "12736-01-04X" in b
+    assert tp.approval_of(dict(item, write_check="P7 changed"), verified).startswith("written, but the check failed")
+
+
+def test_the_cost_goes_to_the_named_tab_and_is_read_back(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)                                   # rows on the "Tracker" tab
+    wb = openpyxl.load_workbook(sheet)
+    other = wb.create_sheet("Notes", 0)
+    other["P3"] = "leave me"
+    wb.active = 0                                              # another tab is the active one
+    wb.save(sheet)
+    _areas(tmp_path, monkeypatch)
+    _quiet(monkeypatch)
+    rep = tp.run_batch(_args(sheet, rows="3", replace_costs=True, sheet_name="Tracker"),
+                       portal=_done_with({"state": "complete"}), status_path=tmp_path / "s.json", sleep=lambda s: None)
+    (r,) = rep["rows"]
+    wb = openpyxl.load_workbook(sheet)
+    assert wb["Tracker"]["P3"].value == 123.46 and wb["Notes"]["P3"].value == "leave me"
+    assert r["write_check"] == "" and "'Tracker'" in r["write_checked"]
+
+
+def test_a_read_back_names_any_other_cell_that_moved():
+    before = {"N": 2, "P": 50.0, "Q": None}
+    assert tp.check_write(before, {"N": 2, "P": 50.0, "Q": 12.5}, "Q", 12.5) == ""
+    msg = tp.check_write(before, {"N": 2, "P": 12.5, "Q": 12.5}, "Q", 12.5)
+    assert "P changed from 50.0 to 12.5" in msg
+    assert "reads None" in tp.check_write(before, before, "Q", 12.5)

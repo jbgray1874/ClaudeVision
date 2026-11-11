@@ -380,6 +380,32 @@ class SheetWriter:
         wb.save(self.sheet)
 
 
+def row_cells(sheet: Path, tab: str, row: int) -> Dict[str, Any]:
+    """Every cell of one sheet row as stored (formulas as formulas), by column letter: the
+    before-and-after picture a write-back is checked against."""
+    import openpyxl
+    from openpyxl.utils import get_column_letter
+    wb = openpyxl.load_workbook(sheet)
+    ws = wb[tab] if tab else wb.active
+    return {get_column_letter(c): ws.cell(row, c).value for c in range(1, ws.max_column + 1)}
+
+
+def check_write(before: Dict[str, Any], after: Dict[str, Any], col: str, value: float) -> str:
+    """'' when the cost cell holds the value and every other cell of the row is as it was;
+    otherwise what differs. A write-back is not trusted until this says so."""
+    col = col.upper()
+    problems = []
+    try:
+        if after.get(col) is None or abs(float(after.get(col)) - float(value)) > 0.005:
+            problems.append(f"{col} reads {after.get(col)!r}, not {value}")
+    except (TypeError, ValueError):
+        problems.append(f"{col} reads {after.get(col)!r}, not {value}")
+    for k in sorted(set(before) | set(after)):
+        if k != col and before.get(k) != after.get(k):
+            problems.append(f"{k} changed from {before.get(k)!r} to {after.get(k)!r}")
+    return "; ".join(problems)
+
+
 # ── the batch ───────────────────────────────────────────────────────────────────────────
 
 def brief_for(r: Dict[str, Any]) -> str:
@@ -511,12 +537,17 @@ def inputs_root() -> Path:
 _ENDED = ("done", "error", "cancelled", "failed", "abandoned", "timeout")
 
 
-def ledger_path(sheet: Path, status_path: Optional[Path]) -> Path:
-    base = status_path.parent if status_path else ROOT / "output" / "tti"
-    return base / (re.sub(r"[^\w .-]", "_", sheet.stem) + ".ledger.json")
+def ledger_path(sheet: Path, status_path: Optional[Path]) -> Optional[Path]:
+    """Beside the status file; None (kept in memory only) when the batch keeps no status file.
+    main() always passes one, so a real batch always has its ledger."""
+    if not status_path:
+        return None
+    return status_path.parent / (re.sub(r"[^\w .-]", "_", sheet.stem) + ".ledger.json")
 
 
-def load_ledger(path: Path) -> Dict[str, Any]:
+def load_ledger(path: Optional[Path]) -> Dict[str, Any]:
+    if path is None:
+        return {}
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:                                                    # noqa: BLE001
@@ -539,17 +570,43 @@ def pack_key(manifest: Optional[Dict[str, Any]]) -> str:
     return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
 
 
+def input_key(manifest: Optional[Dict[str, Any]], r: Dict[str, Any], body_brief: str,
+              method: str, client: str) -> Dict[str, Any]:
+    """Everything a row's price depends on: the pack (GA, revision, files), the quantity, the
+    brief and the estimating mode. A result is reused, and a written cost trusted as current,
+    only while every one is unchanged."""
+    import hashlib
+    return {"pack": pack_key(manifest), "revision": (manifest or {}).get("revision"),
+            "quantity": r.get("quantity"), "method": method, "client": client,
+            "brief": hashlib.sha1(str(body_brief).encode()).hexdigest()[:12]}
+
+
+def changed_inputs(before: Optional[Dict[str, Any]], now: Dict[str, Any]) -> List[str]:
+    if not before:
+        return []
+    return [k for k in now if before.get(k) != now.get(k)]
+
+
 def approval_of(item: Dict[str, Any], manifest: Optional[Dict[str, Any]]) -> str:
-    """Finished is not approved. A written cost from a verified pack is ready for the estimator;
-    a provisional pack is priced with its gaps listed for the estimator to rule on."""
+    """Finished is not approved (11 Nov 2026 review). "Ready for estimator approval" needs a
+    verified pack AND the estimate's own tally clean: no missing costs, no provisional figures,
+    no open decisions. Anything less is priced and labelled provisional, with why."""
     if item.get("state") != "done" or item.get("unit_cost") is None:
         return "not finished"
     if not item.get("written"):
         return "finished, not written"
-    if manifest and manifest.get("status") == "verified":
-        return "ready for estimator approval"
+    if item.get("write_check"):
+        return "written, but the check failed: " + str(item["write_check"])[:160]
+    q = item.get("quality") or {}
     gaps = [*(manifest or {}).get("missing", []), *(manifest or {}).get("bought_in_unmatched", [])]
-    return "provisional: estimator to review" + (f" ({', '.join(map(str, gaps[:6]))})" if gaps else "")
+    why = []
+    if not (manifest and manifest.get("status") == "verified"):
+        why.append("pack provisional" + (f" ({', '.join(map(str, gaps[:6]))})" if gaps else ""))
+    if q.get("state") != "complete":
+        why.append(q.get("label") or "the estimate gave no review tally")
+    if not why:
+        return "ready for estimator approval"
+    return "provisional: estimator to review — " + "; ".join(why)
 
 
 def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optional[Path] = None,
@@ -590,13 +647,13 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
 
     lpath = ledger_path(sheet, status_path)
     ledger = load_ledger(lpath)
-    report["ledger"] = str(lpath)
+    report["ledger"] = str(lpath) if lpath else None
 
     def save() -> None:
         if status_path:
             status_path.parent.mkdir(parents=True, exist_ok=True)
             status_path.write_text(json.dumps(report, indent=1, default=str), encoding="utf-8")
-        if not args.dry_run:
+        if not args.dry_run and lpath is not None:
             lpath.parent.mkdir(parents=True, exist_ok=True)
             lpath.write_text(json.dumps(ledger, indent=1, default=str), encoding="utf-8")
 
@@ -605,6 +662,9 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         e = ledger.setdefault(row_key(r), {})
         e.update({"row": r["row"], "drawing": r.get("drawing"), "quantity": r.get("quantity"),
                   "pack_key": pack_key(manifest), "pack_status": (manifest or {}).get("status"),
+                  "inputs": item.get("inputs") or e.get("inputs"),
+                  "quality": item.get("quality"), "write_check": item.get("write_check"),
+                  "tab": data["sheet"],
                   "revision": (manifest or {}).get("revision"),
                   "pack_folder": (item.get("kept") or {}).get("folder") if isinstance(item.get("kept"), dict)
                   else item.get("kept"),
@@ -618,7 +678,8 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                   "updated": datetime.now().isoformat(timespec="seconds")})
         item["approval"] = e["approval"]
 
-    writer = None if args.dry_run else SheetWriter(sheet, args.sheet_name or "", args.col_cost)
+    # THE TAB THE ROWS WERE READ FROM IS THE TAB WRITTEN TO, by name, never the active one.
+    writer = None if args.dry_run else SheetWriter(sheet, data["sheet"], args.col_cost)
     priced: Dict[Tuple[str, int], Dict[str, Any]] = {}
     for r in data["rows"]:
         manifest = None
@@ -642,6 +703,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                 # the GA's title block, revision or references yet; the screen says so on every row.
                 "pack": (pack_line(manifest) if manifest else PACK_JOB_FOLDER if found.get("match") == "job folder"
                          else PACK_NAMED) if found else ""}
+        item["inputs"] = input_key(manifest, r, brief_for(r), args.method, args.client)
         if manifest:
             item["pack_status"] = manifest["status"]
             item["pack_detail"] = {k: manifest.get(k) for k in ("selected_folder", "revision", "revision_from",
@@ -669,8 +731,25 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             continue
         # A COST ALREADY IN THE CELL STAYS unless replacing is asked for.
         _before = r.get("cost_before")
+        _prev = ledger.get(row_key(r)) or {}
+        _changed = changed_inputs(_prev.get("inputs"), item["inputs"])
+        if _before in (None, "") and _prev.get("written") and not _changed \
+                and not getattr(args, "replace_costs", False):
+            item.update(state="written before", run_id=_prev.get("run_id"),
+                        why=f"an earlier batch wrote {_prev.get('unit_cost')} to "
+                            f"{args.col_cost}{r['row']}, which is now empty; not written twice "
+                            f"(--replace-costs to write it again)")
+            save()
+            continue
         if _before not in (None, "") and not getattr(args, "replace_costs", False):
-            _prev = ledger.get(row_key(r)) or {}
+            if _changed and _prev.get("written"):
+                item.update(state="has a cost", outdated=_changed,
+                            why=f"{args.col_cost}{r['row']} holds {_before}, priced before these "
+                                f"inputs changed: {', '.join(_changed)} — kept but POSSIBLY "
+                                f"OUTDATED (--replace-costs to price it again)")
+                item["approval"] = "outdated: inputs changed since it was priced"
+                save()
+                continue
             if not (_prev.get("written") and str(_prev.get("unit_cost")) == str(_before)):
                 item.update(state="has a cost", why=f"{args.col_cost}{r['row']} already holds "
                             f"{_before}; kept (--replace-costs to price and replace it)")
@@ -735,12 +814,25 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         # result, or a changed pack, is submitted again.
         _prev = ledger.get(row_key(r)) or {}
         st = None
-        if _prev.get("run_id") and _prev.get("pack_key") == pack_key(manifest):
+        if _prev.get("run_id") and not changed_inputs(_prev.get("inputs"), item["inputs"]):
             try:
                 _pst = portal.status(_prev["run_id"]) or {}
             except Exception:                                            # noqa: BLE001
                 _pst = {}
             _ps = str(_pst.get("status") or "")
+            # A WORKER THAT WENT SILENT MAY STILL BE WORKING (row 7, 11 Nov 2026: slot 2 stopped
+            # answering 40334 s in; the service failed the run, the process was never seen to
+            # end). Submitting again could run the job twice and write twice, so the row is held
+            # until a person confirms that worker is gone and asks for it with --resubmit-lost.
+            if _ps == "error" and "stopped responding" in str(_pst.get("error") or "") \
+                    and not getattr(args, "resubmit_lost", False):
+                item.update(state="held: lost worker", run_id=_prev["run_id"],
+                            why=f"run {_prev['run_id']} failed because {_pst.get('runner') or 'its runner'} "
+                                f"stopped answering; confirm that process has ended, then run this row "
+                                f"with --resubmit-lost")
+                record(item, r, manifest)
+                save()
+                continue
             if _ps and _ps not in _ENDED:
                 item.update(state="resumed", run_id=_prev["run_id"],
                             resumed=f"run {_prev['run_id']} from an earlier batch is {_ps}; waited for, not resubmitted")
@@ -766,13 +858,29 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             save()
             st = wait_for(portal, item["run_id"], sleep=sleep)
         cost = unit_cost_of(st, r["quantity"])
-        item.update(state=str(st.get("status")), unit_cost=cost, output=st.get("output_path") or st.get("output"))
+        item.update(state=str(st.get("status")), unit_cost=cost, output=st.get("output_path") or st.get("output"),
+                    quality=st.get("quality") or None, review=st.get("review") or None)
         if r["drawing"]:
             priced[(r["drawing"], r["quantity"])] = item
         if cost is not None and str(st.get("status")) == "done":
             try:
+                try:
+                    _cells_before = row_cells(sheet, data["sheet"], r["row"])
+                except Exception:                                        # noqa: BLE001
+                    _cells_before = None
                 writer.write(r["row"], cost)
                 item["written"] = f"{args.col_cost}{r['row']} = {cost}"
+                # READ IT BACK (11 Nov 2026 review): the cost cell holds the cost, on the named
+                # tab, and nothing else on the row moved.
+                if _cells_before is not None:
+                    try:
+                        item["write_check"] = check_write(_cells_before, row_cells(
+                            sheet, data["sheet"], r["row"]), args.col_cost, cost)
+                    except Exception as _wc:                             # noqa: BLE001
+                        item["write_check"] = f"could not be read back ({_wc})"
+                    if not item["write_check"]:
+                        item["write_checked"] = (f"{args.col_cost}{r['row']} reads {cost} on "
+                                                 f"'{data['sheet']}'; no other cell of the row changed")
             except OSError as exc:
                 # Usually the workbook is open in Excel. The cost is kept here and in the run's
                 # own folder; the row is priced, only the cell is not filled.
@@ -805,6 +913,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="price only the rows that carry a drawing number; the rest are listed, not priced")
     ap.add_argument("--replace-costs", action="store_true",
                     help="price and replace a cost already in the cost column; by default it is kept")
+    ap.add_argument("--resubmit-lost", action="store_true",
+                    help="submit again a row whose earlier run failed because its runner stopped "
+                         "answering; only once that process is confirmed ended")
     ap.add_argument("--col-qty", default="", help="the number of units, e.g. N; default the column headed Qty / Quantity")
     ap.add_argument("--dry-run", action="store_true", help="find the drawings and say what would run; nothing queued or written")
     ap.add_argument("--server", default=os.getenv("SDI_SERVER", "http://localhost:8072"))
@@ -858,6 +969,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                   + (f"; earlier run {_pv.get('run_id')} {_pv.get('state')}"
                      + (f", {_pv.get('unit_cost')}" if _pv.get('unit_cost') is not None else "")
                      + (f", {_pv.get('approval')}" if _pv.get('approval') else "") if _pv.get("run_id") else ""),
+                  flush=True)
+        if it.get("write_checked") or it.get("write_check"):
+            print(f"{'':<11}write-back: {it.get('write_checked') or 'CHECK FAILED: ' + str(it.get('write_check'))}",
                   flush=True)
         if it.get("resumed"):
             print(f"{'':<11}{it['resumed']}", flush=True)
