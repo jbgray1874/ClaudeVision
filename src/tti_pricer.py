@@ -380,6 +380,57 @@ class SheetWriter:
         wb.save(self.sheet)
 
 
+# ── THE CONFERENCE FOLDER (JG, 11 Nov 2026) ────────────────────────────────────────────────
+# "save the GA PDF file for each job we run for TTI ... (keep the existing copy of ALL the output
+# files to where they get saved to now) to K:\Estimating\Completed\Live Enquiries\completed AI
+# briefs\TTI\TTI_Amsterdam-Conference (will be a long list of s/sheets and GA-PDF files)". A copy:
+# the run's own folder keeps everything. TTI only, because it is this batch that does it.
+DEFAULT_COPY_TO = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Live Enquiries"
+                   r"\completed AI briefs\TTI\TTI_Amsterdam-Conference")
+
+
+def copy_to_conference(dest: str, output: Any, manifest: Optional[Dict[str, Any]],
+                       drawing: str) -> List[str]:
+    """The run's spreadsheets and its GA's PDF, copied into `dest`. A file already there with the
+    same size is kept; a different one beside it gets the time added, never overwritten."""
+    if not dest or str(dest).strip().lower() in ("none", "off", "no"):
+        return []
+    from drive_map import to_unc
+    unc = to_unc(str(dest))
+    if unc.startswith("\\\\") and os.name != "nt":
+        raise OSError(f"{unc} is a Windows share; it is reached from the estimating laptop")
+    d = Path(unc)
+    d.mkdir(parents=True, exist_ok=True)
+    picks: List[Tuple[Path, str]] = []
+    out = Path(str(output)) if output else None
+    if out is not None and out.is_file() and out.suffix.lower() in (".xlsx", ".xlsm"):
+        picks.append((out, out.name))
+    elif out is not None and out.is_dir():
+        picks += [(f, f.name) for f in sorted(out.iterdir())
+                  if f.is_file() and f.suffix.lower() in (".xlsx", ".xlsm") and not f.name.startswith("~$")]
+    if manifest:
+        import pack_resolver as pr
+        ga = next((x for x in manifest.get("members") or []
+                   if pr._same(str(x.get("drawing")), str(manifest.get("drawing") or drawing))), None)
+        pdf = next((f for f in (ga or {}).get("files") or [] if str(f.get("format")).lower() == "pdf"), None)
+        if pdf:
+            rev = (ga or {}).get("revision") or manifest.get("revision") or ""
+            picks.append((Path(pdf["path"]), f"{drawing}_GA" + (f"_rev{rev}" if rev else "") + ".pdf"))
+    done: List[str] = []
+    for src, name in picks:
+        if not src.is_file():
+            continue
+        target = d / name
+        if target.exists():
+            if target.stat().st_size == src.stat().st_size:
+                done.append(f"{name} (already there)")
+                continue
+            target = d / f"{target.stem} {datetime.now():%Y-%m-%d %H%M}{target.suffix}"
+        shutil.copy2(src, target)
+        done.append(target.name)
+    return done
+
+
 def row_cells(sheet: Path, tab: str, row: int) -> Dict[str, Any]:
     """Every cell of one sheet row as stored (formulas as formulas), by column letter: the
     before-and-after picture a write-back is checked against."""
@@ -677,6 +728,26 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                   "approval": approval_of(item, manifest),
                   "updated": datetime.now().isoformat(timespec="seconds")})
         item["approval"] = e["approval"]
+        for k in ("filed", "filed_error", "central", "central_ok"):
+            if k in item:
+                e[k] = item[k]
+
+    def extras(item: Dict[str, Any], r: Dict[str, Any], manifest: Optional[Dict[str, Any]],
+               output: Any, cost: Optional[float], copy: bool = True, central_too: bool = True) -> None:
+        """After a finished run: the copies in the conference folder, and the cost on the central
+        sheet. Neither is allowed to fail the row; each says what it did."""
+        if copy:
+          try:
+            item["filed"] = copy_to_conference(getattr(args, "copy_to", ""), output, manifest,
+                                               r.get("drawing") or "")
+          except Exception as exc:                                   # noqa: BLE001
+            item["filed_error"] = f"not copied to the conference folder ({exc})"
+        central = getattr(args, "central_sheet", "")
+        if central_too and central and cost is not None:
+            import tti_central
+            res = tti_central.write(central, data["sheet"], r.get("drawing") or "", r["row"],
+                                    cost, drawing_ref)
+            item["central"], item["central_ok"] = res.get("said"), bool(res.get("ok"))
 
     # THE TAB THE ROWS WERE READ FROM IS THE TAB WRITTEN TO, by name, never the active one.
     writer = None if args.dry_run else SheetWriter(sheet, data["sheet"], args.col_cost)
@@ -759,6 +830,15 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                         output=_prev.get("workbook"), written=_prev.get("written"),
                         why="priced and written by an earlier batch; not run again")
             item["approval"] = _prev.get("approval")
+            # A ROW PRICED BEFORE THE CONFERENCE FOLDER AND THE CENTRAL SHEET EXISTED gets them
+            # now, once: nothing is run again for it.
+            _copy_on = str(getattr(args, "copy_to", "") or "").strip().lower() not in ("", "none", "off", "no")
+            _need_copy = _copy_on and not _prev.get("filed")
+            _need_central = bool(getattr(args, "central_sheet", "")) and not _prev.get("central_ok")
+            if not args.dry_run and (_need_copy or _need_central):
+                extras(item, r, manifest, _prev.get("workbook"), _prev.get("unit_cost"),
+                       copy=_need_copy, central_too=_need_central)
+                record(item, r, manifest)
             priced[(r["drawing"], r["quantity"])] = item
             save()
             continue
@@ -888,6 +968,8 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         else:
             item["why"] = (st.get("error") or f"the run ended {st.get('status')} without a unit cost; "
                            f"{args.col_cost}{r['row']} left as it was")
+        if cost is not None and str(st.get("status")) == "done":
+            extras(item, r, manifest, item.get("output"), cost)
         record(item, r, manifest)
         save()
     report["finished"] = datetime.now().isoformat(timespec="seconds")
@@ -913,6 +995,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="price only the rows that carry a drawing number; the rest are listed, not priced")
     ap.add_argument("--replace-costs", action="store_true",
                     help="price and replace a cost already in the cost column; by default it is kept")
+    ap.add_argument("--copy-to", default=os.getenv("SDI_TTI_COPY_TO") or DEFAULT_COPY_TO,
+                    help="also copy each finished row's spreadsheets and GA PDF here; 'none' to stop")
+    ap.add_argument("--central-sheet", default=os.getenv("SDI_TTI_CENTRAL_SHEET", ""),
+                    help="also write the AI Cost on this central workbook (its SharePoint address)")
     ap.add_argument("--resubmit-lost", action="store_true",
                     help="submit again a row whose earlier run failed because its runner stopped "
                          "answering; only once that process is confirmed ended")
@@ -946,6 +1032,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     _qh = rep["header"]
     print(f"units from column {_qh.get('quantity_column') or '-'} ({_qh.get('quantity') or 'none found: every row priced at 1'})",
           flush=True)
+    print(f"copies to: {args.copy_to or 'none'}", flush=True)
+    print(f"central sheet: {args.central_sheet or 'not set (SDI_TTI_CENTRAL_SHEET)'}", flush=True)
     print(f"unit cost written to column {args.col_cost.upper()} ({_qh.get('cost') or 'no header'})"
           + (" — dry run: nothing is written" if args.dry_run else ""), flush=True)
     found = 0
@@ -975,6 +1063,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                   flush=True)
         if it.get("resumed"):
             print(f"{'':<11}{it['resumed']}", flush=True)
+        if it.get("filed") or it.get("filed_error"):
+            print(f"{'':<11}conference folder: {', '.join(it.get('filed') or []) or it.get('filed_error')}",
+                  flush=True)
+        if it.get("central"):
+            print(f"{'':<11}central sheet: {it['central']}", flush=True)
         if it.get("approval") and not args.dry_run:
             print(f"{'':<11}result: {it['approval']}", flush=True)
         if it.get("why") and it.get("state") not in ("planned", "skipped"):
