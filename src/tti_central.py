@@ -24,9 +24,17 @@ Nothing else on the sheet is touched, and the cell is read back after the save.
 from __future__ import annotations
 
 import re
+import time
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 COST_HEADER = "AI Cost"
+EXCEL_TRIES = 4
+EXCEL_WAIT_S = 6.0
+
+
+def _busy(said: Any) -> bool:
+    t = str(said or "").lower()
+    return "-2147418111" in t or "rejected by callee" in t or "busy" in t
 _DRAWING_HEAD = re.compile(r"^\s*(drawing|dwg)\s*(no\.?|number|#)?\s*$", re.IGNORECASE)
 _COST_HEAD = re.compile(r"^\s*ai\s*cost\b", re.IGNORECASE)
 
@@ -81,7 +89,14 @@ def write(target: str, tab: str, drawing: str, row_hint: Optional[int], value: f
         return {"ok": False, "said": "no central sheet set (SDI_TTI_CENTRAL_SHEET)"}
     if target.lower().startswith("http"):
         # Excel's Copy path can end "?web=1", which opens the browser view; the file is before it.
-        return _write_excel(target.split("?")[0], tab, drawing, row_hint, value, ref)
+        # A BUSY EXCEL IS ASKED AGAIN ("Call was rejected by callee", 11 Nov 2026).
+        res: Dict[str, Any] = {}
+        for i in range(EXCEL_TRIES):
+            res = _write_excel(target.split("?")[0], tab, drawing, row_hint, value, ref)
+            if res.get("ok") or not _busy(res.get("said")):
+                return res
+            time.sleep(EXCEL_WAIT_S * (i + 1))
+        return res
     return _write_openpyxl(target, tab, drawing, row_hint, value, ref)
 
 

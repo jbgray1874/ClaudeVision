@@ -346,14 +346,30 @@ class SheetWriter:
         except Exception:                                                # noqa: BLE001
             self.how = "openpyxl"
 
+    # EXCEL BUSY IS ASKED AGAIN, NEVER REPLACED BY OPENPYXL (11 Nov 2026). Row 18's write met
+    # "Call was rejected by callee" (Excel busy, RPC_E_CALL_REJECTED) and the batch switched to
+    # openpyxl for good. openpyxl rewrites the whole workbook and drops its pictures, and the
+    # tracker's rows carry thumbnails. Where Excel exists it is the only writer: tried again a few
+    # times, then the cost is left unwritten with the reason, and the next batch writes it from
+    # the ledger without pricing again.
+    EXCEL_TRIES = 5
+    EXCEL_WAIT_S = 6.0
+
     def write(self, row: int, value: float) -> None:
         if self.how == "excel":
-            try:
-                self._excel(row, value)
-                return
-            except Exception as exc:                                     # noqa: BLE001
-                print(f"[tti] Excel could not write row {row} ({exc}); using openpyxl", flush=True)
-                self.how = "openpyxl"
+            last: Optional[Exception] = None
+            for i in range(self.EXCEL_TRIES):
+                try:
+                    self._excel(row, value)
+                    return
+                except Exception as exc:                                 # noqa: BLE001
+                    last = exc
+                    print(f"[tti] Excel could not write row {row} (try {i + 1} of {self.EXCEL_TRIES}: "
+                          f"{exc})", flush=True)
+                    time.sleep(self.EXCEL_WAIT_S * (i + 1))
+            raise OSError(f"Excel would not write {self.col}{row} after {self.EXCEL_TRIES} tries ({last}); "
+                          f"close the tracker if it is open and run these rows again: the cost is kept "
+                          f"in the ledger and written then, without pricing again")
         self._openpyxl(row, value)
 
     def _excel(self, row: int, value: float) -> None:
@@ -1068,12 +1084,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
+    # .ENV BEFORE THE SETTINGS ARE READ (11 Nov 2026): the arguments' defaults come from the
+    # environment, and read before .env was loaded, SDI_TTI_CENTRAL_SHEET was empty: row 17's cost
+    # never reached the central tracker, and nothing said so.
     sys.path.insert(0, str(HERE))
     try:
         import config  # noqa: F401  (loads .env)
     except Exception:                                                    # noqa: BLE001
         pass
+    args = build_parser().parse_args(argv)
     portal = None
     if not args.dry_run:
         import live_enquiry_runner as ler

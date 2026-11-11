@@ -137,3 +137,58 @@ def test_a_copied_sharepoint_path_opens_the_file_not_the_browser_view(monkeypatc
     tc.write("https://sdidisplays.sharepoint.com/sites/X/Shared Documents/T.xlsx?web=1", "Milwaukee",
              "TTI-1", 3, 1.0, tp.drawing_ref)
     assert seen == ["https://sdidisplays.sharepoint.com/sites/X/Shared Documents/T.xlsx"]
+
+
+def test_the_central_sheet_setting_in_env_is_read_before_the_arguments(monkeypatch, tmp_path):
+    """Row 17, 11 Nov 2026: SDI_TTI_CENTRAL_SHEET was in .env, but the defaults were read before
+    .env was loaded, so the central tracker was skipped without a word."""
+    import types
+    seen = {}
+    fake = types.ModuleType("config")
+
+    def load():
+        monkeypatch.setenv("SDI_TTI_CENTRAL_SHEET", "https://example.sharepoint.com/T.xlsx")
+    load()
+    monkeypatch.delenv("SDI_TTI_CENTRAL_SHEET")
+    monkeypatch.setitem(sys.modules, "config", None)
+    real_import = __import__
+
+    def imp(name, *a, **k):
+        if name == "config":
+            load()
+            return fake
+        return real_import(name, *a, **k)
+    monkeypatch.setattr("builtins.__import__", imp)
+    monkeypatch.setattr(tp, "run_batch", lambda args, portal, status: seen.setdefault("args", args) and (_ for _ in ()).throw(SystemExit(0)))
+    try:
+        tp.main(["--sheet", str(tmp_path / "x.xlsx"), "--dry-run"])
+    except SystemExit:
+        pass
+    assert seen["args"].central_sheet == "https://example.sharepoint.com/T.xlsx"
+
+
+def test_a_busy_excel_is_asked_again_and_never_replaced_by_openpyxl(monkeypatch, tmp_path):
+    w = tp.SheetWriter(tmp_path / "T.xlsx", "Milwaukee", "Q")
+    w.how, w.EXCEL_WAIT_S = "excel", 0.0
+    calls = []
+
+    def busy_then_ok(row, value):
+        calls.append(row)
+        if len(calls) < 3:
+            raise RuntimeError("(-2147418111, 'Call was rejected by callee.', None, None)")
+    monkeypatch.setattr(w, "_excel", busy_then_ok)
+    monkeypatch.setattr(w, "_openpyxl", lambda *a: (_ for _ in ()).throw(AssertionError("openpyxl drops pictures")))
+    w.write(18, 274.4)
+    assert len(calls) == 3
+    monkeypatch.setattr(w, "_excel", lambda r, v: (_ for _ in ()).throw(RuntimeError("rejected by callee")))
+    with pytest.raises(OSError, match="run these rows again"):
+        w.write(18, 274.4)
+    assert w.how == "excel", "still Excel for the next row"
+
+
+def test_the_central_sheet_is_tried_again_while_excel_is_busy(monkeypatch):
+    answers = [{"ok": False, "said": "the central sheet could not be written ((-2147418111, 'Call was rejected by callee.'))"},
+               {"ok": True, "said": "central sheet row 5 AI Cost = 1.0"}]
+    monkeypatch.setattr(tc, "EXCEL_WAIT_S", 0.0)
+    monkeypatch.setattr(tc, "_write_excel", lambda *a: answers.pop(0))
+    assert tc.write("https://x.sharepoint.com/T.xlsx", "Milwaukee", "D", 5, 1.0, tp.drawing_ref)["ok"]
