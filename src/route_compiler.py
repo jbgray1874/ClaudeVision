@@ -587,17 +587,108 @@ def _split_category_codes(
             parts.append(p)
         if "parts" in ext:
             ext["parts"] = parts
+        # EACH "FIXING" LINE IS ONE ARTICLE WHERE THE PACK LISTS THEM ONE BY ONE (6364-01, 11 Nov
+        # 2026). The GA lists four fixings "FIXING", the rear castor plate's own sheet lists its
+        # hank bush "FIXING", and the weight-plate pack's its tek screw "FIXING". Each of those
+        # children used to stand for EVERY article under the code, so all six fixings went under
+        # the plate (x2) and the pack as well as the GA: 40 wood screws costed as 120. A child
+        # stands for every article only where the pack names fewer lines than articles (12312's
+        # one "P/P" over nine): otherwise each line takes its own article: the one its parent's
+        # own parts-list row names (bom_rows' bom_parent), then the one at its quantity, then the
+        # next unclaimed, in the order the lists print them.
+        def _num(v: Any) -> Optional[float]:
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        def _head(v: Any) -> str:
+            return clean_part_number(str(v or "").split(" - ")[0])
+
+        # The rows may arrive already named (FIXING-PHILIPS-PAN-HEAD-WOOD, split upstream) or
+        # still printed (FIXING + its words): either names the article and its parent.
+        code_of = {clean_part_number(ident): (bc, ident)
+                   for bc, entries in split.items() for _w, ident, _q in entries}
+        owned: Dict[Tuple[str, str], List[str]] = {}
+        for r in bom_rows or []:
+            if not isinstance(r, Mapping):
+                continue
+            _named = code_of.get(clean_part_number(r.get("part_number")))
+            if _named:
+                _bc, _id = _named
+            else:
+                _rc = r.get("printed_code") or r.get("part_number") or r.get("part_code")
+                if not _rc or bare_code(_rc) not in split:
+                    continue
+                _bc, _id = bare_code(_rc), _match(_rc, r.get("description"))
+            _par = _head(r.get("bom_parent"))
+            if _id and _par and _id not in owned.get((_par, _bc), []):
+                owned.setdefault((_par, _bc), []).append(_id)
+
+        src_asms = [a for a in ext.get("assemblies") or []]
+        slots: Dict[str, List[Tuple[int, int, Optional[float], str]]] = {}
+        for ai, a in enumerate(src_asms):
+            if not isinstance(a, Mapping):
+                continue
+            for ki, k in enumerate(a.get("children") or []):
+                _code = k.get("part_number") if isinstance(k, Mapping) else k
+                if bare_code(_code) in split:
+                    slots.setdefault(bare_code(_code), []).append(
+                        (ai, ki, _num(k.get("qty") if isinstance(k, Mapping) else None),
+                         clean_part_number(a.get("part_number"))))
+        given: Dict[Tuple[int, int], List[Tuple[str, Any]]] = {}
+        for bc, sl in slots.items():
+            arts = split[bc]
+            qty_of = {ident: q for _w, ident, q in arts}
+            claimed: Set[str] = set()
+            rest = []
+            by_parent: Dict[str, List[Tuple[int, int, Optional[float], str]]] = {}
+            for s in sl:
+                by_parent.setdefault(s[3], []).append(s)
+            for par, ps in by_parent.items():
+                mine = [i for i in owned.get((par, bc), []) if i in qty_of]
+                if not mine:
+                    rest.extend(ps)
+                    continue
+                if len(ps) < len(mine):
+                    for s in ps:
+                        given[(s[0], s[1])] = [(i, qty_of[i]) for i in mine]
+                else:
+                    free = list(mine)
+                    for s in ps:
+                        pick = next((i for i in free if _num(qty_of[i]) == s[2]), None) \
+                            or (free[0] if free else None)
+                        if pick:
+                            free.remove(pick)
+                            given[(s[0], s[1])] = [(pick, s[2] if s[2] is not None
+                                                    else qty_of[pick])]
+                claimed.update(mine)
+            if not rest:
+                continue
+            left = [ident for _w, ident, _q in arts if ident not in claimed] or \
+                [ident for _w, ident, _q in arts]
+            if len(rest) < len(left):
+                for s in rest:
+                    given[(s[0], s[1])] = [(i, qty_of[i]) for i in left]
+                continue
+            free = list(left)
+            for s in rest:
+                pick = next((i for i in free if _num(qty_of[i]) == s[2]), None) \
+                    or (free[0] if free else None) \
+                    or next((i for i in left if _num(qty_of[i]) == s[2]), None) or left[0]
+                if pick in free:
+                    free.remove(pick)
+                given[(s[0], s[1])] = [(pick, s[2] if s[2] is not None else qty_of[pick])]
+
         asms = []
-        for a in ext.get("assemblies") or []:
+        for ai, a in enumerate(src_asms):
             if not isinstance(a, Mapping):
                 asms.append(a)
                 continue
             kids = []
-            for k in a.get("children") or []:
-                _code = k.get("part_number") if isinstance(k, Mapping) else k
-                if bare_code(_code) in split:
-                    kids.extend({"part_number": ident, "qty": q}
-                                for _w, ident, q in split[bare_code(_code)])
+            for ki, k in enumerate(a.get("children") or []):
+                if (ai, ki) in given:
+                    kids.extend({"part_number": ident, "qty": q} for ident, q in given[(ai, ki)])
                 else:
                     kids.append(k)
             asms.append(dict(a, children=kids))
