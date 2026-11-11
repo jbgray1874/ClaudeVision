@@ -42,7 +42,20 @@ def test_it_reuses_the_crm_speech_and_falls_back_to_the_browser():
     # iPhones, and browsers with no recognition, record for the service where it is set up.
     assert 'ST.speech_stt === "ios" && (IOS || !SR)' in VOICE
     # A server voice that cannot play falls back to the device's own.
-    assert ".catch(function () { if (playing === (btn || null)) deviceVoice(text, btn); });" in VOICE
+    assert 'markVoice(btn, "device", (err && err.message) || "server voice unavailable");\n        deviceVoice(text, btn);' in VOICE
+
+
+def test_the_page_says_which_voice_spoke():
+    """JG, 11 Nov 2026: a quiet fall-back to the device's voice sounded like a regression. The label
+    beside the button says natural voice, or device voice and why."""
+    assert 'if (p && p.then) return p.then(function () { markVoice(btn, "natural"); });' in VOICE
+    assert 'markVoice(btn, "device", ST.speech_reason || "the service has no natural voice set up");' in VOICE
+    assert 'throw new Error("server voice refused (HTTP " + r.status + ")")' in VOICE
+    assert '"natural voice" : "device voice" + (why ? " (" + why + ")" : "")' in VOICE
+    crm = (Path(__file__).resolve().parents[1] / "sdi-intelligence-backend" / "appportal" /
+           "voice-crm.html").read_text(encoding="utf-8")
+    assert "setVoice('natural')" in crm and "setVoice('device', VOICE_WHY" in crm
+    assert "VOICE_WHY='server voice refused (HTTP '+r.status+')'" in crm
 
 
 def test_the_recording_is_the_crm_format():
