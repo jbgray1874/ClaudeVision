@@ -272,3 +272,10 @@ def test_who_is_in_is_grouped_by_manager_when_the_list_has_them(server, tmp_path
     _, _, text = ms.compose(d, ms.app_url())
     names = text.split("WHO IS CLOCKED IN ON BRIGHTHR", 1)[1]
     assert names.index("Jo Manager (1)") < names.index("Zoe Test") < names.index("No manager listed (1)")
+
+
+def test_the_email_says_how_far_inventry_is_in_step(server):
+    """The evidence the update works: of everyone clocked in, how many are on
+    InVentry's list. Zoe Test is; New Starter is not."""
+    _, _, text = ms.compose(ms.gather(now=NOW), ms.app_url())
+    assert "In step: 1 of 2 clocked in are on InVentry's list (50%)" in text
