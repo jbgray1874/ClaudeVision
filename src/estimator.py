@@ -16558,6 +16558,12 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             _edge_parts: List[Tuple[str, float, str, Optional[float]]] = []
             _edge_boards: List[str] = []    # every board the gate admitted, for a per-unit
                                             # confirmation whose metres name no single part
+            # THE METRES ON ONE PIECE OF EACH BANDED PART (11896-08-01-GA, 11 Nov 2026). The
+            # line's quantity is the product's metres, every piece counted; the graph hangs
+            # the line under the parts it bands and multiplies by THEIR count. Handed the
+            # product's figure as the per-parent quantity, 01J's two panels doubled 24.659 m
+            # to 49.318 m. Each banded part takes the metres of one of its pieces instead.
+            _edge_per_piece: Dict[str, float] = {}
             for _p in (parts or []):
                 if not isinstance(_p, dict):
                     continue
@@ -16585,6 +16591,7 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                     _edge_parts.append((
                         _pn_e, float(_v["mm"]) * float(_safe_float(_p.get("quantity")) or 1),
                         str(_v.get("basis") or ""), _safe_float(_v.get("edge_thickness_mm"))))
+                    _edge_per_piece[_pn_e] = float(_v["mm"])
             # ONE LINE PER DECOR (D-733). 12677-01-GA bands a Cleaf Taranta panel and a black
             # one; a single job-wide line named after the first decor would buy the second's
             # edging in the wrong colour. Each decor's parts make their own line.
@@ -16695,6 +16702,13 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 _stub["_edging_for"] = sorted(set(_edge_for))
                 if _edge_for:
                     _stub["bom_parent"] = sorted(set(_edge_for))[0]
+                    # Per piece, per banded part: the graph's count of each part times its
+                    # own metres adds back to the product's metres, never more.
+                    _occ = [{"parent": _pn_o, "qty": round(_edge_per_piece[_pn_o] / 1000.0, 4)}
+                            for _pn_o in sorted(set(_edge_for))
+                            if _edge_per_piece.get(_pn_o)]
+                    if _occ and "estimator_confirmed" not in _edge_from:
+                        _stub["bom_parents"] = _occ
                 if _decor_row:
                     _stub["_edging_row"] = _decor_row
                     _stub.setdefault("review_flags", []).append(
