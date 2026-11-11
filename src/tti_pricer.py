@@ -502,6 +502,56 @@ def inputs_root() -> Path:
     return Path(staging) / "_held" / "tti" if staging else ROOT / "output" / "tti"
 
 
+# ── THE BATCH LEDGER (JG, 11 Nov 2026) ─────────────────────────────────────────────────────
+# "Restarting the batch must resume outstanding work, not duplicate jobs ... keep a per-row
+# record linking the pack manifest, run ID, workbook, cost, assumptions and write-back result."
+# One file per sheet, beside the status file, kept across runs: a row's entry holds the pack it
+# was priced from (its key), the run, the cost, what was written where, and whether the result
+# is finished, ready for the estimator, or provisional. A rerun reads it before submitting.
+_ENDED = ("done", "error", "cancelled", "failed", "abandoned", "timeout")
+
+
+def ledger_path(sheet: Path, status_path: Optional[Path]) -> Path:
+    base = status_path.parent if status_path else ROOT / "output" / "tti"
+    return base / (re.sub(r"[^\w .-]", "_", sheet.stem) + ".ledger.json")
+
+
+def load_ledger(path: Path) -> Dict[str, Any]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:                                                    # noqa: BLE001
+        return {}
+
+
+def row_key(r: Dict[str, Any]) -> str:
+    return f"{r['row']}|{(r.get('drawing') or '').upper()}|{r.get('quantity')}"
+
+
+def pack_key(manifest: Optional[Dict[str, Any]]) -> str:
+    """The pack a row is priced from: the GA, its revision and every member file's fingerprint.
+    A changed drawing is a new key, so a stored result is never reused for a different pack."""
+    if not manifest:
+        return ""
+    import hashlib
+    parts = [str(manifest.get("drawing")), str(manifest.get("revision"))]
+    for x in manifest.get("members") or []:
+        parts += sorted(str(f.get("fingerprint")) for f in x.get("files") or [])
+    return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
+
+
+def approval_of(item: Dict[str, Any], manifest: Optional[Dict[str, Any]]) -> str:
+    """Finished is not approved. A written cost from a verified pack is ready for the estimator;
+    a provisional pack is priced with its gaps listed for the estimator to rule on."""
+    if item.get("state") != "done" or item.get("unit_cost") is None:
+        return "not finished"
+    if not item.get("written"):
+        return "finished, not written"
+    if manifest and manifest.get("status") == "verified":
+        return "ready for estimator approval"
+    gaps = [*(manifest or {}).get("missing", []), *(manifest or {}).get("bought_in_unmatched", [])]
+    return "provisional: estimator to review" + (f" ({', '.join(map(str, gaps[:6]))})" if gaps else "")
+
+
 def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optional[Path] = None,
               sleep: Callable[[float], None] = time.sleep) -> Dict[str, Any]:
     sheet = Path(args.sheet)
@@ -538,10 +588,35 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                                         "prototype_folders": len(listings[1][1]), "source": source},
                               "rows": []}
 
+    lpath = ledger_path(sheet, status_path)
+    ledger = load_ledger(lpath)
+    report["ledger"] = str(lpath)
+
     def save() -> None:
         if status_path:
             status_path.parent.mkdir(parents=True, exist_ok=True)
             status_path.write_text(json.dumps(report, indent=1, default=str), encoding="utf-8")
+        if not args.dry_run:
+            lpath.parent.mkdir(parents=True, exist_ok=True)
+            lpath.write_text(json.dumps(ledger, indent=1, default=str), encoding="utf-8")
+
+    def record(item: Dict[str, Any], r: Dict[str, Any], manifest: Optional[Dict[str, Any]]) -> None:
+        """The row's line in the ledger: pack, run, workbook, cost, assumptions, write-back."""
+        e = ledger.setdefault(row_key(r), {})
+        e.update({"row": r["row"], "drawing": r.get("drawing"), "quantity": r.get("quantity"),
+                  "pack_key": pack_key(manifest), "pack_status": (manifest or {}).get("status"),
+                  "revision": (manifest or {}).get("revision"),
+                  "pack_folder": (item.get("kept") or {}).get("folder") if isinstance(item.get("kept"), dict)
+                  else item.get("kept"),
+                  "missing": (manifest or {}).get("missing"),
+                  "bought_in_unmatched": (manifest or {}).get("bought_in_unmatched"),
+                  "assumptions": (manifest or {}).get("assumptions"),
+                  "run_id": item.get("run_id") or e.get("run_id"), "state": item.get("state"),
+                  "unit_cost": item.get("unit_cost"), "workbook": item.get("output"),
+                  "written": item.get("written"), "why": item.get("why"),
+                  "approval": approval_of(item, manifest),
+                  "updated": datetime.now().isoformat(timespec="seconds")})
+        item["approval"] = e["approval"]
 
     writer = None if args.dry_run else SheetWriter(sheet, args.sheet_name or "", args.col_cost)
     priced: Dict[Tuple[str, int], Dict[str, Any]] = {}
@@ -560,6 +635,9 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                 "found": {k: v for k, v in found.items() if k != "files"} if found else None,
                 "files": len(found.get("files") or []) if found else 0,
                 "thumbnails": len(r["pictures"]), "cost_before": r["cost_before"], "state": "planned",
+                "previous": {k: (ledger.get(row_key(r)) or {}).get(k)
+                             for k in ("run_id", "state", "unit_cost", "written", "approval")}
+                if ledger.get(row_key(r)) else None,
                 # WHAT WAS FOUND IS A CANDIDATE, NOT A VERIFIED PACK (SCRUM-199). Nothing here has read
                 # the GA's title block, revision or references yet; the screen says so on every row.
                 "pack": (pack_line(manifest) if manifest else PACK_JOB_FOLDER if found.get("match") == "job folder"
@@ -578,6 +656,31 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         if getattr(args, "drawings_only", False) and not r["drawing"]:
             item.update(state="skipped", kind="not priced (no drawing number)",
                         why="no drawing number on the row; --drawings-only")
+            save()
+            continue
+        # A DRAWING PACK OR NOTHING (JG, 11 Nov 2026): "price drawing-pack rows only — no
+        # thumbnail-only estimates". A number that found no drawings needs one; a job folder
+        # with no resolved GA needs a person to name the pack.
+        if getattr(args, "drawings_only", False) and not manifest:
+            item.update(state="needs drawing" if not found else "needs decision",
+                        why=("no drawings found for this number" if not found else
+                             "only a job folder matched; no GA pack resolved, so it is not priced"))
+            save()
+            continue
+        # A COST ALREADY IN THE CELL STAYS unless replacing is asked for.
+        _before = r.get("cost_before")
+        if _before not in (None, "") and not getattr(args, "replace_costs", False):
+            _prev = ledger.get(row_key(r)) or {}
+            if not (_prev.get("written") and str(_prev.get("unit_cost")) == str(_before)):
+                item.update(state="has a cost", why=f"{args.col_cost}{r['row']} already holds "
+                            f"{_before}; kept (--replace-costs to price and replace it)")
+                save()
+                continue
+            item.update(state="done", unit_cost=_prev.get("unit_cost"), run_id=_prev.get("run_id"),
+                        output=_prev.get("workbook"), written=_prev.get("written"),
+                        why="priced and written by an earlier batch; not run again")
+            item["approval"] = _prev.get("approval")
+            priced[(r["drawing"], r["quantity"])] = item
             save()
             continue
         save()
@@ -627,15 +730,41 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                 "enquiry_brief": brief_for(r) + (
                     f" Drawing pack {manifest['status']}: " + "; ".join(manifest["assumptions"][:6])
                     if manifest and manifest.get("assumptions") else "")}
-        try:
-            started = portal.start(body)
-        except Exception as exc:                                         # noqa: BLE001
-            item.update(state="not queued", why=str(exc))
+        # RESUME, NEVER DUPLICATE: a run an earlier batch started for this row and this same pack
+        # is waited for (queued or running) or taken (done); only one that ended without a
+        # result, or a changed pack, is submitted again.
+        _prev = ledger.get(row_key(r)) or {}
+        st = None
+        if _prev.get("run_id") and _prev.get("pack_key") == pack_key(manifest):
+            try:
+                _pst = portal.status(_prev["run_id"]) or {}
+            except Exception:                                            # noqa: BLE001
+                _pst = {}
+            _ps = str(_pst.get("status") or "")
+            if _ps and _ps not in _ENDED:
+                item.update(state="resumed", run_id=_prev["run_id"],
+                            resumed=f"run {_prev['run_id']} from an earlier batch is {_ps}; waited for, not resubmitted")
+                record(item, r, manifest)
+                save()
+                st = wait_for(portal, item["run_id"], sleep=sleep)
+            elif _ps == "done" and unit_cost_of(_pst, r["quantity"]) is not None:
+                item.update(run_id=_prev["run_id"], resumed=f"run {_prev['run_id']} from an earlier batch already finished; its result is used")
+                st = _pst
+        if st is None:
+            try:
+                started = portal.start(body)
+            except Exception as exc:                                     # noqa: BLE001
+                _m = re.search(r"/api/estimate/([0-9a-f]{6,})/", str(exc))
+                item.update(state="not queued", why=str(exc)
+                            + (f" — this batch did not start run {_m.group(1)}; let it finish or stop it on "
+                               f"Grid Control, then run this row again" if _m else ""))
+                record(item, r, manifest)
+                save()
+                continue
+            item.update(state="running", run_id=started.get("run_id"))
+            record(item, r, manifest)
             save()
-            continue
-        item.update(state="running", run_id=started.get("run_id"))
-        save()
-        st = wait_for(portal, item["run_id"], sleep=sleep)
+            st = wait_for(portal, item["run_id"], sleep=sleep)
         cost = unit_cost_of(st, r["quantity"])
         item.update(state=str(st.get("status")), unit_cost=cost, output=st.get("output_path") or st.get("output"))
         if r["drawing"]:
@@ -649,7 +778,9 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                 # own folder; the row is priced, only the cell is not filled.
                 item["why"] = f"priced, but {args.col_cost}{r['row']} could not be written ({exc}); close the workbook and run the row again"
         else:
-            item["why"] = st.get("error") or "the run finished without a unit cost; column P left as it was"
+            item["why"] = (st.get("error") or f"the run ended {st.get('status')} without a unit cost; "
+                           f"{args.col_cost}{r['row']} left as it was")
+        record(item, r, manifest)
         save()
     report["finished"] = datetime.now().isoformat(timespec="seconds")
     if writer is not None:
@@ -672,6 +803,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--col-cost", default="P")
     ap.add_argument("--drawings-only", action="store_true",
                     help="price only the rows that carry a drawing number; the rest are listed, not priced")
+    ap.add_argument("--replace-costs", action="store_true",
+                    help="price and replace a cost already in the cost column; by default it is kept")
     ap.add_argument("--col-qty", default="", help="the number of units, e.g. N; default the column headed Qty / Quantity")
     ap.add_argument("--dry-run", action="store_true", help="find the drawings and say what would run; nothing queued or written")
     ap.add_argument("--server", default=os.getenv("SDI_SERVER", "http://localhost:8072"))
@@ -719,6 +852,17 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"{it.get('unit_cost', '') if it.get('unit_cost') is not None else ''}  {where}", flush=True)
         if it.get("pack"):
             print(f"{'':<11}{it['pack']}", flush=True)
+        if it.get("cost_before") not in (None, "") or it.get("previous"):
+            _pv = it.get("previous") or {}
+            print(f"{'':<11}now in {args.col_cost.upper()}: {it.get('cost_before') if it.get('cost_before') not in (None, '') else 'empty'}"
+                  + (f"; earlier run {_pv.get('run_id')} {_pv.get('state')}"
+                     + (f", {_pv.get('unit_cost')}" if _pv.get('unit_cost') is not None else "")
+                     + (f", {_pv.get('approval')}" if _pv.get('approval') else "") if _pv.get("run_id") else ""),
+                  flush=True)
+        if it.get("resumed"):
+            print(f"{'':<11}{it['resumed']}", flush=True)
+        if it.get("approval") and not args.dry_run:
+            print(f"{'':<11}result: {it['approval']}", flush=True)
         if it.get("why") and it.get("state") not in ("planned", "skipped"):
             # WHY A ROW WAS NOT PRICED IS SAID ON SCREEN (JG, 11 Nov 2026: row 7 showed "not
             # queued" and nothing else; the reason was only in the status file).
@@ -734,6 +878,17 @@ def main(argv: Optional[List[str]] = None) -> int:
             "references has a drawing and nothing bought is left to price; provisional: any of those "
             "not yet true, priced with the gaps listed; ambiguous: asked, not priced. "
           f"status file: {status}", flush=True)
+    if not args.dry_run:
+        _out: Dict[str, List[str]] = {}
+        for it in rep["rows"]:
+            a = str(it.get("approval") or "")
+            k = ("priced, ready for estimator approval" if a.startswith("ready")
+                 else "priced, provisional" if a.startswith("provisional")
+                 else "finished, not written" if a.startswith("finished")
+                 else str(it.get("state")))
+            _out.setdefault(k, []).append(str(it["row"]))
+        print("batch: " + "; ".join(f"{k}: rows {', '.join(v)}" for k, v in sorted(_out.items()))
+              + f". ledger: {rep.get('ledger')}", flush=True)
     return 0
 
 
