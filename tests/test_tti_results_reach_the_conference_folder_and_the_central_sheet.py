@@ -129,3 +129,11 @@ def test_a_row_priced_before_this_existed_gets_its_copies_and_central_cost_once(
     tp.run_batch(_args(sheet, rows="3", copy_to="none", central_sheet=str(central), sheet_name="Tracker"),
                  portal=_Portal(), status_path=status, sleep=lambda s: None)
     assert calls == [], "and only once"
+
+
+def test_a_copied_sharepoint_path_opens_the_file_not_the_browser_view(monkeypatch):
+    seen = []
+    monkeypatch.setattr(tc, "_write_excel", lambda target, *a: seen.append(target) or {"ok": True, "said": ""})
+    tc.write("https://sdidisplays.sharepoint.com/sites/X/Shared Documents/T.xlsx?web=1", "Milwaukee",
+             "TTI-1", 3, 1.0, tp.drawing_ref)
+    assert seen == ["https://sdidisplays.sharepoint.com/sites/X/Shared Documents/T.xlsx"]

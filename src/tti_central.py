@@ -80,7 +80,8 @@ def write(target: str, tab: str, drawing: str, row_hint: Optional[int], value: f
     if not target:
         return {"ok": False, "said": "no central sheet set (SDI_TTI_CENTRAL_SHEET)"}
     if target.lower().startswith("http"):
-        return _write_excel(target, tab, drawing, row_hint, value, ref)
+        # Excel's Copy path can end "?web=1", which opens the browser view; the file is before it.
+        return _write_excel(target.split("?")[0], tab, drawing, row_hint, value, ref)
     return _write_openpyxl(target, tab, drawing, row_hint, value, ref)
 
 
