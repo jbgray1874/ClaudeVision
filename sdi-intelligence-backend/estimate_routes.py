@@ -3017,7 +3017,7 @@ def start_from_brief(req: BriefRequest, x_sdi_key: Optional[str] = Header(defaul
     return start(EstimateRequest(client=req.client, drawing_number=req.reference,
                                  units=req.units, quantity_breaks=list(req.quantity_breaks),
                                  method="llm", enquiry_brief=req.brief, email_to=req.email_to,
-                                 fresh_read=bool(req.fresh_read), source="brief"),
+                                 fresh_read=bool(req.fresh_read)),
                  x_sdi_key=x_sdi_key)
 
 
