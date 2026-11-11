@@ -388,6 +388,12 @@ async def _public_surface_guard(request, call_next):
                             "SDI_API_KEY is not, so the estimating API refuses a request "
                             "with no key. Set SDI_API_KEY in .env and restart the service."})
                 return await call_next(request)
+            if path == "/" and request.method in ("GET", "HEAD"):
+                # 11 Nov 2026 (JG opened the bare address and got {"detail":"Not Found"}).
+                # The root here is the office intranet page, never public, so the bare
+                # address goes to the app portal instead - the page people are meant to land
+                # on - and the intranet page stays unreachable from outside.
+                return RedirectResponse(url="/app/", status_code=302)
             if not any(path == a or path.startswith(a + "/") or path == a for a in _PUBLIC_ALLOW):
                 # Indistinguishable from a route that does not exist — the public
                 # surface simply has no file browser, DB or intranet pages.
