@@ -76,3 +76,13 @@ def test_a_resolver_failure_is_said_not_raised(tmp_path):
     (r,) = pc.run(tmp_path, resolve=boom)
     assert r["resolver_status"] == "error" and "no index" in r["question"]
     assert pc.verdict(r) == "resolver found no pack"
+
+
+def test_a_pack_copied_in_yesterday_counts_as_yesterdays_whatever_its_files_dates(tmp_path):
+    import os
+    from datetime import datetime
+    f = _touch(tmp_path / "M&S" / "12773-01-GA" / "12773-01-GA_REV C.pdf")
+    old = datetime(2026, 3, 1).timestamp()
+    os.utime(f, (old, old))                                     # the date it had on W:
+    rows = pc.run(tmp_path, since=datetime(2026, 11, 10), resolve=lambda d, c: _manifest())
+    assert [r["drawing"] for r in rows] == ["12773-01-GA"]

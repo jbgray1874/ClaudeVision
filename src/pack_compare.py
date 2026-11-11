@@ -120,11 +120,18 @@ def job_folders(root: Path, since: Optional[datetime] = None, drawing: str = "",
             if drawing and not pr._same(base, drawing):
                 continue
             if since is not None:
+                # THE FOLDER'S OWN DATE, NOT ITS FILES' (11 Nov 2026): a copied drawing keeps the
+                # date it had on W:, so a pack filled by hand yesterday looked months old and was
+                # skipped. The folder's created and changed dates say when it was filled.
                 try:
-                    newest = max([p.stat().st_mtime for p in j.rglob("*") if p.is_file()] or [j.stat().st_mtime])
+                    st = j.stat()
+                    when = max(st.st_mtime, st.st_ctime)
+                    for sub in j.iterdir():
+                        sst = sub.stat()
+                        when = max(when, sst.st_ctime)
                 except OSError:
                     continue
-                if datetime.fromtimestamp(newest) < since:
+                if datetime.fromtimestamp(when) < since:
                     continue
             out.append((c.name, base, j))
     return out
